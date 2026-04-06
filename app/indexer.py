@@ -14,7 +14,7 @@ from typing import Any
 
 from sqlalchemy import text as sql_text
 
-from app.config import settings
+from app.config import resolve_file_path, settings
 from app.database import get_homevault_db, get_search_db, get_search_engine, validate_vector_table
 from app.models import Embedding, IndexedFile, TranscriptChunk
 from app.workers.clip import index_clip, IMAGE_TYPES, VIDEO_TYPES
@@ -275,11 +275,22 @@ class IndexManager:
                     # Build tags text from HomeVault DB
                     tags_text = _get_file_tags(file_data["id"])
 
+                    # Resolve relative file_path to absolute using drive mounts
+                    abs_path = resolve_file_path(
+                        file_data["drive"], file_data["file_path"]
+                    )
+                    if not abs_path:
+                        logger.warning(
+                            "No mount configured for drive %s, skipping %s",
+                            file_data["drive"], file_data["id"],
+                        )
+                        continue
+
                     indexed_file = IndexedFile(
                         file_id=file_data["id"],
                         drive=file_data["drive"],
                         filename=file_data["filename"],
-                        file_path=file_data["file_path"],
+                        file_path=abs_path,
                         file_type=file_data["file_type"],
                         mime_type=file_data["mime_type"],
                         file_size=file_data["file_size"],

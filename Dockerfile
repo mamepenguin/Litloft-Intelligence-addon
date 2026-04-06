@@ -4,9 +4,20 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ffmpeg \
         build-essential \
+        git \
+        gettext-base \
+        libsqlite3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# Build sqlite-vec from source (pip binary is 32-bit ARM, incompatible with aarch64)
+RUN git clone --depth 1 --branch v0.1.6 https://github.com/asg017/sqlite-vec.git /tmp/sqlite-vec && \
+    cd /tmp/sqlite-vec && \
+    make loadable && \
+    mkdir -p /usr/local/lib/sqlite-vec && \
+    cp dist/vec0.so /usr/local/lib/sqlite-vec/ && \
+    rm -rf /tmp/sqlite-vec
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

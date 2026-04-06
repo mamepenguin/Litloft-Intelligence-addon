@@ -73,6 +73,7 @@ class Settings:
     model_cache_dir: Path
     search_db_path: Path
     allowed_base_dirs: tuple[str, ...] = ("/drives/",)
+    drive_mounts: dict[str, str] = field(default_factory=dict)
     models: ModelConfig = field(default_factory=ModelConfig)
     search: SearchConfig = field(default_factory=SearchConfig)
     indexing: IndexingConfig = field(default_factory=IndexingConfig)
@@ -145,18 +146,39 @@ def load_settings() -> Settings:
     allowed_base_dirs_env = os.environ.get("ALLOWED_BASE_DIRS", "/drives/")
     allowed_base_dirs = tuple(d.strip() for d in allowed_base_dirs_env.split(",") if d.strip())
 
+    # Parse DRIVE_MOUNTS: "動画=/drives/default,写真=/drives/photos"
+    drive_mounts_env = os.environ.get("DRIVE_MOUNTS", "")
+    drive_mounts: dict[str, str] = {}
+    for entry in drive_mounts_env.split(","):
+        entry = entry.strip()
+        if "=" in entry:
+            name, path = entry.split("=", 1)
+            drive_mounts[name.strip()] = path.strip()
+
     return Settings(
         search_data_dir=search_data_dir,
         homevault_db_path=homevault_db_path,
         model_cache_dir=model_cache_dir,
         search_db_path=search_db_path,
         allowed_base_dirs=allowed_base_dirs,
+        drive_mounts=drive_mounts,
         models=_parse_nested(config_data, "models", ModelConfig),
         search=_parse_nested(config_data, "search", SearchConfig),
         indexing=_parse_indexing(config_data),
         workers=_parse_nested(config_data, "workers", WorkerConfig),
         memory=_parse_nested(config_data, "memory", MemoryConfig),
     )
+
+
+def resolve_file_path(drive: str, relative_path: str) -> str | None:
+    """Resolve a relative file path to an absolute path using drive mount mapping.
+
+    Returns None if the drive has no mount configured.
+    """
+    mount = settings.drive_mounts.get(drive)
+    if not mount:
+        return None
+    return str(Path(mount) / relative_path)
 
 
 def validate_file_path(file_path: str) -> bool:

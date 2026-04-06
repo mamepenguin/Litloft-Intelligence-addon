@@ -9,7 +9,6 @@ import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
 
-import sqlite_vec
 from sqlalchemy import event, create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
@@ -27,10 +26,17 @@ _homevault_engine: Engine | None = None
 _HomevaultSession: sessionmaker | None = None
 
 
+import os
+
+_SQLITE_VEC_PATH = os.environ.get(
+    "SQLITE_VEC_PATH", "/usr/local/lib/sqlite-vec/vec0"
+)
+
+
 def _load_sqlite_vec(dbapi_conn: sqlite3.Connection, _: object) -> None:
     """Load sqlite-vec extension on new connections."""
     dbapi_conn.enable_load_extension(True)
-    sqlite_vec.load(dbapi_conn)
+    dbapi_conn.load_extension(_SQLITE_VEC_PATH)
     dbapi_conn.enable_load_extension(False)
 
 
@@ -49,7 +55,7 @@ def init_search_db() -> None:
     _search_engine = create_engine(
         f"sqlite:///{settings.search_db_path}",
         echo=False,
-        connect_args={"check_same_thread": False},
+        connect_args={"check_same_thread": False, "timeout": 30},
     )
 
     event.listen(_search_engine, "connect", _load_sqlite_vec)
