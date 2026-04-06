@@ -1,0 +1,64 @@
+# Semantic Search Service Configuration
+# Copy to search-config.yml and customize as needed.
+
+models:
+  # Whisper model for audio transcription (multilingual)
+  whisper: "openai/whisper-small"
+
+  # Text embedding model (multilingual, used for metadata + transcript)
+  text_embedding: "intfloat/multilingual-e5-small"
+
+  # CLIP model for image/video frame analysis
+  # Swap for language-specific models:
+  #   Japanese: rinna/japanese-clip-vit-b-16
+  #   Chinese:  OFA-Sys/chinese-clip-vit-base-patch16
+  #   Multi:    M-CLIP/XLM-Roberta-Large-Vit-B-32 (~1.5GB)
+  clip: "openai/clip-vit-b-32"
+
+# Search parameters
+search:
+  # Weight for vector similarity vs keyword matching
+  # 0.0 = keyword only, 1.0 = vector only
+  alpha: 0.7
+
+  # Default result limit
+  default_limit: 20
+  max_limit: 100
+
+# Indexing parameters
+indexing:
+  # Reconciliation interval with HomeVault DB (seconds)
+  reconciliation_interval: 3600
+
+  # Frame extraction settings for video CLIP analysis
+  frame_extraction:
+    # Scene detection threshold (0.0-1.0, higher = fewer frames)
+    scene_threshold: 0.3
+    # Minimum interval between frames (seconds)
+    min_interval: 30
+    # Maximum frames per video
+    max_frames: 500
+
+  # Whisper transcription settings
+  whisper:
+    # Segment duration range (seconds)
+    min_segment_duration: 30
+    max_segment_duration: 60
+
+  # Text chunking settings
+  text_chunking:
+    # Maximum characters per chunk
+    max_chunk_size: 1000
+    # Overlap between chunks
+    overlap: 200
+
+# Worker concurrency
+workers:
+  whisper_parallel: 1
+  clip_parallel: 2
+  metadata_batch_size: 32
+
+# Model memory management
+memory:
+  # Unload Whisper model after idle (seconds, 0 = never unload)
+  whisper_idle_unload: 300

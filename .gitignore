@@ -1,0 +1,14 @@
+search-data/
+__pycache__/
+.DS_Store
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+*.onnx
+*.bin
+*.safetensors
+.env
+search-config.yml

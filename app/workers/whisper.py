@@ -1,0 +1,409 @@
+"""Whisper transcription worker.
+
+Transcribes audio from video/audio files using faster-whisper (CTranslate2).
+The model is lazy-loaded and can be unloaded after idle to save RAM.
+
+Only one Whisper task runs at a time (controlled by the indexer's semaphore).
+"""
+
+import asyncio
+import logging
+import threading
+import time
+import uuid
+
+from app.config import settings, validate_file_path
+from app.database import get_search_db, get_search_engine
+from app.models import Embedding, IndexedFile, TranscriptChunk
+from app.workers.embedder import embed_passages
+from sqlalchemy import text as sql_text
+
+logger = logging.getLogger(__name__)
+
+# Model state (lazy-loaded, with idle unload support)
+_lock = threading.Lock()
+_model: object | None = None
+_loaded = False
+_last_used: float = 0.0
+
+# Audio/video types that can be transcribed
+TRANSCRIBABLE_TYPES = {
+    "video/mp4", "video/webm", "video/quicktime", "video/x-matroska",
+    "audio/mpeg", "audio/mp3", "audio/wav", "audio/ogg", "audio/flac",
+    "audio/aac", "audio/m4a", "audio/x-m4a",
+}
+
+
+def _ensure_loaded() -> object:
+    """Lazy-load the Whisper model on first use.
+
+    Returns:
+        The faster-whisper WhisperModel instance.
+    """
+    global _model, _loaded, _last_used
+
+    if _loaded and _model is not None:
+        _last_used = time.monotonic()
+        return _model
+
+    with _lock:
+        if _loaded and _model is not None:
+            _last_used = time.monotonic()
+            return _model
+
+        try:
+            from faster_whisper import WhisperModel
+
+            model_size = _resolve_model_size(settings.models.whisper)
+            cache_dir = str(settings.model_cache_dir)
+
+            logger.info("Loading Whisper model: %s (size: %s)", settings.models.whisper, model_size)
+
+            _model = WhisperModel(
+                model_size,
+                device="cpu",
+                compute_type="int8",
+                download_root=cache_dir,
+            )
+
+            _loaded = True
+            _last_used = time.monotonic()
+            logger.info("Whisper model loaded successfully")
+            return _model
+
+        except Exception as e:
+            logger.error("Failed to load Whisper model: %s", e)
+            raise RuntimeError(f"Whisper model load failed: {e}") from e
+
+
+def _resolve_model_size(config_name: str) -> str:
+    """Resolve config model name to faster-whisper model size.
+
+    Args:
+        config_name: Model name from config (e.g., "openai/whisper-small").
+
+    Returns:
+        Model size string for faster-whisper.
+    """
+    size_map = {
+        "openai/whisper-tiny": "tiny",
+        "openai/whisper-base": "base",
+        "openai/whisper-small": "small",
+        "openai/whisper-medium": "medium",
+        "openai/whisper-large": "large-v3",
+    }
+    return size_map.get(config_name, "small")
+
+
+def unload_model() -> None:
+    """Unload the Whisper model to free RAM.
+
+    Safe to call even if the model is not loaded.
+    """
+    global _model, _loaded
+
+    with _lock:
+        if _model is not None:
+            logger.info("Unloading Whisper model to free RAM")
+            _model = None
+            _loaded = False
+
+
+def check_idle_unload() -> None:
+    """Check if the model should be unloaded due to idle timeout.
+
+    Called periodically by the indexer's background task.
+    """
+    idle_timeout = settings.memory.whisper_idle_unload
+    if idle_timeout <= 0:
+        return
+
+    if not _loaded or _model is None:
+        return
+
+    elapsed = time.monotonic() - _last_used
+    if elapsed > idle_timeout:
+        unload_model()
+
+
+def _transcribe_file(file_path: str) -> list[dict]:
+    """Transcribe a media file using faster-whisper.
+
+    Args:
+        file_path: Path to the audio/video file.
+
+    Returns:
+        List of segment dicts with keys: text, start, end, language.
+    """
+    model = _ensure_loaded()
+
+    try:
+        segments_iter, info = model.transcribe(
+            file_path,
+            beam_size=5,
+            language=None,  # Auto-detect
+            vad_filter=True,  # Voice Activity Detection for better accuracy
+            vad_parameters={"min_silence_duration_ms": 500},
+        )
+
+        detected_language = info.language
+        logger.info(
+            "Transcribing %s (detected language: %s, duration: %.1fs)",
+            file_path, detected_language, info.duration,
+        )
+
+        segments: list[dict] = []
+        for segment in segments_iter:
+            segments = [
+                *segments,
+                {
+                    "text": segment.text.strip(),
+                    "start": segment.start,
+                    "end": segment.end,
+                    "language": detected_language,
+                },
+            ]
+
+        return segments
+
+    except Exception as e:
+        logger.error("Transcription failed for %s: %s", file_path, e)
+        return []
+
+
+def _merge_segments(
+    segments: list[dict],
+    min_duration: int,
+    max_duration: int,
+) -> list[dict]:
+    """Merge small Whisper segments into larger chunks.
+
+    Groups segments to target the min_duration while not exceeding
+    max_duration. Preserves start/end timestamps.
+
+    Args:
+        segments: Raw Whisper segments.
+        min_duration: Minimum target chunk duration in seconds.
+        max_duration: Maximum chunk duration in seconds.
+
+    Returns:
+        List of merged chunk dicts.
+    """
+    if not segments:
+        return []
+
+    chunks: list[dict] = []
+    current_texts: list[str] = []
+    current_start: float = segments[0]["start"]
+    current_end: float = segments[0]["end"]
+    current_language: str = segments[0].get("language", "")
+
+    for segment in segments:
+        segment_duration = segment["end"] - current_start
+
+        if segment_duration > max_duration and current_texts:
+            # Flush current chunk
+            chunks = [
+                *chunks,
+                {
+                    "text": " ".join(current_texts),
+                    "start": current_start,
+                    "end": current_end,
+                    "language": current_language,
+                },
+            ]
+            current_texts = [segment["text"]]
+            current_start = segment["start"]
+            current_end = segment["end"]
+        else:
+            current_texts = [*current_texts, segment["text"]]
+            current_end = segment["end"]
+
+        # Flush if we've exceeded min_duration
+        if current_end - current_start >= min_duration:
+            chunks = [
+                *chunks,
+                {
+                    "text": " ".join(current_texts),
+                    "start": current_start,
+                    "end": current_end,
+                    "language": current_language,
+                },
+            ]
+            current_texts = []
+            current_start = current_end
+
+    # Flush remaining
+    if current_texts:
+        chunks = [
+            *chunks,
+            {
+                "text": " ".join(current_texts),
+                "start": current_start,
+                "end": current_end,
+                "language": current_language,
+            },
+        ]
+
+    return chunks
+
+
+async def index_whisper(file_id: str) -> bool:
+    """Transcribe a media file and index the transcript.
+
+    Runs transcription in a thread to avoid blocking the event loop.
+
+    Args:
+        file_id: The file ID to transcribe and index.
+
+    Returns:
+        True if indexing succeeded.
+    """
+    return await asyncio.to_thread(_index_whisper_sync, file_id)
+
+
+def _index_whisper_sync(file_id: str) -> bool:
+    """Synchronous Whisper indexing implementation.
+
+    Args:
+        file_id: The file ID to transcribe and index.
+
+    Returns:
+        True if indexing succeeded.
+    """
+    with get_search_db() as session:
+        file = session.query(IndexedFile).filter_by(
+            file_id=file_id, active=True
+        ).first()
+
+        if file is None:
+            return False
+
+        if file.mime_type not in TRANSCRIBABLE_TYPES:
+            file.whisper_indexed = True
+            return True
+
+        # Transcribe
+        if not validate_file_path(file.file_path):
+            logger.error("File path validation failed for %s: %s", file.file_id, file.file_path)
+            return False
+        raw_segments = _transcribe_file(file.file_path)
+        if not raw_segments:
+            file.whisper_indexed = True
+            return True
+
+        whisper_config = settings.indexing.whisper
+        chunks = _merge_segments(
+            raw_segments,
+            whisper_config.min_segment_duration,
+            whisper_config.max_segment_duration,
+        )
+
+        if not chunks:
+            file.whisper_indexed = True
+            return True
+
+        # Remove old transcript data
+        _remove_whisper_data(session, file_id)
+
+        # Store transcript chunks
+        for idx, chunk in enumerate(chunks):
+            transcript = TranscriptChunk(
+                file_id=file_id,
+                chunk_index=idx,
+                text=chunk["text"],
+                language=chunk["language"],
+                timestamp_start=chunk["start"],
+                timestamp_end=chunk["end"],
+            )
+            session.add(transcript)
+
+        session.flush()
+
+        # Generate embeddings for transcript chunks
+        chunk_texts = [c["text"] for c in chunks if c["text"].strip()]
+        if not chunk_texts:
+            file.whisper_indexed = True
+            return True
+
+        try:
+            vectors = embed_passages(chunk_texts)
+        except Exception as e:
+            logger.error("Whisper embedding failed for %s: %s", file_id, e)
+            file.whisper_indexed = True
+            return True
+
+        text_idx = 0
+        for idx, chunk in enumerate(chunks):
+            if not chunk["text"].strip():
+                continue
+
+            try:
+                embedding_id = f"wh_{file_id}_{idx}_{uuid.uuid4().hex[:8]}"
+
+                embedding_record = Embedding(
+                    id=embedding_id,
+                    file_id=file_id,
+                    embedding_type="whisper",
+                    vector_table="vec_text",
+                    content_preview=chunk["text"][:200],
+                    timestamp_start=chunk["start"],
+                    timestamp_end=chunk["end"],
+                )
+                session.add(embedding_record)
+                session.flush()
+
+                engine = get_search_engine()
+                vec_bytes = vectors[text_idx].tobytes()
+                with engine.connect() as conn:
+                    conn.execute(
+                        sql_text(
+                            "INSERT INTO vec_text(embedding_id, vector) VALUES(:id, :vec)"
+                        ),
+                        {"id": embedding_id, "vec": vec_bytes},
+                    )
+                    conn.commit()
+
+                text_idx += 1
+
+            except Exception as e:
+                logger.error(
+                    "Failed to store whisper embedding %d for %s: %s",
+                    idx, file_id, e,
+                )
+
+        file.whisper_indexed = True
+        return True
+
+
+def _remove_whisper_data(session: object, file_id: str) -> None:
+    """Remove existing Whisper data (transcripts + embeddings) for a file.
+
+    Args:
+        session: Database session.
+        file_id: The file ID.
+    """
+    # Remove transcript chunks
+    session.query(TranscriptChunk).filter_by(file_id=file_id).delete()
+
+    # Remove whisper embeddings and their vectors
+    existing = (
+        session.query(Embedding)
+        .filter_by(file_id=file_id, embedding_type="whisper")
+        .all()
+    )
+
+    if existing:
+        engine = get_search_engine()
+        with engine.connect() as conn:
+            for emb in existing:
+                conn.execute(
+                    sql_text("DELETE FROM vec_text WHERE embedding_id = :id"),
+                    {"id": emb.id},
+                )
+            conn.commit()
+
+        for emb in existing:
+            session.delete(emb)
+
+    session.flush()
