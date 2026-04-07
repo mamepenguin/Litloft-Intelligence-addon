@@ -644,8 +644,16 @@ class IndexManager:
                     success = await index_clip(task.file_id)
                     if success:
                         logger.info("CLIP indexed: %s", task.file_id)
+                    else:
+                        logger.warning(
+                            "CLIP indexing failed for %s, will retry on next reconciliation",
+                            task.file_id,
+                        )
                 except Exception as e:
-                    logger.error("CLIP indexing failed for %s: %s", task.file_id, e)
+                    logger.error(
+                        "CLIP indexing failed for %s: %s, will retry on next reconciliation",
+                        task.file_id, e,
+                    )
                 finally:
                     self._processing_count -= 1
 
@@ -739,6 +747,50 @@ class IndexManager:
 
 
 # --- Startup cleanup ---
+
+
+def reset_falsely_completed_clip() -> int:
+    """Reset clip_indexed for files marked complete but missing vectors.
+
+    Detects files where clip_indexed=True but no CLIP embeddings exist
+    in vec_clip. This happens when a previous run failed mid-indexing
+    but still marked the file as complete. Called once at startup.
+
+    Returns:
+        Number of files reset.
+    """
+    reset = 0
+    clip_mimes = list(IMAGE_TYPES | VIDEO_TYPES)
+
+    with get_search_db() as session:
+        # Find files marked as clip_indexed but with no CLIP embeddings
+        # Build IN clause with positional placeholders for SQLite
+        placeholders = ", ".join(f":m{i}" for i in range(len(clip_mimes)))
+        params = {f"m{i}": m for i, m in enumerate(clip_mimes)}
+        falsely_completed = session.execute(
+            sql_text(
+                "SELECT f.file_id FROM indexed_files f "
+                "WHERE f.clip_indexed = 1 AND f.active = 1 "
+                f"AND f.mime_type IN ({placeholders}) "
+                "AND f.file_id NOT IN ("
+                "  SELECT DISTINCT e.file_id FROM embeddings e "
+                "  WHERE e.embedding_type = 'clip'"
+                ")"
+            ),
+            params,
+        ).fetchall()
+
+        for (file_id,) in falsely_completed:
+            session.execute(
+                sql_text(
+                    "UPDATE indexed_files SET clip_indexed = 0 "
+                    "WHERE file_id = :file_id"
+                ),
+                {"file_id": file_id},
+            )
+            reset += 1
+
+    return reset
 
 
 def cleanup_orphaned_embeddings() -> int:

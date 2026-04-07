@@ -88,10 +88,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
 
     # Clean up orphaned data from potential crash during previous run
-    from app.indexer import cleanup_orphaned_embeddings
+    from app.indexer import cleanup_orphaned_embeddings, reset_falsely_completed_clip
     cleaned = cleanup_orphaned_embeddings()
     if cleaned > 0:
         logger.info("Cleaned up %d orphaned embeddings from previous run", cleaned)
+
+    # Reset files marked as clip_indexed but missing actual vectors
+    reset = reset_falsely_completed_clip()
+    if reset > 0:
+        logger.info("Reset %d falsely completed CLIP files for re-indexing", reset)
 
     # Start index manager
     _index_manager = IndexManager()

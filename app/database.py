@@ -62,7 +62,7 @@ def init_search_db() -> None:
     _search_engine = create_engine(
         f"sqlite:///{settings.search_db_path}",
         echo=False,
-        connect_args={"check_same_thread": False, "timeout": 30},
+        connect_args={"check_same_thread": False, "timeout": 120},
     )
 
     event.listen(_search_engine, "connect", _load_sqlite_vec)

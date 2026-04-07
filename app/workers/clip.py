@@ -34,7 +34,7 @@ _loaded = False
 _CLIP_DIMS: dict[str, int] = {
     "openai/clip-vit-b-32": 512,
     "openai/clip-vit-b-16": 512,
-    "llm-jp/llm-jp-clip-vit-base-patch16": 768,
+    "llm-jp/llm-jp-clip-vit-base-patch16": 512,
     "llm-jp/llm-jp-clip-vit-large-patch14": 1024,
 }
 
@@ -120,7 +120,11 @@ def _ensure_loaded() -> tuple[object, object, object]:
 def _detect_clip_dim(model: object) -> int:
     """Detect the embedding dimension from a loaded CLIP model.
 
-    Inspects the visual projection layer to determine output dimension.
+    Runs a dummy forward pass through encode_image to get the actual
+    output dimension after projection. This is more reliable than
+    inspecting visual.output_dim, which may return the pre-projection
+    backbone dimension (e.g. 512 for ViT-B) rather than the final
+    projected dimension (e.g. 768 for llm-jp models).
 
     Args:
         model: A loaded open_clip model.
@@ -130,11 +134,16 @@ def _detect_clip_dim(model: object) -> int:
     """
     import torch
 
-    # open_clip models expose visual.output_dim or have a projection layer
-    if hasattr(model, "visual") and hasattr(model.visual, "output_dim"):
-        return model.visual.output_dim
+    # Preferred: dummy forward pass through image encoder for actual output dim
+    try:
+        dummy = torch.zeros(1, 3, 224, 224)
+        with torch.no_grad():
+            out = model.encode_image(dummy)
+        return out.shape[-1]
+    except Exception:
+        pass
 
-    # Fallback: run a dummy forward pass through the text encoder
+    # Fallback: dummy forward pass through text encoder
     try:
         dummy = torch.zeros(1, 77, dtype=torch.long)
         with torch.no_grad():
@@ -444,10 +453,6 @@ def _index_clip_image(file_id: str, file_path: str, filename: str) -> bool:
         embedding_id = f"clip_{file_id}_{uuid.uuid4().hex[:8]}"
     except Exception as e:
         logger.error("CLIP compute failed for %s: %s", file_id, e)
-        with get_search_db() as session:
-            f = session.query(IndexedFile).filter_by(file_id=file_id).first()
-            if f is not None:
-                f.clip_indexed = True
         return False
 
     with get_search_db() as session:
@@ -513,10 +518,6 @@ def _index_clip_video(file_id: str, file_path: str, duration: float | None) -> b
 
     except Exception as e:
         logger.error("CLIP video indexing failed for %s: %s", file_id, e)
-        with get_search_db() as session:
-            f = session.query(IndexedFile).filter_by(file_id=file_id).first()
-            if f is not None:
-                f.clip_indexed = True
         return False
 
     with get_search_db() as session:
