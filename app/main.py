@@ -188,6 +188,19 @@ class MessageResponse(BaseModel):
     message: str
 
 
+# --- Debug search endpoint ---
+
+
+@app.get("/debug/search")
+async def debug_search_endpoint(
+    q: str = Query(..., min_length=1, description="Search query"),
+) -> dict:
+    """Debug search: returns raw scores from each search system."""
+    from app.debug import debug_search
+    result = debug_search(q)
+    return result.model_dump()
+
+
 # --- Search endpoint ---
 
 

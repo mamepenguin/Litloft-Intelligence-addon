@@ -183,6 +183,11 @@ def _vector_search_text(
 ) -> list[_VectorMatch]:
     """Search the text vector table for similar embeddings.
 
+    Applies three filtering stages:
+    1. Absolute threshold (min_score_text): discard low-similarity matches
+    2. Score gap analysis: if scores are flat (no standout), discard all
+    3. Margin cutoff: keep only matches within margin of top score
+
     Args:
         query_vector: Query embedding vector.
         limit: Maximum results.
@@ -211,7 +216,26 @@ def _vector_search_text(
     embedding_ids = [row[0] for row in rows]
     distances = {row[0]: row[1] for row in rows}
 
-    min_score = settings.search.min_score_text
+    # Convert all distances to cosine similarities for gap analysis
+    all_scores = [_l2_to_cosine_similarity(row[1]) for row in rows]
+
+    search_config = settings.search
+    min_score = search_config.min_score_text
+
+    # Score gap analysis: check if results are "flat" (no standout match)
+    # If top score barely exceeds the mean, everything is equally irrelevant
+    if all_scores:
+        top_score = all_scores[0]  # already sorted by distance
+        mean_score = sum(all_scores) / len(all_scores)
+        gap = top_score - mean_score
+
+        if gap < search_config.score_gap_threshold:
+            logger.debug(
+                "Text vector score gap too small (%.4f < %.4f), "
+                "discarding all %d candidates",
+                gap, search_config.score_gap_threshold, len(all_scores),
+            )
+            return []
 
     with get_search_db() as session:
         embeddings = (
@@ -220,13 +244,14 @@ def _vector_search_text(
             .all()
         )
 
-        results: list[_VectorMatch] = []
+        # Stage 1: absolute threshold filter
+        candidates: list[_VectorMatch] = []
         for emb in embeddings:
             score = _l2_to_cosine_similarity(distances.get(emb.id, 2.0))
             if score < min_score:
                 continue
-            results = [
-                *results,
+            candidates = [
+                *candidates,
                 _VectorMatch(
                     embedding_id=emb.id,
                     file_id=emb.file_id,
@@ -237,6 +262,15 @@ def _vector_search_text(
                     timestamp_end=emb.timestamp_end,
                 ),
             ]
+
+        if not candidates:
+            return []
+
+        # Stage 3: margin cutoff — keep only within margin of top score
+        best_score = max(c.score for c in candidates)
+        margin = search_config.score_cutoff_margin
+        results = [c for c in candidates if c.score >= best_score - margin]
+
         return results
 
 
@@ -244,6 +278,9 @@ def _vector_search_clip(
     query_vector: np.ndarray, limit: int
 ) -> list[_VectorMatch]:
     """Search the CLIP vector table for similar embeddings.
+
+    Applies the same filtering stages as text vector search:
+    absolute threshold, score gap analysis, and margin cutoff.
 
     Args:
         query_vector: CLIP query embedding vector.
@@ -273,7 +310,24 @@ def _vector_search_clip(
     embedding_ids = [row[0] for row in rows]
     distances = {row[0]: row[1] for row in rows}
 
-    min_score = settings.search.min_score_clip
+    # Score gap analysis for CLIP
+    all_scores = [_l2_to_cosine_similarity(row[1]) for row in rows]
+    search_config = settings.search
+
+    if all_scores:
+        top_score = all_scores[0]
+        mean_score = sum(all_scores) / len(all_scores)
+        gap = top_score - mean_score
+
+        if gap < search_config.score_gap_threshold:
+            logger.debug(
+                "CLIP score gap too small (%.4f < %.4f), "
+                "discarding all %d candidates",
+                gap, search_config.score_gap_threshold, len(all_scores),
+            )
+            return []
+
+    min_score = search_config.min_score_clip
 
     with get_search_db() as session:
         embeddings = (
@@ -282,13 +336,13 @@ def _vector_search_clip(
             .all()
         )
 
-        results: list[_VectorMatch] = []
+        candidates: list[_VectorMatch] = []
         for emb in embeddings:
             score = _l2_to_cosine_similarity(distances.get(emb.id, 2.0))
             if score < min_score:
                 continue
-            results = [
-                *results,
+            candidates = [
+                *candidates,
                 _VectorMatch(
                     embedding_id=emb.id,
                     file_id=emb.file_id,
@@ -299,6 +353,15 @@ def _vector_search_clip(
                     timestamp_end=emb.timestamp_end,
                 ),
             ]
+
+        if not candidates:
+            return []
+
+        # Margin cutoff
+        best_score = max(c.score for c in candidates)
+        margin = search_config.score_cutoff_margin
+        results = [c for c in candidates if c.score >= best_score - margin]
+
         return results
 
 
@@ -742,7 +805,9 @@ def _build_results(
     # Sort by score descending
     results = sorted(results, key=lambda r: r.score, reverse=True)
 
-    # Dynamic cutoff: discard results far below the top score
+    # Dynamic cutoff: discard results far below the top score.
+    # Ratio-based cutoff works well for RRF scores (which vary proportionally,
+    # unlike cosine similarities that cluster in narrow absolute ranges).
     if results:
         cutoff_ratio = settings.search.score_cutoff_ratio
         top_score = results[0].score

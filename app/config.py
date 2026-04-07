@@ -30,9 +30,14 @@ class SearchConfig:
     default_limit: int = 20
     max_limit: int = 100
     # Pre-filter thresholds (exclude candidates below these before ranking)
-    min_score_text: float = 0.4
-    min_score_clip: float = 0.2
-    # Dynamic cutoff: discard results below (top_score * ratio)
+    min_score_text: float = 0.85
+    min_score_clip: float = 0.25
+    # Score gap analysis: if (top_score - mean_score) < this threshold,
+    # the result set is "flat" (no standout match) and discarded entirely.
+    score_gap_threshold: float = 0.02
+    # Dynamic cutoff: discard results below (top_score - margin)
+    score_cutoff_margin: float = 0.05
+    # Legacy (kept for config file compatibility)
     score_cutoff_ratio: float = 0.5
     # Legacy (unused with RRF, kept for config file compatibility)
     alpha: float = 0.7
