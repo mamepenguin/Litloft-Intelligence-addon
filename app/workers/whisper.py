@@ -170,6 +170,7 @@ def _transcribe_batched(
             batch_size=whisper_config.batch_size,
             beam_size=whisper_config.beam_size,
             language=None,
+            word_timestamps=True,
         )
 
         detected_language = info.language
@@ -182,6 +183,10 @@ def _transcribe_batched(
         for segment in segments_iter:
             text = segment.text.strip()
             if text:
+                words = [
+                    {"word": w.word, "start": w.start, "end": w.end}
+                    for w in (segment.words or [])
+                ]
                 segments = [
                     *segments,
                     {
@@ -189,6 +194,7 @@ def _transcribe_batched(
                         "start": segment.start,
                         "end": segment.end,
                         "language": detected_language,
+                        "words": words,
                     },
                 ]
 
@@ -219,6 +225,7 @@ def _transcribe_sequential(
                 "language": None,
                 "vad_filter": use_vad,
                 "condition_on_previous_text": whisper_config.condition_on_previous_text,
+                "word_timestamps": True,
             }
             if use_vad:
                 transcribe_kwargs["vad_parameters"] = {
@@ -239,6 +246,10 @@ def _transcribe_sequential(
             for segment in segments_iter:
                 text = segment.text.strip()
                 if text:
+                    words = [
+                        {"word": w.word, "start": w.start, "end": w.end}
+                        for w in (segment.words or [])
+                    ]
                     segments = [
                         *segments,
                         {
@@ -246,6 +257,7 @@ def _transcribe_sequential(
                             "start": segment.start,
                             "end": segment.end,
                             "language": detected_language,
+                            "words": words,
                         },
                     ]
 
@@ -267,6 +279,72 @@ def _transcribe_sequential(
     return []
 
 
+def _split_long_segments(
+    segments: list[dict],
+    max_duration: int,
+) -> list[dict]:
+    """Split segments that exceed max_duration using word timestamps.
+
+    Whisper (especially batched mode) can produce segments of 20-30+ seconds.
+    This function splits them at word boundaries to ensure no segment exceeds
+    max_duration, enabling more precise search results.
+
+    Args:
+        segments: Raw Whisper segments (with optional 'words' key).
+        max_duration: Maximum allowed segment duration in seconds.
+
+    Returns:
+        List of segments, each within max_duration.
+    """
+    result: list[dict] = []
+
+    for segment in segments:
+        duration = segment["end"] - segment["start"]
+        words = segment.get("words", [])
+
+        if duration <= max_duration or not words:
+            result = [*result, segment]
+            continue
+
+        # Split at word boundaries
+        language = segment.get("language", "")
+        current_words: list[dict] = []
+        chunk_start: float = words[0]["start"]
+
+        for word in words:
+            would_be_duration = word["end"] - chunk_start
+
+            if would_be_duration > max_duration and current_words:
+                # Flush current word group as a segment
+                result = [
+                    *result,
+                    {
+                        "text": "".join(w["word"] for w in current_words).strip(),
+                        "start": chunk_start,
+                        "end": current_words[-1]["end"],
+                        "language": language,
+                    },
+                ]
+                current_words = [word]
+                chunk_start = word["start"]
+            else:
+                current_words = [*current_words, word]
+
+        # Flush remaining words
+        if current_words:
+            result = [
+                *result,
+                {
+                    "text": "".join(w["word"] for w in current_words).strip(),
+                    "start": chunk_start,
+                    "end": current_words[-1]["end"],
+                    "language": language,
+                },
+            ]
+
+    return result
+
+
 def _merge_segments(
     segments: list[dict],
     min_duration: int,
@@ -285,6 +363,12 @@ def _merge_segments(
     Returns:
         List of merged chunk dicts.
     """
+    if not segments:
+        return []
+
+    # Pre-split any segments that already exceed max_duration
+    segments = _split_long_segments(segments, max_duration)
+
     if not segments:
         return []
 
