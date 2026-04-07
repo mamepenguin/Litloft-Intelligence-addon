@@ -22,12 +22,20 @@ class ModelConfig:
 
 @dataclass(frozen=True)
 class SearchConfig:
-    alpha: float = 0.7
+    # RRF parameters
+    rrf_k: int = 60
+    rrf_candidates: int = 50
+    rrf_weight_clip: float = 0.3
+    # Result limits
     default_limit: int = 20
     max_limit: int = 100
+    # Pre-filter thresholds (exclude candidates below these before ranking)
     min_score_text: float = 0.4
     min_score_clip: float = 0.2
-    score_cutoff_ratio: float = 0.6
+    # Dynamic cutoff: discard results below (top_score * ratio)
+    score_cutoff_ratio: float = 0.5
+    # Legacy (unused with RRF, kept for config file compatibility)
+    alpha: float = 0.7
     type_weight_metadata: float = 1.3
     type_weight_transcript: float = 1.0
     type_weight_text_content: float = 0.9

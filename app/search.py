@@ -89,7 +89,8 @@ def search(
     """Execute a hybrid search query.
 
     Performs vector similarity search across text and CLIP embeddings,
-    combines with keyword matching, and returns file-level results.
+    combines with keyword matching using Reciprocal Rank Fusion (RRF),
+    and returns file-level results.
 
     Args:
         query: The search query string.
@@ -105,26 +106,25 @@ def search(
         limit or search_config.default_limit,
         search_config.max_limit,
     )
+    candidates = search_config.rrf_candidates
 
     # Generate query embeddings
     text_vector = embed_query(query)
     clip_vector = _safe_clip_embed(query)
 
-    # Vector search across both tables
-    text_matches = _vector_search_text(text_vector, effective_limit * 5)
-    clip_matches = _vector_search_clip(clip_vector, effective_limit * 5) if clip_vector is not None else []
+    # Four retrieval systems, each returning top-N candidates
+    text_matches = _vector_search_text(text_vector, candidates)
+    clip_matches = _vector_search_clip(clip_vector, candidates) if clip_vector is not None else []
+    keyword_matches = _keyword_search(query, candidates)
+    transcript_keyword_matches = _keyword_search_transcripts(query, candidates)
 
-    # Keyword matching
-    keyword_matches = _keyword_search(query, effective_limit * 3)
-    transcript_keyword_matches = _keyword_search_transcripts(query, effective_limit * 5)
-
-    # Combine and rank results
-    file_scores = _combine_scores(
+    # Combine via Reciprocal Rank Fusion
+    file_scores = _combine_scores_rrf(
         text_matches=text_matches,
         clip_matches=clip_matches,
         keyword_matches=keyword_matches,
         transcript_keyword_matches=transcript_keyword_matches,
-        alpha=search_config.alpha,
+        k=search_config.rrf_k,
     )
 
     # Apply filters and build results
@@ -409,12 +409,27 @@ def _keyword_search_transcripts(
     return results
 
 
-def _build_fts_query(query: str) -> str:
-    """Build an FTS5 trigram query string.
+def _to_katakana(text: str) -> str:
+    """Convert hiragana characters to katakana."""
+    return "".join(
+        chr(ord(c) + 0x60) if "\u3041" <= c <= "\u3096" else c
+        for c in text
+    )
 
-    For terms with 2 or fewer characters, wraps in double quotes so
-    FTS5 trigram tokenizer matches the literal substring. Longer terms
-    are also quoted to ensure exact substring matching.
+
+def _to_hiragana(text: str) -> str:
+    """Convert katakana characters to hiragana."""
+    return "".join(
+        chr(ord(c) - 0x60) if "\u30A1" <= c <= "\u30F6" else c
+        for c in text
+    )
+
+
+def _build_fts_query(query: str) -> str:
+    """Build an FTS5 trigram query string with kana normalization.
+
+    Each term is expanded to match both hiragana and katakana variants.
+    For example, "みかん先輩" matches both "みかん先輩" and "ミカン先輩".
 
     Args:
         query: Raw search query.
@@ -425,19 +440,29 @@ def _build_fts_query(query: str) -> str:
     terms = [t.strip() for t in query.split() if t.strip()]
     if not terms:
         return ""
-    # Quote each term for literal substring matching with trigram tokenizer.
-    # Strip double quotes to prevent FTS5 syntax errors from user input.
-    quoted = [f'"{t.replace(chr(34), "")}"' for t in terms]
-    return " AND ".join(quoted)
 
+    term_clauses: list[str] = []
+    for term in terms:
+        sanitized = term.replace(chr(34), "")
+        if not sanitized:
+            continue
 
-# Field weight mapping for FTS5 keyword scoring
-_FIELD_WEIGHTS: dict[str, float] = {
-    "filename": 1.0,
-    "title": 0.9,
-    "tags_text": 0.8,
-    "description": 0.6,
-}
+        katakana = _to_katakana(sanitized)
+        hiragana = _to_hiragana(sanitized)
+
+        # Collect unique variants (original, katakana, hiragana)
+        variants = list(dict.fromkeys([sanitized, katakana, hiragana]))
+
+        if len(variants) == 1:
+            term_clauses = [*term_clauses, f'"{variants[0]}"']
+        else:
+            # OR across kana variants for this term
+            or_clause = " OR ".join(f'"{v}"' for v in variants)
+            term_clauses = [*term_clauses, f"({or_clause})"]
+
+    if not term_clauses:
+        return ""
+    return " AND ".join(term_clauses)
 
 
 def _keyword_search(query: str, limit: int) -> list[_KeywordMatch]:
@@ -513,128 +538,146 @@ class _FileScore:
     match_types: set[str] = field(default_factory=set)
 
 
-def _get_type_weight(embedding_type: str) -> float:
-    """Get the scoring weight for an embedding type.
+def _file_ranking_from_vector(
+    matches: list[_VectorMatch],
+) -> tuple[dict[str, int], dict[str, float]]:
+    """Aggregate vector matches to file level and produce a ranking.
+
+    Takes the best score per file, then ranks files by that best score.
 
     Args:
-        embedding_type: One of "metadata", "transcript", "text_content", "clip".
+        matches: Embedding-level vector matches.
 
     Returns:
-        Weight multiplier from config.
+        Tuple of (file_id → 0-based rank, file_id → best score).
     """
-    search_config = settings.search
-    weights = {
-        "metadata": search_config.type_weight_metadata,
-        "transcript": search_config.type_weight_transcript,
-        "text_content": search_config.type_weight_text_content,
-        "clip": search_config.type_weight_clip,
-    }
-    return weights.get(embedding_type, 1.0)
+    file_best: dict[str, float] = {}
+    for m in matches:
+        file_best[m.file_id] = max(file_best.get(m.file_id, 0.0), m.score)
+
+    sorted_files = sorted(file_best.items(), key=lambda x: x[1], reverse=True)
+    ranking = {fid: rank for rank, (fid, _) in enumerate(sorted_files)}
+    return ranking, file_best
 
 
-def _combine_scores(
+def _file_ranking_from_keywords(
+    matches: list[_KeywordMatch] | list[_TranscriptKeywordMatch],
+) -> dict[str, int]:
+    """Produce a file-level ranking from keyword matches.
+
+    For transcript keywords, multiple chunks per file are collapsed
+    to the best score before ranking.
+
+    Args:
+        matches: Keyword match list (already ordered by relevance).
+
+    Returns:
+        Dict mapping file_id to 0-based rank.
+    """
+    file_best: dict[str, float] = {}
+    for m in matches:
+        file_best[m.file_id] = max(file_best.get(m.file_id, 0.0), m.score)
+
+    sorted_files = sorted(file_best.items(), key=lambda x: x[1], reverse=True)
+    return {fid: rank for rank, (fid, _) in enumerate(sorted_files)}
+
+
+def _combine_scores_rrf(
     text_matches: list[_VectorMatch],
     clip_matches: list[_VectorMatch],
     keyword_matches: list[_KeywordMatch],
     transcript_keyword_matches: list[_TranscriptKeywordMatch],
-    alpha: float,
+    k: int,
 ) -> dict[str, _FileScore]:
-    """Combine vector and keyword scores into file-level rankings.
+    """Combine search results using Reciprocal Rank Fusion (RRF).
 
-    Uses per-type best scores with type weights to prevent content-heavy
-    files from dominating through sheer volume of embeddings.
+    Each retrieval system produces a file-level ranking. RRF merges them:
+        score = Σ 1/(k + rank + 1)
+    Files appearing in multiple systems are naturally boosted.
 
     Args:
         text_matches: Text vector search results.
         clip_matches: CLIP vector search results.
         keyword_matches: Keyword search results (metadata fields).
         transcript_keyword_matches: Keyword search results (transcript text).
-        alpha: Weight for vector similarity (0-1).
+        k: RRF smoothing constant (typically 60).
 
     Returns:
         Dict mapping file_id to aggregated scores.
     """
-    # Phase 1: Collect best score per (file, embedding_type)
-    file_type_best: dict[str, dict[str, float]] = {}
+    # --- Collect match info for display (separate from scoring) ---
     file_matches: dict[str, list[MatchInfo]] = {}
     file_match_types: dict[str, set[str]] = {}
 
-    all_vector_matches = [
-        *((m, m.embedding_type) for m in text_matches),
-        *((m, "clip") for m in clip_matches),
-    ]
-
-    for match, match_type in all_vector_matches:
-        fid = match.file_id
-
-        type_best = file_type_best.setdefault(fid, {})
-        type_best[match_type] = max(type_best.get(match_type, 0.0), match.score)
-
-        file_match_types.setdefault(fid, set()).add(match_type)
-        file_matches.setdefault(fid, []).append(MatchInfo(
-            match_type=match_type,
-            text=match.content_preview,
-            score=match.score,
-            timestamp_start=match.timestamp_start,
-            timestamp_end=match.timestamp_end,
+    for m in text_matches:
+        file_match_types.setdefault(m.file_id, set()).add(m.embedding_type)
+        file_matches.setdefault(m.file_id, []).append(MatchInfo(
+            match_type=m.embedding_type,
+            text=m.content_preview,
+            score=m.score,
+            timestamp_start=m.timestamp_start,
+            timestamp_end=m.timestamp_end,
         ))
 
-    # Phase 2: Compute weighted vector score per file
+    for m in clip_matches:
+        file_match_types.setdefault(m.file_id, set()).add("clip")
+        file_matches.setdefault(m.file_id, []).append(MatchInfo(
+            match_type="clip",
+            text=m.content_preview,
+            score=m.score,
+            timestamp_start=m.timestamp_start,
+            timestamp_end=m.timestamp_end,
+        ))
+
+    for m in keyword_matches:
+        file_match_types.setdefault(m.file_id, set()).add("keyword")
+
+    for m in transcript_keyword_matches:
+        file_match_types.setdefault(m.file_id, set()).add("transcript_keyword")
+        file_matches.setdefault(m.file_id, []).append(MatchInfo(
+            match_type="transcript",
+            text=m.text,
+            score=m.score,
+            timestamp_start=m.timestamp_start,
+            timestamp_end=m.timestamp_end,
+        ))
+
+    # --- Build per-system file rankings ---
+    text_ranking, _ = _file_ranking_from_vector(text_matches)
+    clip_ranking, _ = _file_ranking_from_vector(clip_matches)
+    keyword_ranking = _file_ranking_from_keywords(keyword_matches)
+    transcript_kw_ranking = _file_ranking_from_keywords(transcript_keyword_matches)
+
+    # Weighted RRF: CLIP gets reduced weight (0.3) because cross-modal
+    # text→image similarity is noisy for text queries. Other systems
+    # use full weight (1.0). This lets CLIP still surface visual-only
+    # matches while preventing it from overwhelming text-based results.
+    weighted_rankings: list[tuple[dict[str, int], float]] = [
+        (text_ranking, 1.0),
+        (clip_ranking, settings.search.rrf_weight_clip),
+        (keyword_ranking, 1.0),
+        (transcript_kw_ranking, 1.0),
+    ]
+
+    # --- RRF fusion ---
+    all_file_ids: set[str] = set()
+    for ranking, _ in weighted_rankings:
+        all_file_ids.update(ranking.keys())
+
     file_scores: dict[str, _FileScore] = {}
 
-    for fid, type_best in file_type_best.items():
-        best_weighted = max(
-            score * _get_type_weight(etype)
-            for etype, score in type_best.items()
-        )
-        vector_contribution = best_weighted * alpha
+    for fid in all_file_ids:
+        rrf_score = 0.0
+        for ranking, weight in weighted_rankings:
+            if fid in ranking:
+                rrf_score = rrf_score + weight / (k + ranking[fid] + 1)
 
         file_scores[fid] = _FileScore(
             file_id=fid,
-            combined_score=vector_contribution,
+            combined_score=rrf_score,
             matches=file_matches.get(fid, []),
             match_types=file_match_types.get(fid, set()),
         )
-
-    # Phase 3: Add keyword contribution (metadata)
-    for match in keyword_matches:
-        fs = file_scores.setdefault(
-            match.file_id,
-            _FileScore(file_id=match.file_id, combined_score=0.0),
-        )
-        keyword_contribution = match.score * (1.0 - alpha)
-        fs.combined_score = fs.combined_score + keyword_contribution
-        fs.match_types.add("keyword")
-
-    # Phase 4: Add transcript keyword contribution
-    # Best transcript keyword score per file, treated same weight as metadata keywords
-    transcript_best: dict[str, float] = {}
-    for match in transcript_keyword_matches:
-        transcript_best[match.file_id] = max(
-            transcript_best.get(match.file_id, 0.0), match.score
-        )
-
-        # Add as match info with timestamps for segment grouping
-        fs = file_scores.setdefault(
-            match.file_id,
-            _FileScore(file_id=match.file_id, combined_score=0.0),
-        )
-        fs.matches.append(MatchInfo(
-            match_type="transcript",
-            text=match.text,
-            score=match.score,
-            timestamp_start=match.timestamp_start,
-            timestamp_end=match.timestamp_end,
-        ))
-        fs.match_types.add("transcript_keyword")
-
-    for fid, best_score in transcript_best.items():
-        fs = file_scores.setdefault(
-            fid,
-            _FileScore(file_id=fid, combined_score=0.0),
-        )
-        transcript_keyword_contribution = best_score * (1.0 - alpha)
-        fs.combined_score = fs.combined_score + transcript_keyword_contribution
 
     return file_scores
 
