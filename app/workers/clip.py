@@ -16,7 +16,7 @@ import numpy as np
 from PIL import Image
 
 from app.config import settings, validate_file_path
-from app.database import get_search_db, get_search_engine
+from app.database import get_search_db
 from app.models import Embedding, IndexedFile
 from sqlalchemy import text as sql_text
 
@@ -167,17 +167,18 @@ def embed_text_clip(text: str) -> np.ndarray:
 
 def _extract_frames_from_video(
     video_path: str, duration: float | None
-) -> list[tuple[float, Path]]:
+) -> list[tuple[float, Image.Image]]:
     """Extract key frames from a video using hybrid scene detection.
 
     Uses ffmpeg scene detection with minimum interval guarantee.
+    Frames are loaded into memory before the temp directory is cleaned up.
 
     Args:
         video_path: Path to the video file.
         duration: Video duration in seconds (None if unknown).
 
     Returns:
-        List of (timestamp_seconds, frame_path) tuples.
+        List of (timestamp_seconds, PIL.Image) tuples.
     """
     frame_config = settings.indexing.frame_extraction
 
@@ -203,7 +204,19 @@ def _extract_frames_from_video(
             all_frames = scene_frames
 
         # Limit total frames
-        return all_frames[: frame_config.max_frames]
+        path_frames = all_frames[: frame_config.max_frames]
+
+        # Load images into memory BEFORE tmpdir is cleaned up
+        loaded: list[tuple[float, Image.Image]] = []
+        for timestamp, frame_path in path_frames:
+            try:
+                img = Image.open(str(frame_path)).convert("RGB")
+                img.load()  # Force read into memory
+                loaded = [*loaded, (timestamp, img)]
+            except Exception as e:
+                logger.warning("Failed to load frame at %.1fs: %s", timestamp, e)
+
+        return loaded
 
 
 def _extract_scene_frames(
@@ -220,12 +233,19 @@ def _extract_scene_frames(
         List of (timestamp, frame_path) tuples.
     """
     try:
+        # Use showinfo filter to log timestamps, then parse them from stderr.
+        # select + showinfo outputs one line per selected frame with pts_time.
         result = subprocess.run(
             [
                 "ffmpeg", "-i", video_path,
-                "-vf", f"select='gt(scene,{threshold})',scale=224:224",
-                "-vsync", "vfp",
-                "-frame_pts", "1",
+                "-vf", (
+                    f"select='gt(scene,{threshold})',"
+                    "showinfo,"
+                    "scale=224:224,"
+                    "format=yuvj420p"
+                ),
+                "-fps_mode", "passthrough",
+                "-q:v", "5",
                 str(output_dir / "scene_%04d.jpg"),
             ],
             capture_output=True,
@@ -233,19 +253,24 @@ def _extract_scene_frames(
             timeout=300,
         )
 
-        if result.returncode != 0:
-            logger.warning("Scene detection failed: %s", result.stderr[:200])
+        frame_files = sorted(output_dir.glob("scene_*.jpg"))
+        if not frame_files:
+            if result.returncode != 0:
+                logger.warning("Scene detection failed: %s", result.stderr[:200])
             return []
 
-        # Parse frame timestamps from showinfo or use frame numbers
-        frames: list[tuple[float, Path]] = []
-        frame_files = sorted(output_dir.glob("scene_*.jpg"))
+        # Parse pts_time from showinfo lines in stderr
+        import re
+        pts_times: list[float] = []
+        for line in result.stderr.splitlines():
+            m = re.search(r"pts_time:\s*([\d.]+)", line)
+            if m:
+                pts_times = [*pts_times, float(m.group(1))]
 
-        # Get timestamps using ffprobe
-        for frame_file in frame_files:
-            frame_num = int(frame_file.stem.split("_")[1])
-            # Approximate timestamp from frame number
-            frames = [*frames, (float(frame_num), frame_file)]
+        frames: list[tuple[float, Path]] = []
+        for idx, frame_file in enumerate(frame_files):
+            timestamp = pts_times[idx] if idx < len(pts_times) else float(idx * 30)
+            frames = [*frames, (timestamp, frame_file)]
 
         return frames
 
@@ -306,7 +331,7 @@ def _fill_interval_gaps(
                 [
                     "ffmpeg", "-ss", str(timestamp),
                     "-i", video_path,
-                    "-vf", "scale=224:224",
+                    "-vf", "scale=224:224,format=yuvj420p",
                     "-frames:v", "1",
                     "-q:v", "5",
                     str(frame_path),
@@ -343,12 +368,15 @@ async def index_clip(file_id: str) -> bool:
 def _index_clip_sync(file_id: str) -> bool:
     """Synchronous CLIP indexing implementation.
 
+    Splits into read → compute → write phases to minimize DB lock duration.
+
     Args:
         file_id: The file ID to index.
 
     Returns:
         True if indexing succeeded.
     """
+    # --- Phase 1: Read file info (short DB access) ---
     with get_search_db() as session:
         file = session.query(IndexedFile).filter_by(
             file_id=file_id, active=True
@@ -357,100 +385,90 @@ def _index_clip_sync(file_id: str) -> bool:
         if file is None:
             return False
 
-        # Remove old CLIP embeddings
+        file_path = file.file_path
+        mime_type = file.mime_type
+        filename = file.filename
+        duration = file.duration
+
+    if mime_type not in IMAGE_TYPES and mime_type not in VIDEO_TYPES:
+        with get_search_db() as session:
+            file = session.query(IndexedFile).filter_by(file_id=file_id).first()
+            if file is not None:
+                file.clip_indexed = True
+        return True
+
+    # --- Phase 2: Compute embeddings (no DB access, may be slow) ---
+    if not validate_file_path(file_path):
+        logger.error("File path validation failed for %s: %s", file_id, file_path)
+        # Mark as indexed to prevent infinite retry on invalid paths
+        with get_search_db() as session:
+            f = session.query(IndexedFile).filter_by(file_id=file_id).first()
+            if f is not None:
+                f.clip_indexed = True
+        return False
+
+    embeddings_to_store: list[tuple[str, np.ndarray, str, float | None, float | None]] = []
+
+    try:
+        if mime_type in IMAGE_TYPES:
+            image = Image.open(file_path).convert("RGB")
+            vector = embed_image(image)
+            embedding_id = f"clip_{file_id}_{uuid.uuid4().hex[:8]}"
+            embeddings_to_store = [
+                (embedding_id, vector, f"Image: {filename}", None, None)
+            ]
+        else:
+            frames = _extract_frames_from_video(file_path, duration)
+            if not frames:
+                logger.warning("No frames extracted for %s", file_id)
+                with get_search_db() as session:
+                    f = session.query(IndexedFile).filter_by(file_id=file_id).first()
+                    if f is not None:
+                        f.clip_indexed = True
+                return True
+
+            for timestamp, image in frames:
+                try:
+                    vector = embed_image(image)
+                    embedding_id = f"clip_{file_id}_{uuid.uuid4().hex[:8]}"
+                    embeddings_to_store = [
+                        *embeddings_to_store,
+                        (embedding_id, vector, f"Frame at {timestamp:.1f}s", timestamp, timestamp + 30),
+                    ]
+                except Exception as e:
+                    logger.warning(
+                        "Failed to process frame at %ss for %s: %s",
+                        timestamp, file_id, e,
+                    )
+    except Exception as e:
+        logger.error("CLIP compute failed for %s: %s", file_id, e)
+        # Mark as indexed to prevent infinite retry on permanently broken files
+        with get_search_db() as session:
+            f = session.query(IndexedFile).filter_by(file_id=file_id).first()
+            if f is not None:
+                f.clip_indexed = True
+        return False
+
+    # --- Phase 3: Write all results to DB (short transaction) ---
+    with get_search_db() as session:
         _remove_clip_embeddings(session, file_id)
 
-        if file.mime_type in IMAGE_TYPES:
-            return _index_image_clip(session, file)
-        elif file.mime_type in VIDEO_TYPES:
-            return _index_video_clip(session, file)
-        else:
+        for emb_id, vector, preview, ts_start, ts_end in embeddings_to_store:
+            _store_clip_embedding(
+                session=session,
+                embedding_id=emb_id,
+                file_id=file_id,
+                vector=vector,
+                content_preview=preview,
+                timestamp_start=ts_start,
+                timestamp_end=ts_end,
+            )
+
+        file = session.query(IndexedFile).filter_by(file_id=file_id).first()
+        if file is not None:
             file.clip_indexed = True
-            return True
 
-
-def _index_image_clip(session: object, file: IndexedFile) -> bool:
-    """Index CLIP embedding for a single image.
-
-    Args:
-        session: Database session.
-        file: The indexed file record.
-
-    Returns:
-        True if successful.
-    """
-    try:
-        if not validate_file_path(file.file_path):
-            logger.error("File path validation failed for %s: %s", file.file_id, file.file_path)
-            return False
-        image = Image.open(file.file_path).convert("RGB")
-        vector = embed_image(image)
-
-        embedding_id = f"clip_{file.file_id}_{uuid.uuid4().hex[:8]}"
-        _store_clip_embedding(
-            session=session,
-            embedding_id=embedding_id,
-            file_id=file.file_id,
-            vector=vector,
-            content_preview=f"Image: {file.filename}",
-        )
-
-        file.clip_indexed = True
-        return True
-
-    except Exception as e:
-        logger.error("CLIP image indexing failed for %s: %s", file.file_id, e)
-        return False
-
-
-def _index_video_clip(session: object, file: IndexedFile) -> bool:
-    """Index CLIP embeddings for video key frames.
-
-    Args:
-        session: Database session.
-        file: The indexed file record.
-
-    Returns:
-        True if successful.
-    """
-    try:
-        if not validate_file_path(file.file_path):
-            logger.error("File path validation failed for %s: %s", file.file_id, file.file_path)
-            return False
-        frames = _extract_frames_from_video(file.file_path, file.duration)
-
-        if not frames:
-            logger.warning("No frames extracted for %s", file.file_id)
-            file.clip_indexed = True
-            return True
-
-        for timestamp, frame_path in frames:
-            try:
-                image = Image.open(str(frame_path)).convert("RGB")
-                vector = embed_image(image)
-
-                embedding_id = f"clip_{file.file_id}_{uuid.uuid4().hex[:8]}"
-                _store_clip_embedding(
-                    session=session,
-                    embedding_id=embedding_id,
-                    file_id=file.file_id,
-                    vector=vector,
-                    content_preview=f"Frame at {timestamp:.1f}s",
-                    timestamp_start=timestamp,
-                    timestamp_end=timestamp + 30,
-                )
-            except Exception as e:
-                logger.warning(
-                    "Failed to process frame at %ss for %s: %s",
-                    timestamp, file.file_id, e,
-                )
-
-        file.clip_indexed = True
-        return True
-
-    except Exception as e:
-        logger.error("CLIP video indexing failed for %s: %s", file.file_id, e)
-        return False
+    return True
 
 
 def _store_clip_embedding(
@@ -485,14 +503,11 @@ def _store_clip_embedding(
     session.add(embedding_record)
     session.flush()
 
-    engine = get_search_engine()
     vec_bytes = vector.tobytes()
-    with engine.connect() as conn:
-        conn.execute(
-            sql_text("INSERT INTO vec_clip(embedding_id, vector) VALUES(:id, :vec)"),
-            {"id": embedding_id, "vec": vec_bytes},
-        )
-        conn.commit()
+    session.execute(
+        sql_text("INSERT INTO vec_clip(embedding_id, vector) VALUES(:id, :vec)"),
+        {"id": embedding_id, "vec": vec_bytes},
+    )
 
 
 def _remove_clip_embeddings(session: object, file_id: str) -> None:
@@ -511,14 +526,11 @@ def _remove_clip_embeddings(session: object, file_id: str) -> None:
     if not existing:
         return
 
-    engine = get_search_engine()
-    with engine.connect() as conn:
-        for emb in existing:
-            conn.execute(
-                sql_text("DELETE FROM vec_clip WHERE embedding_id = :id"),
-                {"id": emb.id},
-            )
-        conn.commit()
+    for emb in existing:
+        session.execute(
+            sql_text("DELETE FROM vec_clip WHERE embedding_id = :id"),
+            {"id": emb.id},
+        )
 
     for emb in existing:
         session.delete(emb)

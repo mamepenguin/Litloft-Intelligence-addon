@@ -13,7 +13,7 @@ import time
 import uuid
 
 from app.config import settings, validate_file_path
-from app.database import get_search_db, get_search_engine
+from app.database import get_search_db
 from app.models import Embedding, IndexedFile, TranscriptChunk
 from app.workers.embedder import embed_passages
 from sqlalchemy import text as sql_text
@@ -137,38 +137,61 @@ def _transcribe_file(file_path: str) -> list[dict]:
     """
     model = _ensure_loaded()
 
-    try:
-        segments_iter, info = model.transcribe(
-            file_path,
-            beam_size=5,
-            language=None,  # Auto-detect
-            vad_filter=True,  # Voice Activity Detection for better accuracy
-            vad_parameters={"min_silence_duration_ms": 500},
-        )
+    # Try with VAD first, fall back without VAD if it fails.
+    # faster-whisper's VAD can raise IndexError ("tuple index out of range")
+    # on certain audio streams (very short, silence-only, or corrupted).
+    for attempt, use_vad in enumerate([True, False]):
+        try:
+            transcribe_kwargs: dict = {
+                "beam_size": 5,
+                "language": None,
+                "vad_filter": use_vad,
+            }
+            if use_vad:
+                transcribe_kwargs["vad_parameters"] = {
+                    "min_silence_duration_ms": 500
+                }
 
-        detected_language = info.language
-        logger.info(
-            "Transcribing %s (detected language: %s, duration: %.1fs)",
-            file_path, detected_language, info.duration,
-        )
+            segments_iter, info = model.transcribe(
+                file_path, **transcribe_kwargs
+            )
 
-        segments: list[dict] = []
-        for segment in segments_iter:
-            segments = [
-                *segments,
-                {
-                    "text": segment.text.strip(),
-                    "start": segment.start,
-                    "end": segment.end,
-                    "language": detected_language,
-                },
-            ]
+            detected_language = info.language
+            logger.info(
+                "Transcribing %s (detected language: %s, duration: %.1fs, vad=%s)",
+                file_path, detected_language, info.duration, use_vad,
+            )
 
-        return segments
+            segments: list[dict] = []
+            for segment in segments_iter:
+                text = segment.text.strip()
+                if text:
+                    segments = [
+                        *segments,
+                        {
+                            "text": text,
+                            "start": segment.start,
+                            "end": segment.end,
+                            "language": detected_language,
+                        },
+                    ]
 
-    except Exception as e:
-        logger.error("Transcription failed for %s: %s", file_path, e)
-        return []
+            return segments
+
+        except (IndexError, RuntimeError) as e:
+            if attempt == 0:
+                logger.warning(
+                    "Transcription with VAD failed for %s: %s, retrying without VAD",
+                    file_path, e,
+                )
+                continue
+            logger.error("Transcription failed for %s: %s", file_path, e)
+            return []
+        except Exception as e:
+            logger.error("Transcription failed for %s: %s", file_path, e)
+            return []
+
+    return []
 
 
 def _merge_segments(
@@ -265,12 +288,15 @@ async def index_whisper(file_id: str) -> bool:
 def _index_whisper_sync(file_id: str) -> bool:
     """Synchronous Whisper indexing implementation.
 
+    Splits into read → compute → write phases to minimize DB lock duration.
+
     Args:
         file_id: The file ID to transcribe and index.
 
     Returns:
         True if indexing succeeded.
     """
+    # --- Phase 1: Read file info (short DB access) ---
     with get_search_db() as session:
         file = session.query(IndexedFile).filter_by(
             file_id=file_id, active=True
@@ -283,30 +309,47 @@ def _index_whisper_sync(file_id: str) -> bool:
             file.whisper_indexed = True
             return True
 
-        # Transcribe
-        if not validate_file_path(file.file_path):
-            logger.error("File path validation failed for %s: %s", file.file_id, file.file_path)
-            return False
-        raw_segments = _transcribe_file(file.file_path)
-        if not raw_segments:
-            file.whisper_indexed = True
-            return True
+        file_path = file.file_path
 
-        whisper_config = settings.indexing.whisper
-        chunks = _merge_segments(
-            raw_segments,
-            whisper_config.min_segment_duration,
-            whisper_config.max_segment_duration,
-        )
+    if not validate_file_path(file_path):
+        logger.error("File path validation failed for %s: %s", file_id, file_path)
+        return False
 
-        if not chunks:
-            file.whisper_indexed = True
-            return True
+    # --- Phase 2: Transcribe + embed (no DB access, may be very slow) ---
+    raw_segments = _transcribe_file(file_path)
+    if not raw_segments:
+        with get_search_db() as session:
+            file = session.query(IndexedFile).filter_by(file_id=file_id).first()
+            if file is not None:
+                file.whisper_indexed = True
+        return True
 
-        # Remove old transcript data
+    whisper_config = settings.indexing.whisper
+    chunks = _merge_segments(
+        raw_segments,
+        whisper_config.min_segment_duration,
+        whisper_config.max_segment_duration,
+    )
+
+    if not chunks:
+        with get_search_db() as session:
+            file = session.query(IndexedFile).filter_by(file_id=file_id).first()
+            if file is not None:
+                file.whisper_indexed = True
+        return True
+
+    chunk_texts = [c["text"] for c in chunks if c["text"].strip()]
+    vectors = None
+    if chunk_texts:
+        try:
+            vectors = embed_passages(chunk_texts)
+        except Exception as e:
+            logger.error("Whisper embedding failed for %s: %s", file_id, e)
+
+    # --- Phase 3: Write all results to DB (short transaction) ---
+    with get_search_db() as session:
         _remove_whisper_data(session, file_id)
 
-        # Store transcript chunks
         for idx, chunk in enumerate(chunks):
             transcript = TranscriptChunk(
                 file_id=file_id,
@@ -318,62 +361,48 @@ def _index_whisper_sync(file_id: str) -> bool:
             )
             session.add(transcript)
 
-        session.flush()
+        if vectors is not None:
+            text_idx = 0
+            for idx, chunk in enumerate(chunks):
+                if not chunk["text"].strip():
+                    continue
 
-        # Generate embeddings for transcript chunks
-        chunk_texts = [c["text"] for c in chunks if c["text"].strip()]
-        if not chunk_texts:
-            file.whisper_indexed = True
-            return True
+                try:
+                    embedding_id = f"wh_{file_id}_{idx}_{uuid.uuid4().hex[:8]}"
 
-        try:
-            vectors = embed_passages(chunk_texts)
-        except Exception as e:
-            logger.error("Whisper embedding failed for %s: %s", file_id, e)
-            file.whisper_indexed = True
-            return True
+                    embedding_record = Embedding(
+                        id=embedding_id,
+                        file_id=file_id,
+                        embedding_type="whisper",
+                        vector_table="vec_text",
+                        content_preview=chunk["text"][:200],
+                        timestamp_start=chunk["start"],
+                        timestamp_end=chunk["end"],
+                    )
+                    session.add(embedding_record)
+                    session.flush()
 
-        text_idx = 0
-        for idx, chunk in enumerate(chunks):
-            if not chunk["text"].strip():
-                continue
-
-            try:
-                embedding_id = f"wh_{file_id}_{idx}_{uuid.uuid4().hex[:8]}"
-
-                embedding_record = Embedding(
-                    id=embedding_id,
-                    file_id=file_id,
-                    embedding_type="whisper",
-                    vector_table="vec_text",
-                    content_preview=chunk["text"][:200],
-                    timestamp_start=chunk["start"],
-                    timestamp_end=chunk["end"],
-                )
-                session.add(embedding_record)
-                session.flush()
-
-                engine = get_search_engine()
-                vec_bytes = vectors[text_idx].tobytes()
-                with engine.connect() as conn:
-                    conn.execute(
+                    vec_bytes = vectors[text_idx].tobytes()
+                    session.execute(
                         sql_text(
                             "INSERT INTO vec_text(embedding_id, vector) VALUES(:id, :vec)"
                         ),
                         {"id": embedding_id, "vec": vec_bytes},
                     )
-                    conn.commit()
 
-                text_idx += 1
+                    text_idx += 1
 
-            except Exception as e:
-                logger.error(
-                    "Failed to store whisper embedding %d for %s: %s",
-                    idx, file_id, e,
-                )
+                except Exception as e:
+                    logger.error(
+                        "Failed to store whisper embedding %d for %s: %s",
+                        idx, file_id, e,
+                    )
 
-        file.whisper_indexed = True
-        return True
+        file = session.query(IndexedFile).filter_by(file_id=file_id).first()
+        if file is not None:
+            file.whisper_indexed = True
+
+    return True
 
 
 def _remove_whisper_data(session: object, file_id: str) -> None:
@@ -394,14 +423,11 @@ def _remove_whisper_data(session: object, file_id: str) -> None:
     )
 
     if existing:
-        engine = get_search_engine()
-        with engine.connect() as conn:
-            for emb in existing:
-                conn.execute(
-                    sql_text("DELETE FROM vec_text WHERE embedding_id = :id"),
-                    {"id": emb.id},
-                )
-            conn.commit()
+        for emb in existing:
+            session.execute(
+                sql_text("DELETE FROM vec_text WHERE embedding_id = :id"),
+                {"id": emb.id},
+            )
 
         for emb in existing:
             session.delete(emb)

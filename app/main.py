@@ -84,6 +84,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             settings.homevault_db_path,
         )
 
+    # Clean up orphaned data from potential crash during previous run
+    from app.indexer import cleanup_orphaned_embeddings
+    cleaned = cleanup_orphaned_embeddings()
+    if cleaned > 0:
+        logger.info("Cleaned up %d orphaned embeddings from previous run", cleaned)
+
     # Start index manager
     _index_manager = IndexManager()
     try:
@@ -251,10 +257,12 @@ async def status_endpoint() -> StatusResponse:
         },
         pending={
             "total": (
-                index_status.pending_clip
+                index_status.pending_metadata
+                + index_status.pending_clip
                 + index_status.pending_whisper
                 + index_status.pending_text
             ),
+            "metadata": index_status.pending_metadata,
             "clip": index_status.pending_clip,
             "whisper": index_status.pending_whisper,
         },

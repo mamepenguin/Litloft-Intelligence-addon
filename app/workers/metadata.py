@@ -13,7 +13,7 @@ from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.database import get_search_db, get_search_engine, validate_vector_table
+from app.database import get_search_db, validate_vector_table
 from app.extractors.base import TextChunk
 from app.extractors.pdf import PdfExtractor
 from app.extractors.text import TextExtractor
@@ -106,16 +106,14 @@ def _store_embedding(
     session.add(embedding_record)
     session.flush()
 
-    # Insert vector into sqlite-vec virtual table
-    engine = get_search_engine()
+    # Use session's connection (not a separate engine.connect()) to avoid
+    # dual-connection conflicts with SQLite's single-writer constraint.
+    table = validate_vector_table(vector_table)
     vec_bytes = vector.tobytes()
-    with engine.connect() as conn:
-        table = validate_vector_table(vector_table)
-        conn.execute(
-            sql_text(f"INSERT INTO {table}(embedding_id, vector) VALUES(:id, :vec)"),
-            {"id": embedding_id, "vec": vec_bytes},
-        )
-        conn.commit()
+    session.execute(
+        sql_text(f"INSERT INTO {table}(embedding_id, vector) VALUES(:id, :vec)"),
+        {"id": embedding_id, "vec": vec_bytes},
+    )
 
 
 def index_metadata_batch(file_ids: list[str]) -> int:
@@ -272,15 +270,12 @@ def _remove_embeddings(
     if not existing:
         return
 
-    engine = get_search_engine()
-    with engine.connect() as conn:
-        for emb in existing:
-            table = validate_vector_table(emb.vector_table)
-            conn.execute(
-                sql_text(f"DELETE FROM {table} WHERE embedding_id = :id"),
-                {"id": emb.id},
-            )
-        conn.commit()
+    for emb in existing:
+        table = validate_vector_table(emb.vector_table)
+        session.execute(
+            sql_text(f"DELETE FROM {table} WHERE embedding_id = :id"),
+            {"id": emb.id},
+        )
 
     for emb in existing:
         session.delete(emb)

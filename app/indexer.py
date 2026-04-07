@@ -15,7 +15,7 @@ from typing import Any
 from sqlalchemy import text as sql_text
 
 from app.config import resolve_file_path, settings
-from app.database import get_homevault_db, get_search_db, get_search_engine, validate_vector_table
+from app.database import get_homevault_db, get_search_db, validate_vector_table
 from app.models import Embedding, IndexedFile, TranscriptChunk
 from app.workers.clip import index_clip, IMAGE_TYPES, VIDEO_TYPES
 from app.workers.metadata import index_metadata_batch, index_text_content
@@ -67,6 +67,7 @@ class IndexStatus:
     clip_indexed: int = 0
     whisper_indexed: int = 0
     text_indexed: int = 0
+    pending_metadata: int = 0
     pending_clip: int = 0
     pending_whisper: int = 0
     pending_text: int = 0
@@ -169,6 +170,10 @@ class IndexManager:
             ).count()
 
             # Count pending by type
+            pending_metadata = active_files.filter(
+                IndexedFile.metadata_indexed.is_(False),
+            ).count()
+
             clip_types = list(IMAGE_TYPES | VIDEO_TYPES)
             pending_clip = active_files.filter(
                 IndexedFile.clip_indexed.is_(False),
@@ -196,6 +201,7 @@ class IndexManager:
                 clip_indexed=clip,
                 whisper_indexed=whisper,
                 text_indexed=text,
+                pending_metadata=pending_metadata,
                 pending_clip=pending_clip,
                 pending_whisper=pending_whisper,
                 pending_text=pending_text,
@@ -248,9 +254,12 @@ class IndexManager:
                 _purge_file(file_id)
                 purged += 1
 
+            # Resume incomplete: re-queue files that were interrupted mid-indexing
+            resumed = await self._resume_incomplete()
+
             logger.info(
-                "Reconciliation complete: added=%d, deactivated=%d, purged=%d",
-                added, deactivated, purged,
+                "Reconciliation complete: added=%d, deactivated=%d, purged=%d, resumed=%d",
+                added, deactivated, purged, resumed,
             )
 
         except Exception as e:
@@ -312,6 +321,98 @@ class IndexManager:
             await self._queue_file_tasks(file_data)
 
         return added
+
+    async def _resume_incomplete(self) -> int:
+        """Re-queue active files that have incomplete indexing.
+
+        Finds files where any *_indexed flag is False and queues only
+        the missing task types. For index types that don't apply to a
+        file's mime_type (e.g., CLIP for audio), the flag is set to True
+        directly. This handles recovery after a crash or container restart.
+
+        Returns:
+            Number of files re-queued.
+        """
+        resumed = 0
+
+        text_mimes = {
+            "text/plain", "text/markdown", "text/csv",
+            "application/json", "application/pdf",
+            "text/srt", "text/vtt",
+        }
+        clip_mimes = IMAGE_TYPES | VIDEO_TYPES
+
+        with get_search_db() as session:
+            from sqlalchemy import or_
+
+            incomplete = (
+                session.query(IndexedFile)
+                .filter(
+                    IndexedFile.active.is_(True),
+                    or_(
+                        IndexedFile.metadata_indexed.is_(False),
+                        IndexedFile.clip_indexed.is_(False),
+                        IndexedFile.whisper_indexed.is_(False),
+                        IndexedFile.text_indexed.is_(False),
+                    ),
+                )
+                .all()
+            )
+
+            # Mark inapplicable index types as done so they don't appear
+            # as permanently incomplete (e.g., clip_indexed for audio files)
+            for f in incomplete:
+                if not f.clip_indexed and f.mime_type not in clip_mimes:
+                    f.clip_indexed = True
+                if not f.whisper_indexed and f.mime_type not in TRANSCRIBABLE_TYPES:
+                    f.whisper_indexed = True
+                if not f.text_indexed and f.mime_type not in text_mimes:
+                    f.text_indexed = True
+
+            # Snapshot what we need for queuing
+            file_tasks: list[tuple[str, str, bool, bool, bool, bool]] = [
+                (
+                    f.file_id,
+                    f.mime_type,
+                    f.metadata_indexed,
+                    f.clip_indexed,
+                    f.whisper_indexed,
+                    f.text_indexed,
+                )
+                for f in incomplete
+            ]
+
+        for file_id, mime_type, meta_done, clip_done, whisper_done, text_done in file_tasks:
+            queued_any = False
+
+            if not meta_done:
+                await self._enqueue(IndexTask(
+                    file_id=file_id, task_type=TaskType.METADATA
+                ))
+                queued_any = True
+
+            if not clip_done:
+                await self._enqueue(IndexTask(
+                    file_id=file_id, task_type=TaskType.CLIP
+                ))
+                queued_any = True
+
+            if not whisper_done:
+                await self._enqueue(IndexTask(
+                    file_id=file_id, task_type=TaskType.WHISPER
+                ))
+                queued_any = True
+
+            if not text_done:
+                await self._enqueue(IndexTask(
+                    file_id=file_id, task_type=TaskType.TEXT_CONTENT
+                ))
+                queued_any = True
+
+            if queued_any:
+                resumed += 1
+
+        return resumed
 
     async def _queue_file_tasks(self, file_data: dict) -> None:
         """Queue appropriate indexing tasks for a file.
@@ -490,6 +591,9 @@ class IndexManager:
 
                 except Exception as e:
                     logger.error("Metadata batch failed: %s", e)
+                    # Re-queue failed batch so they're retried
+                    for task in batch:
+                        await self._enqueue(task)
                 finally:
                     self._processing_count -= len(batch)
 
@@ -517,7 +621,7 @@ class IndexManager:
                     async with self._clip_semaphore:
                         success = await index_clip(task.file_id)
                         if success:
-                            logger.debug("CLIP indexed: %s", task.file_id)
+                            logger.info("CLIP indexed: %s", task.file_id)
                 except Exception as e:
                     logger.error("CLIP indexing failed for %s: %s", task.file_id, e)
                 finally:
@@ -623,6 +727,61 @@ class IndexManager:
         return collected
 
 
+# --- Startup cleanup ---
+
+
+def cleanup_orphaned_embeddings() -> int:
+    """Remove embeddings whose vectors are missing from vec tables.
+
+    This handles the case where a crash occurred between writing the
+    embedding record and inserting/committing the vector, or vice versa.
+    Called once at startup before the index manager starts.
+
+    Returns:
+        Number of orphaned embedding records removed.
+    """
+    cleaned = 0
+
+    with get_search_db() as session:
+        # Find embedding records with no matching vector
+        for vec_table in ("vec_text", "vec_clip"):
+            orphaned = session.execute(
+                sql_text(
+                    f"SELECT e.id FROM embeddings e "
+                    f"WHERE e.vector_table = :table "
+                    f"AND e.id NOT IN (SELECT embedding_id FROM {vec_table})"
+                ),
+                {"table": vec_table},
+            ).fetchall()
+
+            for (emb_id,) in orphaned:
+                session.execute(
+                    sql_text("DELETE FROM embeddings WHERE id = :id"),
+                    {"id": emb_id},
+                )
+                cleaned += 1
+
+        # Find orphaned vectors with no embedding record
+        for vec_table in ("vec_text", "vec_clip"):
+            orphaned_vecs = session.execute(
+                sql_text(
+                    f"SELECT v.embedding_id FROM {vec_table} v "
+                    f"WHERE v.embedding_id NOT IN (SELECT id FROM embeddings)"
+                ),
+            ).fetchall()
+
+            for (vec_id,) in orphaned_vecs:
+                session.execute(
+                    sql_text(
+                        f"DELETE FROM {vec_table} WHERE embedding_id = :id"
+                    ),
+                    {"id": vec_id},
+                )
+                cleaned += 1
+
+    return cleaned
+
+
 # --- Helper functions for HomeVault DB interaction ---
 
 
@@ -723,17 +882,14 @@ def _purge_file(file_id: str) -> None:
         embeddings = session.query(Embedding).filter_by(file_id=file_id).all()
 
         if embeddings:
-            engine = get_search_engine()
-            with engine.connect() as conn:
-                for emb in embeddings:
-                    table = validate_vector_table(emb.vector_table)
-                    conn.execute(
-                        sql_text(
-                            f"DELETE FROM {table} WHERE embedding_id = :id"
-                        ),
-                        {"id": emb.id},
-                    )
-                conn.commit()
+            for emb in embeddings:
+                table = validate_vector_table(emb.vector_table)
+                session.execute(
+                    sql_text(
+                        f"DELETE FROM {table} WHERE embedding_id = :id"
+                    ),
+                    {"id": emb.id},
+                )
 
             for emb in embeddings:
                 session.delete(emb)

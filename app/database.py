@@ -6,6 +6,7 @@ Manages two SQLite connections:
 """
 
 import sqlite3
+import threading
 from collections.abc import Generator
 from contextlib import contextmanager
 
@@ -16,6 +17,12 @@ from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from app.config import settings
 
 Base = declarative_base()
+
+# Global write lock: SQLite allows only one writer at a time.
+# All vector table mutations (INSERT/DELETE on vec_text, vec_clip) and
+# their accompanying ORM flushes MUST be wrapped with this lock to
+# prevent "database is locked" errors from concurrent worker threads.
+_write_lock = threading.Lock()
 
 # Search DB engine (read-write, with sqlite-vec)
 _search_engine: Engine | None = None
@@ -108,13 +115,17 @@ def init_homevault_db() -> None:
 
 @contextmanager
 def get_search_db() -> Generator[Session, None, None]:
-    """Get a search database session."""
+    """Get a search database session.
+
+    Commit is serialized via _write_lock to prevent concurrent SQLite writers.
+    """
     if _SearchSession is None:
         raise RuntimeError("Search database not initialized")
     session = _SearchSession()
     try:
         yield session
-        session.commit()
+        with _write_lock:
+            session.commit()
     except Exception:
         session.rollback()
         raise
@@ -152,3 +163,8 @@ def validate_vector_table(table_name: str) -> str:
     if table_name not in ALLOWED_VECTOR_TABLES:
         raise ValueError(f"Invalid vector table: {table_name}")
     return table_name
+
+
+def get_write_lock() -> threading.Lock:
+    """Get the global DB write lock for serializing vector table mutations."""
+    return _write_lock
