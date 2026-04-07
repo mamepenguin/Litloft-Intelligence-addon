@@ -53,6 +53,9 @@ class FrameExtractionConfig:
 class WhisperIndexConfig:
     min_segment_duration: int = 10
     max_segment_duration: int = 20
+    beam_size: int = 1
+    batch_size: int = 16
+    condition_on_previous_text: bool = False
 
 
 @dataclass(frozen=True)

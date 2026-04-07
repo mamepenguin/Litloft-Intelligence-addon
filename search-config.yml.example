@@ -44,6 +44,12 @@ indexing:
     # Segment duration range (seconds)
     min_segment_duration: 30
     max_segment_duration: 60
+    # Beam size (1 = greedy decoding, faster; 5 = beam search, slightly more accurate)
+    beam_size: 1
+    # Batch size for parallel inference (0 = sequential, >0 = batched with VAD)
+    batch_size: 16
+    # Use previous segment text as context (false = faster, less hallucination)
+    condition_on_previous_text: false
 
   # Text chunking settings
   text_chunking:

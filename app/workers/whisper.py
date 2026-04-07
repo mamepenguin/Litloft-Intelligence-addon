@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 # Model state (lazy-loaded, with idle unload support)
 _lock = threading.Lock()
 _model: object | None = None
+_batched_pipeline: object | None = None
 _loaded = False
 _last_used: float = 0.0
 
@@ -34,25 +35,25 @@ TRANSCRIBABLE_TYPES = {
 }
 
 
-def _ensure_loaded() -> object:
+def _ensure_loaded() -> tuple[object, object | None]:
     """Lazy-load the Whisper model on first use.
 
     Returns:
-        The faster-whisper WhisperModel instance.
+        Tuple of (WhisperModel, BatchedInferencePipeline or None).
     """
-    global _model, _loaded, _last_used
+    global _model, _batched_pipeline, _loaded, _last_used
 
     if _loaded and _model is not None:
         _last_used = time.monotonic()
-        return _model
+        return _model, _batched_pipeline
 
     with _lock:
         if _loaded and _model is not None:
             _last_used = time.monotonic()
-            return _model
+            return _model, _batched_pipeline
 
         try:
-            from faster_whisper import WhisperModel
+            from faster_whisper import BatchedInferencePipeline, WhisperModel
 
             model_size = _resolve_model_size(settings.models.whisper)
             cache_dir = str(settings.model_cache_dir)
@@ -66,10 +67,17 @@ def _ensure_loaded() -> object:
                 download_root=cache_dir,
             )
 
+            batch_size = settings.indexing.whisper.batch_size
+            if batch_size > 0:
+                _batched_pipeline = BatchedInferencePipeline(model=_model)
+                logger.info("Batched inference enabled (batch_size=%d)", batch_size)
+            else:
+                _batched_pipeline = None
+
             _loaded = True
             _last_used = time.monotonic()
             logger.info("Whisper model loaded successfully")
-            return _model
+            return _model, _batched_pipeline
 
         except Exception as e:
             logger.error("Failed to load Whisper model: %s", e)
@@ -100,12 +108,13 @@ def unload_model() -> None:
 
     Safe to call even if the model is not loaded.
     """
-    global _model, _loaded
+    global _model, _batched_pipeline, _loaded
 
     with _lock:
         if _model is not None:
             logger.info("Unloading Whisper model to free RAM")
             _model = None
+            _batched_pipeline = None
             _loaded = False
 
     import gc
@@ -132,23 +141,84 @@ def check_idle_unload() -> None:
 def _transcribe_file(file_path: str) -> list[dict]:
     """Transcribe a media file using faster-whisper.
 
+    Uses BatchedInferencePipeline when batch_size > 0 for faster throughput.
+    Falls back to sequential transcription otherwise.
+
     Args:
         file_path: Path to the audio/video file.
 
     Returns:
         List of segment dicts with keys: text, start, end, language.
     """
-    model = _ensure_loaded()
+    model, batched = _ensure_loaded()
+    whisper_config = settings.indexing.whisper
 
+    if batched is not None:
+        return _transcribe_batched(batched, file_path, whisper_config)
+    return _transcribe_sequential(model, file_path, whisper_config)
+
+
+def _transcribe_batched(
+    pipeline: object,
+    file_path: str,
+    whisper_config: object,
+) -> list[dict]:
+    """Transcribe using BatchedInferencePipeline for faster throughput."""
+    try:
+        segments_iter, info = pipeline.transcribe(
+            file_path,
+            batch_size=whisper_config.batch_size,
+            beam_size=whisper_config.beam_size,
+            language=None,
+        )
+
+        detected_language = info.language
+        logger.info(
+            "Transcribing %s (detected language: %s, duration: %.1fs, batched=%d)",
+            file_path, detected_language, info.duration, whisper_config.batch_size,
+        )
+
+        segments: list[dict] = []
+        for segment in segments_iter:
+            text = segment.text.strip()
+            if text:
+                segments = [
+                    *segments,
+                    {
+                        "text": text,
+                        "start": segment.start,
+                        "end": segment.end,
+                        "language": detected_language,
+                    },
+                ]
+
+        return segments
+
+    except Exception as e:
+        logger.warning(
+            "Batched transcription failed for %s: %s, falling back to sequential",
+            file_path, e,
+        )
+        model, _ = _ensure_loaded()
+        return _transcribe_sequential(model, file_path, whisper_config)
+
+
+def _transcribe_sequential(
+    model: object,
+    file_path: str,
+    whisper_config: object,
+) -> list[dict]:
+    """Transcribe sequentially with VAD fallback."""
     # Try with VAD first, fall back without VAD if it fails.
     # faster-whisper's VAD can raise IndexError ("tuple index out of range")
     # on certain audio streams (very short, silence-only, or corrupted).
     for attempt, use_vad in enumerate([True, False]):
         try:
             transcribe_kwargs: dict = {
-                "beam_size": 5,
+                "beam_size": whisper_config.beam_size,
                 "language": None,
                 "vad_filter": use_vad,
+                "condition_on_previous_text": whisper_config.condition_on_previous_text,
             }
             if use_vad:
                 transcribe_kwargs["vad_parameters"] = {
