@@ -173,14 +173,23 @@ class IndexManager:
             metadata = active_files.filter(
                 IndexedFile.metadata_indexed.is_(True)
             ).count()
+
+            # Filter by applicable MIME types for type-specific counts
+            clip_types = list(IMAGE_TYPES | VIDEO_TYPES)
             clip = active_files.filter(
-                IndexedFile.clip_indexed.is_(True)
+                IndexedFile.clip_indexed.is_(True),
+                IndexedFile.mime_type.in_(clip_types),
             ).count()
+
+            whisper_types = list(TRANSCRIBABLE_TYPES)
             whisper = active_files.filter(
-                IndexedFile.whisper_indexed.is_(True)
+                IndexedFile.whisper_indexed.is_(True),
+                IndexedFile.mime_type.in_(whisper_types),
             ).count()
+
             text = active_files.filter(
-                IndexedFile.text_indexed.is_(True)
+                IndexedFile.text_indexed.is_(True),
+                IndexedFile.mime_type.in_(list(TEXT_MIMES)),
             ).count()
 
             # Count pending by type
@@ -188,13 +197,11 @@ class IndexManager:
                 IndexedFile.metadata_indexed.is_(False),
             ).count()
 
-            clip_types = list(IMAGE_TYPES | VIDEO_TYPES)
             pending_clip = active_files.filter(
                 IndexedFile.clip_indexed.is_(False),
                 IndexedFile.mime_type.in_(clip_types),
             ).count()
 
-            whisper_types = list(TRANSCRIBABLE_TYPES)
             pending_whisper = active_files.filter(
                 IndexedFile.whisper_indexed.is_(False),
                 IndexedFile.mime_type.in_(whisper_types),
