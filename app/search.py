@@ -23,6 +23,21 @@ logger = logging.getLogger(__name__)
 SEGMENT_GROUP_WINDOW = 30
 
 
+def _l2_to_cosine_similarity(distance: float) -> float:
+    """Convert L2 distance to cosine similarity for normalized vectors.
+
+    For L2-normalized vectors: L2² = 2 - 2·cos(θ)
+    Therefore: cos(θ) = 1 - L2²/2
+
+    Args:
+        distance: L2 (Euclidean) distance from sqlite-vec.
+
+    Returns:
+        Cosine similarity in range [-1, 1].
+    """
+    return 1.0 - (distance * distance) / 2.0
+
+
 @dataclass(frozen=True)
 class MatchInfo:
     """A single matching segment within a file."""
@@ -194,6 +209,8 @@ def _vector_search_text(
     embedding_ids = [row[0] for row in rows]
     distances = {row[0]: row[1] for row in rows}
 
+    min_score = settings.search.min_score_text
+
     with get_search_db() as session:
         embeddings = (
             session.query(Embedding)
@@ -201,18 +218,24 @@ def _vector_search_text(
             .all()
         )
 
-        return [
-            _VectorMatch(
-                embedding_id=emb.id,
-                file_id=emb.file_id,
-                score=1.0 - distances.get(emb.id, 1.0),  # Convert distance to similarity
-                embedding_type=emb.embedding_type,
-                content_preview=emb.content_preview,
-                timestamp_start=emb.timestamp_start,
-                timestamp_end=emb.timestamp_end,
-            )
-            for emb in embeddings
-        ]
+        results: list[_VectorMatch] = []
+        for emb in embeddings:
+            score = _l2_to_cosine_similarity(distances.get(emb.id, 2.0))
+            if score < min_score:
+                continue
+            results = [
+                *results,
+                _VectorMatch(
+                    embedding_id=emb.id,
+                    file_id=emb.file_id,
+                    score=score,
+                    embedding_type=emb.embedding_type,
+                    content_preview=emb.content_preview,
+                    timestamp_start=emb.timestamp_start,
+                    timestamp_end=emb.timestamp_end,
+                ),
+            ]
+        return results
 
 
 def _vector_search_clip(
@@ -248,6 +271,8 @@ def _vector_search_clip(
     embedding_ids = [row[0] for row in rows]
     distances = {row[0]: row[1] for row in rows}
 
+    min_score = settings.search.min_score_clip
+
     with get_search_db() as session:
         embeddings = (
             session.query(Embedding)
@@ -255,18 +280,24 @@ def _vector_search_clip(
             .all()
         )
 
-        return [
-            _VectorMatch(
-                embedding_id=emb.id,
-                file_id=emb.file_id,
-                score=1.0 - distances.get(emb.id, 1.0),
-                embedding_type=emb.embedding_type,
-                content_preview=emb.content_preview,
-                timestamp_start=emb.timestamp_start,
-                timestamp_end=emb.timestamp_end,
-            )
-            for emb in embeddings
-        ]
+        results: list[_VectorMatch] = []
+        for emb in embeddings:
+            score = _l2_to_cosine_similarity(distances.get(emb.id, 2.0))
+            if score < min_score:
+                continue
+            results = [
+                *results,
+                _VectorMatch(
+                    embedding_id=emb.id,
+                    file_id=emb.file_id,
+                    score=score,
+                    embedding_type=emb.embedding_type,
+                    content_preview=emb.content_preview,
+                    timestamp_start=emb.timestamp_start,
+                    timestamp_end=emb.timestamp_end,
+                ),
+            ]
+        return results
 
 
 @dataclass
@@ -382,6 +413,25 @@ class _FileScore:
     match_types: set[str] = field(default_factory=set)
 
 
+def _get_type_weight(embedding_type: str) -> float:
+    """Get the scoring weight for an embedding type.
+
+    Args:
+        embedding_type: One of "metadata", "transcript", "text_content", "clip".
+
+    Returns:
+        Weight multiplier from config.
+    """
+    search_config = settings.search
+    weights = {
+        "metadata": search_config.type_weight_metadata,
+        "transcript": search_config.type_weight_transcript,
+        "text_content": search_config.type_weight_text_content,
+        "clip": search_config.type_weight_clip,
+    }
+    return weights.get(embedding_type, 1.0)
+
+
 def _combine_scores(
     text_matches: list[_VectorMatch],
     clip_matches: list[_VectorMatch],
@@ -389,6 +439,9 @@ def _combine_scores(
     alpha: float,
 ) -> dict[str, _FileScore]:
     """Combine vector and keyword scores into file-level rankings.
+
+    Uses per-type best scores with type weights to prevent content-heavy
+    files from dominating through sheer volume of embeddings.
 
     Args:
         text_matches: Text vector search results.
@@ -399,50 +452,56 @@ def _combine_scores(
     Returns:
         Dict mapping file_id to aggregated scores.
     """
+    # Phase 1: Collect best score per (file, embedding_type)
+    file_type_best: dict[str, dict[str, float]] = {}
+    file_matches: dict[str, list[MatchInfo]] = {}
+    file_match_types: dict[str, set[str]] = {}
+
+    all_vector_matches = [
+        *((m, m.embedding_type) for m in text_matches),
+        *((m, "clip") for m in clip_matches),
+    ]
+
+    for match, match_type in all_vector_matches:
+        fid = match.file_id
+
+        type_best = file_type_best.setdefault(fid, {})
+        type_best[match_type] = max(type_best.get(match_type, 0.0), match.score)
+
+        file_match_types.setdefault(fid, set()).add(match_type)
+        file_matches.setdefault(fid, []).append(MatchInfo(
+            match_type=match_type,
+            text=match.content_preview,
+            score=match.score,
+            timestamp_start=match.timestamp_start,
+            timestamp_end=match.timestamp_end,
+        ))
+
+    # Phase 2: Compute weighted vector score per file
     file_scores: dict[str, _FileScore] = {}
 
-    # Process text vector matches
-    for match in text_matches:
-        fs = file_scores.setdefault(
-            match.file_id,
-            _FileScore(file_id=match.file_id, combined_score=0.0),
+    for fid, type_best in file_type_best.items():
+        best_weighted = max(
+            score * _get_type_weight(etype)
+            for etype, score in type_best.items()
         )
-        weighted_score = match.score * alpha
-        fs.combined_score = max(fs.combined_score, weighted_score)
-        fs.match_types.add(match.embedding_type)
-        fs.matches.append(MatchInfo(
-            match_type=match.embedding_type,
-            text=match.content_preview,
-            score=match.score,
-            timestamp_start=match.timestamp_start,
-            timestamp_end=match.timestamp_end,
-        ))
+        vector_contribution = best_weighted * alpha
 
-    # Process CLIP vector matches
-    for match in clip_matches:
-        fs = file_scores.setdefault(
-            match.file_id,
-            _FileScore(file_id=match.file_id, combined_score=0.0),
+        file_scores[fid] = _FileScore(
+            file_id=fid,
+            combined_score=vector_contribution,
+            matches=file_matches.get(fid, []),
+            match_types=file_match_types.get(fid, set()),
         )
-        weighted_score = match.score * alpha
-        fs.combined_score = max(fs.combined_score, weighted_score)
-        fs.match_types.add("clip")
-        fs.matches.append(MatchInfo(
-            match_type="clip",
-            text=match.content_preview,
-            score=match.score,
-            timestamp_start=match.timestamp_start,
-            timestamp_end=match.timestamp_end,
-        ))
 
-    # Process keyword matches
+    # Phase 3: Add keyword contribution
     for match in keyword_matches:
         fs = file_scores.setdefault(
             match.file_id,
             _FileScore(file_id=match.file_id, combined_score=0.0),
         )
         keyword_contribution = match.score * (1.0 - alpha)
-        fs.combined_score += keyword_contribution
+        fs.combined_score = fs.combined_score + keyword_contribution
         fs.match_types.add("keyword")
 
     return file_scores
@@ -507,6 +566,14 @@ def _build_results(
 
     # Sort by score descending
     results = sorted(results, key=lambda r: r.score, reverse=True)
+
+    # Dynamic cutoff: discard results far below the top score
+    if results:
+        cutoff_ratio = settings.search.score_cutoff_ratio
+        top_score = results[0].score
+        min_combined = top_score * cutoff_ratio
+        results = [r for r in results if r.score >= min_combined]
+
     return results[:limit]
 
 

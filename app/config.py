@@ -16,6 +16,8 @@ class ModelConfig:
     whisper: str = "openai/whisper-small"
     text_embedding: str = "intfloat/multilingual-e5-small"
     clip: str = "openai/clip-vit-b-32"
+    text_query_prefix: str = ""
+    text_passage_prefix: str = ""
 
 
 @dataclass(frozen=True)
@@ -23,6 +25,13 @@ class SearchConfig:
     alpha: float = 0.7
     default_limit: int = 20
     max_limit: int = 100
+    min_score_text: float = 0.4
+    min_score_clip: float = 0.2
+    score_cutoff_ratio: float = 0.6
+    type_weight_metadata: float = 1.3
+    type_weight_transcript: float = 1.0
+    type_weight_text_content: float = 0.9
+    type_weight_clip: float = 1.0
 
 
 @dataclass(frozen=True)

@@ -78,12 +78,20 @@ def init_search_db() -> None:
         conn.commit()
 
 
+def _get_text_embedding_dim() -> int:
+    """Get the text embedding dimension from model config."""
+    from app.workers.embedder import _MODEL_DIMS
+    from app.config import settings
+    return _MODEL_DIMS.get(settings.models.text_embedding, 384)
+
+
 def _create_vec_tables(conn: object) -> None:
     """Create sqlite-vec virtual tables if they don't exist."""
-    # Text embedding vectors (384 dimensions for multilingual-e5-small)
+    text_dim = _get_text_embedding_dim()
+    # Text embedding vectors (dimension depends on configured model)
     conn.execute(text(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS vec_text "
-        "USING vec0(embedding_id TEXT PRIMARY KEY, vector float[384])"
+        f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_text "
+        f"USING vec0(embedding_id TEXT PRIMARY KEY, vector float[{text_dim}])"
     ))
 
     # CLIP embedding vectors (512 dimensions for ViT-B/32)

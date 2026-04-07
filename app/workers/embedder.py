@@ -1,10 +1,11 @@
-"""Text embedding worker using multilingual-e5-small via sentence-transformers.
+"""Text embedding worker using sentence-transformers.
 
 Provides shared text-to-vector embedding functionality used by
 both metadata indexing and whisper transcript indexing.
 
 The model is lazy-loaded on first use and kept in memory.
-Uses sentence-transformers which handles ONNX export and inference internally.
+Supports multilingual-e5 and Ruri model families with automatic
+prefix detection.
 """
 
 import logging
@@ -21,8 +22,56 @@ _lock = threading.Lock()
 _model: object | None = None
 _loaded = False
 
-# multilingual-e5-small produces 384-dimensional vectors
+# Default dimension (overwritten after model loads with actual value)
 EMBEDDING_DIM = 384
+
+# Model name → embedding dimension mapping
+_MODEL_DIMS: dict[str, int] = {
+    "intfloat/multilingual-e5-small": 384,
+    "intfloat/multilingual-e5-base": 768,
+    "intfloat/multilingual-e5-large": 1024,
+    "cl-nagoya/ruri-v3-30m": 256,
+    "cl-nagoya/ruri-v3-130m": 768,
+    "cl-nagoya/ruri-v3-310m": 1024,
+}
+
+# Model family → (query_prefix, passage_prefix)
+_MODEL_PREFIXES: dict[str, tuple[str, str]] = {
+    "e5": ("query: ", "passage: "),
+    "ruri": ("検索クエリ: ", "検索文書: "),
+}
+
+
+def _detect_prefix_family(model_name: str) -> str:
+    """Detect the prefix family from the model name.
+
+    Args:
+        model_name: HuggingFace model identifier.
+
+    Returns:
+        Prefix family key ("e5", "ruri", etc.).
+    """
+    lower = model_name.lower()
+    if "ruri" in lower:
+        return "ruri"
+    return "e5"
+
+
+def _get_prefixes() -> tuple[str, str]:
+    """Get the (query_prefix, passage_prefix) for the configured model.
+
+    Priority: explicit config values > auto-detect from model name.
+    If both text_query_prefix and text_passage_prefix are set in config,
+    those are used directly. Otherwise, falls back to model name detection.
+
+    Returns:
+        Tuple of (query_prefix, passage_prefix) strings.
+    """
+    models_config = settings.models
+    if models_config.text_query_prefix or models_config.text_passage_prefix:
+        return (models_config.text_query_prefix, models_config.text_passage_prefix)
+    family = _detect_prefix_family(models_config.text_embedding)
+    return _MODEL_PREFIXES.get(family, _MODEL_PREFIXES["e5"])
 
 
 def _ensure_loaded() -> object:
@@ -34,7 +83,7 @@ def _ensure_loaded() -> object:
     Raises:
         RuntimeError: If model loading fails.
     """
-    global _model, _loaded
+    global _model, _loaded, EMBEDDING_DIM
 
     if _loaded and _model is not None:
         return _model
@@ -57,8 +106,17 @@ def _ensure_loaded() -> object:
                 device="cpu",
             )
 
+            # Update dimension from actual model
+            actual_dim = _model.get_sentence_embedding_dimension()
+            if actual_dim is not None:
+                EMBEDDING_DIM = actual_dim
+            elif model_name in _MODEL_DIMS:
+                EMBEDDING_DIM = _MODEL_DIMS[model_name]
+
             _loaded = True
-            logger.info("Text embedding model loaded successfully")
+            logger.info(
+                "Text embedding model loaded: %s (dim=%d)", model_name, EMBEDDING_DIM
+            )
             return _model
 
         except Exception as e:
@@ -91,7 +149,7 @@ def embed_texts(texts: list[str]) -> np.ndarray:
 def embed_query(query: str) -> np.ndarray:
     """Embed a search query text.
 
-    Adds the "query: " prefix as per multilingual-e5 convention.
+    Adds the appropriate query prefix for the configured model.
 
     Args:
         query: The search query string.
@@ -99,7 +157,8 @@ def embed_query(query: str) -> np.ndarray:
     Returns:
         numpy array of shape (EMBEDDING_DIM,).
     """
-    prefixed = f"query: {query}"
+    query_prefix, _ = _get_prefixes()
+    prefixed = f"{query_prefix}{query}"
     result = embed_texts([prefixed])
     return result[0]
 
@@ -107,7 +166,7 @@ def embed_query(query: str) -> np.ndarray:
 def embed_passages(passages: list[str]) -> np.ndarray:
     """Embed document passages for indexing.
 
-    Adds the "passage: " prefix as per multilingual-e5 convention.
+    Adds the appropriate passage prefix for the configured model.
 
     Args:
         passages: List of document text passages.
@@ -115,5 +174,6 @@ def embed_passages(passages: list[str]) -> np.ndarray:
     Returns:
         numpy array of shape (len(passages), EMBEDDING_DIM).
     """
-    prefixed = [f"passage: {p}" for p in passages]
+    _, passage_prefix = _get_prefixes()
+    prefixed = [f"{passage_prefix}{p}" for p in passages]
     return embed_texts(prefixed)

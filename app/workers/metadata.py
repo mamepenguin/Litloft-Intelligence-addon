@@ -6,7 +6,9 @@ step and runs in batch mode.
 """
 
 import logging
+import re
 import uuid
+from pathlib import PurePosixPath
 from typing import Any
 
 from sqlalchemy import text as sql_text
@@ -26,6 +28,23 @@ logger = logging.getLogger(__name__)
 _extractors = [TextExtractor(), PdfExtractor()]
 
 
+def _clean_filename(filename: str) -> str:
+    """Convert a filename into natural text for embedding.
+
+    Strips extension, replaces separators with spaces, and collapses
+    whitespace so the embedding model processes it as natural language.
+
+    Args:
+        filename: Original filename (e.g. "Piano_Recital_2024.mp4").
+
+    Returns:
+        Cleaned text (e.g. "Piano Recital 2024").
+    """
+    stem = PurePosixPath(filename).stem
+    cleaned = re.sub(r"[_\-\.]+", " ", stem)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
 def _build_metadata_text(file: IndexedFile) -> str:
     """Build a single text string from file metadata for embedding.
 
@@ -38,7 +57,7 @@ def _build_metadata_text(file: IndexedFile) -> str:
     parts: list[str] = []
 
     if file.filename:
-        parts = [*parts, file.filename]
+        parts = [*parts, _clean_filename(file.filename)]
     if file.title and file.title != file.filename:
         parts = [*parts, file.title]
     if file.description:
