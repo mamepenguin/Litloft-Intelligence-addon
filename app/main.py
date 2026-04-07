@@ -11,7 +11,10 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 from typing import Any
 
+import subprocess
+
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.config import settings
@@ -378,6 +381,261 @@ async def queue_reindex(_: None = Depends(verify_webhook_secret)) -> MessageResp
     await manager.reindex_all()
     return MessageResponse(
         status="accepted", message="Full reindex initiated"
+    )
+
+
+# --- File inspection endpoints ---
+
+
+class TranscriptChunkResponse(BaseModel):
+    index: int
+    text: str
+    start: float
+    end: float
+
+
+class TranscriptResponse(BaseModel):
+    file_id: str
+    drive: str
+    language: str
+    chunks: list[TranscriptChunkResponse]
+
+
+class IndexDetailEmbeddingItem(BaseModel):
+    content_preview: str
+    start: float | None = None
+    end: float | None = None
+
+
+class IndexDetailType(BaseModel):
+    count: int
+    items: list[IndexDetailEmbeddingItem]
+
+
+class IndexDetailsResponse(BaseModel):
+    file_id: str
+    drive: str
+    filename: str
+    status: dict[str, bool]
+    indexed_at: str
+    embeddings: dict[str, IndexDetailType]
+
+
+class ClipTimestampItem(BaseModel):
+    start: float
+    content_preview: str
+
+
+class ClipTimestampsResponse(BaseModel):
+    file_id: str
+    drive: str
+    timestamps: list[ClipTimestampItem]
+
+
+def _get_indexed_file_or_404(file_id: str) -> Any:
+    """Get an indexed file by ID or raise 404."""
+    from app.database import get_search_db
+    from app.models import IndexedFile
+
+    with get_search_db() as db:
+        indexed = db.query(IndexedFile).filter(
+            IndexedFile.file_id == file_id,
+            IndexedFile.active.is_(True),
+        ).first()
+        if not indexed:
+            raise HTTPException(status_code=404, detail="File not indexed")
+        # Detach from session by copying attributes
+        return {
+            "file_id": indexed.file_id,
+            "drive": indexed.drive,
+            "filename": indexed.filename,
+            "file_path": indexed.file_path,
+            "file_type": indexed.file_type,
+            "metadata_indexed": indexed.metadata_indexed,
+            "clip_indexed": indexed.clip_indexed,
+            "whisper_indexed": indexed.whisper_indexed,
+            "text_indexed": indexed.text_indexed,
+            "indexed_at": indexed.indexed_at.isoformat() if indexed.indexed_at else "",
+        }
+
+
+@app.get("/files/{file_id}/transcript", response_model=TranscriptResponse)
+async def get_transcript(file_id: str) -> TranscriptResponse:
+    """Get Whisper transcript chunks for a file."""
+    from app.database import get_search_db
+    from app.models import TranscriptChunk
+
+    indexed = _get_indexed_file_or_404(file_id)
+
+    with get_search_db() as db:
+        chunks = (
+            db.query(TranscriptChunk)
+            .filter(TranscriptChunk.file_id == file_id)
+            .order_by(TranscriptChunk.chunk_index)
+            .all()
+        )
+
+    if not chunks:
+        raise HTTPException(status_code=404, detail="No transcript available")
+
+    language = chunks[0].language if chunks else ""
+
+    return TranscriptResponse(
+        file_id=file_id,
+        drive=indexed["drive"],
+        language=language,
+        chunks=[
+            TranscriptChunkResponse(
+                index=c.chunk_index,
+                text=c.text,
+                start=c.timestamp_start,
+                end=c.timestamp_end,
+            )
+            for c in chunks
+        ],
+    )
+
+
+_EMBEDDING_TYPES = ("metadata", "clip", "whisper", "text_content")
+_ITEMS_PER_TYPE = 50
+
+
+@app.get("/files/{file_id}/index-details", response_model=IndexDetailsResponse)
+async def get_index_details(file_id: str) -> IndexDetailsResponse:
+    """Get detailed indexing status and embedding info for a file."""
+    from sqlalchemy import func
+    from app.database import get_search_db
+    from app.models import Embedding
+
+    indexed = _get_indexed_file_or_404(file_id)
+
+    embeddings_by_type: dict[str, IndexDetailType] = {}
+
+    with get_search_db() as db:
+        for etype in _EMBEDDING_TYPES:
+            count = (
+                db.query(func.count(Embedding.id))
+                .filter(
+                    Embedding.file_id == file_id,
+                    Embedding.embedding_type == etype,
+                )
+                .scalar()
+            ) or 0
+
+            items_query = (
+                db.query(Embedding)
+                .filter(
+                    Embedding.file_id == file_id,
+                    Embedding.embedding_type == etype,
+                )
+                .order_by(Embedding.timestamp_start.asc().nullsfirst())
+                .limit(_ITEMS_PER_TYPE)
+                .all()
+            )
+
+            embeddings_by_type[etype] = IndexDetailType(
+                count=count,
+                items=[
+                    IndexDetailEmbeddingItem(
+                        content_preview=e.content_preview,
+                        start=e.timestamp_start,
+                        end=e.timestamp_end,
+                    )
+                    for e in items_query
+                ],
+            )
+
+    return IndexDetailsResponse(
+        file_id=file_id,
+        drive=indexed["drive"],
+        filename=indexed["filename"],
+        status={
+            "metadata": indexed["metadata_indexed"],
+            "clip": indexed["clip_indexed"],
+            "whisper": indexed["whisper_indexed"],
+            "text": indexed["text_indexed"],
+        },
+        indexed_at=indexed["indexed_at"],
+        embeddings=embeddings_by_type,
+    )
+
+
+@app.get("/files/{file_id}/clip-timestamps", response_model=ClipTimestampsResponse)
+async def get_clip_timestamps(file_id: str) -> ClipTimestampsResponse:
+    """Get CLIP frame extraction timestamps for a file."""
+    from app.database import get_search_db
+    from app.models import Embedding
+
+    indexed = _get_indexed_file_or_404(file_id)
+
+    with get_search_db() as db:
+        clips = (
+            db.query(Embedding)
+            .filter(
+                Embedding.file_id == file_id,
+                Embedding.embedding_type == "clip",
+            )
+            .order_by(Embedding.timestamp_start.asc())
+            .all()
+        )
+
+    return ClipTimestampsResponse(
+        file_id=file_id,
+        drive=indexed["drive"],
+        timestamps=[
+            ClipTimestampItem(
+                start=c.timestamp_start or 0.0,
+                content_preview=c.content_preview,
+            )
+            for c in clips
+        ],
+    )
+
+
+@app.get("/files/{file_id}/frame")
+async def get_frame(
+    file_id: str,
+    t: float = Query(..., ge=0, description="Timestamp in seconds"),
+) -> Response:
+    """Extract a single video frame at the given timestamp using ffmpeg."""
+    from app.config import resolve_file_path, validate_file_path
+
+    indexed = _get_indexed_file_or_404(file_id)
+
+    if indexed["file_type"] != "video":
+        raise HTTPException(status_code=400, detail="Not a video file")
+
+    abs_path = resolve_file_path(indexed["drive"], indexed["file_path"])
+    if not abs_path or not validate_file_path(abs_path):
+        raise HTTPException(status_code=404, detail="Video file not accessible")
+
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-ss", str(t),
+                "-i", abs_path,
+                "-frames:v", "1",
+                "-vf", "scale=480:-1",
+                "-f", "image2pipe",
+                "-vcodec", "mjpeg",
+                "-q:v", "3",
+                "-",
+            ],
+            capture_output=True,
+            timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Frame extraction timed out")
+
+    if result.returncode != 0 or not result.stdout:
+        logger.warning("Frame extraction failed for %s at %.1fs", file_id, t)
+        raise HTTPException(status_code=500, detail="Frame extraction failed")
+
+    return Response(
+        content=result.stdout,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=3600"},
     )
 
 
