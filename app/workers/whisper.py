@@ -13,7 +13,7 @@ import time
 import uuid
 
 from app.config import settings, validate_file_path
-from app.database import get_search_db
+from app.database import delete_fts_transcripts, get_search_db, upsert_fts_transcripts
 from app.models import Embedding, IndexedFile, TranscriptChunk
 from app.workers.embedder import embed_passages
 from sqlalchemy import text as sql_text
@@ -401,6 +401,15 @@ def _index_whisper_sync(file_id: str) -> bool:
                         idx, file_id, e,
                     )
 
+        # Write transcript chunks to FTS5 for keyword search
+        fts_chunks = [
+            {"chunk_index": idx, "text": chunk["text"]}
+            for idx, chunk in enumerate(chunks)
+            if chunk["text"].strip()
+        ]
+        if fts_chunks:
+            upsert_fts_transcripts(session, file_id, fts_chunks)
+
         file = session.query(IndexedFile).filter_by(file_id=file_id).first()
         if file is not None:
             file.whisper_indexed = True
@@ -415,8 +424,9 @@ def _remove_whisper_data(session: object, file_id: str) -> None:
         session: Database session.
         file_id: The file ID.
     """
-    # Remove transcript chunks
+    # Remove transcript chunks (ORM + FTS5)
     session.query(TranscriptChunk).filter_by(file_id=file_id).delete()
+    delete_fts_transcripts(session, file_id)
 
     # Remove whisper embeddings and their vectors
     existing = (

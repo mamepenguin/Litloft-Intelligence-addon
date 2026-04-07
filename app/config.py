@@ -43,8 +43,8 @@ class FrameExtractionConfig:
 
 @dataclass(frozen=True)
 class WhisperIndexConfig:
-    min_segment_duration: int = 30
-    max_segment_duration: int = 60
+    min_segment_duration: int = 10
+    max_segment_duration: int = 20
 
 
 @dataclass(frozen=True)

@@ -13,7 +13,7 @@ from sqlalchemy import text as sql_text
 
 from app.config import settings
 from app.database import get_search_db, get_search_engine
-from app.models import Embedding, IndexedFile
+from app.models import Embedding, IndexedFile, TranscriptChunk
 from app.workers.clip import embed_text_clip, CLIP_DIM
 from app.workers.embedder import embed_query, EMBEDDING_DIM
 
@@ -116,12 +116,14 @@ def search(
 
     # Keyword matching
     keyword_matches = _keyword_search(query, effective_limit * 3)
+    transcript_keyword_matches = _keyword_search_transcripts(query, effective_limit * 5)
 
     # Combine and rank results
     file_scores = _combine_scores(
         text_matches=text_matches,
         clip_matches=clip_matches,
         keyword_matches=keyword_matches,
+        transcript_keyword_matches=transcript_keyword_matches,
         alpha=search_config.alpha,
     )
 
@@ -309,6 +311,104 @@ class _KeywordMatch:
     matched_field: str
 
 
+@dataclass(frozen=True)
+class _TranscriptKeywordMatch:
+    """Internal transcript keyword search match."""
+
+    file_id: str
+    score: float
+    text: str
+    timestamp_start: float | None
+    timestamp_end: float | None
+
+
+def _keyword_search_transcripts(
+    query: str, limit: int
+) -> list[_TranscriptKeywordMatch]:
+    """Search transcript chunks using FTS5 trigram index.
+
+    Returns chunk-level matches with timestamps for segment grouping.
+
+    Args:
+        query: The search query.
+        limit: Maximum results.
+
+    Returns:
+        List of transcript keyword matches with timestamps.
+    """
+    fts_query = _build_fts_query(query)
+    if not fts_query:
+        return []
+
+    engine = get_search_engine()
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            sql_text(
+                "SELECT file_id, chunk_index, text, -rank AS relevance "
+                "FROM fts_transcripts "
+                "WHERE fts_transcripts MATCH :query "
+                "ORDER BY rank "
+                "LIMIT :limit"
+            ),
+            {"query": fts_query, "limit": limit},
+        ).fetchall()
+
+    if not rows:
+        return []
+
+    # Look up timestamps from transcript_chunks table
+    file_chunk_pairs = [(row[0], int(row[1])) for row in rows]
+    file_ids = {pair[0] for pair in file_chunk_pairs}
+
+    with get_search_db() as session:
+        # Verify files are active
+        active_ids = {
+            f.file_id
+            for f in session.query(IndexedFile.file_id)
+            .filter(
+                IndexedFile.file_id.in_(file_ids),
+                IndexedFile.active.is_(True),
+            )
+            .all()
+        }
+
+        # Get timestamps for matched chunks
+        chunks_by_key: dict[tuple[str, int], TranscriptChunk] = {}
+        if file_chunk_pairs:
+            all_chunks = (
+                session.query(TranscriptChunk)
+                .filter(TranscriptChunk.file_id.in_(file_ids))
+                .all()
+            )
+            for chunk in all_chunks:
+                chunks_by_key[(chunk.file_id, chunk.chunk_index)] = chunk
+
+    # Normalize scores
+    max_relevance = max(row[3] for row in rows) if rows else 1.0
+    normalizer = max_relevance if max_relevance > 0 else 1.0
+
+    results: list[_TranscriptKeywordMatch] = []
+    for row in rows:
+        fid, chunk_idx, matched_text, relevance = row[0], int(row[1]), row[2], row[3]
+        if fid not in active_ids:
+            continue
+
+        chunk = chunks_by_key.get((fid, chunk_idx))
+        results = [
+            *results,
+            _TranscriptKeywordMatch(
+                file_id=fid,
+                score=min(relevance / normalizer, 1.0),
+                text=matched_text[:200],
+                timestamp_start=chunk.timestamp_start if chunk else None,
+                timestamp_end=chunk.timestamp_end if chunk else None,
+            ),
+        ]
+
+    return results
+
+
 def _build_fts_query(query: str) -> str:
     """Build an FTS5 trigram query string.
 
@@ -436,6 +536,7 @@ def _combine_scores(
     text_matches: list[_VectorMatch],
     clip_matches: list[_VectorMatch],
     keyword_matches: list[_KeywordMatch],
+    transcript_keyword_matches: list[_TranscriptKeywordMatch],
     alpha: float,
 ) -> dict[str, _FileScore]:
     """Combine vector and keyword scores into file-level rankings.
@@ -446,7 +547,8 @@ def _combine_scores(
     Args:
         text_matches: Text vector search results.
         clip_matches: CLIP vector search results.
-        keyword_matches: Keyword search results.
+        keyword_matches: Keyword search results (metadata fields).
+        transcript_keyword_matches: Keyword search results (transcript text).
         alpha: Weight for vector similarity (0-1).
 
     Returns:
@@ -494,7 +596,7 @@ def _combine_scores(
             match_types=file_match_types.get(fid, set()),
         )
 
-    # Phase 3: Add keyword contribution
+    # Phase 3: Add keyword contribution (metadata)
     for match in keyword_matches:
         fs = file_scores.setdefault(
             match.file_id,
@@ -503,6 +605,36 @@ def _combine_scores(
         keyword_contribution = match.score * (1.0 - alpha)
         fs.combined_score = fs.combined_score + keyword_contribution
         fs.match_types.add("keyword")
+
+    # Phase 4: Add transcript keyword contribution
+    # Best transcript keyword score per file, treated same weight as metadata keywords
+    transcript_best: dict[str, float] = {}
+    for match in transcript_keyword_matches:
+        transcript_best[match.file_id] = max(
+            transcript_best.get(match.file_id, 0.0), match.score
+        )
+
+        # Add as match info with timestamps for segment grouping
+        fs = file_scores.setdefault(
+            match.file_id,
+            _FileScore(file_id=match.file_id, combined_score=0.0),
+        )
+        fs.matches.append(MatchInfo(
+            match_type="transcript",
+            text=match.text,
+            score=match.score,
+            timestamp_start=match.timestamp_start,
+            timestamp_end=match.timestamp_end,
+        ))
+        fs.match_types.add("transcript_keyword")
+
+    for fid, best_score in transcript_best.items():
+        fs = file_scores.setdefault(
+            fid,
+            _FileScore(file_id=fid, combined_score=0.0),
+        )
+        transcript_keyword_contribution = best_score * (1.0 - alpha)
+        fs.combined_score = fs.combined_score + transcript_keyword_contribution
 
     return file_scores
 

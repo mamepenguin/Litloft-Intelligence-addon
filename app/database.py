@@ -77,6 +77,40 @@ def init_search_db() -> None:
         _create_vec_tables(conn)
         conn.commit()
 
+    # Backfill fts_transcripts from existing transcript_chunks
+    _backfill_fts_transcripts()
+
+
+def _backfill_fts_transcripts() -> None:
+    """Backfill fts_transcripts from existing transcript_chunks.
+
+    Runs on startup. Skips if fts_transcripts already has data.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    if _search_engine is None:
+        return
+
+    with _search_engine.connect() as conn:
+        count = conn.execute(
+            text("SELECT COUNT(*) FROM fts_transcripts")
+        ).scalar()
+        if count and count > 0:
+            return
+
+        # Copy all transcript_chunks into fts_transcripts
+        result = conn.execute(
+            text(
+                "INSERT INTO fts_transcripts(file_id, chunk_index, text) "
+                "SELECT file_id, chunk_index, text FROM transcript_chunks"
+            )
+        )
+        conn.commit()
+        inserted = result.rowcount
+        if inserted > 0:
+            logger.info("Backfilled %d transcript chunks into fts_transcripts", inserted)
+
 
 def _get_text_embedding_dim() -> int:
     """Get the text embedding dimension from model config."""
@@ -105,6 +139,12 @@ def _create_vec_tables(conn: object) -> None:
         "CREATE VIRTUAL TABLE IF NOT EXISTS fts_files "
         "USING fts5(file_id, filename, title, description, tags_text, "
         "tokenize='trigram')"
+    ))
+
+    # FTS5 trigram index for keyword search on transcript chunks
+    conn.execute(text(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS fts_transcripts "
+        "USING fts5(file_id, chunk_index, text, tokenize='trigram')"
     ))
 
 
@@ -170,7 +210,7 @@ def get_search_engine() -> Engine:
 
 
 ALLOWED_VECTOR_TABLES = frozenset({"vec_text", "vec_clip"})
-ALLOWED_FTS_TABLES = frozenset({"fts_files"})
+ALLOWED_FTS_TABLES = frozenset({"fts_files", "fts_transcripts"})
 
 
 def validate_vector_table(table_name: str) -> str:
@@ -207,4 +247,33 @@ def delete_fts_file(session: Session, file_id: str) -> None:
     """Remove a row from the FTS5 trigram index."""
     session.execute(text(
         "DELETE FROM fts_files WHERE file_id = :file_id"
+    ), {"file_id": file_id})
+
+
+def upsert_fts_transcripts(
+    session: Session, file_id: str, chunks: list[dict]
+) -> None:
+    """Replace all transcript chunks in the FTS5 trigram index for a file.
+
+    Args:
+        session: Database session.
+        file_id: The file ID.
+        chunks: List of dicts with keys: chunk_index, text.
+    """
+    delete_fts_transcripts(session, file_id)
+    for chunk in chunks:
+        session.execute(text(
+            "INSERT INTO fts_transcripts(file_id, chunk_index, text) "
+            "VALUES(:file_id, :chunk_index, :text)"
+        ), {
+            "file_id": file_id,
+            "chunk_index": str(chunk["chunk_index"]),
+            "text": chunk["text"],
+        })
+
+
+def delete_fts_transcripts(session: Session, file_id: str) -> None:
+    """Remove all transcript chunks from the FTS5 trigram index for a file."""
+    session.execute(text(
+        "DELETE FROM fts_transcripts WHERE file_id = :file_id"
     ), {"file_id": file_id})
