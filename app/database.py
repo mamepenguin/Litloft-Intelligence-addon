@@ -92,6 +92,13 @@ def _create_vec_tables(conn: object) -> None:
         "USING vec0(embedding_id TEXT PRIMARY KEY, vector float[512])"
     ))
 
+    # FTS5 trigram index for keyword search on indexed_files
+    conn.execute(text(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS fts_files "
+        "USING fts5(file_id, filename, title, description, tags_text, "
+        "tokenize='trigram')"
+    ))
+
 
 def init_homevault_db() -> None:
     """Initialize read-only connection to HomeVault's SQLite database."""
@@ -117,14 +124,16 @@ def init_homevault_db() -> None:
 def get_search_db() -> Generator[Session, None, None]:
     """Get a search database session.
 
-    Commit is serialized via _write_lock to prevent concurrent SQLite writers.
+    The write lock is acquired before yielding to serialize all writes
+    (including flush() calls within workers) and held through commit.
+    This prevents 'database is locked' errors from concurrent SQLite writers.
     """
     if _SearchSession is None:
         raise RuntimeError("Search database not initialized")
     session = _SearchSession()
     try:
-        yield session
         with _write_lock:
+            yield session
             session.commit()
     except Exception:
         session.rollback()
@@ -153,6 +162,7 @@ def get_search_engine() -> Engine:
 
 
 ALLOWED_VECTOR_TABLES = frozenset({"vec_text", "vec_clip"})
+ALLOWED_FTS_TABLES = frozenset({"fts_files"})
 
 
 def validate_vector_table(table_name: str) -> str:
@@ -168,3 +178,25 @@ def validate_vector_table(table_name: str) -> str:
 def get_write_lock() -> threading.Lock:
     """Get the global DB write lock for serializing vector table mutations."""
     return _write_lock
+
+
+def upsert_fts_file(session: Session, file_id: str, filename: str,
+                     title: str, description: str, tags_text: str) -> None:
+    """Insert or replace a row in the FTS5 trigram index."""
+    session.execute(text(
+        "INSERT OR REPLACE INTO fts_files(file_id, filename, title, description, tags_text) "
+        "VALUES(:file_id, :filename, :title, :description, :tags_text)"
+    ), {
+        "file_id": file_id,
+        "filename": filename,
+        "title": title,
+        "description": description,
+        "tags_text": tags_text,
+    })
+
+
+def delete_fts_file(session: Session, file_id: str) -> None:
+    """Remove a row from the FTS5 trigram index."""
+    session.execute(text(
+        "DELETE FROM fts_files WHERE file_id = :file_id"
+    ), {"file_id": file_id})

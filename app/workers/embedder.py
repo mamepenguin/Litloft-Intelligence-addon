@@ -54,6 +54,7 @@ def _ensure_loaded() -> object:
             _model = SentenceTransformer(
                 model_name,
                 cache_folder=cache_dir,
+                device="cpu",
             )
 
             _loaded = True

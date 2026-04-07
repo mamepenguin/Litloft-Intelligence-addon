@@ -15,7 +15,13 @@ from typing import Any
 from sqlalchemy import text as sql_text
 
 from app.config import resolve_file_path, settings
-from app.database import get_homevault_db, get_search_db, validate_vector_table
+from app.database import (
+    delete_fts_file,
+    get_homevault_db,
+    get_search_db,
+    upsert_fts_file,
+    validate_vector_table,
+)
 from app.models import Embedding, IndexedFile, TranscriptChunk
 from app.workers.clip import index_clip, IMAGE_TYPES, VIDEO_TYPES
 from app.workers.metadata import index_metadata_batch, index_text_content
@@ -26,6 +32,13 @@ from app.workers.whisper import (
 )
 
 logger = logging.getLogger(__name__)
+
+# MIME types for text content extraction (shared across all indexing logic)
+TEXT_MIMES = frozenset({
+    "text/plain", "text/markdown", "text/csv",
+    "application/json", "application/pdf",
+    "text/srt", "text/vtt",
+})
 
 
 class TaskType(str, Enum):
@@ -84,9 +97,10 @@ class IndexManager:
     """
 
     def __init__(self) -> None:
-        self._queue: asyncio.PriorityQueue[tuple[int, float, IndexTask]] = (
-            asyncio.PriorityQueue()
-        )
+        self._queues: dict[TaskType, asyncio.PriorityQueue[tuple[int, float, IndexTask]]] = {
+            task_type: asyncio.PriorityQueue()
+            for task_type in TaskType
+        }
         self._state = QueueState.RUNNING
         self._processing_count = 0
         self._pause_event = asyncio.Event()
@@ -145,7 +159,7 @@ class IndexManager:
         return QueueStatus(
             state=self._state,
             processing_count=self._processing_count,
-            waiting_count=self._queue.qsize(),
+            waiting_count=sum(q.qsize() for q in self._queues.values()),
         )
 
     def get_index_status(self) -> IndexStatus:
@@ -186,13 +200,9 @@ class IndexManager:
                 IndexedFile.mime_type.in_(whisper_types),
             ).count()
 
-            doc_types = [
-                "text/plain", "text/markdown", "text/csv",
-                "application/json", "application/pdf",
-            ]
             pending_text = active_files.filter(
                 IndexedFile.text_indexed.is_(False),
-                IndexedFile.mime_type.in_(doc_types),
+                IndexedFile.mime_type.in_(list(TEXT_MIMES)),
             ).count()
 
             return IndexStatus(
@@ -295,20 +305,31 @@ class IndexManager:
                         )
                         continue
 
+                    filename = file_data["filename"]
+                    title = file_data.get("title", "")
+                    description = file_data.get("description", "")
+
                     indexed_file = IndexedFile(
                         file_id=file_data["id"],
                         drive=file_data["drive"],
-                        filename=file_data["filename"],
+                        filename=filename,
                         file_path=abs_path,
                         file_type=file_data["file_type"],
                         mime_type=file_data["mime_type"],
                         file_size=file_data["file_size"],
                         duration=file_data.get("duration"),
-                        title=file_data.get("title", ""),
-                        description=file_data.get("description", ""),
+                        title=title,
+                        description=description,
                         tags_text=tags_text,
                     )
                     session.add(indexed_file)
+
+                    # Keep FTS5 trigram index in sync
+                    upsert_fts_file(
+                        session, file_data["id"],
+                        filename, title, description, tags_text,
+                    )
+
                     added += 1
                 except Exception as e:
                     logger.error(
@@ -335,11 +356,6 @@ class IndexManager:
         """
         resumed = 0
 
-        text_mimes = {
-            "text/plain", "text/markdown", "text/csv",
-            "application/json", "application/pdf",
-            "text/srt", "text/vtt",
-        }
         clip_mimes = IMAGE_TYPES | VIDEO_TYPES
 
         with get_search_db() as session:
@@ -366,7 +382,7 @@ class IndexManager:
                     f.clip_indexed = True
                 if not f.whisper_indexed and f.mime_type not in TRANSCRIBABLE_TYPES:
                     f.whisper_indexed = True
-                if not f.text_indexed and f.mime_type not in text_mimes:
+                if not f.text_indexed and f.mime_type not in TEXT_MIMES:
                     f.text_indexed = True
 
             # Snapshot what we need for queuing
@@ -441,25 +457,21 @@ class IndexManager:
             ))
 
         # Queue text content extraction for documents
-        text_mimes = {
-            "text/plain", "text/markdown", "text/csv",
-            "application/json", "application/pdf",
-            "text/srt", "text/vtt",
-        }
-        if mime_type in text_mimes:
+        if mime_type in TEXT_MIMES:
             await self._enqueue(IndexTask(
                 file_id=file_id, task_type=TaskType.TEXT_CONTENT
             ))
 
     async def _enqueue(self, task: IndexTask) -> None:
-        """Add a task to the priority queue.
+        """Add a task to the per-type priority queue.
 
         Args:
             task: The indexing task to queue.
         """
         # Priority queue: lower number = higher priority
         # Negate priority so higher values are processed first
-        await self._queue.put((-task.priority, time.monotonic(), task))
+        queue = self._queues[task.task_type]
+        await queue.put((-task.priority, time.monotonic(), task))
 
     async def prioritize(self, file_id: str) -> bool:
         """Prioritize a specific file for immediate processing.
@@ -694,9 +706,7 @@ class IndexManager:
     async def _collect_batch(
         self, task_type: TaskType, max_size: int
     ) -> list[IndexTask]:
-        """Collect tasks of a specific type from the queue.
-
-        Non-matching tasks are re-queued.
+        """Collect tasks from the per-type queue.
 
         Args:
             task_type: The type of tasks to collect.
@@ -705,24 +715,15 @@ class IndexManager:
         Returns:
             List of collected tasks.
         """
+        queue = self._queues[task_type]
         collected: list[IndexTask] = []
-        requeue: list[tuple[int, float, IndexTask]] = []
 
-        try:
-            while len(collected) < max_size:
-                try:
-                    priority, timestamp, task = self._queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-
-                if task.task_type == task_type:
-                    collected = [*collected, task]
-                else:
-                    requeue = [*requeue, (priority, timestamp, task)]
-        finally:
-            # Re-queue non-matching tasks
-            for item in requeue:
-                await self._queue.put(item)
+        while len(collected) < max_size:
+            try:
+                _, _, task = queue.get_nowait()
+                collected = [*collected, task]
+            except asyncio.QueueEmpty:
+                break
 
         return collected
 
@@ -744,14 +745,15 @@ def cleanup_orphaned_embeddings() -> int:
 
     with get_search_db() as session:
         # Find embedding records with no matching vector
-        for vec_table in ("vec_text", "vec_clip"):
+        for vec_table_name in ("vec_text", "vec_clip"):
+            table = validate_vector_table(vec_table_name)
             orphaned = session.execute(
                 sql_text(
                     f"SELECT e.id FROM embeddings e "
                     f"WHERE e.vector_table = :table "
-                    f"AND e.id NOT IN (SELECT embedding_id FROM {vec_table})"
+                    f"AND e.id NOT IN (SELECT embedding_id FROM {table})"
                 ),
-                {"table": vec_table},
+                {"table": table},
             ).fetchall()
 
             for (emb_id,) in orphaned:
@@ -762,10 +764,11 @@ def cleanup_orphaned_embeddings() -> int:
                 cleaned += 1
 
         # Find orphaned vectors with no embedding record
-        for vec_table in ("vec_text", "vec_clip"):
+        for vec_table_name in ("vec_text", "vec_clip"):
+            table = validate_vector_table(vec_table_name)
             orphaned_vecs = session.execute(
                 sql_text(
-                    f"SELECT v.embedding_id FROM {vec_table} v "
+                    f"SELECT v.embedding_id FROM {table} v "
                     f"WHERE v.embedding_id NOT IN (SELECT id FROM embeddings)"
                 ),
             ).fetchall()
@@ -773,7 +776,7 @@ def cleanup_orphaned_embeddings() -> int:
             for (vec_id,) in orphaned_vecs:
                 session.execute(
                     sql_text(
-                        f"DELETE FROM {vec_table} WHERE embedding_id = :id"
+                        f"DELETE FROM {table} WHERE embedding_id = :id"
                     ),
                     {"id": vec_id},
                 )
@@ -896,6 +899,9 @@ def _purge_file(file_id: str) -> None:
 
         # Delete transcript chunks
         session.query(TranscriptChunk).filter_by(file_id=file_id).delete()
+
+        # Remove from FTS5 index
+        delete_fts_file(session, file_id)
 
         # Delete indexed file record
         session.query(IndexedFile).filter_by(file_id=file_id).delete()

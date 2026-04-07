@@ -6,7 +6,6 @@ Results are grouped at file level with segment timestamps.
 """
 
 import logging
-import re
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -279,98 +278,98 @@ class _KeywordMatch:
     matched_field: str
 
 
-def _keyword_search(query: str, limit: int) -> list[_KeywordMatch]:
-    """Search indexed files by keyword matching.
+def _build_fts_query(query: str) -> str:
+    """Build an FTS5 trigram query string.
 
-    Performs case-insensitive substring matching against
-    filename, title, description, and tags.
+    For terms with 2 or fewer characters, wraps in double quotes so
+    FTS5 trigram tokenizer matches the literal substring. Longer terms
+    are also quoted to ensure exact substring matching.
+
+    Args:
+        query: Raw search query.
+
+    Returns:
+        FTS5 query string safe for the trigram tokenizer.
+    """
+    terms = [t.strip() for t in query.split() if t.strip()]
+    if not terms:
+        return ""
+    # Quote each term for literal substring matching with trigram tokenizer.
+    # Strip double quotes to prevent FTS5 syntax errors from user input.
+    quoted = [f'"{t.replace(chr(34), "")}"' for t in terms]
+    return " AND ".join(quoted)
+
+
+# Field weight mapping for FTS5 keyword scoring
+_FIELD_WEIGHTS: dict[str, float] = {
+    "filename": 1.0,
+    "title": 0.9,
+    "tags_text": 0.8,
+    "description": 0.6,
+}
+
+
+def _keyword_search(query: str, limit: int) -> list[_KeywordMatch]:
+    """Search indexed files using FTS5 trigram index.
+
+    Uses SQLite FTS5 with trigram tokenizer for efficient substring
+    matching across filename, title, description, and tags.
 
     Args:
         query: The search query.
         limit: Maximum results.
 
     Returns:
-        List of keyword matches.
+        List of keyword matches with relevance scores.
     """
-    query_lower = query.lower()
-    query_terms = [t.strip() for t in query_lower.split() if t.strip()]
-
-    if not query_terms:
+    fts_query = _build_fts_query(query)
+    if not fts_query:
         return []
 
+    engine = get_search_engine()
+
+    with engine.connect() as conn:
+        # FTS5 rank is negative (more negative = more relevant)
+        rows = conn.execute(
+            sql_text(
+                "SELECT f.file_id, -f.rank AS relevance "
+                "FROM fts_files f "
+                "WHERE fts_files MATCH :query "
+                "ORDER BY f.rank "
+                "LIMIT :limit"
+            ),
+            {"query": fts_query, "limit": limit},
+        ).fetchall()
+
+    if not rows:
+        return []
+
+    # Normalize scores to 0-1 range
+    max_relevance = max(row[1] for row in rows) if rows else 1.0
+    normalizer = max_relevance if max_relevance > 0 else 1.0
+
+    # Filter to only active files
+    file_ids = [row[0] for row in rows]
     with get_search_db() as session:
-        files = (
-            session.query(IndexedFile)
-            .filter(IndexedFile.active.is_(True))
+        active_ids = {
+            f.file_id
+            for f in session.query(IndexedFile.file_id)
+            .filter(
+                IndexedFile.file_id.in_(file_ids),
+                IndexedFile.active.is_(True),
+            )
             .all()
+        }
+
+    return [
+        _KeywordMatch(
+            file_id=row[0],
+            score=min(row[1] / normalizer, 1.0),
+            matched_field="fts",
         )
-
-        matches: list[_KeywordMatch] = []
-
-        for file in files:
-            score, matched_field = _calculate_keyword_score(file, query_terms)
-            if score > 0:
-                matches = [*matches, _KeywordMatch(
-                    file_id=file.file_id,
-                    score=score,
-                    matched_field=matched_field,
-                )]
-
-        # Sort by score descending, take top N
-        matches = sorted(matches, key=lambda m: m.score, reverse=True)
-        return matches[:limit]
-
-
-def _calculate_keyword_score(
-    file: IndexedFile, terms: list[str]
-) -> tuple[float, str]:
-    """Calculate keyword match score for a file.
-
-    Args:
-        file: The indexed file.
-        terms: Lowercased search terms.
-
-    Returns:
-        Tuple of (score, best_matched_field).
-    """
-    fields = {
-        "filename": (file.filename or "").lower(),
-        "title": (file.title or "").lower(),
-        "description": (file.description or "").lower(),
-        "tags": (file.tags_text or "").lower(),
-    }
-
-    # Weight by field importance
-    weights = {
-        "filename": 1.0,
-        "title": 0.9,
-        "tags": 0.8,
-        "description": 0.6,
-    }
-
-    best_score = 0.0
-    best_field = ""
-
-    for field_name, field_text in fields.items():
-        if not field_text:
-            continue
-
-        matched_terms = sum(1 for t in terms if t in field_text)
-        if matched_terms == 0:
-            continue
-
-        # Score based on percentage of terms matched, weighted by field
-        field_score = (matched_terms / len(terms)) * weights[field_name]
-
-        # Bonus for exact match
-        if all(t in field_text for t in terms):
-            field_score *= 1.2
-
-        if field_score > best_score:
-            best_score = field_score
-            best_field = field_name
-
-    return min(best_score, 1.0), best_field
+        for row in rows
+        if row[0] in active_ids
+    ]
 
 
 @dataclass
@@ -443,10 +442,7 @@ def _combine_scores(
             _FileScore(file_id=match.file_id, combined_score=0.0),
         )
         keyword_contribution = match.score * (1.0 - alpha)
-        fs.combined_score = max(
-            fs.combined_score,
-            fs.combined_score + keyword_contribution,
-        )
+        fs.combined_score += keyword_contribution
         fs.match_types.add("keyword")
 
     return file_scores

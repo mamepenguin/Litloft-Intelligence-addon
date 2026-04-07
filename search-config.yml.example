@@ -57,6 +57,7 @@ workers:
   whisper_parallel: 1
   clip_parallel: 2
   metadata_batch_size: 32
+  clip_frame_batch_size: 50
 
 # Model memory management
 memory:

@@ -59,6 +59,7 @@ class WorkerConfig:
     whisper_parallel: int = 1
     clip_parallel: int = 2
     metadata_batch_size: int = 32
+    clip_frame_batch_size: int = 50
 
 
 @dataclass(frozen=True)

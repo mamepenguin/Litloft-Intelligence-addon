@@ -108,6 +108,9 @@ def unload_model() -> None:
             _model = None
             _loaded = False
 
+    import gc
+    gc.collect()
+
 
 def check_idle_unload() -> None:
     """Check if the model should be unloaded due to idle timeout.

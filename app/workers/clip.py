@@ -80,6 +80,7 @@ def _ensure_loaded() -> tuple[object, object, object]:
                 clip_config["model_name"],
                 pretrained=clip_config["pretrained"],
                 cache_dir=cache_dir,
+                device="cpu",
             )
             _tokenizer = open_clip.get_tokenizer(clip_config["model_name"])
 
@@ -165,58 +166,45 @@ def embed_text_clip(text: str) -> np.ndarray:
     return features.squeeze().cpu().numpy().astype(np.float32)
 
 
-def _extract_frames_from_video(
-    video_path: str, duration: float | None
-) -> list[tuple[float, Image.Image]]:
-    """Extract key frames from a video using hybrid scene detection.
+def _extract_frame_paths(
+    video_path: str, duration: float | None, output_dir: Path
+) -> list[tuple[float, Path]]:
+    """Extract key frames from a video to disk using hybrid scene detection.
 
     Uses ffmpeg scene detection with minimum interval guarantee.
-    Frames are loaded into memory before the temp directory is cleaned up.
+    Frames are saved as JPEG files in output_dir. The caller is
+    responsible for managing the lifetime of output_dir.
 
     Args:
         video_path: Path to the video file.
         duration: Video duration in seconds (None if unknown).
+        output_dir: Directory to save extracted frame files.
 
     Returns:
-        List of (timestamp_seconds, PIL.Image) tuples.
+        List of (timestamp_seconds, frame_path) tuples.
     """
     frame_config = settings.indexing.frame_extraction
 
-    with tempfile.TemporaryDirectory(prefix="clip_frames_") as tmpdir:
-        tmp_path = Path(tmpdir)
+    # Step 1: Scene detection frames
+    scene_frames = _extract_scene_frames(
+        video_path, output_dir, frame_config.scene_threshold
+    )
 
-        # Step 1: Scene detection frames
-        scene_frames = _extract_scene_frames(
-            video_path, tmp_path, frame_config.scene_threshold
+    # Step 2: Fill gaps with interval-based frames
+    if duration is not None and duration > 0:
+        all_frames = _fill_interval_gaps(
+            video_path,
+            output_dir,
+            scene_frames,
+            duration,
+            frame_config.min_interval,
+            frame_config.max_frames,
         )
+    else:
+        all_frames = scene_frames
 
-        # Step 2: Fill gaps with interval-based frames
-        if duration is not None and duration > 0:
-            all_frames = _fill_interval_gaps(
-                video_path,
-                tmp_path,
-                scene_frames,
-                duration,
-                frame_config.min_interval,
-                frame_config.max_frames,
-            )
-        else:
-            all_frames = scene_frames
-
-        # Limit total frames
-        path_frames = all_frames[: frame_config.max_frames]
-
-        # Load images into memory BEFORE tmpdir is cleaned up
-        loaded: list[tuple[float, Image.Image]] = []
-        for timestamp, frame_path in path_frames:
-            try:
-                img = Image.open(str(frame_path)).convert("RGB")
-                img.load()  # Force read into memory
-                loaded = [*loaded, (timestamp, img)]
-            except Exception as e:
-                logger.warning("Failed to load frame at %.1fs: %s", timestamp, e)
-
-        return loaded
+    # Limit total frames
+    return all_frames[: frame_config.max_frames]
 
 
 def _extract_scene_frames(
@@ -368,7 +356,10 @@ async def index_clip(file_id: str) -> bool:
 def _index_clip_sync(file_id: str) -> bool:
     """Synchronous CLIP indexing implementation.
 
-    Splits into read → compute → write phases to minimize DB lock duration.
+    For images: single embedding, same as before.
+    For videos: streams frames in batches to limit peak memory.
+    Each batch is loaded from disk, embedded, and written to DB
+    before the next batch is loaded.
 
     Args:
         file_id: The file ID to index.
@@ -397,29 +388,83 @@ def _index_clip_sync(file_id: str) -> bool:
                 file.clip_indexed = True
         return True
 
-    # --- Phase 2: Compute embeddings (no DB access, may be slow) ---
     if not validate_file_path(file_path):
         logger.error("File path validation failed for %s: %s", file_id, file_path)
-        # Mark as indexed to prevent infinite retry on invalid paths
         with get_search_db() as session:
             f = session.query(IndexedFile).filter_by(file_id=file_id).first()
             if f is not None:
                 f.clip_indexed = True
         return False
 
-    embeddings_to_store: list[tuple[str, np.ndarray, str, float | None, float | None]] = []
+    # --- Image: single embedding (no streaming needed) ---
+    if mime_type in IMAGE_TYPES:
+        return _index_clip_image(file_id, file_path, filename)
+
+    # --- Video: streaming batch processing ---
+    return _index_clip_video(file_id, file_path, duration)
+
+
+def _index_clip_image(file_id: str, file_path: str, filename: str) -> bool:
+    """Index a single image file with CLIP.
+
+    Args:
+        file_id: The file ID.
+        file_path: Path to the image file.
+        filename: Original filename for preview text.
+
+    Returns:
+        True if indexing succeeded.
+    """
+    try:
+        image = Image.open(file_path).convert("RGB")
+        vector = embed_image(image)
+        embedding_id = f"clip_{file_id}_{uuid.uuid4().hex[:8]}"
+    except Exception as e:
+        logger.error("CLIP compute failed for %s: %s", file_id, e)
+        with get_search_db() as session:
+            f = session.query(IndexedFile).filter_by(file_id=file_id).first()
+            if f is not None:
+                f.clip_indexed = True
+        return False
+
+    with get_search_db() as session:
+        _remove_clip_embeddings(session, file_id)
+        _store_clip_embedding(
+            session=session,
+            embedding_id=embedding_id,
+            file_id=file_id,
+            vector=vector,
+            content_preview=f"Image: {filename}",
+        )
+        file = session.query(IndexedFile).filter_by(file_id=file_id).first()
+        if file is not None:
+            file.clip_indexed = True
+
+    return True
+
+
+def _index_clip_video(file_id: str, file_path: str, duration: float | None) -> bool:
+    """Index video frames with CLIP using streaming batch processing.
+
+    Extracts frames to a temp directory, then processes them in
+    batches of clip_frame_batch_size to limit peak memory usage.
+
+    Args:
+        file_id: The file ID.
+        file_path: Path to the video file.
+        duration: Video duration in seconds.
+
+    Returns:
+        True if indexing succeeded.
+    """
+    batch_size = settings.workers.clip_frame_batch_size
 
     try:
-        if mime_type in IMAGE_TYPES:
-            image = Image.open(file_path).convert("RGB")
-            vector = embed_image(image)
-            embedding_id = f"clip_{file_id}_{uuid.uuid4().hex[:8]}"
-            embeddings_to_store = [
-                (embedding_id, vector, f"Image: {filename}", None, None)
-            ]
-        else:
-            frames = _extract_frames_from_video(file_path, duration)
-            if not frames:
+        with tempfile.TemporaryDirectory(prefix="clip_frames_") as tmpdir:
+            tmp_path = Path(tmpdir)
+            frame_paths = _extract_frame_paths(file_path, duration, tmp_path)
+
+            if not frame_paths:
                 logger.warning("No frames extracted for %s", file_id)
                 with get_search_db() as session:
                     f = session.query(IndexedFile).filter_by(file_id=file_id).first()
@@ -427,33 +472,79 @@ def _index_clip_sync(file_id: str) -> bool:
                         f.clip_indexed = True
                 return True
 
-            for timestamp, image in frames:
-                try:
-                    vector = embed_image(image)
-                    embedding_id = f"clip_{file_id}_{uuid.uuid4().hex[:8]}"
-                    embeddings_to_store = [
-                        *embeddings_to_store,
-                        (embedding_id, vector, f"Frame at {timestamp:.1f}s", timestamp, timestamp + 30),
-                    ]
-                except Exception as e:
-                    logger.warning(
-                        "Failed to process frame at %ss for %s: %s",
-                        timestamp, file_id, e,
-                    )
+            # Remove old embeddings once before streaming new ones
+            with get_search_db() as session:
+                _remove_clip_embeddings(session, file_id)
+
+            # Process frames in batches
+            total_stored = 0
+            for batch_start in range(0, len(frame_paths), batch_size):
+                batch = frame_paths[batch_start:batch_start + batch_size]
+                stored = _process_frame_batch(file_id, batch)
+                total_stored += stored
+
+            logger.info(
+                "CLIP indexed %d/%d frames for %s",
+                total_stored, len(frame_paths), file_id,
+            )
+
     except Exception as e:
-        logger.error("CLIP compute failed for %s: %s", file_id, e)
-        # Mark as indexed to prevent infinite retry on permanently broken files
+        logger.error("CLIP video indexing failed for %s: %s", file_id, e)
         with get_search_db() as session:
             f = session.query(IndexedFile).filter_by(file_id=file_id).first()
             if f is not None:
                 f.clip_indexed = True
         return False
 
-    # --- Phase 3: Write all results to DB (short transaction) ---
     with get_search_db() as session:
-        _remove_clip_embeddings(session, file_id)
+        file = session.query(IndexedFile).filter_by(file_id=file_id).first()
+        if file is not None:
+            file.clip_indexed = True
 
-        for emb_id, vector, preview, ts_start, ts_end in embeddings_to_store:
+    return True
+
+
+def _process_frame_batch(
+    file_id: str,
+    frame_paths: list[tuple[float, Path]],
+) -> int:
+    """Load, embed, and store a batch of video frames.
+
+    Each frame is loaded from disk, embedded with CLIP, and the
+    result is written to the database. PIL images are released
+    after embedding to keep memory bounded.
+
+    Args:
+        file_id: The file ID.
+        frame_paths: List of (timestamp, path) tuples for this batch.
+
+    Returns:
+        Number of embeddings successfully stored.
+    """
+    embeddings: list[tuple[str, np.ndarray, str, float, float]] = []
+
+    for timestamp, frame_path in frame_paths:
+        try:
+            img = Image.open(str(frame_path)).convert("RGB")
+            img.load()
+            vector = embed_image(img)
+            del img
+            embedding_id = f"clip_{file_id}_{uuid.uuid4().hex[:8]}"
+            embeddings = [
+                *embeddings,
+                (embedding_id, vector, f"Frame at {timestamp:.1f}s", timestamp, timestamp + 30),
+            ]
+        except Exception as e:
+            logger.warning(
+                "Failed to process frame at %.1fs for %s: %s",
+                timestamp, file_id, e,
+            )
+
+    if not embeddings:
+        return 0
+
+    with get_search_db() as session:
+        for emb_id, vector, preview, ts_start, ts_end in embeddings:
             _store_clip_embedding(
                 session=session,
                 embedding_id=emb_id,
@@ -464,11 +555,7 @@ def _index_clip_sync(file_id: str) -> bool:
                 timestamp_end=ts_end,
             )
 
-        file = session.query(IndexedFile).filter_by(file_id=file_id).first()
-        if file is not None:
-            file.clip_indexed = True
-
-    return True
+    return len(embeddings)
 
 
 def _store_clip_embedding(
