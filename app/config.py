@@ -15,7 +15,7 @@ import yaml
 class ModelConfig:
     whisper: str = "openai/whisper-small"
     text_embedding: str = "intfloat/multilingual-e5-small"
-    clip: str = "openai/clip-vit-b-32"
+    clip: str = "llm-jp/llm-jp-clip-vit-base-patch16"
     text_query_prefix: str = ""
     text_passage_prefix: str = ""
 
@@ -25,7 +25,7 @@ class SearchConfig:
     # RRF parameters
     rrf_k: int = 60
     rrf_candidates: int = 50
-    rrf_weight_clip: float = 0.3
+    rrf_weight_clip: float = 0.5
     # Result limits
     default_limit: int = 20
     max_limit: int = 100

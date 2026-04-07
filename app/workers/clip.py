@@ -1,6 +1,7 @@
 """CLIP analysis worker for image and video frame embeddings.
 
-Extracts visual features using CLIP (ViT-B/32 by default, configurable).
+Extracts visual features using CLIP (configurable via search-config.yml).
+Supports built-in open_clip models and HuggingFace Hub models (hf-hub:).
 For videos, uses hybrid frame extraction: scene detection + minimum interval.
 """
 
@@ -29,11 +30,17 @@ _preprocess: object | None = None
 _tokenizer: object | None = None
 _loaded = False
 
-# CLIP produces 512-dimensional vectors (ViT-B/32)
-CLIP_DIM = 512
+# Model name → embedding dimension mapping
+_CLIP_DIMS: dict[str, int] = {
+    "openai/clip-vit-b-32": 512,
+    "openai/clip-vit-b-16": 512,
+    "llm-jp/llm-jp-clip-vit-base-patch16": 768,
+    "llm-jp/llm-jp-clip-vit-large-patch14": 1024,
+}
 
-# Semaphore for parallel CLIP processing
-_semaphore: asyncio.Semaphore | None = None
+# Default dimension (overwritten after model loads with actual value)
+CLIP_DIM = _CLIP_DIMS.get(settings.models.clip, 512)
+
 
 # Image file types that CLIP can process directly
 IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp"}
@@ -42,21 +49,18 @@ IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp"
 VIDEO_TYPES = {"video/mp4", "video/webm", "video/quicktime", "video/x-matroska"}
 
 
-def _get_semaphore() -> asyncio.Semaphore:
-    """Get or create the CLIP processing semaphore."""
-    global _semaphore
-    if _semaphore is None:
-        _semaphore = asyncio.Semaphore(settings.workers.clip_parallel)
-    return _semaphore
-
 
 def _ensure_loaded() -> tuple[object, object, object]:
     """Lazy-load the CLIP model on first use.
 
+    Supports two loading styles:
+    - Built-in open_clip models: "openai/clip-vit-b-32" etc.
+    - HuggingFace Hub models: loaded via "hf-hub:" prefix.
+
     Returns:
         Tuple of (model, preprocess, tokenizer).
     """
-    global _model, _preprocess, _tokenizer, _loaded
+    global _model, _preprocess, _tokenizer, _loaded, CLIP_DIM
 
     if _loaded and _model is not None:
         return _model, _preprocess, _tokenizer
@@ -73,20 +77,39 @@ def _ensure_loaded() -> tuple[object, object, object]:
 
             logger.info("Loading CLIP model: %s", model_name)
 
-            # Map config model names to open_clip model/pretrained pairs
-            clip_config = _resolve_clip_model(model_name)
+            # Built-in open_clip models (openai/*)
+            builtin_map = {
+                "openai/clip-vit-b-32": ("ViT-B-32", "openai"),
+                "openai/clip-vit-b-16": ("ViT-B-16", "openai"),
+            }
 
-            _model, _, _preprocess = open_clip.create_model_and_transforms(
-                clip_config["model_name"],
-                pretrained=clip_config["pretrained"],
-                cache_dir=cache_dir,
-                device="cpu",
-            )
-            _tokenizer = open_clip.get_tokenizer(clip_config["model_name"])
+            if model_name in builtin_map:
+                oc_model, oc_pretrained = builtin_map[model_name]
+                _model, _, _preprocess = open_clip.create_model_and_transforms(
+                    oc_model,
+                    pretrained=oc_pretrained,
+                    cache_dir=cache_dir,
+                    device="cpu",
+                )
+                _tokenizer = open_clip.get_tokenizer(oc_model)
+            else:
+                # HuggingFace Hub models (llm-jp/*, etc.)
+                hf_name = f"hf-hub:{model_name}"
+                _model, _preprocess = open_clip.create_model_from_pretrained(
+                    hf_name,
+                    cache_dir=cache_dir,
+                )
+                _tokenizer = open_clip.get_tokenizer(hf_name)
 
             _model.eval()
+
+            # Detect actual embedding dimension from the model
+            CLIP_DIM = _detect_clip_dim(_model)
+
             _loaded = True
-            logger.info("CLIP model loaded successfully")
+            logger.info(
+                "CLIP model loaded successfully (dim=%d)", CLIP_DIM
+            )
             return _model, _preprocess, _tokenizer
 
         except Exception as e:
@@ -94,32 +117,34 @@ def _ensure_loaded() -> tuple[object, object, object]:
             raise RuntimeError(f"CLIP model load failed: {e}") from e
 
 
-def _resolve_clip_model(config_name: str) -> dict[str, str]:
-    """Resolve config model name to open_clip model/pretrained pair.
+def _detect_clip_dim(model: object) -> int:
+    """Detect the embedding dimension from a loaded CLIP model.
+
+    Inspects the visual projection layer to determine output dimension.
 
     Args:
-        config_name: Model name from search-config.yml.
+        model: A loaded open_clip model.
 
     Returns:
-        Dict with model_name and pretrained keys.
+        The embedding dimension (e.g. 512, 768, 1024).
     """
-    model_map = {
-        "openai/clip-vit-b-32": {
-            "model_name": "ViT-B-32",
-            "pretrained": "openai",
-        },
-        "rinna/japanese-clip-vit-b-16": {
-            "model_name": "ViT-B-16",
-            "pretrained": "laion2b_s34b_b88k",
-        },
-    }
+    import torch
 
-    resolved = model_map.get(config_name)
-    if resolved is not None:
-        return resolved
+    # open_clip models expose visual.output_dim or have a projection layer
+    if hasattr(model, "visual") and hasattr(model.visual, "output_dim"):
+        return model.visual.output_dim
 
-    # Default fallback
-    return {"model_name": "ViT-B-32", "pretrained": "openai"}
+    # Fallback: run a dummy forward pass through the text encoder
+    try:
+        dummy = torch.zeros(1, 77, dtype=torch.long)
+        with torch.no_grad():
+            out = model.encode_text(dummy)
+        return out.shape[-1]
+    except Exception:
+        pass
+
+    # Last resort: use the static mapping
+    return _CLIP_DIMS.get(settings.models.clip, 512)
 
 
 def embed_image(image: Image.Image) -> np.ndarray:
@@ -348,9 +373,7 @@ async def index_clip(file_id: str) -> bool:
     Returns:
         True if indexing succeeded.
     """
-    sem = _get_semaphore()
-    async with sem:
-        return await asyncio.to_thread(_index_clip_sync, file_id)
+    return await asyncio.to_thread(_index_clip_sync, file_id)
 
 
 def _index_clip_sync(file_id: str) -> bool:

@@ -14,8 +14,8 @@ from sqlalchemy import text as sql_text
 from app.config import settings
 from app.database import get_search_db, get_search_engine
 from app.models import Embedding, IndexedFile, TranscriptChunk
-from app.workers.clip import embed_text_clip, CLIP_DIM
-from app.workers.embedder import embed_query, EMBEDDING_DIM
+from app.workers.clip import embed_text_clip
+from app.workers.embedder import embed_query
 
 logger = logging.getLogger(__name__)
 

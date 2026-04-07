@@ -72,8 +72,9 @@ def init_search_db() -> None:
 
     _SearchSession = sessionmaker(bind=_search_engine, expire_on_commit=False)
 
-    # Create virtual tables for vector search (sqlite-vec)
+    # Migrate vec_clip if dimension changed (model swap), then create tables
     with _search_engine.connect() as conn:
+        _migrate_vec_clip_if_needed(conn)
         _create_vec_tables(conn)
         conn.commit()
 
@@ -119,6 +120,69 @@ def _get_text_embedding_dim() -> int:
     return _MODEL_DIMS.get(settings.models.text_embedding, 384)
 
 
+def _get_clip_embedding_dim() -> int:
+    """Get the CLIP embedding dimension from model config."""
+    from app.workers.clip import _CLIP_DIMS
+    from app.config import settings
+    return _CLIP_DIMS.get(settings.models.clip, 512)
+
+
+def _migrate_vec_clip_if_needed(conn: object) -> None:
+    """Drop and recreate vec_clip if its dimension doesn't match config.
+
+    sqlite-vec virtual tables cannot be ALTERed, so a dimension change
+    requires DROP + CREATE. All existing CLIP embeddings are removed and
+    clip_indexed flags are reset so the indexer re-processes all files.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    expected_dim = _get_clip_embedding_dim()
+
+    # Check if vec_clip exists
+    row = conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name='vec_clip'")
+    ).fetchone()
+    if row is None:
+        return  # Table doesn't exist yet; _create_vec_tables will handle it
+
+    # Probe current dimension by reading the table's SQL definition
+    # sqlite-vec tables store their schema in sqlite_master.sql
+    schema_row = conn.execute(
+        text("SELECT sql FROM sqlite_master WHERE type='table' AND name='vec_clip'")
+    ).fetchone()
+
+    if schema_row is None:
+        return
+
+    # Parse "vector float[N]" from the CREATE statement
+    import re
+    match = re.search(r"float\[(\d+)\]", schema_row[0] or "")
+    if match is None:
+        return
+
+    current_dim = int(match.group(1))
+    if current_dim == expected_dim:
+        return
+
+    logger.warning(
+        "CLIP dimension changed (%d → %d). Dropping vec_clip and "
+        "resetting clip_indexed flags for re-indexing.",
+        current_dim, expected_dim,
+    )
+
+    # Remove all CLIP embedding records from the ORM table
+    conn.execute(text("DELETE FROM embeddings WHERE embedding_type = 'clip'"))
+
+    # Drop the old virtual table
+    conn.execute(text("DROP TABLE vec_clip"))
+
+    # Reset clip_indexed so the indexer re-processes all files
+    conn.execute(text("UPDATE indexed_files SET clip_indexed = 0"))
+
+    conn.commit()
+
+
 def _create_vec_tables(conn: object) -> None:
     """Create sqlite-vec virtual tables if they don't exist."""
     text_dim = _get_text_embedding_dim()
@@ -128,10 +192,11 @@ def _create_vec_tables(conn: object) -> None:
         f"USING vec0(embedding_id TEXT PRIMARY KEY, vector float[{text_dim}])"
     ))
 
-    # CLIP embedding vectors (512 dimensions for ViT-B/32)
+    # CLIP embedding vectors (dimension depends on configured model)
+    clip_dim = _get_clip_embedding_dim()
     conn.execute(text(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS vec_clip "
-        "USING vec0(embedding_id TEXT PRIMARY KEY, vector float[512])"
+        f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_clip "
+        f"USING vec0(embedding_id TEXT PRIMARY KEY, vector float[{clip_dim}])"
     ))
 
     # FTS5 trigram index for keyword search on indexed_files

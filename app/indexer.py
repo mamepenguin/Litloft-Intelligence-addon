@@ -109,9 +109,6 @@ class IndexManager:
         self._whisper_semaphore = asyncio.Semaphore(
             settings.workers.whisper_parallel
         )
-        self._clip_semaphore = asyncio.Semaphore(
-            settings.workers.clip_parallel
-        )
         self._running_tasks: set[str] = set()
         self._background_tasks: list[asyncio.Task] = []
 
@@ -120,9 +117,15 @@ class IndexManager:
         logger.info("Starting index manager")
 
         # Start worker tasks
+        clip_count = settings.workers.clip_parallel
         self._background_tasks = [
             asyncio.create_task(self._metadata_worker(), name="metadata_worker"),
-            asyncio.create_task(self._clip_worker(), name="clip_worker"),
+            *[
+                asyncio.create_task(
+                    self._clip_worker(), name=f"clip_worker_{i}"
+                )
+                for i in range(clip_count)
+            ],
             asyncio.create_task(self._whisper_worker(), name="whisper_worker"),
             asyncio.create_task(
                 self._reconciliation_worker(), name="reconciliation_worker"
@@ -638,10 +641,9 @@ class IndexManager:
                 self._processing_count += 1
 
                 try:
-                    async with self._clip_semaphore:
-                        success = await index_clip(task.file_id)
-                        if success:
-                            logger.info("CLIP indexed: %s", task.file_id)
+                    success = await index_clip(task.file_id)
+                    if success:
+                        logger.info("CLIP indexed: %s", task.file_id)
                 except Exception as e:
                     logger.error("CLIP indexing failed for %s: %s", task.file_id, e)
                 finally:
