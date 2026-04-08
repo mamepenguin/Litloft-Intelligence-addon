@@ -63,8 +63,8 @@ class TextExtractor(ContentExtractor):
         )
 
         return [
-            TextChunk(text=chunk, page=idx, metadata=suffix)
-            for idx, chunk in enumerate(text_chunks)
+            TextChunk(text=chunk, page=None, metadata=suffix)
+            for chunk in text_chunks
         ]
 
 

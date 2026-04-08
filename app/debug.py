@@ -17,6 +17,7 @@ from app.search import (
     _build_fts_query,
     _combine_scores_rrf,
     _keyword_search,
+    _keyword_search_text_content,
     _keyword_search_transcripts,
     _l2_to_cosine_similarity,
     _vector_search_clip,
@@ -57,6 +58,14 @@ class DebugTranscriptKeywordMatch(BaseModel):
     timestamp_end: float | None = None
 
 
+class DebugTextContentKeywordMatch(BaseModel):
+    file_id: str
+    filename: str
+    score: float
+    text: str
+    page: int | None = None
+
+
 class DebugCombinedResult(BaseModel):
     file_id: str
     filename: str
@@ -73,6 +82,7 @@ class DebugSearchResponse(BaseModel):
     clip_vector: list[DebugVectorMatch]
     keyword: list[DebugKeywordMatch]
     transcript_keyword: list[DebugTranscriptKeywordMatch]
+    text_content_keyword: list[DebugTextContentKeywordMatch]
     combined: list[DebugCombinedResult]
     score_stats: dict
 
@@ -109,6 +119,7 @@ def debug_search(query: str) -> DebugSearchResponse:
     )
     keyword_matches = _keyword_search(query, candidates)
     transcript_kw_matches = _keyword_search_transcripts(query, candidates)
+    text_content_kw_matches = _keyword_search_text_content(query, candidates)
 
     # Collect all file_ids for filename lookup
     all_file_ids = list({
@@ -116,6 +127,7 @@ def debug_search(query: str) -> DebugSearchResponse:
         *[m.file_id for m in clip_matches],
         *[m.file_id for m in keyword_matches],
         *[m.file_id for m in transcript_kw_matches],
+        *[m.file_id for m in text_content_kw_matches],
     })
     names = _filenames_map(all_file_ids)
 
@@ -184,12 +196,28 @@ def debug_search(query: str) -> DebugSearchResponse:
         reverse=True,
     )
 
+    debug_text_content_kw = sorted(
+        [
+            DebugTextContentKeywordMatch(
+                file_id=m.file_id,
+                filename=names.get(m.file_id, "?"),
+                score=round(m.score, 4),
+                text=m.text[:100],
+                page=m.page,
+            )
+            for m in text_content_kw_matches
+        ],
+        key=lambda x: x.score,
+        reverse=True,
+    )
+
     # Combined RRF
     file_scores = _combine_scores_rrf(
         text_matches=text_matches,
         clip_matches=clip_matches,
         keyword_matches=keyword_matches,
         transcript_keyword_matches=transcript_kw_matches,
+        text_content_keyword_matches=text_content_kw_matches,
         k=search_config.rrf_k,
     )
 
@@ -207,6 +235,9 @@ def debug_search(query: str) -> DebugSearchResponse:
     tkw_best: dict[str, float] = {}
     for m in transcript_kw_matches:
         tkw_best[m.file_id] = max(tkw_best.get(m.file_id, 0.0), m.score)
+    tckw_best: dict[str, float] = {}
+    for m in text_content_kw_matches:
+        tckw_best[m.file_id] = max(tckw_best.get(m.file_id, 0.0), m.score)
 
     combined_sorted = sorted(
         file_scores.values(), key=lambda fs: fs.combined_score, reverse=True
@@ -225,6 +256,7 @@ def debug_search(query: str) -> DebugSearchResponse:
                     "clip_vector": clip_best.get(fs.file_id, 0.0),
                     "keyword": kw_best.get(fs.file_id, 0.0),
                     "transcript_keyword": tkw_best.get(fs.file_id, 0.0),
+                    "text_content_keyword": tckw_best.get(fs.file_id, 0.0),
                 }.items()
                 if v > 0
             },
@@ -253,6 +285,7 @@ def debug_search(query: str) -> DebugSearchResponse:
         },
         "keyword": {"count": len(keyword_matches)},
         "transcript_keyword": {"count": len(transcript_kw_matches)},
+        "text_content_keyword": {"count": len(text_content_kw_matches)},
     }
 
     return DebugSearchResponse(
@@ -274,6 +307,7 @@ def debug_search(query: str) -> DebugSearchResponse:
         clip_vector=debug_clip,
         keyword=debug_kw,
         transcript_keyword=debug_transcript_kw,
+        text_content_keyword=debug_text_content_kw,
         combined=debug_combined,
         score_stats=score_stats,
     )

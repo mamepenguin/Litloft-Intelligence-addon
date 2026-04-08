@@ -212,6 +212,12 @@ def _create_vec_tables(conn: object) -> None:
         "USING fts5(file_id, chunk_index, text, tokenize='trigram')"
     ))
 
+    # FTS5 trigram index for keyword search on text content (PDF, etc.)
+    conn.execute(text(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS fts_text_content "
+        "USING fts5(file_id, chunk_index, page, text, tokenize='trigram')"
+    ))
+
 
 def init_homevault_db() -> None:
     """Initialize read-only connection to HomeVault's SQLite database."""
@@ -275,7 +281,7 @@ def get_search_engine() -> Engine:
 
 
 ALLOWED_VECTOR_TABLES = frozenset({"vec_text", "vec_clip"})
-ALLOWED_FTS_TABLES = frozenset({"fts_files", "fts_transcripts"})
+ALLOWED_FTS_TABLES = frozenset({"fts_files", "fts_transcripts", "fts_text_content"})
 
 
 def validate_vector_table(table_name: str) -> str:
@@ -341,4 +347,34 @@ def delete_fts_transcripts(session: Session, file_id: str) -> None:
     """Remove all transcript chunks from the FTS5 trigram index for a file."""
     session.execute(text(
         "DELETE FROM fts_transcripts WHERE file_id = :file_id"
+    ), {"file_id": file_id})
+
+
+def upsert_fts_text_content(
+    session: Session, file_id: str, chunks: list[dict]
+) -> None:
+    """Replace all text content chunks in the FTS5 trigram index for a file.
+
+    Args:
+        session: Database session.
+        file_id: The file ID.
+        chunks: List of dicts with keys: chunk_index, page (int|None), text.
+    """
+    delete_fts_text_content(session, file_id)
+    for chunk in chunks:
+        session.execute(text(
+            "INSERT INTO fts_text_content(file_id, chunk_index, page, text) "
+            "VALUES(:file_id, :chunk_index, :page, :text)"
+        ), {
+            "file_id": file_id,
+            "chunk_index": str(chunk["chunk_index"]),
+            "page": str(chunk["page"]) if chunk["page"] is not None else "",
+            "text": chunk["text"],
+        })
+
+
+def delete_fts_text_content(session: Session, file_id: str) -> None:
+    """Remove all text content chunks from the FTS5 trigram index for a file."""
+    session.execute(text(
+        "DELETE FROM fts_text_content WHERE file_id = :file_id"
     ), {"file_id": file_id})

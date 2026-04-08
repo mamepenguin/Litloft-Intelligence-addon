@@ -17,6 +17,7 @@ from sqlalchemy import text as sql_text
 from app.config import resolve_file_path, settings
 from app.database import (
     delete_fts_file,
+    delete_fts_text_content,
     delete_fts_transcripts,
     get_homevault_db,
     get_search_db,
@@ -965,6 +966,7 @@ def _purge_file(file_id: str) -> None:
         # Remove from FTS5 indexes
         delete_fts_file(session, file_id)
         delete_fts_transcripts(session, file_id)
+        delete_fts_text_content(session, file_id)
 
         # Delete indexed file record
         session.query(IndexedFile).filter_by(file_id=file_id).delete()

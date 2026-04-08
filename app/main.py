@@ -128,6 +128,7 @@ class SearchResultSegmentMatch(BaseModel):
     type: str
     text: str
     score: float
+    page: int | None = None
 
 
 class SearchResultSegment(BaseModel):
@@ -243,6 +244,7 @@ async def search_endpoint(
                                 type=m.match_type,
                                 text=m.text,
                                 score=round(m.score, 4),
+                                page=m.page,
                             )
                             for m in s.matches
                         ],
@@ -266,6 +268,7 @@ class SourceCountsModel(BaseModel):
     clip_vector: int
     keyword: int
     transcript_keyword: int
+    text_content_keyword: int = 0
 
 
 class CompareResponseModel(BaseModel):
@@ -297,6 +300,7 @@ def _to_response_model(result: Any) -> SearchResponseModel:
                                 type=m.match_type,
                                 text=m.text,
                                 score=round(m.score, 4),
+                                page=m.page,
                             )
                             for m in s.matches
                         ],
@@ -338,6 +342,7 @@ async def search_compare_endpoint(
             clip_vector=compare.source_counts.clip_vector,
             keyword=compare.source_counts.keyword,
             transcript_keyword=compare.source_counts.transcript_keyword,
+            text_content_keyword=compare.source_counts.text_content_keyword,
         ),
     )
 

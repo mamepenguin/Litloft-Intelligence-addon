@@ -15,7 +15,7 @@ from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.database import get_search_db, validate_vector_table
+from app.database import get_search_db, upsert_fts_text_content, validate_vector_table
 from app.extractors.base import TextChunk
 from app.extractors.pdf import PdfExtractor
 from app.extractors.text import TextExtractor
@@ -265,6 +265,17 @@ def index_text_content(file_id: str) -> bool:
                     "Failed to store text embedding %d for %s: %s",
                     idx, file_id, e,
                 )
+
+        # Write full text chunks to FTS5 for keyword search
+        fts_chunks = [
+            {
+                "chunk_index": idx,
+                "page": chunk.page,
+                "text": chunk.text,
+            }
+            for idx, chunk in enumerate(chunks)
+        ]
+        upsert_fts_text_content(session, file_id, fts_chunks)
 
         file.text_indexed = True
         return True

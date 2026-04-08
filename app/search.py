@@ -47,6 +47,7 @@ class MatchInfo:
     score: float
     timestamp_start: float | None = None
     timestamp_end: float | None = None
+    page: int | None = None
 
 
 @dataclass(frozen=True)
@@ -112,11 +113,12 @@ def search(
     text_vector = embed_query(query)
     clip_vector = _safe_clip_embed(query)
 
-    # Four retrieval systems, each returning top-N candidates
+    # Five retrieval systems, each returning top-N candidates
     text_matches = _vector_search_text(text_vector, candidates)
     clip_matches = _vector_search_clip(clip_vector, candidates) if clip_vector is not None else []
     keyword_matches = _keyword_search(query, candidates)
     transcript_keyword_matches = _keyword_search_transcripts(query, candidates)
+    text_content_keyword_matches = _keyword_search_text_content(query, candidates)
 
     # Combine via weighted cosine similarity
     file_scores = _combine_scores_cosine(
@@ -124,6 +126,7 @@ def search(
         clip_matches=clip_matches,
         keyword_matches=keyword_matches,
         transcript_keyword_matches=transcript_keyword_matches,
+        text_content_keyword_matches=text_content_keyword_matches,
     )
 
     # Apply filters and build results
@@ -384,6 +387,16 @@ class _TranscriptKeywordMatch:
     timestamp_end: float | None
 
 
+@dataclass(frozen=True)
+class _TextContentKeywordMatch:
+    """Internal text content keyword search match."""
+
+    file_id: str
+    score: float
+    text: str
+    page: int | None
+
+
 def _keyword_search_transcripts(
     query: str, limit: int
 ) -> list[_TranscriptKeywordMatch]:
@@ -590,6 +603,80 @@ def _keyword_search(query: str, limit: int) -> list[_KeywordMatch]:
     ]
 
 
+def _keyword_search_text_content(
+    query: str, limit: int
+) -> list[_TextContentKeywordMatch]:
+    """Search text content chunks using FTS5 trigram index.
+
+    Returns chunk-level matches with page numbers for PDF and similar docs.
+
+    Args:
+        query: The search query.
+        limit: Maximum results.
+
+    Returns:
+        List of text content keyword matches with page info.
+    """
+    fts_query = _build_fts_query(query)
+    if not fts_query:
+        return []
+
+    engine = get_search_engine()
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            sql_text(
+                "SELECT file_id, chunk_index, page, text, -rank AS relevance "
+                "FROM fts_text_content "
+                "WHERE fts_text_content MATCH :query "
+                "ORDER BY rank "
+                "LIMIT :limit"
+            ),
+            {"query": fts_query, "limit": limit},
+        ).fetchall()
+
+    if not rows:
+        return []
+
+    # Verify files are active
+    file_ids = {row[0] for row in rows}
+    with get_search_db() as session:
+        active_ids = {
+            f.file_id
+            for f in session.query(IndexedFile.file_id)
+            .filter(
+                IndexedFile.file_id.in_(file_ids),
+                IndexedFile.active.is_(True),
+            )
+            .all()
+        }
+
+    # Normalize scores
+    max_relevance = max(row[4] for row in rows) if rows else 1.0
+    normalizer = max_relevance if max_relevance > 0 else 1.0
+
+    results: list[_TextContentKeywordMatch] = []
+    for row in rows:
+        fid = row[0]
+        if fid not in active_ids:
+            continue
+
+        page_str = row[2]
+        page_num = int(page_str) if page_str and page_str.isdigit() else None
+
+        results = [
+            *results,
+            _TextContentKeywordMatch(
+                file_id=fid,
+                score=min(row[4] / normalizer, 1.0),
+                text=row[3][:200],
+                page=page_num,
+            ),
+        ]
+
+    return results
+
+
 @dataclass
 class _FileScore:
     """Aggregated score for a file across all match sources."""
@@ -623,12 +710,16 @@ def _file_ranking_from_vector(
 
 
 def _file_ranking_from_keywords(
-    matches: list[_KeywordMatch] | list[_TranscriptKeywordMatch],
+    matches: (
+        list[_KeywordMatch]
+        | list[_TranscriptKeywordMatch]
+        | list[_TextContentKeywordMatch]
+    ),
 ) -> dict[str, int]:
     """Produce a file-level ranking from keyword matches.
 
-    For transcript keywords, multiple chunks per file are collapsed
-    to the best score before ranking.
+    For transcript/text-content keywords, multiple chunks per file are
+    collapsed to the best score before ranking.
 
     Args:
         matches: Keyword match list (already ordered by relevance).
@@ -649,6 +740,8 @@ def _combine_scores_rrf(
     clip_matches: list[_VectorMatch],
     keyword_matches: list[_KeywordMatch],
     transcript_keyword_matches: list[_TranscriptKeywordMatch],
+    text_content_keyword_matches: list[_TextContentKeywordMatch] | None = None,
+    *,
     k: int,
 ) -> dict[str, _FileScore]:
     """Combine search results using Reciprocal Rank Fusion (RRF).
@@ -662,6 +755,7 @@ def _combine_scores_rrf(
         clip_matches: CLIP vector search results.
         keyword_matches: Keyword search results (metadata fields).
         transcript_keyword_matches: Keyword search results (transcript text).
+        text_content_keyword_matches: Keyword search results (text content).
         k: RRF smoothing constant (typically 60).
 
     Returns:
@@ -704,11 +798,23 @@ def _combine_scores_rrf(
             timestamp_end=m.timestamp_end,
         ))
 
+    for m in (text_content_keyword_matches or []):
+        file_match_types.setdefault(m.file_id, set()).add("text_content_keyword")
+        file_matches.setdefault(m.file_id, []).append(MatchInfo(
+            match_type="text_content",
+            text=m.text,
+            score=m.score,
+            page=m.page,
+        ))
+
     # --- Build per-system file rankings ---
     text_ranking, _ = _file_ranking_from_vector(text_matches)
     clip_ranking, _ = _file_ranking_from_vector(clip_matches)
     keyword_ranking = _file_ranking_from_keywords(keyword_matches)
     transcript_kw_ranking = _file_ranking_from_keywords(transcript_keyword_matches)
+    text_content_kw_ranking = _file_ranking_from_keywords(
+        text_content_keyword_matches or []
+    )
 
     # Weighted RRF: CLIP gets reduced weight (0.3) because cross-modal
     # text→image similarity is noisy for text queries. Other systems
@@ -719,6 +825,7 @@ def _combine_scores_rrf(
         (clip_ranking, settings.search.rrf_weight_clip),
         (keyword_ranking, 1.0),
         (transcript_kw_ranking, 1.0),
+        (text_content_kw_ranking, 1.0),
     ]
 
     # --- RRF fusion ---
@@ -909,6 +1016,7 @@ def _combine_scores_cosine(
     clip_matches: list[_VectorMatch],
     keyword_matches: list[_KeywordMatch],
     transcript_keyword_matches: list[_TranscriptKeywordMatch],
+    text_content_keyword_matches: list[_TextContentKeywordMatch] | None = None,
 ) -> dict[str, _FileScore]:
     """Combine search results using weighted cosine similarity scores.
 
@@ -927,6 +1035,7 @@ def _combine_scores_cosine(
         "clip_vector": {},
         "keyword": {},
         "transcript_keyword": {},
+        "text_content_keyword": {},
     }
 
     for m in text_matches:
@@ -973,6 +1082,17 @@ def _combine_scores_cosine(
         src = file_source_best["transcript_keyword"]
         src[m.file_id] = max(src.get(m.file_id, 0.0), m.score)
 
+    for m in (text_content_keyword_matches or []):
+        file_match_types.setdefault(m.file_id, set()).add("text_content_keyword")
+        file_matches.setdefault(m.file_id, []).append(MatchInfo(
+            match_type="text_content",
+            text=m.text,
+            score=m.score,
+            page=m.page,
+        ))
+        src = file_source_best["text_content_keyword"]
+        src[m.file_id] = max(src.get(m.file_id, 0.0), m.score)
+
     # Combine: alpha * best_vector + (1 - alpha) * best_keyword
     alpha = search_config.alpha
     all_file_ids: set[str] = set()
@@ -988,6 +1108,7 @@ def _combine_scores_cosine(
         best_keyword = max(
             file_source_best["keyword"].get(fid, 0.0),
             file_source_best["transcript_keyword"].get(fid, 0.0),
+            file_source_best["text_content_keyword"].get(fid, 0.0),
         )
         combined = alpha * best_vector + (1.0 - alpha) * best_keyword
         file_scores[fid] = _FileScore(
@@ -1008,6 +1129,7 @@ class SourceCounts:
     clip_vector: int
     keyword: int
     transcript_keyword: int
+    text_content_keyword: int = 0
 
 
 @dataclass(frozen=True)
@@ -1046,12 +1168,14 @@ def execute_search_compare(
     )
     keyword_matches = _keyword_search(query, candidates)
     transcript_kw_matches = _keyword_search_transcripts(query, candidates)
+    text_content_kw_matches = _keyword_search_text_content(query, candidates)
 
     source_counts = SourceCounts(
         text_vector=len(text_matches),
         clip_vector=len(clip_matches),
         keyword=len(keyword_matches),
         transcript_keyword=len(transcript_kw_matches),
+        text_content_keyword=len(text_content_kw_matches),
     )
 
     # RRF scoring
@@ -1060,6 +1184,7 @@ def execute_search_compare(
         clip_matches=clip_matches,
         keyword_matches=keyword_matches,
         transcript_keyword_matches=transcript_kw_matches,
+        text_content_keyword_matches=text_content_kw_matches,
         k=search_config.rrf_k,
     )
     rrf_results = _build_results(rrf_scores, file_type, drive, effective_limit)
@@ -1073,6 +1198,7 @@ def execute_search_compare(
         clip_matches=clip_matches,
         keyword_matches=keyword_matches,
         transcript_keyword_matches=transcript_kw_matches,
+        text_content_keyword_matches=text_content_kw_matches,
     )
     cosine_results = _build_results(cosine_scores, file_type, drive, effective_limit)
     cosine_results_no_cutoff = _build_results(
