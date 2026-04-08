@@ -89,7 +89,7 @@ def search(
     """Execute a hybrid search query.
 
     Performs vector similarity search across text and CLIP embeddings,
-    combines with keyword matching using Reciprocal Rank Fusion (RRF),
+    combines with keyword matching using weighted cosine similarity,
     and returns file-level results.
 
     Args:
@@ -118,13 +118,12 @@ def search(
     keyword_matches = _keyword_search(query, candidates)
     transcript_keyword_matches = _keyword_search_transcripts(query, candidates)
 
-    # Combine via Reciprocal Rank Fusion
-    file_scores = _combine_scores_rrf(
+    # Combine via weighted cosine similarity
+    file_scores = _combine_scores_cosine(
         text_matches=text_matches,
         clip_matches=clip_matches,
         keyword_matches=keyword_matches,
         transcript_keyword_matches=transcript_keyword_matches,
-        k=search_config.rrf_k,
     )
 
     # Apply filters and build results
@@ -750,6 +749,8 @@ def _build_results(
     file_type: str | None,
     drive: str | None,
     limit: int,
+    *,
+    skip_cutoff: bool = False,
 ) -> list[SearchResult]:
     """Build final search results from aggregated scores.
 
@@ -760,6 +761,7 @@ def _build_results(
         file_type: Optional file type filter.
         drive: Optional drive filter.
         limit: Maximum results.
+        skip_cutoff: If True, skip the dynamic score cutoff.
 
     Returns:
         Sorted list of SearchResult objects.
@@ -808,7 +810,7 @@ def _build_results(
     # Dynamic cutoff: discard results far below the top score.
     # Ratio-based cutoff works well for RRF scores (which vary proportionally,
     # unlike cosine similarities that cluster in narrow absolute ranges).
-    if results:
+    if results and not skip_cutoff:
         cutoff_ratio = settings.search.score_cutoff_ratio
         top_score = results[0].score
         min_combined = top_score * cutoff_ratio
@@ -888,3 +890,212 @@ def _group_matches_into_segments(
             ]
 
     return segments
+
+
+# ---------------------------------------------------------------------------
+# Cosine-similarity-based scoring (alternative to RRF)
+# ---------------------------------------------------------------------------
+
+_TYPE_WEIGHTS: dict[str, str] = {
+    "metadata": "type_weight_metadata",
+    "transcript": "type_weight_transcript",
+    "text_content": "type_weight_text_content",
+    "clip": "type_weight_clip",
+}
+
+
+def _combine_scores_cosine(
+    text_matches: list[_VectorMatch],
+    clip_matches: list[_VectorMatch],
+    keyword_matches: list[_KeywordMatch],
+    transcript_keyword_matches: list[_TranscriptKeywordMatch],
+) -> dict[str, _FileScore]:
+    """Combine search results using weighted cosine similarity scores.
+
+    Each file's score is the weighted maximum similarity across all sources.
+    Uses config weights (alpha for vector vs keyword balance, type_weight_*
+    for per-source weighting).
+    """
+    search_config = settings.search
+
+    # Collect match info and per-source best scores
+    file_matches: dict[str, list[MatchInfo]] = {}
+    file_match_types: dict[str, set[str]] = {}
+    # source → file_id → best score
+    file_source_best: dict[str, dict[str, float]] = {
+        "text_vector": {},
+        "clip_vector": {},
+        "keyword": {},
+        "transcript_keyword": {},
+    }
+
+    for m in text_matches:
+        file_match_types.setdefault(m.file_id, set()).add(m.embedding_type)
+        file_matches.setdefault(m.file_id, []).append(MatchInfo(
+            match_type=m.embedding_type,
+            text=m.content_preview,
+            score=m.score,
+            timestamp_start=m.timestamp_start,
+            timestamp_end=m.timestamp_end,
+        ))
+        weight = getattr(search_config, _TYPE_WEIGHTS.get(m.embedding_type, ""), 1.0)
+        weighted = m.score * weight
+        src = file_source_best["text_vector"]
+        src[m.file_id] = max(src.get(m.file_id, 0.0), weighted)
+
+    for m in clip_matches:
+        file_match_types.setdefault(m.file_id, set()).add("clip")
+        file_matches.setdefault(m.file_id, []).append(MatchInfo(
+            match_type="clip",
+            text=m.content_preview,
+            score=m.score,
+            timestamp_start=m.timestamp_start,
+            timestamp_end=m.timestamp_end,
+        ))
+        weighted = m.score * search_config.type_weight_clip
+        src = file_source_best["clip_vector"]
+        src[m.file_id] = max(src.get(m.file_id, 0.0), weighted)
+
+    for m in keyword_matches:
+        file_match_types.setdefault(m.file_id, set()).add("keyword")
+        src = file_source_best["keyword"]
+        src[m.file_id] = max(src.get(m.file_id, 0.0), m.score)
+
+    for m in transcript_keyword_matches:
+        file_match_types.setdefault(m.file_id, set()).add("transcript_keyword")
+        file_matches.setdefault(m.file_id, []).append(MatchInfo(
+            match_type="transcript",
+            text=m.text,
+            score=m.score,
+            timestamp_start=m.timestamp_start,
+            timestamp_end=m.timestamp_end,
+        ))
+        src = file_source_best["transcript_keyword"]
+        src[m.file_id] = max(src.get(m.file_id, 0.0), m.score)
+
+    # Combine: alpha * best_vector + (1 - alpha) * best_keyword
+    alpha = search_config.alpha
+    all_file_ids: set[str] = set()
+    for src_scores in file_source_best.values():
+        all_file_ids.update(src_scores.keys())
+
+    file_scores: dict[str, _FileScore] = {}
+    for fid in all_file_ids:
+        best_vector = max(
+            file_source_best["text_vector"].get(fid, 0.0),
+            file_source_best["clip_vector"].get(fid, 0.0),
+        )
+        best_keyword = max(
+            file_source_best["keyword"].get(fid, 0.0),
+            file_source_best["transcript_keyword"].get(fid, 0.0),
+        )
+        combined = alpha * best_vector + (1.0 - alpha) * best_keyword
+        file_scores[fid] = _FileScore(
+            file_id=fid,
+            combined_score=combined,
+            matches=file_matches.get(fid, []),
+            match_types=file_match_types.get(fid, set()),
+        )
+
+    return file_scores
+
+
+@dataclass(frozen=True)
+class SourceCounts:
+    """Hit counts from each retrieval system (post-filter)."""
+
+    text_vector: int
+    clip_vector: int
+    keyword: int
+    transcript_keyword: int
+
+
+@dataclass(frozen=True)
+class CompareResponse:
+    """Side-by-side comparison of RRF and cosine scoring."""
+
+    rrf: SearchResponse
+    cosine: SearchResponse
+    rrf_no_cutoff: SearchResponse
+    cosine_no_cutoff: SearchResponse
+    source_counts: SourceCounts
+
+
+def execute_search_compare(
+    query: str,
+    limit: int | None = None,
+    file_type: str | None = None,
+    drive: str | None = None,
+) -> CompareResponse:
+    """Execute search with both RRF and cosine scoring, for comparison."""
+    search_config = settings.search
+    effective_limit = min(
+        limit or search_config.default_limit,
+        search_config.max_limit,
+    )
+    candidates = search_config.rrf_candidates
+
+    text_vector = embed_query(query)
+    clip_vector = _safe_clip_embed(query)
+
+    text_matches = _vector_search_text(text_vector, candidates)
+    clip_matches = (
+        _vector_search_clip(clip_vector, candidates)
+        if clip_vector is not None
+        else []
+    )
+    keyword_matches = _keyword_search(query, candidates)
+    transcript_kw_matches = _keyword_search_transcripts(query, candidates)
+
+    source_counts = SourceCounts(
+        text_vector=len(text_matches),
+        clip_vector=len(clip_matches),
+        keyword=len(keyword_matches),
+        transcript_keyword=len(transcript_kw_matches),
+    )
+
+    # RRF scoring
+    rrf_scores = _combine_scores_rrf(
+        text_matches=text_matches,
+        clip_matches=clip_matches,
+        keyword_matches=keyword_matches,
+        transcript_keyword_matches=transcript_kw_matches,
+        k=search_config.rrf_k,
+    )
+    rrf_results = _build_results(rrf_scores, file_type, drive, effective_limit)
+    rrf_results_no_cutoff = _build_results(
+        rrf_scores, file_type, drive, effective_limit, skip_cutoff=True,
+    )
+
+    # Cosine scoring
+    cosine_scores = _combine_scores_cosine(
+        text_matches=text_matches,
+        clip_matches=clip_matches,
+        keyword_matches=keyword_matches,
+        transcript_keyword_matches=transcript_kw_matches,
+    )
+    cosine_results = _build_results(cosine_scores, file_type, drive, effective_limit)
+    cosine_results_no_cutoff = _build_results(
+        cosine_scores, file_type, drive, effective_limit, skip_cutoff=True,
+    )
+
+    with get_search_db() as session:
+        indexed_count = session.query(IndexedFile).filter(
+            IndexedFile.active.is_(True)
+        ).count()
+
+    def _make_response(results: list[SearchResult]) -> SearchResponse:
+        return SearchResponse(
+            results=tuple(results),
+            total=len(results),
+            indexed_files=indexed_count,
+            service_version=settings.service_version,
+        )
+
+    return CompareResponse(
+        rrf=_make_response(rrf_results),
+        cosine=_make_response(cosine_results),
+        rrf_no_cutoff=_make_response(rrf_results_no_cutoff),
+        cosine_no_cutoff=_make_response(cosine_results_no_cutoff),
+        source_counts=source_counts,
+    )

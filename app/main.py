@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from app.config import settings
 from app.database import init_homevault_db, init_search_db
 from app.indexer import IndexManager
-from app.search import search as execute_search
+from app.search import execute_search_compare, search as execute_search
 from app.webhook import (
     FilesDeletedPayload,
     FilesPurgedPayload,
@@ -255,6 +255,90 @@ async def search_endpoint(
         total=result.total,
         indexed_files=result.indexed_files,
         service_version=result.service_version,
+    )
+
+
+# --- Compare endpoint (temporary: side-by-side RRF vs cosine) ---
+
+
+class SourceCountsModel(BaseModel):
+    text_vector: int
+    clip_vector: int
+    keyword: int
+    transcript_keyword: int
+
+
+class CompareResponseModel(BaseModel):
+    rrf: SearchResponseModel
+    cosine: SearchResponseModel
+    rrf_no_cutoff: SearchResponseModel
+    cosine_no_cutoff: SearchResponseModel
+    source_counts: SourceCountsModel
+
+
+def _to_response_model(result: Any) -> SearchResponseModel:
+    from app.search import SearchResponse as _SR
+    return SearchResponseModel(
+        results=[
+            SearchResultItem(
+                file_id=r.file_id,
+                drive=r.drive,
+                filename=r.filename,
+                file_type=r.file_type,
+                score=round(r.score, 4),
+                match_types=list(r.match_types),
+                segments=[
+                    SearchResultSegment(
+                        time_range=(
+                            list(s.time_range) if s.time_range else None
+                        ),
+                        matches=[
+                            SearchResultSegmentMatch(
+                                type=m.match_type,
+                                text=m.text,
+                                score=round(m.score, 4),
+                            )
+                            for m in s.matches
+                        ],
+                    )
+                    for s in r.segments
+                ],
+            )
+            for r in result.results
+        ],
+        total=result.total,
+        indexed_files=result.indexed_files,
+        service_version=result.service_version,
+    )
+
+
+@app.get("/search/compare", response_model=CompareResponseModel)
+async def search_compare_endpoint(
+    q: str = Query(..., min_length=1, description="Search query"),
+    limit: int = Query(default=20, ge=1, le=100, description="Max results"),
+    type: str | None = Query(default=None, description="File type filter"),
+    drive: str | None = Query(default=None, description="Drive name filter"),
+) -> CompareResponseModel:
+    """Compare RRF vs cosine-similarity scoring side by side."""
+    try:
+        compare = execute_search_compare(
+            query=q, limit=limit, file_type=type, drive=drive,
+        )
+    except Exception as e:
+        logger.error("Compare search failed: %s", e)
+        raise HTTPException(status_code=500, detail="Search failed") from e
+
+    return CompareResponseModel(
+        rrf=_to_response_model(compare.rrf),
+        cosine=_to_response_model(compare.cosine),
+        rrf_no_cutoff=_to_response_model(compare.rrf_no_cutoff),
+        cosine_no_cutoff=_to_response_model(compare.cosine_no_cutoff),
+        source_counts=SourceCountsModel(
+            text_vector=compare.source_counts.text_vector,
+            clip_vector=compare.source_counts.clip_vector,
+            keyword=compare.source_counts.keyword,
+            transcript_keyword=compare.source_counts.transcript_keyword,
+        ),
     )
 
 

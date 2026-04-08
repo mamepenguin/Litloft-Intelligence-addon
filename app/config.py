@@ -22,10 +22,8 @@ class ModelConfig:
 
 @dataclass(frozen=True)
 class SearchConfig:
-    # RRF parameters
-    rrf_k: int = 60
+    # Candidate retrieval
     rrf_candidates: int = 50
-    rrf_weight_clip: float = 0.5
     # Result limits
     default_limit: int = 20
     max_limit: int = 100
@@ -37,14 +35,19 @@ class SearchConfig:
     score_gap_threshold: float = 0.02
     # Dynamic cutoff: discard results below (top_score - margin)
     score_cutoff_margin: float = 0.05
-    # Legacy (kept for config file compatibility)
+    # Combined score cutoff: discard results below (top_score * ratio)
     score_cutoff_ratio: float = 0.5
-    # Legacy (unused with RRF, kept for config file compatibility)
+    # Cosine scoring weights
+    # alpha: balance between vector similarity and keyword matching
     alpha: float = 0.7
+    # Per-source type weights (applied to vector scores before combining)
     type_weight_metadata: float = 1.3
     type_weight_transcript: float = 1.0
     type_weight_text_content: float = 0.9
     type_weight_clip: float = 1.0
+    # Legacy (kept for config file compatibility, used by compare endpoint)
+    rrf_k: int = 60
+    rrf_weight_clip: float = 0.5
 
 
 @dataclass(frozen=True)
