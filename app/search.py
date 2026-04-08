@@ -12,7 +12,7 @@ import numpy as np
 from sqlalchemy import text as sql_text
 
 from app.config import settings
-from app.database import get_search_db, get_search_engine
+from app.database import get_search_db, get_search_engine, validate_vector_table
 from app.models import Embedding, IndexedFile, TranscriptChunk
 from app.workers.clip import embed_text_clip
 from app.workers.embedder import embed_query
@@ -997,6 +997,382 @@ def _group_matches_into_segments(
             ]
 
     return segments
+
+
+# ---------------------------------------------------------------------------
+# Similar files search
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SimilarFileResult:
+    """A file similar to a given source file."""
+
+    file_id: str
+    drive: str
+    filename: str
+    file_type: str
+    mime_type: str
+    score: float
+    match_type: str  # primary embedding type used
+
+
+def find_similar(
+    file_id: str,
+    limit: int = 6,
+    drive: str | None = None,
+) -> list[SimilarFileResult]:
+    """Find files similar to the given file using its existing embeddings.
+
+    Selects the primary embedding type based on the file's type:
+    - image/video: CLIP embeddings
+    - audio: Whisper (text) embeddings
+    - document/text: text_content embeddings
+    - other: metadata embeddings
+
+    Falls back to metadata embeddings if the primary type has no data.
+
+    Args:
+        file_id: The source file ID.
+        limit: Maximum number of similar files to return.
+        drive: Optional drive filter (restricts results to this drive).
+
+    Returns:
+        List of similar files sorted by similarity score.
+    """
+    with get_search_db() as session:
+        source = (
+            session.query(IndexedFile)
+            .filter(
+                IndexedFile.file_id == file_id,
+                IndexedFile.active.is_(True),
+            )
+            .first()
+        )
+        if source is None:
+            return []
+
+        file_type = source.file_type
+
+    # Determine which embedding types to use based on file type
+    primary_type, secondary_type = _select_embedding_types(file_type)
+
+    primary_results = _find_similar_by_embedding(
+        file_id, primary_type, limit * 2, drive,
+    )
+
+    # If there's a secondary type, merge both results
+    secondary_results: list[dict] = []
+    if secondary_type and secondary_type != primary_type:
+        secondary_results = _find_similar_by_embedding(
+            file_id, secondary_type, limit * 2, drive,
+        )
+        merged = _merge_similar_results(
+            primary_results, secondary_results, limit,
+        )
+    else:
+        merged = primary_results[:limit]
+
+    # Determine match_type per result
+    primary_ids = {r["file_id"] for r in primary_results}
+    secondary_ids = {r["file_id"] for r in secondary_results}
+
+    return [
+        SimilarFileResult(
+            file_id=r["file_id"],
+            drive=r["drive"],
+            filename=r["filename"],
+            file_type=r["file_type"],
+            mime_type=r["mime_type"],
+            score=r["score"],
+            match_type=(
+                f"{primary_type}+{secondary_type}"
+                if r["file_id"] in primary_ids and r["file_id"] in secondary_ids
+                else primary_type if r["file_id"] in primary_ids
+                else secondary_type or primary_type
+            ),
+        )
+        for r in merged
+    ]
+
+
+def _merge_similar_results(
+    primary: list[dict],
+    secondary: list[dict],
+    limit: int,
+) -> list[dict]:
+    """Merge results from primary and secondary embedding types.
+
+    Scoring strategy:
+    - Both matched:    average of primary and secondary scores (strongest signal)
+    - Primary only:    primary score as-is
+    - Secondary only:  score penalized by 0.7x (secondary alone is weaker evidence,
+                       e.g. whisper embeddings cluster tightly for same-language videos)
+
+    Args:
+        primary: Results from primary embedding type (e.g. CLIP).
+        secondary: Results from secondary embedding type (e.g. whisper).
+        limit: Maximum results to return.
+
+    Returns:
+        Merged and sorted list of results.
+    """
+    primary_by_id = {r["file_id"]: r for r in primary}
+    secondary_by_id = {r["file_id"]: r for r in secondary}
+
+    merged: list[dict] = []
+    for fid, p in primary_by_id.items():
+        s = secondary_by_id.get(fid)
+        if s:
+            # Both matched: boost by averaging (strongest signal)
+            combined_score = (p["score"] + s["score"]) / 2.0
+            merged.append({**p, "score": combined_score})
+        else:
+            # Primary only: use as-is
+            merged.append(p)
+
+    # Secondary-only results are NOT included: they lack primary
+    # (visual) confirmation and produce too many false positives
+    # due to narrow score distributions (e.g. whisper embeddings
+    # for same-language videos cluster at 0.85-0.94 regardless
+    # of content similarity).
+
+    merged.sort(key=lambda r: r["score"], reverse=True)
+    return merged[:limit]
+
+
+def _select_embedding_types(
+    file_type: str,
+) -> tuple[str, str | None]:
+    """Select primary and fallback embedding types based on file type.
+
+    No metadata fallback: filename-based embeddings produce false positives
+    for files with non-descriptive names (e.g. "IMG_1234.jpg", UUIDs).
+
+    Returns:
+        Tuple of (primary_type, fallback_type). fallback_type may be None.
+    """
+    type_map: dict[str, tuple[str, str | None]] = {
+        "image": ("clip", None),
+        "video": ("clip", "whisper"),
+        "audio": ("whisper", None),
+        "document": ("text_content", None),
+    }
+    return type_map.get(file_type, ("metadata", None))
+
+
+def _find_similar_by_embedding(
+    file_id: str,
+    embedding_type: str,
+    limit: int,
+    drive: str | None,
+) -> list[dict]:
+    """Find similar files using a specific embedding type.
+
+    Averages all embeddings of the given type for the source file,
+    then queries the appropriate vector table for nearest neighbors.
+
+    Args:
+        file_id: Source file ID.
+        embedding_type: The embedding type to use.
+        limit: Max results.
+        drive: Optional drive filter.
+
+    Returns:
+        List of dicts with file info and similarity score.
+    """
+    # Determine which vector table to query
+    vec_table = validate_vector_table(
+        "vec_clip" if embedding_type == "clip" else "vec_text"
+    )
+
+    # For whisper embeddings, skip if transcript is too short to be meaningful.
+    # BGM-only files often produce a single spurious word ("you", "the", etc.)
+    # whose embedding matches everything.
+    if embedding_type == "whisper":
+        with get_search_db() as session:
+            from app.models import TranscriptChunk
+            chunks = (
+                session.query(TranscriptChunk)
+                .filter(TranscriptChunk.file_id == file_id)
+                .all()
+            )
+            total_text = " ".join(c.text for c in chunks).strip()
+            if len(total_text) < 20:
+                logger.debug(
+                    "Skipping whisper similar for %s: transcript too short (%d chars)",
+                    file_id, len(total_text),
+                )
+                return []
+
+    # Get the source file's embedding IDs
+    with get_search_db() as session:
+        source_embeddings = (
+            session.query(Embedding.id)
+            .filter(
+                Embedding.file_id == file_id,
+                Embedding.embedding_type == embedding_type,
+            )
+            .all()
+        )
+
+    if not source_embeddings:
+        return []
+
+    embedding_ids = [e.id for e in source_embeddings]
+
+    # Retrieve vectors and compute average
+    engine = get_search_engine()
+    vectors: list[np.ndarray] = []
+
+    with engine.connect() as conn:
+        for eid in embedding_ids:
+            row = conn.execute(
+                sql_text(
+                    f"SELECT vector FROM {vec_table} "
+                    f"WHERE embedding_id = :eid"
+                ),
+                {"eid": eid},
+            ).fetchone()
+            if row and row[0]:
+                vec = np.frombuffer(row[0], dtype=np.float32)
+                vectors.append(vec)
+
+    if not vectors:
+        return []
+
+    # Average and normalize
+    avg_vector = np.mean(vectors, axis=0)
+    norm = np.linalg.norm(avg_vector)
+    if norm > 0:
+        avg_vector = avg_vector / norm
+
+    # Query for nearest neighbors.
+    # Must fetch enough to look past the source file's own embeddings
+    # (e.g. a video with 89 CLIP frames will occupy the top ~89 slots).
+    source_count = len(embedding_ids)
+    fetch_limit = source_count + limit + 20
+    with engine.connect() as conn:
+        rows = conn.execute(
+            sql_text(
+                f"SELECT embedding_id, distance "
+                f"FROM {vec_table} "
+                f"WHERE vector MATCH :vec "
+                f"ORDER BY distance "
+                f"LIMIT :limit"
+            ),
+            {"vec": avg_vector.tobytes(), "limit": fetch_limit},
+        ).fetchall()
+
+    if not rows:
+        return []
+
+    neighbor_ids = [row[0] for row in rows]
+    distances = {row[0]: row[1] for row in rows}
+
+    # Look up file info for neighbor embeddings
+    with get_search_db() as session:
+        neighbor_embeddings = (
+            session.query(Embedding)
+            .filter(Embedding.id.in_(neighbor_ids))
+            .all()
+        )
+
+        # Map embedding -> file_id with best score per file
+        file_best_score: dict[str, float] = {}
+        for emb in neighbor_embeddings:
+            if emb.file_id == file_id:
+                continue  # exclude self
+            score = _l2_to_cosine_similarity(distances.get(emb.id, 2.0))
+            if score > file_best_score.get(emb.file_id, 0.0):
+                file_best_score[emb.file_id] = score
+
+        if not file_best_score:
+            return []
+
+        # --- Quality filters ---
+
+        # 1. Remove near-identical scores (score >= 0.999) — these are
+        #    duplicate embeddings from empty/trivial content (e.g. BGM
+        #    files where Whisper outputs the same single word)
+        file_best_score = {
+            fid: s for fid, s in file_best_score.items() if s < 0.999
+        }
+
+        if not file_best_score:
+            return []
+
+        # 2. Absolute minimum score: below this, similarity is not
+        #    meaningful regardless of relative ranking
+        min_similar_score = 0.70
+        file_best_score = {
+            fid: s for fid, s in file_best_score.items()
+            if s >= min_similar_score
+        }
+
+        if not file_best_score:
+            return []
+
+        # 3. Score gap analysis: if many candidates all have flat scores,
+        #    the embedding doesn't meaningfully distinguish files.
+        #    Only apply when there are enough candidates to compute
+        #    a meaningful gap (>= 5); with few candidates, the absolute
+        #    min_score threshold is sufficient.
+        scores = list(file_best_score.values())
+        top_score = max(scores)
+
+        if len(scores) >= 5:
+            mean_score = sum(scores) / len(scores)
+            gap = top_score - mean_score
+
+            if gap < 0.01:
+                logger.debug(
+                    "Similar search gap too small (%.4f) for %s via %s, "
+                    "discarding %d candidates",
+                    gap, file_id, embedding_type, len(scores),
+                )
+                return []
+
+        # 4. Margin cutoff: keep only results within margin of top score
+        margin = 0.05
+        file_best_score = {
+            fid: s for fid, s in file_best_score.items()
+            if s >= top_score - margin
+        }
+
+        if not file_best_score:
+            return []
+
+        # Get file metadata for matched files
+        query = session.query(IndexedFile).filter(
+            IndexedFile.file_id.in_(list(file_best_score.keys())),
+            IndexedFile.active.is_(True),
+        )
+        if drive:
+            query = query.filter(IndexedFile.drive == drive)
+
+        files = {f.file_id: f for f in query.all()}
+
+    # Build results sorted by score
+    results: list[dict] = []
+    for fid, score in sorted(
+        file_best_score.items(), key=lambda x: x[1], reverse=True
+    ):
+        f = files.get(fid)
+        if f is None:
+            continue
+        results.append({
+            "file_id": f.file_id,
+            "drive": f.drive,
+            "filename": f.filename,
+            "file_type": f.file_type,
+            "mime_type": f.mime_type,
+            "score": score,
+        })
+        if len(results) >= limit:
+            break
+
+    return results
 
 
 # ---------------------------------------------------------------------------
