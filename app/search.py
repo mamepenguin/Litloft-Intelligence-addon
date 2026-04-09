@@ -1014,14 +1014,25 @@ class SimilarFileResult:
     file_type: str
     mime_type: str
     score: float
-    match_type: str  # primary embedding type used
+    match_type: str  # e.g. "clip", "tfidf", "clip+tfidf"
+    primary_score: float | None = None
+    secondary_score: float | None = None
+    shared_keywords: tuple[dict, ...] = ()
+
+
+@dataclass(frozen=True)
+class SimilarSearchResult:
+    """Complete result of a similar files search."""
+
+    results: list[SimilarFileResult]
+    source_keywords: tuple[dict, ...] = ()
 
 
 def find_similar(
     file_id: str,
     limit: int = 6,
     drive: str | None = None,
-) -> list[SimilarFileResult]:
+) -> SimilarSearchResult:
     """Find files similar to the given file using its existing embeddings.
 
     Selects the primary embedding type based on the file's type:
@@ -1030,7 +1041,9 @@ def find_similar(
     - document/text: text_content embeddings
     - other: metadata embeddings
 
-    Falls back to metadata embeddings if the primary type has no data.
+    For video files, TF-IDF on transcript text is used as the secondary
+    signal instead of whisper embeddings (which lose topic information
+    when averaged).
 
     Args:
         file_id: The source file ID.
@@ -1050,7 +1063,7 @@ def find_similar(
             .first()
         )
         if source is None:
-            return []
+            return SimilarSearchResult(results=[])
 
         file_type = source.file_type
 
@@ -1061,9 +1074,18 @@ def find_similar(
         file_id, primary_type, limit * 2, drive,
     )
 
-    # If there's a secondary type, merge both results
+    # For video files, use TF-IDF on transcripts instead of whisper embeddings
     secondary_results: list[dict] = []
-    if secondary_type and secondary_type != primary_type:
+    source_keywords: list[str] = []
+    if secondary_type == "tfidf":
+        from app.tfidf import find_similar_by_tfidf
+        secondary_results, source_keywords = find_similar_by_tfidf(
+            file_id, limit * 2, drive,
+        )
+        merged = _merge_similar_results(
+            primary_results, secondary_results, limit,
+        )
+    elif secondary_type and secondary_type != primary_type:
         secondary_results = _find_similar_by_embedding(
             file_id, secondary_type, limit * 2, drive,
         )
@@ -1073,27 +1095,41 @@ def find_similar(
     else:
         merged = primary_results[:limit]
 
-    # Determine match_type per result
-    primary_ids = {r["file_id"] for r in primary_results}
-    secondary_ids = {r["file_id"] for r in secondary_results}
+    # Build lookup maps for score breakdown and keywords
+    primary_by_id = {r["file_id"]: r["score"] for r in primary_results}
+    secondary_by_id = {r["file_id"]: r for r in secondary_results}
 
-    return [
-        SimilarFileResult(
-            file_id=r["file_id"],
-            drive=r["drive"],
-            filename=r["filename"],
-            file_type=r["file_type"],
-            mime_type=r["mime_type"],
-            score=r["score"],
-            match_type=(
-                f"{primary_type}+{secondary_type}"
-                if r["file_id"] in primary_ids and r["file_id"] in secondary_ids
-                else primary_type if r["file_id"] in primary_ids
-                else secondary_type or primary_type
-            ),
-        )
-        for r in merged
-    ]
+    return SimilarSearchResult(
+        results=[
+            SimilarFileResult(
+                file_id=r["file_id"],
+                drive=r["drive"],
+                filename=r["filename"],
+                file_type=r["file_type"],
+                mime_type=r["mime_type"],
+                score=r["score"],
+                match_type=(
+                    f"{primary_type}+{secondary_type}"
+                    if r["file_id"] in primary_by_id and r["file_id"] in secondary_by_id
+                    else primary_type if r["file_id"] in primary_by_id
+                    else secondary_type or primary_type
+                ),
+                primary_score=primary_by_id.get(r["file_id"]),
+                secondary_score=(
+                    secondary_by_id[r["file_id"]]["score"]
+                    if r["file_id"] in secondary_by_id
+                    else None
+                ),
+                shared_keywords=tuple(
+                    secondary_by_id[r["file_id"]].get("shared_keywords", [])
+                    if r["file_id"] in secondary_by_id
+                    else []
+                ),
+            )
+            for r in merged
+        ],
+        source_keywords=tuple(source_keywords),
+    )
 
 
 def _merge_similar_results(
@@ -1101,17 +1137,19 @@ def _merge_similar_results(
     secondary: list[dict],
     limit: int,
 ) -> list[dict]:
-    """Merge results from primary and secondary embedding types.
+    """Merge results from primary and secondary sources.
 
-    Scoring strategy:
-    - Both matched:    average of primary and secondary scores (strongest signal)
-    - Primary only:    primary score as-is
-    - Secondary only:  score penalized by 0.7x (secondary alone is weaker evidence,
-                       e.g. whisper embeddings cluster tightly for same-language videos)
+    Both signals are normalized to [0, 1] and combined with equal
+    weight.  This treats visual similarity (CLIP) and topic similarity
+    (TF-IDF) as equally valuable signals:
+
+      both:           0.5 * norm_primary + 0.5 * norm_secondary
+      primary only:   norm_primary * single_signal_weight
+      secondary only: norm_secondary * single_signal_weight
 
     Args:
-        primary: Results from primary embedding type (e.g. CLIP).
-        secondary: Results from secondary embedding type (e.g. whisper).
+        primary: Results from primary source (e.g. CLIP).
+        secondary: Results from secondary source (e.g. TF-IDF).
         limit: Maximum results to return.
 
     Returns:
@@ -1120,22 +1158,59 @@ def _merge_similar_results(
     primary_by_id = {r["file_id"]: r for r in primary}
     secondary_by_id = {r["file_id"]: r for r in secondary}
 
-    merged: list[dict] = []
-    for fid, p in primary_by_id.items():
-        s = secondary_by_id.get(fid)
-        if s:
-            # Both matched: boost by averaging (strongest signal)
-            combined_score = (p["score"] + s["score"]) / 2.0
-            merged.append({**p, "score": combined_score})
-        else:
-            # Primary only: use as-is
-            merged.append(p)
+    # Normalize primary scores to [0, 1]
+    if primary:
+        pri_scores = [r["score"] for r in primary]
+        pri_max = max(pri_scores)
+        pri_min = min(pri_scores)
+        pri_range = pri_max - pri_min
+    else:
+        pri_range = 0.0
+        pri_max = 0.0
+        pri_min = 0.0
 
-    # Secondary-only results are NOT included: they lack primary
-    # (visual) confirmation and produce too many false positives
-    # due to narrow score distributions (e.g. whisper embeddings
-    # for same-language videos cluster at 0.85-0.94 regardless
-    # of content similarity).
+    # Normalize secondary scores to [0, 1]
+    if secondary:
+        sec_scores = [r["score"] for r in secondary]
+        sec_max = max(sec_scores)
+        sec_min = min(sec_scores)
+        sec_range = sec_max - sec_min
+    else:
+        sec_range = 0.0
+        sec_max = 0.0
+        sec_min = 0.0
+
+    # Weight for results that have only one signal (mild penalty)
+    single_signal_weight = 0.7
+
+    merged: list[dict] = []
+    all_file_ids = set(primary_by_id) | set(secondary_by_id)
+
+    for fid in all_file_ids:
+        p = primary_by_id.get(fid)
+        s = secondary_by_id.get(fid)
+
+        norm_pri = (
+            (p["score"] - pri_min) / pri_range
+            if p and pri_range > 0
+            else 1.0 if p else None
+        )
+        norm_sec = (
+            (s["score"] - sec_min) / sec_range
+            if s and sec_range > 0
+            else 1.0 if s else None
+        )
+
+        if norm_pri is not None and norm_sec is not None:
+            score = 0.5 * norm_pri + 0.5 * norm_sec
+        elif norm_pri is not None:
+            score = norm_pri * single_signal_weight
+        else:
+            score = norm_sec * single_signal_weight
+
+        # Use whichever source dict has the file metadata
+        base = p if p else s
+        merged.append({**base, "score": score})
 
     merged.sort(key=lambda r: r["score"], reverse=True)
     return merged[:limit]
@@ -1154,7 +1229,7 @@ def _select_embedding_types(
     """
     type_map: dict[str, tuple[str, str | None]] = {
         "image": ("clip", None),
-        "video": ("clip", "whisper"),
+        "video": ("clip", "tfidf"),
         "audio": ("whisper", None),
         "document": ("text_content", None),
     }
@@ -1342,6 +1417,24 @@ def _find_similar_by_embedding(
 
         if not file_best_score:
             return []
+
+        # 5. Spread check: if many candidates remain and all are
+        #    bunched within a narrow band, the embedding doesn't
+        #    meaningfully distinguish them. Use coefficient of
+        #    variation (std/mean) which captures spread relative
+        #    to the score level.
+        scores = list(file_best_score.values())
+        if len(scores) >= 5:
+            s_mean = sum(scores) / len(scores)
+            s_std = (sum((s - s_mean) ** 2 for s in scores) / len(scores)) ** 0.5
+            cv = s_std / s_mean if s_mean > 0 else 0.0
+            if cv < 0.01:
+                logger.debug(
+                    "Similar search CV too small (%.4f) for %s via %s, "
+                    "discarding %d candidates",
+                    cv, file_id, embedding_type, len(scores),
+                )
+                return []
 
         # Get file metadata for matched files
         query = session.query(IndexedFile).filter(

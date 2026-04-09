@@ -494,6 +494,14 @@ async def queue_reindex(_: None = Depends(verify_webhook_secret)) -> MessageResp
 # --- Similar files endpoint ---
 
 
+class KeywordScore(BaseModel):
+    word: str
+    score: float | None = None
+    source_tfidf: float | None = None
+    target_tfidf: float | None = None
+    relevance: float | None = None
+
+
 class SimilarFileItem(BaseModel):
     file_id: str
     drive: str
@@ -502,10 +510,14 @@ class SimilarFileItem(BaseModel):
     mime_type: str
     score: float
     match_type: str
+    primary_score: float | None = None
+    secondary_score: float | None = None
+    shared_keywords: list[KeywordScore] = []
 
 
 class SimilarFilesResponse(BaseModel):
     results: list[SimilarFileItem]
+    source_keywords: list[KeywordScore] = []
 
 
 @app.get("/similar/{file_id}", response_model=SimilarFilesResponse)
@@ -516,7 +528,7 @@ async def similar_files_endpoint(
 ) -> SimilarFilesResponse:
     """Find files similar to the given file using existing embeddings."""
     try:
-        results = find_similar(file_id=file_id, limit=limit, drive=drive)
+        search_result = find_similar(file_id=file_id, limit=limit, drive=drive)
     except Exception as e:
         logger.error("Similar files search failed: %s", e)
         raise HTTPException(status_code=500, detail="Similar search failed") from e
@@ -531,8 +543,16 @@ async def similar_files_endpoint(
                 mime_type=r.mime_type,
                 score=round(r.score, 4),
                 match_type=r.match_type,
+                primary_score=round(r.primary_score, 4) if r.primary_score is not None else None,
+                secondary_score=round(r.secondary_score, 4) if r.secondary_score is not None else None,
+                shared_keywords=[
+                    KeywordScore(**kw) for kw in r.shared_keywords
+                ],
             )
-            for r in results
+            for r in search_result.results
+        ],
+        source_keywords=[
+            KeywordScore(**kw) for kw in search_result.source_keywords
         ],
     )
 
