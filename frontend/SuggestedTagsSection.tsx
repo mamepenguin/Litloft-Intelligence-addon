@@ -1,0 +1,222 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
+import { Check, CheckCheck, RefreshCw, Sparkles, X } from "lucide-react";
+import { getSuggestedTags, dismissSuggestedTags, regenerateSuggestedTags } from "./api";
+import type { SuggestedTagsResponse } from "./api";
+import { fetchJSON } from "@/lib/api";
+import type { FileItem } from "@/types";
+
+interface SuggestedTagsSectionProps {
+  fileId: string;
+}
+
+async function addTagsToFile(fileId: string, existingTags: string[], newTags: string[]): Promise<FileItem> {
+  const merged = [...new Set([...existingTags, ...newTags])];
+  return fetchJSON<FileItem>(`/api/files/${fileId}/tags`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tags: merged }),
+  });
+}
+
+async function getFileData(fileId: string): Promise<FileItem> {
+  return fetchJSON<FileItem>(`/api/files/${fileId}`);
+}
+
+export default function SuggestedTagsSection({ fileId }: SuggestedTagsSectionProps) {
+  const t = useTranslations("file");
+  const [data, setData] = useState<SuggestedTagsResponse | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [accepting, setAccepting] = useState<Set<string>>(new Set());
+  const [acceptedTags, setAcceptedTags] = useState<Set<string>>(new Set());
+  const [dismissing, setDismissing] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
+  const [acceptingAll, setAcceptingAll] = useState(false);
+  const [hidden, setHidden] = useState(false);
+
+  const fetchData = useCallback(async () => {
+    const result = await getSuggestedTags(fileId);
+    setData(result);
+    setLoaded(true);
+  }, [fileId]);
+
+  useEffect(() => {
+    setData(null);
+    setLoaded(false);
+    setAccepting(new Set());
+    setAcceptedTags(new Set());
+    setHidden(false);
+    setRegenerating(false);
+    fetchData();
+  }, [fileId, fetchData]);
+
+  const handleAcceptTag = useCallback(async (tag: string) => {
+    setAccepting((prev) => new Set([...prev, tag]));
+    try {
+      const file = await getFileData(fileId);
+      await addTagsToFile(fileId, file.tags, [tag]);
+      setAcceptedTags((prev) => new Set([...prev, tag]));
+    } catch {
+      // silently fail
+    } finally {
+      setAccepting((prev) => {
+        const next = new Set(prev);
+        next.delete(tag);
+        return next;
+      });
+    }
+  }, [fileId]);
+
+  const handleAcceptAll = useCallback(async () => {
+    if (!data?.tags) return;
+    const pendingTags = data.tags.filter((tag) => !acceptedTags.has(tag));
+    if (pendingTags.length === 0) return;
+
+    setAcceptingAll(true);
+    try {
+      const file = await getFileData(fileId);
+      await addTagsToFile(fileId, file.tags, pendingTags);
+      setAcceptedTags((prev) => new Set([...prev, ...pendingTags]));
+    } catch {
+      // silently fail
+    } finally {
+      setAcceptingAll(false);
+    }
+  }, [fileId, data, acceptedTags]);
+
+  const handleDismiss = useCallback(async () => {
+    setDismissing(true);
+    try {
+      await dismissSuggestedTags(fileId);
+      setHidden(true);
+    } catch {
+      // silently fail
+    } finally {
+      setDismissing(false);
+    }
+  }, [fileId]);
+
+  const handleRegenerate = useCallback(async () => {
+    setRegenerating(true);
+    setAcceptedTags(new Set());
+    try {
+      await regenerateSuggestedTags(fileId);
+      // Refetch after a short delay to allow processing
+      setTimeout(() => {
+        fetchData().finally(() => setRegenerating(false));
+      }, 1000);
+    } catch {
+      setRegenerating(false);
+    }
+  }, [fileId, fetchData]);
+
+  if (!loaded || !data?.available) {
+    return null;
+  }
+
+  if (hidden || data.status === "accepted" || data.status === "dismissed") {
+    return null;
+  }
+
+  if (!data.tags || data.tags.length === 0) {
+    return null;
+  }
+
+  const pendingTags = data.tags.filter((tag) => !acceptedTags.has(tag));
+  const allAccepted = pendingTags.length === 0;
+
+  if (allAccepted) {
+    return null;
+  }
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center gap-2">
+        <Sparkles size={14} className="text-amber-400" />
+        <h2 className="text-sm font-semibold text-text-muted">
+          {t("suggestedTags", { defaultMessage: "AI Suggested Tags" })}
+        </h2>
+        {data.model && (
+          <span className="text-[10px] text-text-muted/50">{data.model}</span>
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        {data.tags.map((tag) => {
+          const isAccepted = acceptedTags.has(tag);
+          const isAccepting = accepting.has(tag);
+
+          if (isAccepted) {
+            return (
+              <span
+                key={tag}
+                className="flex items-center gap-1 rounded-full bg-accent-teal/15 px-2.5 py-1 text-xs font-medium text-accent-teal"
+              >
+                <Check size={12} />
+                {tag}
+              </span>
+            );
+          }
+
+          return (
+            <span
+              key={tag}
+              className="group flex items-center gap-1 rounded-full border border-dashed border-amber-400/40 bg-amber-400/5 px-2.5 py-1 text-xs font-medium text-amber-300/80"
+            >
+              {tag}
+              <button
+                onClick={() => handleAcceptTag(tag)}
+                disabled={isAccepting}
+                className="rounded-full p-0.5 text-amber-400/60 transition-colors hover:bg-amber-400/15 hover:text-amber-300 disabled:opacity-50"
+                aria-label={t("acceptTag", { defaultMessage: "Add tag {tag}", tag })}
+              >
+                {isAccepting ? (
+                  <RefreshCw size={12} className="animate-spin" />
+                ) : (
+                  <Check size={12} />
+                )}
+              </button>
+            </span>
+          );
+        })}
+      </div>
+
+      <div className="mt-2 flex items-center gap-2">
+        <button
+          onClick={handleAcceptAll}
+          disabled={acceptingAll}
+          className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+        >
+          {acceptingAll ? (
+            <RefreshCw size={11} className="animate-spin" />
+          ) : (
+            <CheckCheck size={11} />
+          )}
+          {t("acceptAllTags", { defaultMessage: "Accept all" })}
+        </button>
+        <button
+          onClick={handleDismiss}
+          disabled={dismissing}
+          className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+        >
+          {dismissing ? (
+            <RefreshCw size={11} className="animate-spin" />
+          ) : (
+            <X size={11} />
+          )}
+          {t("dismissTags", { defaultMessage: "Dismiss" })}
+        </button>
+        <button
+          onClick={handleRegenerate}
+          disabled={regenerating}
+          className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+        >
+          <RefreshCw size={11} className={regenerating ? "animate-spin" : ""} />
+          {t("regenerateTags", { defaultMessage: "Regenerate" })}
+        </button>
+      </div>
+    </div>
+  );
+}

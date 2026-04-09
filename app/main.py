@@ -5,6 +5,7 @@ Initializes databases and starts the background indexing pipeline
 on application startup.
 """
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -20,6 +21,8 @@ from pydantic import BaseModel, Field
 from app.config import settings
 from app.database import init_homevault_db, init_search_db
 from app.indexer import IndexManager
+from app.llm import LLMClient
+from app.workers.auto_tags import AutoTagsWorker
 from app.search import execute_search_compare, find_similar, search as execute_search
 from app.webhook import (
     FilesDeletedPayload,
@@ -40,8 +43,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Module-level index manager (initialized during lifespan)
+# Module-level index manager and auto-tags worker (initialized during lifespan)
 _index_manager: IndexManager | None = None
+_auto_tags_worker: AutoTagsWorker | None = None
+_llm_client: LLMClient | None = None
 
 
 def _get_index_manager() -> IndexManager:
@@ -98,8 +103,29 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if reset > 0:
         logger.info("Reset %d falsely completed CLIP files for re-indexing", reset)
 
-    # Start index manager
-    _index_manager = IndexManager()
+    # Initialize LLM client and auto-tags worker
+    global _llm_client, _auto_tags_worker
+
+    _llm_client = LLMClient(settings.llm)
+    if _llm_client.enabled:
+        logger.info(
+            "LLM client enabled: provider=%s, model=%s",
+            settings.llm.provider, settings.llm.model,
+        )
+    else:
+        logger.info("LLM client disabled")
+
+    _auto_tags_worker = AutoTagsWorker(_llm_client)
+    auto_tags_task: asyncio.Task | None = None
+
+    if settings.features.auto_tags and _llm_client.enabled:
+        auto_tags_task = asyncio.create_task(
+            _auto_tags_worker.run(), name="auto_tags_worker"
+        )
+        logger.info("Auto-tags worker started")
+
+    # Start index manager (pass auto_tags_worker for post-metadata hook)
+    _index_manager = IndexManager(auto_tags_worker=_auto_tags_worker)
     try:
         await _index_manager.start()
     except Exception as e:
@@ -109,6 +135,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     # Shutdown
+    if auto_tags_task is not None:
+        auto_tags_task.cancel()
+        try:
+            await auto_tags_task
+        except asyncio.CancelledError:
+            pass
     if _index_manager is not None:
         await _index_manager.stop()
     logger.info("Semantic search service stopped")
@@ -153,12 +185,26 @@ class SearchResponseModel(BaseModel):
     service_version: str
 
 
+class FeaturesStatus(BaseModel):
+    indexing: bool
+    search: bool
+    auto_tags: bool
+
+
+class LLMStatus(BaseModel):
+    provider: str
+    model: str
+    enabled: bool
+
+
 class StatusResponse(BaseModel):
     status: str
     indexed: dict[str, int]
     pending: dict[str, int]
     queue: dict[str, Any]
     models: dict[str, str]
+    features: FeaturesStatus
+    llm: LLMStatus
 
 
 class WebhookScanComplete(BaseModel):
@@ -386,6 +432,16 @@ async def status_endpoint() -> StatusResponse:
             "clip": settings.models.clip,
             "text_embedding": settings.models.text_embedding,
         },
+        features=FeaturesStatus(
+            indexing=settings.features.indexing,
+            search=settings.features.search,
+            auto_tags=settings.features.auto_tags,
+        ),
+        llm=LLMStatus(
+            provider=settings.llm.provider,
+            model=settings.llm.model,
+            enabled=_llm_client.enabled if _llm_client else False,
+        ),
     )
 
 
@@ -867,6 +923,103 @@ async def get_frame(
         content=result.stdout,
         media_type="image/jpeg",
         headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+# --- Suggested tags endpoints ---
+
+
+class SuggestedTagsResponse(BaseModel):
+    available: bool
+    file_id: str | None = None
+    tags: list[str] | None = None
+    model: str | None = None
+    status: str | None = None
+    created_at: str | None = None
+
+
+@app.get("/files/{file_id}/suggested-tags", response_model=SuggestedTagsResponse)
+async def get_suggested_tags(file_id: str) -> SuggestedTagsResponse:
+    """Get suggested tags for a file."""
+    import json as json_mod
+    from app.database import get_search_db
+    from sqlalchemy import text as sql_text
+
+    if not settings.features.auto_tags:
+        return SuggestedTagsResponse(available=False)
+
+    with get_search_db() as session:
+        row = session.execute(
+            sql_text(
+                "SELECT file_id, tags, model, status, created_at "
+                "FROM suggested_tags WHERE file_id = :fid"
+            ),
+            {"fid": file_id},
+        ).fetchone()
+
+    if row is None:
+        return SuggestedTagsResponse(available=False)
+
+    try:
+        tags = json_mod.loads(row[1])
+    except (json_mod.JSONDecodeError, TypeError):
+        tags = []
+
+    return SuggestedTagsResponse(
+        available=True,
+        file_id=row[0],
+        tags=tags,
+        model=row[2],
+        status=row[3],
+        created_at=row[4],
+    )
+
+
+@app.post("/files/{file_id}/suggested-tags/dismiss", response_model=MessageResponse)
+async def dismiss_suggested_tags(file_id: str) -> MessageResponse:
+    """Dismiss suggested tags for a file."""
+    from app.database import get_search_db
+    from sqlalchemy import text as sql_text
+
+    with get_search_db() as session:
+        result = session.execute(
+            sql_text(
+                "UPDATE suggested_tags SET status = 'dismissed' "
+                "WHERE file_id = :fid"
+            ),
+            {"fid": file_id},
+        )
+
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="No suggested tags found")
+
+    return MessageResponse(status="ok", message="Suggested tags dismissed")
+
+
+@app.post("/files/{file_id}/suggested-tags/regenerate", response_model=MessageResponse)
+async def regenerate_suggested_tags(file_id: str) -> MessageResponse:
+    """Delete existing suggested tags and re-queue for auto-tagging."""
+    from app.database import get_search_db
+    from sqlalchemy import text as sql_text
+
+    if not settings.features.auto_tags:
+        raise HTTPException(status_code=400, detail="Auto-tags feature is disabled")
+
+    if _auto_tags_worker is None or _llm_client is None or not _llm_client.enabled:
+        raise HTTPException(status_code=400, detail="LLM is not enabled")
+
+    # Delete existing entry
+    with get_search_db() as session:
+        session.execute(
+            sql_text("DELETE FROM suggested_tags WHERE file_id = :fid"),
+            {"fid": file_id},
+        )
+
+    # Re-queue
+    await _auto_tags_worker.enqueue(file_id)
+
+    return MessageResponse(
+        status="accepted", message="Regeneration queued"
     )
 
 

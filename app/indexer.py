@@ -98,7 +98,8 @@ class IndexManager:
     - Periodic reconciliation
     """
 
-    def __init__(self) -> None:
+    def __init__(self, auto_tags_worker: object | None = None) -> None:
+        self._auto_tags_worker = auto_tags_worker
         self._queues: dict[TaskType, asyncio.PriorityQueue[tuple[int, float, IndexTask]]] = {
             task_type: asyncio.PriorityQueue()
             for task_type in TaskType
@@ -615,6 +616,15 @@ class IndexManager:
                     # Also process text content for applicable files
                     for file_id in file_ids:
                         await asyncio.to_thread(index_text_content, file_id)
+
+                    # Queue auto-tagging for successfully indexed files
+                    if (
+                        self._auto_tags_worker is not None
+                        and settings.features.auto_tags
+                        and count > 0
+                    ):
+                        for file_id in file_ids:
+                            await self._auto_tags_worker.enqueue(file_id)
 
                 except Exception as e:
                     logger.error("Metadata batch failed: %s", e)

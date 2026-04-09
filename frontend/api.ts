@@ -249,3 +249,35 @@ export async function getClipTimestamps(fileId: string): Promise<ClipTimestampsR
 export function getFrameUrl(fileId: string, timestamp: number): string {
   return `${API_BASE}/addons/intelligence/files/${fileId}/frame?t=${timestamp}`;
 }
+
+// Suggested tags types and API
+export interface SuggestedTagsResponse {
+  available: boolean;
+  file_id?: string;
+  tags?: string[];
+  model?: string;
+  status?: string;
+  created_at?: string;
+}
+
+export async function getSuggestedTags(fileId: string): Promise<SuggestedTagsResponse> {
+  try {
+    return await fetchJSON<SuggestedTagsResponse>(
+      `${API_BASE}/addons/intelligence/files/${fileId}/suggested-tags`
+    );
+  } catch {
+    return { available: false };
+  }
+}
+
+export async function dismissSuggestedTags(fileId: string): Promise<void> {
+  await fetchJSON(`${API_BASE}/addons/intelligence/files/${fileId}/suggested-tags/dismiss`, {
+    method: "POST",
+  });
+}
+
+export async function regenerateSuggestedTags(fileId: string): Promise<void> {
+  await fetchJSON(`${API_BASE}/addons/intelligence/files/${fileId}/suggested-tags/regenerate`, {
+    method: "POST",
+  });
+}

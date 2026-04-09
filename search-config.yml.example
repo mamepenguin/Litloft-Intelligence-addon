@@ -1,6 +1,28 @@
 # Semantic Search Service Configuration
 # Copy to search-config.yml and customize as needed.
 
+# Feature flags
+features:
+  indexing: true
+  search: true
+  auto_tags: false    # requires llm.provider != "disabled"
+  # summaries: false  # future
+  # rag: false        # future
+
+# LLM provider configuration (required for auto_tags and future LLM features)
+# Supports any OpenAI-compatible API: ollama, vLLM, LM Studio, OpenAI, etc.
+llm:
+  provider: "disabled"       # "openai_compatible" | "disabled"
+  base_url: ""               # e.g. "http://host.docker.internal:11434/v1" (ollama)
+  api_key: ""                # or use env var LLM_API_KEY
+  model: ""                  # e.g. "gemma2:9b", "gpt-4o-mini"
+  max_tokens: 256
+  temperature: 0.3
+  # Example: ollama with auto_tags
+  # provider: "openai_compatible"
+  # base_url: "http://host.docker.internal:11434/v1"
+  # model: "gemma2:9b"
+
 models:
   # Whisper model for audio transcription (multilingual)
   whisper: "openai/whisper-small"

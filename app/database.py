@@ -78,6 +78,11 @@ def init_search_db() -> None:
         _create_vec_tables(conn)
         conn.commit()
 
+    # Create suggested_tags table for auto-tagging
+    with _search_engine.connect() as conn:
+        _create_suggested_tags_table(conn)
+        conn.commit()
+
     # Backfill fts_transcripts from existing transcript_chunks
     _backfill_fts_transcripts()
 
@@ -216,6 +221,20 @@ def _create_vec_tables(conn: object) -> None:
     conn.execute(text(
         "CREATE VIRTUAL TABLE IF NOT EXISTS fts_text_content "
         "USING fts5(file_id, chunk_index, page, text, tokenize='trigram')"
+    ))
+
+
+def _create_suggested_tags_table(conn: object) -> None:
+    """Create the suggested_tags table for auto-tagging if it doesn't exist."""
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS suggested_tags ("
+        "  file_id TEXT PRIMARY KEY,"
+        "  tags TEXT NOT NULL,"
+        "  model TEXT NOT NULL,"
+        "  context_type TEXT NOT NULL,"
+        "  created_at TEXT NOT NULL,"
+        "  status TEXT NOT NULL DEFAULT 'pending'"
+        ")"
     ))
 
 

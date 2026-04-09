@@ -96,6 +96,23 @@ class MemoryConfig:
 
 
 @dataclass(frozen=True)
+class FeaturesConfig:
+    indexing: bool = True
+    search: bool = True
+    auto_tags: bool = False
+
+
+@dataclass(frozen=True)
+class LLMConfig:
+    provider: str = "disabled"  # "openai_compatible" | "disabled"
+    base_url: str = ""
+    api_key: str = ""
+    model: str = ""
+    max_tokens: int = 256
+    temperature: float = 0.3
+
+
+@dataclass(frozen=True)
 class Settings:
     search_data_dir: Path
     homevault_db_path: Path
@@ -108,6 +125,8 @@ class Settings:
     indexing: IndexingConfig = field(default_factory=IndexingConfig)
     workers: WorkerConfig = field(default_factory=WorkerConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    features: FeaturesConfig = field(default_factory=FeaturesConfig)
+    llm: LLMConfig = field(default_factory=LLMConfig)
     service_version: str = "0.1.0"
     port: int = 8100
 
@@ -184,6 +203,20 @@ def load_settings() -> Settings:
             name, path = entry.split("=", 1)
             drive_mounts[name.strip()] = path.strip()
 
+    # Parse LLM config with env var override for api_key
+    llm_config = _parse_nested(config_data, "llm", LLMConfig)
+    llm_api_key_env = os.environ.get("LLM_API_KEY", "")
+    if llm_api_key_env:
+        # Rebuild with overridden api_key (frozen dataclass)
+        llm_config = LLMConfig(
+            provider=llm_config.provider,
+            base_url=llm_config.base_url,
+            api_key=llm_api_key_env,
+            model=llm_config.model,
+            max_tokens=llm_config.max_tokens,
+            temperature=llm_config.temperature,
+        )
+
     return Settings(
         search_data_dir=search_data_dir,
         homevault_db_path=homevault_db_path,
@@ -196,6 +229,8 @@ def load_settings() -> Settings:
         indexing=_parse_indexing(config_data),
         workers=_parse_nested(config_data, "workers", WorkerConfig),
         memory=_parse_nested(config_data, "memory", MemoryConfig),
+        features=_parse_nested(config_data, "features", FeaturesConfig),
+        llm=llm_config,
     )
 
 

@@ -14,3 +14,4 @@ open-clip-torch==2.30.0
 pillow==11.1.0
 PyMuPDF==1.25.5
 janome==0.5.0
+openai>=1.0.0
