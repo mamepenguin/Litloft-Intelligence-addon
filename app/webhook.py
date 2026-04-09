@@ -8,6 +8,7 @@ import logging
 from dataclasses import dataclass
 
 from app.indexer import IndexManager
+from app.search import invalidate_similar_cache
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,7 @@ async def handle_scan_complete(
     )
 
     await index_manager.handle_scan_complete(payload.drive)
+    invalidate_similar_cache()
 
     return {"status": "accepted", "message": "Reconciliation triggered"}
 
@@ -98,6 +100,7 @@ async def handle_files_deleted(
     await index_manager.handle_files_deleted(
         list(payload.file_ids), payload.type
     )
+    invalidate_similar_cache()
 
     return {
         "status": "accepted",
@@ -126,6 +129,7 @@ async def handle_files_restored(
     )
 
     await index_manager.handle_files_restored(list(payload.file_ids))
+    invalidate_similar_cache()
 
     return {
         "status": "accepted",
@@ -154,6 +158,7 @@ async def handle_files_purged(
     )
 
     await index_manager.handle_files_purged(list(payload.file_ids))
+    invalidate_similar_cache()
 
     return {
         "status": "accepted",

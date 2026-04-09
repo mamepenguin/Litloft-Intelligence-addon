@@ -531,6 +531,9 @@ class IndexManager:
         """
         logger.info("Starting full reindex")
 
+        from app.search import invalidate_similar_cache
+        invalidate_similar_cache()
+
         with get_search_db() as session:
             session.query(IndexedFile).filter(
                 IndexedFile.active.is_(True)

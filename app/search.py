@@ -5,6 +5,7 @@ to provide high-quality search results ranked by combined score.
 Results are grouped at file level with segment timestamps.
 """
 
+import json
 import logging
 from dataclasses import dataclass, field
 
@@ -13,7 +14,7 @@ from sqlalchemy import text as sql_text
 
 from app.config import settings
 from app.database import get_search_db, get_search_engine, validate_vector_table
-from app.models import Embedding, IndexedFile, TranscriptChunk
+from app.models import Embedding, IndexedFile, SimilarCache, TranscriptChunk
 from app.workers.clip import embed_text_clip
 from app.workers.embedder import embed_query
 
@@ -1028,6 +1029,71 @@ class SimilarSearchResult:
     source_keywords: tuple[dict, ...] = ()
 
 
+def _build_similar_cache_key(
+    file_id: str, limit: int, drive: str | None,
+) -> str:
+    """Build a cache key for similar files results."""
+    return f"{file_id}:{limit}:{drive or '_'}"
+
+
+def _serialize_similar_result(result: SimilarSearchResult) -> str:
+    """Serialize a SimilarSearchResult to JSON string."""
+    return json.dumps({
+        "results": [
+            {
+                "file_id": r.file_id,
+                "drive": r.drive,
+                "filename": r.filename,
+                "file_type": r.file_type,
+                "mime_type": r.mime_type,
+                "score": r.score,
+                "match_type": r.match_type,
+                "primary_score": r.primary_score,
+                "secondary_score": r.secondary_score,
+                "shared_keywords": list(r.shared_keywords),
+            }
+            for r in result.results
+        ],
+        "source_keywords": list(result.source_keywords),
+    })
+
+
+def _deserialize_similar_result(json_str: str) -> SimilarSearchResult:
+    """Deserialize a JSON string to SimilarSearchResult."""
+    data = json.loads(json_str)
+    return SimilarSearchResult(
+        results=[
+            SimilarFileResult(
+                file_id=r["file_id"],
+                drive=r["drive"],
+                filename=r["filename"],
+                file_type=r["file_type"],
+                mime_type=r["mime_type"],
+                score=r["score"],
+                match_type=r["match_type"],
+                primary_score=r.get("primary_score"),
+                secondary_score=r.get("secondary_score"),
+                shared_keywords=tuple(r.get("shared_keywords", [])),
+            )
+            for r in data["results"]
+        ],
+        source_keywords=tuple(data.get("source_keywords", [])),
+    )
+
+
+def invalidate_similar_cache() -> int:
+    """Delete all similar files cache entries.
+
+    Called on index updates (scan-complete, files-deleted, etc.).
+    Returns number of deleted rows.
+    """
+    with get_search_db() as session:
+        count = session.query(SimilarCache).delete()
+        session.commit()
+        logger.info("Invalidated %d similar cache entries", count)
+        return count
+
+
 def find_similar(
     file_id: str,
     limit: int = 6,
@@ -1053,6 +1119,15 @@ def find_similar(
     Returns:
         List of similar files sorted by similarity score.
     """
+    # Check cache first
+    cache_key = _build_similar_cache_key(file_id, limit, drive)
+    with get_search_db() as session:
+        cached = session.query(SimilarCache).filter(
+            SimilarCache.cache_key == cache_key,
+        ).first()
+        if cached is not None:
+            return _deserialize_similar_result(cached.result_json)
+
     with get_search_db() as session:
         source = (
             session.query(IndexedFile)
@@ -1099,7 +1174,7 @@ def find_similar(
     primary_by_id = {r["file_id"]: r["score"] for r in primary_results}
     secondary_by_id = {r["file_id"]: r for r in secondary_results}
 
-    return SimilarSearchResult(
+    result = SimilarSearchResult(
         results=[
             SimilarFileResult(
                 file_id=r["file_id"],
@@ -1130,6 +1205,26 @@ def find_similar(
         ],
         source_keywords=tuple(source_keywords),
     )
+
+    # Save to cache
+    try:
+        with get_search_db() as session:
+            existing = session.query(SimilarCache).filter(
+                SimilarCache.cache_key == cache_key,
+            ).first()
+            if existing:
+                existing.result_json = _serialize_similar_result(result)
+            else:
+                session.add(SimilarCache(
+                    cache_key=cache_key,
+                    file_id=file_id,
+                    result_json=_serialize_similar_result(result),
+                ))
+            session.commit()
+    except Exception:
+        logger.warning("Failed to save similar cache for %s", file_id, exc_info=True)
+
+    return result
 
 
 def _merge_similar_results(
