@@ -240,6 +240,19 @@ def _vector_search_text(
             )
             return []
 
+        # Coefficient of variation check: if scores are bunched in a
+        # narrow band the embedding cannot meaningfully distinguish them.
+        if len(all_scores) >= 5 and mean_score > 0:
+            std = (sum((s - mean_score) ** 2 for s in all_scores) / len(all_scores)) ** 0.5
+            cv = std / mean_score
+            if cv < 0.01:
+                logger.debug(
+                    "Text vector CV too small (%.4f), "
+                    "discarding all %d candidates",
+                    cv, len(all_scores),
+                )
+                return []
+
     with get_search_db() as session:
         embeddings = (
             session.query(Embedding)
@@ -329,6 +342,18 @@ def _vector_search_clip(
                 gap, search_config.score_gap_threshold, len(all_scores),
             )
             return []
+
+        # Coefficient of variation check (same as text vector)
+        if len(all_scores) >= 5 and mean_score > 0:
+            std = (sum((s - mean_score) ** 2 for s in all_scores) / len(all_scores)) ** 0.5
+            cv = std / mean_score
+            if cv < 0.01:
+                logger.debug(
+                    "CLIP vector CV too small (%.4f), "
+                    "discarding all %d candidates",
+                    cv, len(all_scores),
+                )
+                return []
 
     min_score = search_config.min_score_clip
 
