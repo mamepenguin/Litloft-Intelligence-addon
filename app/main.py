@@ -124,6 +124,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         logger.info("Auto-tags worker started")
 
+        # Queue already-indexed files that don't have suggested tags yet
+        pending = await _auto_tags_worker.enqueue_unprocessed()
+        if pending > 0:
+            logger.info("Auto-tags: queued %d previously indexed files", pending)
+
     # Start index manager (pass auto_tags_worker for post-metadata hook)
     _index_manager = IndexManager(auto_tags_worker=_auto_tags_worker)
     try:

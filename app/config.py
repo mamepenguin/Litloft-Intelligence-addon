@@ -108,7 +108,7 @@ class LLMConfig:
     base_url: str = ""
     api_key: str = ""
     model: str = ""
-    max_tokens: int = 256
+    max_tokens: int = 2048
     temperature: float = 0.3
 
 

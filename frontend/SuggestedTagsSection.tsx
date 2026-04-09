@@ -101,35 +101,58 @@ export default function SuggestedTagsSection({ fileId }: SuggestedTagsSectionPro
   const handleRegenerate = useCallback(async () => {
     setRegenerating(true);
     setAcceptedTags(new Set());
+    setHidden(false);
     try {
       await regenerateSuggestedTags(fileId);
-      // Refetch after a short delay to allow processing
-      setTimeout(() => {
-        fetchData().finally(() => setRegenerating(false));
-      }, 1000);
+      // Poll for results — LLM processing takes a few seconds
+      const maxAttempts = 15;
+      for (let i = 0; i < maxAttempts; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const result = await getSuggestedTags(fileId);
+        if (result.available && result.tags && result.tags.length > 0) {
+          setData(result);
+          break;
+        }
+      }
     } catch {
+      // silently fail
+    } finally {
       setRegenerating(false);
     }
-  }, [fileId, fetchData]);
+  }, [fileId]);
 
-  if (!loaded || !data?.available) {
-    return null;
+  if (!loaded) return null;
+
+  // Show compact regenerate-only UI when no pending tags to display
+  const hasPendingTags = data?.available
+    && data.tags
+    && data.tags.length > 0
+    && data.status !== "accepted"
+    && !hidden
+    && data.tags.some((tag) => !acceptedTags.has(tag));
+
+  if (!hasPendingTags) {
+    // Show regenerate button for dismissed, accepted, or not-yet-generated files
+    return (
+      <div>
+        <div className="flex items-center gap-2">
+          <Sparkles size={14} className="text-text-muted" />
+          <button
+            onClick={handleRegenerate}
+            disabled={regenerating}
+            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+          >
+            <RefreshCw size={11} className={regenerating ? "animate-spin" : ""} />
+            {regenerating
+              ? t("regeneratingTags", { defaultMessage: "Generating..." })
+              : t("generateTags", { defaultMessage: "Generate AI tags" })}
+          </button>
+        </div>
+      </div>
+    );
   }
 
-  if (hidden || data.status === "accepted" || data.status === "dismissed") {
-    return null;
-  }
-
-  if (!data.tags || data.tags.length === 0) {
-    return null;
-  }
-
-  const pendingTags = data.tags.filter((tag) => !acceptedTags.has(tag));
-  const allAccepted = pendingTags.length === 0;
-
-  if (allAccepted) {
-    return null;
-  }
+  const pendingTags = data!.tags!.filter((tag) => !acceptedTags.has(tag));
 
   return (
     <div>

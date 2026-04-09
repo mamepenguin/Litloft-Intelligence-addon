@@ -50,6 +50,27 @@ class AutoTagsWorker:
         """
         await self._queue.put(file_id)
 
+    async def enqueue_unprocessed(self) -> int:
+        """Find indexed files without suggested tags and enqueue them.
+
+        Returns:
+            Number of files queued.
+        """
+        with get_search_db() as session:
+            rows = session.execute(
+                sql_text(
+                    "SELECT f.file_id FROM indexed_files f "
+                    "WHERE f.active = 1 AND f.metadata_indexed = 1 "
+                    "AND f.file_id NOT IN (SELECT file_id FROM suggested_tags)"
+                )
+            ).fetchall()
+
+        count = 0
+        for (file_id,) in rows:
+            await self._queue.put(file_id)
+            count += 1
+        return count
+
     async def run(self) -> None:
         """Main worker loop. Processes one file at a time."""
         while True:
