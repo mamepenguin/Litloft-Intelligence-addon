@@ -19,6 +19,7 @@ from PIL import Image
 from app.config import settings, validate_file_path
 from app.database import get_search_db
 from app.models import Embedding, IndexedFile
+from app.workers import blip
 from sqlalchemy import text as sql_text
 
 logger = logging.getLogger(__name__)
@@ -437,7 +438,7 @@ def _index_clip_sync(file_id: str) -> bool:
 
 
 def _index_clip_image(file_id: str, file_path: str, filename: str) -> bool:
-    """Index a single image file with CLIP.
+    """Index a single image file with CLIP, and optionally generate BLIP caption.
 
     Args:
         file_id: The file ID.
@@ -467,6 +468,9 @@ def _index_clip_image(file_id: str, file_path: str, filename: str) -> bool:
         file = session.query(IndexedFile).filter_by(file_id=file_id).first()
         if file is not None:
             file.clip_indexed = True
+
+    # Generate BLIP caption for the image (reuses the already-loaded PIL image)
+    _generate_blip_caption_if_needed(file_id, image)
 
     return True
 
@@ -515,6 +519,10 @@ def _index_clip_video(file_id: str, file_path: str, duration: float | None) -> b
                 "CLIP indexed %d/%d frames for %s",
                 total_stored, len(frame_paths), file_id,
             )
+
+            # Generate BLIP caption from the first extracted frame
+            if frame_paths:
+                _generate_blip_caption_for_video_frame(file_id, frame_paths[0])
 
     except Exception as e:
         logger.error("CLIP video indexing failed for %s: %s", file_id, e)
@@ -580,6 +588,112 @@ def _process_frame_batch(
             )
 
     return len(embeddings)
+
+
+def _has_blip_caption(file_id: str) -> bool:
+    """Check if a BLIP caption already exists for a file.
+
+    Args:
+        file_id: The file ID to check.
+
+    Returns:
+        True if a blip_caption embedding exists.
+    """
+    with get_search_db() as session:
+        count = (
+            session.query(Embedding)
+            .filter_by(file_id=file_id, embedding_type="blip_caption")
+            .count()
+        )
+        return count > 0
+
+
+def _store_blip_caption(file_id: str, caption: str) -> None:
+    """Store a BLIP caption as an embedding record (no vector).
+
+    Args:
+        file_id: The file ID this caption belongs to.
+        caption: The generated caption text.
+    """
+    embedding_id = f"blip_{file_id}_{uuid.uuid4().hex[:8]}"
+
+    with get_search_db() as session:
+        # Remove any existing BLIP captions for this file
+        existing = (
+            session.query(Embedding)
+            .filter_by(file_id=file_id, embedding_type="blip_caption")
+            .all()
+        )
+        for emb in existing:
+            session.delete(emb)
+        if existing:
+            session.flush()
+
+        record = Embedding(
+            id=embedding_id,
+            file_id=file_id,
+            embedding_type="blip_caption",
+            vector_table="",
+            content_preview=caption[:500],
+        )
+        session.add(record)
+
+    logger.info("BLIP caption stored for %s: %s", file_id, caption[:80])
+
+
+def _generate_blip_caption_if_needed(
+    file_id: str, image: Image.Image
+) -> None:
+    """Generate and store a BLIP caption for an image if BLIP is enabled.
+
+    Skips if BLIP is disabled or a caption already exists.
+    Logs and continues on errors without crashing.
+
+    Args:
+        file_id: The file ID.
+        image: PIL Image (already loaded for CLIP).
+    """
+    if not blip.is_enabled():
+        return
+
+    if _has_blip_caption(file_id):
+        return
+
+    try:
+        caption = blip.generate_caption(image)
+        if caption:
+            _store_blip_caption(file_id, caption)
+    except Exception as e:
+        logger.error("BLIP captioning failed for %s: %s", file_id, e)
+
+
+def _generate_blip_caption_for_video_frame(
+    file_id: str, frame_info: tuple[float, Path]
+) -> None:
+    """Generate and store a BLIP caption from a video frame.
+
+    Uses the first extracted frame as a representative image
+    to give auto_tags visual context for videos.
+
+    Args:
+        file_id: The file ID.
+        frame_info: Tuple of (timestamp, frame_path).
+    """
+    if not blip.is_enabled():
+        return
+
+    if _has_blip_caption(file_id):
+        return
+
+    _, frame_path = frame_info
+    try:
+        image = Image.open(str(frame_path)).convert("RGB")
+        caption = blip.generate_caption(image)
+        del image
+        if caption:
+            _store_blip_caption(file_id, caption)
+    except Exception as e:
+        logger.error("BLIP video captioning failed for %s: %s", file_id, e)
 
 
 def _store_clip_embedding(

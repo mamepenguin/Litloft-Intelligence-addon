@@ -37,6 +37,12 @@ models:
   #   Multi:    M-CLIP/XLM-Roberta-Large-Vit-B-32 (~1.5GB)
   clip: "openai/clip-vit-b-32"
 
+  # BLIP model for image captioning (optional, used by auto_tags)
+  # Generates English text descriptions of images for tag generation.
+  # Leave empty to disable. Requires ~1GB additional memory.
+  # blip: "Salesforce/blip-image-captioning-base"
+  blip: ""
+
 # Search parameters
 search:
   # Weight for vector similarity vs keyword matching

@@ -16,6 +16,7 @@ class ModelConfig:
     whisper: str = "openai/whisper-small"
     text_embedding: str = "intfloat/multilingual-e5-small"
     clip: str = "llm-jp/llm-jp-clip-vit-base-patch16"
+    blip: str = ""  # empty = disabled. e.g. "Salesforce/blip-image-captioning-base"
     text_query_prefix: str = ""
     text_passage_prefix: str = ""
 
