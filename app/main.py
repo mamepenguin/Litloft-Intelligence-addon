@@ -788,7 +788,7 @@ async def get_transcript(file_id: str) -> TranscriptResponse:
     )
 
 
-_EMBEDDING_TYPES = ("metadata", "clip", "whisper", "text_content")
+_EMBEDDING_TYPES = ("metadata", "clip", "whisper", "text_content", "blip_caption")
 _ITEMS_PER_TYPE = 50
 
 

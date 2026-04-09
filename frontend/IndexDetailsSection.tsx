@@ -17,6 +17,7 @@ const TYPE_LABELS: Record<string, string> = {
   clip: "CLIP",
   whisper: "Whisper",
   text_content: "Text",
+  blip_caption: "BLIP Caption",
 };
 
 const TYPE_COLORS: Record<string, string> = {
@@ -24,6 +25,7 @@ const TYPE_COLORS: Record<string, string> = {
   clip: "bg-emerald-500",
   whisper: "bg-blue-500",
   text_content: "bg-purple-500",
+  blip_caption: "bg-amber-500",
 };
 
 export default function IndexDetailsSection({ fileId }: IndexDetailsSectionProps) {
@@ -53,6 +55,15 @@ export default function IndexDetailsSection({ fileId }: IndexDetailsSectionProps
       </div>
 
       <div className="rounded-lg bg-bg-card p-3">
+        {/* BLIP caption (if available) */}
+        {embeddings.blip_caption && embeddings.blip_caption.count > 0 && (
+          <div className="mb-3 rounded-md bg-amber-500/5 border border-amber-500/20 px-3 py-2">
+            <p className="text-xs text-amber-300/80 italic">
+              &quot;{embeddings.blip_caption.items[0]?.content_preview}&quot;
+            </p>
+          </div>
+        )}
+
         {/* Status badges */}
         <div className="mb-3 flex flex-wrap gap-2">
           {(Object.entries(status) as [string, boolean][]).map(([key, done]) => (
