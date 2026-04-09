@@ -152,7 +152,7 @@ export default function SuggestedTagsSection({ fileId }: SuggestedTagsSectionPro
     );
   }
 
-  const pendingTags = data!.tags!.filter((tag) => !acceptedTags.has(tag));
+  const pendingTags = (data?.tags ?? []).filter((tag) => !acceptedTags.has(tag));
 
   return (
     <div>
@@ -167,7 +167,7 @@ export default function SuggestedTagsSection({ fileId }: SuggestedTagsSectionPro
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">
-        {data.tags.map((tag) => {
+        {(data?.tags ?? []).map((tag) => {
           const isAccepted = acceptedTags.has(tag);
           const isAccepting = accepting.has(tag);
 
