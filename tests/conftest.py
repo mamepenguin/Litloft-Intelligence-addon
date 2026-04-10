@@ -4,10 +4,36 @@ Provides factories and helpers for creating test configurations
 without importing heavy ML dependencies.
 """
 
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from unittest.mock import MagicMock
+
+# Stub heavy ML dependencies at collection time so individual test
+# files don't need to repeat the boilerplate. Crucially, numpy's
+# `bool_` attribute is set to the real `bool` type so pytest.approx's
+# `isinstance(val, np.bool_)` check keeps working — a plain MagicMock
+# attribute would break every float comparison in the suite.
+_ml_stubs = (
+    "PIL", "PIL.Image",
+    "open_clip",
+    "torch",
+    "sentence_transformers",
+    "faster_whisper",
+    "onnxruntime",
+    "transformers",
+    "janome", "janome.tokenizer",
+    "sqlite_vec",
+)
+for _mod in _ml_stubs:
+    if _mod not in sys.modules:
+        sys.modules[_mod] = MagicMock()
+
+if "numpy" not in sys.modules:
+    _numpy_stub = MagicMock()
+    _numpy_stub.bool_ = bool  # Real type for pytest.approx
+    sys.modules["numpy"] = _numpy_stub
 
 import pytest
 
