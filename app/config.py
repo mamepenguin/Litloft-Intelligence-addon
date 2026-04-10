@@ -111,6 +111,7 @@ class LLMConfig:
     model: str = ""
     max_tokens: int = 2048
     temperature: float = 0.3
+    tag_language: str = "auto"  # "auto" | "ja" | "en" | etc.
 
 
 @dataclass(frozen=True)

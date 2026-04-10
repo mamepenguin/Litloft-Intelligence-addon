@@ -19,20 +19,32 @@ from app.models import Embedding, IndexedFile, TranscriptChunk
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_PROMPT = (
-    "あなたはファイル管理システムのタグ付けアシスタントです。\n"
-    "ファイルの内容に基づいて、検索に役立つタグを5-10個提案してください。\n"
-    "\n"
-    "規則:\n"
-    "- JSON配列で返すこと: [\"tag1\", \"tag2\", ...]\n"
-    "- 既存タグと重複しないこと\n"
-    "- 具体的で検索に有用なタグにすること\n"
-    "- ファイルの内容を要約するタグを含めること\n"
-    "- タグは短く（1-3語）\n"
-    "- JSON配列のみ返し、他のテキストは含めないこと"
-)
+_LANGUAGE_INSTRUCTIONS: dict[str, str] = {
+    "ja": "- タグは日本語で生成すること\n",
+    "en": "- Tags must be in English\n",
+}
 
 _MAX_CONTEXT_CHARS = 2000
+
+
+def _build_system_prompt() -> str:
+    """Build system prompt with language instruction based on config."""
+    lang = settings.llm.tag_language
+    lang_line = _LANGUAGE_INSTRUCTIONS.get(lang, "")
+
+    return (
+        "あなたはファイル管理システムのタグ付けアシスタントです。\n"
+        "ファイルの内容に基づいて、検索に役立つタグを5-10個提案してください。\n"
+        "\n"
+        "規則:\n"
+        "- JSON配列で返すこと: [\"tag1\", \"tag2\", ...]\n"
+        "- 既存タグと重複しないこと\n"
+        "- 具体的で検索に有用なタグにすること\n"
+        "- ファイルの内容を要約するタグを含めること\n"
+        "- タグは短く（1-3語）\n"
+        f"{lang_line}"
+        "- JSON配列のみ返し、他のテキストは含めないこと"
+    )
 
 
 class AutoTagsWorker:
@@ -117,7 +129,7 @@ class AutoTagsWorker:
         user_prompt = _build_user_prompt(indexed_file, context_type, context, existing_tags)
 
         # Query LLM
-        tags = await self._llm_client.generate_json(_SYSTEM_PROMPT, user_prompt)
+        tags = await self._llm_client.generate_json(_build_system_prompt(), user_prompt)
 
         if not isinstance(tags, list):
             logger.warning(
