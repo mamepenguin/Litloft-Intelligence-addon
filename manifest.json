@@ -8,6 +8,7 @@
         ],
         "file-detail-sections": [
             {"id": "suggested-tags", "label": "Suggested Tags", "priority": 5},
+            {"id": "summary", "label": "AI Summary", "priority": 6},
             {"id": "transcript", "label": "Transcript", "priority": 10},
             {"id": "clip-frames", "label": "CLIP Frames", "priority": 20},
             {"id": "index-details", "label": "Index Details", "priority": 30},
@@ -17,7 +18,8 @@
             {"id": "index-status", "label": "Index Status", "priority": 10}
         ],
         "folder-actions": [
-            {"id": "folder-auto-tags", "label": "Generate AI Tags", "priority": 10}
+            {"id": "folder-auto-tags", "label": "Generate AI Tags", "priority": 10},
+            {"id": "folder-summaries", "label": "Generate AI Summaries", "priority": 20}
         ]
     },
     "proxy": {
@@ -159,6 +161,38 @@
             },
             {
                 "path": "/batch/suggested-tags",
+                "methods": ["POST"],
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/summary",
+                "methods": ["GET"],
+                "pre_check": {
+                    "type": "file_access",
+                    "param": "file_id"
+                },
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/summary/regenerate",
+                "methods": ["POST"],
+                "pre_check": {
+                    "type": "file_access",
+                    "param": "file_id"
+                },
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/summary/hide",
+                "methods": ["POST"],
+                "pre_check": {
+                    "type": "file_access",
+                    "param": "file_id"
+                },
+                "response_filter": null
+            },
+            {
+                "path": "/batch/summaries",
                 "methods": ["POST"],
                 "response_filter": null
             },

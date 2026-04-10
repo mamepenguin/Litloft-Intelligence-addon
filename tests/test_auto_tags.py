@@ -58,7 +58,7 @@ class TestBuildSystemPrompt:
 
     def test_japanese_language_instruction(self, monkeypatch, make_settings):
         settings = make_settings(
-            llm=LLMConfig(tag_language="ja")
+            llm=LLMConfig(output_language="ja")
         )
         monkeypatch.setattr("app.config.settings", settings)
         # Also patch the module-level reference in auto_tags
@@ -70,7 +70,7 @@ class TestBuildSystemPrompt:
 
     def test_english_language_instruction(self, monkeypatch, make_settings):
         settings = make_settings(
-            llm=LLMConfig(tag_language="en")
+            llm=LLMConfig(output_language="en")
         )
         monkeypatch.setattr("app.config.settings", settings)
         monkeypatch.setattr("app.workers.auto_tags.settings", settings)
@@ -81,7 +81,7 @@ class TestBuildSystemPrompt:
 
     def test_auto_language_no_specific_instruction(self, monkeypatch, make_settings):
         settings = make_settings(
-            llm=LLMConfig(tag_language="auto")
+            llm=LLMConfig(output_language="auto")
         )
         monkeypatch.setattr("app.config.settings", settings)
         monkeypatch.setattr("app.workers.auto_tags.settings", settings)
@@ -93,7 +93,7 @@ class TestBuildSystemPrompt:
 
     def test_unknown_language_no_specific_instruction(self, monkeypatch, make_settings):
         settings = make_settings(
-            llm=LLMConfig(tag_language="fr")
+            llm=LLMConfig(output_language="fr")
         )
         monkeypatch.setattr("app.config.settings", settings)
         monkeypatch.setattr("app.workers.auto_tags.settings", settings)
@@ -105,7 +105,7 @@ class TestBuildSystemPrompt:
         assert "English" not in result
 
     def test_prompt_contains_json_instruction(self, monkeypatch, make_settings):
-        settings = make_settings(llm=LLMConfig(tag_language="auto"))
+        settings = make_settings(llm=LLMConfig(output_language="auto"))
         monkeypatch.setattr("app.config.settings", settings)
         monkeypatch.setattr("app.workers.auto_tags.settings", settings)
 

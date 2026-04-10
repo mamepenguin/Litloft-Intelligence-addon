@@ -6,7 +6,7 @@ features:
   indexing: true
   search: true
   auto_tags: false    # "false" | "manual" | "on_index" (requires llm.provider != "disabled")
-  # summaries: false  # future
+  summaries: false    # "false" | "manual" | "on_index" (requires llm.provider != "disabled")
   # rag: false        # future
 
 # LLM provider configuration (required for auto_tags and future LLM features)
@@ -20,7 +20,7 @@ llm:
   model: ""                  # e.g. "gemma2:9b", "gpt-4o-mini", "deepseek-chat"
   max_tokens: 2048
   temperature: 0.3
-  tag_language: "auto"       # "auto" | "ja" | "en" — controls auto_tags output language
+  output_language: "auto"    # "auto" | "ja" | "en" — applies to auto_tags and summaries
   # Retry behavior for transient failures (timeouts, 429, 5xx)
   retry_attempts: 3          # total attempts = 1 + retries
   retry_base_delay: 1.0      # seconds; doubled on each retry
@@ -36,6 +36,14 @@ llm:
   # provider: "openai_compatible"
   # base_url: "https://api.deepseek.com/v1"
   # model: "deepseek-chat"
+
+# AI Summaries configuration (used when features.summaries != "false")
+# Generates 1-sentence short summary + paragraph long summary for videos,
+# audio files, and documents. Display-only: never writes to HomeVault DB.
+summaries:
+  max_context_chars: 8000    # threshold: smaller contexts are sent in full
+  window_chars: 2500         # per-window size when sampling long content
+  window_count: 3            # number of windows (first/middle/last; use odd numbers)
 
 models:
   # Whisper model for audio transcription (multilingual)

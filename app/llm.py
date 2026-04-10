@@ -171,7 +171,8 @@ class LLMClient:
         """Generate a completion and parse the result as JSON.
 
         Attempts direct JSON parsing first. On failure, tries to
-        extract a JSON array using regex as a fallback.
+        extract either a JSON object or array using regex as a fallback
+        (in case the model wraps output in ```json ... ``` or prose).
 
         Args:
             system_prompt: System message for the model.
@@ -190,15 +191,23 @@ class LLMClient:
         except (json.JSONDecodeError, TypeError):
             pass
 
-        # Fallback: extract JSON array with regex
-        match = re.search(r"\[.*\]", raw, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(0))
-            except (json.JSONDecodeError, TypeError):
-                pass
+        # Fallback: try object first (dict), then array (list).
+        # Object match is prioritized because array fallback was
+        # historically the only option and we don't want to regress.
+        for pattern in (r"\{.*\}", r"\[.*\]"):
+            match = re.search(pattern, raw, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(0))
+                except (json.JSONDecodeError, TypeError):
+                    continue
 
+        # Log only a short excerpt so error logs don't contain long
+        # slices of file content on parse failures — LLM output often
+        # echoes bits of the prompt context.
+        preview = (raw[:40] + "…") if len(raw) > 40 else raw
         logger.warning(
-            "Failed to parse LLM response as JSON: %.200s", raw
+            "Failed to parse LLM response as JSON (len=%d, head=%r)",
+            len(raw), preview,
         )
         return None

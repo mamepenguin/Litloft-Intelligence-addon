@@ -35,7 +35,7 @@ def llm_config_factory():
             "model": "test-model",
             "max_tokens": 2048,
             "temperature": 0.3,
-            "tag_language": "auto",
+            "output_language": "auto",
         }
         return LLMConfig(**{**defaults, **overrides})
 

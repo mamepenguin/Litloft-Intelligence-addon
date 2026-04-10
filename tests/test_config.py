@@ -140,7 +140,7 @@ class TestLoadSettings:
             "  provider: openai_compatible\n"
             "  base_url: http://localhost:11434/v1\n"
             "  model: llama3\n"
-            "  tag_language: ja\n"
+            "  output_language: ja\n"
         )
 
         monkeypatch.setenv("SEARCH_DATA_DIR", str(tmp_path / "data"))
@@ -160,7 +160,7 @@ class TestLoadSettings:
             "Photos": "/drives/photos",
         }
         assert result.llm.provider == "openai_compatible"
-        assert result.llm.tag_language == "ja"
+        assert result.llm.output_language == "ja"
 
     def test_llm_api_key_env_overrides_yaml(self, tmp_path, monkeypatch):
         config_file = tmp_path / "search-config.yml"
@@ -170,7 +170,7 @@ class TestLoadSettings:
             "  api_key: yaml-key\n"
             "  base_url: http://localhost:11434/v1\n"
             "  model: llama3\n"
-            "  tag_language: en\n"
+            "  output_language: en\n"
         )
 
         monkeypatch.setenv("SEARCH_DATA_DIR", str(tmp_path / "data"))
@@ -184,7 +184,7 @@ class TestLoadSettings:
         # Other LLM fields preserved from YAML
         assert result.llm.provider == "openai_compatible"
         assert result.llm.model == "llama3"
-        assert result.llm.tag_language == "en"
+        assert result.llm.output_language == "en"
 
     def test_llm_api_key_env_empty_does_not_override(self, tmp_path, monkeypatch):
         config_file = tmp_path / "search-config.yml"

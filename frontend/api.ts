@@ -297,3 +297,56 @@ export async function batchSuggestedTags(fileIds: string[]): Promise<BatchSugges
     }
   );
 }
+
+// Summaries types and API
+export interface SummaryResponse {
+  available: boolean;
+  file_id?: string;
+  short_summary?: string;
+  long_summary?: string;
+  model?: string;
+  context_type?: string;
+  was_truncated?: boolean;
+  status?: "generated" | "hidden" | string;
+  created_at?: string;
+}
+
+export async function getSummary(fileId: string): Promise<SummaryResponse> {
+  try {
+    return await fetchJSON<SummaryResponse>(
+      `${API_BASE}/addons/intelligence/files/${fileId}/summary`
+    );
+  } catch {
+    return { available: false };
+  }
+}
+
+export async function regenerateSummary(fileId: string): Promise<void> {
+  await fetchJSON(
+    `${API_BASE}/addons/intelligence/files/${fileId}/summary/regenerate`,
+    { method: "POST" }
+  );
+}
+
+export async function hideSummary(fileId: string): Promise<void> {
+  await fetchJSON(
+    `${API_BASE}/addons/intelligence/files/${fileId}/summary/hide`,
+    { method: "POST" }
+  );
+}
+
+export interface BatchSummariesResponse {
+  queued: number;
+  skipped: number;
+}
+
+export async function batchSummaries(fileIds: string[]): Promise<BatchSummariesResponse> {
+  return fetchJSON<BatchSummariesResponse>(
+    `${API_BASE}/addons/intelligence/batch/summaries`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ file_ids: fileIds }),
+    }
+  );
+}

@@ -83,6 +83,11 @@ def init_search_db() -> None:
         _create_suggested_tags_table(conn)
         conn.commit()
 
+    # Create file_summaries table for AI summaries
+    with _search_engine.connect() as conn:
+        _create_file_summaries_table(conn)
+        conn.commit()
+
     # Backfill fts_transcripts from existing transcript_chunks
     _backfill_fts_transcripts()
 
@@ -234,6 +239,32 @@ def _create_suggested_tags_table(conn: object) -> None:
         "  context_type TEXT NOT NULL,"
         "  created_at TEXT NOT NULL,"
         "  status TEXT NOT NULL DEFAULT 'pending'"
+        ")"
+    ))
+
+
+def _create_file_summaries_table(conn: object) -> None:
+    """Create the file_summaries table for AI summaries if it doesn't exist.
+
+    Stores a single summary per file with two layers:
+    - short_summary: ~1 sentence (30-80 chars)
+    - long_summary: 3-5 sentences (200-400 chars)
+
+    Unlike suggested_tags, summaries have no approve/dismiss workflow —
+    the intelligence DB stays self-contained and the host DB is never touched.
+    Status is either 'generated' (displayed) or 'hidden' (user opted out).
+    """
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS file_summaries ("
+        "  file_id TEXT PRIMARY KEY,"
+        "  short_summary TEXT NOT NULL,"
+        "  long_summary TEXT NOT NULL,"
+        "  model TEXT NOT NULL,"
+        "  context_type TEXT NOT NULL,"
+        "  context_chars INTEGER NOT NULL,"
+        "  was_truncated INTEGER NOT NULL DEFAULT 0,"
+        "  status TEXT NOT NULL DEFAULT 'generated',"
+        "  created_at TEXT NOT NULL"
         ")"
     ))
 

@@ -29,7 +29,7 @@ _MAX_CONTEXT_CHARS = 2000
 
 def _build_system_prompt() -> str:
     """Build system prompt with language instruction based on config."""
-    lang = settings.llm.tag_language
+    lang = settings.llm.output_language
     lang_line = _LANGUAGE_INSTRUCTIONS.get(lang, "")
 
     return (

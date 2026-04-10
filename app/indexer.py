@@ -99,8 +99,13 @@ class IndexManager:
     - Periodic reconciliation
     """
 
-    def __init__(self, auto_tags_worker: object | None = None) -> None:
+    def __init__(
+        self,
+        auto_tags_worker: object | None = None,
+        summaries_worker: object | None = None,
+    ) -> None:
         self._auto_tags_worker = auto_tags_worker
+        self._summaries_worker = summaries_worker
         self._queues: dict[TaskType, asyncio.PriorityQueue[tuple[int, float, IndexTask]]] = {
             task_type: asyncio.PriorityQueue()
             for task_type in TaskType
@@ -627,6 +632,15 @@ class IndexManager:
                         for file_id in file_ids:
                             await self._auto_tags_worker.enqueue(file_id)
 
+                    # Queue summary generation for successfully indexed files (on_index mode only)
+                    if (
+                        self._summaries_worker is not None
+                        and settings.features.summaries == "on_index"
+                        and count > 0
+                    ):
+                        for file_id in file_ids:
+                            await self._summaries_worker.enqueue(file_id)
+
                 except Exception as e:
                     logger.error("Metadata batch failed: %s", e)
                     # Re-queue failed batch so they're retried
@@ -957,7 +971,8 @@ def _set_file_active(file_id: str, *, active: bool) -> None:
 def _purge_file(file_id: str) -> None:
     """Permanently remove a file and all its data from the search index.
 
-    Deletes embeddings, transcript chunks, vector entries, and the
+    Deletes embeddings, transcript chunks, vector entries, FTS rows,
+    LLM-generated artifacts (suggested tags and summaries), and the
     indexed file record.
 
     Args:
@@ -987,6 +1002,18 @@ def _purge_file(file_id: str) -> None:
         delete_fts_file(session, file_id)
         delete_fts_transcripts(session, file_id)
         delete_fts_text_content(session, file_id)
+
+        # Delete LLM-generated artifacts. These rows outlive embeddings
+        # today (no foreign key) so they must be cleaned explicitly —
+        # otherwise synthesized content from deleted files survives in DB.
+        session.execute(
+            sql_text("DELETE FROM suggested_tags WHERE file_id = :fid"),
+            {"fid": file_id},
+        )
+        session.execute(
+            sql_text("DELETE FROM file_summaries WHERE file_id = :fid"),
+            {"fid": file_id},
+        )
 
         # Delete indexed file record
         session.query(IndexedFile).filter_by(file_id=file_id).delete()

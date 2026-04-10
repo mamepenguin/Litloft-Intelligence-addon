@@ -17,9 +17,10 @@ from app.config import settings
 from app.database import init_homevault_db, init_search_db
 from app.indexer import IndexManager
 from app.llm import LLMClient
-from app.routers import files, queue, search, similar, webhooks
+from app.routers import files, queue, search, similar, summaries, webhooks
 from app.schemas import FeaturesStatus, LLMStatus, StatusResponse
 from app.workers.auto_tags import AutoTagsWorker
+from app.workers.summaries import SummariesWorker
 
 # Configure logging
 logging.basicConfig(
@@ -87,8 +88,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             if pending > 0:
                 logger.info("Auto-tags: queued %d previously indexed files", pending)
 
-    # Start index manager (pass auto_tags_worker for post-metadata hook)
-    index_manager = IndexManager(auto_tags_worker=auto_tags_worker)
+    # Initialize summaries worker (shares the same LLM client)
+    summaries_worker = SummariesWorker(llm_client)
+    dependencies._summaries_worker = summaries_worker
+    summaries_task: asyncio.Task | None = None
+
+    if settings.features.summaries != "false" and llm_client.enabled:
+        summaries_task = asyncio.create_task(
+            summaries_worker.run(), name="summaries_worker"
+        )
+        logger.info(
+            "Summaries worker started (mode=%s)", settings.features.summaries
+        )
+
+        # on_index: queue already-indexed files that don't have summaries yet
+        if settings.features.summaries == "on_index":
+            pending = await summaries_worker.enqueue_unprocessed()
+            if pending > 0:
+                logger.info(
+                    "Summaries: queued %d previously indexed files", pending
+                )
+
+    # Start index manager (pass workers for post-metadata hooks)
+    index_manager = IndexManager(
+        auto_tags_worker=auto_tags_worker,
+        summaries_worker=summaries_worker,
+    )
     dependencies._index_manager = index_manager
     try:
         await index_manager.start()
@@ -103,6 +128,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         auto_tags_task.cancel()
         try:
             await auto_tags_task
+        except asyncio.CancelledError:
+            pass
+    if summaries_task is not None:
+        summaries_task.cancel()
+        try:
+            await summaries_task
         except asyncio.CancelledError:
             pass
     if dependencies._index_manager is not None:
@@ -122,6 +153,7 @@ app.include_router(webhooks.router)
 app.include_router(queue.router)
 app.include_router(similar.router)
 app.include_router(files.router)
+app.include_router(summaries.router)
 
 
 @app.get("/status", response_model=StatusResponse, tags=["status"])
@@ -166,11 +198,13 @@ async def status_endpoint() -> StatusResponse:
             indexing=settings.features.indexing,
             search=settings.features.search,
             auto_tags=settings.features.auto_tags,
+            summaries=settings.features.summaries,
         ),
         llm=LLMStatus(
             provider=settings.llm.provider,
             model=settings.llm.model,
             enabled=llm_client.enabled if llm_client else False,
+            output_language=settings.llm.output_language,
         ),
     )
 

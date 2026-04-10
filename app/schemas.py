@@ -60,12 +60,14 @@ class FeaturesStatus(BaseModel):
     indexing: bool
     search: bool
     auto_tags: str
+    summaries: str
 
 
 class LLMStatus(BaseModel):
     provider: str
     model: str
     enabled: bool
+    output_language: str
 
 
 class StatusResponse(BaseModel):
@@ -206,5 +208,29 @@ class BatchSuggestedTagsRequest(BaseModel):
 
 
 class BatchSuggestedTagsResponse(BaseModel):
+    queued: int
+    skipped: int
+
+
+# --- Summaries ---
+
+
+class SummaryResponse(BaseModel):
+    available: bool
+    file_id: str | None = None
+    short_summary: str | None = None
+    long_summary: str | None = None
+    model: str | None = None
+    context_type: str | None = None
+    was_truncated: bool | None = None
+    status: str | None = None
+    created_at: str | None = None
+
+
+class BatchSummariesRequest(BaseModel):
+    file_ids: list[str] = Field(..., max_length=500)
+
+
+class BatchSummariesResponse(BaseModel):
     queued: int
     skipped: int

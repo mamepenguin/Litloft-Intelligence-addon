@@ -104,6 +104,18 @@ class FeaturesConfig:
     indexing: bool = True
     search: bool = True
     auto_tags: str = "false"  # "false" | "manual" | "on_index"
+    summaries: str = "false"  # "false" | "manual" | "on_index"
+
+
+@dataclass(frozen=True)
+class SummariesConfig:
+    # Threshold: if total context <= max_context_chars, send full text.
+    # Otherwise, sample windows from beginning/middle/end.
+    max_context_chars: int = 8000
+    # Characters per window when sampling (window_count windows total).
+    window_chars: int = 2500
+    # Number of windows to sample (first/middle/last; use odd numbers).
+    window_count: int = 3
 
 
 @dataclass(frozen=True)
@@ -114,7 +126,7 @@ class LLMConfig:
     model: str = ""
     max_tokens: int = 2048
     temperature: float = 0.3
-    tag_language: str = "auto"  # "auto" | "ja" | "en" | etc.
+    output_language: str = "auto"  # "auto" | "ja" | "en" | etc. — applies to auto_tags and summaries
     # Retry behavior for transient failures (timeouts, 429, 5xx)
     retry_attempts: int = 3  # total attempts = 1 + retries
     retry_base_delay: float = 1.0  # seconds, doubled on each retry
@@ -138,6 +150,7 @@ class Settings:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     features: FeaturesConfig = field(default_factory=FeaturesConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    summaries: SummariesConfig = field(default_factory=SummariesConfig)
     service_version: str = "0.1.0"
     port: int = 8100
 
@@ -226,7 +239,7 @@ def load_settings() -> Settings:
             model=llm_config.model,
             max_tokens=llm_config.max_tokens,
             temperature=llm_config.temperature,
-            tag_language=llm_config.tag_language,
+            output_language=llm_config.output_language,
             retry_attempts=llm_config.retry_attempts,
             retry_base_delay=llm_config.retry_base_delay,
             retry_max_delay=llm_config.retry_max_delay,
@@ -247,6 +260,7 @@ def load_settings() -> Settings:
         memory=_parse_nested(config_data, "memory", MemoryConfig),
         features=_parse_nested(config_data, "features", FeaturesConfig),
         llm=llm_config,
+        summaries=_parse_nested(config_data, "summaries", SummariesConfig),
     )
 
 
