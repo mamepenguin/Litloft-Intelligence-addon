@@ -1,10 +1,14 @@
 """Debug search endpoint for analyzing raw scores from each search system.
 
-Provides detailed per-system score breakdowns to diagnose false positives
-and tune thresholds. Only intended for development/debugging use.
+Provides detailed per-system score breakdowns and per-step timing
+to diagnose false positives, tune thresholds, and profile latency.
+Only intended for development/debugging use.
 """
 
 import logging
+import time
+from collections.abc import Callable
+from typing import TypeVar
 
 import numpy as np
 from pydantic import BaseModel
@@ -27,6 +31,17 @@ from app.workers.clip import embed_text_clip
 from app.workers.embedder import embed_query
 
 logger = logging.getLogger(__name__)
+
+
+_T = TypeVar("_T")
+
+
+def _time_it(timings: dict[str, float], label: str, fn: Callable[[], _T]) -> _T:
+    """Run fn() and record its wall-clock duration in milliseconds."""
+    start = time.perf_counter()
+    result = fn()
+    timings[label] = round((time.perf_counter() - start) * 1000, 2)
+    return result
 
 
 # --- Response models ---
@@ -85,6 +100,7 @@ class DebugSearchResponse(BaseModel):
     text_content_keyword: list[DebugTextContentKeywordMatch]
     combined: list[DebugCombinedResult]
     score_stats: dict
+    timings_ms: dict[str, float]  # wall-clock ms per step
 
 
 def _filenames_map(file_ids: list[str]) -> dict[str, str]:
@@ -104,22 +120,52 @@ def debug_search(query: str) -> DebugSearchResponse:
     """Run search with full diagnostic output from each system."""
     search_config = settings.search
     candidates = search_config.rrf_candidates
+    timings: dict[str, float] = {}
+    total_start = time.perf_counter()
 
     # Generate embeddings
-    text_vector = embed_query(query)
-    try:
-        clip_vector = embed_text_clip(query)
-    except Exception:
-        clip_vector = None
+    text_vector = _time_it(
+        timings, "embed_query_text", lambda: embed_query(query),
+    )
+
+    def _clip_embed() -> np.ndarray | None:
+        try:
+            return embed_text_clip(query)
+        except Exception:
+            return None
+
+    clip_vector = _time_it(timings, "embed_query_clip", _clip_embed)
 
     # Run each system independently
-    text_matches = _vector_search_text(text_vector, candidates)
-    clip_matches = (
-        _vector_search_clip(clip_vector, candidates) if clip_vector is not None else []
+    text_matches = _time_it(
+        timings,
+        "vector_search_text",
+        lambda: _vector_search_text(text_vector, candidates),
     )
-    keyword_matches = _keyword_search(query, candidates)
-    transcript_kw_matches = _keyword_search_transcripts(query, candidates)
-    text_content_kw_matches = _keyword_search_text_content(query, candidates)
+    clip_matches = _time_it(
+        timings,
+        "vector_search_clip",
+        lambda: (
+            _vector_search_clip(clip_vector, candidates)
+            if clip_vector is not None
+            else []
+        ),
+    )
+    keyword_matches = _time_it(
+        timings,
+        "keyword_search_metadata",
+        lambda: _keyword_search(query, candidates),
+    )
+    transcript_kw_matches = _time_it(
+        timings,
+        "keyword_search_transcripts",
+        lambda: _keyword_search_transcripts(query, candidates),
+    )
+    text_content_kw_matches = _time_it(
+        timings,
+        "keyword_search_text_content",
+        lambda: _keyword_search_text_content(query, candidates),
+    )
 
     # Collect all file_ids for filename lookup
     all_file_ids = list({
@@ -129,7 +175,11 @@ def debug_search(query: str) -> DebugSearchResponse:
         *[m.file_id for m in transcript_kw_matches],
         *[m.file_id for m in text_content_kw_matches],
     })
-    names = _filenames_map(all_file_ids)
+    names = _time_it(
+        timings,
+        "filename_lookup",
+        lambda: _filenames_map(all_file_ids),
+    )
 
     # Build debug output for each system
     debug_text = sorted(
@@ -212,13 +262,17 @@ def debug_search(query: str) -> DebugSearchResponse:
     )
 
     # Combined RRF
-    file_scores = _combine_scores_rrf(
-        text_matches=text_matches,
-        clip_matches=clip_matches,
-        keyword_matches=keyword_matches,
-        transcript_keyword_matches=transcript_kw_matches,
-        text_content_keyword_matches=text_content_kw_matches,
-        k=search_config.rrf_k,
+    file_scores = _time_it(
+        timings,
+        "combine_scores_rrf",
+        lambda: _combine_scores_rrf(
+            text_matches=text_matches,
+            clip_matches=clip_matches,
+            keyword_matches=keyword_matches,
+            transcript_keyword_matches=transcript_kw_matches,
+            text_content_keyword_matches=text_content_kw_matches,
+            k=search_config.rrf_k,
+        ),
     )
 
     # Build per-file source score map
@@ -288,6 +342,8 @@ def debug_search(query: str) -> DebugSearchResponse:
         "text_content_keyword": {"count": len(text_content_kw_matches)},
     }
 
+    timings["total"] = round((time.perf_counter() - total_start) * 1000, 2)
+
     return DebugSearchResponse(
         query=query,
         fts_query=_build_fts_query(query),
@@ -310,4 +366,5 @@ def debug_search(query: str) -> DebugSearchResponse:
         text_content_keyword=debug_text_content_kw,
         combined=debug_combined,
         score_stats=score_stats,
+        timings_ms=timings,
     )
