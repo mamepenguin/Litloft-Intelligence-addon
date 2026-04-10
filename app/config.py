@@ -114,6 +114,12 @@ class LLMConfig:
     max_tokens: int = 2048
     temperature: float = 0.3
     tag_language: str = "auto"  # "auto" | "ja" | "en" | etc.
+    # Retry behavior for transient failures (timeouts, 429, 5xx)
+    retry_attempts: int = 3  # total attempts = 1 + retries
+    retry_base_delay: float = 1.0  # seconds, doubled on each retry
+    retry_max_delay: float = 30.0  # cap on individual backoff delay
+    # Minimum interval between requests (0 = no rate limiting)
+    min_request_interval_ms: int = 0
 
 
 @dataclass(frozen=True)
@@ -220,6 +226,10 @@ def load_settings() -> Settings:
             max_tokens=llm_config.max_tokens,
             temperature=llm_config.temperature,
             tag_language=llm_config.tag_language,
+            retry_attempts=llm_config.retry_attempts,
+            retry_base_delay=llm_config.retry_base_delay,
+            retry_max_delay=llm_config.retry_max_delay,
+            min_request_interval_ms=llm_config.min_request_interval_ms,
         )
 
     return Settings(

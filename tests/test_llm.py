@@ -1,16 +1,96 @@
 """Tests for app.llm module.
 
 Covers LLMClient initialization (enabled/disabled detection),
-text generation with mocked AsyncOpenAI, and JSON parsing with
-regex fallback.
+text generation with mocked AsyncOpenAI, JSON parsing with
+regex fallback, retry with exponential backoff, and rate limiting.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    InternalServerError,
+    RateLimitError,
+)
 
 from app.config import LLMConfig
 from app.llm import LLMClient
+
+
+def _make_response_obj(text: str) -> MagicMock:
+    """Build a mock OpenAI chat completion response."""
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = text
+    return response
+
+
+def _make_status_error(status_code: int) -> APIStatusError:
+    """Build an APIStatusError with a specific status code."""
+    request = httpx.Request("POST", "http://test/chat/completions")
+    response = httpx.Response(
+        status_code=status_code,
+        request=request,
+        content=b'{"error": {"message": "test"}}',
+    )
+    return APIStatusError(
+        message=f"HTTP {status_code}",
+        response=response,
+        body=None,
+    )
+
+
+def _make_rate_limit_error() -> RateLimitError:
+    """Build a RateLimitError (429)."""
+    request = httpx.Request("POST", "http://test/chat/completions")
+    response = httpx.Response(
+        status_code=429,
+        request=request,
+        content=b'{"error": {"message": "Rate limit exceeded"}}',
+    )
+    return RateLimitError(
+        message="Rate limit exceeded",
+        response=response,
+        body=None,
+    )
+
+
+def _make_internal_server_error() -> InternalServerError:
+    """Build an InternalServerError (500)."""
+    request = httpx.Request("POST", "http://test/chat/completions")
+    response = httpx.Response(
+        status_code=500,
+        request=request,
+        content=b'{"error": {"message": "Internal error"}}',
+    )
+    return InternalServerError(
+        message="Internal server error",
+        response=response,
+        body=None,
+    )
+
+
+def _make_client(
+    retry_attempts: int = 3,
+    retry_base_delay: float = 0.01,
+    retry_max_delay: float = 0.1,
+    min_request_interval_ms: int = 0,
+) -> LLMClient:
+    """Build an enabled LLMClient with fast retry for tests."""
+    config = LLMConfig(
+        provider="openai_compatible",
+        base_url="http://localhost:11434/v1",
+        model="llama3",
+        retry_attempts=retry_attempts,
+        retry_base_delay=retry_base_delay,
+        retry_max_delay=retry_max_delay,
+        min_request_interval_ms=min_request_interval_ms,
+    )
+    return LLMClient(config)
 
 
 # ---------------------------------------------------------------------------
@@ -229,3 +309,306 @@ class TestLLMClientGenerateJson:
         result = await client.generate_json("system", "user")
 
         assert result == ["tag1", "tag2"]
+
+
+# ---------------------------------------------------------------------------
+# LLMClient.generate retry logic
+# ---------------------------------------------------------------------------
+
+
+class TestLLMClientRetry:
+    """Tests for retry behavior on transient failures."""
+
+    @pytest.mark.asyncio
+    async def test_retries_on_rate_limit_error(self):
+        """RateLimitError (429) triggers retry and eventually succeeds."""
+        client = _make_client(retry_attempts=3)
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=[
+                _make_rate_limit_error(),
+                _make_rate_limit_error(),
+                _make_response_obj("success"),
+            ]
+        )
+
+        result = await client.generate("system", "user")
+
+        assert result == "success"
+        assert client._client.chat.completions.create.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_retries_on_timeout(self):
+        """APITimeoutError triggers retry and eventually succeeds."""
+        client = _make_client(retry_attempts=2)
+        client._client = MagicMock()
+        request = httpx.Request("POST", "http://test")
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=[
+                APITimeoutError(request=request),
+                _make_response_obj("ok"),
+            ]
+        )
+
+        result = await client.generate("system", "user")
+
+        assert result == "ok"
+        assert client._client.chat.completions.create.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retries_on_connection_error(self):
+        """APIConnectionError triggers retry."""
+        client = _make_client(retry_attempts=1)
+        client._client = MagicMock()
+        request = httpx.Request("POST", "http://test")
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=[
+                APIConnectionError(request=request),
+                _make_response_obj("ok"),
+            ]
+        )
+
+        result = await client.generate("system", "user")
+
+        assert result == "ok"
+
+    @pytest.mark.asyncio
+    async def test_retries_on_internal_server_error(self):
+        """InternalServerError (500) triggers retry."""
+        client = _make_client(retry_attempts=1)
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=[
+                _make_internal_server_error(),
+                _make_response_obj("ok"),
+            ]
+        )
+
+        result = await client.generate("system", "user")
+
+        assert result == "ok"
+
+    @pytest.mark.asyncio
+    async def test_no_retry_on_insufficient_balance(self):
+        """402 Insufficient Balance is permanent — no retry."""
+        client = _make_client(retry_attempts=3)
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=_make_status_error(402)
+        )
+
+        result = await client.generate("system", "user")
+
+        assert result is None
+        # Called only once (no retries)
+        assert client._client.chat.completions.create.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_no_retry_on_bad_request(self):
+        """400 Bad Request is permanent — no retry."""
+        client = _make_client(retry_attempts=3)
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=_make_status_error(400)
+        )
+
+        result = await client.generate("system", "user")
+
+        assert result is None
+        assert client._client.chat.completions.create.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_no_retry_on_unauthorized(self):
+        """401 Unauthorized is permanent — no retry."""
+        client = _make_client(retry_attempts=3)
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=_make_status_error(401)
+        )
+
+        result = await client.generate("system", "user")
+
+        assert result is None
+        assert client._client.chat.completions.create.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_retry_exhausted_returns_none(self):
+        """All retries failing returns None."""
+        client = _make_client(retry_attempts=2)
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=_make_rate_limit_error()
+        )
+
+        result = await client.generate("system", "user")
+
+        assert result is None
+        # Initial call + 2 retries = 3 total
+        assert client._client.chat.completions.create.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_zero_retries(self):
+        """retry_attempts=0 means one attempt total, no retries."""
+        client = _make_client(retry_attempts=0)
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=_make_rate_limit_error()
+        )
+
+        result = await client.generate("system", "user")
+
+        assert result is None
+        assert client._client.chat.completions.create.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_generic_exception_not_retried(self):
+        """Unknown exceptions fall through to the generic catch — no retry."""
+        client = _make_client(retry_attempts=3)
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=ValueError("unexpected")
+        )
+
+        result = await client.generate("system", "user")
+
+        assert result is None
+        assert client._client.chat.completions.create.await_count == 1
+
+    def test_backoff_delay_doubles(self):
+        """Backoff delay doubles on each attempt."""
+        client = _make_client(
+            retry_base_delay=1.0, retry_max_delay=100.0,
+        )
+        assert client._backoff_delay(0) == 1.0
+        assert client._backoff_delay(1) == 2.0
+        assert client._backoff_delay(2) == 4.0
+        assert client._backoff_delay(3) == 8.0
+
+    def test_backoff_delay_capped_at_max(self):
+        """Backoff delay is capped at retry_max_delay."""
+        client = _make_client(
+            retry_base_delay=1.0, retry_max_delay=5.0,
+        )
+        assert client._backoff_delay(0) == 1.0
+        assert client._backoff_delay(1) == 2.0
+        assert client._backoff_delay(2) == 4.0
+        # Would be 8.0, capped at 5.0
+        assert client._backoff_delay(3) == 5.0
+        assert client._backoff_delay(10) == 5.0
+
+    @pytest.mark.asyncio
+    async def test_retry_uses_exponential_backoff(self):
+        """Verify asyncio.sleep is called with exponentially increasing delays."""
+        client = _make_client(
+            retry_attempts=3,
+            retry_base_delay=1.0,
+            retry_max_delay=100.0,
+        )
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=[
+                _make_rate_limit_error(),
+                _make_rate_limit_error(),
+                _make_rate_limit_error(),
+                _make_response_obj("ok"),
+            ]
+        )
+
+        with patch("app.llm.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            result = await client.generate("system", "user")
+
+        assert result == "ok"
+        # Three retries → three backoff delays: 1.0, 2.0, 4.0
+        delays = [call.args[0] for call in mock_sleep.call_args_list]
+        assert delays == [1.0, 2.0, 4.0]
+
+
+# ---------------------------------------------------------------------------
+# LLMClient rate limiting
+# ---------------------------------------------------------------------------
+
+
+class TestLLMClientRateLimit:
+    """Tests for minimum request interval enforcement."""
+
+    @pytest.mark.asyncio
+    async def test_no_rate_limit_by_default(self):
+        """min_request_interval_ms=0 means no delay between requests."""
+        client = _make_client(min_request_interval_ms=0)
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            return_value=_make_response_obj("ok")
+        )
+
+        with patch("app.llm.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await client.generate("system", "user")
+            await client.generate("system", "user")
+
+        # No rate-limiting sleeps should happen
+        assert mock_sleep.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_enforces_interval(self):
+        """Successive requests wait for the configured interval."""
+        client = _make_client(min_request_interval_ms=500)
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            return_value=_make_response_obj("ok")
+        )
+
+        # Mock time: first call sets _last_request_time to 0.0,
+        # second call sees elapsed=0.1 - 0.0 = 0.1, waits 0.4s
+        with patch("app.llm.time.monotonic") as mock_time, \
+             patch("app.llm.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            # First gen: 1 monotonic() (save last_time=0.0)
+            # Second gen: 2 monotonic() (compute elapsed=0.1, then save=0.5)
+            mock_time.side_effect = [0.0, 0.1, 0.5]
+            await client.generate("system", "user")
+            await client.generate("system", "user")
+
+        sleep_calls = [
+            call.args[0] for call in mock_sleep.call_args_list
+            if call.args[0] > 0
+        ]
+        assert len(sleep_calls) == 1
+        assert sleep_calls[0] == pytest.approx(0.4)
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_skipped_if_enough_time_elapsed(self):
+        """If interval has already passed, no sleep occurs."""
+        client = _make_client(min_request_interval_ms=100)
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            return_value=_make_response_obj("ok")
+        )
+
+        with patch("app.llm.time.monotonic") as mock_time, \
+             patch("app.llm.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            # First gen saves t=0.0, second gen sees elapsed=1.0 (> 0.1)
+            mock_time.side_effect = [0.0, 1.0, 1.0]
+            await client.generate("system", "user")
+            await client.generate("system", "user")
+
+        positive_sleeps = [
+            call.args[0] for call in mock_sleep.call_args_list
+            if call.args[0] > 0
+        ]
+        assert positive_sleeps == []
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_first_request_no_wait(self):
+        """First request never waits even with rate limit configured."""
+        client = _make_client(min_request_interval_ms=1000)
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            return_value=_make_response_obj("ok")
+        )
+
+        with patch("app.llm.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await client.generate("system", "user")
+
+        positive_sleeps = [
+            call.args[0] for call in mock_sleep.call_args_list
+            if call.args[0] > 0
+        ]
+        assert positive_sleeps == []
