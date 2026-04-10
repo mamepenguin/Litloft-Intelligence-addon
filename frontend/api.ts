@@ -357,3 +357,120 @@ export async function batchSummaries(fileIds: string[]): Promise<BatchSummariesR
     }
   );
 }
+
+// --- RAG (question answering) ---
+
+export interface Citation {
+  file_id: string;
+  drive: string;
+  filename: string;
+  file_type: string;
+  quote: string;
+  relevance: number;
+  segment_location: string | null;
+}
+
+export interface Source {
+  file_id: string;
+  drive: string;
+  filename: string;
+  file_type: string;
+  score: number;
+  match_types: string[];
+}
+
+export interface AnswerResponse {
+  query: string;
+  answer: string | null;
+  citations: Citation[];
+  sources: Source[];
+  retrieved_count: number;
+  took_ms: number;
+}
+
+export interface AskOptions {
+  topK?: number;
+  fileType?: FileType;
+  drive?: string;
+  signal?: AbortSignal;
+}
+
+// Intelligence /status shape extended with feature flags + llm enablement.
+// This mirrors the backend FeaturesStatus + LLMStatus subset the AskSearchMode
+// gate needs. The other endpoints use SearchServiceStatus which is a minimal
+// projection — we keep both to avoid breaking existing callers.
+export interface IntelligenceStatus {
+  status?: string;
+  features?: {
+    indexing: boolean;
+    search: boolean;
+    auto_tags: string;
+    summaries: string;
+    rag: boolean;
+  };
+  llm?: {
+    provider: string;
+    model: string;
+    enabled: boolean;
+    output_language: string;
+  };
+}
+
+export async function getIntelligenceStatus(
+  signal?: AbortSignal,
+): Promise<IntelligenceStatus | null> {
+  try {
+    const res = await fetch(`${API_BASE}/addons/intelligence/status`, {
+      credentials: "include",
+      signal,
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as IntelligenceStatus;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ask a question via the intelligence RAG endpoint.
+ *
+ * Throws on HTTP errors — callers should inspect the message to decide
+ * whether to surface an "LLM disabled" (400) or "generate failed" (500)
+ * state. 400 responses include a server-provided `detail` string which
+ * is preserved in the thrown Error message for debugging.
+ *
+ * AbortError is allowed to propagate so the caller can distinguish a
+ * user-initiated cancel (unmount / query change) from a real failure.
+ */
+export async function askQuestion(
+  query: string,
+  options?: AskOptions,
+): Promise<AnswerResponse> {
+  const body: Record<string, unknown> = { query };
+  if (options?.topK != null) body.top_k = options.topK;
+  if (options?.fileType) body.file_type = options.fileType;
+  if (options?.drive) body.drive = options.drive;
+
+  const res = await fetch(`${API_BASE}/addons/intelligence/ask`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: options?.signal,
+  });
+
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const errBody = (await res.json()) as { detail?: string };
+      if (errBody?.detail) detail = errBody.detail;
+    } catch {
+      // ignore — fall back to status text
+    }
+    const err = new Error(detail) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
+
+  return (await res.json()) as AnswerResponse;
+}
