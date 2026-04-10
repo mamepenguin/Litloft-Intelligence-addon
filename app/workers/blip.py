@@ -110,8 +110,12 @@ def generate_caption(image: Image.Image) -> str | None:
 
         inputs = processor(image, return_tensors="pt")
 
+        generate_kwargs: dict = {"max_new_tokens": settings.models.blip_max_tokens}
+        if settings.models.blip_num_beams > 1:
+            generate_kwargs["num_beams"] = settings.models.blip_num_beams
+
         with torch.no_grad():
-            output_ids = model.generate(**inputs, max_new_tokens=50)
+            output_ids = model.generate(**inputs, **generate_kwargs)
 
         caption = processor.decode(output_ids[0], skip_special_tokens=True)
         return caption.strip() if caption else None

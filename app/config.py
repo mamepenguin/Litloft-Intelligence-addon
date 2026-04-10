@@ -17,6 +17,8 @@ class ModelConfig:
     text_embedding: str = "intfloat/multilingual-e5-small"
     clip: str = "llm-jp/llm-jp-clip-vit-base-patch16"
     blip: str = ""  # empty = disabled. e.g. "Salesforce/blip-image-captioning-base"
+    blip_max_tokens: int = 50  # max tokens for BLIP caption generation
+    blip_num_beams: int = 1  # beam search width (1 = greedy, higher = better quality but slower)
     text_query_prefix: str = ""
     text_passage_prefix: str = ""
 

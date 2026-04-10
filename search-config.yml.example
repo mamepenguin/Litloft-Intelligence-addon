@@ -49,6 +49,11 @@ models:
   # Leave empty to disable. Requires ~1GB additional memory.
   # blip: "Salesforce/blip-image-captioning-base"
   blip: ""
+  # BLIP caption generation parameters:
+  # blip_max_tokens: max output length (default: 50, increase for longer captions)
+  # blip_num_beams: beam search width (default: 1 = greedy, 3-4 = better quality but slower)
+  # blip_max_tokens: 100
+  # blip_num_beams: 3
 
 # Search parameters
 search:
