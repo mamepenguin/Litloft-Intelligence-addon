@@ -5,23 +5,30 @@
 features:
   indexing: true
   search: true
-  auto_tags: false    # requires llm.provider != "disabled"
+  auto_tags: false    # "false" | "manual" | "on_index" (requires llm.provider != "disabled")
   # summaries: false  # future
   # rag: false        # future
 
 # LLM provider configuration (required for auto_tags and future LLM features)
-# Supports any OpenAI-compatible API: ollama, vLLM, LM Studio, OpenAI, etc.
+# Supports any OpenAI-compatible API: ollama, vLLM, LM Studio, OpenAI, DeepSeek, etc.
+# Note: File content (transcripts, captions, text) is sent to the LLM API.
+# For privacy-sensitive content, use a local LLM (e.g., ollama).
 llm:
   provider: "disabled"       # "openai_compatible" | "disabled"
   base_url: ""               # e.g. "http://host.docker.internal:11434/v1" (ollama)
   api_key: ""                # or use env var LLM_API_KEY
-  model: ""                  # e.g. "gemma2:9b", "gpt-4o-mini"
-  max_tokens: 256
+  model: ""                  # e.g. "gemma2:9b", "gpt-4o-mini", "deepseek-chat"
+  max_tokens: 2048
   temperature: 0.3
+  tag_language: "auto"       # "auto" | "ja" | "en" — controls auto_tags output language
   # Example: ollama with auto_tags
   # provider: "openai_compatible"
   # base_url: "http://host.docker.internal:11434/v1"
   # model: "gemma2:9b"
+  # Example: DeepSeek API
+  # provider: "openai_compatible"
+  # base_url: "https://api.deepseek.com/v1"
+  # model: "deepseek-chat"
 
 models:
   # Whisper model for audio transcription (multilingual)
