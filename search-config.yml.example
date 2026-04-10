@@ -113,6 +113,12 @@ workers:
   clip_frame_batch_size: 50
 
 # Model memory management
+# Whisper and BLIP are only used during indexing, so they can be
+# unloaded after a period of inactivity to free RAM (~500MB each).
+# CLIP and text_embedding stay resident because they are used by
+# the search query path on every request.
 memory:
   # Unload Whisper model after idle (seconds, 0 = never unload)
   whisper_idle_unload: 300
+  # Unload BLIP model after idle (seconds, 0 = never unload)
+  blip_idle_unload: 300

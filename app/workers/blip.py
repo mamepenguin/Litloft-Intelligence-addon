@@ -5,12 +5,15 @@ Generates English text descriptions of images using BLIP
 in the embeddings table and consumed by the auto_tags worker
 to produce meaningful tags.
 
-The model is lazy-loaded on first use and kept in memory.
-Only active when models.blip is set in search-config.yml.
+The model is lazy-loaded on first use and unloaded after an idle
+period (controlled by settings.memory.blip_idle_unload) to free
+the ~1GB of RAM the model occupies. Only active when models.blip
+is set in search-config.yml.
 """
 
 import logging
 import threading
+import time
 
 from PIL import Image
 
@@ -18,14 +21,12 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Model state (lazy-loaded, thread-safe)
+# Model state (lazy-loaded, with idle unload support)
 _lock = threading.Lock()
 _model: object | None = None
 _processor: object | None = None
 _loaded = False
-
-# TODO: Add idle unload similar to whisper.py if memory pressure is a concern.
-# For now, the model stays loaded once initialized (~1GB).
+_last_used: float = 0.0
 
 
 def is_enabled() -> bool:
@@ -50,13 +51,15 @@ def _ensure_loaded() -> tuple[object, object]:
     Raises:
         RuntimeError: If BLIP is disabled or model loading fails.
     """
-    global _model, _processor, _loaded
+    global _model, _processor, _loaded, _last_used
 
     if _loaded and _model is not None:
+        _last_used = time.monotonic()
         return _model, _processor
 
     with _lock:
         if _loaded and _model is not None:
+            _last_used = time.monotonic()
             return _model, _processor
 
         if not is_enabled():
@@ -79,12 +82,49 @@ def _ensure_loaded() -> tuple[object, object]:
             _model.eval()
 
             _loaded = True
+            _last_used = time.monotonic()
             logger.info("BLIP model loaded successfully")
             return _model, _processor
 
         except Exception as e:
             logger.error("Failed to load BLIP model: %s", e)
             raise RuntimeError(f"BLIP model load failed: {e}") from e
+
+
+def unload_model() -> None:
+    """Unload the BLIP model to free RAM (~1GB).
+
+    Safe to call even if the model is not loaded.
+    """
+    global _model, _processor, _loaded
+
+    with _lock:
+        if _model is not None:
+            logger.info("Unloading BLIP model to free RAM")
+            _model = None
+            _processor = None
+            _loaded = False
+
+    import gc
+    gc.collect()
+
+
+def check_idle_unload() -> None:
+    """Check if the model should be unloaded due to idle timeout.
+
+    Called periodically by the indexer's background task.
+    Respects settings.memory.blip_idle_unload (0 = never unload).
+    """
+    idle_timeout = settings.memory.blip_idle_unload
+    if idle_timeout <= 0:
+        return
+
+    if not _loaded or _model is None:
+        return
+
+    elapsed = time.monotonic() - _last_used
+    if elapsed > idle_timeout:
+        unload_model()
 
 
 def generate_caption(image: Image.Image) -> str | None:

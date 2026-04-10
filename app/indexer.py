@@ -25,10 +25,11 @@ from app.database import (
     validate_vector_table,
 )
 from app.models import Embedding, IndexedFile, TranscriptChunk
+from app.workers.blip import check_idle_unload as check_blip_idle_unload
 from app.workers.clip import index_clip, IMAGE_TYPES, VIDEO_TYPES
 from app.workers.metadata import index_metadata_batch, index_text_content
 from app.workers.whisper import (
-    check_idle_unload,
+    check_idle_unload as check_whisper_idle_unload,
     index_whisper,
     TRANSCRIBABLE_TYPES,
 )
@@ -725,11 +726,17 @@ class IndexManager:
                 await asyncio.sleep(60)
 
     async def _idle_unload_worker(self) -> None:
-        """Periodically check if Whisper model should be unloaded."""
+        """Periodically check if heavy models should be unloaded.
+
+        Models used only during indexing (Whisper, BLIP) are unloaded
+        after their configured idle timeout to free RAM. CLIP stays
+        loaded because it is also used in the search query path.
+        """
         while True:
             try:
                 await asyncio.sleep(60)
-                check_idle_unload()
+                check_whisper_idle_unload()
+                check_blip_idle_unload()
             except asyncio.CancelledError:
                 return
             except Exception as e:

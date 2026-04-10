@@ -96,6 +96,7 @@ class WorkerConfig:
 @dataclass(frozen=True)
 class MemoryConfig:
     whisper_idle_unload: int = 300
+    blip_idle_unload: int = 300  # seconds; 0 = never unload
 
 
 @dataclass(frozen=True)
