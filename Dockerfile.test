@@ -1,0 +1,38 @@
+FROM python:3.12-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        git \
+        gettext-base \
+        libsqlite3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Build sqlite-vec (needed for database module import)
+RUN git clone --depth 1 --branch v0.1.6 https://github.com/asg017/sqlite-vec.git /tmp/sqlite-vec && \
+    cd /tmp/sqlite-vec && \
+    make loadable && \
+    mkdir -p /usr/local/lib/sqlite-vec && \
+    cp dist/vec0.so /usr/local/lib/sqlite-vec/ && \
+    rm -rf /tmp/sqlite-vec
+
+# Install only lightweight dependencies needed for tests
+COPY requirements.txt .
+RUN pip install --no-cache-dir \
+    sqlalchemy pyyaml numpy openai httpx \
+    pytest pytest-asyncio pytest-cov
+
+COPY app/ ./app/
+COPY tests/ ./tests/
+COPY pytest.ini .
+
+RUN mkdir -p /search-data/models
+
+ENV PYTHONUNBUFFERED=1
+ENV SEARCH_DATA_DIR=/search-data
+ENV HOMEVAULT_DB_PATH=/search-data/homevault.db
+ENV SEARCH_CONFIG_PATH=/app/search-config.yml
+
+CMD ["python", "-m", "pytest", "tests/", "-v", "--tb=short"]
