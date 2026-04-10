@@ -217,6 +217,7 @@ def load_settings() -> Settings:
             model=llm_config.model,
             max_tokens=llm_config.max_tokens,
             temperature=llm_config.temperature,
+            tag_language=llm_config.tag_language,
         )
 
     return Settings(
