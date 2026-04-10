@@ -17,7 +17,7 @@ from app.config import settings
 from app.database import init_homevault_db, init_search_db
 from app.indexer import IndexManager
 from app.llm import LLMClient
-from app.routers import files, queue, search, similar, summaries, webhooks
+from app.routers import files, queue, rag, search, similar, summaries, webhooks
 from app.schemas import FeaturesStatus, LLMStatus, StatusResponse
 from app.workers.auto_tags import AutoTagsWorker
 from app.workers.summaries import SummariesWorker
@@ -154,6 +154,7 @@ app.include_router(queue.router)
 app.include_router(similar.router)
 app.include_router(files.router)
 app.include_router(summaries.router)
+app.include_router(rag.router)
 
 
 @app.get("/status", response_model=StatusResponse, tags=["status"])
@@ -199,6 +200,7 @@ async def status_endpoint() -> StatusResponse:
             search=settings.features.search,
             auto_tags=settings.features.auto_tags,
             summaries=settings.features.summaries,
+            rag=settings.features.rag,
         ),
         llm=LLMStatus(
             provider=settings.llm.provider,

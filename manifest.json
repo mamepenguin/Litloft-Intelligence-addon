@@ -4,7 +4,8 @@
     "type": "external_service",
     "slots": {
         "search-modes": [
-            {"id": "semantic-search", "label": "Semantic Search", "priority": 10}
+            {"id": "semantic-search", "label": "Semantic Search", "priority": 10},
+            {"id": "ask", "label": "Ask AI", "priority": 20}
         ],
         "file-detail-sections": [
             {"id": "suggested-tags", "label": "Suggested Tags", "priority": 5},
@@ -195,6 +196,17 @@
                 "path": "/batch/summaries",
                 "methods": ["POST"],
                 "response_filter": null
+            },
+            {
+                "path": "/ask",
+                "methods": ["POST"],
+                "response_filter": {
+                    "type": "drive_access_nested",
+                    "paths": {
+                        "citations": "drive",
+                        "sources": "drive"
+                    }
+                }
             },
             {
                 "path": "/queue/pause",

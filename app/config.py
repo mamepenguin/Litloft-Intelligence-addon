@@ -105,6 +105,35 @@ class FeaturesConfig:
     search: bool = True
     auto_tags: str = "false"  # "false" | "manual" | "on_index"
     summaries: str = "false"  # "false" | "manual" | "on_index"
+    # RAG (question answering) is a simple on/off switch: there is no
+    # index-time equivalent to "on_index" because RAG only runs in
+    # response to user queries. Default off for security — file content
+    # (transcripts, captions, text) is sent to the LLM API.
+    rag: bool = False
+
+
+@dataclass(frozen=True)
+class RagConfig:
+    """RAG (question answering) configuration.
+
+    Controls how many files are retrieved, how much context per file
+    is extracted, the hard total-context cap, and the LLM max_tokens
+    override for answer generation. Defaults match spec Phase A.
+    """
+
+    # Number of files retrieved and fed to the LLM as context.
+    top_k: int = 5
+    # Max characters of context extracted from each file
+    # (from segment matches, not full transcripts).
+    max_context_chars_per_file: int = 2000
+    # Hard cap on total context size across all retrieved files.
+    # When exceeded, lower-scoring files are dropped.
+    max_total_context_chars: int = 10000
+    # LLM max_tokens override for answer + citations generation.
+    max_tokens: int = 1024
+    # How many characters around a timestamped transcript match
+    # to include as "context window" (only when segments have times).
+    transcript_window_seconds: float = 30.0
 
 
 @dataclass(frozen=True)
@@ -138,6 +167,15 @@ class LLMConfig:
     retry_max_delay: float = 30.0  # cap on individual backoff delay
     # Minimum interval between requests (0 = no rate limiting)
     min_request_interval_ms: int = 0
+    # Hard per-request timeout. The OpenAI SDK defaults to ~600 seconds,
+    # which is far longer than any reasonable home-LAN deployment wants
+    # — a stuck upstream would otherwise keep the coroutine alive for
+    # 10 minutes after the host proxy's 15s timeout has already given
+    # up, and a user mashing "Regenerate" could accumulate dozens of
+    # pending LLM calls. 90s is generous enough for local ollama on
+    # mid-range hardware but forces clean failure on remote-API stalls.
+    request_timeout_seconds: float = 90.0
+    request_connect_timeout_seconds: float = 10.0
 
 
 @dataclass(frozen=True)
@@ -156,6 +194,7 @@ class Settings:
     features: FeaturesConfig = field(default_factory=FeaturesConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     summaries: SummariesConfig = field(default_factory=SummariesConfig)
+    rag: RagConfig = field(default_factory=RagConfig)
     service_version: str = "0.1.0"
     port: int = 8100
 
@@ -266,6 +305,7 @@ def load_settings() -> Settings:
         features=_parse_nested(config_data, "features", FeaturesConfig),
         llm=llm_config,
         summaries=_parse_nested(config_data, "summaries", SummariesConfig),
+        rag=_parse_nested(config_data, "rag", RagConfig),
     )
 
 

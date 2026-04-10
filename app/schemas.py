@@ -61,6 +61,7 @@ class FeaturesStatus(BaseModel):
     search: bool
     auto_tags: str
     summaries: str
+    rag: bool = False
 
 
 class LLMStatus(BaseModel):
@@ -241,3 +242,58 @@ class BatchSummariesRequest(BaseModel):
 class BatchSummariesResponse(BaseModel):
     queued: int
     skipped: int
+
+
+# --- RAG (question answering) ---
+
+
+class AskRequest(BaseModel):
+    """Request body for POST /ask.
+
+    Enforces a 1-1000 character range on the raw query as a basic
+    DoS guard. The router applies an additional >=3 character
+    post-strip check so "a  " does not reach the LLM.
+    """
+
+    query: str = Field(..., min_length=1, max_length=1000)
+    top_k: int | None = Field(default=None, ge=1, le=20)
+    file_type: str | None = None
+    drive: str | None = None
+
+
+class CitationModel(BaseModel):
+    """A single citation backing one part of the RAG answer."""
+
+    file_id: str
+    drive: str
+    filename: str
+    file_type: str
+    quote: str
+    relevance: float
+    segment_location: str | None = None  # e.g. "0:45" or "page 3"
+
+
+class SourceModel(BaseModel):
+    """A retrieved file that was passed to the LLM as context.
+
+    Populated even when the LLM fails to produce a valid answer,
+    so the UI can still show the user which files were considered.
+    """
+
+    file_id: str
+    drive: str
+    filename: str
+    file_type: str
+    score: float
+    match_types: list[str]
+
+
+class AnswerResponseModel(BaseModel):
+    """Response body for POST /ask."""
+
+    query: str
+    answer: str | None
+    citations: list[CitationModel]
+    sources: list[SourceModel]
+    retrieved_count: int
+    took_ms: int

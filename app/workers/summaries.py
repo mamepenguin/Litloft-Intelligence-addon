@@ -25,8 +25,14 @@ from app.config import settings
 from app.database import get_search_db
 from app.llm import LLMClient
 from app.models import IndexedFile, TranscriptChunk
+from app.text_utils import trim_to_sentence_boundary
 
 logger = logging.getLogger(__name__)
+
+# Re-export the shared helper under its legacy private name so existing
+# callers (and the summaries tests) that imported `_trim_to_sentence_boundary`
+# from this module keep working after the helper moved to app.text_utils.
+_trim_to_sentence_boundary = trim_to_sentence_boundary
 
 _LANGUAGE_INSTRUCTIONS: dict[str, str] = {
     "ja": "- 要約は日本語で生成すること\n",
@@ -40,14 +46,6 @@ _SUPPORTED_CONTEXT_TYPES: frozenset[str] = frozenset({"video", "audio", "documen
 
 # Separator inserted between sampled windows in truncated contexts.
 _WINDOW_SEPARATOR = "\n\n[...中略...]\n\n"
-
-# Sentence boundary characters used when trimming window edges.
-# Keeps the first/last window snippet from starting or ending mid-sentence.
-# Note: ASCII "." is deliberately excluded — it creates too many false
-# positives on abbreviations (Mr., e.g., U.S., 3.14, etc.). Full stops
-# in English are detected via "!" / "?" / "\n" which is good enough
-# for the window-trimming heuristic.
-_SENTENCE_BOUNDARY_CHARS = ("。", "．", "!", "?", "！", "？", "\n")
 
 
 def _build_system_prompt() -> str:
@@ -66,49 +64,6 @@ def _build_system_prompt() -> str:
         f"{lang_line}"
         "- JSONのみ返し、他のテキストは含めないこと"
     )
-
-
-def _trim_to_sentence_boundary(snippet: str) -> str:
-    """Trim a snippet so both ends land on a sentence boundary.
-
-    Drops the leading fragment up to the first boundary and the trailing
-    fragment after the last boundary. The leading trim is skipped when
-    it would remove more than half of the snippet — in that case we'd
-    rather keep a mid-sentence opening than lose the majority of the
-    extracted content.
-
-    Args:
-        snippet: Raw substring extracted from a larger text.
-
-    Returns:
-        The snippet with incomplete fragments at each edge removed.
-    """
-    if not snippet:
-        return snippet
-
-    # Find the first sentence boundary after the first char (leading trim).
-    leading_cut = 0
-    for i, char in enumerate(snippet):
-        if char in _SENTENCE_BOUNDARY_CHARS:
-            # Include the boundary char itself, cut after it.
-            leading_cut = i + 1
-            break
-
-    # Guard: don't drop more than half the snippet chasing a boundary.
-    # If the first boundary sits past the midpoint, the head content
-    # outweighs the benefit of a clean sentence start, so we keep it.
-    if leading_cut > len(snippet) // 2:
-        leading_cut = 0
-
-    # Find the last sentence boundary (trailing trim).
-    trailing_cut = len(snippet)
-    for i in range(len(snippet) - 1, -1, -1):
-        if snippet[i] in _SENTENCE_BOUNDARY_CHARS:
-            trailing_cut = i + 1
-            break
-
-    trimmed = snippet[leading_cut:trailing_cut].strip()
-    return trimmed or snippet.strip()
 
 
 def _sample_windows(text: str, window_chars: int, window_count: int) -> str:
@@ -164,7 +119,7 @@ def _sample_windows(text: str, window_chars: int, window_count: int) -> str:
         else:
             merged = [*merged, span]
 
-    snippets = [_trim_to_sentence_boundary(text[s:e]) for s, e in merged]
+    snippets = [trim_to_sentence_boundary(text[s:e]) for s, e in merged]
     return _WINDOW_SEPARATOR.join(snippets)
 
 

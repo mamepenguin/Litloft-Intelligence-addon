@@ -15,6 +15,7 @@ import logging
 import re
 import time
 
+import httpx
 from openai import (
     APIConnectionError,
     APIStatusError,
@@ -51,9 +52,30 @@ class LLMClient:
             and bool(config.model)
         )
         if self._enabled:
+            # Explicit timeout (see LLMConfig docstring for rationale).
+            # httpx.Timeout accepts a total timeout + a separate connect
+            # timeout so slow TCP handshakes fail faster than slow body
+            # reads. Falling back to the SDK default (~600s) on
+            # non-finite values keeps tests that pass a MagicMock config
+            # from crashing on initialization.
+            timeout: httpx.Timeout | None
+            total = config.request_timeout_seconds
+            connect = config.request_connect_timeout_seconds
+            if isinstance(total, (int, float)) and total > 0:
+                timeout = httpx.Timeout(
+                    float(total),
+                    connect=(
+                        float(connect)
+                        if isinstance(connect, (int, float)) and connect > 0
+                        else float(total)
+                    ),
+                )
+            else:
+                timeout = None
             self._client = AsyncOpenAI(
                 base_url=config.base_url,
                 api_key=config.api_key or "not-needed",
+                timeout=timeout,
             )
         # Rate-limiting state (None = no previous request yet)
         self._rate_lock = asyncio.Lock()
@@ -79,7 +101,11 @@ class LLMClient:
             self._last_request_time = time.monotonic()
 
     async def generate(
-        self, system_prompt: str, user_prompt: str
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens_override: int | None = None,
     ) -> str | None:
         """Generate a text completion with retry on transient failures.
 
@@ -90,6 +116,11 @@ class LLMClient:
         Args:
             system_prompt: System message for the model.
             user_prompt: User message for the model.
+            max_tokens_override: Optional per-call override for
+                max_tokens. When None, falls back to the configured
+                ``self._config.max_tokens``. RAG answer generation uses
+                this to get a longer token budget than the default
+                summary/tag budget without mutating global config.
 
         Returns:
             Completion text, or None if disabled or on final failure.
@@ -98,6 +129,11 @@ class LLMClient:
             return None
 
         max_attempts = max(1, self._config.retry_attempts + 1)
+        effective_max_tokens = (
+            max_tokens_override
+            if max_tokens_override is not None
+            else self._config.max_tokens
+        )
 
         for attempt in range(max_attempts):
             await self._wait_for_rate_limit()
@@ -109,7 +145,7 @@ class LLMClient:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    max_tokens=self._config.max_tokens,
+                    max_tokens=effective_max_tokens,
                     temperature=self._config.temperature,
                 )
                 return response.choices[0].message.content
@@ -166,7 +202,11 @@ class LLMClient:
         return min(delay, self._config.retry_max_delay)
 
     async def generate_json(
-        self, system_prompt: str, user_prompt: str
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens_override: int | None = None,
     ) -> list | dict | None:
         """Generate a completion and parse the result as JSON.
 
@@ -177,11 +217,18 @@ class LLMClient:
         Args:
             system_prompt: System message for the model.
             user_prompt: User message for the model.
+            max_tokens_override: Optional per-call override for
+                max_tokens. Forwarded to ``generate()``. None means
+                use the configured default.
 
         Returns:
             Parsed JSON (list or dict), or None on failure.
         """
-        raw = await self.generate(system_prompt, user_prompt)
+        raw = await self.generate(
+            system_prompt,
+            user_prompt,
+            max_tokens_override=max_tokens_override,
+        )
         if raw is None:
             return None
 

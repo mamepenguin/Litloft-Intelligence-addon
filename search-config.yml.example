@@ -7,7 +7,10 @@ features:
   search: true
   auto_tags: false    # "false" | "manual" | "on_index" (requires llm.provider != "disabled")
   summaries: false    # "false" | "manual" | "on_index" (requires llm.provider != "disabled")
-  # rag: false        # future
+  rag: false          # true | false — question answering (requires llm.provider != "disabled")
+                      # SECURITY: when enabled, file content (transcripts, captions,
+                      # text) is sent to the LLM API on every ask. For privacy-sensitive
+                      # content use a local LLM (e.g., ollama).
 
 # LLM provider configuration (required for auto_tags and future LLM features)
 # Supports any OpenAI-compatible API: ollama, vLLM, LM Studio, OpenAI, DeepSeek, etc.
@@ -27,7 +30,14 @@ llm:
   retry_max_delay: 30.0      # cap on individual backoff delay
   # Rate limiting: minimum interval between requests (0 = no limit)
   # Useful for external APIs with strict rate limits. For local ollama, leave at 0.
+  # For RAG with external APIs, consider 500-1000 ms to limit cost per user click.
   min_request_interval_ms: 0
+  # Hard per-request timeout. Default 90s is generous for local ollama on
+  # mid-range hardware; remote APIs rarely take more than 30s. If your ollama
+  # runs on slow hardware, raise; if you want faster failure on remote stalls,
+  # lower. The host addon proxy times the browser side out at 15s anyway.
+  request_timeout_seconds: 90.0
+  request_connect_timeout_seconds: 10.0
   # Example: ollama with auto_tags
   # provider: "openai_compatible"
   # base_url: "http://host.docker.internal:11434/v1"
@@ -46,6 +56,17 @@ summaries:
   max_context_chars: 8000    # threshold: smaller contexts are sent in full
   window_chars: 2500         # per-window size when sampling long content
   window_count: 3            # number of windows (first/middle/last; use odd numbers)
+
+# RAG (question answering) configuration (used when features.rag = true)
+# Retrieves top-k files for a user question, builds a bounded context
+# excerpt per file, and asks the LLM to produce an answer with citations.
+# Nothing is persisted: every ask is a one-shot retrieval + generation.
+rag:
+  top_k: 5                          # files retrieved and fed to the LLM
+  max_context_chars_per_file: 2000  # per-file budget for the context excerpt
+  max_total_context_chars: 10000    # hard cap on combined context size
+  max_tokens: 1024                  # LLM max_tokens override for answer generation
+  transcript_window_seconds: 30.0   # context window around each timestamped match
 
 models:
   # Whisper model for audio transcription (multilingual)
