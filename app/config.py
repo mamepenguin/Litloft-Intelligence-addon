@@ -109,6 +109,11 @@ class FeaturesConfig:
 
 @dataclass(frozen=True)
 class SummariesConfig:
+    # Minimum context length (stripped). Files with less usable content
+    # than this are skipped entirely — a tiny transcript like the word
+    # "you" (Whisper false positive on silent content) would otherwise
+    # cause the LLM to hallucinate a summary from the filename alone.
+    min_context_chars: int = 50
     # Threshold: if total context <= max_context_chars, send full text.
     # Otherwise, sample windows from beginning/middle/end.
     max_context_chars: int = 8000

@@ -23,6 +23,7 @@ from app.workers.summaries import (
     _prepare_context,
     _sample_windows,
     _trim_to_sentence_boundary,
+    classify_missing_reason,
 )
 
 
@@ -430,6 +431,113 @@ class TestGetFullDocumentText:
 
 
 # ---------------------------------------------------------------------------
+# classify_missing_reason
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyMissingReason:
+    """The router uses this to render the right "no summary yet" state."""
+
+    def _patch(self, monkeypatch, make_settings, indexed=None, transcript="", text=""):
+        settings = make_settings()
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+        monkeypatch.setattr(
+            "app.workers.summaries._get_indexed_file", lambda fid: indexed
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_transcript", lambda fid: transcript
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_document_text", lambda fid: text
+        )
+
+    def test_file_not_found(self, monkeypatch, make_settings):
+        self._patch(monkeypatch, make_settings, indexed=None)
+        assert classify_missing_reason("abc") == "file_not_found"
+
+    def test_unsupported_type(self, monkeypatch, make_settings):
+        self._patch(
+            monkeypatch, make_settings,
+            indexed={
+                "file_id": "abc",
+                "filename": "photo.jpg",
+                "file_type": "image",
+                "title": "",
+                "description": "",
+            },
+        )
+        assert classify_missing_reason("abc") == "unsupported_type"
+
+    def test_archive_is_unsupported(self, monkeypatch, make_settings):
+        self._patch(
+            monkeypatch, make_settings,
+            indexed={
+                "file_id": "abc",
+                "filename": "archive.zip",
+                "file_type": "archive",
+                "title": "",
+                "description": "",
+            },
+        )
+        assert classify_missing_reason("abc") == "unsupported_type"
+
+    def test_video_with_tiny_transcript_is_insufficient(
+        self, monkeypatch, make_settings
+    ):
+        # The FFXIV piano cover case: filename-rich, transcript = "you".
+        self._patch(
+            monkeypatch, make_settings,
+            indexed={
+                "file_id": "abc",
+                "filename": "FFXIV Piano.mp4",
+                "file_type": "video",
+                "title": "",
+                "description": "",
+            },
+            transcript="you",
+        )
+        assert classify_missing_reason("abc") == "insufficient_content"
+
+    def test_document_with_empty_text_is_insufficient(
+        self, monkeypatch, make_settings
+    ):
+        self._patch(
+            monkeypatch, make_settings,
+            indexed={
+                "file_id": "abc",
+                "filename": "empty.pdf",
+                "file_type": "document",
+                "title": "",
+                "description": "",
+            },
+            text="",
+        )
+        assert classify_missing_reason("abc") == "insufficient_content"
+
+    def test_video_with_adequate_transcript_is_ready(
+        self, monkeypatch, make_settings
+    ):
+        long_transcript = (
+            "Welcome to this lecture on machine learning fundamentals. "
+            "Today we will cover perceptrons, gradient descent, and basic "
+            "neural network architectures in detail."
+        )
+        self._patch(
+            monkeypatch, make_settings,
+            indexed={
+                "file_id": "abc",
+                "filename": "lecture.mp4",
+                "file_type": "video",
+                "title": "",
+                "description": "",
+            },
+            transcript=long_transcript,
+        )
+        assert classify_missing_reason("abc") == "not_generated"
+
+
+# ---------------------------------------------------------------------------
 # SummariesWorker._process_file
 # ---------------------------------------------------------------------------
 
@@ -595,6 +703,127 @@ class TestSummariesWorkerProcessFile:
         save_spy.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_skips_when_transcript_below_min_threshold(
+        self, monkeypatch, patched_settings_enabled, mock_llm_client
+    ):
+        """A trivial transcript like "you" must not produce a summary.
+
+        Without this guard the LLM would hallucinate a summary from the
+        filename alone — see the real-world FFXIV piano cover case where
+        Whisper produced a single "you" token and the model made up
+        elaborate details from the filename.
+        """
+        monkeypatch.setattr(
+            "app.workers.summaries._has_summary", lambda fid: False
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._get_indexed_file",
+            lambda fid: {
+                "file_id": fid,
+                "filename": "FFXIV - Dawntrail OST Piano Cover.mp4",
+                "file_type": "video",
+                "title": "",
+                "description": "",
+            },
+        )
+        # 3 chars — well below the 50-char default threshold.
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_transcript", lambda fid: "you"
+        )
+        save_spy = MagicMock()
+        monkeypatch.setattr(
+            "app.workers.summaries._save_summary", save_spy
+        )
+
+        worker = SummariesWorker(mock_llm_client)
+        await worker._process_file("abc")
+
+        mock_llm_client.generate_json.assert_not_called()
+        save_spy.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_when_document_text_below_min_threshold(
+        self, monkeypatch, patched_settings_enabled, mock_llm_client
+    ):
+        """A near-empty document must not produce a summary either."""
+        monkeypatch.setattr(
+            "app.workers.summaries._has_summary", lambda fid: False
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._get_indexed_file",
+            lambda fid: {
+                "file_id": fid,
+                "filename": "report.pdf",
+                "file_type": "document",
+                "title": "",
+                "description": "",
+            },
+        )
+        # Only whitespace + a few chars — below threshold after strip().
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_document_text",
+            lambda fid: "   hi   ",
+        )
+        save_spy = MagicMock()
+        monkeypatch.setattr(
+            "app.workers.summaries._save_summary", save_spy
+        )
+
+        worker = SummariesWorker(mock_llm_client)
+        await worker._process_file("doc1")
+
+        mock_llm_client.generate_json.assert_not_called()
+        save_spy.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_accepts_when_transcript_meets_threshold(
+        self, monkeypatch, make_settings, mock_llm_client
+    ):
+        """A transcript exactly at the threshold should still produce a summary."""
+        from app.config import FeaturesConfig, LLMConfig, SummariesConfig
+
+        settings = make_settings(
+            features=FeaturesConfig(summaries="manual"),
+            llm=LLMConfig(provider="openai_compatible", model="m"),
+            summaries=SummariesConfig(min_context_chars=20),
+        )
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        monkeypatch.setattr(
+            "app.workers.summaries._has_summary", lambda fid: False
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._get_indexed_file",
+            lambda fid: {
+                "file_id": fid,
+                "filename": "talk.mp4",
+                "file_type": "video",
+                "title": "",
+                "description": "",
+            },
+        )
+        # Exactly 20 chars (stripped).
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_transcript",
+            lambda fid: "hello world of twenty",  # 21 chars, above threshold
+        )
+
+        save_spy = MagicMock()
+        monkeypatch.setattr(
+            "app.workers.summaries._save_summary", save_spy
+        )
+
+        mock_llm_client.generate_json = AsyncMock(
+            return_value={"short": "s", "long": "l"}
+        )
+
+        worker = SummariesWorker(mock_llm_client)
+        await worker._process_file("abc")
+
+        save_spy.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_saves_valid_summary_for_video(
         self, monkeypatch, patched_settings_enabled, mock_llm_client
     ):
@@ -613,7 +842,10 @@ class TestSummariesWorkerProcessFile:
         )
         monkeypatch.setattr(
             "app.workers.summaries._get_full_transcript",
-            lambda fid: "This is a transcript about neural networks.",
+            lambda fid: (
+                "This is a transcript about neural networks and how they "
+                "learn patterns from data through repeated training cycles."
+            ),
         )
         save_spy = MagicMock()
         monkeypatch.setattr(
@@ -657,7 +889,10 @@ class TestSummariesWorkerProcessFile:
         )
         monkeypatch.setattr(
             "app.workers.summaries._get_full_document_text",
-            lambda fid: "Full document body here.",
+            lambda fid: (
+                "Full document body here with enough content to comfortably "
+                "exceed the minimum context threshold for summary generation."
+            ),
         )
         save_spy = MagicMock()
         monkeypatch.setattr(

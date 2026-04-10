@@ -299,6 +299,12 @@ export async function batchSuggestedTags(fileIds: string[]): Promise<BatchSugges
 }
 
 // Summaries types and API
+export type SummaryMissingReason =
+  | "not_generated"
+  | "insufficient_content"
+  | "unsupported_type"
+  | "file_not_found";
+
 export interface SummaryResponse {
   available: boolean;
   file_id?: string;
@@ -309,6 +315,7 @@ export interface SummaryResponse {
   was_truncated?: boolean;
   status?: "generated" | "hidden" | string;
   created_at?: string;
+  reason?: SummaryMissingReason | string;
 }
 
 export async function getSummary(fileId: string): Promise<SummaryResponse> {

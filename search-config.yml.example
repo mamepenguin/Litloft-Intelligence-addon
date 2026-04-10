@@ -41,6 +41,8 @@ llm:
 # Generates 1-sentence short summary + paragraph long summary for videos,
 # audio files, and documents. Display-only: never writes to HomeVault DB.
 summaries:
+  min_context_chars: 50      # skip files with less usable content than this
+                             # (prevents hallucinated summaries from near-empty transcripts)
   max_context_chars: 8000    # threshold: smaller contexts are sent in full
   window_chars: 2500         # per-window size when sampling long content
   window_count: 3            # number of windows (first/middle/last; use odd numbers)

@@ -26,6 +26,7 @@ from app.schemas import (
     MessageResponse,
     SummaryResponse,
 )
+from app.workers.summaries import classify_missing_reason
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,14 @@ async def get_summary(file_id: str) -> SummaryResponse:
         ).fetchone()
 
     if row is None:
-        return SummaryResponse(available=False)
+        # Classify *why* there's no summary so the frontend can render
+        # a useful state (button / "insufficient content" / hidden)
+        # instead of always offering a generate button that would
+        # silently skip when the file lacks usable content.
+        return SummaryResponse(
+            available=False,
+            reason=classify_missing_reason(file_id),
+        )
 
     status_value = row[6]
     if status_value == "hidden":
@@ -101,8 +109,20 @@ async def get_summary(file_id: str) -> SummaryResponse:
     "/files/{file_id}/summary/regenerate", response_model=MessageResponse
 )
 async def regenerate_summary(file_id: str) -> MessageResponse:
-    """Delete the existing summary and re-queue generation."""
+    """Delete the existing summary and re-queue generation.
+
+    Rejects the request upfront (400) when the file cannot be summarized
+    — either the type is unsupported or the context is below threshold.
+    This avoids a 40-second frontend polling timeout when the request
+    would have been silently skipped by the worker anyway.
+    """
     _require_llm_enabled()
+
+    # Pre-flight: surface skip reasons as 400 so the frontend can show
+    # them immediately instead of waiting for a worker that will no-op.
+    reason = classify_missing_reason(file_id)
+    if reason in ("unsupported_type", "insufficient_content", "file_not_found"):
+        raise HTTPException(status_code=400, detail=reason)
 
     summaries_worker = get_summaries_worker()
 

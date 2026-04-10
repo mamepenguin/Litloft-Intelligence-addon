@@ -197,6 +197,35 @@ def _classify_file_type(file_type: str) -> str | None:
     return None
 
 
+def classify_missing_reason(file_id: str) -> str:
+    """Explain why a file does not currently have a stored summary.
+
+    Called by the router when the file_summaries table has no row for
+    a given file, so the frontend can render the right UI state rather
+    than always offering a "Generate" button that would silently skip.
+
+    Return values:
+        "file_not_found"        — no indexed_files row at all
+        "unsupported_type"      — image/archive/etc.
+        "insufficient_content"  — supported type but below threshold
+        "not_generated"         — ready to generate, waiting for user
+    """
+    indexed_file = _get_indexed_file(file_id)
+    if indexed_file is None:
+        return "file_not_found"
+
+    context_type = _classify_file_type(indexed_file["file_type"])
+    if context_type is None:
+        return "unsupported_type"
+
+    # Reuse _build_context so the threshold check is applied exactly
+    # the same way the worker would apply it — no second source of truth.
+    if _build_context(indexed_file, context_type) is None:
+        return "insufficient_content"
+
+    return "not_generated"
+
+
 def _get_indexed_file(file_id: str) -> dict | None:
     """Fetch basic indexed-file info for a file, or None if not indexed."""
     with get_search_db() as session:
@@ -261,25 +290,37 @@ def _get_full_document_text(file_id: str) -> str:
 def _build_context(indexed_file: dict, context_type: str) -> str | None:
     """Build raw context text for a file, or None if no content is available.
 
+    Enforces settings.summaries.min_context_chars: any file whose usable
+    content (after stripping whitespace) is shorter than that threshold
+    returns None and is skipped by the worker. This guards against the
+    LLM hallucinating a summary from only the filename when Whisper
+    produces a trivial transcript (e.g., "you" on a silent piano video)
+    or a document extractor yields a near-empty text layer.
+
     Args:
         indexed_file: File info dict from _get_indexed_file.
         context_type: "video" | "audio" | "document".
 
     Returns:
         The raw (untruncated) context text, or None if the file has no
-        transcript / document text to summarize.
+        usable transcript / document text to summarize.
     """
     file_id = indexed_file["file_id"]
+    raw: str = ""
 
     if context_type in ("video", "audio"):
-        transcript = _get_full_transcript(file_id)
-        return transcript or None
+        raw = _get_full_transcript(file_id)
+    elif context_type == "document":
+        raw = _get_full_document_text(file_id)
 
-    if context_type == "document":
-        text = _get_full_document_text(file_id)
-        return text or None
+    if not raw:
+        return None
 
-    return None
+    min_chars = settings.summaries.min_context_chars
+    if len(raw.strip()) < min_chars:
+        return None
+
+    return raw
 
 
 def _build_user_prompt(

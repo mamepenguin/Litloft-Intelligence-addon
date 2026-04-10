@@ -76,9 +76,29 @@ export default function SummarySection({ fileId }: SummarySectionProps) {
   // Section stays hidden after a user actively hides it
   if (hidden) return null;
 
-  // When no summary exists yet, show an inline prompt so users can trigger
-  // generation on demand. Keeps "manual" mode discoverable.
   if (!data?.available) {
+    // File type is not summarizable (image, archive, etc.) — hide the
+    // section entirely so the UI doesn't offer a useless button.
+    if (data?.reason === "unsupported_type") return null;
+
+    // File exists but the transcript / extracted text is below the
+    // min_context_chars threshold. Offering a generate button would
+    // just lead to a silent skip, so show an informative note instead.
+    if (data?.reason === "insufficient_content") {
+      return (
+        <div className="flex items-center gap-2">
+          <BookOpen size={14} className="text-text-muted/50" />
+          <span className="text-xs text-text-muted/70">
+            {t("summaryInsufficientContent", {
+              defaultMessage: "Not enough content to summarize",
+            })}
+          </span>
+        </div>
+      );
+    }
+
+    // Ready to generate — show the button. Covers reason="not_generated"
+    // as well as feature-disabled/null-reason legacy paths.
     return (
       <div>
         <div className="flex items-center gap-2">

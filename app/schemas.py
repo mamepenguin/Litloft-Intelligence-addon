@@ -225,6 +225,13 @@ class SummaryResponse(BaseModel):
     was_truncated: bool | None = None
     status: str | None = None
     created_at: str | None = None
+    # When available=False, explains why:
+    #   "not_generated"        — file is eligible but user hasn't generated yet
+    #   "insufficient_content" — transcript/text below min_context_chars
+    #   "unsupported_type"     — image/archive/etc., can't be summarized
+    #   "file_not_found"       — no indexed_files row
+    #   None                   — feature disabled or summary hidden by user
+    reason: str | None = None
 
 
 class BatchSummariesRequest(BaseModel):
