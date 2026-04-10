@@ -100,7 +100,7 @@ class MemoryConfig:
 class FeaturesConfig:
     indexing: bool = True
     search: bool = True
-    auto_tags: bool = False
+    auto_tags: str = "false"  # "false" | "manual" | "on_index"
 
 
 @dataclass(frozen=True)

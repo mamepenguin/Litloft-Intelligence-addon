@@ -281,3 +281,19 @@ export async function regenerateSuggestedTags(fileId: string): Promise<void> {
     method: "POST",
   });
 }
+
+export interface BatchSuggestedTagsResponse {
+  queued: number;
+  skipped: number;
+}
+
+export async function batchSuggestedTags(fileIds: string[]): Promise<BatchSuggestedTagsResponse> {
+  return fetchJSON<BatchSuggestedTagsResponse>(
+    `${API_BASE}/addons/intelligence/batch/suggested-tags`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ file_ids: fileIds }),
+    }
+  );
+}

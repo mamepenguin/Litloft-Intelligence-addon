@@ -91,7 +91,7 @@ class AutoTagsWorker:
         Args:
             file_id: The file ID to process.
         """
-        if not settings.features.auto_tags:
+        if settings.features.auto_tags == "false":
             return
 
         if not self._llm_client.enabled:

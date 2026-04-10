@@ -617,10 +617,10 @@ class IndexManager:
                     for file_id in file_ids:
                         await asyncio.to_thread(index_text_content, file_id)
 
-                    # Queue auto-tagging for successfully indexed files
+                    # Queue auto-tagging for successfully indexed files (on_index mode only)
                     if (
                         self._auto_tags_worker is not None
-                        and settings.features.auto_tags
+                        and settings.features.auto_tags == "on_index"
                         and count > 0
                     ):
                         for file_id in file_ids:

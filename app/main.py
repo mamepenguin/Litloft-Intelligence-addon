@@ -118,16 +118,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _auto_tags_worker = AutoTagsWorker(_llm_client)
     auto_tags_task: asyncio.Task | None = None
 
-    if settings.features.auto_tags and _llm_client.enabled:
+    if settings.features.auto_tags != "false" and _llm_client.enabled:
         auto_tags_task = asyncio.create_task(
             _auto_tags_worker.run(), name="auto_tags_worker"
         )
-        logger.info("Auto-tags worker started")
+        logger.info("Auto-tags worker started (mode=%s)", settings.features.auto_tags)
 
-        # Queue already-indexed files that don't have suggested tags yet
-        pending = await _auto_tags_worker.enqueue_unprocessed()
-        if pending > 0:
-            logger.info("Auto-tags: queued %d previously indexed files", pending)
+        # on_index: queue already-indexed files that don't have suggested tags yet
+        if settings.features.auto_tags == "on_index":
+            pending = await _auto_tags_worker.enqueue_unprocessed()
+            if pending > 0:
+                logger.info("Auto-tags: queued %d previously indexed files", pending)
 
     # Start index manager (pass auto_tags_worker for post-metadata hook)
     _index_manager = IndexManager(auto_tags_worker=_auto_tags_worker)
@@ -193,7 +194,7 @@ class SearchResponseModel(BaseModel):
 class FeaturesStatus(BaseModel):
     indexing: bool
     search: bool
-    auto_tags: bool
+    auto_tags: str
 
 
 class LLMStatus(BaseModel):
@@ -950,7 +951,7 @@ async def get_suggested_tags(file_id: str) -> SuggestedTagsResponse:
     from app.database import get_search_db
     from sqlalchemy import text as sql_text
 
-    if not settings.features.auto_tags:
+    if settings.features.auto_tags == "false":
         return SuggestedTagsResponse(available=False)
 
     with get_search_db() as session:
@@ -1007,7 +1008,7 @@ async def regenerate_suggested_tags(file_id: str) -> MessageResponse:
     from app.database import get_search_db
     from sqlalchemy import text as sql_text
 
-    if not settings.features.auto_tags:
+    if settings.features.auto_tags == "false":
         raise HTTPException(status_code=400, detail="Auto-tags feature is disabled")
 
     if _auto_tags_worker is None or _llm_client is None or not _llm_client.enabled:
@@ -1026,6 +1027,51 @@ async def regenerate_suggested_tags(file_id: str) -> MessageResponse:
     return MessageResponse(
         status="accepted", message="Regeneration queued"
     )
+
+
+class BatchSuggestedTagsRequest(BaseModel):
+    file_ids: list[str] = Field(..., max_length=500)
+
+
+class BatchSuggestedTagsResponse(BaseModel):
+    queued: int
+    skipped: int
+
+
+@app.post("/batch/suggested-tags", response_model=BatchSuggestedTagsResponse)
+async def batch_suggested_tags(body: BatchSuggestedTagsRequest) -> BatchSuggestedTagsResponse:
+    """Queue auto-tagging for a batch of files. Skips files that already have suggestions."""
+    from app.database import get_search_db
+    from sqlalchemy import text as sql_text
+
+    if settings.features.auto_tags == "false":
+        raise HTTPException(status_code=400, detail="Auto-tags feature is disabled")
+
+    if _auto_tags_worker is None or _llm_client is None or not _llm_client.enabled:
+        raise HTTPException(status_code=400, detail="LLM is not enabled")
+
+    # Find which files already have suggested tags
+    with get_search_db() as session:
+        existing: set[str] = set()
+        if body.file_ids:
+            placeholders = ",".join(f":id{i}" for i in range(len(body.file_ids)))
+            params = {f"id{i}": fid for i, fid in enumerate(body.file_ids)}
+            for row in session.execute(
+                sql_text(f"SELECT file_id FROM suggested_tags WHERE file_id IN ({placeholders})"),
+                params,
+            ).fetchall():
+                existing.add(row[0])
+
+    queued = 0
+    skipped = 0
+    for file_id in body.file_ids:
+        if file_id in existing:
+            skipped += 1
+        else:
+            await _auto_tags_worker.enqueue(file_id)
+            queued += 1
+
+    return BatchSuggestedTagsResponse(queued=queued, skipped=skipped)
 
 
 # --- Health check ---
