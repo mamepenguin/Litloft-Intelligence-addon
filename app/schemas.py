@@ -1,0 +1,210 @@
+"""Pydantic models for request/response schemas."""
+
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+# --- Search ---
+
+
+class SearchResultSegmentMatch(BaseModel):
+    type: str
+    text: str
+    score: float
+    page: int | None = None
+
+
+class SearchResultSegment(BaseModel):
+    time_range: list[float] | None = None
+    matches: list[SearchResultSegmentMatch]
+
+
+class SearchResultItem(BaseModel):
+    file_id: str
+    drive: str
+    filename: str
+    file_type: str
+    score: float
+    match_types: list[str]
+    segments: list[SearchResultSegment]
+
+
+class SearchResponseModel(BaseModel):
+    results: list[SearchResultItem]
+    total: int
+    indexed_files: int
+    service_version: str
+
+
+class SourceCountsModel(BaseModel):
+    text_vector: int
+    clip_vector: int
+    keyword: int
+    transcript_keyword: int
+    text_content_keyword: int = 0
+
+
+class CompareResponseModel(BaseModel):
+    rrf: SearchResponseModel
+    cosine: SearchResponseModel
+    rrf_no_cutoff: SearchResponseModel
+    cosine_no_cutoff: SearchResponseModel
+    source_counts: SourceCountsModel
+
+
+# --- Status ---
+
+
+class FeaturesStatus(BaseModel):
+    indexing: bool
+    search: bool
+    auto_tags: str
+
+
+class LLMStatus(BaseModel):
+    provider: str
+    model: str
+    enabled: bool
+
+
+class StatusResponse(BaseModel):
+    status: str
+    indexed: dict[str, int]
+    pending: dict[str, int]
+    queue: dict[str, Any]
+    models: dict[str, str]
+    features: FeaturesStatus
+    llm: LLMStatus
+
+
+# --- Webhooks ---
+
+
+class WebhookScanComplete(BaseModel):
+    drive: str
+    added: int = 0
+    removed: int = 0
+
+
+class WebhookFilesDeleted(BaseModel):
+    file_ids: list[str] = Field(..., max_length=10000)
+    type: str = "soft_delete"
+
+
+class WebhookFilesRestored(BaseModel):
+    file_ids: list[str] = Field(..., max_length=10000)
+
+
+class WebhookFilesPurged(BaseModel):
+    file_ids: list[str] = Field(..., max_length=10000)
+
+
+# --- Queue ---
+
+
+class QueuePrioritize(BaseModel):
+    file_id: str
+
+
+class MessageResponse(BaseModel):
+    status: str
+    message: str
+
+
+# --- Similar files ---
+
+
+class KeywordScore(BaseModel):
+    word: str
+    score: float | None = None
+    source_tfidf: float | None = None
+    target_tfidf: float | None = None
+    relevance: float | None = None
+
+
+class SimilarFileItem(BaseModel):
+    file_id: str
+    drive: str
+    filename: str
+    file_type: str
+    mime_type: str
+    score: float
+    match_type: str
+    primary_score: float | None = None
+    secondary_score: float | None = None
+    shared_keywords: list[KeywordScore] = []
+
+
+class SimilarFilesResponse(BaseModel):
+    results: list[SimilarFileItem]
+    source_keywords: list[KeywordScore] = []
+
+
+# --- File inspection ---
+
+
+class TranscriptChunkResponse(BaseModel):
+    index: int
+    text: str
+    start: float
+    end: float
+
+
+class TranscriptResponse(BaseModel):
+    file_id: str
+    drive: str
+    language: str
+    chunks: list[TranscriptChunkResponse]
+
+
+class IndexDetailEmbeddingItem(BaseModel):
+    content_preview: str
+    start: float | None = None
+    end: float | None = None
+
+
+class IndexDetailType(BaseModel):
+    count: int
+    items: list[IndexDetailEmbeddingItem]
+
+
+class IndexDetailsResponse(BaseModel):
+    file_id: str
+    drive: str
+    filename: str
+    status: dict[str, bool]
+    indexed_at: str
+    embeddings: dict[str, IndexDetailType]
+
+
+class ClipTimestampItem(BaseModel):
+    start: float
+    content_preview: str
+
+
+class ClipTimestampsResponse(BaseModel):
+    file_id: str
+    drive: str
+    timestamps: list[ClipTimestampItem]
+
+
+# --- Suggested tags ---
+
+
+class SuggestedTagsResponse(BaseModel):
+    available: bool
+    file_id: str | None = None
+    tags: list[str] | None = None
+    model: str | None = None
+    status: str | None = None
+    created_at: str | None = None
+
+
+class BatchSuggestedTagsRequest(BaseModel):
+    file_ids: list[str] = Field(..., max_length=500)
+
+
+class BatchSuggestedTagsResponse(BaseModel):
+    queued: int
+    skipped: int

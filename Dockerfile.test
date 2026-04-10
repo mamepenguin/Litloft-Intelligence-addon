@@ -22,6 +22,7 @@ RUN git clone --depth 1 --branch v0.1.6 https://github.com/asg017/sqlite-vec.git
 COPY requirements.txt .
 RUN pip install --no-cache-dir \
     sqlalchemy pyyaml numpy openai httpx \
+    fastapi pydantic \
     pytest pytest-asyncio pytest-cov
 
 COPY app/ ./app/
