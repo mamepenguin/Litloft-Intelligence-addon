@@ -254,30 +254,40 @@ class IndexManager:
             indexed_files = _get_indexed_file_ids()
 
             homevault_ids = {f["id"] for f in homevault_files}
+            # A file is "active" for indexing purposes only if it is neither
+            # trashed (deleted_at) nor missing (missing_since). Missing files
+            # keep their embeddings but are marked inactive so they don't
+            # appear in search results — matching the soft-delete behaviour.
             homevault_active = {
-                f["id"] for f in homevault_files if f["deleted_at"] is None
+                f["id"]
+                for f in homevault_files
+                if f["deleted_at"] is None and f.get("missing_since") is None
             }
-            homevault_deleted = {
-                f["id"] for f in homevault_files if f["deleted_at"] is not None
+            homevault_inactive = {
+                f["id"]
+                for f in homevault_files
+                if f["deleted_at"] is not None or f.get("missing_since") is not None
             }
 
-            # New files: in HomeVault but not indexed
+            # New files: in HomeVault (active) but not indexed
             new_ids = homevault_active - indexed_files
             if new_ids:
                 added = await self._add_new_files(
                     [f for f in homevault_files if f["id"] in new_ids]
                 )
 
-            # Soft-deleted: mark as inactive
-            for file_id in homevault_deleted & indexed_files:
+            # Inactive (trashed or missing): deactivate in the index
+            for file_id in homevault_inactive & indexed_files:
                 _set_file_active(file_id, active=False)
                 deactivated += 1
 
-            # Restored: mark as active again
+            # Active: reactivate (covers "missing → recovered" and
+            # "trash → restored" since both flow through this branch)
             for file_id in homevault_active & indexed_files:
                 _set_file_active(file_id, active=True)
 
-            # Purged: in index but not in HomeVault at all
+            # Purged: in index but not in HomeVault DB at all
+            # (user explicitly called DELETE /purge)
             orphaned = indexed_files - homevault_ids
             for file_id in orphaned:
                 _purge_file(file_id)
@@ -595,6 +605,30 @@ class IndexManager:
         for file_id in file_ids:
             _purge_file(file_id)
 
+    async def handle_files_missing(self, file_ids: list[str]) -> None:
+        """Handle files-missing webhook.
+
+        Missing files are kept in the search index but marked inactive so
+        they don't appear in search results. Embeddings, transcripts and
+        CLIP vectors are preserved for fast reactivation on recovery.
+
+        Args:
+            file_ids: IDs of files that vanished from the HomeVault filesystem.
+        """
+        for file_id in file_ids:
+            _set_file_active(file_id, active=False)
+
+    async def handle_files_recovered(self, file_ids: list[str]) -> None:
+        """Handle files-recovered webhook.
+
+        Reactivates files that were previously marked missing.
+
+        Args:
+            file_ids: IDs of files that reappeared on the HomeVault filesystem.
+        """
+        for file_id in file_ids:
+            _set_file_active(file_id, active=True)
+
     # --- Background workers ---
 
     async def _metadata_worker(self) -> None:
@@ -888,17 +922,31 @@ def cleanup_orphaned_embeddings() -> int:
 def _get_homevault_files() -> list[dict]:
     """Get all files from HomeVault DB.
 
-    Returns:
-        List of file data dicts.
+    Returns a list of file dicts including the ``missing_since`` column
+    so reconcile can distinguish active / missing / trashed states. The
+    column is read via PRAGMA check so older HomeVault DBs without it
+    still work.
     """
     with get_homevault_db() as session:
-        rows = session.execute(
-            sql_text(
+        has_missing_since = any(
+            row[1] == "missing_since"
+            for row in session.execute(sql_text("PRAGMA table_info(files)")).fetchall()
+        )
+
+        if has_missing_since:
+            query = (
                 "SELECT id, filename, title, description, drive, folder_path, "
-                "file_path, file_size, file_type, mime_type, duration, deleted_at "
-                "FROM files"
+                "file_path, file_size, file_type, mime_type, duration, deleted_at, "
+                "missing_since FROM files"
             )
-        ).fetchall()
+        else:
+            query = (
+                "SELECT id, filename, title, description, drive, folder_path, "
+                "file_path, file_size, file_type, mime_type, duration, deleted_at, "
+                "NULL AS missing_since FROM files"
+            )
+
+        rows = session.execute(sql_text(query)).fetchall()
 
         return [
             {
@@ -914,6 +962,7 @@ def _get_homevault_files() -> list[dict]:
                 "mime_type": row[9],
                 "duration": row[10],
                 "deleted_at": row[11],
+                "missing_since": row[12],
             }
             for row in rows
         ]

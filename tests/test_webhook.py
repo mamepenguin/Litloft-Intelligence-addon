@@ -28,11 +28,15 @@ for _mod in (
 
 from app.webhook import (
     FilesDeletedPayload,
+    FilesMissingPayload,
     FilesPurgedPayload,
+    FilesRecoveredPayload,
     FilesRestoredPayload,
     ScanCompletePayload,
     handle_files_deleted,
+    handle_files_missing,
     handle_files_purged,
+    handle_files_recovered,
     handle_files_restored,
     handle_scan_complete,
 )
@@ -46,6 +50,8 @@ def mock_index_manager():
     manager.handle_files_deleted = AsyncMock()
     manager.handle_files_restored = AsyncMock()
     manager.handle_files_purged = AsyncMock()
+    manager.handle_files_missing = AsyncMock()
+    manager.handle_files_recovered = AsyncMock()
     return manager
 
 
@@ -197,4 +203,71 @@ class TestHandleFilesPurged:
 
         assert "status" in result
         assert "message" in result
+        assert result["status"] == "accepted"
+
+
+# ---------------------------------------------------------------------------
+# handle_files_missing / handle_files_recovered
+# ---------------------------------------------------------------------------
+
+
+class TestHandleFilesMissing:
+    """Tests for handle_files_missing webhook handler."""
+
+    @pytest.mark.asyncio
+    async def test_calls_index_manager_with_file_ids(self, mock_index_manager):
+        payload = FilesMissingPayload(file_ids=("id1", "id2"))
+
+        with patch("app.webhook.invalidate_similar_cache") as mock_invalidate:
+            result = await handle_files_missing(payload, mock_index_manager)
+
+        mock_index_manager.handle_files_missing.assert_awaited_once_with(
+            ["id1", "id2"]
+        )
+        mock_invalidate.assert_called_once()
+        assert result["status"] == "accepted"
+        assert "2 files marked missing" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_empty_file_ids(self, mock_index_manager):
+        payload = FilesMissingPayload(file_ids=())
+
+        with patch("app.webhook.invalidate_similar_cache"):
+            result = await handle_files_missing(payload, mock_index_manager)
+
+        mock_index_manager.handle_files_missing.assert_awaited_once_with([])
+        assert "0 files" in result["message"]
+
+
+class TestHandleFilesRecovered:
+    """Tests for handle_files_recovered webhook handler."""
+
+    @pytest.mark.asyncio
+    async def test_calls_index_manager_with_file_ids(self, mock_index_manager):
+        payload = FilesRecoveredPayload(file_ids=("id1", "id2", "id3"))
+
+        with patch("app.webhook.invalidate_similar_cache") as mock_invalidate:
+            result = await handle_files_recovered(payload, mock_index_manager)
+
+        mock_index_manager.handle_files_recovered.assert_awaited_once_with(
+            ["id1", "id2", "id3"]
+        )
+        mock_invalidate.assert_called_once()
+        assert result["status"] == "accepted"
+        assert "3 files recovered" in result["message"]
+
+
+class TestScanCompleteWithMissing:
+    """New ScanCompletePayload fields should pass through the handler."""
+
+    @pytest.mark.asyncio
+    async def test_missing_recovered_counts_passed(self, mock_index_manager):
+        payload = ScanCompletePayload(
+            drive="Videos", added=1, missing=5, recovered=2
+        )
+
+        with patch("app.webhook.invalidate_similar_cache"):
+            result = await handle_scan_complete(payload, mock_index_manager)
+
+        mock_index_manager.handle_scan_complete.assert_awaited_once_with("Videos")
         assert result["status"] == "accepted"

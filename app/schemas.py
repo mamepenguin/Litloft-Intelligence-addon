@@ -87,7 +87,11 @@ class StatusResponse(BaseModel):
 class WebhookScanComplete(BaseModel):
     drive: str
     added: int = 0
+    # ``removed`` kept for HomeVault builds that predate the missing-files
+    # feature. New builds send ``missing`` / ``recovered`` instead.
     removed: int = 0
+    missing: int = 0
+    recovered: int = 0
 
 
 class WebhookFilesDeleted(BaseModel):
@@ -100,6 +104,14 @@ class WebhookFilesRestored(BaseModel):
 
 
 class WebhookFilesPurged(BaseModel):
+    file_ids: list[str] = Field(..., max_length=10000)
+
+
+class WebhookFilesMissing(BaseModel):
+    file_ids: list[str] = Field(..., max_length=10000)
+
+
+class WebhookFilesRecovered(BaseModel):
     file_ids: list[str] = Field(..., max_length=10000)
 
 

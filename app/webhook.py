@@ -19,7 +19,25 @@ class ScanCompletePayload:
 
     drive: str
     added: int = 0
+    # ``removed`` kept for backwards compatibility with older HomeVault
+    # builds. New builds emit ``missing`` / ``recovered`` instead.
     removed: int = 0
+    missing: int = 0
+    recovered: int = 0
+
+
+@dataclass(frozen=True)
+class FilesMissingPayload:
+    """Payload for files-missing webhook (scanner detected vanished files)."""
+
+    file_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FilesRecoveredPayload:
+    """Payload for files-recovered webhook (scanner detected reappearance)."""
+
+    file_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -67,14 +85,55 @@ async def handle_scan_complete(
         Acknowledgment dict.
     """
     logger.info(
-        "Received scan-complete webhook: drive=%s, added=%d, removed=%d",
-        payload.drive, payload.added, payload.removed,
+        "Received scan-complete webhook: drive=%s, added=%d, missing=%d, recovered=%d",
+        payload.drive, payload.added, payload.missing, payload.recovered,
     )
 
     await index_manager.handle_scan_complete(payload.drive)
     invalidate_similar_cache()
 
     return {"status": "accepted", "message": "Reconciliation triggered"}
+
+
+async def handle_files_missing(
+    payload: FilesMissingPayload,
+    index_manager: IndexManager,
+) -> dict[str, str]:
+    """Handle files-missing webhook from HomeVault.
+
+    Marks files as inactive in the index. Embeddings and transcripts are
+    preserved so the file can be fully restored if it reappears on disk.
+    """
+    logger.info(
+        "Received files-missing webhook: %d files",
+        len(payload.file_ids),
+    )
+    await index_manager.handle_files_missing(list(payload.file_ids))
+    invalidate_similar_cache()
+    return {
+        "status": "accepted",
+        "message": f"{len(payload.file_ids)} files marked missing",
+    }
+
+
+async def handle_files_recovered(
+    payload: FilesRecoveredPayload,
+    index_manager: IndexManager,
+) -> dict[str, str]:
+    """Handle files-recovered webhook from HomeVault.
+
+    Reactivates previously missing files in the index.
+    """
+    logger.info(
+        "Received files-recovered webhook: %d files",
+        len(payload.file_ids),
+    )
+    await index_manager.handle_files_recovered(list(payload.file_ids))
+    invalidate_similar_cache()
+    return {
+        "status": "accepted",
+        "message": f"{len(payload.file_ids)} files recovered",
+    }
 
 
 async def handle_files_deleted(
