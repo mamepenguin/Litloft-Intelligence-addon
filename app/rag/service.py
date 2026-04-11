@@ -31,6 +31,7 @@ from typing import Any, Literal
 
 from app.config import settings
 from app.dependencies import get_llm_client
+from app.rag.answer_stream import AnswerStreamExtractor
 from app.rag.context import assemble_contexts
 from app.rag.parser import Citation, parse_answer
 from app.rag.prompt import build_system_prompt, build_user_prompt
@@ -347,6 +348,13 @@ async def stream_answer(
     user_prompt = build_user_prompt(query, contexts)
 
     buffered: list[str] = []
+    # The LLM is asked for a JSON object `{"answer": "...", "citations": [...]}`,
+    # so forwarding raw provider chunks would make the UI display JSON
+    # syntax instead of the answer. The extractor parses the stream on
+    # the fly and yields only the decoded characters of the ``answer``
+    # field value, while ``buffered`` keeps the full raw payload for
+    # post-stream citations parsing.
+    extractor = AnswerStreamExtractor()
     # Explicit aiter/aclose lifecycle so a client disconnect mid-stream
     # deterministically tears down the upstream LLM connection instead
     # of waiting on async-generator GC. Without this, a cancelled SSE
@@ -360,7 +368,17 @@ async def stream_answer(
     try:
         async for delta in llm_stream:
             buffered = [*buffered, delta]
-            yield AnswerEvent(kind="answer_chunk", data={"delta": delta})
+            extracted = extractor.feed(delta)
+            if extracted:
+                yield AnswerEvent(
+                    kind="answer_chunk", data={"delta": extracted}
+                )
+        # Flush any content still held back by the extractor — happens
+        # when the LLM truncated the answer string or emitted short
+        # prose that never crossed the mode-decision threshold.
+        tail = extractor.finalize()
+        if tail:
+            yield AnswerEvent(kind="answer_chunk", data={"delta": tail})
     finally:
         aclose = getattr(llm_stream, "aclose", None)
         if aclose is not None:

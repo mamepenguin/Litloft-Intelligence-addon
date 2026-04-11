@@ -36,6 +36,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import { useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
 import { AlertCircle, Send, Sparkles, Square, X } from "lucide-react";
@@ -306,11 +307,26 @@ function IntelligenceAskPageInner() {
               break;
             case "answer_chunk":
               liveAnswer = liveAnswer + event.delta;
-              setState({
-                kind: "streaming",
-                keywords: liveKeywords,
-                sources: liveSources,
-                answerBuffer: liveAnswer,
+              // flushSync is required because React 18+ automatically
+              // batches setState calls that happen across await points
+              // in the same async task. A single browser reader.read()
+              // typically delivers many SSE frames in one TCP packet,
+              // so the `for await` loop below dispatches dozens of
+              // answer_chunk updates back-to-back — auto-batching
+              // would coalesce them into a single render at the end,
+              // making the UI look like "all at once" even though the
+              // network actually streamed the tokens progressively.
+              // Forcing a synchronous flush per chunk restores the
+              // character-by-character typewriter effect. The other
+              // event kinds (keywords/sources/citations) fire at most
+              // once each, so they keep the default batched behavior.
+              flushSync(() => {
+                setState({
+                  kind: "streaming",
+                  keywords: liveKeywords,
+                  sources: liveSources,
+                  answerBuffer: liveAnswer,
+                });
               });
               break;
             case "citations":

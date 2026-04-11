@@ -542,10 +542,13 @@ class TestStreamAnswerHappyPath:
         ))
 
         kinds = [e.kind for e in events]
+        # Exactly one answer_chunk carrying the extracted answer-field
+        # value: the stream extractor swallows the surrounding JSON
+        # syntax (``{"answer": "``, the closing quote, the citations
+        # array) so the UI never sees raw JSON scroll past.
         assert kinds == [
             "keywords",
             "sources",
-            "answer_chunk",
             "answer_chunk",
             "citations",
             "done",
@@ -555,18 +558,19 @@ class TestStreamAnswerHappyPath:
         sources = events[1].data["sources"]
         assert {s["file_id"] for s in sources} == {"f1", "f2"}
 
-        # The two answer_chunk events carry the raw deltas verbatim.
-        assert events[2].data["delta"] == deltas[0]
-        assert events[3].data["delta"] == deltas[1]
+        # Only the decoded answer-field value is streamed, not the
+        # raw deltas. The JSON key, colons, quotes, and the citations
+        # object are stripped by the extractor.
+        assert events[2].data["delta"] == "京都の紅葉 [1]"
 
         # Citations are parsed from the full buffered JSON and the
         # f1 citation survives the allowed-id check.
-        citations = events[4].data["citations"]
+        citations = events[3].data["citations"]
         assert len(citations) == 1
         assert citations[0]["file_id"] == "f1"
 
         # done carries timing metadata.
-        done_payload = events[5].data
+        done_payload = events[4].data
         assert done_payload.get("retrieved_count") == 2
         assert "took_ms" in done_payload
 
