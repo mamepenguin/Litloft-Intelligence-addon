@@ -612,3 +612,92 @@ class TestLLMClientRateLimit:
             if call.args[0] > 0
         ]
         assert positive_sleeps == []
+
+
+# ---------------------------------------------------------------------------
+# generate_stream
+# ---------------------------------------------------------------------------
+
+
+def _make_stream_chunk(content: str | None):
+    """Build a mock ChatCompletionChunk with the given delta content.
+
+    A real OpenAI streaming chunk has ``chunk.choices[0].delta.content``.
+    The SDK emits a None content on the first (role-only) and last
+    (finish) chunks; we mimic that shape so the filter in
+    generate_stream is exercised.
+    """
+    chunk = MagicMock()
+    chunk.choices = [MagicMock()]
+    chunk.choices[0].delta = MagicMock()
+    chunk.choices[0].delta.content = content
+    return chunk
+
+
+async def _async_iter(chunks):
+    for c in chunks:
+        yield c
+
+
+class TestGenerateStream:
+    @pytest.mark.asyncio
+    async def test_yields_content_deltas_in_order(self):
+        client = _make_client()
+        chunks = [
+            _make_stream_chunk(None),      # role-only first chunk
+            _make_stream_chunk("Hello, "),
+            _make_stream_chunk("world"),
+            _make_stream_chunk(None),      # finish chunk
+        ]
+        client._client.chat.completions.create = AsyncMock(
+            return_value=_async_iter(chunks)
+        )
+
+        deltas: list[str] = []
+        async for delta in client.generate_stream("sys", "usr"):
+            deltas.append(delta)
+
+        assert deltas == ["Hello, ", "world"]
+
+    @pytest.mark.asyncio
+    async def test_disabled_yields_nothing(self):
+        config = LLMConfig(provider="disabled")
+        client = LLMClient(config)
+
+        deltas = [d async for d in client.generate_stream("sys", "usr")]
+
+        assert deltas == []
+
+    @pytest.mark.asyncio
+    async def test_open_failure_yields_nothing(self):
+        client = _make_client()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=_make_rate_limit_error()
+        )
+
+        deltas = [d async for d in client.generate_stream("sys", "usr")]
+
+        # Stream open failed; generator terminates cleanly without
+        # retry (the caller has to decide what to do with a short
+        # or empty stream).
+        assert deltas == []
+
+    @pytest.mark.asyncio
+    async def test_mid_stream_error_returns_partial_output(self):
+        """A crash mid-iteration must not propagate — we keep what we got."""
+        client = _make_client()
+
+        async def _broken_iter():
+            yield _make_stream_chunk("partial ")
+            yield _make_stream_chunk("output")
+            raise RuntimeError("transport died")
+
+        client._client.chat.completions.create = AsyncMock(
+            return_value=_broken_iter()
+        )
+
+        deltas = [d async for d in client.generate_stream("sys", "usr")]
+
+        # The two successfully-received chunks survive; the crash is
+        # swallowed and the iterator terminates cleanly.
+        assert deltas == ["partial ", "output"]

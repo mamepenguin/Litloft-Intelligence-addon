@@ -30,7 +30,12 @@ for _mod in (
 from app.config import LLMConfig, RagConfig  # noqa: E402
 from app.rag.context import ContextSnippet, FileContext  # noqa: E402
 from app.rag.retriever import RetrievedFile  # noqa: E402
-from app.rag.service import AnswerResponse, answer_question  # noqa: E402
+from app.rag.service import (  # noqa: E402
+    AnswerEvent,
+    AnswerResponse,
+    answer_question,
+    stream_answer,
+)
 from app.search import MatchInfo, SegmentGroup  # noqa: E402
 
 
@@ -470,3 +475,198 @@ class TestAnswerQuestionFilterForwarding:
         kwargs = retrieve_spy.call_args.kwargs
         assert kwargs.get("file_type") == "document"
         assert kwargs.get("drive") == "Docs"
+
+
+# ---------------------------------------------------------------------------
+# Streaming path: stream_answer
+# ---------------------------------------------------------------------------
+
+
+def _make_stream_llm_mock(deltas: list[str]):
+    """Build a MagicMock LLM client whose generate_stream yields ``deltas``.
+
+    Returns a tuple ``(client, deltas)`` so tests can assert on what
+    was emitted without re-typing the sequence.
+    """
+    client = MagicMock()
+    client.enabled = True
+
+    async def _stream(*args, **kwargs):
+        for delta in deltas:
+            yield delta
+
+    client.generate_stream = _stream
+    return client
+
+
+async def _collect(gen) -> list[AnswerEvent]:
+    events: list[AnswerEvent] = []
+    async for event in gen:
+        events.append(event)
+    return events
+
+
+class TestStreamAnswerHappyPath:
+    """stream_answer yields keywords -> sources -> chunks -> citations -> done."""
+
+    @pytest.mark.asyncio
+    async def test_emits_ordered_events(
+        self, monkeypatch, patched_rag_enabled
+    ):
+        candidates = [_retrieved("f1"), _retrieved("f2")]
+        monkeypatch.setattr(
+            "app.rag.service.transform_query",
+            AsyncMock(return_value="京都 紅葉"),
+        )
+        monkeypatch.setattr(
+            "app.rag.service.retrieve_with_keywords",
+            AsyncMock(return_value=candidates),
+        )
+        monkeypatch.setattr(
+            "app.rag.service.assemble_contexts",
+            lambda cands, cfg: [_context(c.file_id) for c in cands],
+        )
+
+        # Two-chunk stream that together reconstitutes valid JSON with
+        # a [1] citation pointing at f1 (in the allowed candidate set).
+        deltas = [
+            '{"answer": "京都の紅葉 [1]", ',
+            '"citations": [{"file_id": "f1", "quote": "紅葉", "relevance": 0.9}]}',
+        ]
+        llm = _make_stream_llm_mock(deltas)
+        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+
+        events = await _collect(stream_answer(
+            query="京都の紅葉について",
+            hv_token="tok",
+        ))
+
+        kinds = [e.kind for e in events]
+        assert kinds == [
+            "keywords",
+            "sources",
+            "answer_chunk",
+            "answer_chunk",
+            "citations",
+            "done",
+        ]
+
+        assert events[0].data["keywords"] == "京都 紅葉"
+        sources = events[1].data["sources"]
+        assert {s["file_id"] for s in sources} == {"f1", "f2"}
+
+        # The two answer_chunk events carry the raw deltas verbatim.
+        assert events[2].data["delta"] == deltas[0]
+        assert events[3].data["delta"] == deltas[1]
+
+        # Citations are parsed from the full buffered JSON and the
+        # f1 citation survives the allowed-id check.
+        citations = events[4].data["citations"]
+        assert len(citations) == 1
+        assert citations[0]["file_id"] == "f1"
+
+        # done carries timing metadata.
+        done_payload = events[5].data
+        assert done_payload.get("retrieved_count") == 2
+        assert "took_ms" in done_payload
+
+
+class TestStreamAnswerEmptyRetrieval:
+    @pytest.mark.asyncio
+    async def test_empty_candidates_short_circuits(
+        self, monkeypatch, patched_rag_enabled
+    ):
+        monkeypatch.setattr(
+            "app.rag.service.transform_query",
+            AsyncMock(return_value="kw"),
+        )
+        monkeypatch.setattr(
+            "app.rag.service.retrieve_with_keywords",
+            AsyncMock(return_value=[]),
+        )
+        llm = _make_stream_llm_mock(["should", "not", "stream"])
+        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+
+        events = await _collect(stream_answer(query="anything", hv_token=None))
+
+        kinds = [e.kind for e in events]
+        # Keywords -> empty sources -> empty citations -> done.
+        # Crucially, NO answer_chunk events: the LLM stream is never
+        # opened when there are no candidates.
+        assert "answer_chunk" not in kinds
+        assert kinds[0] == "keywords"
+        assert kinds[-1] == "done"
+        # The empty sources event is emitted so the UI can say "nothing found".
+        sources_events = [e for e in events if e.kind == "sources"]
+        assert sources_events and sources_events[0].data["sources"] == []
+
+
+class TestStreamAnswerHallucinationFilter:
+    @pytest.mark.asyncio
+    async def test_drops_citations_for_unknown_file_ids(
+        self, monkeypatch, patched_rag_enabled
+    ):
+        candidates = [_retrieved("f1")]
+        monkeypatch.setattr(
+            "app.rag.service.transform_query",
+            AsyncMock(return_value="kw"),
+        )
+        monkeypatch.setattr(
+            "app.rag.service.retrieve_with_keywords",
+            AsyncMock(return_value=candidates),
+        )
+        monkeypatch.setattr(
+            "app.rag.service.assemble_contexts",
+            lambda cands, cfg: [_context(c.file_id) for c in cands],
+        )
+
+        # The LLM claims a citation pointing at "f999" which was NOT
+        # in the retrieved set. The anti-hallucination filter must
+        # drop it; the "f1" citation survives.
+        full_json = (
+            '{"answer": "text [1][2]", "citations": ['
+            '{"file_id": "f1", "quote": "q", "relevance": 0.9},'
+            '{"file_id": "f999", "quote": "fake", "relevance": 0.5}'
+            "]}"
+        )
+        llm = _make_stream_llm_mock([full_json])
+        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+
+        events = await _collect(stream_answer(query="q", hv_token="t"))
+
+        citations_event = next(e for e in events if e.kind == "citations")
+        kept = citations_event.data["citations"]
+        assert len(kept) == 1
+        assert kept[0]["file_id"] == "f1"
+
+
+class TestStreamAnswerUnparseableJSON:
+    @pytest.mark.asyncio
+    async def test_unparseable_stream_yields_empty_citations(
+        self, monkeypatch, patched_rag_enabled
+    ):
+        """Prose-only output still emits a clean terminal ``citations`` event."""
+        candidates = [_retrieved("f1")]
+        monkeypatch.setattr(
+            "app.rag.service.transform_query",
+            AsyncMock(return_value="kw"),
+        )
+        monkeypatch.setattr(
+            "app.rag.service.retrieve_with_keywords",
+            AsyncMock(return_value=candidates),
+        )
+        monkeypatch.setattr(
+            "app.rag.service.assemble_contexts",
+            lambda cands, cfg: [_context(c.file_id) for c in cands],
+        )
+        llm = _make_stream_llm_mock(["this is not json at all"])
+        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+
+        events = await _collect(stream_answer(query="q", hv_token="t"))
+
+        citations_event = next(e for e in events if e.kind == "citations")
+        assert citations_event.data["citations"] == []
+        # The raw answer_chunk was still streamed — the user gets to
+        # see whatever the model said even if we can't build citations.
+        chunks = [e for e in events if e.kind == "answer_chunk"]
+        assert chunks and chunks[0].data["delta"] == "this is not json at all"

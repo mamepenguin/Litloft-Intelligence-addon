@@ -894,3 +894,111 @@ class TestCombineScoresRrf:
             k=60,
         )
         assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# Recall mode: _combine_scores_rrf with _RecallParams overrides
+# ---------------------------------------------------------------------------
+
+
+class TestRecallModeRRF:
+    """Recall mode rebalances the RRF channel weights for RAG use.
+
+    Precision mode (existing callers): CLIP uses the configured
+    ``rrf_weight_clip`` (default 0.5), everything else 1.0.
+    Recall mode: transcript/text_content upweighted to 1.5, CLIP
+    pushed down to 0.2. BLIP-disabled environments drop CLIP to 0.
+    """
+
+    def _transcript_match(self, file_id: str, score: float) -> _TranscriptKeywordMatch:
+        return _TranscriptKeywordMatch(
+            file_id=file_id,
+            score=score,
+            text="segment text",
+            timestamp_start=0.0,
+            timestamp_end=10.0,
+        )
+
+    def _clip_match(self, file_id: str, score: float) -> _VectorMatch:
+        return _VectorMatch(
+            embedding_id=f"{file_id}-emb",
+            file_id=file_id,
+            score=score,
+            embedding_type="clip",
+            content_preview="image clip",
+            timestamp_start=None,
+            timestamp_end=None,
+        )
+
+    def test_recall_mode_uses_override_weights(self):
+        """A file hit only by transcript_keyword should outrank a CLIP-only
+        file of the same rank in recall mode — the opposite of precision."""
+        from app.search import _RECALL_PARAMS
+
+        transcript_only = [self._transcript_match("f_text", 0.9)]
+        clip_only = [self._clip_match("f_clip", 0.9)]
+
+        recall_scores = _combine_scores_rrf(
+            text_matches=[],
+            clip_matches=clip_only,
+            keyword_matches=[],
+            transcript_keyword_matches=transcript_only,
+            k=60,
+            recall_params=_RECALL_PARAMS,
+            include_clip=True,
+        )
+
+        # Both files appear, but transcript-only file has the higher
+        # combined score because of the 1.5 weight vs. CLIP's 0.2.
+        assert recall_scores["f_text"].combined_score > recall_scores[
+            "f_clip"
+        ].combined_score
+
+    def test_precision_mode_keeps_clip_weight(self):
+        """Without recall_params, the legacy precision-mode weights apply."""
+        transcript_only = [self._transcript_match("f_text", 0.9)]
+        clip_only = [self._clip_match("f_clip", 0.9)]
+
+        precision_scores = _combine_scores_rrf(
+            text_matches=[],
+            clip_matches=clip_only,
+            keyword_matches=[],
+            transcript_keyword_matches=transcript_only,
+            k=60,
+        )
+
+        # Under precision mode the two channels are closer together
+        # (clip is 0.5, transcript is 1.0). They won't be equal because
+        # of the different weights but transcript still wins — what
+        # matters is that the ratio is narrower than in recall mode.
+        text_score = precision_scores["f_text"].combined_score
+        clip_score = precision_scores["f_clip"].combined_score
+        assert text_score > clip_score
+        assert text_score / clip_score < 3.0  # much narrower than recall's 1.5/0.2 = 7.5x
+
+    def test_include_clip_false_zeroes_clip_channel(self):
+        """include_clip=False forces the CLIP channel weight to 0.
+
+        This is how the runtime handles BLIP-disabled environments:
+        without BLIP captions the LLM cannot read an image match, so
+        the candidate slot is wasted.
+        """
+        from app.search import _RECALL_PARAMS
+
+        clip_only = [self._clip_match("f_clip", 0.9)]
+
+        scores = _combine_scores_rrf(
+            text_matches=[],
+            clip_matches=clip_only,
+            keyword_matches=[],
+            transcript_keyword_matches=[],
+            k=60,
+            recall_params=_RECALL_PARAMS,
+            include_clip=False,
+        )
+
+        # The CLIP-only file is still present in the score map (the
+        # combiner iterates every unique file_id), but its combined
+        # score is 0 because every channel that could have matched it
+        # contributed weight 0.
+        assert scores["f_clip"].combined_score == 0.0

@@ -2,10 +2,10 @@
     "label": "Intelligence",
     "icon": "brain",
     "type": "external_service",
+    "href": "/addons/intelligence",
     "slots": {
         "search-modes": [
-            {"id": "semantic-search", "label": "Semantic Search", "priority": 10},
-            {"id": "ask", "label": "Ask AI", "priority": 20}
+            {"id": "semantic-search", "label": "Semantic Search", "priority": 10}
         ],
         "file-detail-sections": [
             {"id": "suggested-tags", "label": "Suggested Tags", "priority": 5},
@@ -200,6 +200,7 @@
             {
                 "path": "/ask",
                 "methods": ["POST"],
+                "stream": true,
                 "response_filter": {
                     "type": "drive_access_nested",
                     "paths": {

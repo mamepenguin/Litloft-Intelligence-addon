@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
+import { Sparkles } from "lucide-react";
 
 import { semanticSearch, getSearchStatus } from "./api";
 import type { SemanticSearchResult, SemanticSearchSegment } from "./api";
@@ -139,6 +140,11 @@ export default function SemanticSearchSlot({
   onSelect,
 }: SemanticSearchSlotProps) {
   const t = useTranslations("search");
+  // Separate namespace for the Ask link label: reuses the already-
+  // translated "「{query}」について AI で質問応答" string from the
+  // askSearch namespace (formerly owned by the deleted AskSearchMode
+  // slot) so we don't add a duplicate translation just for a button.
+  const askT = useTranslations("askSearch");
   const [available, setAvailable] = useState<boolean | null>(null);
   const [results, setResults] = useState<SemanticSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -202,6 +208,15 @@ export default function SemanticSearchSlot({
 
   if (results.length === 0) return null;
 
+  // Hybrid entry point into the Ask pipeline: when the user has already
+  // found *some* results via keyword search, offer a one-click handoff
+  // to the RAG page (`/addons/intelligence?q=<query>`). The Ask page
+  // auto-fires on mount when a seed `q` is present so this link gives
+  // a true one-click "get me an answer" flow without disturbing the
+  // established input culture of the search modal. See the RAG
+  // redesign spec §"UI レイヤー: 完全分離 + ハイブリッド導線".
+  const askHref = `/addons/intelligence?q=${encodeURIComponent(query.trim())}`;
+
   return (
     <>
       {results.map((result) => (
@@ -217,6 +232,14 @@ export default function SemanticSearchSlot({
           <div className="h-4 w-4 animate-spin rounded-full border-2 border-accent border-t-transparent" />
         </div>
       )}
+      <button
+        type="button"
+        onClick={() => onSelect(askHref)}
+        className="flex w-full items-center gap-2 border-t border-bg-border px-4 py-2.5 text-left text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
+      >
+        <Sparkles size={12} className="flex-shrink-0 text-accent-teal" />
+        <span className="truncate">{askT("button", { query: query.trim() })}</span>
+      </button>
     </>
   );
 }

@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import AsyncIterator
 
 import httpx
 from openai import (
@@ -188,6 +189,103 @@ class LLMClient:
                 return None
 
         return None
+
+    async def generate_stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens_override: int | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream a text completion token-by-token.
+
+        Unlike ``generate()``, this method does **not** retry on
+        transient failures: the client has already started receiving
+        bytes, and silently restarting would produce a disjoint output
+        stream. On any error the iterator terminates cleanly and the
+        caller is responsible for treating a short/empty stream as a
+        failure — the SSE wrapper logs the exception type so the
+        streamed error manifests as "no answer" rather than a 500.
+
+        Args:
+            system_prompt: System message for the model.
+            user_prompt: User message for the model.
+            max_tokens_override: Optional per-call override for
+                ``max_tokens`` (see ``generate``).
+
+        Yields:
+            Content delta strings, in order, as the provider emits them.
+            Empty deltas (some providers send empty strings as
+            keep-alives) are filtered out so downstream SSE consumers
+            do not see redundant events.
+        """
+        if not self._enabled:
+            return
+
+        await self._wait_for_rate_limit()
+
+        effective_max_tokens = (
+            max_tokens_override
+            if max_tokens_override is not None
+            else self._config.max_tokens
+        )
+
+        try:
+            stream = await self._client.chat.completions.create(
+                model=self._config.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=effective_max_tokens,
+                temperature=self._config.temperature,
+                stream=True,
+            )
+        except _RETRY_EXCEPTIONS as e:
+            logger.warning(
+                "LLM stream open failed (%s); yielding nothing",
+                type(e).__name__,
+            )
+            return
+        except APIStatusError as e:
+            logger.warning(
+                "LLM stream open failed with status %d; yielding nothing",
+                e.status_code,
+            )
+            return
+        except Exception as e:
+            logger.warning("LLM stream open failed: %s", e)
+            return
+
+        try:
+            async for chunk in stream:
+                # The OpenAI SDK normalizes streaming chunks into an
+                # object with ``choices[0].delta.content`` — which is
+                # None on the very first and very last chunks (role
+                # announcement + finish marker). Skip those quietly so
+                # the caller only sees real deltas.
+                try:
+                    choices = chunk.choices
+                except AttributeError:
+                    continue
+                if not choices:
+                    continue
+                delta = getattr(choices[0], "delta", None)
+                if delta is None:
+                    continue
+                content = getattr(delta, "content", None)
+                if content:
+                    yield content
+        except Exception as e:
+            # Mid-stream failure. Log the exception type and terminate
+            # the iterator. The caller has whatever was already yielded;
+            # the SSE layer converts the short output into a best-effort
+            # partial answer (or None if nothing came through at all).
+            logger.warning(
+                "LLM stream interrupted (%s); terminating",
+                type(e).__name__,
+            )
+            return
 
     def _backoff_delay(self, attempt: int) -> float:
         """Compute exponential backoff delay for a given attempt.

@@ -1,7 +1,7 @@
 """Search endpoints: semantic search, compare, and debug."""
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -73,15 +73,29 @@ async def search_endpoint(
     limit: int = Query(default=20, ge=1, le=100, description="Max results"),
     type: str | None = Query(default=None, description="File type filter"),
     drive: str | None = Query(default=None, description="Drive name filter"),
+    mode: Literal["precision", "recall"] = Query(
+        default="precision",
+        description=(
+            "Ranking mode. 'precision' (default) is for the human search UI; "
+            "'recall' is for admin comparison with the RAG / Ask pipeline."
+        ),
+    ),
 ) -> SearchResponseModel:
     """Execute a semantic search query.
 
     Combines vector similarity search with keyword matching
     to find relevant files across all indexed content.
+
+    The ``mode`` parameter exists so admin tooling can compare the
+    precision ranking (what the search UI returns) side-by-side with
+    the recall ranking (what the RAG retriever sees). End-user traffic
+    always uses the default ``precision`` mode; the manifest does not
+    need any special handling because ``mode`` is just another query
+    string parameter passed through the addon proxy.
     """
     try:
         result = execute_search(
-            query=q, limit=limit, file_type=type, drive=drive
+            query=q, limit=limit, file_type=type, drive=drive, mode=mode,
         )
     except Exception as e:
         logger.error("Search failed: %s", e)

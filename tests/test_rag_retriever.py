@@ -1,10 +1,17 @@
 """Tests for app.rag.retriever module.
 
-Covers retrieve_candidates: wraps app.search.search(), filters file_ids
-via the host's Internal API (/api/internal/filter-file-ids), and
-enriches results with IndexedFile metadata.
+Covers:
+
+* ``retrieve_candidates`` — natural-language entry point that runs
+  the LLM query transform then hands off to ``retrieve_with_keywords``.
+* ``retrieve_with_keywords`` — wraps ``app.search.search()`` in
+  recall mode, filters file_ids via the host's Internal API, and
+  enriches results with IndexedFile metadata.
 
 Network calls are mocked — tests never touch real HTTP or databases.
+The query transform is stubbed out in every test with a pass-through
+``AsyncMock`` so each test can still assert on the keyword string that
+actually reached ``search()``.
 """
 
 import sys
@@ -30,13 +37,39 @@ for _mod in (
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
 
-from app.rag.retriever import RetrievedFile, retrieve_candidates  # noqa: E402
+from app.rag.retriever import (  # noqa: E402
+    RetrievedFile,
+    retrieve_candidates,
+    retrieve_with_keywords,
+)
 from app.search import (  # noqa: E402
     MatchInfo,
     SearchResponse,
     SearchResult,
     SegmentGroup,
 )
+
+
+@pytest.fixture(autouse=True)
+def stub_query_transform(monkeypatch):
+    """Replace the LLM-backed query transform with a pass-through.
+
+    Every retriever test in this module covers wiring, not the
+    transform LLM call itself (which has its own dedicated test
+    module). A pass-through stub keeps the keyword-equals-query
+    assumption intact so existing assertions on the keyword string
+    keep working without per-test plumbing.
+    """
+    async def _identity(q: str) -> str:
+        return q
+
+    # The retriever imports transform_query at module top-level, so we
+    # patch the retriever's binding (not the query_transform module's
+    # original) to intercept the call site.
+    monkeypatch.setattr(
+        "app.rag.retriever.transform_query",
+        _identity,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +188,101 @@ class TestRetrieveCandidates:
         kwargs = search_spy.call_args.kwargs
         args = search_spy.call_args.args
         assert kwargs.get("limit") == 3 or (len(args) >= 2 and args[1] == 3)
+
+    @pytest.mark.asyncio
+    async def test_uses_recall_mode(self, monkeypatch):
+        """The RAG pipeline must drive app.search.search() in recall mode.
+
+        Recall mode widens thresholds and rebalances channel weights
+        (see _RecallParams in app/search.py). Without it the RAG
+        retriever inherits the strict precision-mode cutoffs tuned
+        for the human search UI, which drops borderline true-positives
+        before the LLM ever sees them.
+        """
+        search_spy = MagicMock(return_value=_make_search_response([]))
+        monkeypatch.setattr("app.rag.retriever.search", search_spy)
+        monkeypatch.setattr(
+            "app.rag.retriever._filter_file_ids_via_internal_api",
+            AsyncMock(return_value=set()),
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever._get_indexed_files_meta",
+            lambda fids: {},
+        )
+
+        await retrieve_candidates(
+            query="a natural question", top_k=5, hv_token=None
+        )
+
+        kwargs = search_spy.call_args.kwargs
+        assert kwargs.get("mode") == "recall"
+
+    @pytest.mark.asyncio
+    async def test_applies_transform_before_search(self, monkeypatch):
+        """retrieve_candidates must pass the transformed keywords, not the raw query."""
+        async def _transform(q: str) -> str:
+            return "extracted keywords"
+
+        monkeypatch.setattr(
+            "app.rag.retriever.transform_query", _transform
+        )
+        search_spy = MagicMock(return_value=_make_search_response([]))
+        monkeypatch.setattr("app.rag.retriever.search", search_spy)
+        monkeypatch.setattr(
+            "app.rag.retriever._filter_file_ids_via_internal_api",
+            AsyncMock(return_value=set()),
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever._get_indexed_files_meta",
+            lambda fids: {},
+        )
+
+        await retrieve_candidates(
+            query="why does the 共通点 matter?",
+            top_k=5,
+            hv_token=None,
+        )
+
+        # First positional arg to search() is the query string — we
+        # expect the transformed keywords, not the raw user input.
+        args = search_spy.call_args.args
+        assert args and args[0] == "extracted keywords"
+
+    @pytest.mark.asyncio
+    async def test_retrieve_with_keywords_skips_transform(self, monkeypatch):
+        """retrieve_with_keywords must pass the caller's string through verbatim.
+
+        This is the entry point used by the streaming router, which
+        runs the transform itself so it can emit the ``keywords`` SSE
+        event before the search step. The function must NOT run the
+        transform a second time.
+        """
+        transform_spy = AsyncMock(return_value="should-not-be-called")
+        monkeypatch.setattr(
+            "app.rag.retriever.transform_query", transform_spy
+        )
+        search_spy = MagicMock(return_value=_make_search_response([]))
+        monkeypatch.setattr("app.rag.retriever.search", search_spy)
+        monkeypatch.setattr(
+            "app.rag.retriever._filter_file_ids_via_internal_api",
+            AsyncMock(return_value=set()),
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever._get_indexed_files_meta",
+            lambda fids: {},
+        )
+
+        await retrieve_with_keywords(
+            keywords="verbatim keywords",
+            top_k=5,
+            hv_token=None,
+        )
+
+        # Transform never invoked.
+        transform_spy.assert_not_called()
+        # search() saw the caller's verbatim keyword string.
+        args = search_spy.call_args.args
+        assert args and args[0] == "verbatim keywords"
 
     @pytest.mark.asyncio
     async def test_forwards_filters_to_search(self, monkeypatch):

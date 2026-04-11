@@ -1,16 +1,26 @@
 """RAG retriever: hybrid search wrapper with access control.
 
-Wraps the existing ``app.search.search()`` pipeline, then enforces
-drive-level access control by calling the host's Internal API
-(``/api/internal/filter-file-ids``) with the caller's ``X-HV-Token``
-header. Files the caller cannot see are dropped before they ever
+Wraps the existing ``app.search.search()`` pipeline in **recall mode**
+(channel-rebalanced RRF + relaxed cutoffs) and enforces drive-level
+access control by calling the host's Internal API
+(``/api/internal/filter-file-ids``) with the caller's ``access_token``
+cookie. Files the caller cannot see are dropped before they ever
 reach the LLM context builder — this is the primary access gate;
 the manifest's ``response_filter`` is a secondary belt-and-suspenders.
 
-``retrieve_candidates`` is the only public function. The two helper
-coroutines / functions (``_filter_file_ids_via_internal_api`` and
-``_get_indexed_files_meta``) are defined at module level so tests
-can monkeypatch them.
+A natural-language query is always rewritten into keyword form by
+``app.rag.query_transform.transform_query`` *before* hitting the
+search index. This eliminates the failure mode where question-style
+noise words ("共通点は？", "教えて") poison the FTS5 AND-joined query
+and drop the true-positive file entirely. The streaming router uses
+``retrieve_with_keywords`` directly so it can emit the ``keywords``
+SSE event between transform and search.
+
+Public surface:
+
+* ``transform_query`` (re-exported): natural-language → keyword string.
+* ``retrieve_candidates(query, ...)``: transform + retrieve + access.
+* ``retrieve_with_keywords(keywords, ...)``: retrieve + access only.
 """
 
 import asyncio
@@ -22,7 +32,16 @@ import httpx
 
 from app.database import get_search_db
 from app.models import IndexedFile
+from app.rag.query_transform import transform_query  # re-export
 from app.search import SearchResult, SegmentGroup, search
+
+# re-export so callers can ``from app.rag.retriever import transform_query``
+__all__ = [
+    "RetrievedFile",
+    "retrieve_candidates",
+    "retrieve_with_keywords",
+    "transform_query",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -195,25 +214,34 @@ def _to_retrieved_file(
     )
 
 
-async def retrieve_candidates(
-    query: str,
+async def retrieve_with_keywords(
+    keywords: str,
     top_k: int,
     hv_token: str | None,
     file_type: str | None = None,
     drive: str | None = None,
 ) -> list[RetrievedFile]:
-    """Retrieve top-k candidates for a query and apply access control.
+    """Retrieve top-k RAG candidates for a **pre-transformed** keyword query.
+
+    This is the entry point used by the streaming router, which needs
+    to emit the transformed keywords to the client as an SSE event
+    before running the retrieval. Callers with a natural-language
+    question should use ``retrieve_candidates`` instead, which handles
+    the transform step itself.
 
     Pipeline:
 
-    1. Run the existing hybrid search via ``app.search.search()``.
-    2. Filter file_ids via the Internal API (passing X-HV-Token).
+    1. Run hybrid search in **recall mode** via ``app.search.search()``.
+    2. Filter file_ids via the Internal API (forwarding access_token).
     3. Enrich the surviving results with IndexedFile title/description.
 
     Args:
-        query: The user's natural-language question.
+        keywords: A search-friendly keyword string (already transformed
+            from the natural-language question). Passed straight into
+            the hybrid search index.
         top_k: Max number of files to pull from the search pipeline.
-        hv_token: Optional X-HV-Token to forward for access control.
+        hv_token: Optional ``access_token`` cookie to forward for
+            access control (None = unauthenticated caller).
         file_type: Optional file type filter (video / audio / ...).
         drive: Optional drive name filter.
 
@@ -224,10 +252,11 @@ async def retrieve_candidates(
     # don't block the event loop while it does DB / vector work.
     response = await asyncio.to_thread(
         search,
-        query,
+        keywords,
         limit=top_k,
         file_type=file_type,
         drive=drive,
+        mode="recall",
     )
 
     results = list(response.results)
@@ -255,3 +284,43 @@ async def retrieve_candidates(
         _to_retrieved_file(r, meta_by_id.get(r.file_id, {}))
         for r in allowed_results
     ]
+
+
+async def retrieve_candidates(
+    query: str,
+    top_k: int,
+    hv_token: str | None,
+    file_type: str | None = None,
+    drive: str | None = None,
+) -> list[RetrievedFile]:
+    """Transform a natural-language question and retrieve RAG candidates.
+
+    Convenience wrapper that runs the LLM keyword transform *first*,
+    then hands off to ``retrieve_with_keywords``. Used by the non-
+    streaming code paths (service layer, tests) where the keyword
+    string does not need to be surfaced to the caller separately.
+
+    On LLM transform failure the helper falls back to the raw query
+    so the pipeline still degrades gracefully — it will perform worse
+    on question-style inputs than with the transform, but will not
+    hard-fail.
+
+    Args:
+        query: The user's natural-language question.
+        top_k: Max number of files to pull from the search pipeline.
+        hv_token: Optional ``access_token`` cookie to forward for
+            access control.
+        file_type: Optional file type filter (video / audio / ...).
+        drive: Optional drive name filter.
+
+    Returns:
+        A list of ``RetrievedFile`` preserving the original search order.
+    """
+    keywords = await transform_query(query)
+    return await retrieve_with_keywords(
+        keywords=keywords,
+        top_k=top_k,
+        hv_token=hv_token,
+        file_type=file_type,
+        drive=drive,
+    )

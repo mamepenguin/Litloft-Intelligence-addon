@@ -1,30 +1,41 @@
 """RAG orchestration layer.
 
-``answer_question`` is the single public entry point. It runs the
-full pipeline:
+Two public entry points:
 
-1. ``retrieve_candidates`` — hybrid search + Internal API access filter.
-2. ``assemble_contexts``   — build per-file snippets under budgets.
-3. LLM call                — system + user prompt via generate_json.
-4. ``parse_answer``        — validate shape, drop hallucinated file_ids.
-5. Assemble ``AnswerResponse`` with citations + sources + timing.
+* ``answer_question`` — legacy non-streaming path. Runs the full
+  pipeline and returns an ``AnswerResponse`` in one shot. Still used
+  by internal tests and tooling.
+* ``stream_answer`` — SSE streaming path used by ``POST /ask``. Yields
+  typed ``AnswerEvent`` instances (``keywords`` → zero or more
+  ``answer_chunk`` → ``citations`` → ``done``). The router layer is
+  responsible for encoding these events to ``text/event-stream``.
 
-The function short-circuits when retrieval is empty (no LLM call)
-and gracefully degrades when the LLM returns unparseable output
-(answer=None but sources populated so the UI can still show them).
+Both paths share the same retrieval + context + anti-hallucination
+stages. The only differences are that ``stream_answer``:
+
+1. Runs ``transform_query`` separately so it can emit a ``keywords``
+   event to the client before the search even starts (fast feedback).
+2. Uses ``LLMClient.generate_stream`` to pipe answer tokens to the
+   client as they arrive.
+3. Buffers the full answer text in parallel with streaming so the
+   terminal citations event can parse+validate against the full JSON
+   payload the LLM returned, not a mid-stream fragment.
 """
 
+import json
 import logging
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from app.config import settings
 from app.dependencies import get_llm_client
 from app.rag.context import assemble_contexts
 from app.rag.parser import Citation, parse_answer
 from app.rag.prompt import build_system_prompt, build_user_prompt
-from app.rag.retriever import RetrievedFile, retrieve_candidates
+from app.rag.query_transform import transform_query
+from app.rag.retriever import RetrievedFile, retrieve_candidates, retrieve_with_keywords
 
 logger = logging.getLogger(__name__)
 
@@ -212,3 +223,209 @@ async def answer_question(
         retrieved_count=len(candidates),
         took_ms=int((time.monotonic() - start) * 1000),
     )
+
+
+# ---------------------------------------------------------------------------
+# Streaming path
+# ---------------------------------------------------------------------------
+
+
+# Event kinds emitted over the SSE stream. Kept as a Literal so the
+# router layer can exhaustively switch on event.kind without string
+# typos sneaking past review.
+AnswerEventKind = Literal[
+    "keywords",
+    "answer_chunk",
+    "citations",
+    "sources",
+    "done",
+]
+
+
+@dataclass(frozen=True)
+class AnswerEvent:
+    """A single event in the streaming RAG answer pipeline.
+
+    ``kind`` determines what ``data`` contains:
+
+    * ``keywords`` → ``{"keywords": str}`` — emitted once, right after
+      the LLM query transform completes.
+    * ``answer_chunk`` → ``{"delta": str}`` — emitted many times,
+      one per token chunk from the LLM stream.
+    * ``sources`` → ``{"sources": [...]}`` — emitted once, after the
+      retrieval step so the UI can show "I looked at these files"
+      even before the answer finishes generating.
+    * ``citations`` → ``{"citations": [...]}`` — emitted once, after
+      the LLM stream ends and the answer JSON has been parsed and
+      anti-hallucination-filtered.
+    * ``done`` → ``{}`` — terminal marker. The router closes the
+      response after sending this.
+
+    The frozen dataclass keeps immutability guarantees without dragging
+    Pydantic into the streaming hot path.
+    """
+
+    kind: AnswerEventKind
+    data: dict[str, Any]
+
+
+def _empty_done_event(
+    *,
+    extra: dict[str, Any] | None = None,
+) -> AnswerEvent:
+    """Construct a terminal ``done`` event with optional metadata."""
+    payload: dict[str, Any] = extra or {}
+    return AnswerEvent(kind="done", data=payload)
+
+
+async def stream_answer(
+    query: str,
+    hv_token: str | None,
+    top_k: int | None = None,
+    file_type: str | None = None,
+    drive: str | None = None,
+) -> AsyncIterator[AnswerEvent]:
+    """Run the RAG pipeline and yield SSE-ready events.
+
+    The generator is safe to consume concurrently with request
+    cancellation: if the client disconnects, the ``async for`` in the
+    router stops iterating and the LLM stream is dropped as the object
+    is garbage-collected. We deliberately do **not** cache partial
+    answers — Phase 1 is stateless by design (see redesign spec).
+
+    Event ordering (always):
+
+    ``keywords`` → ``sources`` → 0..N ``answer_chunk`` → ``citations`` → ``done``
+
+    On retrieval-empty the pipeline short-circuits: ``keywords`` +
+    empty ``sources`` + empty ``citations`` + ``done`` with no
+    ``answer_chunk`` events. On LLM failure the pipeline emits as
+    many ``answer_chunk`` events as it managed to receive, then tries
+    to parse whatever it buffered; an unparseable buffer produces an
+    empty ``citations`` payload (consistent with ``answer_question``).
+    """
+    rag_config = settings.rag
+    effective_top_k = top_k if top_k is not None else rag_config.top_k
+
+    start = time.monotonic()
+
+    # Stage 0: LLM keyword transform.
+    # This is the earliest point we can give the user visible feedback
+    # ("searching for: ...") which matters a lot when the downstream
+    # retrieval + LLM latency is 2-5 seconds on a home LAN.
+    keywords = await transform_query(query)
+    yield AnswerEvent(kind="keywords", data={"keywords": keywords})
+
+    # Stage 1: retrieve + access filter using the transformed keywords.
+    candidates = await retrieve_with_keywords(
+        keywords=keywords,
+        top_k=effective_top_k,
+        hv_token=hv_token,
+        file_type=file_type,
+        drive=drive,
+    )
+
+    sources = [_to_source_dict(c) for c in candidates]
+    yield AnswerEvent(kind="sources", data={"sources": sources})
+
+    if not candidates:
+        yield AnswerEvent(kind="citations", data={"citations": []})
+        yield _empty_done_event(
+            extra={
+                "retrieved_count": 0,
+                "took_ms": int((time.monotonic() - start) * 1000),
+            }
+        )
+        return
+
+    # Stage 2: build per-file contexts under budget.
+    contexts = assemble_contexts(candidates, rag_config)
+
+    # Stage 3: stream the LLM answer.
+    llm = get_llm_client()
+    system_prompt = build_system_prompt(settings.llm.output_language)
+    user_prompt = build_user_prompt(query, contexts)
+
+    buffered: list[str] = []
+    # Explicit aiter/aclose lifecycle so a client disconnect mid-stream
+    # deterministically tears down the upstream LLM connection instead
+    # of waiting on async-generator GC. Without this, a cancelled SSE
+    # request could leave the OpenAI-compatible HTTP stream open until
+    # the event loop runs its periodic GC pass, wasting provider quota.
+    llm_stream = llm.generate_stream(
+        system_prompt,
+        user_prompt,
+        max_tokens_override=rag_config.max_tokens,
+    )
+    try:
+        async for delta in llm_stream:
+            buffered = [*buffered, delta]
+            yield AnswerEvent(kind="answer_chunk", data={"delta": delta})
+    finally:
+        aclose = getattr(llm_stream, "aclose", None)
+        if aclose is not None:
+            try:
+                await aclose()
+            except Exception:  # noqa: BLE001 — best-effort cleanup
+                pass
+
+    # Stage 4: parse + validate citations against the retrieved set.
+    # The LLM is instructed to return a single JSON object; we parse
+    # the full buffered output here, post-stream, so the terminal
+    # ``citations`` event only contains file_ids that survived the
+    # hallucination filter. The parser uses the same code path as the
+    # non-streaming pipeline for consistency.
+    full_text = "".join(buffered)
+    parsed = _parse_streamed_answer(full_text, candidates)
+
+    if parsed is None:
+        citations: list[dict[str, Any]] = []
+    else:
+        citations = [
+            _to_citation_dict(c, candidates) for c in parsed.citations
+        ]
+
+    yield AnswerEvent(kind="citations", data={"citations": citations})
+    yield _empty_done_event(
+        extra={
+            "retrieved_count": len(candidates),
+            "took_ms": int((time.monotonic() - start) * 1000),
+        }
+    )
+
+
+def _parse_streamed_answer(
+    full_text: str,
+    candidates: list[RetrievedFile],
+):
+    """Parse the LLM's full buffered JSON output and validate citations.
+
+    Mirrors the relevant portion of ``answer_question``'s Stage 4 but
+    operates on a text blob (since ``generate_stream`` returns raw
+    strings) instead of a pre-parsed dict. Returns the parsed answer
+    object, or None if the buffer is empty / unparseable.
+    """
+    if not full_text.strip():
+        return None
+
+    # Try direct JSON parse first; fall back to regex object extraction
+    # for models that wrap output in prose or code fences.
+    import re
+
+    raw_json: dict | list | None = None
+    try:
+        raw_json = json.loads(full_text)
+    except (json.JSONDecodeError, TypeError):
+        match = re.search(r"\{.*\}", full_text, re.DOTALL)
+        if match:
+            try:
+                raw_json = json.loads(match.group(0))
+            except (json.JSONDecodeError, TypeError):
+                raw_json = None
+
+    if raw_json is None:
+        logger.debug("Streamed answer buffer was not valid JSON")
+        return None
+
+    allowed = frozenset(c.file_id for c in candidates)
+    return parse_answer(raw_json, allowed)

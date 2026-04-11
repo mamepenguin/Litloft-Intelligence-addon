@@ -3,7 +3,9 @@ import { lazy } from "react";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const slotComponents: Record<string, React.LazyExoticComponent<React.ComponentType<any>>> = {
   "semantic-search": lazy(() => import("./SemanticSearchSlot")),
-  "ask": lazy(() => import("./AskSearchMode")),
+  // "ask" slot removed in the RAG redesign: the Ask UI lives on a
+  // dedicated page at /addons/intelligence. See manifest.json (href)
+  // and frontend/Page.tsx.
   "similar-files": lazy(() => import("./SimilarFilesSection")),
   "index-status": lazy(() => import("./IndexStatusWidget")),
   "clip-frames": lazy(() => import("./ClipFramesSection")),

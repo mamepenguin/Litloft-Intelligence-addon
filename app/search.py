@@ -8,6 +8,7 @@ Results are grouped at file level with segment timestamps.
 import json
 import logging
 from dataclasses import dataclass, field
+from typing import Literal
 
 import numpy as np
 from sqlalchemy import text as sql_text
@@ -22,6 +23,61 @@ logger = logging.getLogger(__name__)
 
 # Time window for grouping co-located matches (seconds)
 SEGMENT_GROUP_WINDOW = 30
+
+# Search mode:
+# - "precision": tuned for human-facing search UI. Uses cosine combiner,
+#   strict thresholds, narrow cutoffs. Default.
+# - "recall": tuned for RAG / Ask pipeline. LLM can tolerate noise, so
+#   we widen thresholds, relax cutoffs, rebalance channel weights toward
+#   transcript/text-content (LLM-quotable sources) and downweight CLIP
+#   (since the LLM only sees BLIP captions, not raw image bytes).
+#   Uses the weighted RRF combiner.
+SearchMode = Literal["precision", "recall"]
+
+
+@dataclass(frozen=True)
+class _RecallParams:
+    """Threshold + weight overrides for recall (RAG) mode.
+
+    Kept as a frozen dataclass so the recall knobs live in one place.
+    Not exposed to config: these values are empirically chosen for the
+    LLM's tolerance of noisy candidates and are not meant to be tuned
+    by end users the way precision-mode thresholds are.
+    """
+
+    # Vector thresholds — looser than precision defaults so borderline
+    # true-positives are not dropped at the channel level before RRF
+    # has a chance to reinforce them across channels.
+    min_score_text: float = 0.75
+    score_gap_threshold: float = 0.0  # disabled — flat-set rejection off
+    score_cutoff_margin: float = 0.15
+    # Combined-score ratio cutoff — applied after RRF fusion.
+    # Much more permissive than the precision default so the top_k=5
+    # window keeps borderline candidates the LLM might cite.
+    score_cutoff_ratio: float = 0.2
+    # RRF channel weights. transcript/text_content upweighted because
+    # they produce direct quotations the LLM can cite. CLIP downweighted
+    # because the LLM receives BLIP captions at best (never raw pixels).
+    rrf_weight_text: float = 1.0
+    rrf_weight_keyword: float = 1.0
+    rrf_weight_transcript_keyword: float = 1.5
+    rrf_weight_text_content_keyword: float = 1.5
+    rrf_weight_clip: float = 0.2
+
+
+_RECALL_PARAMS = _RecallParams()
+
+
+def _recall_clip_enabled() -> bool:
+    """Return True when CLIP ranking should participate in recall mode.
+
+    In recall mode the CLIP channel is skipped entirely when BLIP is
+    disabled, because without BLIP captions there is nothing readable
+    the LLM can quote from an image match — the CLIP hit would just
+    steal a top_k slot from a text candidate the LLM could actually use.
+    """
+    blip = getattr(settings.models, "blip", "") or ""
+    return bool(blip.strip())
 
 
 def _l2_to_cosine_similarity(distance: float) -> float:
@@ -87,18 +143,24 @@ def search(
     limit: int | None = None,
     file_type: str | None = None,
     drive: str | None = None,
+    *,
+    mode: SearchMode = "precision",
 ) -> SearchResponse:
     """Execute a hybrid search query.
 
     Performs vector similarity search across text and CLIP embeddings,
-    combines with keyword matching using weighted cosine similarity,
-    and returns file-level results.
+    combines with keyword matching, and returns file-level results.
 
     Args:
         query: The search query string.
         limit: Maximum number of results.
         file_type: Optional file type filter.
         drive: Optional drive name filter.
+        mode: "precision" (default, human-facing UI) uses the weighted
+            cosine combiner with strict thresholds; "recall" (RAG /
+            Ask pipeline) uses RRF with loosened thresholds and
+            rebalanced channel weights. See SearchMode docstring and
+            the RAG redesign spec for rationale.
 
     Returns:
         SearchResponse with ranked results.
@@ -114,21 +176,48 @@ def search(
     text_vector = embed_query(query)
     clip_vector = _safe_clip_embed(query)
 
-    # Five retrieval systems, each returning top-N candidates
-    text_matches = _vector_search_text(text_vector, candidates)
-    clip_matches = _vector_search_clip(clip_vector, candidates) if clip_vector is not None else []
+    # Five retrieval systems, each returning top-N candidates.
+    # Mode is threaded into the vector channels because their per-channel
+    # thresholds differ between precision and recall. Keyword channels
+    # are threshold-free so they do not need the mode argument.
+    text_matches = _vector_search_text(text_vector, candidates, mode=mode)
+    # In recall mode, skip CLIP retrieval entirely when BLIP is disabled —
+    # without BLIP captions the LLM cannot read the image, so CLIP hits
+    # are candidate-slot noise. See _recall_clip_enabled() docstring.
+    skip_clip = mode == "recall" and not _recall_clip_enabled()
+    clip_matches = (
+        _vector_search_clip(clip_vector, candidates, mode=mode)
+        if clip_vector is not None and not skip_clip
+        else []
+    )
     keyword_matches = _keyword_search(query, candidates)
     transcript_keyword_matches = _keyword_search_transcripts(query, candidates)
     text_content_keyword_matches = _keyword_search_text_content(query, candidates)
 
-    # Combine via weighted cosine similarity
-    file_scores = _combine_scores_cosine(
-        text_matches=text_matches,
-        clip_matches=clip_matches,
-        keyword_matches=keyword_matches,
-        transcript_keyword_matches=transcript_keyword_matches,
-        text_content_keyword_matches=text_content_keyword_matches,
-    )
+    if mode == "recall":
+        # Weighted RRF with recall-tuned channel weights. We drop the
+        # CLIP channel weight to near-zero (or zero if BLIP disabled)
+        # and upweight transcript/text_content because those are the
+        # only channels the LLM can directly quote from.
+        file_scores = _combine_scores_rrf(
+            text_matches=text_matches,
+            clip_matches=clip_matches,
+            keyword_matches=keyword_matches,
+            transcript_keyword_matches=transcript_keyword_matches,
+            text_content_keyword_matches=text_content_keyword_matches,
+            k=search_config.rrf_k,
+            recall_params=_RECALL_PARAMS,
+            include_clip=not skip_clip,
+        )
+    else:
+        # Precision: existing weighted cosine combiner.
+        file_scores = _combine_scores_cosine(
+            text_matches=text_matches,
+            clip_matches=clip_matches,
+            keyword_matches=keyword_matches,
+            transcript_keyword_matches=transcript_keyword_matches,
+            text_content_keyword_matches=text_content_keyword_matches,
+        )
 
     # Apply filters and build results
     results = _build_results(
@@ -136,6 +225,7 @@ def search(
         file_type=file_type,
         drive=drive,
         limit=effective_limit,
+        mode=mode,
     )
 
     # Get total indexed count
@@ -182,7 +272,10 @@ class _VectorMatch:
 
 
 def _vector_search_text(
-    query_vector: np.ndarray, limit: int
+    query_vector: np.ndarray,
+    limit: int,
+    *,
+    mode: SearchMode = "precision",
 ) -> list[_VectorMatch]:
     """Search the text vector table for similar embeddings.
 
@@ -191,9 +284,15 @@ def _vector_search_text(
     2. Score gap analysis: if scores are flat (no standout), discard all
     3. Margin cutoff: keep only matches within margin of top score
 
+    In ``mode="recall"``, all three thresholds are loosened: the absolute
+    threshold drops from 0.85 to 0.75, the gap check is disabled, and
+    the margin cutoff widens from 0.05 to 0.15. This is to avoid
+    dropping borderline true-positives before the RAG LLM sees them.
+
     Args:
         query_vector: Query embedding vector.
         limit: Maximum results.
+        mode: precision (default) or recall.
 
     Returns:
         List of vector matches.
@@ -223,20 +322,29 @@ def _vector_search_text(
     all_scores = [_l2_to_cosine_similarity(row[1]) for row in rows]
 
     search_config = settings.search
-    min_score = search_config.min_score_text
+    if mode == "recall":
+        min_score = _RECALL_PARAMS.min_score_text
+        gap_threshold = _RECALL_PARAMS.score_gap_threshold
+        margin = _RECALL_PARAMS.score_cutoff_margin
+    else:
+        min_score = search_config.min_score_text
+        gap_threshold = search_config.score_gap_threshold
+        margin = search_config.score_cutoff_margin
 
     # Score gap analysis: check if results are "flat" (no standout match)
-    # If top score barely exceeds the mean, everything is equally irrelevant
-    if all_scores:
+    # If top score barely exceeds the mean, everything is equally irrelevant.
+    # Recall mode disables this (gap_threshold=0) so borderline candidates
+    # survive for the LLM to filter.
+    if all_scores and gap_threshold > 0:
         top_score = all_scores[0]  # already sorted by distance
         mean_score = sum(all_scores) / len(all_scores)
         gap = top_score - mean_score
 
-        if gap < search_config.score_gap_threshold:
+        if gap < gap_threshold:
             logger.debug(
                 "Text vector score gap too small (%.4f < %.4f), "
                 "discarding all %d candidates",
-                gap, search_config.score_gap_threshold, len(all_scores),
+                gap, gap_threshold, len(all_scores),
             )
             return []
 
@@ -284,23 +392,33 @@ def _vector_search_text(
 
         # Stage 3: margin cutoff — keep only within margin of top score
         best_score = max(c.score for c in candidates)
-        margin = search_config.score_cutoff_margin
         results = [c for c in candidates if c.score >= best_score - margin]
 
         return results
 
 
 def _vector_search_clip(
-    query_vector: np.ndarray, limit: int
+    query_vector: np.ndarray,
+    limit: int,
+    *,
+    mode: SearchMode = "precision",
 ) -> list[_VectorMatch]:
     """Search the CLIP vector table for similar embeddings.
 
     Applies the same filtering stages as text vector search:
     absolute threshold, score gap analysis, and margin cutoff.
 
+    In ``mode="recall"`` the ``min_score_clip`` absolute threshold is
+    deliberately **not** loosened — the CLIP channel weight is already
+    reduced in the RRF combiner, and keeping the entry threshold firm
+    prevents low-quality image matches from crowding out text hits in
+    the top_k window. Only the gap check (disabled) and the margin
+    cutoff (widened) are relaxed.
+
     Args:
         query_vector: CLIP query embedding vector.
         limit: Maximum results.
+        mode: precision (default) or recall.
 
     Returns:
         List of vector matches.
@@ -329,17 +447,25 @@ def _vector_search_clip(
     # Score gap analysis for CLIP
     all_scores = [_l2_to_cosine_similarity(row[1]) for row in rows]
     search_config = settings.search
+    # min_score_clip is NOT loosened in recall mode (see docstring).
+    # Only the gap check is disabled and the margin widened.
+    if mode == "recall":
+        gap_threshold = _RECALL_PARAMS.score_gap_threshold
+        margin = _RECALL_PARAMS.score_cutoff_margin
+    else:
+        gap_threshold = search_config.score_gap_threshold
+        margin = search_config.score_cutoff_margin
 
-    if all_scores:
+    if all_scores and gap_threshold > 0:
         top_score = all_scores[0]
         mean_score = sum(all_scores) / len(all_scores)
         gap = top_score - mean_score
 
-        if gap < search_config.score_gap_threshold:
+        if gap < gap_threshold:
             logger.debug(
                 "CLIP score gap too small (%.4f < %.4f), "
                 "discarding all %d candidates",
-                gap, search_config.score_gap_threshold, len(all_scores),
+                gap, gap_threshold, len(all_scores),
             )
             return []
 
@@ -387,7 +513,6 @@ def _vector_search_clip(
 
         # Margin cutoff
         best_score = max(c.score for c in candidates)
-        margin = search_config.score_cutoff_margin
         results = [c for c in candidates if c.score >= best_score - margin]
 
         return results
@@ -769,11 +894,13 @@ def _combine_scores_rrf(
     text_content_keyword_matches: list[_TextContentKeywordMatch] | None = None,
     *,
     k: int,
+    recall_params: _RecallParams | None = None,
+    include_clip: bool = True,
 ) -> dict[str, _FileScore]:
     """Combine search results using Reciprocal Rank Fusion (RRF).
 
     Each retrieval system produces a file-level ranking. RRF merges them:
-        score = Σ 1/(k + rank + 1)
+        score = Σ weight / (k + rank + 1)
     Files appearing in multiple systems are naturally boosted.
 
     Args:
@@ -783,6 +910,15 @@ def _combine_scores_rrf(
         transcript_keyword_matches: Keyword search results (transcript text).
         text_content_keyword_matches: Keyword search results (text content).
         k: RRF smoothing constant (typically 60).
+        recall_params: Optional recall-mode channel weight overrides.
+            When None, the legacy precision-mode RRF weights are used
+            (all channels 1.0 except CLIP which uses
+            ``settings.search.rrf_weight_clip``). When provided, the
+            RAG-tuned weights from ``_RecallParams`` are applied.
+        include_clip: When False, the CLIP channel is excluded entirely
+            (weight set to 0). Used in recall mode when BLIP is disabled:
+            without BLIP captions there is nothing the LLM can read from
+            an image, so CLIP hits would only waste candidate slots.
 
     Returns:
         Dict mapping file_id to aggregated scores.
@@ -842,17 +978,35 @@ def _combine_scores_rrf(
         text_content_keyword_matches or []
     )
 
-    # Weighted RRF: CLIP gets reduced weight (0.3) because cross-modal
-    # text→image similarity is noisy for text queries. Other systems
-    # use full weight (1.0). This lets CLIP still surface visual-only
-    # matches while preventing it from overwhelming text-based results.
-    weighted_rankings: list[tuple[dict[str, int], float]] = [
-        (text_ranking, 1.0),
-        (clip_ranking, settings.search.rrf_weight_clip),
-        (keyword_ranking, 1.0),
-        (transcript_kw_ranking, 1.0),
-        (text_content_kw_ranking, 1.0),
-    ]
+    # Weighted RRF. Precision mode uses the legacy weights (text/keyword
+    # at 1.0, CLIP at the configured rrf_weight_clip default 0.5).
+    # Recall mode uses the _RecallParams weights, which upweight
+    # transcript/text_content to 1.5 (so the LLM gets quotable sources
+    # ranked higher) and push CLIP down to 0.2 (BLIP captions are thin
+    # information; raw pixels never reach the LLM). When include_clip
+    # is False, the CLIP channel weight is forced to 0.
+    if recall_params is not None:
+        clip_weight = (
+            recall_params.rrf_weight_clip if include_clip else 0.0
+        )
+        weighted_rankings: list[tuple[dict[str, int], float]] = [
+            (text_ranking, recall_params.rrf_weight_text),
+            (clip_ranking, clip_weight),
+            (keyword_ranking, recall_params.rrf_weight_keyword),
+            (transcript_kw_ranking, recall_params.rrf_weight_transcript_keyword),
+            (text_content_kw_ranking, recall_params.rrf_weight_text_content_keyword),
+        ]
+    else:
+        clip_weight = (
+            settings.search.rrf_weight_clip if include_clip else 0.0
+        )
+        weighted_rankings = [
+            (text_ranking, 1.0),
+            (clip_ranking, clip_weight),
+            (keyword_ranking, 1.0),
+            (transcript_kw_ranking, 1.0),
+            (text_content_kw_ranking, 1.0),
+        ]
 
     # --- RRF fusion ---
     all_file_ids: set[str] = set()
@@ -884,6 +1038,7 @@ def _build_results(
     limit: int,
     *,
     skip_cutoff: bool = False,
+    mode: SearchMode = "precision",
 ) -> list[SearchResult]:
     """Build final search results from aggregated scores.
 
@@ -895,6 +1050,10 @@ def _build_results(
         drive: Optional drive filter.
         limit: Maximum results.
         skip_cutoff: If True, skip the dynamic score cutoff.
+        mode: precision (default) uses ``settings.search.score_cutoff_ratio``;
+            recall uses the much more permissive ``_RECALL_PARAMS``
+            ratio so borderline RAG candidates are not stripped before
+            they reach the LLM.
 
     Returns:
         Sorted list of SearchResult objects.
@@ -944,7 +1103,10 @@ def _build_results(
     # Ratio-based cutoff works well for RRF scores (which vary proportionally,
     # unlike cosine similarities that cluster in narrow absolute ranges).
     if results and not skip_cutoff:
-        cutoff_ratio = settings.search.score_cutoff_ratio
+        if mode == "recall":
+            cutoff_ratio = _RECALL_PARAMS.score_cutoff_ratio
+        else:
+            cutoff_ratio = settings.search.score_cutoff_ratio
         top_score = results[0].score
         min_combined = top_score * cutoff_ratio
         results = [r for r in results if r.score >= min_combined]

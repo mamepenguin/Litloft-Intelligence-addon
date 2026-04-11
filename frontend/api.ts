@@ -431,21 +431,115 @@ export async function getIntelligenceStatus(
   }
 }
 
+// --- Streaming Ask (SSE) ---
+
 /**
- * Ask a question via the intelligence RAG endpoint.
+ * Events yielded by the `askQuestionStream` async generator.
  *
- * Throws on HTTP errors — callers should inspect the message to decide
- * whether to surface an "LLM disabled" (400) or "generate failed" (500)
- * state. 400 responses include a server-provided `detail` string which
- * is preserved in the thrown Error message for debugging.
+ * The backend emits them in this order (always):
+ *   1. `keywords` — the transformed search-keyword string.
+ *   2. `sources`  — the access-filtered retrieved file list.
+ *   3. `answer_chunk` × N — token chunks, in LLM output order.
+ *   4. `citations` — final anti-hallucination-filtered citations.
+ *   5. `done`     — terminal event, optionally carrying `error`.
  *
- * AbortError is allowed to propagate so the caller can distinguish a
- * user-initiated cancel (unmount / query change) from a real failure.
+ * Using a discriminated union keeps the consumer's switch exhaustive;
+ * adding a new kind on the backend surfaces as a TS error in the UI.
  */
-export async function askQuestion(
+export type AskStreamEvent =
+  | { kind: "keywords"; keywords: string }
+  | { kind: "sources"; sources: Source[] }
+  | { kind: "answer_chunk"; delta: string }
+  | { kind: "citations"; citations: Citation[] }
+  | {
+      kind: "done";
+      retrieved_count?: number;
+      took_ms?: number;
+      error?: string;
+    };
+
+/**
+ * Parse a single Server-Sent Events frame into a typed `AskStreamEvent`.
+ *
+ * A valid frame is a sequence of `event:` / `data:` / `id:` / comment
+ * lines terminated by a blank line. We tolerate LF / CRLF line endings
+ * and skip unknown fields. Returns null when the frame is malformed
+ * (missing event or unparseable JSON payload) so the caller can drop
+ * it rather than crash the stream.
+ */
+function parseSseFrame(frame: string): AskStreamEvent | null {
+  let eventName = "";
+  let dataLine = "";
+  const lines = frame.split(/\r?\n/);
+  for (const line of lines) {
+    if (line.startsWith("event:")) {
+      eventName = line.slice(6).trim();
+    } else if (line.startsWith("data:")) {
+      // Spec allows multi-line data; concatenate subsequent data lines
+      // with newlines. In practice the backend only emits single-line
+      // JSON, but the spec-correct behavior is cheap.
+      dataLine = dataLine ? `${dataLine}\n${line.slice(5).trim()}` : line.slice(5).trim();
+    }
+  }
+  if (!eventName) return null;
+  let data: Record<string, unknown> = {};
+  if (dataLine) {
+    try {
+      data = JSON.parse(dataLine) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+  switch (eventName) {
+    case "keywords":
+      return { kind: "keywords", keywords: String(data.keywords ?? "") };
+    case "sources":
+      return {
+        kind: "sources",
+        sources: Array.isArray(data.sources) ? (data.sources as Source[]) : [],
+      };
+    case "answer_chunk":
+      return { kind: "answer_chunk", delta: String(data.delta ?? "") };
+    case "citations":
+      return {
+        kind: "citations",
+        citations: Array.isArray(data.citations)
+          ? (data.citations as Citation[])
+          : [],
+      };
+    case "done":
+      return {
+        kind: "done",
+        retrieved_count:
+          typeof data.retrieved_count === "number" ? data.retrieved_count : undefined,
+        took_ms:
+          typeof data.took_ms === "number" ? data.took_ms : undefined,
+        error: typeof data.error === "string" ? data.error : undefined,
+      };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Ask a question via the intelligence RAG endpoint and stream events.
+ *
+ * Yields `AskStreamEvent`s as the server emits them. The caller should
+ * consume the generator with `for await` and react to each event kind
+ * (append `answer_chunk.delta` to the visible answer, render
+ * `sources` / `citations` in the sidebar, etc.).
+ *
+ * Throws on non-2xx responses before the stream starts (feature
+ * disabled, LLM off, query too short). Once the stream is open,
+ * network errors terminate the iterator cleanly — the consumer sees
+ * whichever events arrived before the break. Abort via
+ * `options.signal` is propagated to `fetch` and causes an AbortError,
+ * which the caller can distinguish from a real failure.
+ */
+export async function* askQuestionStream(
   query: string,
   options?: AskOptions,
-): Promise<AnswerResponse> {
+): AsyncGenerator<AskStreamEvent> {
   const body: Record<string, unknown> = { query };
   if (options?.topK != null) body.top_k = options.topK;
   if (options?.fileType) body.file_type = options.fileType;
@@ -454,7 +548,10 @@ export async function askQuestion(
   const res = await fetch(`${API_BASE}/addons/intelligence/ask`, {
     method: "POST",
     credentials: "include",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
     body: JSON.stringify(body),
     signal: options?.signal,
   });
@@ -472,5 +569,46 @@ export async function askQuestion(
     throw err;
   }
 
-  return (await res.json()) as AnswerResponse;
+  const reader = res.body?.getReader();
+  if (!reader) {
+    // No body on a 2xx SSE response is anomalous but not fatal — emit
+    // a synthetic done with no events and let the consumer handle it.
+    yield { kind: "done" };
+    return;
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // SSE frames are delimited by a blank line (\n\n or \r\n\r\n).
+      // We split on either to be proxy-tolerant.
+      let separator = buffer.indexOf("\n\n");
+      while (separator !== -1) {
+        const frame = buffer.slice(0, separator);
+        buffer = buffer.slice(separator + 2);
+        const event = parseSseFrame(frame);
+        if (event) yield event;
+        separator = buffer.indexOf("\n\n");
+      }
+    }
+    // Flush any trailing non-terminated frame. Rare, but possible if
+    // the connection closes without a final blank line.
+    if (buffer.trim()) {
+      const event = parseSseFrame(buffer);
+      if (event) yield event;
+    }
+  } finally {
+    // Release the reader even if the consumer breaks out early so the
+    // response body's underlying connection can be reclaimed.
+    try {
+      reader.releaseLock();
+    } catch {
+      // ignore
+    }
+  }
 }
