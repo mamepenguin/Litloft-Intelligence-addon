@@ -294,6 +294,10 @@ class IndexManager:
                 _purge_file(file_id)
                 purged += 1
 
+            # Reset hvlinks that were marked complete but have no transcript
+            # (caption download may have failed initially and succeeded later)
+            self._reset_hvlinks_with_new_vtt()
+
             # Resume incomplete: re-queue files that were interrupted mid-indexing
             resumed = await self._resume_incomplete()
 
@@ -372,6 +376,51 @@ class IndexManager:
             await self._queue_file_tasks(file_data)
 
         return added
+
+    def _reset_hvlinks_with_new_vtt(self) -> None:
+        """Reset whisper_indexed for hvlink files that gained VTT since last index.
+
+        When caption download fails initially, the hvlink is marked
+        whisper_indexed=True with no TranscriptChunks. If captions are
+        later downloaded (via retry or refresh), this resets the flag
+        so _resume_incomplete will re-queue them.
+        """
+        with get_search_db() as session:
+            hvlinks = (
+                session.query(IndexedFile)
+                .filter(
+                    IndexedFile.active.is_(True),
+                    IndexedFile.mime_type == HVLINK_MIME,
+                    IndexedFile.whisper_indexed.is_(True),
+                )
+                .all()
+            )
+
+            reset_count = 0
+            for f in hvlinks:
+                has_chunks = (
+                    session.query(TranscriptChunk)
+                    .filter_by(file_id=f.file_id)
+                    .first()
+                    is not None
+                )
+                if has_chunks:
+                    continue
+
+                # Check if VTT file now exists on disk
+                from pathlib import Path
+                hvlink_path = Path(f.file_path)
+                stem = hvlink_path.stem
+                parent = hvlink_path.parent
+                if any(parent.glob(f"{stem}*.vtt")):
+                    f.whisper_indexed = False
+                    reset_count += 1
+
+            if reset_count:
+                logger.info(
+                    "Reset %d hvlink(s) with new VTT for re-indexing",
+                    reset_count,
+                )
 
     async def _resume_incomplete(self) -> int:
         """Re-queue active files that have incomplete indexing.
