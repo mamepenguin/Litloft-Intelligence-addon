@@ -32,6 +32,7 @@ from app.workers.whisper import (
     check_idle_unload as check_whisper_idle_unload,
     index_whisper,
     TRANSCRIBABLE_TYPES,
+    HVLINK_MIME,
 )
 
 logger = logging.getLogger(__name__)
@@ -193,7 +194,7 @@ class IndexManager:
                 IndexedFile.mime_type.in_(clip_types),
             ).count()
 
-            whisper_types = list(TRANSCRIBABLE_TYPES)
+            whisper_types = list(TRANSCRIBABLE_TYPES) + [HVLINK_MIME]
             whisper = active_files.filter(
                 IndexedFile.whisper_indexed.is_(True),
                 IndexedFile.mime_type.in_(whisper_types),
@@ -409,7 +410,7 @@ class IndexManager:
             for f in incomplete:
                 if not f.clip_indexed and f.mime_type not in clip_mimes:
                     f.clip_indexed = True
-                if not f.whisper_indexed and f.mime_type not in TRANSCRIBABLE_TYPES:
+                if not f.whisper_indexed and f.mime_type not in TRANSCRIBABLE_TYPES and f.mime_type != HVLINK_MIME:
                     f.whisper_indexed = True
                 if not f.text_indexed and f.mime_type not in TEXT_MIMES:
                     f.text_indexed = True
@@ -479,8 +480,8 @@ class IndexManager:
                 file_id=file_id, task_type=TaskType.CLIP
             ))
 
-        # Queue Whisper for audio/video
-        if mime_type in TRANSCRIBABLE_TYPES:
+        # Queue Whisper for audio/video (or VTT indexing for .hvlink)
+        if mime_type in TRANSCRIBABLE_TYPES or mime_type == HVLINK_MIME:
             await self._enqueue(IndexTask(
                 file_id=file_id, task_type=TaskType.WHISPER
             ))
@@ -530,7 +531,7 @@ class IndexManager:
                 await self._enqueue(IndexTask(
                     file_id=file_id, task_type=TaskType.CLIP, priority=100
                 ))
-            if not file.whisper_indexed and file.mime_type in TRANSCRIBABLE_TYPES:
+            if not file.whisper_indexed and (file.mime_type in TRANSCRIBABLE_TYPES or file.mime_type == HVLINK_MIME):
                 await self._enqueue(IndexTask(
                     file_id=file_id, task_type=TaskType.WHISPER, priority=100
                 ))

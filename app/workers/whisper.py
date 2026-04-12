@@ -34,6 +34,9 @@ TRANSCRIBABLE_TYPES = {
     "audio/aac", "audio/m4a", "audio/x-m4a",
 }
 
+# External source files that use adjacent .vtt instead of Whisper
+HVLINK_MIME = "application/vnd.homevault.link+json"
+
 
 def _ensure_loaded() -> tuple[object, object | None]:
     """Lazy-load the Whisper model on first use.
@@ -462,11 +465,18 @@ def _index_whisper_sync(file_id: str) -> bool:
         if file is None:
             return False
 
-        if file.mime_type not in TRANSCRIBABLE_TYPES:
+        mime_type = file.mime_type
+        file_path = file.file_path
+
+        if mime_type not in TRANSCRIBABLE_TYPES and mime_type != HVLINK_MIME:
             file.whisper_indexed = True
             return True
 
-        file_path = file.file_path
+    # External source: use adjacent .vtt instead of Whisper.
+    # Called outside get_search_db() to avoid self-deadlock on _write_lock
+    # (_index_hvlink_vtt internally acquires get_search_db()).
+    if mime_type == HVLINK_MIME:
+        return _index_hvlink_vtt(file_id, file_path)
 
     if not validate_file_path(file_path):
         logger.error("File path validation failed for %s: %s", file_id, file_path)
@@ -600,3 +610,212 @@ def _remove_whisper_data(session: object, file_id: str) -> None:
             session.delete(emb)
 
     session.flush()
+
+
+def _parse_vtt_cues(vtt_path: str) -> list[dict]:
+    """Parse a WebVTT file into timestamped segments.
+
+    Returns a list of dicts with keys: text, start, end, language.
+    """
+    import re
+    from pathlib import Path
+
+    path = Path(vtt_path)
+    if not path.exists():
+        return []
+
+    # Detect language from filename: stem.lang.vtt
+    lang = ""
+    parts = path.stem.rsplit(".", 1)
+    if len(parts) == 2 and re.match(r"^[a-zA-Z]{2}(?:-[a-zA-Z]{2,4})?$", parts[1]):
+        lang = parts[1]
+
+    content = path.read_text(encoding="utf-8", errors="replace")
+    timestamp_re = re.compile(
+        r"(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})"
+    )
+    tag_re = re.compile(r"<[^>]+>")
+
+    cues: list[dict] = []
+    current_start = 0.0
+    current_end = 0.0
+    current_text_lines: list[str] = []
+    in_cue = False
+
+    for line in content.splitlines():
+        line = line.strip()
+
+        m = timestamp_re.match(line)
+        if m:
+            if in_cue and current_text_lines:
+                text = " ".join(current_text_lines).strip()
+                if text:
+                    cues.append({
+                        "text": text,
+                        "start": current_start,
+                        "end": current_end,
+                        "language": lang,
+                    })
+
+            h1, m1, s1, ms1, h2, m2, s2, ms2 = (int(x) for x in m.groups())
+            current_start = h1 * 3600 + m1 * 60 + s1 + ms1 / 1000
+            current_end = h2 * 3600 + m2 * 60 + s2 + ms2 / 1000
+            current_text_lines = []
+            in_cue = True
+            continue
+
+        if not line:
+            if in_cue and current_text_lines:
+                text = " ".join(current_text_lines).strip()
+                if text:
+                    cues.append({
+                        "text": text,
+                        "start": current_start,
+                        "end": current_end,
+                        "language": lang,
+                    })
+                current_text_lines = []
+                in_cue = False
+            continue
+
+        if line.startswith("WEBVTT") or line.startswith("NOTE"):
+            continue
+
+        if in_cue:
+            cleaned = tag_re.sub("", line)
+            if cleaned.strip():
+                current_text_lines.append(cleaned.strip())
+
+    if in_cue and current_text_lines:
+        text = " ".join(current_text_lines).strip()
+        if text:
+            cues.append({
+                "text": text,
+                "start": current_start,
+                "end": current_end,
+                "language": lang,
+            })
+
+    return cues
+
+
+def _index_hvlink_vtt(file_id: str, file_path: str) -> bool:
+    """Index an .hvlink file using adjacent .vtt subtitles instead of Whisper.
+
+    Reads .vtt file(s) next to the .hvlink, parses cues into segments,
+    merges them, creates TranscriptChunks and embeddings — same output
+    as the Whisper path.
+    """
+    from pathlib import Path
+
+    hvlink_path = Path(file_path)
+    stem = hvlink_path.stem
+    parent = hvlink_path.parent
+
+    vtt_candidates = sorted(parent.glob(f"{stem}*.vtt"))
+    if not vtt_candidates:
+        logger.info("No adjacent VTT for hvlink %s, marking as indexed", file_id)
+        with get_search_db() as session:
+            file = session.query(IndexedFile).filter_by(file_id=file_id).first()
+            if file is not None:
+                file.whisper_indexed = True
+        return True
+
+    best_vtt = vtt_candidates[0]
+    for c in vtt_candidates:
+        if c.name == f"{stem}.vtt":
+            best_vtt = c
+            break
+
+    raw_segments = _parse_vtt_cues(str(best_vtt))
+    if not raw_segments:
+        logger.info("VTT empty for hvlink %s, marking as indexed", file_id)
+        with get_search_db() as session:
+            file = session.query(IndexedFile).filter_by(file_id=file_id).first()
+            if file is not None:
+                file.whisper_indexed = True
+        return True
+
+    whisper_config = settings.indexing.whisper
+    chunks = _merge_segments(
+        raw_segments,
+        whisper_config.min_segment_duration,
+        whisper_config.max_segment_duration,
+    )
+
+    if not chunks:
+        with get_search_db() as session:
+            file = session.query(IndexedFile).filter_by(file_id=file_id).first()
+            if file is not None:
+                file.whisper_indexed = True
+        return True
+
+    chunk_texts = [c["text"] for c in chunks if c["text"].strip()]
+    vectors = None
+    if chunk_texts:
+        try:
+            vectors = embed_passages(chunk_texts)
+        except Exception as e:
+            logger.error("VTT embedding failed for %s: %s", file_id, e)
+
+    with get_search_db() as session:
+        _remove_whisper_data(session, file_id)
+
+        for idx, chunk in enumerate(chunks):
+            transcript = TranscriptChunk(
+                file_id=file_id,
+                chunk_index=idx,
+                text=chunk["text"],
+                language=chunk["language"],
+                timestamp_start=chunk["start"],
+                timestamp_end=chunk["end"],
+            )
+            session.add(transcript)
+
+        if vectors is not None:
+            text_idx = 0
+            for idx, chunk in enumerate(chunks):
+                if not chunk["text"].strip():
+                    continue
+                try:
+                    embedding_id = f"wh_{file_id}_{idx}_{uuid.uuid4().hex[:8]}"
+                    embedding_record = Embedding(
+                        id=embedding_id,
+                        file_id=file_id,
+                        embedding_type="whisper",
+                        vector_table="vec_text",
+                        content_preview=chunk["text"][:200],
+                        timestamp_start=chunk["start"],
+                        timestamp_end=chunk["end"],
+                    )
+                    session.add(embedding_record)
+                    session.flush()
+
+                    vec_bytes = vectors[text_idx].tobytes()
+                    session.execute(
+                        sql_text(
+                            "INSERT INTO vec_text(embedding_id, vector) VALUES(:id, :vec)"
+                        ),
+                        {"id": embedding_id, "vec": vec_bytes},
+                    )
+                    text_idx += 1
+                except Exception as e:
+                    logger.error(
+                        "Failed to store VTT embedding %d for %s: %s",
+                        idx, file_id, e,
+                    )
+
+        fts_chunks = [
+            {"chunk_index": idx, "text": chunk["text"]}
+            for idx, chunk in enumerate(chunks)
+            if chunk["text"].strip()
+        ]
+        if fts_chunks:
+            upsert_fts_transcripts(session, file_id, fts_chunks)
+
+        file = session.query(IndexedFile).filter_by(file_id=file_id).first()
+        if file is not None:
+            file.whisper_indexed = True
+
+    logger.info("Indexed hvlink VTT transcript for %s (%d chunks)", file_id, len(chunks))
+    return True

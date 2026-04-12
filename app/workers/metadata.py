@@ -149,6 +149,7 @@ def index_metadata_batch(file_ids: list[str]) -> int:
 
     indexed_count = 0
 
+    # --- Phase 1: Read file info (short DB access) ---
     with get_search_db() as session:
         files = (
             session.query(IndexedFile)
@@ -164,47 +165,56 @@ def index_metadata_batch(file_ids: list[str]) -> int:
 
         # Build metadata texts for batch embedding
         metadata_texts: list[str] = []
-        valid_files: list[IndexedFile] = []
+        valid_file_ids: list[str] = []
 
         for file in files:
             meta_text = _build_metadata_text(file)
             if meta_text.strip():
                 metadata_texts = [*metadata_texts, meta_text]
-                valid_files = [*valid_files, file]
+                valid_file_ids = [*valid_file_ids, file.file_id]
 
-        if not metadata_texts:
-            return 0
+    if not metadata_texts:
+        return 0
 
-        try:
-            vectors = embed_passages(metadata_texts)
-        except Exception as e:
-            logger.error("Metadata embedding batch failed: %s", e)
-            return 0
+    # --- Phase 2: Compute embeddings (no DB lock, may be slow) ---
+    try:
+        vectors = embed_passages(metadata_texts)
+    except Exception as e:
+        logger.error("Metadata embedding batch failed: %s", e)
+        return 0
 
-        for file, vector in zip(valid_files, vectors):
+    # --- Phase 3: Write results to DB (short transaction) ---
+    with get_search_db() as session:
+        for file_id_val, vector, meta_text in zip(
+            valid_file_ids, vectors, metadata_texts
+        ):
             try:
-                embedding_id = f"meta_{file.file_id}_{uuid.uuid4().hex[:8]}"
+                embedding_id = f"meta_{file_id_val}_{uuid.uuid4().hex[:8]}"
 
                 # Remove old metadata embeddings for this file
-                _remove_embeddings(session, file.file_id, "metadata")
+                _remove_embeddings(session, file_id_val, "metadata")
 
                 _store_embedding(
                     session=session,
                     embedding_id=embedding_id,
-                    file_id=file.file_id,
+                    file_id=file_id_val,
                     embedding_type="metadata",
                     vector_table="vec_text",
                     vector=vector,
-                    content_preview=metadata_texts[valid_files.index(file)][:200],
+                    content_preview=meta_text[:200],
                 )
 
-                file.metadata_indexed = True
+                file = session.query(IndexedFile).filter_by(
+                    file_id=file_id_val
+                ).first()
+                if file is not None:
+                    file.metadata_indexed = True
                 indexed_count += 1
 
             except Exception as e:
                 logger.error(
                     "Failed to store metadata embedding for %s: %s",
-                    file.file_id, e,
+                    file_id_val, e,
                 )
 
     return indexed_count
@@ -222,6 +232,7 @@ def index_text_content(file_id: str) -> bool:
     Returns:
         True if indexing succeeded.
     """
+    # --- Phase 1: Read file info (short DB access) ---
     with get_search_db() as session:
         file = session.query(IndexedFile).filter_by(
             file_id=file_id, active=True
@@ -235,14 +246,17 @@ def index_text_content(file_id: str) -> bool:
             file.text_indexed = True
             return True
 
-        chunk_texts = [c.text for c in chunks]
+    # --- Phase 2: Compute embeddings (no DB lock, may be slow) ---
+    chunk_texts = [c.text for c in chunks]
 
-        try:
-            vectors = embed_passages(chunk_texts)
-        except Exception as e:
-            logger.error("Text content embedding failed for %s: %s", file_id, e)
-            return False
+    try:
+        vectors = embed_passages(chunk_texts)
+    except Exception as e:
+        logger.error("Text content embedding failed for %s: %s", file_id, e)
+        return False
 
+    # --- Phase 3: Write results to DB (short transaction) ---
+    with get_search_db() as session:
         # Remove old text content embeddings
         _remove_embeddings(session, file_id, "text_content")
 
@@ -277,7 +291,11 @@ def index_text_content(file_id: str) -> bool:
         ]
         upsert_fts_text_content(session, file_id, fts_chunks)
 
-        file.text_indexed = True
+        file_record = session.query(IndexedFile).filter_by(
+            file_id=file_id
+        ).first()
+        if file_record is not None:
+            file_record.text_indexed = True
         return True
 
 
