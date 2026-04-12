@@ -31,9 +31,12 @@ for _mod in _ml_stubs:
         sys.modules[_mod] = MagicMock()
 
 if "numpy" not in sys.modules:
-    _numpy_stub = MagicMock()
-    _numpy_stub.bool_ = bool  # Real type for pytest.approx
-    sys.modules["numpy"] = _numpy_stub
+    try:
+        import numpy  # noqa: F401  — prefer the real package when installed
+    except ImportError:
+        _numpy_stub = MagicMock()
+        _numpy_stub.bool_ = bool  # Real type for pytest.approx
+        sys.modules["numpy"] = _numpy_stub
 
 import pytest
 

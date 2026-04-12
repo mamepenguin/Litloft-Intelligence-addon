@@ -9,7 +9,7 @@ from fastapi.responses import Response
 from sqlalchemy import text as sql_text
 
 from app.config import settings
-from app.dependencies import get_auto_tags_worker, get_llm_client
+from app.dependencies import get_auto_tags_worker
 from app.schemas import (
     BatchSuggestedTagsRequest,
     BatchSuggestedTagsResponse,
@@ -302,11 +302,7 @@ async def regenerate_suggested_tags(file_id: str) -> MessageResponse:
     if settings.features.auto_tags == "false":
         raise HTTPException(status_code=400, detail="Auto-tags feature is disabled")
 
-    llm_client = get_llm_client()
     auto_tags_worker = get_auto_tags_worker()
-
-    if not llm_client.enabled:
-        raise HTTPException(status_code=400, detail="LLM is not enabled")
 
     # Delete existing entry
     with get_search_db() as session:
@@ -331,11 +327,7 @@ async def batch_suggested_tags(body: BatchSuggestedTagsRequest) -> BatchSuggeste
     if settings.features.auto_tags == "false":
         raise HTTPException(status_code=400, detail="Auto-tags feature is disabled")
 
-    llm_client = get_llm_client()
     auto_tags_worker = get_auto_tags_worker()
-
-    if not llm_client.enabled:
-        raise HTTPException(status_code=400, detail="LLM is not enabled")
 
     # Find which files already have suggested tags
     with get_search_db() as session:

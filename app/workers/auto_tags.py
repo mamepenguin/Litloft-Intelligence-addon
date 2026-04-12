@@ -1,13 +1,27 @@
-"""Auto-tagging worker using LLM.
+"""Auto-tagging worker using CLIP zero-shot, TF-IDF, and optional LLM.
 
-Processes files through an LLM to suggest tags based on file
-metadata, transcripts, captions, and text content. Runs as a
-dedicated async queue processing one file at a time.
+Generates tag suggestions through a layered pipeline:
+
+1. Always: CLIP zero-shot scoring against a curated concept vocabulary
+   (plus the user's own tag history) and TF-IDF keyword extraction
+   from transcript + filename.
+
+2. If an LLM is configured: the CLIP/TF-IDF candidates are fed to the
+   LLM as grounding context, and the LLM's refined tag list is the
+   final output. The LLM sees the noisy raw candidates and can
+   abstract/filter them — this is the "local candidates as grounding"
+   pattern rather than a simple union.
+
+3. If no LLM is configured: CLIP + TF-IDF candidates are merged
+   directly (deduplicated, capped to 10) and saved as suggestions.
+
+Runs as a dedicated async queue processing one file at a time.
 """
 
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import text as sql_text
@@ -16,6 +30,9 @@ from app.config import settings
 from app.database import get_homevault_db, get_search_db
 from app.llm import LLMClient
 from app.models import Embedding, IndexedFile, TranscriptChunk
+from app.tfidf import get_tfidf_keywords_for_file
+from app.workers.clip_concepts import score_file_concepts
+from app.workers.tag_knn import recommend_tags_by_similarity
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +42,62 @@ _LANGUAGE_INSTRUCTIONS: dict[str, str] = {
 }
 
 _MAX_CONTEXT_CHARS = 2000
+# Cap the number of CLIP / TF-IDF candidates offered to the LLM.  Too
+# many and the prompt wastes tokens on noise; too few and genuine
+# signals from the local pipeline disappear.
+_MAX_CLIP_CANDIDATES = 10
+_MAX_TFIDF_CANDIDATES = 10
+_MAX_KNN_CANDIDATES = 10
+_KNN_NEIGHBORS = 20
+# When no LLM is configured we surface a compact tag list. Auto-tag UX
+# expects roughly five to ten tags per file, matching the LLM prompt.
+_LOCAL_ONLY_TAG_LIMIT = 10
+# Minimum cosine similarity for a CLIP concept to count as a candidate.
+# 0.25 matches the threshold used by the semantic-search pipeline.
+_CLIP_THRESHOLD = 0.25
+
+
+@dataclass(frozen=True)
+class TagCandidates:
+    """Local-only tag candidates from CLIP zero-shot, TF-IDF, and k-NN."""
+
+    clip: list[str]
+    tfidf: list[str]
+    # k-NN recommendations come from tags on CLIP-similar files that
+    # the user has already tagged. This channel is empty on cold
+    # start but grows more valuable as the user keeps tagging.
+    knn: list[str] = None  # type: ignore[assignment]
+
+    def __post_init__(self):
+        # Default empty list without a mutable default argument.
+        if self.knn is None:
+            object.__setattr__(self, "knn", [])
+
+    def has_any(self) -> bool:
+        return bool(self.clip or self.tfidf or self.knn)
+
+    def merged(self, limit: int) -> list[str]:
+        """Merge candidate sources, dedupe case-insensitively, cap to ``limit``.
+
+        Priority order:
+          1. k-NN — tags the user has actually applied to similar files,
+             the strongest signal once the library is non-empty.
+          2. CLIP zero-shot — visually grounded concepts.
+          3. TF-IDF — keywords mined from noisy transcripts; lowest
+             confidence channel.
+        """
+        seen: set[str] = set()
+        out: list[str] = []
+        for src in (self.knn, self.clip, self.tfidf):
+            for tag in src:
+                key = tag.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(tag)
+                if len(out) >= limit:
+                    return out
+        return out
 
 
 def _build_system_prompt() -> str:
@@ -55,11 +128,7 @@ class AutoTagsWorker:
         self._queue: asyncio.Queue[str] = asyncio.Queue()
 
     async def enqueue(self, file_id: str) -> None:
-        """Add a file to the auto-tagging queue.
-
-        Args:
-            file_id: The file ID to process.
-        """
+        """Add a file to the auto-tagging queue."""
         await self._queue.put(file_id)
 
     async def enqueue_unprocessed(self) -> int:
@@ -95,70 +164,221 @@ class AutoTagsWorker:
                 logger.error("Auto-tags worker error: %s", e)
 
     async def _process_file(self, file_id: str) -> None:
-        """Process a single file for auto-tagging.
+        """Generate and persist auto-tag suggestions for one file.
 
-        Checks preconditions, builds context, queries LLM,
-        and saves the result.
-
-        Args:
-            file_id: The file ID to process.
+        Unlike the original LLM-only flow, this runs the CLIP/TF-IDF
+        candidate pipeline first and only falls through to the LLM
+        when one is configured. When the LLM is disabled we still
+        produce suggestions from the local candidates.
         """
         if settings.features.auto_tags == "false":
             return
 
-        if not self._llm_client.enabled:
-            return
-
-        # Check if already processed
         if _has_suggested_tags(file_id):
             return
 
-        # Get indexed file info
         indexed_file = _get_indexed_file(file_id)
         if indexed_file is None:
             return
 
-        # Get existing tags from HomeVault DB
         existing_tags = _get_existing_tags(file_id)
-
-        # Build context based on file type
         context_type = _classify_file_type(indexed_file["file_type"])
-        context = _build_context(indexed_file, context_type, existing_tags)
 
-        # Build user prompt
-        user_prompt = _build_user_prompt(indexed_file, context_type, context, existing_tags)
+        # Phase 1: always collect local candidates.
+        candidates = _generate_candidates(file_id, context_type, existing_tags)
 
-        # Query LLM
-        tags = await self._llm_client.generate_json(_build_system_prompt(), user_prompt)
+        # Phase 2: produce the final tag list.
+        llm_enabled = self._llm_client.enabled
+        if llm_enabled:
+            tags, model_label = await self._tags_via_llm(
+                indexed_file, context_type, existing_tags, candidates
+            )
+        else:
+            tags = candidates.merged(_LOCAL_ONLY_TAG_LIMIT)
+            model_label = "clip+tfidf"
 
-        if not isinstance(tags, list):
-            logger.warning(
-                "Auto-tags LLM returned non-list for %s, skipping", file_id
+        if not tags:
+            logger.info(
+                "Auto-tags: no candidates for %s (llm=%s)",
+                file_id, llm_enabled,
             )
             return
 
-        # Filter to strings only and deduplicate against existing
-        existing_lower = {t.lower() for t in existing_tags}
-        filtered_tags = [
-            t for t in tags
-            if isinstance(t, str) and t.strip() and t.lower() not in existing_lower
-        ]
-
-        if not filtered_tags:
-            logger.info("Auto-tags: no new tags for %s after filtering", file_id)
+        filtered = _filter_tags(tags, existing_tags)
+        if not filtered:
+            logger.info("Auto-tags: all tags filtered out for %s", file_id)
             return
 
-        # Save to database
         _save_suggested_tags(
             file_id=file_id,
-            tags=filtered_tags,
-            model=settings.llm.model,
+            tags=filtered,
+            model=model_label,
             context_type=context_type,
         )
         logger.info(
-            "Auto-tags: saved %d suggested tags for %s",
-            len(filtered_tags), file_id,
+            "Auto-tags: saved %d tags for %s (model=%s)",
+            len(filtered), file_id, model_label,
         )
+
+    async def _tags_via_llm(
+        self,
+        indexed_file: dict,
+        context_type: str,
+        existing_tags: list[str],
+        candidates: TagCandidates,
+    ) -> tuple[list[str], str]:
+        """Run the LLM with candidates as grounding context.
+
+        Returns the parsed tag list (empty on parse failure) and the
+        ``model`` label to persist, which records both the grounding
+        pipeline and the LLM so we can later tell which pipeline
+        produced a given suggestion.
+        """
+        context = _build_context(indexed_file, context_type)
+        user_prompt = _build_user_prompt(
+            indexed_file, context_type, context, existing_tags, candidates
+        )
+        raw = await self._llm_client.generate_json(
+            _build_system_prompt(), user_prompt
+        )
+        model_suffix = settings.llm.model or "llm"
+        model_label = f"clip+tfidf+{model_suffix}"
+
+        if not isinstance(raw, list):
+            logger.warning(
+                "Auto-tags LLM returned non-list for %s; "
+                "falling back to local candidates",
+                indexed_file["file_id"],
+            )
+            return candidates.merged(_LOCAL_ONLY_TAG_LIMIT), model_label
+
+        tags = [t for t in raw if isinstance(t, str) and t.strip()]
+        return tags, model_label
+
+
+# ---------------------------------------------------------------------------
+# Candidate generation
+# ---------------------------------------------------------------------------
+
+
+def _generate_candidates(
+    file_id: str,
+    context_type: str,
+    existing_tags: list[str],
+) -> TagCandidates:
+    """Collect tag candidates from all local signals.
+
+    Runs three pipelines independently:
+      - CLIP zero-shot against the curated concept vocabulary
+      - TF-IDF keyword extraction from transcript + filename
+      - k-NN recommendation from already-tagged similar files
+
+    Failures in any single pipeline are logged and treated as empty
+    signals rather than aborting the whole run — e.g. a document has
+    no CLIP embeddings, which is not an error.
+    """
+    clip_tags = _safe_clip_candidates(file_id, context_type, existing_tags)
+    tfidf_tags = _safe_tfidf_candidates(file_id, existing_tags)
+    knn_tags = _safe_knn_candidates(file_id, context_type, existing_tags)
+    return TagCandidates(clip=clip_tags, tfidf=tfidf_tags, knn=knn_tags)
+
+
+def _safe_clip_candidates(
+    file_id: str,
+    context_type: str,
+    existing_tags: list[str],
+) -> list[str]:
+    if context_type not in ("image", "video"):
+        return []
+    try:
+        scored = score_file_concepts(
+            file_id,
+            threshold=_CLIP_THRESHOLD,
+            top_k=_MAX_CLIP_CANDIDATES,
+        )
+    except Exception as e:
+        logger.warning("CLIP candidate scoring failed for %s: %s", file_id, e)
+        return []
+    existing_lower = {t.lower() for t in existing_tags}
+    return [name for name, _ in scored if name.lower() not in existing_lower]
+
+
+def _safe_knn_candidates(
+    file_id: str,
+    context_type: str,
+    existing_tags: list[str],
+) -> list[str]:
+    """Recommend tags from CLIP-similar already-tagged files.
+
+    Silently returns an empty list for file types without CLIP
+    embeddings (documents, audio) since k-NN has nothing to compare
+    against. Any runtime error is logged and downgraded to "no
+    candidates" so a bad neighbor query doesn't crash the worker.
+    """
+    if context_type not in ("image", "video"):
+        return []
+    try:
+        scored = recommend_tags_by_similarity(
+            file_id,
+            k_neighbors=_KNN_NEIGHBORS,
+            top_tags=_MAX_KNN_CANDIDATES,
+        )
+    except Exception as e:
+        logger.warning("k-NN tag recommendation failed for %s: %s", file_id, e)
+        return []
+    existing_lower = {t.lower() for t in existing_tags}
+    return [name for name, _ in scored if name.lower() not in existing_lower]
+
+
+def _safe_tfidf_candidates(
+    file_id: str,
+    existing_tags: list[str],
+) -> list[str]:
+    try:
+        rows = get_tfidf_keywords_for_file(
+            file_id,
+            k=_MAX_TFIDF_CANDIDATES,
+            # Drop words that appear in only one file — almost always
+            # a Whisper mis-transcription rather than a real topic.
+            min_doc_freq=2,
+        )
+    except Exception as e:
+        logger.warning("TF-IDF candidate extraction failed for %s: %s", file_id, e)
+        return []
+    existing_lower = {t.lower() for t in existing_tags}
+    out: list[str] = []
+    for row in rows:
+        word = row.get("word") if isinstance(row, dict) else None
+        if not isinstance(word, str) or not word:
+            continue
+        if word.lower() in existing_lower:
+            continue
+        out.append(word)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Filtering + DB helpers
+# ---------------------------------------------------------------------------
+
+
+def _filter_tags(tags: list, existing_tags: list[str]) -> list[str]:
+    """Normalize a raw tag list: strings only, non-empty, not already applied."""
+    existing_lower = {t.lower() for t in existing_tags}
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in tags:
+        if not isinstance(t, str):
+            continue
+        trimmed = t.strip()
+        if not trimmed:
+            continue
+        key = trimmed.lower()
+        if key in existing_lower or key in seen:
+            continue
+        seen.add(key)
+        out.append(trimmed)
+    return out
 
 
 def _has_suggested_tags(file_id: str) -> bool:
@@ -225,36 +445,20 @@ def _classify_file_type(file_type: str) -> str:
     return "other"
 
 
-def _build_context(
-    indexed_file: dict, context_type: str, existing_tags: list[str]
-) -> str:
-    """Build additional context based on file type.
-
-    Args:
-        indexed_file: File info dict.
-        context_type: Classified file type.
-        existing_tags: List of existing tag names.
-
-    Returns:
-        Additional context string.
-    """
+def _build_context(indexed_file: dict, context_type: str) -> str:
+    """Build additional context (transcript/captions/text) based on file type."""
     file_id = indexed_file["file_id"]
     parts: list[str] = []
 
     if context_type in ("video", "audio"):
-        # Get transcript chunks
         transcript = _get_transcript_text(file_id)
         if transcript:
             parts = [*parts, f"Transcript:\n{transcript}"]
-
     elif context_type == "image":
-        # Get BLIP captions if available
         captions = _get_blip_captions(file_id)
         if captions:
             parts = [*parts, f"Image captions:\n{captions}"]
-
     elif context_type == "document":
-        # Get text content chunks
         text_content = _get_text_content(file_id)
         if text_content:
             parts = [*parts, f"Content:\n{text_content}"]
@@ -316,24 +520,20 @@ def _build_user_prompt(
     context_type: str,
     context: str,
     existing_tags: list[str],
+    candidates: TagCandidates | None = None,
 ) -> str:
     """Build the user prompt for LLM tag generation.
 
-    Args:
-        indexed_file: File info dict.
-        context_type: Classified file type.
-        context: Additional context string.
-        existing_tags: List of existing tag names.
-
-    Returns:
-        Formatted user prompt.
+    When ``candidates`` is provided (non-empty CLIP or TF-IDF lists),
+    the prompt includes a "参考候補" section so the LLM can use them
+    as grounding signals. The instruction deliberately allows the LLM
+    to override or ignore them — they're hints, not ground truth.
     """
     parts: list[str] = [
         f"ファイル名: {indexed_file['filename']}",
         f"タイプ: {context_type}",
     ]
 
-    # Add metadata if available
     if indexed_file["title"] and indexed_file["title"] != indexed_file["filename"]:
         parts = [*parts, f"タイトル: {indexed_file['title']}"]
     if indexed_file["description"]:
@@ -343,6 +543,27 @@ def _build_user_prompt(
 
     if context:
         parts = [*parts, context]
+
+    if candidates is not None and candidates.has_any():
+        candidate_lines: list[str] = ["", "【参考候補】"]
+        # k-NN first because "similar tagged files" is the strongest
+        # signal for "what the user considers relevant".
+        if candidates.knn:
+            candidate_lines.append(
+                "類似ファイルのタグ: " + ", ".join(candidates.knn)
+            )
+        if candidates.clip:
+            candidate_lines.append(
+                "画像解析による候補: " + ", ".join(candidates.clip)
+            )
+        if candidates.tfidf:
+            candidate_lines.append(
+                "キーワード抽出による候補: " + ", ".join(candidates.tfidf)
+            )
+        candidate_lines.append(
+            "※ 候補は参考情報です。より適切なタグがあればそちらを優先してください。"
+        )
+        parts = [*parts, "\n".join(candidate_lines)]
 
     tags_display = ", ".join(existing_tags) if existing_tags else "なし"
     parts = [*parts, f"既存タグ: {tags_display}"]
@@ -356,14 +577,7 @@ def _save_suggested_tags(
     model: str,
     context_type: str,
 ) -> None:
-    """Save suggested tags to the search database.
-
-    Args:
-        file_id: The file ID.
-        tags: List of suggested tag strings.
-        model: LLM model name used.
-        context_type: File type classification.
-    """
+    """Save suggested tags to the search database."""
     now = datetime.now(UTC).isoformat()
     tags_json = json.dumps(tags, ensure_ascii=False)
 

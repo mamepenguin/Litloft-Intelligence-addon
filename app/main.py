@@ -76,11 +76,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     dependencies._auto_tags_worker = auto_tags_worker
     auto_tags_task: asyncio.Task | None = None
 
-    if settings.features.auto_tags != "false" and llm_client.enabled:
+    # Auto-tags runs even when the LLM is disabled — the worker falls
+    # back to CLIP zero-shot + TF-IDF candidate generation in that
+    # case and produces "clip+tfidf" sourced suggestions.
+    if settings.features.auto_tags != "false":
         auto_tags_task = asyncio.create_task(
             auto_tags_worker.run(), name="auto_tags_worker"
         )
-        logger.info("Auto-tags worker started (mode=%s)", settings.features.auto_tags)
+        logger.info(
+            "Auto-tags worker started (mode=%s, llm=%s)",
+            settings.features.auto_tags, llm_client.enabled,
+        )
 
         # on_index: queue already-indexed files that don't have suggested tags yet
         if settings.features.auto_tags == "on_index":
