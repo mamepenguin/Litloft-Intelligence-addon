@@ -93,16 +93,25 @@ def _query_nearest_file_ids(
     # Pulling k * 10 + 50 keeps things manageable even on large libraries.
     fetch_limit = max(k * 10 + 50, 100)
 
+    # sqlite-vec's KNN planner requires LIMIT (or `k = ?`) to apply
+    # directly to the virtual vec_clip table. Joining to embeddings in
+    # the same statement moves the LIMIT outside the optimizer's reach
+    # and raises "A LIMIT or 'k = ?' constraint is required". Do the
+    # KNN first in a subquery, then JOIN + filter on the result — same
+    # pattern app.search uses for its CLIP similarity lookups.
     scores: dict[str, float] = {}
     with get_search_engine().connect() as conn:
         rows = conn.execute(
             sql_text(
-                "SELECT e.file_id, v.distance FROM vec_clip v "
+                "SELECT e.file_id, v.distance FROM ("
+                "  SELECT embedding_id, distance FROM vec_clip "
+                "  WHERE vector MATCH :vec "
+                "  ORDER BY distance "
+                "  LIMIT :limit"
+                ") v "
                 "JOIN embeddings e ON v.embedding_id = e.id "
-                "WHERE v.vector MATCH :vec "
-                "AND e.file_id != :src "
-                "ORDER BY v.distance "
-                "LIMIT :limit"
+                "WHERE e.file_id != :src "
+                "ORDER BY v.distance"
             ),
             {
                 "vec": query_vector.astype(np.float32).tobytes(),
