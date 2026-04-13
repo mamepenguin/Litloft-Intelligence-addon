@@ -180,7 +180,7 @@ class LLMConfig:
 
 @dataclass(frozen=True)
 class Settings:
-    search_data_dir: Path
+    intelligence_data_dir: Path
     homevault_db_path: Path
     model_cache_dir: Path
     search_db_path: Path
@@ -246,7 +246,7 @@ def load_settings() -> Settings:
     """
     import os
 
-    search_data_dir = Path(os.environ.get("SEARCH_DATA_DIR", "/search-data"))
+    intelligence_data_dir = Path(os.environ.get("INTELLIGENCE_DATA_DIR", "/intelligence-data"))
     homevault_db_path = Path(
         os.environ.get("HOMEVAULT_DB_PATH", "/data/homevault.db")
     )
@@ -256,8 +256,8 @@ def load_settings() -> Settings:
     )
     config_data = load_config_file(config_path)
 
-    model_cache_dir = search_data_dir / "models"
-    search_db_path = search_data_dir / "search.db"
+    model_cache_dir = intelligence_data_dir / "models"
+    search_db_path = intelligence_data_dir / "search.db"
 
     allowed_base_dirs_env = os.environ.get("ALLOWED_BASE_DIRS", "/drives/")
     allowed_base_dirs = tuple(d.strip() for d in allowed_base_dirs_env.split(",") if d.strip())
@@ -291,7 +291,7 @@ def load_settings() -> Settings:
         )
 
     return Settings(
-        search_data_dir=search_data_dir,
+        intelligence_data_dir=intelligence_data_dir,
         homevault_db_path=homevault_db_path,
         model_cache_dir=model_cache_dir,
         search_db_path=search_db_path,

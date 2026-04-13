@@ -24,10 +24,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ ./app/
 
-RUN mkdir -p /search-data/models
+RUN mkdir -p /intelligence-data/models
 
 ENV PYTHONUNBUFFERED=1
-ENV SEARCH_DATA_DIR=/search-data
+ENV INTELLIGENCE_DATA_DIR=/intelligence-data
 ENV HOMEVAULT_DB_PATH=/data/homevault.db
 
 EXPOSE 8100

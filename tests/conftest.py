@@ -77,7 +77,7 @@ def make_settings(tmp_path):
 
     def _create(**overrides) -> Settings:
         defaults = {
-            "search_data_dir": tmp_path / "search-data",
+            "intelligence_data_dir": tmp_path / "intelligence-data",
             "homevault_db_path": tmp_path / "homevault.db",
             "model_cache_dir": tmp_path / "models",
             "search_db_path": tmp_path / "search.db",

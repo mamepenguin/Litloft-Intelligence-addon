@@ -697,7 +697,7 @@ class TestCombineScoresCosine:
         import app.search as search_mod
         from app import config
         monkeypatch.setattr(search_mod, "settings", config.Settings(
-            search_data_dir=config.settings.search_data_dir,
+            intelligence_data_dir=config.settings.intelligence_data_dir,
             homevault_db_path=config.settings.homevault_db_path,
             model_cache_dir=config.settings.model_cache_dir,
             search_db_path=config.settings.search_db_path,
@@ -840,7 +840,7 @@ class TestCombineScoresRrf:
         import app.search as search_mod
         from app import config
         monkeypatch.setattr(search_mod, "settings", config.Settings(
-            search_data_dir=config.settings.search_data_dir,
+            intelligence_data_dir=config.settings.intelligence_data_dir,
             homevault_db_path=config.settings.homevault_db_path,
             model_cache_dir=config.settings.model_cache_dir,
             search_db_path=config.settings.search_db_path,

@@ -57,7 +57,7 @@ def init_search_db() -> None:
     """Initialize the search database with sqlite-vec extension."""
     global _search_engine, _SearchSession
 
-    settings.search_data_dir.mkdir(parents=True, exist_ok=True)
+    settings.intelligence_data_dir.mkdir(parents=True, exist_ok=True)
 
     _search_engine = create_engine(
         f"sqlite:///{settings.search_db_path}",

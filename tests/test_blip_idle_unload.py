@@ -40,7 +40,7 @@ def _patch_memory(
     """Patch settings.memory.blip_idle_unload in the blip module."""
     monkeypatch.setattr(
         blip, "settings", app_config.Settings(
-            search_data_dir=app_config.settings.search_data_dir,
+            intelligence_data_dir=app_config.settings.intelligence_data_dir,
             homevault_db_path=app_config.settings.homevault_db_path,
             model_cache_dir=app_config.settings.model_cache_dir,
             search_db_path=app_config.settings.search_db_path,

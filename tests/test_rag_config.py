@@ -170,7 +170,7 @@ class TestLoadSettingsRag:
             "  transcript_window_seconds: 45.0\n"
         )
 
-        monkeypatch.setenv("SEARCH_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
         monkeypatch.setenv("HOMEVAULT_DB_PATH", str(tmp_path / "hv.db"))
         monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
 
@@ -190,7 +190,7 @@ class TestLoadSettingsRag:
             "  rag: false\n"
         )
 
-        monkeypatch.setenv("SEARCH_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
         monkeypatch.setenv("HOMEVAULT_DB_PATH", str(tmp_path / "hv.db"))
         monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
 
@@ -211,7 +211,7 @@ class TestLoadSettingsRag:
             "  top_k: 3\n"
         )
 
-        monkeypatch.setenv("SEARCH_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
         monkeypatch.setenv("HOMEVAULT_DB_PATH", str(tmp_path / "hv.db"))
         monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
 
@@ -235,7 +235,7 @@ class TestLoadSettingsRag:
             "  rag: true\n"
         )
 
-        monkeypatch.setenv("SEARCH_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
         monkeypatch.setenv("HOMEVAULT_DB_PATH", str(tmp_path / "hv.db"))
         monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
 

@@ -29,11 +29,11 @@ COPY app/ ./app/
 COPY tests/ ./tests/
 COPY pytest.ini .
 
-RUN mkdir -p /search-data/models
+RUN mkdir -p /intelligence-data/models
 
 ENV PYTHONUNBUFFERED=1
-ENV SEARCH_DATA_DIR=/search-data
-ENV HOMEVAULT_DB_PATH=/search-data/homevault.db
+ENV INTELLIGENCE_DATA_DIR=/intelligence-data
+ENV HOMEVAULT_DB_PATH=/intelligence-data/homevault.db
 ENV SEARCH_CONFIG_PATH=/app/search-config.yml
 
 CMD ["python", "-m", "pytest", "tests/", "-v", "--tb=short"]

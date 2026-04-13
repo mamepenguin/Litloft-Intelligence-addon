@@ -143,7 +143,7 @@ class TestLoadSettings:
             "  output_language: ja\n"
         )
 
-        monkeypatch.setenv("SEARCH_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
         monkeypatch.setenv("HOMEVAULT_DB_PATH", str(tmp_path / "hv.db"))
         monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
         monkeypatch.setenv("ALLOWED_BASE_DIRS", "/drives/,/mnt/")
@@ -151,7 +151,7 @@ class TestLoadSettings:
 
         result = load_settings()
 
-        assert result.search_data_dir == Path(str(tmp_path / "data"))
+        assert result.intelligence_data_dir == Path(str(tmp_path / "data"))
         assert result.homevault_db_path == Path(str(tmp_path / "hv.db"))
         assert result.models.whisper == "openai/whisper-large"
         assert result.allowed_base_dirs == ("/drives/", "/mnt/")
@@ -173,7 +173,7 @@ class TestLoadSettings:
             "  output_language: en\n"
         )
 
-        monkeypatch.setenv("SEARCH_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
         monkeypatch.setenv("HOMEVAULT_DB_PATH", str(tmp_path / "hv.db"))
         monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
         monkeypatch.setenv("LLM_API_KEY", "env-override-key")
@@ -193,7 +193,7 @@ class TestLoadSettings:
             "  api_key: yaml-key\n"
         )
 
-        monkeypatch.setenv("SEARCH_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
         monkeypatch.setenv("HOMEVAULT_DB_PATH", str(tmp_path / "hv.db"))
         monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
         monkeypatch.setenv("LLM_API_KEY", "")
@@ -203,7 +203,7 @@ class TestLoadSettings:
         assert result.llm.api_key == "yaml-key"
 
     def test_drive_mounts_empty_string(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("SEARCH_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
         monkeypatch.setenv("HOMEVAULT_DB_PATH", str(tmp_path / "hv.db"))
         monkeypatch.setenv("SEARCH_CONFIG_PATH", str(tmp_path / "missing.yml"))
         monkeypatch.setenv("DRIVE_MOUNTS", "")
@@ -213,7 +213,7 @@ class TestLoadSettings:
         assert result.drive_mounts == {}
 
     def test_allowed_base_dirs_strips_whitespace(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("SEARCH_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
         monkeypatch.setenv("HOMEVAULT_DB_PATH", str(tmp_path / "hv.db"))
         monkeypatch.setenv("SEARCH_CONFIG_PATH", str(tmp_path / "missing.yml"))
         monkeypatch.setenv("ALLOWED_BASE_DIRS", "  /a/ , /b/  ,  ")
@@ -223,7 +223,7 @@ class TestLoadSettings:
         assert result.allowed_base_dirs == ("/a/", "/b/")
 
     def test_defaults_when_no_env_vars(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("SEARCH_DATA_DIR", raising=False)
+        monkeypatch.delenv("INTELLIGENCE_DATA_DIR", raising=False)
         monkeypatch.delenv("HOMEVAULT_DB_PATH", raising=False)
         monkeypatch.delenv("SEARCH_CONFIG_PATH", raising=False)
         monkeypatch.delenv("ALLOWED_BASE_DIRS", raising=False)
@@ -232,7 +232,7 @@ class TestLoadSettings:
 
         result = load_settings()
 
-        assert result.search_data_dir == Path("/search-data")
+        assert result.intelligence_data_dir == Path("/intelligence-data")
         assert result.homevault_db_path == Path("/data/homevault.db")
         assert result.allowed_base_dirs == ("/drives/",)
 
