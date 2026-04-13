@@ -42,6 +42,30 @@ _RETRY_EXCEPTIONS: tuple[type[Exception], ...] = (
 _PERMANENT_STATUS_CODES = frozenset({400, 401, 402, 403, 404})
 
 
+# Model name prefixes that require ``max_completion_tokens`` instead of
+# the legacy ``max_tokens`` parameter (OpenAI's next-gen families refuse
+# to accept ``max_tokens`` since early 2025). Match is case-insensitive
+# against the configured model string.
+_MAX_COMPLETION_TOKENS_PREFIXES: tuple[str, ...] = (
+    "gpt-5",
+    "o1",
+    "o3",
+    "o4",
+)
+
+
+def _uses_max_completion_tokens(model: str) -> bool:
+    """Decide which token-budget parameter name the target model accepts.
+
+    Keeping the check on the client side lets us support OpenAI's new
+    models without a config flag while leaving the many OpenAI-compatible
+    backends (ollama, vLLM, LM Studio, older gpt-4 / gpt-3.5) on the
+    legacy ``max_tokens`` parameter they already accept.
+    """
+    lowered = (model or "").lower()
+    return any(lowered.startswith(p) for p in _MAX_COMPLETION_TOKENS_PREFIXES)
+
+
 class LLMClient:
     """Async LLM client wrapping AsyncOpenAI for OpenAI-compatible APIs."""
 
@@ -107,6 +131,7 @@ class LLMClient:
         user_prompt: str,
         *,
         max_tokens_override: int | None = None,
+        response_format: dict | None = None,
     ) -> str | None:
         """Generate a text completion with retry on transient failures.
 
@@ -122,6 +147,11 @@ class LLMClient:
                 ``self._config.max_tokens``. RAG answer generation uses
                 this to get a longer token budget than the default
                 summary/tag budget without mutating global config.
+            response_format: Optional OpenAI-style response_format dict
+                (e.g. ``{"type": "json_object"}``). Forwarded to the
+                Chat Completions API when non-None. Providers that
+                don't support it typically ignore the field; providers
+                that do will refuse to return malformed JSON.
 
         Returns:
             Completion text, or None if disabled or on final failure.
@@ -136,6 +166,23 @@ class LLMClient:
             else self._config.max_tokens
         )
 
+        # Only include response_format in the kwargs when specified, so
+        # providers that 400 on unknown keys are not broken for non-JSON
+        # callers like RAG streaming.
+        extra_kwargs: dict = {}
+        if response_format is not None:
+            extra_kwargs["response_format"] = response_format
+
+        # OpenAI's gpt-5 / o-series families reject ``max_tokens`` and
+        # require ``max_completion_tokens``. Every other OpenAI-compatible
+        # backend (ollama, vLLM, LM Studio, gpt-4, gpt-3.5) still speaks
+        # the legacy parameter, so we route by model prefix rather than
+        # sending both.
+        if _uses_max_completion_tokens(self._config.model):
+            extra_kwargs["max_completion_tokens"] = effective_max_tokens
+        else:
+            extra_kwargs["max_tokens"] = effective_max_tokens
+
         for attempt in range(max_attempts):
             await self._wait_for_rate_limit()
 
@@ -146,8 +193,8 @@ class LLMClient:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    max_tokens=effective_max_tokens,
                     temperature=self._config.temperature,
+                    **extra_kwargs,
                 )
                 return response.choices[0].message.content
             except _RETRY_EXCEPTIONS as e:
@@ -230,17 +277,22 @@ class LLMClient:
             else self._config.max_tokens
         )
 
+        stream_kwargs: dict = {
+            "model": self._config.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": self._config.temperature,
+            "stream": True,
+        }
+        if _uses_max_completion_tokens(self._config.model):
+            stream_kwargs["max_completion_tokens"] = effective_max_tokens
+        else:
+            stream_kwargs["max_tokens"] = effective_max_tokens
+
         try:
-            stream = await self._client.chat.completions.create(
-                model=self._config.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                max_tokens=effective_max_tokens,
-                temperature=self._config.temperature,
-                stream=True,
-            )
+            stream = await self._client.chat.completions.create(**stream_kwargs)
         except _RETRY_EXCEPTIONS as e:
             logger.warning(
                 "LLM stream open failed (%s); yielding nothing",
@@ -322,10 +374,15 @@ class LLMClient:
         Returns:
             Parsed JSON (list or dict), or None on failure.
         """
+        # Request JSON object mode so compliant providers (OpenAI,
+        # ollama, vLLM, LM Studio) refuse to emit non-JSON output.
+        # Providers that don't support the field typically ignore it,
+        # so we still rely on the regex fallback below as a safety net.
         raw = await self.generate(
             system_prompt,
             user_prompt,
             max_tokens_override=max_tokens_override,
+            response_format={"type": "json_object"},
         )
         if raw is None:
             return None
