@@ -21,6 +21,7 @@ Runs as a dedicated async queue processing one file at a time.
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -110,13 +111,13 @@ def _build_system_prompt() -> str:
         "ファイルの内容に基づいて、検索に役立つタグを5-10個提案してください。\n"
         "\n"
         "規則:\n"
-        "- JSON配列で返すこと: [\"tag1\", \"tag2\", ...]\n"
+        '- JSON形式で返すこと: {"tags": ["tag1", "tag2", ...]}\n'
         "- 既存タグと重複しないこと\n"
         "- 具体的で検索に有用なタグにすること\n"
         "- ファイルの内容を要約するタグを含めること\n"
         "- タグは短く（1-3語）\n"
         f"{lang_line}"
-        "- JSON配列のみ返し、他のテキストは含めないこと"
+        "- JSONのみ返し、他のテキストは含めないこと"
     )
 
 
@@ -184,18 +185,32 @@ class AutoTagsWorker:
         existing_tags = _get_existing_tags(file_id)
         context_type = _classify_file_type(indexed_file["file_type"])
 
+        t_start = time.perf_counter()
+
         # Phase 1: always collect local candidates.
+        t_cand_start = time.perf_counter()
         candidates = _generate_candidates(file_id, context_type, existing_tags)
+        t_cand = time.perf_counter() - t_cand_start
 
         # Phase 2: produce the final tag list.
         llm_enabled = self._llm_client.enabled
+        t_llm = 0.0
         if llm_enabled:
+            t_llm_start = time.perf_counter()
             tags, model_label = await self._tags_via_llm(
                 indexed_file, context_type, existing_tags, candidates
             )
+            t_llm = time.perf_counter() - t_llm_start
         else:
             tags = candidates.merged(_LOCAL_ONLY_TAG_LIMIT)
             model_label = "clip+tfidf"
+
+        t_total = time.perf_counter() - t_start
+        logger.debug(
+            "PROFILE auto_tags file=%s type=%s total=%.3fs "
+            "candidates=%.3fs llm=%.3fs llm_enabled=%s",
+            file_id, context_type, t_total, t_cand, t_llm, llm_enabled,
+        )
 
         if not tags:
             logger.info(
@@ -244,15 +259,27 @@ class AutoTagsWorker:
         model_suffix = settings.llm.model or "llm"
         model_label = f"clip+tfidf+{model_suffix}"
 
-        if not isinstance(raw, list):
+        # With json_object mode the provider returns an object, so the
+        # canonical shape is ``{"tags": [...]}``. Older / non-compliant
+        # providers might still emit a raw list — accept that too for
+        # backward compatibility.
+        tag_list: list | None = None
+        if isinstance(raw, list):
+            tag_list = raw
+        elif isinstance(raw, dict):
+            candidate_value = raw.get("tags")
+            if isinstance(candidate_value, list):
+                tag_list = candidate_value
+
+        if tag_list is None:
             logger.warning(
-                "Auto-tags LLM returned non-list for %s; "
-                "falling back to local candidates",
-                indexed_file["file_id"],
+                "Auto-tags LLM returned unusable shape for %s "
+                "(type=%s); falling back to local candidates",
+                indexed_file["file_id"], type(raw).__name__,
             )
             return candidates.merged(_LOCAL_ONLY_TAG_LIMIT), model_label
 
-        tags = [t for t in raw if isinstance(t, str) and t.strip()]
+        tags = [t for t in tag_list if isinstance(t, str) and t.strip()]
         return tags, model_label
 
 
@@ -277,9 +304,25 @@ def _generate_candidates(
     signals rather than aborting the whole run — e.g. a document has
     no CLIP embeddings, which is not an error.
     """
+    t0 = time.perf_counter()
     clip_tags = _safe_clip_candidates(file_id, context_type, existing_tags)
+    t_clip = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
     tfidf_tags = _safe_tfidf_candidates(file_id, existing_tags)
+    t_tfidf = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
     knn_tags = _safe_knn_candidates(file_id, context_type, existing_tags)
+    t_knn = time.perf_counter() - t0
+
+    logger.debug(
+        "PROFILE candidates file=%s type=%s clip=%.3fs(%d) tfidf=%.3fs(%d) knn=%.3fs(%d)",
+        file_id, context_type,
+        t_clip, len(clip_tags),
+        t_tfidf, len(tfidf_tags),
+        t_knn, len(knn_tags),
+    )
     return TagCandidates(clip=clip_tags, tfidf=tfidf_tags, knn=knn_tags)
 
 

@@ -627,6 +627,39 @@ class TestProcessFileBranches:
         assert "bad-llm" in saved["model"]
 
     @pytest.mark.asyncio
+    async def test_llm_dict_with_tags_key_is_unwrapped(
+        self, monkeypatch, make_settings
+    ):
+        """When the LLM returns {"tags": [...]} (json_object mode),
+        the worker should unwrap the tags list rather than fall back."""
+        from app.config import FeaturesConfig
+        from app.workers import auto_tags as at
+
+        settings = make_settings(
+            llm=LLMConfig(provider="openai_compatible", model="test-llm"),
+            features=FeaturesConfig(auto_tags="on_index"),
+        )
+        monkeypatch.setattr(at, "settings", settings)
+
+        llm = MagicMock()
+        llm.enabled = True
+
+        async def fake_generate_json(system, user):
+            return {"tags": ["料理失敗談", "パスタ料理"]}
+
+        llm.generate_json = fake_generate_json
+
+        saved: dict = {}
+        candidates = TagCandidates(clip=["料理"], tfidf=["パスタ"])
+        self._install_common_stubs(monkeypatch, candidates=candidates, saved=saved)
+
+        worker = at.AutoTagsWorker(llm)
+        await worker._process_file("file-1")
+
+        assert saved["tags"] == ["料理失敗談", "パスタ料理"]
+        assert saved["model"] == "clip+tfidf+test-llm"
+
+    @pytest.mark.asyncio
     async def test_no_candidates_no_save(
         self, monkeypatch, make_settings
     ):
