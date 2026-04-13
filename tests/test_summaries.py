@@ -60,6 +60,15 @@ class TestClassifyFileType:
     def test_empty_string_returns_none(self):
         assert _classify_file_type("") is None
 
+    def test_hvlink_mime_classified_as_video(self):
+        # HVLink files (external video references) have file_type="other"
+        # from the host's MIME heuristics but carry VTT-derived transcripts,
+        # so they should feed the video summary path.
+        assert (
+            _classify_file_type("other", "application/vnd.homevault.link+json")
+            == "video"
+        )
+
 
 # ---------------------------------------------------------------------------
 # _build_system_prompt

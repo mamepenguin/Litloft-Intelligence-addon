@@ -25,6 +25,7 @@ from app.config import settings
 from app.database import get_search_db
 from app.llm import LLMClient
 from app.models import IndexedFile, TranscriptChunk
+from app.workers.whisper import HVLINK_MIME
 from app.text_utils import trim_to_sentence_boundary
 
 logger = logging.getLogger(__name__)
@@ -141,8 +142,15 @@ def _prepare_context(text: str) -> tuple[str, bool]:
     return (sampled, True)
 
 
-def _classify_file_type(file_type: str) -> str | None:
-    """Map a raw file_type to a summaries context type, or None if unsupported."""
+def _classify_file_type(file_type: str, mime_type: str | None = None) -> str | None:
+    """Map a raw file_type to a summaries context type, or None if unsupported.
+
+    HVLink files (external video references like YouTube) are classified as
+    "video" so their VTT-derived transcripts feed the same summary path as
+    local videos — their host-side file_type is "other" by MIME heuristics.
+    """
+    if mime_type == HVLINK_MIME:
+        return "video"
     if file_type == "video":
         return "video"
     if file_type == "audio":
@@ -169,7 +177,9 @@ def classify_missing_reason(file_id: str) -> str:
     if indexed_file is None:
         return "file_not_found"
 
-    context_type = _classify_file_type(indexed_file["file_type"])
+    context_type = _classify_file_type(
+        indexed_file["file_type"], indexed_file.get("mime_type")
+    )
     if context_type is None:
         return "unsupported_type"
 
@@ -198,6 +208,7 @@ def _get_indexed_file(file_id: str) -> dict | None:
             "file_id": f.file_id,
             "filename": f.filename,
             "file_type": f.file_type,
+            "mime_type": f.mime_type,
             "title": f.title,
             "description": f.description,
         }
@@ -421,7 +432,9 @@ class SummariesWorker:
         if indexed_file is None:
             return
 
-        context_type = _classify_file_type(indexed_file["file_type"])
+        context_type = _classify_file_type(
+            indexed_file["file_type"], indexed_file.get("mime_type")
+        )
         if context_type not in _SUPPORTED_CONTEXT_TYPES:
             return
 
