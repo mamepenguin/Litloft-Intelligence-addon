@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "label": "case 011: transcript-faithful query",
+    "date": "2026-04-14T13:50:16Z",
+    "git_commit": "unknown",
+    "llm_model": "gemma4:e2b",
+    "llm_base_url": "http://host.docker.internal:11434/v1",
+    "rag_top_k": 5,
+    "rag_max_tokens": 1024,
+    "snapshot_path": "/eval-data/test-drive/snapshot/search.db",
+    "snapshot_sha256": "68ca5275ea9f82f53a9175b38394109ffed7ecb774ca7b2a100692a6bb59517f",
+    "indexed_with": {
+      "whisper": "openai/whisper-small",
+      "clip": "llm-jp/llm-jp-clip-vit-base-patch16",
+      "blip": "Salesforce/blip-image-captioning-base"
+    },
+    "runs_stage1": 1,
+    "runs_stage2": 1,
+    "runs_stage3": 3,
+    "epsilon": 0.1,
+    "drive": "eval-drive",
+    "blocklists": {
+      "question_words.txt": "b2aa63dd5c23475e50ebe81eaaf4bc8585165d6fbcb96fae0e56d5d65b12be13",
+      "file_type_words.txt": "9c304d6f3ee5743511d3783b64f095b9507ed8233dcdf2aca665481873468907"
+    }
+  },
+  "cases": [
+    {
+      "id": "011_long_video_atashinchi_game",
+      "query": "半年かけてゲームを手に入れた話、何て言ってた？",
+      "stage1": {
+        "keywords": "ゲーム 話",
+        "must_include_coverage": 0.5,
+        "must_exclude_violations": 0
+      },
+      "stage2": {
+        "top_file_ids": [
+          "E91YCBdvjlOT"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.2,
+        "retrieved_gt_file_ids": [
+          "E91YCBdvjlOT"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "半年かけて溜めた小豆が落ちたまでようやく手に入れたこのゲームと共に、今日この日曜日だけはゆいぎな一日にしたい、という話がありました。",
+            "citation_file_ids": [
+              "E91YCBdvjlOT"
+            ],
+            "retrieved_file_ids": [
+              "E91YCBdvjlOT"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 1.0,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 7964
+          },
+          {
+            "answer": "半年かけて溜めた小豆が落ちたまでようやく手に入れたこのゲームと共に、今日この日曜日だけはゆいぎな一日にしたい、という話がありました。",
+            "citation_file_ids": [
+              "E91YCBdvjlOT"
+            ],
+            "retrieved_file_ids": [
+              "E91YCBdvjlOT"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 1.0,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 8102
+          },
+          {
+            "answer": "半年かけて溜めた小豆が落ちたまでようやく手に入れたこのゲームと共に、今日この日曜日だけはゆいぎな一日にしたい、という話がありました。",
+            "citation_file_ids": [
+              "E91YCBdvjlOT"
+            ],
+            "retrieved_file_ids": [
+              "E91YCBdvjlOT"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 1.0,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 8065
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 1.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 1.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 1.0,
+        "citation_in_retrieved_unstable": false
+      }
+    }
+  ]
+}
