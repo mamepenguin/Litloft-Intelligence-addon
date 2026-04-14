@@ -1,0 +1,21 @@
+# Global blocklist: file-type words (Phase F).
+# Derived from rag/query_transform.py system prompt.
+動画
+音声
+画像
+映像
+メディア
+ファイル
+写真
+文書
+ドキュメント
+PDF
+pdf
+ビデオ
+オーディオ
+# Content-genre nouns that act like file-type words for FTS poisoning:
+# users say "日記を見せて" or "メモを探して" expecting the doc genre,
+# not those literal characters in the body. Treat them as drop-on-sight.
+日記
+メモ
+ノート

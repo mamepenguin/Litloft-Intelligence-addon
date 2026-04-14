@@ -21,6 +21,7 @@ useful with ugly keywords than a hard failure.
 import logging
 
 from app.dependencies import get_llm_client
+from app.rag.keyword_filter import filter_keywords
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,16 @@ async def transform_query(
         if isinstance(keywords, str):
             cleaned = keywords.strip()
             if cleaned:
-                return cleaned
+                # Server-side blocklist safety net: weak local LLMs
+                # (gemma4:e2b raw fallback) leak file-type / question
+                # words back into the keyword string even when the
+                # system prompt forbids them. Strip those tokens so FTS
+                # AND-joins are not poisoned. If filtering empties the
+                # result the LLM extraction was useless anyway, so fall
+                # through to the raw-query graceful path below.
+                filtered = filter_keywords(cleaned)
+                if filtered:
+                    return filtered
 
     logger.debug(
         "Query transform returned unusable output, falling back to raw query"

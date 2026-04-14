@@ -7,10 +7,12 @@ Design per spec §"マッチング正規化規約":
 3. Hiragana → Katakana fold (unify kana without breaking non-Japanese text).
 4. Plain substring match (no token boundary check; Japanese has no spaces).
 
-Global blocklists live in ``app/evals/blocklists/*.txt`` and are loaded once
-per run. Each line is one entry; ``#`` starts a comment, blank lines are
-skipped. The blocklist hash is embedded into reports so diffing two reports
-reveals whether the blocklist itself changed between runs.
+Global blocklists live in ``app/blocklists/*.txt`` (moved from
+``app/evals/blocklists/`` so production ``query_transform`` can apply
+the same word list as a server-side safety net). They're loaded once
+per run; each line is one entry, ``#`` starts a comment, blank lines
+are skipped. The blocklist hash is embedded into reports so diffing
+two reports reveals whether the list itself changed between runs.
 """
 
 from __future__ import annotations
@@ -20,7 +22,10 @@ import unicodedata
 from functools import lru_cache
 from pathlib import Path
 
-BLOCKLIST_DIR = Path(__file__).resolve().parent / "blocklists"
+# Shared with app/rag/keyword_filter.py — single source of truth so a
+# blocklist edit affects both eval measurement and runtime filtering
+# in lockstep.
+BLOCKLIST_DIR = Path(__file__).resolve().parent.parent / "blocklists"
 
 
 def _hira_to_kata(s: str) -> str:
