@@ -1,15 +1,15 @@
 {
   "schema_version": 1,
-  "created_at": "2026-04-14T09:53:34Z",
-  "search_db_sha256": "1263c433364e2e0a06598490dfdd3d668573dec44852ffa82e52ef392ca31016",
+  "created_at": "2026-04-14T13:29:24Z",
+  "search_db_sha256": "68ca5275ea9f82f53a9175b38394109ffed7ecb774ca7b2a100692a6bb59517f",
   "indexed_with": {
     "whisper": "openai/whisper-small",
     "clip": "llm-jp/llm-jp-clip-vit-base-patch16",
     "blip": "Salesforce/blip-image-captioning-base"
   },
   "drive_layout": {
-    "root": "/drives/eval-drive",
-    "file_count": 12,
-    "total_bytes": 813629
+    "root": "/drives/default",
+    "file_count": 193,
+    "total_bytes": 8628036064
   }
 }
