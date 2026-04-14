@@ -1,0 +1,28 @@
+id: 005_cross_modal_image_text
+query: "黒猫の写真と日記を見せて"
+
+# Cross-modal retrieval: CLIP must surface blackcat.jpg (image),
+# while text retrieval must surface cat_diary.md. A working pipeline
+# should place both in top-5; a degraded one will only return one
+# modality.
+expected_keywords:
+  must_include:
+    - "黒猫"
+  must_exclude:
+    - "写真"
+    - "日記"
+
+ground_truth_files:
+  - path: "images/blackcat.jpg"
+  - path: "docs/cat_diary.md"
+
+must_mention:
+  - "黒猫"
+
+notes: |
+  Phase G: image (CLIP) + text (FTS) combined in a single query.
+  "写真" and "日記" are file-type-ish nouns that should be stripped
+  globally by the blocklist; the case-local must_exclude is redundant
+  but kept explicit as a smoke-test of the blocklist intersection.
+  Tests the a1 failure mode where file-type nouns drown the proper
+  noun "黒猫" and image hits vanish.

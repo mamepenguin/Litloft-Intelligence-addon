@@ -1,0 +1,31 @@
+id: 004_segment_overlap
+query: "永観堂のライトアップについて何て言ってた？"
+
+# Focused segment test: the Kyoto autumn video narrates several spots
+# sequentially; 永観堂 + ライトアップ ("illumination at night") should land
+# in a specific chunk of the transcript, not the opening frames. A
+# time_range hint around the middle of the clip lets IoU>=0.3 actually
+# discriminate "right section retrieved" from "only file matched".
+expected_keywords:
+  must_include:
+    - "永観堂"
+    - "ライトアップ"
+  must_exclude:
+    - "言っ"
+
+ground_truth_files:
+  - path: "videos/kyoto_autumn.mp4"
+    segment_hint:
+      time_range: [3.0, 8.0]
+
+must_mention:
+  - "ライトアップ"
+
+notes: |
+  Phase G: exercises segment_recall@k with a non-trivial mid-file window.
+  If the chunker collapses short videos into a single segment, IoU will
+  still be ~1.0 (hint fully covered); the test is meaningful for longer
+  transcripts. Known limitation (README §"既知の制限"): the test-drive
+  videos are short so Whisper often produces a single segment group, and
+  this case will flip to seg-recall=1 trivially. Kept as a regression
+  anchor for when the corpus grows.

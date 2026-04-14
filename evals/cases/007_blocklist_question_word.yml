@@ -1,0 +1,34 @@
+id: 007_blocklist_question_word
+query: "機械学習と京都の紅葉動画の共通点は？"
+
+# Two unrelated topics joined by "共通点は？" — the historical failure
+# mode from hako O_lh_jKTbQBcMKs23483Z where "共通点" leaks through
+# query_transform and poisons FTS5. With the Phase F global blocklist
+# enabled, must_exclude_violations should be 0 for this case.
+expected_keywords:
+  must_include:
+    - "機械学習"
+    - "紅葉"
+  must_exclude:
+    - "共通点"
+
+# Ground truth: the ML tech paper and the Kyoto autumn video. The
+# family_notes.md is intentionally NOT in the ground truth even though
+# it covers Kyoto — we want to stress-test that retrieval surfaces the
+# two anchor files cleanly, not the whole "Kyoto cluster".
+ground_truth_files:
+  - path: "videos/ml_intro.mp4"
+    segment_hint:
+      time_range: [0.0, 20.0]
+  - path: "videos/kyoto_autumn.mp4"
+  - path: "docs/tech_paper.md"
+
+must_mention: []
+
+notes: |
+  Phase G: direct regression for the "共通点は？" bug. Relies on the
+  global blocklist (question_words.txt) to drop 共通点; must_exclude
+  in the case is redundant but documents intent. Also tests recall
+  across two disjoint topics in a single query — a failure mode where
+  the transformer picks one topic and drops the other.
+  Related hako: O_lh_jKTbQBcMKs23483Z.

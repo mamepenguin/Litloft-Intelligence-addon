@@ -1,0 +1,23 @@
+id: 006_no_answer
+query: "宇宙ステーションの食事メニューは何ですか？"
+
+# Out-of-corpus question: nothing in test-drive talks about ISS meals.
+# Expected behaviour: retrieval returns irrelevant hits (recall will be
+# vacuously 1.0 because the gt set is empty), generate should produce
+# an "information not available" answer with no citations, and the
+# runner must not crash on empty ground_truth_files.
+expected_keywords:
+  must_include: []
+  must_exclude:
+    - "何"
+
+ground_truth_files: []
+
+must_mention: []
+
+notes: |
+  Phase G: "no answer" case. Exercises the empty-gt code paths in
+  resolver / stages. citation_in_ground_truth denominator uses
+  len(citations); when gt is empty, any citation counts as 0/N, so a
+  well-behaved LLM that emits "該当なし" with no citations yields
+  the most favourable metric. Hallucinated citations will score 0.0.

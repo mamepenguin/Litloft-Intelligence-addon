@@ -1,0 +1,15 @@
+# Global blocklist: file-type words (Phase F).
+# Derived from rag/query_transform.py system prompt.
+動画
+音声
+画像
+映像
+メディア
+ファイル
+写真
+文書
+ドキュメント
+PDF
+pdf
+ビデオ
+オーディオ

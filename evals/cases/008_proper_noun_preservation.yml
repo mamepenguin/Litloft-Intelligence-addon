@@ -1,0 +1,27 @@
+id: 008_proper_noun_preservation
+query: "東福寺の通天橋と哲学の道はどんな感じ？"
+
+# Three Kyoto proper nouns in one query. query_transform must preserve
+# all three without translating or truncating them. The narrated video
+# mentions all three; surviving any single one is sufficient for file
+# recall, but all three should pass Stage 1 keyword coverage.
+expected_keywords:
+  must_include:
+    - "東福寺"
+    - "通天橋"
+    - "哲学の道"
+  must_exclude:
+    - "どんな"
+
+ground_truth_files:
+  - path: "videos/kyoto_autumn.mp4"
+  - path: "docs/family_notes.md"
+
+must_mention: []
+
+notes: |
+  Phase G: proper-noun preservation stress test. Catches regressions
+  where the transformer over-simplifies ("京都の観光スポット") and
+  loses the specific nouns that disambiguate retrieval. The bundled
+  blocklist should drop "どんな" / "感じ" without touching the
+  proper nouns.

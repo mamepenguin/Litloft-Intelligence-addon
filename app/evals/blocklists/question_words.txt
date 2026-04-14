@@ -1,0 +1,24 @@
+# Global blocklist: question words / verb phrases (Phase F).
+# One entry per line, comments (#) and blank lines ignored.
+# Derived from rag/query_transform.py system prompt.
+何
+どう
+なぜ
+共通点
+理由
+違い
+方法
+言ってた
+言った
+教えて
+作り方
+どこ
+いつ
+だれ
+誰
+なに
+どんな
+どのように
+について
+とは
+って
