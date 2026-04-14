@@ -2,6 +2,7 @@
     "label": "Intelligence",
     "icon": "brain",
     "type": "external_service",
+    "scope": "both",
     "href": "/addons/intelligence",
     "slots": {
         "search-modes": [
