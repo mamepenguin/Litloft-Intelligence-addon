@@ -145,6 +145,7 @@ def search(
     drive: str | None = None,
     *,
     mode: SearchMode = "precision",
+    semantic_query: str | None = None,
 ) -> SearchResponse:
     """Execute a hybrid search query.
 
@@ -172,9 +173,15 @@ def search(
     )
     candidates = search_config.rrf_candidates
 
-    # Generate query embeddings
-    text_vector = embed_query(query)
-    clip_vector = _safe_clip_embed(query)
+    # Generate query embeddings. ``semantic_query`` is the natural-language
+    # phrasing used for vector channels, which benefit from full context
+    # (question form, particles, etc.). ``query`` is used unchanged for
+    # keyword/FTS channels, which benefit from noise-free tokens. When the
+    # caller does not pass ``semantic_query`` they get the legacy behaviour
+    # of the same string driving both (suitable for direct UI input).
+    effective_semantic = semantic_query if semantic_query is not None else query
+    text_vector = embed_query(effective_semantic)
+    clip_vector = _safe_clip_embed(effective_semantic)
 
     # Five retrieval systems, each returning top-N candidates.
     # Mode is threaded into the vector channels because their per-channel

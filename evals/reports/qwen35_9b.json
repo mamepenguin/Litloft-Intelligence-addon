@@ -1,0 +1,630 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "label": "qwen3.5:9b",
+    "date": "2026-04-14T11:17:29Z",
+    "git_commit": "unknown",
+    "llm_model": "qwen3.5:9b",
+    "llm_base_url": "http://host.docker.internal:11434/v1",
+    "rag_top_k": 5,
+    "rag_max_tokens": 1024,
+    "snapshot_path": "/eval-data/test-drive/snapshot/search.db",
+    "snapshot_sha256": "1263c433364e2e0a06598490dfdd3d668573dec44852ffa82e52ef392ca31016",
+    "indexed_with": {
+      "whisper": "openai/whisper-small",
+      "clip": "llm-jp/llm-jp-clip-vit-base-patch16",
+      "blip": "Salesforce/blip-image-captioning-base"
+    },
+    "runs_stage1": 1,
+    "runs_stage2": 1,
+    "runs_stage3": 3,
+    "epsilon": 0.1,
+    "drive": "eval-drive",
+    "blocklists": {
+      "question_words.txt": "b2aa63dd5c23475e50ebe81eaaf4bc8585165d6fbcb96fae0e56d5d65b12be13",
+      "file_type_words.txt": "9c304d6f3ee5743511d3783b64f095b9507ed8233dcdf2aca665481873468907"
+    }
+  },
+  "cases": [
+    {
+      "id": "001_proper_noun_kyoto",
+      "query": "京都の紅葉について何を言ってた？",
+      "stage1": {
+        "keywords": "京都の紅葉について何を言ってた？",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 5
+      },
+      "stage2": {
+        "top_file_ids": [
+          "xv2nmOPUTJvi",
+          "qf--MrL_g_Gt"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 0.0,
+        "segment_recall_at_10": 0.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.4,
+        "retrieved_gt_file_ids": [
+          "xv2nmOPUTJvi",
+          "qf--MrL_g_Gt"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "xv2nmOPUTJvi",
+              "qf--MrL_g_Gt"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 76869
+          },
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "xv2nmOPUTJvi",
+              "qf--MrL_g_Gt"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 86428
+          },
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "xv2nmOPUTJvi",
+              "qf--MrL_g_Gt"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 91206
+          }
+        ],
+        "must_mention_coverage_median": 0.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 0.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 0.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "002_question_word_noise",
+      "query": "黒猫の共通点は？",
+      "stage1": {
+        "keywords": "黒猫の共通点は？",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 1
+      },
+      "stage2": {
+        "top_file_ids": [
+          "ZmxTegJvjxAy",
+          "5z3uW83PgOb1",
+          "j_UPRviAs1Mm"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 0.0,
+        "segment_recall_at_10": 0.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.4,
+        "retrieved_gt_file_ids": [
+          "ZmxTegJvjxAy",
+          "5z3uW83PgOb1"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "ZmxTegJvjxAy",
+              "5z3uW83PgOb1",
+              "j_UPRviAs1Mm"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 94668
+          },
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "ZmxTegJvjxAy",
+              "5z3uW83PgOb1",
+              "j_UPRviAs1Mm"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 52853
+          },
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "ZmxTegJvjxAy",
+              "5z3uW83PgOb1",
+              "j_UPRviAs1Mm"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 52432
+          }
+        ],
+        "must_mention_coverage_median": 0.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 0.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 0.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "003_recipe_segment",
+      "query": "カレーの作り方は？",
+      "stage1": {
+        "keywords": "カレーの作り方は？",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 1
+      },
+      "stage2": {
+        "top_file_ids": [
+          "6ZUevJjXSBVz",
+          "qf--MrL_g_Gt"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.4,
+        "retrieved_gt_file_ids": [
+          "6ZUevJjXSBVz",
+          "qf--MrL_g_Gt"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "6ZUevJjXSBVz",
+              "qf--MrL_g_Gt"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 92981
+          },
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "6ZUevJjXSBVz",
+              "qf--MrL_g_Gt"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 94292
+          },
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "6ZUevJjXSBVz",
+              "qf--MrL_g_Gt"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 92681
+          }
+        ],
+        "must_mention_coverage_median": 0.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 0.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 0.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "004_segment_overlap",
+      "query": "永観堂のライトアップについて何て言ってた？",
+      "stage1": {
+        "keywords": "永観堂のライトアップについて何て言ってた？",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 5
+      },
+      "stage2": {
+        "top_file_ids": [
+          "xv2nmOPUTJvi"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.2,
+        "retrieved_gt_file_ids": [
+          "xv2nmOPUTJvi"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "xv2nmOPUTJvi"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 91500
+          },
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "xv2nmOPUTJvi"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 98135
+          },
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "xv2nmOPUTJvi"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 138223
+          }
+        ],
+        "must_mention_coverage_median": 0.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 0.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 0.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "005_cross_modal_image_text",
+      "query": "黒猫の写真と日記を見せて",
+      "stage1": {
+        "keywords": "黒猫の写真と日記を見せて",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 2
+      },
+      "stage2": {
+        "top_file_ids": [
+          "ZmxTegJvjxAy",
+          "5z3uW83PgOb1",
+          "qf--MrL_g_Gt",
+          "j_UPRviAs1Mm"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.4,
+        "retrieved_gt_file_ids": [
+          "ZmxTegJvjxAy",
+          "j_UPRviAs1Mm"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "ZmxTegJvjxAy",
+              "5z3uW83PgOb1",
+              "qf--MrL_g_Gt",
+              "j_UPRviAs1Mm"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 48279
+          },
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "ZmxTegJvjxAy",
+              "5z3uW83PgOb1",
+              "qf--MrL_g_Gt",
+              "j_UPRviAs1Mm"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 47808
+          },
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "ZmxTegJvjxAy",
+              "5z3uW83PgOb1",
+              "qf--MrL_g_Gt",
+              "j_UPRviAs1Mm"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 47998
+          }
+        ],
+        "must_mention_coverage_median": 0.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 0.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 0.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "006_no_answer",
+      "query": "宇宙ステーションの食事メニューは何ですか？",
+      "stage1": {
+        "keywords": "宇宙ステーションの食事メニューは何ですか？",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 1
+      },
+      "stage2": {
+        "top_file_ids": [],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 0.0,
+        "precision_at_5": 0.0,
+        "retrieved_gt_file_ids": []
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 3410
+          },
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 3472
+          },
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 3410
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 0.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 0.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "007_blocklist_question_word",
+      "query": "機械学習と京都の紅葉動画の共通点は？",
+      "stage1": {
+        "keywords": "機械学習と京都の紅葉動画の共通点は？",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 2
+      },
+      "stage2": {
+        "top_file_ids": [
+          "rG-RB9DbOblv",
+          "xv2nmOPUTJvi",
+          "QzLEo8LTOgGr"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.6,
+        "retrieved_gt_file_ids": [
+          "rG-RB9DbOblv",
+          "xv2nmOPUTJvi",
+          "QzLEo8LTOgGr"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "rG-RB9DbOblv",
+              "xv2nmOPUTJvi",
+              "QzLEo8LTOgGr"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 47424
+          },
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "rG-RB9DbOblv",
+              "xv2nmOPUTJvi",
+              "QzLEo8LTOgGr"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 47381
+          },
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "rG-RB9DbOblv",
+              "xv2nmOPUTJvi",
+              "QzLEo8LTOgGr"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 47560
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 0.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 0.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "008_proper_noun_preservation",
+      "query": "東福寺の通天橋と哲学の道はどんな感じ？",
+      "stage1": {
+        "keywords": "東福寺の通天橋と哲学の道はどんな感じ？",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 1
+      },
+      "stage2": {
+        "top_file_ids": [
+          "xv2nmOPUTJvi"
+        ],
+        "file_recall_at_5": 0.5,
+        "file_recall_at_10": 0.5,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.2,
+        "retrieved_gt_file_ids": [
+          "xv2nmOPUTJvi"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "xv2nmOPUTJvi"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 45896
+          },
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "xv2nmOPUTJvi"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 45844
+          },
+          {
+            "answer": null,
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "xv2nmOPUTJvi"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 46020
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 0.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 0.0,
+        "citation_in_retrieved_unstable": false
+      }
+    }
+  ]
+}

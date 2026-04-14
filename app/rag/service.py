@@ -322,12 +322,17 @@ async def stream_answer(
     yield AnswerEvent(kind="keywords", data={"keywords": keywords})
 
     # Stage 1: retrieve + access filter using the transformed keywords.
+    # ``original_query`` carries the raw natural-language question through
+    # so vector channels get full semantic context while FTS only sees
+    # the noise-free keywords — restores text_content recall that narrowing
+    # the keyword string alone was dropping (eval case 001, 005).
     candidates = await retrieve_with_keywords(
         keywords=keywords,
         top_k=effective_top_k,
         hv_token=hv_token,
         file_type=file_type,
         drive=drive,
+        original_query=query,
     )
 
     sources = [_to_source_dict(c) for c in candidates]

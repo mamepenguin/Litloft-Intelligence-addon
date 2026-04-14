@@ -152,6 +152,7 @@ async def run_stage2(
         limit=top_k,
         drive=drive,
         mode="recall",
+        semantic_query=case.query,
     )
     results = list(response.results)
     gt_ids = {gt.file_id for gt in resolved if gt.file_id is not None}

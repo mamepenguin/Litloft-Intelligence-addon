@@ -220,6 +220,8 @@ async def retrieve_with_keywords(
     hv_token: str | None,
     file_type: str | None = None,
     drive: str | None = None,
+    *,
+    original_query: str | None = None,
 ) -> list[RetrievedFile]:
     """Retrieve top-k RAG candidates for a **pre-transformed** keyword query.
 
@@ -257,6 +259,7 @@ async def retrieve_with_keywords(
         file_type=file_type,
         drive=drive,
         mode="recall",
+        semantic_query=original_query,
     )
 
     results = list(response.results)
@@ -323,6 +326,7 @@ async def retrieve_candidates(
         keywords=keywords,
         top_k=top_k,
         hv_token=hv_token,
+        original_query=query,
         file_type=file_type,
         drive=drive,
     )
