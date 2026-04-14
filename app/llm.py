@@ -401,6 +401,26 @@ class LLMClient:
         if raw is None:
             return None
 
+        # Some OpenAI-compatible backends (certain ollama versions in
+        # particular) accept response_format={"type": "json_object"} but
+        # silently return an empty body instead of enforcing JSON. When
+        # that happens, retry once without response_format so the model
+        # can obey the prompt-level JSON instruction. Compliant providers
+        # never hit this path, so latency is only paid by broken ones.
+        if not raw.strip():
+            logger.info(
+                "LLM returned empty body with json_object mode; "
+                "retrying without response_format"
+            )
+            raw = await self.generate(
+                system_prompt,
+                user_prompt,
+                max_tokens_override=max_tokens_override,
+                temperature=temperature,
+            )
+            if raw is None:
+                return None
+
         # Try direct JSON parse
         try:
             return json.loads(raw)

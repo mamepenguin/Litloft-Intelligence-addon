@@ -26,10 +26,12 @@ logger = logging.getLogger(__name__)
 
 
 # Max tokens for the keyword extraction response. A three-keyword
-# JSON payload fits comfortably in 64 tokens including braces and
-# the field name; capping here keeps the cost of the extra LLM call
-# negligible compared to the main answer-generation call.
-_QUERY_TRANSFORM_MAX_TOKENS = 64
+# JSON payload fits in ~40 tokens, but small local models (notably
+# gemma4:e2b under ollama) emit short reasoning before the JSON and
+# get silently truncated to an empty body at 64. 256 accommodates that
+# preamble without meaningfully increasing end-to-end latency — the
+# generate step itself is bounded by rag.max_tokens (1024+).
+_QUERY_TRANSFORM_MAX_TOKENS = 256
 
 
 _SYSTEM_PROMPT = (
