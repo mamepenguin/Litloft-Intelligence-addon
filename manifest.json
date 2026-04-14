@@ -57,12 +57,14 @@
                 "path": "/status",
                 "methods": ["GET"],
                 "drive_optional": true,
+                "pre_check": {"type": "admin"},
                 "response_filter": null
             },
             {
                 "path": "/index-details",
                 "methods": ["GET"],
                 "drive_optional": true,
+                "pre_check": {"type": "admin"},
                 "response_filter": null
             },
             {
@@ -216,24 +218,28 @@
                 "path": "/queue/pause",
                 "methods": ["POST"],
                 "drive_optional": true,
+                "pre_check": {"type": "admin"},
                 "response_filter": null
             },
             {
                 "path": "/queue/resume",
                 "methods": ["POST"],
                 "drive_optional": true,
+                "pre_check": {"type": "admin"},
                 "response_filter": null
             },
             {
                 "path": "/queue/reindex",
                 "methods": ["POST"],
                 "drive_optional": true,
+                "pre_check": {"type": "admin"},
                 "response_filter": null
             },
             {
                 "path": "/queue/prioritize",
                 "methods": ["POST"],
                 "drive_optional": true,
+                "pre_check": {"type": "admin"},
                 "response_filter": null
             }
         ]
