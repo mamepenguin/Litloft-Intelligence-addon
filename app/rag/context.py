@@ -16,16 +16,20 @@ touching the real search database.
 """
 
 import logging
+import re
 from dataclasses import dataclass
 
+import numpy as np
 from sqlalchemy import text as sql_text
 
 from app.config import RagConfig
 from app.database import get_search_db
 from app.models import Embedding, TranscriptChunk
+from app.rag.keyword_filter import filter_keywords
 from app.rag.retriever import RetrievedFile
 from app.search import MatchInfo, SegmentGroup
 from app.text_utils import trim_to_sentence_boundary
+from app.workers.embedder import embed_query
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +136,156 @@ def _fetch_document_chunks_around(
             for row in rows
             if row[1]
         ]
+
+
+_TEXT_EMBEDDING_ID_CHUNK_RE = re.compile(r"^txt_[^_]+_(\d+)_")
+
+
+def _fetch_document_chunks_by_vector(
+    file_id: str,
+    query_vector: np.ndarray,
+    top_n: int,
+) -> list[int]:
+    """Return the top-N chunk indices of a document by vector similarity.
+
+    Queries ``vec_text`` for the ``top_n`` nearest ``text_content``
+    embeddings that belong to ``file_id`` and extracts the chunk index
+    encoded in each embedding id (format ``txt_{file_id}_{idx}_{hash}``).
+
+    This rescues the "semantically close file, keyword-poor chunk" case
+    where the file is retrieved via vector similarity but the specific
+    passage that answers the query does not overlap the transformed
+    keyword tokens. Without this, ``_collect_document_snippets`` only
+    sees FTS-matched chunks and the LLM context can miss the actual
+    answer while the file itself is clearly on-topic.
+
+    Args:
+        file_id: The file to fetch chunks from.
+        query_vector: L2-normalized query embedding (same model as
+            the passages, same shape as ``vec_text.vector``).
+        top_n: Max number of chunk indices to return.
+
+    Returns:
+        Chunk indices in vector-similarity order (nearest first).
+        Duplicates are removed while preserving first-seen order.
+        Empty list on any error or when ``top_n <= 0``.
+    """
+    if top_n <= 0:
+        return []
+
+    try:
+        vec_bytes = np.asarray(query_vector, dtype=np.float32).tobytes()
+    except (TypeError, ValueError) as e:
+        logger.warning("Invalid query vector for %s: %s", file_id, e)
+        return []
+
+    # sqlite-vec's KNN operator ranks globally; we pull more than top_n
+    # to tolerate the case where another file dominates the top of the
+    # distance ordering. k is capped at 4096 by sqlite-vec; 200 is ample
+    # for a single-file rescue and keeps the scan fast.
+    knn_k = min(200, max(top_n * 20, 40))
+
+    try:
+        with get_search_db() as session:
+            rows = session.execute(
+                sql_text(
+                    "SELECT v.embedding_id, v.distance "
+                    "FROM vec_text v "
+                    "JOIN embeddings e "
+                    "ON CAST(e.id AS TEXT) = v.embedding_id "
+                    "WHERE v.vector MATCH :vec AND k = :k "
+                    "AND e.file_id = :fid "
+                    "AND e.embedding_type = 'text_content' "
+                    "ORDER BY v.distance"
+                ),
+                {"vec": vec_bytes, "k": knn_k, "fid": file_id},
+            ).fetchall()
+    except Exception as e:  # noqa: BLE001 - fail soft, don't break RAG
+        logger.warning(
+            "Vector chunk lookup failed for %s: %s", file_id, e
+        )
+        return []
+
+    indices: list[int] = []
+    seen: set[int] = set()
+    for emb_id, _distance in rows:
+        match = _TEXT_EMBEDDING_ID_CHUNK_RE.match(emb_id or "")
+        if not match:
+            continue
+        idx = int(match.group(1))
+        if idx in seen:
+            continue
+        seen = {*seen, idx}
+        indices = [*indices, idx]
+        if len(indices) >= top_n:
+            break
+    return indices
+
+
+def _fetch_document_chunks_by_keyword_or(
+    file_id: str,
+    keywords: str,
+    top_n: int,
+) -> list[int]:
+    """Return chunk indices that literally contain any of the keywords.
+
+    FTS5 OR search within the target file — complements the vector
+    pass by catching chunks where the answer phrasing literally
+    contains a query token even though the chunk's embedding is far
+    from the query embedding. This is common for terse summary
+    passages (e.g. a one-line enumeration of 5 agreed points) whose
+    vector doesn't match the wordy question but whose text contains
+    the question's literal anchor words.
+
+    Each whitespace-separated keyword is quoted as an FTS5 phrase and
+    joined with ``OR`` so any single keyword hitting is enough. Chunk
+    indices are returned in FTS rank order, deduped.
+    """
+    if top_n <= 0:
+        return []
+
+    terms = [t.strip() for t in (keywords or "").split() if t.strip()]
+    if not terms:
+        return []
+
+    quoted = [f'"{t.replace(chr(34), "")}"' for t in terms if t.replace(chr(34), "")]
+    if not quoted:
+        return []
+    fts_query = " OR ".join(quoted)
+
+    try:
+        with get_search_db() as session:
+            rows = session.execute(
+                sql_text(
+                    "SELECT chunk_index "
+                    "FROM fts_text_content "
+                    "WHERE fts_text_content MATCH :q "
+                    "AND file_id = :fid "
+                    "ORDER BY rank "
+                    "LIMIT :lim"
+                ),
+                {"q": fts_query, "fid": file_id, "lim": top_n * 3},
+            ).fetchall()
+    except Exception as e:  # noqa: BLE001 - fail soft
+        logger.warning(
+            "Keyword chunk lookup failed for %s: %s", file_id, e
+        )
+        return []
+
+    indices: list[int] = []
+    seen: set[int] = set()
+    for row in rows:
+        try:
+            idx = int(row[0])
+        except (TypeError, ValueError):
+            continue
+        if idx in seen:
+            continue
+        seen = {*seen, idx}
+        indices = [*indices, idx]
+        if len(indices) >= top_n:
+            break
+    return indices
 
 
 def _fetch_blip_caption(file_id: str) -> str | None:
@@ -275,35 +429,102 @@ def _collect_transcript_snippets(
 
 def _collect_document_snippets(
     candidate: RetrievedFile,
+    rag_config: RagConfig,
+    query_vector: np.ndarray | None = None,
+    keywords: str | None = None,
 ) -> list[ContextSnippet]:
-    """Build text_content snippets for a document file."""
+    """Build text_content snippets for a document file.
+
+    Combines two chunk-selection strategies:
+
+    1. **Vector-similar chunks** (preferred, listed first): when
+       ``query_vector`` is provided and ``document_vector_top_n > 0``,
+       pull the top-N nearest ``text_content`` chunks of this file
+       from ``vec_text``. This handles the vocabulary-mismatch case
+       where the file was retrieved via semantic similarity but no
+       literal keyword landed on the answer passage.
+    2. **Keyword-match chunks**: the historical path — chunks that
+       FTS matched, plus their immediate neighbors.
+
+    Vector-selected chunks appear before keyword-selected ones so the
+    per-file character budget (enforced downstream in ``_cap_snippets``)
+    favours semantically-relevant text over keyword-incidental text.
+    Duplicate chunk indices are dropped on the way in.
+    """
     snippets: list[ContextSnippet] = []
     seen_indices: set[int] = set()
-    for segment in candidate.segments:
-        for match in segment.matches:
-            # The `page` field on MatchInfo carries the chunk index for
-            # document results (see app.search). Fall back to 0 when
-            # unset so we still fetch something.
-            chunk_idx = match.page if match.page is not None else 0
-            if chunk_idx in seen_indices:
-                continue
-            seen_indices = {*seen_indices, chunk_idx}
+
+    def _emit(chunk_idx: int, source_tag: str, expand: bool) -> None:
+        nonlocal snippets, seen_indices
+        if chunk_idx in seen_indices:
+            return
+        seen_indices = {*seen_indices, chunk_idx}
+        if expand:
             chunks = _fetch_document_chunks_around(
                 candidate.file_id, chunk_idx
             )
             if not chunks:
-                continue
+                return
             text = "\n\n".join(c[1] for c in chunks if c[1])
-            if not text:
-                continue
-            snippets = [
-                *snippets,
-                ContextSnippet(
-                    source="text_content",
-                    text=text,
-                    location=f"chunk {chunk_idx}",
-                ),
-            ]
+        else:
+            # Vector-selected chunks don't need ±1 neighbor padding —
+            # vector similarity already picked the right passage, and
+            # padding every hit would crowd the per-file budget so
+            # only the first-ranked chunk fits. Emit the single chunk
+            # text directly so top_n distinct chunks can coexist.
+            chunks = _fetch_document_chunks_around(
+                candidate.file_id, chunk_idx
+            )
+            text = next(
+                (c[1] for c in chunks if c[0] == chunk_idx and c[1]), ""
+            )
+        if not text:
+            return
+        snippets = [
+            *snippets,
+            ContextSnippet(
+                source=source_tag,
+                text=text,
+                location=f"chunk {chunk_idx}",
+            ),
+        ]
+
+    # (1a) Literal keyword-OR chunks first. Terse summary passages
+    # (e.g. a one-line "5 点で合意" enumeration) rank low in vector
+    # space against a wordy question but contain the question's
+    # literal anchor words — surface them before vector candidates
+    # so they win the per-file char budget. Run against
+    # ``filter_keywords(keywords)`` so question-word noise does not
+    # dilute the OR set.
+    if keywords and rag_config.document_vector_top_n > 0:
+        cleaned = filter_keywords(keywords)
+        if cleaned:
+            for idx in _fetch_document_chunks_by_keyword_or(
+                candidate.file_id,
+                cleaned,
+                rag_config.document_vector_top_n,
+            ):
+                _emit(idx, "text_content_keyword", expand=False)
+
+    # (1b) Vector-similar chunks next. No ±1 expansion — keep each
+    # hit compact so multiple chunks fit under the per-file budget.
+    if query_vector is not None and rag_config.document_vector_top_n > 0:
+        for idx in _fetch_document_chunks_by_vector(
+            candidate.file_id,
+            query_vector,
+            rag_config.document_vector_top_n,
+        ):
+            _emit(idx, "text_content_vector", expand=False)
+
+    # (2) Keyword-match chunks with ±1 neighbor padding (historical
+    # path). Neighbor padding still matters here because the keyword
+    # match may land on a short fragment that needs surrounding prose
+    # for the LLM to interpret.
+    for segment in candidate.segments:
+        for match in segment.matches:
+            chunk_idx = match.page if match.page is not None else 0
+            _emit(chunk_idx, "text_content", expand=True)
+
     return snippets
 
 
@@ -333,6 +554,8 @@ def _collect_image_snippets(
 def build_file_context(
     candidate: RetrievedFile,
     rag_config: RagConfig,
+    query_vector: np.ndarray | None = None,
+    keywords: str | None = None,
 ) -> FileContext:
     """Build a compact context excerpt for a single retrieved file.
 
@@ -354,7 +577,12 @@ def build_file_context(
     if file_type in ("video", "audio"):
         snippets = _collect_transcript_snippets(candidate, rag_config)
     elif file_type in ("document", "text"):
-        snippets = _collect_document_snippets(candidate)
+        snippets = _collect_document_snippets(
+            candidate,
+            rag_config,
+            query_vector=query_vector,
+            keywords=keywords,
+        )
     elif file_type == "image":
         snippets = _collect_image_snippets(candidate)
     else:
@@ -388,6 +616,8 @@ def build_file_context(
 def assemble_contexts(
     candidates: list[RetrievedFile],
     rag_config: RagConfig,
+    query: str | None = None,
+    keywords: str | None = None,
 ) -> list[FileContext]:
     """Build contexts for all candidates, enforcing the total budget.
 
@@ -395,9 +625,32 @@ def assemble_contexts(
     file's context would push the cumulative character total past
     ``max_total_context_chars``, the remaining lower-scored files are
     dropped. Files with zero snippets are filtered out of the result.
+
+    When ``query`` is provided and any document file has
+    ``document_vector_top_n > 0`` configured, the query is embedded
+    once here and the resulting vector is threaded into document
+    context builders so chunk selection can use semantic similarity
+    in addition to FTS keyword matches. Embedding failures fall back
+    to keyword-only behaviour; the helper never raises.
     """
     if not candidates:
         return []
+
+    # Embed the query once (rather than per-file) when it's worth
+    # doing — i.e., the vector pass is enabled and at least one
+    # candidate is a document. Transcripts / images / audio don't use
+    # this vector so we don't pay the embedding cost for them.
+    query_vector: np.ndarray | None = None
+    if query and rag_config.document_vector_top_n > 0 and any(
+        c.file_type in ("document", "text") for c in candidates
+    ):
+        try:
+            query_vector = embed_query(query)
+        except Exception as e:  # noqa: BLE001 - fail soft, don't break RAG
+            logger.warning(
+                "Query embedding failed in context builder: %s", e
+            )
+            query_vector = None
 
     # Sort by score desc — highest-scored files get the budget first.
     ordered = sorted(candidates, key=lambda c: c.score, reverse=True)
@@ -406,8 +659,18 @@ def assemble_contexts(
     running_total = 0
     budget = rag_config.max_total_context_chars
 
+    # Use transformed keywords when available; otherwise fall back
+    # to the raw query so the keyword-OR FTS pass still has tokens
+    # to work with (filter_keywords strips question words inside).
+    effective_keywords = keywords or query
+
     for candidate in ordered:
-        ctx = build_file_context(candidate, rag_config)
+        ctx = build_file_context(
+            candidate,
+            rag_config,
+            query_vector=query_vector,
+            keywords=effective_keywords,
+        )
         if not ctx.snippets:
             continue
         if running_total + ctx.total_chars > budget:

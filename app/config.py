@@ -125,15 +125,23 @@ class RagConfig:
     top_k: int = 5
     # Max characters of context extracted from each file
     # (from segment matches, not full transcripts).
-    max_context_chars_per_file: int = 2000
+    max_context_chars_per_file: int = 3500
     # Hard cap on total context size across all retrieved files.
     # When exceeded, lower-scoring files are dropped.
-    max_total_context_chars: int = 10000
+    max_total_context_chars: int = 17500
     # LLM max_tokens override for answer + citations generation.
     max_tokens: int = 1024
     # How many characters around a timestamped transcript match
     # to include as "context window" (only when segments have times).
     transcript_window_seconds: float = 30.0
+    # For document files: number of top vector-similar chunks to pull
+    # into the LLM context, in addition to keyword-match chunks. This
+    # rescues queries whose natural-language vocabulary doesn't overlap
+    # with the target file's literal tokens — the file-level vector
+    # channel already surfaced the right file, but keyword-driven chunk
+    # selection can still miss the actual answer passage. 0 disables
+    # the vector pass and restores keyword-only behaviour.
+    document_vector_top_n: int = 6
 
 
 @dataclass(frozen=True)

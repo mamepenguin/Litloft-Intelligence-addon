@@ -68,6 +68,7 @@ def _segment_location_for(
     file_id: str,
     candidates: list[RetrievedFile],
     quote: str = "",
+    contexts: list | None = None,
 ) -> str | None:
     """Best-effort timestamp/page label for a citation's source file.
 
@@ -80,27 +81,82 @@ def _segment_location_for(
     Output: ``m:ss`` for time-based matches, ``page N`` for document
     matches. Falls back to the first match in the first segment when
     quote is empty or has no overlap with any match text.
+
+    The ``MatchInfo`` path (candidate.segments) is preferred because
+    it carries fine-grained per-match timestamps — for long videos the
+    enclosing ``SegmentGroup`` covers many seconds, and the group's
+    start is a much worse location than the individual match's
+    ``timestamp_start``. The ``contexts`` snippet path is used only as
+    a fallback when the candidate has no matches (e.g. vector-only
+    document chunks have no ``MatchInfo`` entry and their location
+    lives on the assembled snippet as ``"chunk N"``).
     """
     for candidate in candidates:
         if candidate.file_id != file_id:
             continue
         if not candidate.segments:
-            return None
+            break
 
         best_match = _pick_match_for_quote(candidate.segments, quote)
         if best_match is None:
-            # No matches at all — fall back to segment[0].time_range.
             seg0 = candidate.segments[0]
             if seg0.time_range is not None:
                 seconds = int(max(0.0, seg0.time_range[0]))
                 return f"{seconds // 60}:{seconds % 60:02d}"
-            return None
+            break
 
         if best_match.timestamp_start is not None:
             seconds = int(max(0.0, best_match.timestamp_start))
             return f"{seconds // 60}:{seconds % 60:02d}"
         if best_match.page is not None:
             return f"page {best_match.page}"
+        break
+
+    # Fallback: vector-selected document chunks have no MatchInfo entry.
+    # Locate the snippet whose body contains the quote and return its
+    # "chunk N" label.
+    if contexts and quote and quote.strip():
+        snippet_location = _snippet_location_for_quote(
+            file_id, contexts, quote
+        )
+        if snippet_location is not None:
+            return snippet_location
+
+    return None
+
+
+def _snippet_location_for_quote(
+    file_id: str,
+    contexts: list,
+    quote: str,
+) -> str | None:
+    """Find the snippet whose text best overlaps the LLM-provided quote.
+
+    Walks the snippets of the ``FileContext`` matching ``file_id`` and
+    returns the ``location`` of the snippet with the largest overlap
+    with ``quote``. Returns ``None`` when the file has no contexts or
+    no snippet overlaps the quote at all — the caller then falls back
+    to the candidate-segments path.
+    """
+    for ctx in contexts:
+        if getattr(ctx, "file_id", None) != file_id:
+            continue
+        best_score = 0
+        best_location: str | None = None
+        for snippet in getattr(ctx, "snippets", ()):
+            text = getattr(snippet, "text", "") or ""
+            if not text:
+                continue
+            score = _quote_overlap_score(quote, text)
+            if score > best_score:
+                best_score = score
+                best_location = getattr(snippet, "location", None)
+        # Require a real overlap (length * 1000 term) before trusting
+        # the location — pure character-set overlap is too noisy for
+        # long snippets and would pin unrelated quotes to arbitrary
+        # chunks.
+        if best_score >= 3_000 and best_location:
+            return best_location
         return None
     return None
 
@@ -159,6 +215,7 @@ def _quote_overlap_score(quote: str, text: str) -> int:
 def _to_citation_dict(
     citation: Citation,
     candidates: list[RetrievedFile],
+    contexts: list | None = None,
 ) -> dict[str, Any]:
     """Convert a parsed Citation into the router-ready dict shape.
 
@@ -194,7 +251,7 @@ def _to_citation_dict(
         "quote": citation.quote,
         "relevance": citation.relevance,
         "segment_location": _segment_location_for(
-            citation.file_id, candidates, citation.quote
+            citation.file_id, candidates, citation.quote, contexts=contexts
         ),
     }
 
@@ -252,7 +309,7 @@ async def answer_question(
         )
 
     # Stage 2: build per-file contexts under budget.
-    contexts = assemble_contexts(candidates, rag_config)
+    contexts = assemble_contexts(candidates, rag_config, query=query)
 
     # Stage 3: LLM call.
     llm = get_llm_client()
@@ -285,7 +342,7 @@ async def answer_question(
         )
 
     citations = [
-        _to_citation_dict(c, candidates) for c in parsed.citations
+        _to_citation_dict(c, candidates, contexts=contexts) for c in parsed.citations
     ]
 
     return AnswerResponse(
@@ -417,7 +474,7 @@ async def stream_answer(
         return
 
     # Stage 2: build per-file contexts under budget.
-    contexts = assemble_contexts(candidates, rag_config)
+    contexts = assemble_contexts(candidates, rag_config, query=query)
 
     # Stage 3: stream the LLM answer.
     llm = get_llm_client()
@@ -477,7 +534,7 @@ async def stream_answer(
         citations: list[dict[str, Any]] = []
     else:
         citations = [
-            _to_citation_dict(c, candidates) for c in parsed.citations
+            _to_citation_dict(c, candidates, contexts=contexts) for c in parsed.citations
         ]
 
     yield AnswerEvent(kind="citations", data={"citations": citations})

@@ -1,0 +1,38 @@
+id: 012_vocab_mismatch_vit
+query: "畳み込みを使わずに画像処理を実現した新しいアーキテクチャは何？"
+
+# Vocabulary-mismatch recall case. The query deliberately uses "畳み込み"
+# — CNN terminology that does NOT appear in tech_paper.md (the doc lists
+# "CNN" only as a bare acronym). The target paragraph is the ViT section,
+# which describes パッチ系列 / Transformer / 大規模事前学習 without ever
+# saying 畳み込み. The query naturally yields 4–5 keywords after Stage 1
+# transform ("畳み込み 画像処理 新しい アーキテクチャ" 系列), and most of
+# them miss the doc's literal tokens — so the FTS AND-joined keyword
+# channel returns zero, and retrieval must succeed via vector similarity
+# alone.
+#
+# Real-world trigger: a user asked about "Knowledge / Round A /
+# 3 エージェント合意" when the target file's title was
+# "HomeVault × Karpathy Second Brain / WriteBack-RAG — 取り込み提案書".
+# Query language and title language had zero overlap; 5 AND-joined
+# keywords hit nothing; the target (hako id 19rWVBEF11TL) never surfaced.
+# This case is the test-drive analogue of that failure.
+
+expected_keywords:
+  must_include:
+    - "画像"
+  must_exclude:
+    - "実現"
+
+ground_truth_files:
+  - path: "docs/tech_paper.md"
+
+must_mention:
+  - "ViT"
+
+notes: |
+  Diagnostic for recall-mode vector thresholds. If Stage 2 file_recall=0
+  here while other cases pass, the FTS channel is carrying more of the
+  load than we thought and min_score_text=0.75 is too tight to rescue
+  queries whose vocabulary drifts from the corpus surface form. Use this
+  case as the pivot when sweeping _RecallParams.min_score_text.
