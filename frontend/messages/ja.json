@@ -27,7 +27,7 @@
     "showMore": "もっと見る"
   },
   "askSearch": {
-    "button": "「{query}」について AI で質問応答",
+    "button": "「{query}」について AI に質問する",
     "loading": "回答を生成中...",
     "loadingHint": "(数秒かかることがあります)",
     "answerTitle": "AI 回答",
