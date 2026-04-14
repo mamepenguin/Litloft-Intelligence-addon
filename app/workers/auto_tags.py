@@ -129,26 +129,46 @@ class AutoTagsWorker:
         self._queue: asyncio.Queue[str] = asyncio.Queue()
 
     async def enqueue(self, file_id: str) -> None:
-        """Add a file to the auto-tagging queue."""
+        """Add a file to the auto-tagging queue.
+
+        Per-drive policy (``intelligence.auto_tags``) is checked here
+        so files in opted-out drives never enter the queue. The check
+        fails open so a transient internal-API failure won't suppress
+        legitimate work.
+        """
+        from app.policy_client import is_file_feature_enabled
+        if not await is_file_feature_enabled(file_id, "auto_tags"):
+            return
         await self._queue.put(file_id)
 
     async def enqueue_unprocessed(self) -> int:
         """Find indexed files without suggested tags and enqueue them.
 
         Returns:
-            Number of files queued.
+            Number of files queued (after per-drive policy filtering).
         """
+        from app.policy_client import is_feature_enabled
+
         with get_search_db() as session:
             rows = session.execute(
                 sql_text(
-                    "SELECT f.file_id FROM indexed_files f "
+                    "SELECT f.file_id, f.drive FROM indexed_files f "
                     "WHERE f.active = 1 AND f.metadata_indexed = 1 "
                     "AND f.file_id NOT IN (SELECT file_id FROM suggested_tags)"
                 )
             ).fetchall()
 
+        # Cache per-drive decisions so we don't pay one HTTP round-trip
+        # per file when many files share a drive.
+        drive_allowed: dict[str, bool] = {}
         count = 0
-        for (file_id,) in rows:
+        for file_id, drive in rows:
+            allowed = drive_allowed.get(drive)
+            if allowed is None:
+                allowed = await is_feature_enabled(drive, "auto_tags")
+                drive_allowed[drive] = allowed
+            if not allowed:
+                continue
             await self._queue.put(file_id)
             count += 1
         return count

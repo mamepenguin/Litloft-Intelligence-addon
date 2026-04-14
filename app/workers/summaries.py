@@ -373,7 +373,15 @@ class SummariesWorker:
         self._queue: asyncio.Queue[str] = asyncio.Queue()
 
     async def enqueue(self, file_id: str) -> None:
-        """Add a file to the summaries queue."""
+        """Add a file to the summaries queue.
+
+        Per-drive policy (``intelligence.summaries``) is checked here
+        so files in opted-out drives never enter the queue. Fails open
+        on transient internal-API failure.
+        """
+        from app.policy_client import is_file_feature_enabled
+        if not await is_file_feature_enabled(file_id, "summaries"):
+            return
         await self._queue.put(file_id)
 
     async def enqueue_unprocessed(self) -> int:
@@ -381,22 +389,33 @@ class SummariesWorker:
 
         Only enqueues files whose file_type is supported by summaries
         (video/audio/document) and whose metadata has been indexed.
+        Per-drive policy (``intelligence.summaries``) is consulted once
+        per drive so opted-out drives don't generate any summary work.
 
         Returns:
-            Number of files queued.
+            Number of files queued (after policy filtering).
         """
+        from app.policy_client import is_feature_enabled
+
         with get_search_db() as session:
             rows = session.execute(
                 sql_text(
-                    "SELECT f.file_id FROM indexed_files f "
+                    "SELECT f.file_id, f.drive FROM indexed_files f "
                     "WHERE f.active = 1 AND f.metadata_indexed = 1 "
                     "AND f.file_type IN ('video', 'audio', 'document', 'text') "
                     "AND f.file_id NOT IN (SELECT file_id FROM file_summaries)"
                 )
             ).fetchall()
 
+        drive_allowed: dict[str, bool] = {}
         count = 0
-        for (file_id,) in rows:
+        for file_id, drive in rows:
+            allowed = drive_allowed.get(drive)
+            if allowed is None:
+                allowed = await is_feature_enabled(drive, "summaries")
+                drive_allowed[drive] = allowed
+            if not allowed:
+                continue
             await self._queue.put(file_id)
             count += 1
         return count

@@ -320,6 +320,30 @@ class IndexManager:
         Returns:
             Number of files added.
         """
+        from app.policy_client import is_feature_enabled
+
+        # Per-drive policy gate: drop files whose drive disables the
+        # ``index`` feature in drives.json before they touch the search
+        # DB. The host already filters the scan-complete webhook for
+        # listeners that opt in, but workers run reconcile() unprompted
+        # too — so we re-check here. is_feature_enabled fails open on
+        # network errors; this is a worker optimisation, not the
+        # security boundary.
+        permitted: list[dict] = []
+        for f in files:
+            try:
+                if await is_feature_enabled(f["drive"], "index"):
+                    permitted.append(f)
+                else:
+                    logger.debug(
+                        "Skipping %s: intelligence.index disabled for drive %s",
+                        f["id"], f["drive"],
+                    )
+            except Exception:
+                # Defensive: never let policy lookup block real work.
+                permitted.append(f)
+        files = permitted
+
         added = 0
 
         with get_search_db() as session:
@@ -619,6 +643,14 @@ class IndexManager:
         Args:
             drive: The drive that was scanned.
         """
+        from app.policy_client import is_feature_enabled
+
+        if not await is_feature_enabled(drive, "index"):
+            logger.info(
+                "Skipping reconcile for drive %s (intelligence.index disabled)",
+                drive,
+            )
+            return
         logger.info("Handling scan-complete for drive: %s", drive)
         await self.reconcile()
 
