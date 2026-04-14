@@ -49,7 +49,7 @@ function ProgressBar({
   );
 }
 
-function StatusContent({ status, drive }: { status: SearchServiceStatus; drive: string }) {
+function StatusContent({ status, drive }: { status: SearchServiceStatus; drive?: string }) {
   const t = useTranslations("semanticSearch");
   const [confirmReindex, setConfirmReindex] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -194,10 +194,11 @@ function StatusContent({ status, drive }: { status: SearchServiceStatus; drive: 
 }
 
 interface IndexStatusWidgetProps {
-  // Optional so the widget can be dropped into the global /admin
-  // dashboard before Phase 6 wires up an admin-widgets slot. With no
-  // drive we render an "unavailable" panel — the addon is scope=drive
-  // and requires X-HV-Drive on every status call.
+  // Optional: when omitted the widget renders the global admin view
+  // (process-wide queue + total indexed counts), suitable for /admin's
+  // dashboard-widgets slot. When passed, it currently renders the same
+  // global counters but flagged with the drive context — a future
+  // change can split per-drive vs global counters here.
   drive?: string;
 }
 
@@ -207,24 +208,19 @@ export default function IndexStatusWidget({ drive }: IndexStatusWidgetProps) {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchStatus = useCallback(async () => {
-    if (!drive) {
-      setStatus({ available: false });
-      return;
-    }
     const result = await getSearchStatus(drive);
     setStatus(result);
   }, [drive]);
 
   useEffect(() => {
     fetchStatus();
-    if (!drive) return;
     intervalRef.current = setInterval(fetchStatus, POLL_INTERVAL);
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
       }
     };
-  }, [fetchStatus, drive]);
+  }, [fetchStatus]);
 
   if (status === null) {
     return (
@@ -248,7 +244,7 @@ export default function IndexStatusWidget({ drive }: IndexStatusWidgetProps) {
         </h3>
       </div>
 
-      {status.available && drive ? (
+      {status.available ? (
         <StatusContent status={status} drive={drive} />
       ) : (
         <div className="flex items-center gap-2 text-sm text-text-muted">

@@ -188,11 +188,17 @@ export async function searchCompare(
   }
 }
 
-export async function getSearchStatus(drive: string): Promise<SearchServiceStatus> {
+export async function getSearchStatus(
+  drive?: string,
+): Promise<SearchServiceStatus> {
+  // /status returns process-global counters (queue, indexed totals
+  // across all drives). The host marks it drive_optional so the admin
+  // dashboard can call it without a drive context, while per-drive
+  // pages still pass their drive for consistency.
   try {
     return await fetchJSON<SearchServiceStatus>(
       `${API_BASE}/addons/intelligence/status`,
-      { headers: driveHeaders(drive) },
+      drive ? { headers: driveHeaders(drive) } : {},
     );
   } catch {
     return { available: false };
@@ -214,39 +220,42 @@ export async function getSimilarFiles(
   }
 }
 
-// Queue control. The queue is a process-global resource but the addon
-// is now scope=drive, so the host proxy still requires X-HV-Drive on
-// every route. Callers pass whichever drive context they happen to be
-// in; the backend ignores the header for queue ops. Phase 6 will move
-// these to a dedicated /admin surface so they no longer need a drive.
-export async function searchQueuePause(drive: string): Promise<void> {
+// Queue control. The queue is a process-global resource owned by the
+// addon container; per-drive context is meaningless for it. The host
+// marks every /queue/* route drive_optional so admin tooling can call
+// them without an active drive, while per-drive widgets that happen
+// to surface a queue button can still pass a drive header for
+// observability.
+export async function searchQueuePause(drive?: string): Promise<void> {
   await fetchJSON(`${API_BASE}/addons/intelligence/queue/pause`, {
     method: "POST",
-    headers: driveHeaders(drive),
+    headers: drive ? driveHeaders(drive) : undefined,
   });
 }
 
-export async function searchQueueResume(drive: string): Promise<void> {
+export async function searchQueueResume(drive?: string): Promise<void> {
   await fetchJSON(`${API_BASE}/addons/intelligence/queue/resume`, {
     method: "POST",
-    headers: driveHeaders(drive),
+    headers: drive ? driveHeaders(drive) : undefined,
   });
 }
 
-export async function searchQueueReindex(drive: string): Promise<void> {
+export async function searchQueueReindex(drive?: string): Promise<void> {
   await fetchJSON(`${API_BASE}/addons/intelligence/queue/reindex`, {
     method: "POST",
-    headers: driveHeaders(drive),
+    headers: drive ? driveHeaders(drive) : undefined,
   });
 }
 
 export async function searchQueuePrioritize(
   fileId: string,
-  drive: string,
+  drive?: string,
 ): Promise<void> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (drive) Object.assign(headers, driveHeaders(drive));
   await fetchJSON(`${API_BASE}/addons/intelligence/queue/prioritize`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...driveHeaders(drive) },
+    headers,
     body: JSON.stringify({ file_id: fileId }),
   });
 }
