@@ -67,25 +67,93 @@ class AnswerResponse:
 def _segment_location_for(
     file_id: str,
     candidates: list[RetrievedFile],
+    quote: str = "",
 ) -> str | None:
     """Best-effort timestamp/page label for a citation's source file.
 
-    Uses the first segment of the matching retrieved file to produce
-    a human-readable location. For video/audio this is ``m:ss``; for
-    documents we use the chunk/page number from ``MatchInfo.page``.
+    Drills down to the individual MatchInfo whose text best overlaps
+    the LLM-provided ``quote``. This matters for long videos where the
+    indexer aggregates many transcript chunks into one wide
+    SegmentGroup (e.g. [95s, 478s]); using the group's start would
+    point to the segment opening rather than the cited moment.
+
+    Output: ``m:ss`` for time-based matches, ``page N`` for document
+    matches. Falls back to the first match in the first segment when
+    quote is empty or has no overlap with any match text.
     """
     for candidate in candidates:
         if candidate.file_id != file_id:
             continue
-        for segment in candidate.segments:
-            if segment.time_range is not None:
-                seconds = int(max(0.0, segment.time_range[0]))
+        if not candidate.segments:
+            return None
+
+        best_match = _pick_match_for_quote(candidate.segments, quote)
+        if best_match is None:
+            # No matches at all — fall back to segment[0].time_range.
+            seg0 = candidate.segments[0]
+            if seg0.time_range is not None:
+                seconds = int(max(0.0, seg0.time_range[0]))
                 return f"{seconds // 60}:{seconds % 60:02d}"
-            for match in segment.matches:
-                if match.page is not None:
-                    return f"page {match.page}"
+            return None
+
+        if best_match.timestamp_start is not None:
+            seconds = int(max(0.0, best_match.timestamp_start))
+            return f"{seconds // 60}:{seconds % 60:02d}"
+        if best_match.page is not None:
+            return f"page {best_match.page}"
         return None
     return None
+
+
+def _pick_match_for_quote(segments, quote: str):
+    """Return the single MatchInfo whose text best overlaps ``quote``.
+
+    Iterates every MatchInfo across every segment and scores by
+    substring containment of the quote in the match text (with
+    char-overlap tiebreak). Returns the first match by retriever order
+    when ``quote`` is empty or no overlap is found, or ``None`` when
+    the candidate has no matches at all.
+    """
+    first_match = None
+    for segment in segments:
+        for match in segment.matches:
+            if first_match is None:
+                first_match = match
+            if not match.text:
+                continue
+
+    if not quote or not quote.strip():
+        return first_match
+
+    quote_norm = quote.strip()
+    best = first_match
+    best_score = -1
+    for segment in segments:
+        for match in segment.matches:
+            if not match.text:
+                continue
+            score = _quote_overlap_score(quote_norm, match.text)
+            if score > best_score:
+                best_score = score
+                best = match
+    return best
+
+
+def _quote_overlap_score(quote: str, text: str) -> int:
+    """Substring-containment score; tiebreaker = shared char count.
+
+    Walks decreasing-length windows of the quote until one is found in
+    the text. The returned score is dominated by window length (×1000)
+    so a 10-char substring always beats a 5-char one regardless of how
+    many random characters happen to overlap.
+    """
+    max_window = min(len(quote), 64)
+    for size in range(max_window, 2, -1):
+        for start in range(0, len(quote) - size + 1):
+            window = quote[start : start + size]
+            if window in text:
+                return size * 1000 + len(set(quote) & set(text))
+    return len(set(quote) & set(text))
 
 
 def _to_citation_dict(
@@ -126,7 +194,7 @@ def _to_citation_dict(
         "quote": citation.quote,
         "relevance": citation.relevance,
         "segment_location": _segment_location_for(
-            citation.file_id, candidates
+            citation.file_id, candidates, citation.quote
         ),
     }
 
