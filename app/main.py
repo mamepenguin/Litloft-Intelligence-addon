@@ -84,6 +84,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if reset > 0:
         logger.info("Reset %d falsely completed CLIP files for re-indexing", reset)
 
+    # Per-drive policy: drop everything indexed for drives whose
+    # intelligence.index has been turned off in drives.json. Runs on
+    # every startup so flipping the policy and restarting the addon is
+    # the documented "purge" workflow. Failure inside one drive is
+    # logged but does not block the rest of startup.
+    try:
+        from app.purge import purge_disabled_drives
+        purged = await purge_disabled_drives()
+        if purged:
+            for drive, count in purged.items():
+                logger.info(
+                    "Purged %d files from drive '%s' "
+                    "(intelligence.index disabled in drives.json)",
+                    count, drive,
+                )
+    except Exception:
+        logger.exception("Per-drive policy purge failed; continuing startup")
+
     # Initialize LLM client and auto-tags worker
     llm_client = LLMClient(settings.llm)
     dependencies._llm_client = llm_client
