@@ -2,8 +2,9 @@
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.drive_context import assert_file_in_drive, require_drive
 from app.schemas import KeywordScore, SimilarFileItem, SimilarFilesResponse
 from app.search import find_similar
 
@@ -16,9 +17,9 @@ router = APIRouter(tags=["similar"])
 async def similar_files_endpoint(
     file_id: str,
     limit: int = Query(default=6, ge=1, le=20),
-    drive: str | None = Query(default=None),
+    drive: str = Depends(require_drive),
 ) -> SimilarFilesResponse:
-    """Find files similar to the given file using existing embeddings."""
+    """Find files similar to ``file_id`` within the request's drive."""
     try:
         search_result = find_similar(file_id=file_id, limit=limit, drive=drive)
     except Exception as e:
@@ -53,7 +54,7 @@ async def similar_files_endpoint(
 async def debug_similar_endpoint(
     file_id: str,
     limit: int = Query(default=20, ge=1, le=100),
-    drive: str | None = Query(default=None),
+    drive: str = Depends(require_drive),
 ) -> dict:
     """Debug similar files: returns raw scores from each embedding type."""
     from app.search import (
@@ -74,6 +75,7 @@ async def debug_similar_endpoint(
         )
         if not source:
             raise HTTPException(status_code=404, detail="File not indexed")
+        assert_file_in_drive(source.drive, drive)
 
         source_info = {
             "file_id": source.file_id,

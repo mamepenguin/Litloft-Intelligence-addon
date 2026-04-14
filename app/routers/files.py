@@ -4,12 +4,13 @@ import logging
 import subprocess
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy import text as sql_text
 
 from app.config import settings
 from app.dependencies import get_auto_tags_worker
+from app.drive_context import assert_file_in_drive, require_drive
 from app.schemas import (
     BatchSuggestedTagsRequest,
     BatchSuggestedTagsResponse,
@@ -32,8 +33,13 @@ _EMBEDDING_TYPES = ("metadata", "clip", "whisper", "text_content", "blip_caption
 _ITEMS_PER_TYPE = 50
 
 
-def _get_indexed_file_or_404(file_id: str) -> dict[str, Any]:
-    """Get an indexed file by ID or raise 404."""
+def _get_indexed_file_or_404(file_id: str, drive: str) -> dict[str, Any]:
+    """Get an indexed file by ID or raise 404.
+
+    Returns 404 both for unknown file_ids and for files that belong to a
+    drive other than the request's. Treating both as 404 keeps the API
+    from leaking which file_ids exist outside the current drive.
+    """
     from app.database import get_search_db
     from app.models import IndexedFile
 
@@ -44,6 +50,7 @@ def _get_indexed_file_or_404(file_id: str) -> dict[str, Any]:
         ).first()
         if not indexed:
             raise HTTPException(status_code=404, detail="File not indexed")
+        assert_file_in_drive(indexed.drive, drive)
         # Detach from session by copying attributes
         return {
             "file_id": indexed.file_id,
@@ -60,12 +67,15 @@ def _get_indexed_file_or_404(file_id: str) -> dict[str, Any]:
 
 
 @router.get("/files/{file_id}/transcript", response_model=TranscriptResponse)
-async def get_transcript(file_id: str) -> TranscriptResponse:
+async def get_transcript(
+    file_id: str,
+    drive: str = Depends(require_drive),
+) -> TranscriptResponse:
     """Get Whisper transcript chunks for a file."""
     from app.database import get_search_db
     from app.models import TranscriptChunk
 
-    indexed = _get_indexed_file_or_404(file_id)
+    indexed = _get_indexed_file_or_404(file_id, drive)
 
     with get_search_db() as db:
         chunks = (
@@ -97,13 +107,16 @@ async def get_transcript(file_id: str) -> TranscriptResponse:
 
 
 @router.get("/files/{file_id}/index-details", response_model=IndexDetailsResponse)
-async def get_index_details(file_id: str) -> IndexDetailsResponse:
+async def get_index_details(
+    file_id: str,
+    drive: str = Depends(require_drive),
+) -> IndexDetailsResponse:
     """Get detailed indexing status and embedding info for a file."""
     from sqlalchemy import func
     from app.database import get_search_db
     from app.models import Embedding
 
-    indexed = _get_indexed_file_or_404(file_id)
+    indexed = _get_indexed_file_or_404(file_id, drive)
 
     embeddings_by_type: dict[str, IndexDetailType] = {}
 
@@ -157,12 +170,15 @@ async def get_index_details(file_id: str) -> IndexDetailsResponse:
 
 
 @router.get("/files/{file_id}/clip-timestamps", response_model=ClipTimestampsResponse)
-async def get_clip_timestamps(file_id: str) -> ClipTimestampsResponse:
+async def get_clip_timestamps(
+    file_id: str,
+    drive: str = Depends(require_drive),
+) -> ClipTimestampsResponse:
     """Get CLIP frame extraction timestamps for a file."""
     from app.database import get_search_db
     from app.models import Embedding
 
-    indexed = _get_indexed_file_or_404(file_id)
+    indexed = _get_indexed_file_or_404(file_id, drive)
 
     with get_search_db() as db:
         clips = (
@@ -192,11 +208,12 @@ async def get_clip_timestamps(file_id: str) -> ClipTimestampsResponse:
 async def get_frame(
     file_id: str,
     t: float = Query(..., ge=0, description="Timestamp in seconds"),
+    drive: str = Depends(require_drive),
 ) -> Response:
     """Extract a single video frame at the given timestamp using ffmpeg."""
     from app.config import resolve_file_path, validate_file_path
 
-    indexed = _get_indexed_file_or_404(file_id)
+    indexed = _get_indexed_file_or_404(file_id, drive)
 
     if indexed["file_type"] != "video":
         raise HTTPException(status_code=400, detail="Not a video file")
@@ -239,13 +256,21 @@ async def get_frame(
 
 
 @router.get("/files/{file_id}/suggested-tags", response_model=SuggestedTagsResponse)
-async def get_suggested_tags(file_id: str) -> SuggestedTagsResponse:
+async def get_suggested_tags(
+    file_id: str,
+    drive: str = Depends(require_drive),
+) -> SuggestedTagsResponse:
     """Get suggested tags for a file."""
     import json as json_mod
     from app.database import get_search_db
 
     if settings.features.auto_tags == "false":
         return SuggestedTagsResponse(available=False)
+
+    # Confirm the target file lives in the request drive before reading
+    # its suggestions; otherwise a malicious caller could probe other
+    # drives' file_ids.
+    _get_indexed_file_or_404(file_id, drive)
 
     with get_search_db() as session:
         row = session.execute(
@@ -275,9 +300,14 @@ async def get_suggested_tags(file_id: str) -> SuggestedTagsResponse:
 
 
 @router.post("/files/{file_id}/suggested-tags/dismiss", response_model=MessageResponse)
-async def dismiss_suggested_tags(file_id: str) -> MessageResponse:
+async def dismiss_suggested_tags(
+    file_id: str,
+    drive: str = Depends(require_drive),
+) -> MessageResponse:
     """Dismiss suggested tags for a file."""
     from app.database import get_search_db
+
+    _get_indexed_file_or_404(file_id, drive)
 
     with get_search_db() as session:
         result = session.execute(
@@ -295,13 +325,17 @@ async def dismiss_suggested_tags(file_id: str) -> MessageResponse:
 
 
 @router.post("/files/{file_id}/suggested-tags/regenerate", response_model=MessageResponse)
-async def regenerate_suggested_tags(file_id: str) -> MessageResponse:
+async def regenerate_suggested_tags(
+    file_id: str,
+    drive: str = Depends(require_drive),
+) -> MessageResponse:
     """Delete existing suggested tags and re-queue for auto-tagging."""
     from app.database import get_search_db
 
     if settings.features.auto_tags == "false":
         raise HTTPException(status_code=400, detail="Auto-tags feature is disabled")
 
+    _get_indexed_file_or_404(file_id, drive)
     auto_tags_worker = get_auto_tags_worker()
 
     # Delete existing entry
@@ -320,19 +354,38 @@ async def regenerate_suggested_tags(file_id: str) -> MessageResponse:
 
 
 @router.post("/batch/suggested-tags", response_model=BatchSuggestedTagsResponse)
-async def batch_suggested_tags(body: BatchSuggestedTagsRequest) -> BatchSuggestedTagsResponse:
-    """Queue auto-tagging for a batch of files. Skips files that already have suggestions."""
+async def batch_suggested_tags(
+    body: BatchSuggestedTagsRequest,
+    drive: str = Depends(require_drive),
+) -> BatchSuggestedTagsResponse:
+    """Queue auto-tagging for a batch of files in the current drive.
+
+    Files that don't belong to the request drive are silently dropped
+    (counted as skipped) so other-drive file_ids cannot be probed and
+    cross-drive LLM cost cannot be incurred from a single drive context.
+    """
     from app.database import get_search_db
+    from app.models import IndexedFile
 
     if settings.features.auto_tags == "false":
         raise HTTPException(status_code=400, detail="Auto-tags feature is disabled")
 
     auto_tags_worker = get_auto_tags_worker()
 
-    # Find which files already have suggested tags
-    with get_search_db() as session:
-        existing: set[str] = set()
-        if body.file_ids:
+    in_drive: set[str] = set()
+    existing: set[str] = set()
+    if body.file_ids:
+        with get_search_db() as session:
+            in_drive = {
+                row.file_id
+                for row in session.query(IndexedFile.file_id)
+                .filter(
+                    IndexedFile.file_id.in_(body.file_ids),
+                    IndexedFile.drive == drive,
+                    IndexedFile.active.is_(True),
+                )
+                .all()
+            }
             placeholders = ",".join(f":id{i}" for i in range(len(body.file_ids)))
             params = {f"id{i}": fid for i, fid in enumerate(body.file_ids)}
             for row in session.execute(
@@ -344,7 +397,7 @@ async def batch_suggested_tags(body: BatchSuggestedTagsRequest) -> BatchSuggeste
     queued = 0
     skipped = 0
     for file_id in body.file_ids:
-        if file_id in existing:
+        if file_id not in in_drive or file_id in existing:
             skipped += 1
         else:
             await auto_tags_worker.enqueue(file_id)

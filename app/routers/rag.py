@@ -27,11 +27,12 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, HTTPException
+from fastapi import APIRouter, Cookie, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.config import settings
 from app.dependencies import get_llm_client
+from app.drive_context import require_drive
 from app.rag.service import (
     AnswerEvent,
     stream_answer,
@@ -201,6 +202,7 @@ async def _sse_stream(
 async def ask_endpoint(
     body: AskRequest,
     access_token: Annotated[str | None, Cookie()] = None,
+    drive: str = Depends(require_drive),
 ) -> StreamingResponse:
     """Answer a natural-language question using retrieval-augmented generation.
 
@@ -236,6 +238,13 @@ async def ask_endpoint(
     if len(body.query.strip()) < 3:
         raise HTTPException(status_code=400, detail="Query too short")
 
+    # If the body redundantly specifies a drive, it must agree with the
+    # X-HV-Drive header. The header is the source of truth (set by the
+    # host's Generic Addon Proxy from the URL); a mismatch indicates a
+    # spoofed body and is rejected outright.
+    if body.drive and body.drive != drive:
+        raise HTTPException(status_code=403, detail="Drive mismatch")
+
     # Acquire a concurrency slot BEFORE opening the SSE stream. If the
     # semaphore is full, fail fast with 503 so the caller sees a real
     # HTTP error instead of an opaque "stream never produced anything"
@@ -260,7 +269,7 @@ async def ask_endpoint(
             access_token=access_token,
             top_k=body.top_k,
             file_type=body.file_type,
-            drive=body.drive,
+            drive=drive,
             semaphore=semaphore,
         )
         return StreamingResponse(

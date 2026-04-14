@@ -3,8 +3,9 @@
 import logging
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.drive_context import require_drive
 from app.schemas import (
     CompareResponseModel,
     SearchResponseModel,
@@ -72,7 +73,6 @@ async def search_endpoint(
     q: str = Query(..., min_length=1, description="Search query"),
     limit: int = Query(default=20, ge=1, le=100, description="Max results"),
     type: str | None = Query(default=None, description="File type filter"),
-    drive: str | None = Query(default=None, description="Drive name filter"),
     mode: Literal["precision", "recall"] = Query(
         default="precision",
         description=(
@@ -80,18 +80,14 @@ async def search_endpoint(
             "'recall' is for admin comparison with the RAG / Ask pipeline."
         ),
     ),
+    drive: str = Depends(require_drive),
 ) -> SearchResponseModel:
-    """Execute a semantic search query.
+    """Execute a semantic search query within the request's drive.
 
-    Combines vector similarity search with keyword matching
-    to find relevant files across all indexed content.
-
-    The ``mode`` parameter exists so admin tooling can compare the
-    precision ranking (what the search UI returns) side-by-side with
-    the recall ranking (what the RAG retriever sees). End-user traffic
-    always uses the default ``precision`` mode; the manifest does not
-    need any special handling because ``mode`` is just another query
-    string parameter passed through the addon proxy.
+    Drive scope is set by the ``X-HV-Drive`` header (forwarded by the
+    HomeVault Generic Addon Proxy from ``/drive/{drive}/...``). Results
+    are constrained to that drive — cross-drive search is not exposed
+    at all to keep drive-as-privacy-boundary intact.
     """
     try:
         result = execute_search(
@@ -109,7 +105,7 @@ async def search_compare_endpoint(
     q: str = Query(..., min_length=1, description="Search query"),
     limit: int = Query(default=20, ge=1, le=100, description="Max results"),
     type: str | None = Query(default=None, description="File type filter"),
-    drive: str | None = Query(default=None, description="Drive name filter"),
+    drive: str = Depends(require_drive),
 ) -> CompareResponseModel:
     """Compare RRF vs cosine-similarity scoring side by side."""
     try:

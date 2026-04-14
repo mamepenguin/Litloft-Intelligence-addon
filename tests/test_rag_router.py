@@ -356,7 +356,12 @@ class TestAskEndpointStreaming:
             file_type="video",
             drive="Videos",
         )
-        result = await ask_endpoint(body=body, access_token=None)
+        # X-HV-Drive is the source of truth; body.drive must agree. The
+        # router resolves the header via Depends, so when calling the
+        # handler directly we pass ``drive`` explicitly.
+        result = await ask_endpoint(
+            body=body, access_token=None, drive="Videos",
+        )
         await _collect_sse_body(result)
 
         assert captured.get("top_k") == 7

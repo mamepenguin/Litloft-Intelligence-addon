@@ -14,12 +14,14 @@ for the file_ids it receives.
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text as sql_text
 
 from app.config import settings
 from app.database import get_search_db
 from app.dependencies import get_llm_client, get_summaries_worker
+from app.drive_context import assert_file_in_drive, require_drive
+from app.models import IndexedFile
 from app.schemas import (
     BatchSummariesRequest,
     BatchSummariesResponse,
@@ -27,6 +29,22 @@ from app.schemas import (
     SummaryResponse,
 )
 from app.workers.summaries import classify_missing_reason
+
+
+def _require_file_in_drive(file_id: str, drive: str) -> None:
+    """Raise 404 unless ``file_id`` belongs to ``drive``."""
+    with get_search_db() as session:
+        row = (
+            session.query(IndexedFile.drive)
+            .filter(
+                IndexedFile.file_id == file_id,
+                IndexedFile.active.is_(True),
+            )
+            .first()
+        )
+    if row is None:
+        raise HTTPException(status_code=404, detail="File not indexed")
+    assert_file_in_drive(row.drive, drive)
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +69,10 @@ def _require_llm_enabled() -> None:
 
 
 @router.get("/files/{file_id}/summary", response_model=SummaryResponse)
-async def get_summary(file_id: str) -> SummaryResponse:
+async def get_summary(
+    file_id: str,
+    drive: str = Depends(require_drive),
+) -> SummaryResponse:
     """Fetch the stored summary for a file.
 
     Returns available=False when:
@@ -65,6 +86,8 @@ async def get_summary(file_id: str) -> SummaryResponse:
     """
     if settings.features.summaries == "false":
         return SummaryResponse(available=False)
+
+    _require_file_in_drive(file_id, drive)
 
     with get_search_db() as session:
         row = session.execute(
@@ -108,7 +131,10 @@ async def get_summary(file_id: str) -> SummaryResponse:
 @router.post(
     "/files/{file_id}/summary/regenerate", response_model=MessageResponse
 )
-async def regenerate_summary(file_id: str) -> MessageResponse:
+async def regenerate_summary(
+    file_id: str,
+    drive: str = Depends(require_drive),
+) -> MessageResponse:
     """Delete the existing summary and re-queue generation.
 
     Rejects the request upfront (400) when the file cannot be summarized
@@ -117,6 +143,7 @@ async def regenerate_summary(file_id: str) -> MessageResponse:
     would have been silently skipped by the worker anyway.
     """
     _require_llm_enabled()
+    _require_file_in_drive(file_id, drive)
 
     # Pre-flight: surface skip reasons as 400 so the frontend can show
     # them immediately instead of waiting for a worker that will no-op.
@@ -139,12 +166,17 @@ async def regenerate_summary(file_id: str) -> MessageResponse:
 
 
 @router.post("/files/{file_id}/summary/hide", response_model=MessageResponse)
-async def hide_summary(file_id: str) -> MessageResponse:
+async def hide_summary(
+    file_id: str,
+    drive: str = Depends(require_drive),
+) -> MessageResponse:
     """Mark a summary as hidden so it stops being displayed.
 
     The row is preserved (not deleted) so the data is still available
     for audit / debugging / potential un-hide UI.
     """
+    _require_file_in_drive(file_id, drive)
+
     with get_search_db() as session:
         result = session.execute(
             sql_text(
@@ -163,27 +195,32 @@ async def hide_summary(file_id: str) -> MessageResponse:
 @router.post("/batch/summaries", response_model=BatchSummariesResponse)
 async def batch_summaries(
     body: BatchSummariesRequest,
+    drive: str = Depends(require_drive),
 ) -> BatchSummariesResponse:
-    """Queue summary generation for a batch of files.
+    """Queue summary generation for a batch of files in the current drive.
 
-    Files that already have a summary (any status) are skipped.
-
-    SECURITY NOTE: the Generic Addon Proxy currently only enforces
-    file_access pre_checks against path parameters, NOT against body
-    payloads. The same limitation applies to /batch/suggested-tags.
-    Until the proxy learns to filter body arrays, callers can enqueue
-    LLM work for files they cannot read (the GET endpoint still blocks
-    reading the result, but the operator incurs LLM cost). Tracked as
-    follow-up work; acceptable for single-user home-LAN deployments.
+    Files outside the request drive are silently dropped (counted as
+    skipped) so other drives' file_ids cannot be probed and an attacker
+    in one drive cannot incur LLM cost for files in another.
     """
     _require_llm_enabled()
 
     summaries_worker = get_summaries_worker()
 
-    # Find which files already have summaries to avoid duplicate work.
+    in_drive: set[str] = set()
     existing: set[str] = set()
     if body.file_ids:
         with get_search_db() as session:
+            in_drive = {
+                row.file_id
+                for row in session.query(IndexedFile.file_id)
+                .filter(
+                    IndexedFile.file_id.in_(body.file_ids),
+                    IndexedFile.drive == drive,
+                    IndexedFile.active.is_(True),
+                )
+                .all()
+            }
             placeholders = ",".join(f":id{i}" for i in range(len(body.file_ids)))
             params = {f"id{i}": fid for i, fid in enumerate(body.file_ids)}
             for row in session.execute(
@@ -197,7 +234,7 @@ async def batch_summaries(
     queued = 0
     skipped = 0
     for file_id in body.file_ids:
-        if file_id in existing:
+        if file_id not in in_drive or file_id in existing:
             skipped += 1
         else:
             await summaries_worker.enqueue(file_id)

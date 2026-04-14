@@ -2,8 +2,8 @@
     "label": "Intelligence",
     "icon": "brain",
     "type": "external_service",
-    "scope": "both",
-    "href": "/addons/intelligence",
+    "scope": "drive",
+    "href": "/drive/{drive}/addons/intelligence",
     "slots": {
         "search-modes": [
             {"id": "semantic-search", "label": "Semantic Search", "priority": 10}
@@ -32,8 +32,9 @@
             {
                 "path": "/search",
                 "methods": ["GET"],
+                "pre_check": {"type": "addon_feature", "feature": "search"},
                 "response_filter": {
-                    "type": "drive_access",
+                    "type": "current_drive_only",
                     "array_path": "results",
                     "drive_field": "drive"
                 }
@@ -41,8 +42,9 @@
             {
                 "path": "/search/compare",
                 "methods": ["GET"],
+                "pre_check": {"type": "addon_feature", "feature": "search"},
                 "response_filter": {
-                    "type": "drive_access_nested",
+                    "type": "current_drive_only_nested",
                     "paths": {
                         "rrf.results": "drive",
                         "cosine.results": "drive",
@@ -69,7 +71,7 @@
                     "param": "file_id"
                 },
                 "response_filter": {
-                    "type": "drive_access",
+                    "type": "current_drive_only",
                     "array_path": "results",
                     "drive_field": "drive"
                 }
@@ -155,15 +157,13 @@
             {
                 "path": "/files/{file_id}/suggested-tags/regenerate",
                 "methods": ["POST"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
+                "pre_check": {"type": "addon_feature", "feature": "auto_tags"},
                 "response_filter": null
             },
             {
                 "path": "/batch/suggested-tags",
                 "methods": ["POST"],
+                "pre_check": {"type": "addon_feature", "feature": "auto_tags"},
                 "response_filter": null
             },
             {
@@ -178,10 +178,7 @@
             {
                 "path": "/files/{file_id}/summary/regenerate",
                 "methods": ["POST"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
+                "pre_check": {"type": "addon_feature", "feature": "summaries"},
                 "response_filter": null
             },
             {
@@ -196,14 +193,16 @@
             {
                 "path": "/batch/summaries",
                 "methods": ["POST"],
+                "pre_check": {"type": "addon_feature", "feature": "summaries"},
                 "response_filter": null
             },
             {
                 "path": "/ask",
                 "methods": ["POST"],
+                "pre_check": {"type": "addon_feature", "feature": "rag"},
                 "stream": true,
                 "response_filter": {
-                    "type": "drive_access_nested",
+                    "type": "current_drive_only_nested",
                     "paths": {
                         "citations": "drive",
                         "sources": "drive"
