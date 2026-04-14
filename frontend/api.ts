@@ -3,6 +3,18 @@ import type { FileType } from "@/types";
 
 const API_BASE = "/api";
 
+/**
+ * Drive context header for every intelligence API call.
+ *
+ * Manifest scope is "drive" so the host's Generic Addon Proxy demands
+ * X-HV-Drive on every route. The header value must be ISO-8859-1 only,
+ * so non-ASCII drive names (e.g. Japanese) are percent-encoded; the
+ * intelligence backend decodes once via drive_context.require_drive.
+ */
+function driveHeaders(drive: string): HeadersInit {
+  return { "X-HV-Drive": encodeURIComponent(drive) };
+}
+
 // Semantic search types
 export interface SemanticSearchMatch {
   type: "transcript" | "clip" | "metadata" | "content";
@@ -135,15 +147,16 @@ export interface ClipTimestampsResponse {
 // Semantic search
 export async function semanticSearch(
   query: string,
-  params?: { limit?: number; type?: FileType; drive?: string }
+  drive: string,
+  params?: { limit?: number; type?: FileType }
 ): Promise<SemanticSearchResponse> {
   const searchParams = new URLSearchParams({ q: query });
   if (params?.limit) searchParams.set("limit", String(params.limit));
   if (params?.type) searchParams.set("type", params.type);
-  if (params?.drive) searchParams.set("drive", params.drive);
   try {
     return await fetchJSON<SemanticSearchResponse>(
-      `${API_BASE}/addons/intelligence/search?${searchParams.toString()}`
+      `${API_BASE}/addons/intelligence/search?${searchParams.toString()}`,
+      { headers: driveHeaders(drive) },
     );
   } catch {
     return { available: false, results: [], total: 0 };
@@ -152,6 +165,7 @@ export async function semanticSearch(
 
 export async function searchCompare(
   query: string,
+  drive: string,
   params?: { limit?: number; type?: FileType }
 ): Promise<SearchCompareResponse> {
   const searchParams = new URLSearchParams({ q: query });
@@ -159,7 +173,8 @@ export async function searchCompare(
   if (params?.type) searchParams.set("type", params.type);
   try {
     return await fetchJSON<SearchCompareResponse>(
-      `${API_BASE}/addons/intelligence/search/compare?${searchParams.toString()}`
+      `${API_BASE}/addons/intelligence/search/compare?${searchParams.toString()}`,
+      { headers: driveHeaders(drive) },
     );
   } catch {
     return {
@@ -173,9 +188,12 @@ export async function searchCompare(
   }
 }
 
-export async function getSearchStatus(): Promise<SearchServiceStatus> {
+export async function getSearchStatus(drive: string): Promise<SearchServiceStatus> {
   try {
-    return await fetchJSON<SearchServiceStatus>(`${API_BASE}/addons/intelligence/status`);
+    return await fetchJSON<SearchServiceStatus>(
+      `${API_BASE}/addons/intelligence/status`,
+      { headers: driveHeaders(drive) },
+    );
   } catch {
     return { available: false };
   }
@@ -183,63 +201,93 @@ export async function getSearchStatus(): Promise<SearchServiceStatus> {
 
 export async function getSimilarFiles(
   fileId: string,
+  drive: string,
   limit: number = 6
 ): Promise<SimilarFilesResponse> {
   try {
     return await fetchJSON<SimilarFilesResponse>(
-      `${API_BASE}/addons/intelligence/similar/${fileId}?limit=${limit}`
+      `${API_BASE}/addons/intelligence/similar/${fileId}?limit=${limit}`,
+      { headers: driveHeaders(drive) },
     );
   } catch {
     return { available: false, results: [], source_keywords: [] as KeywordScore[] };
   }
 }
 
-// Queue control
-export async function searchQueuePause(): Promise<void> {
-  await fetchJSON(`${API_BASE}/addons/intelligence/queue/pause`, { method: "POST" });
+// Queue control. The queue is a process-global resource but the addon
+// is now scope=drive, so the host proxy still requires X-HV-Drive on
+// every route. Callers pass whichever drive context they happen to be
+// in; the backend ignores the header for queue ops. Phase 6 will move
+// these to a dedicated /admin surface so they no longer need a drive.
+export async function searchQueuePause(drive: string): Promise<void> {
+  await fetchJSON(`${API_BASE}/addons/intelligence/queue/pause`, {
+    method: "POST",
+    headers: driveHeaders(drive),
+  });
 }
 
-export async function searchQueueResume(): Promise<void> {
-  await fetchJSON(`${API_BASE}/addons/intelligence/queue/resume`, { method: "POST" });
+export async function searchQueueResume(drive: string): Promise<void> {
+  await fetchJSON(`${API_BASE}/addons/intelligence/queue/resume`, {
+    method: "POST",
+    headers: driveHeaders(drive),
+  });
 }
 
-export async function searchQueueReindex(): Promise<void> {
-  await fetchJSON(`${API_BASE}/addons/intelligence/queue/reindex`, { method: "POST" });
+export async function searchQueueReindex(drive: string): Promise<void> {
+  await fetchJSON(`${API_BASE}/addons/intelligence/queue/reindex`, {
+    method: "POST",
+    headers: driveHeaders(drive),
+  });
 }
 
-export async function searchQueuePrioritize(fileId: string): Promise<void> {
+export async function searchQueuePrioritize(
+  fileId: string,
+  drive: string,
+): Promise<void> {
   await fetchJSON(`${API_BASE}/addons/intelligence/queue/prioritize`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...driveHeaders(drive) },
     body: JSON.stringify({ file_id: fileId }),
   });
 }
 
 // Search inspection APIs
-export async function getFileTranscript(fileId: string): Promise<TranscriptResponse> {
+export async function getFileTranscript(
+  fileId: string,
+  drive: string,
+): Promise<TranscriptResponse> {
   try {
     return await fetchJSON<TranscriptResponse>(
-      `${API_BASE}/addons/intelligence/files/${fileId}/transcript`
+      `${API_BASE}/addons/intelligence/files/${fileId}/transcript`,
+      { headers: driveHeaders(drive) },
     );
   } catch {
     return { available: false };
   }
 }
 
-export async function getFileIndexDetails(fileId: string): Promise<IndexDetailsResponse> {
+export async function getFileIndexDetails(
+  fileId: string,
+  drive: string,
+): Promise<IndexDetailsResponse> {
   try {
     return await fetchJSON<IndexDetailsResponse>(
-      `${API_BASE}/addons/intelligence/files/${fileId}/index-details`
+      `${API_BASE}/addons/intelligence/files/${fileId}/index-details`,
+      { headers: driveHeaders(drive) },
     );
   } catch {
     return { available: false };
   }
 }
 
-export async function getClipTimestamps(fileId: string): Promise<ClipTimestampsResponse> {
+export async function getClipTimestamps(
+  fileId: string,
+  drive: string,
+): Promise<ClipTimestampsResponse> {
   try {
     return await fetchJSON<ClipTimestampsResponse>(
-      `${API_BASE}/addons/intelligence/files/${fileId}/clip-timestamps`
+      `${API_BASE}/addons/intelligence/files/${fileId}/clip-timestamps`,
+      { headers: driveHeaders(drive) },
     );
   } catch {
     return { available: false };
@@ -247,6 +295,12 @@ export async function getClipTimestamps(fileId: string): Promise<ClipTimestampsR
 }
 
 export function getFrameUrl(fileId: string, timestamp: number): string {
+  // <img src> can't carry headers. The host proxy's file_access pre_check
+  // already verifies the caller's session can read this file regardless
+  // of the missing X-HV-Drive — and the URL itself is unguessable enough
+  // (UUIDs) that this is no worse than a thumbnail URL. If we ever need
+  // strict drive context here we'll need a different approach (signed
+  // URL or a hidden iframe with fetch+blob).
   return `${API_BASE}/addons/intelligence/files/${fileId}/frame?t=${timestamp}`;
 }
 
@@ -260,26 +314,38 @@ export interface SuggestedTagsResponse {
   created_at?: string;
 }
 
-export async function getSuggestedTags(fileId: string): Promise<SuggestedTagsResponse> {
+export async function getSuggestedTags(
+  fileId: string,
+  drive: string,
+): Promise<SuggestedTagsResponse> {
   try {
     return await fetchJSON<SuggestedTagsResponse>(
-      `${API_BASE}/addons/intelligence/files/${fileId}/suggested-tags`
+      `${API_BASE}/addons/intelligence/files/${fileId}/suggested-tags`,
+      { headers: driveHeaders(drive) },
     );
   } catch {
     return { available: false };
   }
 }
 
-export async function dismissSuggestedTags(fileId: string): Promise<void> {
-  await fetchJSON(`${API_BASE}/addons/intelligence/files/${fileId}/suggested-tags/dismiss`, {
-    method: "POST",
-  });
+export async function dismissSuggestedTags(
+  fileId: string,
+  drive: string,
+): Promise<void> {
+  await fetchJSON(
+    `${API_BASE}/addons/intelligence/files/${fileId}/suggested-tags/dismiss`,
+    { method: "POST", headers: driveHeaders(drive) },
+  );
 }
 
-export async function regenerateSuggestedTags(fileId: string): Promise<void> {
-  await fetchJSON(`${API_BASE}/addons/intelligence/files/${fileId}/suggested-tags/regenerate`, {
-    method: "POST",
-  });
+export async function regenerateSuggestedTags(
+  fileId: string,
+  drive: string,
+): Promise<void> {
+  await fetchJSON(
+    `${API_BASE}/addons/intelligence/files/${fileId}/suggested-tags/regenerate`,
+    { method: "POST", headers: driveHeaders(drive) },
+  );
 }
 
 export interface BatchSuggestedTagsResponse {
@@ -287,12 +353,15 @@ export interface BatchSuggestedTagsResponse {
   skipped: number;
 }
 
-export async function batchSuggestedTags(fileIds: string[]): Promise<BatchSuggestedTagsResponse> {
+export async function batchSuggestedTags(
+  fileIds: string[],
+  drive: string,
+): Promise<BatchSuggestedTagsResponse> {
   return fetchJSON<BatchSuggestedTagsResponse>(
     `${API_BASE}/addons/intelligence/batch/suggested-tags`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...driveHeaders(drive) },
       body: JSON.stringify({ file_ids: fileIds }),
     }
   );
@@ -318,27 +387,37 @@ export interface SummaryResponse {
   reason?: SummaryMissingReason | string;
 }
 
-export async function getSummary(fileId: string): Promise<SummaryResponse> {
+export async function getSummary(
+  fileId: string,
+  drive: string,
+): Promise<SummaryResponse> {
   try {
     return await fetchJSON<SummaryResponse>(
-      `${API_BASE}/addons/intelligence/files/${fileId}/summary`
+      `${API_BASE}/addons/intelligence/files/${fileId}/summary`,
+      { headers: driveHeaders(drive) },
     );
   } catch {
     return { available: false };
   }
 }
 
-export async function regenerateSummary(fileId: string): Promise<void> {
+export async function regenerateSummary(
+  fileId: string,
+  drive: string,
+): Promise<void> {
   await fetchJSON(
     `${API_BASE}/addons/intelligence/files/${fileId}/summary/regenerate`,
-    { method: "POST" }
+    { method: "POST", headers: driveHeaders(drive) },
   );
 }
 
-export async function hideSummary(fileId: string): Promise<void> {
+export async function hideSummary(
+  fileId: string,
+  drive: string,
+): Promise<void> {
   await fetchJSON(
     `${API_BASE}/addons/intelligence/files/${fileId}/summary/hide`,
-    { method: "POST" }
+    { method: "POST", headers: driveHeaders(drive) },
   );
 }
 
@@ -347,12 +426,15 @@ export interface BatchSummariesResponse {
   skipped: number;
 }
 
-export async function batchSummaries(fileIds: string[]): Promise<BatchSummariesResponse> {
+export async function batchSummaries(
+  fileIds: string[],
+  drive: string,
+): Promise<BatchSummariesResponse> {
   return fetchJSON<BatchSummariesResponse>(
     `${API_BASE}/addons/intelligence/batch/summaries`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...driveHeaders(drive) },
       body: JSON.stringify({ file_ids: fileIds }),
     }
   );
@@ -391,7 +473,6 @@ export interface AnswerResponse {
 export interface AskOptions {
   topK?: number;
   fileType?: FileType;
-  drive?: string;
   signal?: AbortSignal;
 }
 
@@ -417,11 +498,13 @@ export interface IntelligenceStatus {
 }
 
 export async function getIntelligenceStatus(
+  drive: string,
   signal?: AbortSignal,
 ): Promise<IntelligenceStatus | null> {
   try {
     const res = await fetch(`${API_BASE}/addons/intelligence/status`, {
       credentials: "include",
+      headers: driveHeaders(drive),
       signal,
     });
     if (!res.ok) return null;
@@ -538,12 +621,12 @@ function parseSseFrame(frame: string): AskStreamEvent | null {
  */
 export async function* askQuestionStream(
   query: string,
+  drive: string,
   options?: AskOptions,
 ): AsyncGenerator<AskStreamEvent> {
   const body: Record<string, unknown> = { query };
   if (options?.topK != null) body.top_k = options.topK;
   if (options?.fileType) body.file_type = options.fileType;
-  if (options?.drive) body.drive = options.drive;
 
   const res = await fetch(`${API_BASE}/addons/intelligence/ask`, {
     method: "POST",
@@ -551,6 +634,7 @@ export async function* askQuestionStream(
     headers: {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
+      ...driveHeaders(drive),
     },
     body: JSON.stringify(body),
     signal: options?.signal,

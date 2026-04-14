@@ -49,7 +49,7 @@ function ProgressBar({
   );
 }
 
-function StatusContent({ status }: { status: SearchServiceStatus }) {
+function StatusContent({ status, drive }: { status: SearchServiceStatus; drive: string }) {
   const t = useTranslations("semanticSearch");
   const [confirmReindex, setConfirmReindex] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -59,26 +59,26 @@ function StatusContent({ status }: { status: SearchServiceStatus }) {
     setActionLoading(isPaused ? "resume" : "pause");
     try {
       if (isPaused) {
-        await searchQueueResume();
+        await searchQueueResume(drive);
       } else {
-        await searchQueuePause();
+        await searchQueuePause(drive);
       }
     } catch {
       // Silently fail - next poll will show actual state
     }
     setActionLoading(null);
-  }, [status.queue?.paused]);
+  }, [status.queue?.paused, drive]);
 
   const handleReindex = useCallback(async () => {
     setConfirmReindex(false);
     setActionLoading("reindex");
     try {
-      await searchQueueReindex();
+      await searchQueueReindex(drive);
     } catch {
       // Silently fail
     }
     setActionLoading(null);
-  }, []);
+  }, [drive]);
 
   const indexed = status.indexed;
   const pending = status.pending;
@@ -193,25 +193,38 @@ function StatusContent({ status }: { status: SearchServiceStatus }) {
   );
 }
 
-export default function IndexStatusWidget() {
+interface IndexStatusWidgetProps {
+  // Optional so the widget can be dropped into the global /admin
+  // dashboard before Phase 6 wires up an admin-widgets slot. With no
+  // drive we render an "unavailable" panel — the addon is scope=drive
+  // and requires X-HV-Drive on every status call.
+  drive?: string;
+}
+
+export default function IndexStatusWidget({ drive }: IndexStatusWidgetProps) {
   const t = useTranslations("semanticSearch");
   const [status, setStatus] = useState<SearchServiceStatus | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchStatus = useCallback(async () => {
-    const result = await getSearchStatus();
+    if (!drive) {
+      setStatus({ available: false });
+      return;
+    }
+    const result = await getSearchStatus(drive);
     setStatus(result);
-  }, []);
+  }, [drive]);
 
   useEffect(() => {
     fetchStatus();
+    if (!drive) return;
     intervalRef.current = setInterval(fetchStatus, POLL_INTERVAL);
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
       }
     };
-  }, [fetchStatus]);
+  }, [fetchStatus, drive]);
 
   if (status === null) {
     return (
@@ -235,8 +248,8 @@ export default function IndexStatusWidget() {
         </h3>
       </div>
 
-      {status.available ? (
-        <StatusContent status={status} />
+      {status.available && drive ? (
+        <StatusContent status={status} drive={drive} />
       ) : (
         <div className="flex items-center gap-2 text-sm text-text-muted">
           <SearchX size={16} />

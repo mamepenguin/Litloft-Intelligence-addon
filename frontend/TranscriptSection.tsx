@@ -10,10 +10,11 @@ import { formatDuration } from "@/lib/format";
 
 interface TranscriptSectionProps {
   fileId: string;
+  drive: string;
   videoRef: React.RefObject<HTMLVideoElement | null>;
 }
 
-export default function TranscriptSection({ fileId, videoRef }: TranscriptSectionProps) {
+export default function TranscriptSection({ fileId, drive, videoRef }: TranscriptSectionProps) {
   const t = useTranslations("searchIndex");
   const [chunks, setChunks] = useState<TranscriptChunkItem[]>([]);
   const [language, setLanguage] = useState("");
@@ -24,7 +25,7 @@ export default function TranscriptSection({ fileId, videoRef }: TranscriptSectio
 
   useEffect(() => {
     setLoading(true);
-    getFileTranscript(fileId).then((res) => {
+    getFileTranscript(fileId, drive).then((res) => {
       if (res.available && res.chunks && res.chunks.length > 0) {
         setChunks(res.chunks);
         setLanguage(res.language || "");
@@ -34,7 +35,7 @@ export default function TranscriptSection({ fileId, videoRef }: TranscriptSectio
       }
       setLoading(false);
     });
-  }, [fileId]);
+  }, [fileId, drive]);
 
   const handleTimeUpdate = useCallback(() => {
     const video = videoRef.current;

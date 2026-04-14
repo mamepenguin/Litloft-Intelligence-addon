@@ -8,6 +8,7 @@ import type { SummaryResponse } from "./api";
 
 interface SummarySectionProps {
   fileId: string;
+  drive: string;
 }
 
 // Maximum polling attempts after a regenerate call. Each attempt waits
@@ -15,7 +16,7 @@ interface SummarySectionProps {
 const POLL_MAX_ATTEMPTS = 20;
 const POLL_INTERVAL_MS = 2000;
 
-export default function SummarySection({ fileId }: SummarySectionProps) {
+export default function SummarySection({ fileId, drive }: SummarySectionProps) {
   const t = useTranslations("file");
   const [data, setData] = useState<SummaryResponse | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -24,10 +25,10 @@ export default function SummarySection({ fileId }: SummarySectionProps) {
   const [hidden, setHidden] = useState(false);
 
   const fetchData = useCallback(async () => {
-    const result = await getSummary(fileId);
+    const result = await getSummary(fileId, drive);
     setData(result);
     setLoaded(true);
-  }, [fileId]);
+  }, [fileId, drive]);
 
   useEffect(() => {
     setData(null);
@@ -42,11 +43,11 @@ export default function SummarySection({ fileId }: SummarySectionProps) {
     setRegenerating(true);
     setHidden(false);
     try {
-      await regenerateSummary(fileId);
+      await regenerateSummary(fileId, drive);
       // Poll for results — LLM processing takes a few seconds.
       for (let i = 0; i < POLL_MAX_ATTEMPTS; i++) {
         await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-        const result = await getSummary(fileId);
+        const result = await getSummary(fileId, drive);
         if (result.available && result.long_summary) {
           setData(result);
           break;
@@ -57,19 +58,19 @@ export default function SummarySection({ fileId }: SummarySectionProps) {
     } finally {
       setRegenerating(false);
     }
-  }, [fileId]);
+  }, [fileId, drive]);
 
   const handleHide = useCallback(async () => {
     setHiding(true);
     try {
-      await hideSummary(fileId);
+      await hideSummary(fileId, drive);
       setHidden(true);
     } catch {
       // silently fail
     } finally {
       setHiding(false);
     }
-  }, [fileId]);
+  }, [fileId, drive]);
 
   if (!loaded) return null;
 

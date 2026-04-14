@@ -10,6 +10,7 @@ import { formatDuration } from "@/lib/format";
 
 interface IndexDetailsSectionProps {
   fileId: string;
+  drive: string;
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -28,7 +29,7 @@ const TYPE_COLORS: Record<string, string> = {
   blip_caption: "bg-amber-500",
 };
 
-export default function IndexDetailsSection({ fileId }: IndexDetailsSectionProps) {
+export default function IndexDetailsSection({ fileId, drive }: IndexDetailsSectionProps) {
   const t = useTranslations("searchIndex");
   const [data, setData] = useState<IndexDetailsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -36,11 +37,11 @@ export default function IndexDetailsSection({ fileId }: IndexDetailsSectionProps
 
   useEffect(() => {
     setLoading(true);
-    getFileIndexDetails(fileId).then((res) => {
+    getFileIndexDetails(fileId, drive).then((res) => {
       setData(res.available ? res : null);
       setLoading(false);
     });
-  }, [fileId]);
+  }, [fileId, drive]);
 
   if (loading || !data) return null;
 

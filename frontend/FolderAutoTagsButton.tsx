@@ -10,7 +10,7 @@ interface FolderAutoTagsButtonProps {
   drive: string;
 }
 
-export default function FolderAutoTagsButton({ fileIds }: FolderAutoTagsButtonProps) {
+export default function FolderAutoTagsButton({ fileIds, drive }: FolderAutoTagsButtonProps) {
   const t = useTranslations("file");
   const [loading, setLoading] = useState(false);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
@@ -20,7 +20,7 @@ export default function FolderAutoTagsButton({ fileIds }: FolderAutoTagsButtonPr
     setLoading(true);
     setResultMessage(null);
     try {
-      const result = await batchSuggestedTags(fileIds);
+      const result = await batchSuggestedTags(fileIds, drive);
       if (result.queued === 0 && result.skipped > 0) {
         setResultMessage(t("tagsBatchEmpty"));
       } else {
@@ -34,7 +34,7 @@ export default function FolderAutoTagsButton({ fileIds }: FolderAutoTagsButtonPr
     } finally {
       setLoading(false);
     }
-  }, [fileIds, loading, t]);
+  }, [fileIds, drive, loading, t]);
 
   if (fileIds.length === 0) return null;
 

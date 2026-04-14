@@ -41,6 +41,7 @@ import { useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
 import { AlertCircle, Send, Sparkles, Square, X } from "lucide-react";
 
+import { useCurrentDrive } from "@/components/CurrentDriveProvider";
 import {
   askQuestionStream,
   getIntelligenceStatus,
@@ -205,6 +206,10 @@ function IntelligenceAskPageInner() {
   const t = useTranslations("askSearch");
   const searchParams = useSearchParams();
   const seedQuery = searchParams?.get("q") ?? "";
+  // The page lives at /drive/{drive}/addons/intelligence so this is
+  // always populated when the wrapper renders us. Guard anyway in case
+  // of future scope changes.
+  const drive = useCurrentDrive();
 
   const [input, setInput] = useState(seedQuery);
   const [state, setState] = useState<AskState>({ kind: "idle" });
@@ -218,9 +223,13 @@ function IntelligenceAskPageInner() {
   // --- Status probe: gate the Ask button when the backend has RAG off
   //     or the LLM isn't configured. Runs once on mount. ---
   useEffect(() => {
+    if (!drive) {
+      setRagAvailable(false);
+      return;
+    }
     const controller = new AbortController();
     let cancelled = false;
-    getIntelligenceStatus(controller.signal).then(
+    getIntelligenceStatus(drive, controller.signal).then(
       (status: IntelligenceStatus | null) => {
         if (cancelled) return;
         const enabled =
@@ -232,7 +241,7 @@ function IntelligenceAskPageInner() {
       cancelled = true;
       controller.abort();
     };
-  }, []);
+  }, [drive]);
 
   // --- Cleanup: abort any inflight stream on unmount. ---
   useEffect(() => {
@@ -267,8 +276,17 @@ function IntelligenceAskPageInner() {
         answerBuffer: "",
       });
 
+      if (!drive) {
+        setState({
+          kind: "error",
+          message: t("queryTooShort"),
+          retryable: false,
+        });
+        return;
+      }
+
       try {
-        const stream = askQuestionStream(trimmed, {
+        const stream = askQuestionStream(trimmed, drive, {
           signal: controller.signal,
         });
 
@@ -389,7 +407,7 @@ function IntelligenceAskPageInner() {
         }
       }
     },
-    [t],
+    [t, drive],
   );
 
   // --- Auto-fire on mount when the URL carries a seed query. ---

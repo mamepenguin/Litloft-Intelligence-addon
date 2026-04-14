@@ -150,16 +150,21 @@ export default function SemanticSearchSlot({
   const [loading, setLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Check availability on mount
+  // Check availability on mount (rechecked when the active drive
+  // changes, since /status is now drive-scoped).
   useEffect(() => {
+    if (!drive) {
+      setAvailable(false);
+      return;
+    }
     let cancelled = false;
-    getSearchStatus().then((res) => {
+    getSearchStatus(drive).then((res) => {
       if (!cancelled) {
         setAvailable(res.available);
       }
     });
     return () => { cancelled = true; };
-  }, []);
+  }, [drive]);
 
   // Debounced search
   useEffect(() => {
@@ -174,10 +179,9 @@ export default function SemanticSearchSlot({
       const filterType = filter === "all" ? undefined : (filter as "video" | "image" | "audio" | "document");
       setLoading(true);
       try {
-        const res = await semanticSearch(query.trim(), {
+        const res = await semanticSearch(query.trim(), drive, {
           limit: 20,
           type: filterType,
-          drive,
         });
         setResults(res.results);
       } catch {
@@ -215,7 +219,7 @@ export default function SemanticSearchSlot({
   // a true one-click "get me an answer" flow without disturbing the
   // established input culture of the search modal. See the RAG
   // redesign spec §"UI レイヤー: 完全分離 + ハイブリッド導線".
-  const askHref = `/addons/intelligence?q=${encodeURIComponent(query.trim())}`;
+  const askHref = `/drive/${encodeURIComponent(drive)}/addons/intelligence?q=${encodeURIComponent(query.trim())}`;
 
   return (
     <>

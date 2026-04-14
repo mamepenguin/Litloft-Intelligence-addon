@@ -10,12 +10,13 @@ import { formatDuration } from "@/lib/format";
 
 interface ClipFramesSectionProps {
   fileId: string;
+  drive: string;
   videoRef: React.RefObject<HTMLVideoElement | null>;
 }
 
 const INITIAL_SHOW = 20;
 
-export default function ClipFramesSection({ fileId, videoRef }: ClipFramesSectionProps) {
+export default function ClipFramesSection({ fileId, drive, videoRef }: ClipFramesSectionProps) {
   const t = useTranslations("searchIndex");
   const [timestamps, setTimestamps] = useState<ClipTimestampItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -24,7 +25,7 @@ export default function ClipFramesSection({ fileId, videoRef }: ClipFramesSectio
 
   useEffect(() => {
     setLoading(true);
-    getClipTimestamps(fileId).then((res) => {
+    getClipTimestamps(fileId, drive).then((res) => {
       if (res.available && res.timestamps && res.timestamps.length > 0) {
         setTimestamps(res.timestamps);
         setAvailable(true);
@@ -33,7 +34,7 @@ export default function ClipFramesSection({ fileId, videoRef }: ClipFramesSectio
       }
       setLoading(false);
     });
-  }, [fileId]);
+  }, [fileId, drive]);
 
   const seekTo = useCallback(
     (time: number) => {

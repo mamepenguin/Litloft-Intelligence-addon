@@ -2,9 +2,10 @@
 
 import logging
 import subprocess
-from typing import Any
+from typing import Annotated, Any
+from urllib.parse import unquote
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy import text as sql_text
 
@@ -208,12 +209,45 @@ async def get_clip_timestamps(
 async def get_frame(
     file_id: str,
     t: float = Query(..., ge=0, description="Timestamp in seconds"),
-    drive: str = Depends(require_drive),
+    x_hv_drive: Annotated[str | None, Header(alias="X-HV-Drive")] = None,
 ) -> Response:
-    """Extract a single video frame at the given timestamp using ffmpeg."""
+    """Extract a single video frame at the given timestamp using ffmpeg.
+
+    Drive context is optional here because the route is loaded via
+    ``<img src>`` which can't carry custom headers. The host's
+    ``file_access`` pre_check still verifies the caller can read the
+    file's drive; when the header *is* present we additionally enforce
+    the strict current-drive match (defence in depth for non-image
+    consumers).
+    """
     from app.config import resolve_file_path, validate_file_path
 
-    indexed = _get_indexed_file_or_404(file_id, drive)
+    drive = unquote(x_hv_drive) if x_hv_drive else None
+    if drive is None:
+        # Look up the indexed file without the drive assertion. The
+        # host already authorised the caller for this specific file.
+        from app.database import get_search_db
+        from app.models import IndexedFile
+        with get_search_db() as db:
+            row = (
+                db.query(IndexedFile)
+                .filter(
+                    IndexedFile.file_id == file_id,
+                    IndexedFile.active.is_(True),
+                )
+                .first()
+            )
+        if not row:
+            raise HTTPException(status_code=404, detail="File not indexed")
+        indexed = {
+            "file_id": row.file_id,
+            "drive": row.drive,
+            "filename": row.filename,
+            "file_path": row.file_path,
+            "file_type": row.file_type,
+        }
+    else:
+        indexed = _get_indexed_file_or_404(file_id, drive)
 
     if indexed["file_type"] != "video":
         raise HTTPException(status_code=400, detail="Not a video file")

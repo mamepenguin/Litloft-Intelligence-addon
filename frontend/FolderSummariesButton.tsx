@@ -10,7 +10,7 @@ interface FolderSummariesButtonProps {
   drive: string;
 }
 
-export default function FolderSummariesButton({ fileIds }: FolderSummariesButtonProps) {
+export default function FolderSummariesButton({ fileIds, drive }: FolderSummariesButtonProps) {
   const t = useTranslations("file");
   const [loading, setLoading] = useState(false);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
@@ -20,7 +20,7 @@ export default function FolderSummariesButton({ fileIds }: FolderSummariesButton
     setLoading(true);
     setResultMessage(null);
     try {
-      const result = await batchSummaries(fileIds);
+      const result = await batchSummaries(fileIds, drive);
       if (result.queued === 0 && result.skipped > 0) {
         setResultMessage(t("summariesBatchEmpty"));
       } else {
@@ -37,7 +37,7 @@ export default function FolderSummariesButton({ fileIds }: FolderSummariesButton
     } finally {
       setLoading(false);
     }
-  }, [fileIds, loading, t]);
+  }, [fileIds, drive, loading, t]);
 
   if (fileIds.length === 0) return null;
 

@@ -129,6 +129,7 @@
             {
                 "path": "/files/{file_id}/frame",
                 "methods": ["GET"],
+                "drive_optional": true,
                 "pre_check": {
                     "type": "file_access",
                     "param": "file_id"

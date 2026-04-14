@@ -10,6 +10,7 @@ import type { FileItem } from "@/types";
 
 interface SuggestedTagsSectionProps {
   fileId: string;
+  drive: string;
 }
 
 async function addTagsToFile(fileId: string, existingTags: string[], newTags: string[]): Promise<FileItem> {
@@ -25,7 +26,7 @@ async function getFileData(fileId: string): Promise<FileItem> {
   return fetchJSON<FileItem>(`/api/files/${fileId}`);
 }
 
-export default function SuggestedTagsSection({ fileId }: SuggestedTagsSectionProps) {
+export default function SuggestedTagsSection({ fileId, drive }: SuggestedTagsSectionProps) {
   const t = useTranslations("file");
   const [data, setData] = useState<SuggestedTagsResponse | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -37,10 +38,10 @@ export default function SuggestedTagsSection({ fileId }: SuggestedTagsSectionPro
   const [hidden, setHidden] = useState(false);
 
   const fetchData = useCallback(async () => {
-    const result = await getSuggestedTags(fileId);
+    const result = await getSuggestedTags(fileId, drive);
     setData(result);
     setLoaded(true);
-  }, [fileId]);
+  }, [fileId, drive]);
 
   useEffect(() => {
     setData(null);
@@ -89,26 +90,26 @@ export default function SuggestedTagsSection({ fileId }: SuggestedTagsSectionPro
   const handleDismiss = useCallback(async () => {
     setDismissing(true);
     try {
-      await dismissSuggestedTags(fileId);
+      await dismissSuggestedTags(fileId, drive);
       setHidden(true);
     } catch {
       // silently fail
     } finally {
       setDismissing(false);
     }
-  }, [fileId]);
+  }, [fileId, drive]);
 
   const handleRegenerate = useCallback(async () => {
     setRegenerating(true);
     setAcceptedTags(new Set());
     setHidden(false);
     try {
-      await regenerateSuggestedTags(fileId);
+      await regenerateSuggestedTags(fileId, drive);
       // Poll for results — LLM processing takes a few seconds
       const maxAttempts = 15;
       for (let i = 0; i < maxAttempts; i++) {
         await new Promise((r) => setTimeout(r, 2000));
-        const result = await getSuggestedTags(fileId);
+        const result = await getSuggestedTags(fileId, drive);
         if (result.available && result.tags && result.tags.length > 0) {
           setData(result);
           break;
@@ -119,7 +120,7 @@ export default function SuggestedTagsSection({ fileId }: SuggestedTagsSectionPro
     } finally {
       setRegenerating(false);
     }
-  }, [fileId]);
+  }, [fileId, drive]);
 
   if (!loaded) return null;
 

@@ -8,6 +8,7 @@ import type { SimilarFileItem, KeywordScore } from "./api";
 
 interface SimilarFilesSectionProps {
   fileId: string;
+  drive: string;
 }
 
 function matchTypeLabel(matchType: string): string {
@@ -43,7 +44,7 @@ function ScoreBadge({ item }: { item: SimilarFileItem }) {
   );
 }
 
-export default function SimilarFilesSection({ fileId }: SimilarFilesSectionProps) {
+export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSectionProps) {
   const t = useTranslations("file");
   const [results, setResults] = useState<SimilarFileItem[]>([]);
   const [sourceKeywords, setSourceKeywords] = useState<KeywordScore[]>([]);
@@ -76,13 +77,13 @@ export default function SimilarFilesSection({ fileId }: SimilarFilesSectionProps
   }, [fileId]);
 
   const fetchSimilar = useCallback(async () => {
-    const data = await getSimilarFiles(fileId);
+    const data = await getSimilarFiles(fileId, drive);
     if (data.available && data.results.length > 0) {
       setResults(data.results);
       setSourceKeywords(data.source_keywords ?? []);
     }
     setLoaded(true);
-  }, [fileId]);
+  }, [fileId, drive]);
 
   useEffect(() => {
     if (visible && !loaded) {
