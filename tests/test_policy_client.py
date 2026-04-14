@@ -13,20 +13,41 @@ def _reset_cache():
 
 
 def test_evaluate_empty_means_enabled():
-    assert policy_client._evaluate_response({}, "auto_tags") is True
+    assert policy_client._evaluate_response(
+        {"default": True, "features": {}}, "auto_tags",
+    ) is True
 
 
-def test_evaluate_all_shorthand_disables_everything():
-    assert policy_client._evaluate_response({"_all": False}, "rag") is False
-    assert policy_client._evaluate_response({"_all": True}, "rag") is True
+def test_evaluate_default_false_disables_everything():
+    payload = {"default": False, "features": {}}
+    assert policy_client._evaluate_response(payload, "rag") is False
+    assert policy_client._evaluate_response(payload, "index") is False
 
 
-def test_evaluate_per_feature_dict():
-    payload = {"index": True, "auto_tags": False}
+def test_evaluate_per_feature_overrides_default():
+    payload = {
+        "default": True,
+        "features": {"index": True, "auto_tags": False},
+    }
     assert policy_client._evaluate_response(payload, "index") is True
     assert policy_client._evaluate_response(payload, "auto_tags") is False
-    # Unknown feature → default True (graceful degradation).
+    # Unknown feature falls back to the explicit default (True here).
     assert policy_client._evaluate_response(payload, "rag") is True
+
+
+def test_evaluate_named_feature_can_override_default_false():
+    payload = {
+        "default": False,
+        "features": {"index": True},
+    }
+    assert policy_client._evaluate_response(payload, "index") is True
+    assert policy_client._evaluate_response(payload, "rag") is False
+
+
+def test_evaluate_malformed_payload_fails_open():
+    """Schema mismatch must not silently disable real work."""
+    assert policy_client._evaluate_response({}, "rag") is True
+    assert policy_client._evaluate_response({"features": "not-a-dict"}, "x") is True
 
 
 @pytest.mark.asyncio
@@ -36,7 +57,7 @@ async def test_is_feature_enabled_caches_after_first_call(monkeypatch):
     class _Resp:
         status_code = 200
         def json(self_inner):
-            return {"auto_tags": False}
+            return {"default": True, "features": {"auto_tags": False}}
 
     class _Client:
         def __init__(self, *a, **kw): pass

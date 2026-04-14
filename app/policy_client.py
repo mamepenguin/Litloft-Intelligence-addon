@@ -41,21 +41,20 @@ def _base_url() -> str:
 
 
 def _evaluate_response(payload: dict, feature: str) -> bool:
-    """Resolve a feature flag against the policy dict format.
+    """Resolve a feature flag against the host's policy response.
 
-    The host returns:
-    - ``{}``: no policy configured → all features enabled.
-    - ``{"_all": false}``: bool shorthand → every feature disabled.
-    - ``{"<feature>": bool, ...}``: per-feature dict.
-    Unknown features default to True (graceful degradation).
+    The host returns ``{"default": bool, "features": {<name>: bool}}``.
+    A named feature wins over default; missing keys fall back to
+    default; a malformed payload fails open (True) so a transient
+    schema mismatch does not silently disable real work.
     """
     if not isinstance(payload, dict):
         return True
-    if "_all" in payload:
-        return bool(payload["_all"])
-    if feature in payload:
-        return bool(payload[feature])
-    return True
+    features = payload.get("features")
+    if isinstance(features, dict) and feature in features:
+        return bool(features[feature])
+    default = payload.get("default", True)
+    return bool(default)
 
 
 async def is_feature_enabled(drive: str, feature: str) -> bool:
