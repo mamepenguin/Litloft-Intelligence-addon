@@ -1,0 +1,29 @@
+id: 009_long_video_olive
+query: "200年以上の古いオリーブの話、何て言ってた？"
+
+# Long-form video (8:31, 34 transcript chunks) — first hit-point is the
+# narrator describing the age of the antique olive at ~2:50-3:30. Tests
+# segment_recall in a multi-chunk file where IoU can actually
+# discriminate between the right section and unrelated parts of the
+# same video.
+expected_keywords:
+  must_include:
+    - "200年"
+    - "オリーブ"
+  must_exclude:
+    - "言っ"
+
+ground_truth_files:
+  - path: "videos/【最高額更新】樹齢200年超えの格好良すぎる植物「古木オリーブ」を買ってしまった【TBL86】.mp4"
+    segment_hint:
+      time_range: [170.0, 210.0]   # narrator: "従令少なくとも200年から300年以上はあるらしい"
+
+must_mention:
+  - "200年"
+
+notes: |
+  Phase J (long-video extension): exercises segment_recall on a real
+  multi-chunk video. The 200年 mention sits at chunks [170-186] and
+  [186-206], so a hint window covering [170, 210] catches the cluster.
+  IoU>=0.3 against either chunk is a real signal — not the trivially
+  IoU=1.0 of single-chunk short videos.

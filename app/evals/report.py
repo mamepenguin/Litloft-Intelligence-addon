@@ -53,7 +53,15 @@ def _agg_value(case_reports: list[CaseReport], pick) -> float:
 def _stage3_median_of_medians(
     case_reports: list[CaseReport], attr: str
 ) -> float:
-    vals = [getattr(c.stage3, attr).median for c in case_reports]
+    # Skip cases whose metric has no observed values (e.g. citation_segment_match
+    # is N/A when the LLM did not cite any segment-hinted GT file). Treating
+    # those as 0.0 dragged the outer median down, so a perfect run on hinted
+    # cases looked like 0.50 when half the cases were N/A.
+    vals = [
+        getattr(c.stage3, attr).median
+        for c in case_reports
+        if getattr(c.stage3, attr).values
+    ]
     if not vals:
         return 0.0
     return statistics.median(vals)

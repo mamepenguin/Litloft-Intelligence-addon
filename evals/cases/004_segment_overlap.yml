@@ -17,6 +17,13 @@ ground_truth_files:
   - path: "videos/kyoto_autumn.mp4"
     segment_hint:
       time_range: [3.0, 8.0]
+  # family_notes.md contains a direct prose match for 永観堂 + 夜のライトアップ
+  # ("永観堂の紅葉も素晴らしく、夜のライトアップでは昼とはまったく違う表情…").
+  # Originally omitted from GT, but the LLM legitimately cites it when it
+  # ranks high — penalising that as a citation_in_ground_truth miss
+  # mismeasures retrieval quality. No segment_hint because the file is a
+  # single short paragraph.
+  - path: "docs/family_notes.md"
 
 must_mention:
   - "ライトアップ"

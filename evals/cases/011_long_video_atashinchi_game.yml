@@ -1,0 +1,34 @@
+id: 011_long_video_atashinchi_game
+query: "半年かけてゲームを手に入れた話、何て言ってた？"
+
+# Long-form video (15 transcript chunks, あたしンち アニメ). Specific
+# plot point: the protagonist saves up for half a year to buy a game.
+# Hit-point sits at ~[71, 90]. Tests pinpoint segment retrieval in a
+# narrative video where many other plot beats compete.
+#
+# Query reformulated to use transcript-faithful wording. The earlier
+# version used the character name "ユズ" (filename only, not in
+# transcript) which forced gemma4:e2b's Stage 1 transform into raw
+# fallback (README §9 "json_object 非対応 LLM"). Real users searching
+# this kind of clip describe the situation, not a character name they
+# may not remember — keep the case grounded in what the audio says.
+expected_keywords:
+  must_include:
+    - "ゲーム"
+    - "半年"
+  must_exclude:
+    - "言っ"
+
+ground_truth_files:
+  - path: "videos/「ユズの日曜日」第168話 ｜ あたしンち ｜ [ENG sub].mp4"
+    segment_hint:
+      time_range: [65.0, 95.0]   # narrator: "半年かかって溜めた小豆…手に入れたこのゲーム"
+
+must_mention:
+  - "ゲーム"
+
+notes: |
+  Phase J (long-video extension): the "half-year saving for a game"
+  beat is at chunk [71, 90]. The video has unrelated father/family
+  scenes at later timestamps (270s, 350s+). A correct retrieval must
+  surface the early game-acquisition chunk specifically.

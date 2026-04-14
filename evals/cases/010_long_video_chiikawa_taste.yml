@@ -1,0 +1,26 @@
+id: 010_long_video_chiikawa_taste
+query: "ちいかわアイスの味の特徴は？"
+
+# Long-form video (8:42, 37 transcript chunks). The taste description
+# (ヨーグルト味, 甘さ控えめ) sits in the middle of the video. Distinct
+# from the sticker-collection segments at the end — exercises whether
+# retrieval picks the right part of a topical video.
+expected_keywords:
+  must_include:
+    - "ちいかわ"
+    - "ヨーグルト"
+
+ground_truth_files:
+  - path: "videos/【ちいかわ】セブンイレブン限定！！不二家コラボ！ちいかわ一口ミルキーアイスがついに新登場！！オリジナルステッカー付いてくる♪.mp4"
+    segment_hint:
+      time_range: [85.0, 115.0]   # narrator: "アイスのお味は無茶うまいヨーグルト味"
+
+must_mention:
+  - "ヨーグルト"
+
+notes: |
+  Phase J (long-video extension): the taste description chunk sits at
+  ~[92, 112]. A 30s hint window targets it cleanly. The same video
+  also covers stickers / stand-making (chunks 400+), so a model that
+  returns "any segment from this file" should NOT pass — only the
+  taste-description chunk satisfies the hint.

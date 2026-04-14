@@ -45,12 +45,33 @@ def _iou_seconds(
 
 
 def _segment_matches_hint(result: SearchResult, hint: SegmentHint) -> bool:
-    """True if any segment in ``result`` satisfies the ground-truth hint."""
+    """True if any segment in ``result`` satisfies the ground-truth hint.
+
+    For time hints we accept either:
+    * ``IoU >= 0.3`` (tight alignment between segment and hint), or
+    * ``hint_coverage >= 0.5`` (the segment covers at least half of the
+      hint window, even if the segment itself is much wider).
+
+    The coverage clause matters for long videos where the indexer
+    aggregates many transcript chunks into a single wide ``SegmentGroup``
+    (e.g. [95s, 478s] — 6+ minutes wide). With IoU alone, a 40-second
+    hint inside such a group scores ~0.10 and fails, even though the
+    retriever clearly surfaced the correct moment. Coverage rewards
+    that "right span surfaced" outcome without dropping the IoU-based
+    discrimination on tighter matches.
+    """
     for group in result.segments:
-        # time_range hint: IoU >= 0.3 against the segment group window
         if hint.time_range is not None and group.time_range is not None:
-            if _iou_seconds(group.time_range, hint.time_range) >= 0.3:
+            iou = _iou_seconds(group.time_range, hint.time_range)
+            if iou >= 0.3:
                 return True
+            seg_lo, seg_hi = min(group.time_range), max(group.time_range)
+            hint_lo, hint_hi = min(hint.time_range), max(hint.time_range)
+            hint_size = hint_hi - hint_lo
+            if hint_size > 0:
+                intersection = max(0.0, min(seg_hi, hint_hi) - max(seg_lo, hint_lo))
+                if intersection / hint_size >= 0.5:
+                    return True
         # page hint: exact match against any matchInfo.page
         if hint.page is not None:
             for m in group.matches:
