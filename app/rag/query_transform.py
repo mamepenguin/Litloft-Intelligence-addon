@@ -48,7 +48,11 @@ _SYSTEM_PROMPT = (
 )
 
 
-async def transform_query(natural_query: str) -> str:
+async def transform_query(
+    natural_query: str,
+    *,
+    temperature: float | None = None,
+) -> str:
     """Rewrite a natural-language RAG question as a search-keyword string.
 
     Args:
@@ -87,6 +91,7 @@ async def transform_query(natural_query: str) -> str:
         _SYSTEM_PROMPT,
         user_prompt,
         max_tokens_override=_QUERY_TRANSFORM_MAX_TOKENS,
+        temperature=temperature,
     )
 
     if isinstance(raw, dict):

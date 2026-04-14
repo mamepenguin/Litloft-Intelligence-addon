@@ -1,0 +1,30 @@
+id: 001_proper_noun_kyoto
+query: "京都の紅葉について何を言ってた？"
+
+# Stage 1 keywords: proper noun "京都" + "紅葉" must survive the transform,
+# while generic question-verb noise ("言ってた", "何") should be dropped.
+# Grammar auxiliaries in expected_keywords.must_exclude are case-specific;
+# truly global noise lives in app/evals/blocklists/.
+expected_keywords:
+  must_include:
+    - "京都"
+    - "紅葉"
+  must_exclude:
+    - "言っ"
+
+# Ground-truth citations: a short narrated video plus the family-notes
+# markdown chapter that describes the same Kyoto trip.
+ground_truth_files:
+  - path: "videos/kyoto_autumn.mp4"
+    segment_hint:
+      time_range: [0.0, 60.0]
+  - path: "docs/family_notes.md"
+
+must_mention:
+  - "紅葉"
+
+notes: |
+  Proper-noun + question-verb baseline. Both the video transcript and the
+  markdown explicitly cover the Kyoto autumn trip, so recall@5 should be
+  saturated once Whisper + chunker work at all. If Stage 1 drops "京都",
+  the video half will disappear from retrieval and recall will halve.

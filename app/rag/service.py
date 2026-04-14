@@ -149,6 +149,8 @@ async def answer_question(
     top_k: int | None = None,
     file_type: str | None = None,
     drive: str | None = None,
+    *,
+    temperature: float | None = None,
 ) -> AnswerResponse:
     """Run the full RAG pipeline and return an ``AnswerResponse``.
 
@@ -168,6 +170,7 @@ async def answer_question(
         hv_token=hv_token,
         file_type=file_type,
         drive=drive,
+        transform_temperature=temperature,
     )
 
     if not candidates:
@@ -192,6 +195,7 @@ async def answer_question(
         system_prompt,
         user_prompt,
         max_tokens_override=rag_config.max_tokens,
+        temperature=temperature,
     )
 
     # Stage 4: parse + validate citations against the retrieved set.

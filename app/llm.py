@@ -132,6 +132,7 @@ class LLMClient:
         *,
         max_tokens_override: int | None = None,
         response_format: dict | None = None,
+        temperature: float | None = None,
     ) -> str | None:
         """Generate a text completion with retry on transient failures.
 
@@ -165,6 +166,11 @@ class LLMClient:
             if max_tokens_override is not None
             else self._config.max_tokens
         )
+        effective_temperature = (
+            temperature
+            if temperature is not None
+            else self._config.temperature
+        )
 
         # Only include response_format in the kwargs when specified, so
         # providers that 400 on unknown keys are not broken for non-JSON
@@ -193,7 +199,7 @@ class LLMClient:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    temperature=self._config.temperature,
+                    temperature=effective_temperature,
                     **extra_kwargs,
                 )
                 return response.choices[0].message.content
@@ -243,6 +249,7 @@ class LLMClient:
         user_prompt: str,
         *,
         max_tokens_override: int | None = None,
+        temperature: float | None = None,
     ) -> AsyncIterator[str]:
         """Stream a text completion token-by-token.
 
@@ -276,6 +283,11 @@ class LLMClient:
             if max_tokens_override is not None
             else self._config.max_tokens
         )
+        effective_temperature = (
+            temperature
+            if temperature is not None
+            else self._config.temperature
+        )
 
         stream_kwargs: dict = {
             "model": self._config.model,
@@ -283,7 +295,7 @@ class LLMClient:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "temperature": self._config.temperature,
+            "temperature": effective_temperature,
             "stream": True,
         }
         if _uses_max_completion_tokens(self._config.model):
@@ -357,6 +369,7 @@ class LLMClient:
         user_prompt: str,
         *,
         max_tokens_override: int | None = None,
+        temperature: float | None = None,
     ) -> list | dict | None:
         """Generate a completion and parse the result as JSON.
 
@@ -383,6 +396,7 @@ class LLMClient:
             user_prompt,
             max_tokens_override=max_tokens_override,
             response_format={"type": "json_object"},
+            temperature=temperature,
         )
         if raw is None:
             return None

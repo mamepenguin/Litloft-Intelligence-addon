@@ -1,0 +1,29 @@
+id: 003_recipe_segment
+query: "カレーの作り方は？"
+
+expected_keywords:
+  must_include:
+    - "カレー"
+  must_exclude:
+    - "作り方"
+
+# Audio-first case. The recipe audio is the canonical source; the
+# family_notes markdown re-tells the same recipe inside the
+# "お姉ちゃんが妹にカレーを教えた日" chapter. segment_hint on the audio
+# pins the early portion where the onion-sautéing step lands — a
+# Stage 2 segment_recall failure here means our audio chunker mis-aligned
+# with Whisper segments.
+ground_truth_files:
+  - path: "audio/recipe_curry.mp3"
+    segment_hint:
+      time_range: [0.0, 20.0]
+  - path: "docs/family_notes.md"
+
+must_mention:
+  - "カレー"
+
+notes: |
+  Cross-modal case: audio transcript + markdown retelling. Also exercises
+  segment-granular recall on an mp3 file (not just video). "作り方" is a
+  generic question-nominal that should not survive Stage 1; surviving it
+  would drown out the recipe-specific signal.

@@ -53,14 +53,31 @@ def _enable_wal_mode(dbapi_conn: sqlite3.Connection, _: object) -> None:
     dbapi_conn.execute("PRAGMA foreign_keys=ON")
 
 
+def _resolve_search_db_path() -> str:
+    """Resolve the search.db path, honoring the eval-harness override.
+
+    The eval harness sets ``INTELLIGENCE_SEARCH_DB_PATH`` to point the
+    service at a frozen snapshot DB instead of the live runtime DB. The
+    override path must already exist (we never copy or migrate); the
+    caller is responsible for providing a complete snapshot.
+
+    Returns the path string passed to SQLAlchemy's ``create_engine``.
+    """
+    override = os.environ.get("INTELLIGENCE_SEARCH_DB_PATH", "").strip()
+    if override:
+        return override
+    return str(settings.search_db_path)
+
+
 def init_search_db() -> None:
     """Initialize the search database with sqlite-vec extension."""
     global _search_engine, _SearchSession
 
     settings.intelligence_data_dir.mkdir(parents=True, exist_ok=True)
 
+    db_path = _resolve_search_db_path()
     _search_engine = create_engine(
-        f"sqlite:///{settings.search_db_path}",
+        f"sqlite:///{db_path}",
         echo=False,
         connect_args={"check_same_thread": False, "timeout": 120},
     )

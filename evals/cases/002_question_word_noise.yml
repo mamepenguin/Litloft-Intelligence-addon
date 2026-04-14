@@ -1,0 +1,32 @@
+id: 002_question_word_noise
+query: "黒猫の共通点は？"
+
+# Regression test for hako O_lh_jKTbQBcMKs23483Z: the interrogative noun
+# "共通点" used to survive query_transform and become an unmatched query
+# term, driving retrieval to 0 hits. Expect only "黒猫" to pass through.
+expected_keywords:
+  must_include:
+    - "黒猫"
+  must_exclude:
+    - "共通点"
+
+# Ground truth: the narrated video explicitly enumerates black-cat traits
+# ("人懐こく賢い", "病気に強い", "幸運の象徴"), and the cat_diary markdown
+# mirrors the same generalisations. No time_range for the document; the
+# video segment hint covers the middle of the clip where the enumeration
+# actually lands (Whisper segments vary slightly per model).
+ground_truth_files:
+  - path: "videos/black_cat_facts.mp4"
+    segment_hint:
+      time_range: [5.0, 45.0]
+  - path: "docs/cat_diary.md"
+
+must_mention:
+  - "黒猫"
+
+notes: |
+  Historical regression: "共通点" as a bare nominal leaks into the keyword
+  set and poisons retrieval. Stage 1 must strip it. Stage 2 should still
+  recall both files via "黒猫" alone. Stage 3 must_mention is deliberately
+  loose — we only require the answer to reference 黒猫 at all, not a
+  specific trait (LLM phrasing drifts run-to-run).

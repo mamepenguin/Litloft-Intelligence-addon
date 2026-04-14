@@ -292,6 +292,8 @@ async def retrieve_candidates(
     hv_token: str | None,
     file_type: str | None = None,
     drive: str | None = None,
+    *,
+    transform_temperature: float | None = None,
 ) -> list[RetrievedFile]:
     """Transform a natural-language question and retrieve RAG candidates.
 
@@ -316,7 +318,7 @@ async def retrieve_candidates(
     Returns:
         A list of ``RetrievedFile`` preserving the original search order.
     """
-    keywords = await transform_query(query)
+    keywords = await transform_query(query, temperature=transform_temperature)
     return await retrieve_with_keywords(
         keywords=keywords,
         top_k=top_k,
