@@ -95,6 +95,10 @@ def init_search_db() -> None:
         _create_vec_tables(conn)
         conn.commit()
 
+    # Migrate transcript_chunks for AI refine columns (idempotent).
+    with _search_engine.begin() as conn:
+        _migrate_transcript_chunks_if_needed(conn)
+
     # Create suggested_tags table for auto-tagging
     with _search_engine.connect() as conn:
         _create_suggested_tags_table(conn)
@@ -208,6 +212,30 @@ def _migrate_vec_clip_if_needed(conn: object) -> None:
     conn.execute(text("UPDATE indexed_files SET clip_indexed = 0"))
 
     conn.commit()
+
+
+def _migrate_transcript_chunks_if_needed(conn: object) -> None:
+    """Add AI-refine columns (``text_original``, ``text_refined_at``).
+
+    SQLite's ALTER TABLE ADD COLUMN is idempotent via a preflight
+    PRAGMA table_info check; running this twice is a no-op.
+    """
+    cols = {
+        row[1]
+        for row in conn.execute(
+            text("PRAGMA table_info(transcript_chunks)")
+        ).fetchall()
+    }
+    if "text_original" not in cols:
+        conn.execute(
+            text("ALTER TABLE transcript_chunks ADD COLUMN text_original TEXT")
+        )
+    if "text_refined_at" not in cols:
+        conn.execute(
+            text(
+                "ALTER TABLE transcript_chunks ADD COLUMN text_refined_at TIMESTAMP"
+            )
+        )
 
 
 def _create_vec_tables(conn: object) -> None:

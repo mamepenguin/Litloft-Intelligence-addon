@@ -1,8 +1,9 @@
 """Pydantic models for request/response schemas."""
 
+from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # --- Search ---
@@ -62,6 +63,7 @@ class FeaturesStatus(BaseModel):
     auto_tags: str
     summaries: str
     rag: bool = False
+    transcript_refine: str = "false"
 
 
 class LLMStatus(BaseModel):
@@ -160,10 +162,22 @@ class SimilarFilesResponse(BaseModel):
 
 
 class TranscriptChunkResponse(BaseModel):
+    """One transcript chunk, possibly AI-refined.
+
+    ``text_original`` + ``text_refined_at`` are populated when the
+    chunk has been through the refine worker; both are None for
+    unrefined chunks. Serialized as camelCase (``textOriginal`` /
+    ``refinedAt``) to match the UI's ``TranscriptChunkItem``.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
     index: int
     text: str
     start: float
     end: float
+    text_original: str | None = Field(default=None, alias="textOriginal", serialization_alias="textOriginal")
+    text_refined_at: datetime | None = Field(default=None, alias="refinedAt", serialization_alias="refinedAt")
 
 
 class TranscriptResponse(BaseModel):

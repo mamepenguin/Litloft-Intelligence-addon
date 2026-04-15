@@ -11,6 +11,10 @@ features:
                       # SECURITY: when enabled, file content (transcripts, captions,
                       # text) is sent to the LLM API on every ask. For privacy-sensitive
                       # content use a local LLM (e.g., ollama).
+  transcript_refine: false
+                      # "false" | "manual" | "on_index" — LLM-based ASR transcript
+                      # correction. Originals kept in text_original for revert.
+                      # Requires llm.provider != "disabled".
 
 # LLM provider configuration (required for auto_tags and future LLM features)
 # Supports any OpenAI-compatible API: ollama, vLLM, LM Studio, OpenAI, DeepSeek, etc.

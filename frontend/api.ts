@@ -101,6 +101,12 @@ export interface TranscriptChunkItem {
   text: string;
   start: number;
   end: number;
+  // Populated when the chunk has been AI-refined. `refinedAt` is the
+  // ISO timestamp of the refine run; `textOriginal` is the pre-refine
+  // ASR output preserved for revert + tooltip display. Both are null /
+  // undefined for unrefined chunks.
+  refinedAt?: string | null;
+  textOriginal?: string | null;
 }
 
 export interface TranscriptResponse {
@@ -273,6 +279,52 @@ export async function getFileTranscript(
   } catch {
     return { available: false };
   }
+}
+
+// --- Transcript refine (AI correction of ASR output) ---
+
+export interface RefineFileResponse {
+  job_id: string;
+  chunk_count: number;
+}
+
+export async function refineFileTranscript(
+  fileId: string,
+  drive: string,
+): Promise<RefineFileResponse> {
+  return fetchJSON<RefineFileResponse>(
+    `${API_BASE}/addons/intelligence/refine/files/${fileId}`,
+    { method: "POST", headers: driveHeaders(drive) },
+  );
+}
+
+export async function revertFileTranscript(
+  fileId: string,
+  drive: string,
+): Promise<void> {
+  await fetchJSON(
+    `${API_BASE}/addons/intelligence/refine/files/${fileId}/revert`,
+    { method: "POST", headers: driveHeaders(drive) },
+  );
+}
+
+export interface RefineFolderResponse {
+  queued: number;
+  jobs: string[];
+}
+
+export async function refineFolderTranscripts(
+  drive: string,
+  path: string,
+): Promise<RefineFolderResponse> {
+  return fetchJSON<RefineFolderResponse>(
+    `${API_BASE}/addons/intelligence/refine/folders`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...driveHeaders(drive) },
+      body: JSON.stringify({ drive, path }),
+    },
+  );
 }
 
 export async function getFileIndexDetails(

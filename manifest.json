@@ -225,6 +225,35 @@
                 }
             },
             {
+                "path": "/refine/files/{file_id}",
+                "methods": ["POST"],
+                "pre_check": {
+                    "type": "file_access",
+                    "param": "file_id"
+                },
+                "addon_feature": "transcript_refine",
+                "require_drive": true,
+                "response_filter": null
+            },
+            {
+                "path": "/refine/files/{file_id}/revert",
+                "methods": ["POST"],
+                "pre_check": {
+                    "type": "file_access",
+                    "param": "file_id"
+                },
+                "addon_feature": "transcript_refine",
+                "require_drive": true,
+                "response_filter": null
+            },
+            {
+                "path": "/refine/folders",
+                "methods": ["POST"],
+                "pre_check": {"type": "addon_feature", "feature": "transcript_refine"},
+                "require_drive": true,
+                "response_filter": null
+            },
+            {
                 "path": "/queue/pause",
                 "methods": ["POST"],
                 "drive_optional": true,

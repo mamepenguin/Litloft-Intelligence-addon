@@ -15,4 +15,5 @@ export const slotComponents: Record<string, React.LazyExoticComponent<React.Comp
   "summary": lazy(() => import("./SummarySection")),
   "folder-auto-tags": lazy(() => import("./FolderAutoTagsButton")),
   "folder-summaries": lazy(() => import("./FolderSummariesButton")),
+  "folder-refine-transcripts": lazy(() => import("./FolderRefineButton")),
 };

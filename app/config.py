@@ -110,6 +110,9 @@ class FeaturesConfig:
     # response to user queries. Default off for security — file content
     # (transcripts, captions, text) is sent to the LLM API.
     rag: bool = False
+    # Transcript AI refine ("false" | "manual" | "on_index"). Default off
+    # since file contents are sent to the LLM API during refine.
+    transcript_refine: str = "false"
 
 
 @dataclass(frozen=True)

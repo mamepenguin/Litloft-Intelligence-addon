@@ -135,6 +135,13 @@ class TranscriptChunk(Base):
     timestamp_start: Mapped[float] = mapped_column(Float, nullable=False)
     timestamp_end: Mapped[float] = mapped_column(Float, nullable=False)
 
+    # Preserved original text, set only on first AI refine.
+    text_original: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Non-null marks the chunk as AI-refined.
+    text_refined_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(UTC)
     )

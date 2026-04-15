@@ -1,14 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FileText } from "lucide-react";
+import { FileText, Sparkles, Undo2 } from "lucide-react";
 import { useTranslations } from "next-intl";
 
-import { getFileTranscript } from "./api";
+import {
+  getFileTranscript,
+  refineFileTranscript,
+  revertFileTranscript,
+} from "./api";
 import type { TranscriptChunkItem } from "./api";
 import { formatDuration } from "@/lib/format";
 import { getSubtitleUrl } from "@/lib/api";
 import type { SubtitleInfo } from "@/types";
+import { useAddonStatus } from "@/components/AddonSlotsProvider";
 
 interface TranscriptSectionProps {
   fileId: string;
@@ -62,6 +67,15 @@ function parseVttCues(vtt: string): TranscriptChunkItem[] {
 
 export default function TranscriptSection({ fileId, drive, videoRef, subtitles = [] }: TranscriptSectionProps) {
   const t = useTranslations("searchIndex");
+  const addonStatus = useAddonStatus("intelligence");
+  const refineFeature = addonStatus.features?.transcript_refine;
+  // Backend sends either boolean false or the string "false" when the
+  // feature is fully OFF. Anything else ("manual", "on_index", true)
+  // counts as enabled for UI purposes.
+  const refineEnabled =
+    refineFeature !== false && refineFeature !== "false" && refineFeature !== undefined;
+  const [refining, setRefining] = useState(false);
+  const [reverting, setReverting] = useState(false);
   const [whisperChunks, setWhisperChunks] = useState<TranscriptChunkItem[]>([]);
   const [whisperLanguage, setWhisperLanguage] = useState("");
   const [whisperWordCues, setWhisperWordCues] = useState<TranscriptChunkItem[]>([]);
@@ -158,6 +172,42 @@ export default function TranscriptSection({ fileId, drive, videoRef, subtitles =
     [videoRef]
   );
 
+  const hasRefinedChunks = useMemo(
+    () => whisperChunks.some((c) => c.refinedAt),
+    [whisperChunks],
+  );
+
+  const handleRefine = useCallback(async () => {
+    if (refining) return;
+    setRefining(true);
+    try {
+      await refineFileTranscript(fileId, drive);
+      // Re-fetch so refinedAt / textOriginal render immediately; the
+      // backend processes asynchronously, so this may still show the
+      // pre-refine state. A full WebSocket wiring lands in a follow-up.
+      const res = await getFileTranscript(fileId, drive);
+      if (res.available && res.chunks) setWhisperChunks(res.chunks);
+    } catch {
+      // non-critical — user can retry
+    } finally {
+      setRefining(false);
+    }
+  }, [fileId, drive, refining]);
+
+  const handleRevert = useCallback(async () => {
+    if (reverting) return;
+    setReverting(true);
+    try {
+      await revertFileTranscript(fileId, drive);
+      const res = await getFileTranscript(fileId, drive);
+      if (res.available && res.chunks) setWhisperChunks(res.chunks);
+    } catch {
+      // non-critical
+    } finally {
+      setReverting(false);
+    }
+  }, [fileId, drive, reverting]);
+
   if (loading || (!chunksAvailable && !wordsAvailable && !externalAvailable)) return null;
 
   const toggleOptions: { id: Source; label: string; available: boolean }[] = [
@@ -180,7 +230,7 @@ export default function TranscriptSection({ fileId, drive, videoRef, subtitles =
         )}
         <span className="text-xs">({cues.length})</span>
         {showToggle && (
-          <div className="ml-auto flex gap-1 text-xs">
+          <div className="ml-2 flex gap-1 text-xs">
             {visibleOptions.map((opt) => (
               <button
                 key={opt.id}
@@ -193,25 +243,62 @@ export default function TranscriptSection({ fileId, drive, videoRef, subtitles =
             ))}
           </div>
         )}
+        {refineEnabled && source === "chunks" && (
+          <div className="ml-auto flex gap-1 text-xs">
+            <button
+              type="button"
+              onClick={handleRefine}
+              disabled={refining}
+              className="flex items-center gap-1 rounded px-2 py-0.5 text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+            >
+              <Sparkles size={11} className={refining ? "animate-pulse" : ""} />
+              {t("transcriptRefine")}
+            </button>
+            {hasRefinedChunks && (
+              <button
+                type="button"
+                onClick={handleRevert}
+                disabled={reverting}
+                className="flex items-center gap-1 rounded px-2 py-0.5 text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+              >
+                <Undo2 size={11} className={reverting ? "animate-pulse" : ""} />
+                {t("transcriptRevert")}
+              </button>
+            )}
+          </div>
+        )}
       </div>
       <div className="max-h-80 space-y-0.5 overflow-y-auto rounded-lg bg-bg-card p-2">
-        {cues.map((cue) => (
-          <button
-            key={cue.index}
-            ref={cue.index === activeIndex ? activeRef : undefined}
-            onClick={() => seekTo(cue.start)}
-            className={`flex w-full cursor-pointer gap-3 rounded px-2 py-1.5 text-left text-sm transition-colors hover:bg-bg-primary ${
-              cue.index === activeIndex
-                ? "bg-accent/10 text-accent"
-                : "text-text-primary"
-            }`}
-          >
-            <span className="shrink-0 font-mono text-xs text-text-muted">
-              {formatDuration(cue.start)}
-            </span>
-            <span className="min-w-0 flex-1">{cue.text}</span>
-          </button>
-        ))}
+        {cues.map((cue) => {
+          const isRefined = Boolean(cue.refinedAt);
+          return (
+            <button
+              key={cue.index}
+              ref={cue.index === activeIndex ? activeRef : undefined}
+              onClick={() => seekTo(cue.start)}
+              title={
+                isRefined && cue.textOriginal
+                  ? `${t("transcriptOriginalLabel")}: ${cue.textOriginal}`
+                  : undefined
+              }
+              className={`flex w-full cursor-pointer gap-3 rounded px-2 py-1.5 text-left text-sm transition-colors hover:bg-bg-primary ${
+                cue.index === activeIndex
+                  ? "bg-accent/10 text-accent"
+                  : "text-text-primary"
+              }`}
+            >
+              <span className="shrink-0 font-mono text-xs text-text-muted">
+                {formatDuration(cue.start)}
+              </span>
+              <span className="min-w-0 flex-1">{cue.text}</span>
+              {isRefined && (
+                <span className="shrink-0 rounded bg-accent-teal/15 px-1.5 py-0.5 text-[10px] font-medium text-accent-teal">
+                  {t("transcriptRefinedBadge")}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

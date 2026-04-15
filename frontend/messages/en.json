@@ -24,6 +24,10 @@
     "transcriptSourceChunks": "Chunks",
     "transcriptSourceWords": "Words",
     "transcriptSourceExternal": "External",
+    "transcriptRefine": "Refine with AI",
+    "transcriptRevert": "Undo AI refinement",
+    "transcriptRefinedBadge": "AI refined",
+    "transcriptOriginalLabel": "Original",
     "indexTitle": "Index Details",
     "clipTitle": "CLIP Frames",
     "more": "more",
@@ -78,6 +82,8 @@
     "summaryInsufficientContent": "Not enough content to summarize",
     "generateFolderSummaries": "Generate AI summaries for folder",
     "summariesBatchQueued": "{queued} summaries queued ({skipped} skipped)",
-    "summariesBatchEmpty": "All files already have summaries"
+    "summariesBatchEmpty": "All files already have summaries",
+    "generateFolderTranscriptRefine": "Refine folder transcripts with AI",
+    "refineBatchQueued": "{queued} queued"
   }
 }

@@ -101,6 +101,8 @@ async def get_transcript(
                 text=c.text,
                 start=c.timestamp_start,
                 end=c.timestamp_end,
+                text_original=c.text_original,
+                text_refined_at=c.text_refined_at,
             )
             for c in chunks
         ],
