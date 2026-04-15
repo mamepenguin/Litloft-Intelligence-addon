@@ -144,6 +144,40 @@ class TranscriptChunk(Base):
     )
 
 
+class TranscriptWord(Base):
+    """Stores Whisper word-level timestamps for subtitle rendering and precise seek.
+
+    Complements TranscriptChunk (which is optimised for embedding/search at
+    10–30 s granularity). Word rows are the fine-grained source of truth
+    used to build subtitles (1–5 s cues) and to seek inside a segment hit.
+
+    Populated only when Whisper runs against the file. HvLink files (which
+    derive chunks from adjacent .vtt) do not produce word rows because
+    WebVTT cues rarely carry word-level timing.
+    """
+
+    __tablename__ = "transcript_words"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    file_id: Mapped[str] = mapped_column(String(12), nullable=False, index=True)
+    word_index: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    language: Mapped[str] = mapped_column(String(10), nullable=False, default="")
+
+    timestamp_start: Mapped[float] = mapped_column(Float, nullable=False)
+    timestamp_end: Mapped[float] = mapped_column(Float, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC)
+    )
+
+    __table_args__ = (
+        Index("idx_transcript_words_file_idx", "file_id", "word_index"),
+        Index("idx_transcript_words_file_time", "file_id", "timestamp_start"),
+    )
+
+
 class SimilarCache(Base):
     """Cache for similar files search results.
 

@@ -14,7 +14,7 @@ import uuid
 
 from app.config import settings, validate_file_path
 from app.database import delete_fts_transcripts, get_search_db, upsert_fts_transcripts
-from app.models import Embedding, IndexedFile, TranscriptChunk
+from app.models import Embedding, IndexedFile, TranscriptChunk, TranscriptWord
 from app.workers.embedder import embed_passages
 from sqlalchemy import text as sql_text
 
@@ -282,70 +282,118 @@ def _transcribe_sequential(
     return []
 
 
-def _split_long_segments(
-    segments: list[dict],
-    max_duration: int,
-) -> list[dict]:
-    """Split segments that exceed max_duration using word timestamps.
+_PUNCT_BREAK = frozenset(".。!?！？…")
+_PUNCT_SOFT = frozenset(",、;:：；")
+_SILENCE_GAP = 0.4  # seconds; larger gaps are treated as sentence boundaries
 
-    Whisper (especially batched mode) can produce segments of 20-30+ seconds.
-    This function splits them at word boundaries to ensure no segment exceeds
-    max_duration, enabling more precise search results.
 
-    Args:
-        segments: Raw Whisper segments (with optional 'words' key).
-        max_duration: Maximum allowed segment duration in seconds.
+def _flatten_words(segments: list[dict]) -> list[dict]:
+    """Flatten per-segment ``words`` lists into a single ordered list.
 
-    Returns:
-        List of segments, each within max_duration.
+    Segments without word timestamps are skipped (batched mode occasionally
+    omits words for very short utterances). The resulting list is ordered
+    by the underlying segment iteration so timestamps stay monotonic.
     """
-    result: list[dict] = []
+    flat: list[dict] = []
+    for seg in segments:
+        language = seg.get("language", "")
+        for w in seg.get("words") or []:
+            text = (w.get("word") or "").strip()
+            if not text:
+                continue
+            flat.append({
+                "text": text,
+                "start": float(w["start"]),
+                "end": float(w["end"]),
+                "language": language,
+            })
+    return flat
 
-    for segment in segments:
-        duration = segment["end"] - segment["start"]
-        words = segment.get("words", [])
 
-        if duration <= max_duration or not words:
-            result = [*result, segment]
-            continue
+def _build_chunks_from_words(
+    words: list[dict],
+    min_duration: float,
+    max_duration: float,
+) -> list[dict]:
+    """Build search-oriented transcript chunks from word-level timestamps.
 
-        # Split at word boundaries
-        language = segment.get("language", "")
-        current_words: list[dict] = []
-        chunk_start: float = words[0]["start"]
+    Chunks are cut preferentially at sentence boundaries (terminal
+    punctuation, then soft punctuation, then silence gaps). The min/max
+    duration bounds are hard constraints: chunks shorter than min are
+    extended past a break candidate; chunks at or above max are flushed
+    unconditionally to avoid the unbounded-chunk regression that the old
+    ``_merge_segments`` allowed when a single Whisper segment exceeded
+    max_duration (ref hako qx19g-IBnLc7_C-WBo-rf).
+    """
+    if not words:
+        return []
 
-        for word in words:
-            would_be_duration = word["end"] - chunk_start
+    def _is_break(word_text: str, gap_to_next: float) -> int:
+        """Return 2 for hard break, 1 for soft break, 0 otherwise."""
+        if word_text and word_text[-1] in _PUNCT_BREAK:
+            return 2
+        if gap_to_next >= _SILENCE_GAP:
+            return 2
+        if word_text and word_text[-1] in _PUNCT_SOFT:
+            return 1
+        return 0
 
-            if would_be_duration > max_duration and current_words:
-                # Flush current word group as a segment
-                result = [
-                    *result,
-                    {
-                        "text": "".join(w["word"] for w in current_words).strip(),
-                        "start": chunk_start,
-                        "end": current_words[-1]["end"],
-                        "language": language,
-                    },
-                ]
-                current_words = [word]
-                chunk_start = word["start"]
-            else:
-                current_words = [*current_words, word]
+    chunks: list[dict] = []
+    current: list[dict] = []
+    chunk_start = words[0]["start"]
+    language = words[0].get("language", "")
 
-        # Flush remaining words
-        if current_words:
-            result = [
-                *result,
-                {
-                    "text": "".join(w["word"] for w in current_words).strip(),
-                    "start": chunk_start,
-                    "end": current_words[-1]["end"],
-                    "language": language,
-                },
-            ]
+    for i, word in enumerate(words):
+        current.append(word)
+        chunk_end = word["end"]
+        duration = chunk_end - chunk_start
+        next_start = words[i + 1]["start"] if i + 1 < len(words) else chunk_end
+        gap = max(0.0, next_start - chunk_end)
+        break_strength = _is_break(word["text"], gap)
 
-    return result
+        should_flush = False
+        if duration >= max_duration:
+            should_flush = True
+        elif duration >= min_duration and break_strength == 2:
+            should_flush = True
+        elif duration >= min_duration * 1.5 and break_strength == 1:
+            should_flush = True
+
+        if should_flush:
+            chunks.append({
+                "text": _join_words([w["text"] for w in current], language),
+                "start": chunk_start,
+                "end": chunk_end,
+                "language": language,
+            })
+            current = []
+            if i + 1 < len(words):
+                chunk_start = words[i + 1]["start"]
+
+    if current:
+        chunks.append({
+            "text": _join_words([w["text"] for w in current], language),
+            "start": chunk_start,
+            "end": current[-1]["end"],
+            "language": language,
+        })
+
+    return chunks
+
+
+def _join_words(tokens: list[str], language: str) -> str:
+    """Join tokens with a space when the language expects inter-word spaces.
+
+    CJK languages (ja/zh/ko/th) are joined without a separator. Other
+    languages get a single-space join. The caller passes a stripped
+    token per word, so we never produce leading/trailing whitespace.
+    """
+    if not tokens:
+        return ""
+    lang = (language or "").lower()
+    if lang.startswith(("ja", "zh", "ko", "th")):
+        return "".join(tokens)
+    return " ".join(tokens)
 
 
 def _merge_segments(
@@ -353,25 +401,13 @@ def _merge_segments(
     min_duration: int,
     max_duration: int,
 ) -> list[dict]:
-    """Merge small Whisper segments into larger chunks.
+    """Merge cue-shaped segments into larger chunks.
 
-    Groups segments to target the min_duration while not exceeding
-    max_duration. Preserves start/end timestamps.
-
-    Args:
-        segments: Raw Whisper segments.
-        min_duration: Minimum target chunk duration in seconds.
-        max_duration: Maximum chunk duration in seconds.
-
-    Returns:
-        List of merged chunk dicts.
+    Used for the HvLink path where raw inputs are WebVTT cues (no word
+    timestamps). For the main Whisper path use ``_build_chunks_from_words``
+    instead — it respects sentence boundaries and enforces max_duration
+    strictly.
     """
-    if not segments:
-        return []
-
-    # Pre-split any segments that already exceed max_duration
-    segments = _split_long_segments(segments, max_duration)
-
     if not segments:
         return []
 
@@ -492,8 +528,9 @@ def _index_whisper_sync(file_id: str) -> bool:
         return True
 
     whisper_config = settings.indexing.whisper
-    chunks = _merge_segments(
-        raw_segments,
+    words = _flatten_words(raw_segments)
+    chunks = _build_chunks_from_words(
+        words,
         whisper_config.min_segment_duration,
         whisper_config.max_segment_duration,
     )
@@ -527,6 +564,22 @@ def _index_whisper_sync(file_id: str) -> bool:
                 timestamp_end=chunk["end"],
             )
             session.add(transcript)
+
+        if words:
+            session.bulk_insert_mappings(
+                TranscriptWord,
+                [
+                    {
+                        "file_id": file_id,
+                        "word_index": i,
+                        "text": w["text"],
+                        "language": w.get("language", ""),
+                        "timestamp_start": w["start"],
+                        "timestamp_end": w["end"],
+                    }
+                    for i, w in enumerate(words)
+                ],
+            )
 
         if vectors is not None:
             text_idx = 0
@@ -588,8 +641,9 @@ def _remove_whisper_data(session: object, file_id: str) -> None:
         session: Database session.
         file_id: The file ID.
     """
-    # Remove transcript chunks (ORM + FTS5)
+    # Remove transcript chunks, word-level rows, and FTS5 mirror
     session.query(TranscriptChunk).filter_by(file_id=file_id).delete()
+    session.query(TranscriptWord).filter_by(file_id=file_id).delete()
     delete_fts_transcripts(session, file_id)
 
     # Remove whisper embeddings and their vectors

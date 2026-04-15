@@ -24,7 +24,7 @@ from app.database import (
     upsert_fts_file,
     validate_vector_table,
 )
-from app.models import Embedding, IndexedFile, TranscriptChunk
+from app.models import Embedding, IndexedFile, TranscriptChunk, TranscriptWord
 from app.workers.blip import check_idle_unload as check_blip_idle_unload
 from app.workers.clip import index_clip, IMAGE_TYPES, VIDEO_TYPES
 from app.workers.metadata import index_metadata_batch, index_text_content
@@ -1126,8 +1126,9 @@ def _purge_file(file_id: str) -> None:
             for emb in embeddings:
                 session.delete(emb)
 
-        # Delete transcript chunks
+        # Delete transcript chunks and word-level rows
         session.query(TranscriptChunk).filter_by(file_id=file_id).delete()
+        session.query(TranscriptWord).filter_by(file_id=file_id).delete()
 
         # Remove from FTS5 indexes
         delete_fts_file(session, file_id)

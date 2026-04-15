@@ -107,6 +107,73 @@ async def get_transcript(
     )
 
 
+@router.get("/files/{file_id}/subtitles.vtt")
+async def get_subtitles_vtt(
+    file_id: str,
+    x_hv_drive: Annotated[str | None, Header(alias="X-HV-Drive")] = None,
+) -> Response:
+    """Return Whisper-derived subtitles as a WebVTT document.
+
+    Drive context is optional here because the route is loaded via
+    ``<track src>`` which can't carry custom headers (mirrors the
+    ``/files/{id}/frame`` pattern). The host's ``file_access``
+    pre_check still verifies drive access for the specific file; when
+    the header *is* present we additionally enforce the strict
+    current-drive match for non-track consumers.
+
+    Built on demand from the ``transcript_words`` table. The file must
+    have been indexed after the word-level rollout; older files lack
+    words and yield 404 until they are re-indexed.
+    """
+    from app.database import get_search_db
+    from app.models import IndexedFile, TranscriptWord
+    from app.subtitle_builder import build_vtt
+
+    drive = unquote(x_hv_drive) if x_hv_drive else None
+    if drive is None:
+        with get_search_db() as db:
+            row = (
+                db.query(IndexedFile)
+                .filter(
+                    IndexedFile.file_id == file_id,
+                    IndexedFile.active.is_(True),
+                )
+                .first()
+            )
+        if not row:
+            raise HTTPException(status_code=404, detail="File not indexed")
+    else:
+        _get_indexed_file_or_404(file_id, drive)
+
+    with get_search_db() as db:
+        rows = (
+            db.query(TranscriptWord)
+            .filter(TranscriptWord.file_id == file_id)
+            .order_by(TranscriptWord.word_index)
+            .all()
+        )
+
+    if not rows:
+        raise HTTPException(status_code=404, detail="No word-level transcript available")
+
+    language = rows[0].language or ""
+    words = [
+        {
+            "text": r.text,
+            "timestamp_start": r.timestamp_start,
+            "timestamp_end": r.timestamp_end,
+        }
+        for r in rows
+    ]
+
+    vtt = build_vtt(words, language=language)
+    return Response(
+        content=vtt,
+        media_type="text/vtt; charset=utf-8",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
 @router.get("/files/{file_id}/index-details", response_model=IndexDetailsResponse)
 async def get_index_details(
     file_id: str,

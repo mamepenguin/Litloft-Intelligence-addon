@@ -9,7 +9,7 @@ can be re-enabled later from a clean slate.
 Tables emptied per drive:
 - ``indexed_files`` (drive column)
 - ``embeddings`` and their vector-table backing rows (joined via file_id)
-- ``transcript_chunks`` (file_id)
+- ``transcript_chunks`` and ``transcript_words`` (file_id)
 - ``suggested_tags`` (file_id)
 - ``file_summaries`` (file_id)
 - FTS5 mirrors (``fts_files``, ``fts_transcripts``, ``fts_text_content``)

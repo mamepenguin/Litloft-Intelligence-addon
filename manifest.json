@@ -104,6 +104,16 @@
                 "response_filter": null
             },
             {
+                "path": "/files/{file_id}/subtitles.vtt",
+                "methods": ["GET"],
+                "drive_optional": true,
+                "pre_check": {
+                    "type": "file_access",
+                    "param": "file_id"
+                },
+                "response_filter": null
+            },
+            {
                 "path": "/files/{file_id}/index-details",
                 "methods": ["GET"],
                 "pre_check": {

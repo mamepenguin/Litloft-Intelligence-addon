@@ -21,6 +21,8 @@
   },
   "searchIndex": {
     "transcriptTitle": "トランスクリプト",
+    "transcriptSourceWhisper": "Whisper",
+    "transcriptSourceExternal": "外部字幕",
     "indexTitle": "インデックス詳細",
     "clipTitle": "CLIP フレーム",
     "more": "件以上",
