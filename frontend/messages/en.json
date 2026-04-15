@@ -21,7 +21,8 @@
   },
   "searchIndex": {
     "transcriptTitle": "Transcript",
-    "transcriptSourceWhisper": "Whisper",
+    "transcriptSourceChunks": "Chunks",
+    "transcriptSourceWords": "Words",
     "transcriptSourceExternal": "External",
     "indexTitle": "Index Details",
     "clipTitle": "CLIP Frames",

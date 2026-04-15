@@ -17,7 +17,7 @@ interface TranscriptSectionProps {
   subtitles?: SubtitleInfo[];
 }
 
-type Source = "whisper" | "external";
+type Source = "chunks" | "words" | "external";
 
 function parseVttCues(vtt: string): TranscriptChunkItem[] {
   const lines = vtt.split(/\r?\n/);
@@ -25,18 +25,22 @@ function parseVttCues(vtt: string): TranscriptChunkItem[] {
   const tsRe = /(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})/;
   let current: { start: number; end: number; text: string[] } | null = null;
   let idx = 0;
+  const flush = () => {
+    if (current) {
+      cues.push({
+        index: idx++,
+        start: current.start,
+        end: current.end,
+        text: current.text.join(" ").trim(),
+      });
+      current = null;
+    }
+  };
   for (const raw of lines) {
     const line = raw.trim();
     const m = line.match(tsRe);
     if (m) {
-      if (current) {
-        cues.push({
-          index: idx++,
-          start: current.start,
-          end: current.end,
-          text: current.text.join(" ").trim(),
-        });
-      }
+      flush();
       const n = m.map((x) => Number(x));
       current = {
         start: n[1] * 3600 + n[2] * 60 + n[3] + n[4] / 1000,
@@ -46,28 +50,13 @@ function parseVttCues(vtt: string): TranscriptChunkItem[] {
       continue;
     }
     if (!line) {
-      if (current) {
-        cues.push({
-          index: idx++,
-          start: current.start,
-          end: current.end,
-          text: current.text.join(" ").trim(),
-        });
-        current = null;
-      }
+      flush();
       continue;
     }
     if (line.startsWith("WEBVTT") || line.startsWith("NOTE") || line.startsWith("Language:")) continue;
     if (current) current.text.push(line.replace(/<[^>]+>/g, ""));
   }
-  if (current) {
-    cues.push({
-      index: idx,
-      start: current.start,
-      end: current.end,
-      text: current.text.join(" ").trim(),
-    });
-  }
+  flush();
   return cues.filter((c) => c.text);
 }
 
@@ -75,14 +64,17 @@ export default function TranscriptSection({ fileId, drive, videoRef, subtitles =
   const t = useTranslations("searchIndex");
   const [whisperChunks, setWhisperChunks] = useState<TranscriptChunkItem[]>([]);
   const [whisperLanguage, setWhisperLanguage] = useState("");
+  const [whisperWordCues, setWhisperWordCues] = useState<TranscriptChunkItem[]>([]);
   const [externalCues, setExternalCues] = useState<TranscriptChunkItem[]>([]);
   const [externalLanguage, setExternalLanguage] = useState("");
   const [loading, setLoading] = useState(true);
-  const [source, setSource] = useState<Source>("whisper");
+  const [source, setSource] = useState<Source>("chunks");
   const [activeIndex, setActiveIndex] = useState(-1);
   const activeRef = useRef<HTMLButtonElement>(null);
-  const externalAvailable = subtitles.length > 0;
-  const whisperAvailable = whisperChunks.length > 0;
+
+  const chunksAvailable = whisperChunks.length > 0;
+  const wordsAvailable = whisperWordCues.length > 0;
+  const externalAvailable = subtitles.length > 0 && externalCues.length > 0;
 
   useEffect(() => {
     setLoading(true);
@@ -98,7 +90,14 @@ export default function TranscriptSection({ fileId, drive, videoRef, subtitles =
   }, [fileId, drive]);
 
   useEffect(() => {
-    if (!externalAvailable) {
+    fetch(`/api/addons/intelligence/files/${fileId}/subtitles.vtt`)
+      .then((r) => (r.ok ? r.text() : ""))
+      .then((text) => setWhisperWordCues(text ? parseVttCues(text) : []))
+      .catch(() => setWhisperWordCues([]));
+  }, [fileId]);
+
+  useEffect(() => {
+    if (subtitles.length === 0) {
       setExternalCues([]);
       return;
     }
@@ -108,27 +107,33 @@ export default function TranscriptSection({ fileId, drive, videoRef, subtitles =
       .then((r) => (r.ok ? r.text() : ""))
       .then((text) => setExternalCues(text ? parseVttCues(text) : []))
       .catch(() => setExternalCues([]));
-  }, [fileId, subtitles, externalAvailable]);
+  }, [fileId, subtitles]);
 
+  // Reset `source` to the first available one whenever availability changes.
   useEffect(() => {
-    if (!whisperAvailable && externalAvailable) setSource("external");
-    else if (whisperAvailable && !externalAvailable) setSource("whisper");
-  }, [whisperAvailable, externalAvailable]);
+    const available: Source[] = [];
+    if (chunksAvailable) available.push("chunks");
+    if (wordsAvailable) available.push("words");
+    if (externalAvailable) available.push("external");
+    if (available.length === 0) return;
+    if (!available.includes(source)) setSource(available[0]);
+  }, [chunksAvailable, wordsAvailable, externalAvailable, source]);
 
-  const { chunks, language } = useMemo(() => {
-    if (source === "external") return { chunks: externalCues, language: externalLanguage };
-    return { chunks: whisperChunks, language: whisperLanguage };
-  }, [source, externalCues, externalLanguage, whisperChunks, whisperLanguage]);
+  const { cues, language } = useMemo(() => {
+    if (source === "external") return { cues: externalCues, language: externalLanguage };
+    if (source === "words") return { cues: whisperWordCues, language: whisperLanguage };
+    return { cues: whisperChunks, language: whisperLanguage };
+  }, [source, externalCues, externalLanguage, whisperWordCues, whisperChunks, whisperLanguage]);
 
   const handleTimeUpdate = useCallback(() => {
     const video = videoRef.current;
-    if (!video || chunks.length === 0) return;
+    if (!video || cues.length === 0) return;
     const currentTime = video.currentTime;
-    const idx = chunks.findIndex(
+    const idx = cues.findIndex(
       (c) => currentTime >= c.start && currentTime < c.end
     );
     setActiveIndex(idx);
-  }, [chunks, videoRef]);
+  }, [cues, videoRef]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -153,9 +158,15 @@ export default function TranscriptSection({ fileId, drive, videoRef, subtitles =
     [videoRef]
   );
 
-  if (loading || (!whisperAvailable && !externalAvailable)) return null;
+  if (loading || (!chunksAvailable && !wordsAvailable && !externalAvailable)) return null;
 
-  const showToggle = whisperAvailable && externalAvailable;
+  const toggleOptions: { id: Source; label: string; available: boolean }[] = [
+    { id: "chunks", label: t("transcriptSourceChunks"), available: chunksAvailable },
+    { id: "words", label: t("transcriptSourceWords"), available: wordsAvailable },
+    { id: "external", label: t("transcriptSourceExternal"), available: externalAvailable },
+  ];
+  const visibleOptions = toggleOptions.filter((o) => o.available);
+  const showToggle = visibleOptions.length >= 2;
 
   return (
     <div>
@@ -167,42 +178,38 @@ export default function TranscriptSection({ fileId, drive, videoRef, subtitles =
             {language}
           </span>
         )}
-        <span className="text-xs">({chunks.length})</span>
+        <span className="text-xs">({cues.length})</span>
         {showToggle && (
           <div className="ml-auto flex gap-1 text-xs">
-            <button
-              type="button"
-              onClick={() => setSource("whisper")}
-              className={`rounded px-1.5 py-0.5 ${source === "whisper" ? "bg-accent text-white" : "bg-bg-card"}`}
-            >
-              {t("transcriptSourceWhisper")}
-            </button>
-            <button
-              type="button"
-              onClick={() => setSource("external")}
-              className={`rounded px-1.5 py-0.5 ${source === "external" ? "bg-accent text-white" : "bg-bg-card"}`}
-            >
-              {t("transcriptSourceExternal")}
-            </button>
+            {visibleOptions.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setSource(opt.id)}
+                className={`rounded px-1.5 py-0.5 ${source === opt.id ? "bg-accent text-white" : "bg-bg-card"}`}
+              >
+                {opt.label}
+              </button>
+            ))}
           </div>
         )}
       </div>
       <div className="max-h-80 space-y-0.5 overflow-y-auto rounded-lg bg-bg-card p-2">
-        {chunks.map((chunk) => (
+        {cues.map((cue) => (
           <button
-            key={chunk.index}
-            ref={chunk.index === activeIndex ? activeRef : undefined}
-            onClick={() => seekTo(chunk.start)}
+            key={cue.index}
+            ref={cue.index === activeIndex ? activeRef : undefined}
+            onClick={() => seekTo(cue.start)}
             className={`flex w-full cursor-pointer gap-3 rounded px-2 py-1.5 text-left text-sm transition-colors hover:bg-bg-primary ${
-              chunk.index === activeIndex
+              cue.index === activeIndex
                 ? "bg-accent/10 text-accent"
                 : "text-text-primary"
             }`}
           >
             <span className="shrink-0 font-mono text-xs text-text-muted">
-              {formatDuration(chunk.start)}
+              {formatDuration(cue.start)}
             </span>
-            <span className="min-w-0 flex-1">{chunk.text}</span>
+            <span className="min-w-0 flex-1">{cue.text}</span>
           </button>
         ))}
       </div>
