@@ -16,6 +16,17 @@ from dataclasses import dataclass
 
 _PUNCT_BREAK = frozenset(".。!?！？…")
 _PUNCT_SOFT = frozenset(",、;:：；")
+# Characters that must never appear at the start of a cue line. Small kana
+# and the prolonged-sound mark bind to the preceding mora; leading
+# punctuation is also visually awkward. Used to rewind width-capped flushes
+# to a linguistically safe position.
+_NO_BREAK_BEFORE = frozenset(
+    "ーゝゞ々"
+    "ぁぃぅぇぉっゃゅょゎ"
+    "ァィゥェォッャュョヮヵヶ"
+    "、。！？!?.,;:：；…"
+    "」』）)】〉》"
+)
 
 
 @dataclass(frozen=True)
@@ -60,6 +71,36 @@ def _format_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:06.3f}"
 
 
+def _first_char(word: dict) -> str:
+    text = (word.get("text") or "").strip()
+    return text[0] if text else ""
+
+
+def _can_break_before(word: dict) -> bool:
+    """Return False when splitting a cue just before ``word`` would leave
+    a dangling prolonged-sound mark, small kana, or closing punctuation.
+    """
+    ch = _first_char(word)
+    return bool(ch) and ch not in _NO_BREAK_BEFORE
+
+
+def _safe_break_between(prev: dict, nxt: dict) -> bool:
+    """Check a cue boundary between two adjacent word tokens.
+
+    Rejects leading-prolongation / small-kana cases and also refuses to
+    split a run of consecutive katakana, which is almost always a single
+    loanword (e.g. ``ドラクエ``) even though Whisper may emit it as two
+    subword tokens.
+    """
+    if not _can_break_before(nxt):
+        return False
+    prev_text = (prev.get("text") or "").strip()
+    nxt_text = (nxt.get("text") or "").strip()
+    if prev_text and nxt_text and _is_katakana(prev_text[-1]) and _is_katakana(nxt_text[0]):
+        return False
+    return True
+
+
 def build_cues(
     words: list[dict],
     language: str = "",
@@ -71,6 +112,11 @@ def build_cues(
     ``timestamp_end``. The output dicts carry ``start``, ``end``, and
     ``text`` with a single ``\\n`` between pseudo-lines when the cue
     exceeds half the max width (keeps two-line subtitles balanced).
+
+    When a width cap forces a mid-sentence flush we rewind to the most
+    recent "safe" break position (after punctuation, after a silence
+    gap, after an ASCII space) so CJK cues don't split mid-word between
+    a kana and its prolonged-sound mark.
     """
     if not words:
         return []
@@ -78,18 +124,61 @@ def build_cues(
 
     cues: list[dict] = []
     current: list[dict] = []
+    # Indices into ``current`` where splitting is linguistically safe
+    # (i.e. current[:idx] is a complete phrase; current[idx:] carries
+    # forward). Populated on punctuation / silence-gap boundaries.
+    safe_breaks: list[int] = []
     cue_start = float(words[0]["timestamp_start"])
 
-    def flush(end_time: float) -> None:
+    def emit(upto: int, end_time: float) -> None:
+        """Flush ``current[:upto]`` as a cue ending at ``end_time``."""
+        nonlocal current, safe_breaks, cue_start
+        if upto <= 0 or not current:
+            return
+        head = current[:upto]
+        tail = current[upto:]
+        tokens = [w["text"].strip() for w in head if w["text"].strip()]
+        if tokens:
+            text = _join_for_language(tokens, language)
+            cues.append({"start": cue_start, "end": end_time, "text": text})
+        current = tail
+        safe_breaks = [b - upto for b in safe_breaks if b > upto]
+        if current:
+            cue_start = float(current[0]["timestamp_start"])
+
+    def flush_with_rewind(fallback_end: float) -> None:
+        """Flush the accumulated cue, preferring a recorded safe break."""
         if not current:
             return
-        tokens = [w["text"].strip() for w in current if w["text"].strip()]
-        if not tokens:
+        # Walk safe breaks from newest to oldest; use the first one that
+        # keeps the cue above half the max width (avoids trailing tiny
+        # fragments) and whose carry-forward first word is breakable.
+        half_width = cfg.max_width / 2
+        for cand in reversed(safe_breaks):
+            if cand <= 0 or cand >= len(current):
+                continue
+            head = current[:cand]
+            head_tokens = [w["text"].strip() for w in head if w["text"].strip()]
+            head_text = _join_for_language(head_tokens, language)
+            if _display_width(head_text) < half_width:
+                continue
+            if not _safe_break_between(current[cand - 1], current[cand]):
+                continue
+            emit(cand, float(current[cand - 1]["timestamp_end"]))
             return
-        text = _join_for_language(tokens, language)
-        cues.append({"start": cue_start, "end": end_time, "text": text})
+        # No recorded candidate worked — scan backwards for any position
+        # whose successor is breakable, then fall back to hard flush.
+        for cand in range(len(current) - 1, 0, -1):
+            if _safe_break_between(current[cand - 1], current[cand]):
+                emit(cand, float(current[cand - 1]["timestamp_end"]))
+                return
+        emit(len(current), fallback_end)
 
     for i, word in enumerate(words):
+        # When the previous iteration flushed the entire cue, cue_start
+        # is stale — reset it before we start building the next cue.
+        if not current:
+            cue_start = float(word["timestamp_start"])
         current.append(word)
         word_end = float(word["timestamp_end"])
         duration = word_end - cue_start
@@ -106,27 +195,69 @@ def build_cues(
         word_text = word["text"].strip()
         ends_hard = bool(word_text) and word_text[-1] in _PUNCT_BREAK
         ends_soft = bool(word_text) and word_text[-1] in _PUNCT_SOFT
+        has_space = " " in word_text  # ASCII/EN segmentation hint
 
-        should_flush = False
-        if duration >= cfg.max_duration:
-            should_flush = True
-        elif current_width >= cfg.max_width:
-            should_flush = True
-        elif duration >= cfg.min_duration and (ends_hard or gap >= cfg.silence_gap):
-            should_flush = True
-        elif duration >= cfg.min_duration and ends_soft and current_width >= cfg.max_width * 0.75:
-            should_flush = True
+        # Record a safe-break candidate AFTER this word whenever the
+        # boundary is linguistically clean.
+        if ends_hard or ends_soft or gap >= cfg.silence_gap or has_space:
+            if i + 1 < len(words) and _safe_break_between(word, words[i + 1]):
+                safe_breaks.append(len(current))
 
-        if should_flush:
-            flush(word_end)
-            current = []
-            if i + 1 < len(words):
-                cue_start = float(words[i + 1]["timestamp_start"])
+        hard_boundary = (
+            duration >= cfg.min_duration
+            and (ends_hard or gap >= cfg.silence_gap)
+        )
+        soft_boundary = (
+            duration >= cfg.min_duration
+            and ends_soft
+            and current_width >= cfg.max_width * 0.75
+        )
+
+        if duration >= cfg.max_duration or current_width >= cfg.max_width:
+            flush_with_rewind(word_end)
+        elif hard_boundary or soft_boundary:
+            emit(len(current), word_end)
 
     if current:
-        flush(float(current[-1]["timestamp_end"]))
+        emit(len(current), float(current[-1]["timestamp_end"]))
 
     return [_balance_two_lines(c, cfg.max_width // 2) for c in cues]
+
+
+def _is_katakana(ch: str) -> bool:
+    return bool(ch) and "\u30a0" <= ch <= "\u30ff"
+
+
+def _adjust_cjk_break(text: str, idx: int) -> int:
+    """Nudge a midpoint break index outward to a safer CJK position.
+
+    Avoids splitting in the middle of a katakana run (usually a single
+    loanword) and never places the break right before a prolonged-sound
+    mark or small kana. Returns the original index when no better
+    position exists within the search window.
+    """
+    if idx <= 0 or idx >= len(text):
+        return idx
+    limit = min(len(text), max(4, len(text) // 4))
+
+    def _bad(pos: int) -> bool:
+        if pos <= 0 or pos >= len(text):
+            return True
+        if text[pos] in _NO_BREAK_BEFORE:
+            return True
+        # Don't break between two consecutive katakana (same loanword).
+        if _is_katakana(text[pos - 1]) and _is_katakana(text[pos]):
+            return True
+        return False
+
+    if not _bad(idx):
+        return idx
+    for step in range(1, limit + 1):
+        if idx + step < len(text) and not _bad(idx + step):
+            return idx + step
+        if idx - step > 0 and not _bad(idx - step):
+            return idx - step
+    return idx
 
 
 def _balance_two_lines(cue: dict, soft_width: int) -> dict:
@@ -160,7 +291,7 @@ def _balance_two_lines(cue: dict, soft_width: int) -> dict:
         if ch in _PUNCT_SOFT and _display_width(text[: i + 1]) >= soft_width // 2:
             return {**cue, "text": text[: i + 1] + "\n" + text[i + 1 :].lstrip()}
 
-    mid = len(text) // 2
+    mid = _adjust_cjk_break(text, len(text) // 2)
     return {**cue, "text": text[:mid] + "\n" + text[mid:]}
 
 
