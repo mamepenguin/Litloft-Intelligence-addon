@@ -1,9 +1,13 @@
 """Transcript AI refine endpoints.
 
 * ``POST /refine/files/{file_id}`` — enqueue refine for one file
-* ``POST /refine/files/{file_id}/revert`` — restore text_original
 * ``POST /refine/folders`` — refine every transcript-bearing file
   under a given drive+path
+
+Revert is deliberately not exposed: the refine pipeline now re-chunks
+the transcript on LLM-inserted punctuation boundaries, which makes
+per-chunk originals meaningless. Users who want to undo a refine
+should re-run whisper indexing from scratch (`whisper_indexed=False`).
 
 Access control (drive-scope) is enforced by the host's Generic Addon
 Proxy. The router adds feature-flag gating, per-drive policy gating,
@@ -140,49 +144,6 @@ async def refine_file(
     return {"job_id": job_id, "chunk_count": chunk_count}
 
 
-@router.post("/refine/files/{file_id}/revert")
-async def revert_file(
-    file_id: str,
-    drive: str = Depends(require_drive),
-) -> dict:
-    """Revert a file's AI-refined chunks back to the stored originals."""
-    _require_feature_on()
-    await _require_drive_policy(drive)
-
-    with get_search_db() as session:
-        indexed = _fetch_indexed_file(session, file_id, drive)
-        if indexed is None:
-            raise HTTPException(status_code=404, detail="File not found")
-
-        chunks = (
-            session.query(TranscriptChunk)
-            .filter(TranscriptChunk.file_id == file_id)
-            .all()
-        )
-
-        reverted_ids: list[int] = []
-        for chunk in chunks:
-            if chunk.text_original is None:
-                continue
-            original = chunk.text_original
-            chunk.text = original
-            chunk.text_original = None
-            chunk.text_refined_at = None
-            reverted_ids.append(int(chunk.id))
-            realign_words_for_chunk(
-                session,
-                chunk.file_id,
-                chunk.timestamp_start,
-                chunk.timestamp_end,
-                original,
-            )
-
-        if reverted_ids:
-            await recompute_chunk_embeddings(session, reverted_ids)
-
-    return {"reverted_count": len(reverted_ids)}
-
-
 @router.post("/refine/folders")
 async def refine_folder(
     body: dict = Body(...),
@@ -251,7 +212,6 @@ __all__ = [
     "recompute_chunk_embeddings",
     "refine_file",
     "refine_folder",
-    "revert_file",
     "settings",
     "start_refine_job",
 ]

@@ -25,16 +25,14 @@
     "transcriptSourceWords": "Words",
     "transcriptSourceExternal": "External",
     "transcriptRefine": "Refine with AI",
-    "transcriptRevert": "Undo AI refinement",
     "transcriptRefinedBadge": "AI refined",
-    "transcriptOriginalLabel": "Original",
     "indexTitle": "Index Details",
     "clipTitle": "CLIP Frames",
     "more": "more",
     "showMore": "Show more"
   },
   "askSearch": {
-    "button": "Ask AI about \u201c{query}\u201d",
+    "button": "Ask AI about “{query}”",
     "loading": "Generating answer...",
     "loadingHint": "(may take a few seconds)",
     "answerTitle": "AI Answer",

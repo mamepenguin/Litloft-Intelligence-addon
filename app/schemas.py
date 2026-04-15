@@ -164,10 +164,9 @@ class SimilarFilesResponse(BaseModel):
 class TranscriptChunkResponse(BaseModel):
     """One transcript chunk, possibly AI-refined.
 
-    ``text_original`` + ``text_refined_at`` are populated when the
-    chunk has been through the refine worker; both are None for
-    unrefined chunks. Serialized as camelCase (``textOriginal`` /
-    ``refinedAt``) to match the UI's ``TranscriptChunkItem``.
+    ``text_refined_at`` is populated when the chunk has been through
+    the refine worker; None for unrefined chunks. Serialized as
+    camelCase (``refinedAt``) to match the UI's ``TranscriptChunkItem``.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -176,7 +175,6 @@ class TranscriptChunkResponse(BaseModel):
     text: str
     start: float
     end: float
-    text_original: str | None = Field(default=None, alias="textOriginal", serialization_alias="textOriginal")
     text_refined_at: datetime | None = Field(default=None, alias="refinedAt", serialization_alias="refinedAt")
 
 

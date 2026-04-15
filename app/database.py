@@ -219,10 +219,17 @@ def _migrate_vec_clip_if_needed(conn: object) -> None:
 
 
 def _migrate_transcript_chunks_if_needed(conn: object) -> None:
-    """Add AI-refine columns (``text_original``, ``text_refined_at``).
+    """Evolve ``transcript_chunks`` schema for AI refine + re-chunking.
 
-    SQLite's ALTER TABLE ADD COLUMN is idempotent via a preflight
-    PRAGMA table_info check; running this twice is a no-op.
+    - Adds ``text_refined_at`` if missing (original refine feature).
+    - Drops ``text_original`` if present: refine now re-chunks the
+      transcript at sentence boundaries derived from LLM-inserted
+      punctuation, which invalidates any per-chunk original snapshot.
+      Revert is instead "re-run whisper from scratch"; dropping the
+      column keeps the schema honest about what we can restore.
+
+    Idempotent: running twice is a no-op. Requires SQLite 3.35+ for
+    ``DROP COLUMN`` (Docker image ships 3.40+).
     """
     cols = {
         row[1]
@@ -230,15 +237,15 @@ def _migrate_transcript_chunks_if_needed(conn: object) -> None:
             text("PRAGMA table_info(transcript_chunks)")
         ).fetchall()
     }
-    if "text_original" not in cols:
-        conn.execute(
-            text("ALTER TABLE transcript_chunks ADD COLUMN text_original TEXT")
-        )
     if "text_refined_at" not in cols:
         conn.execute(
             text(
                 "ALTER TABLE transcript_chunks ADD COLUMN text_refined_at TIMESTAMP"
             )
+        )
+    if "text_original" in cols:
+        conn.execute(
+            text("ALTER TABLE transcript_chunks DROP COLUMN text_original")
         )
 
 

@@ -36,7 +36,6 @@ def _chunk(cid: int, text: str, start: float, end: float) -> SimpleNamespace:
         file_id="fileabc",
         chunk_index=cid - 1,
         text=text,
-        text_original=None,
         text_refined_at=None,
         timestamp_start=start,
         timestamp_end=end,
@@ -61,7 +60,7 @@ def llm_stub():
 
 @pytest.mark.asyncio
 class TestRefineChunksHappyPath:
-    async def test_updates_chunks_and_stores_original(self, session, llm_stub):
+    async def test_updates_chunks_and_stamps_refined_at(self, session, llm_stub):
         chunks = [
             _chunk(1, "origin one", 0.0, 5.0),
             _chunk(2, "origin two", 5.0, 10.0),
@@ -75,9 +74,9 @@ class TestRefineChunksHappyPath:
 
         assert result.refined_count == 2
         assert result.skipped_count == 0
-        # The impl must copy original → text_original before overwriting
-        # ``text``. Both chunks should have text_original populated.
-        assert chunks[0].text_original == "origin one"
+        # Text is overwritten and refined_at stamped. Originals are NOT
+        # preserved — refine downstream re-chunks the transcript, which
+        # would invalidate per-chunk originals anyway.
         assert chunks[0].text == "refined one"
         assert chunks[0].text_refined_at is not None
         assert chunks[1].text == "refined two"
@@ -96,7 +95,6 @@ class TestRefineChunksMalformedResponse:
         assert result.refined_count == 0
         assert result.skipped_count == 1
         assert chunks[0].text == "origin"
-        assert chunks[0].text_original is None
         assert chunks[0].text_refined_at is None
 
     async def test_non_list_response_preserves_original(self, session, llm_stub):
@@ -172,14 +170,14 @@ class TestRefineChunksExceptionHandling:
         # Window 1 (WINDOW_SIZE chunks) skipped, window 2 refined.
         assert result.refined_count == WINDOW_SIZE
         assert result.skipped_count == WINDOW_SIZE
-        # Originals preserved in window 1
+        # Window 1 preserved verbatim (LLM raised, no mutations).
         for c in chunks[:WINDOW_SIZE]:
-            assert c.text_original is None
             assert c.text.startswith("txt")
-        # Refined in window 2
+            assert c.text_refined_at is None
+        # Window 2 refined.
         for c in chunks[WINDOW_SIZE:]:
-            assert c.text_original is not None
             assert c.text.startswith("R")
+            assert c.text_refined_at is not None
 
 
 @pytest.mark.asyncio

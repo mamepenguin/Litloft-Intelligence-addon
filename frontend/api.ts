@@ -102,11 +102,11 @@ export interface TranscriptChunkItem {
   start: number;
   end: number;
   // Populated when the chunk has been AI-refined. `refinedAt` is the
-  // ISO timestamp of the refine run; `textOriginal` is the pre-refine
-  // ASR output preserved for revert + tooltip display. Both are null /
-  // undefined for unrefined chunks.
+  // ISO timestamp of the refine run. Null / undefined for unrefined
+  // chunks. Originals are not preserved — refine re-chunks the
+  // transcript on punctuation boundaries, so per-chunk originals
+  // would no longer align.
   refinedAt?: string | null;
-  textOriginal?: string | null;
 }
 
 export interface TranscriptResponse {
@@ -294,16 +294,6 @@ export async function refineFileTranscript(
 ): Promise<RefineFileResponse> {
   return fetchJSON<RefineFileResponse>(
     `${API_BASE}/addons/intelligence/refine/files/${fileId}`,
-    { method: "POST", headers: driveHeaders(drive) },
-  );
-}
-
-export async function revertFileTranscript(
-  fileId: string,
-  drive: string,
-): Promise<void> {
-  await fetchJSON(
-    `${API_BASE}/addons/intelligence/refine/files/${fileId}/revert`,
     { method: "POST", headers: driveHeaders(drive) },
   );
 }

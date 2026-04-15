@@ -126,9 +126,10 @@ async def refine_chunks(
     """Refine ``chunks`` in windows of ``WINDOW_SIZE`` via the LLM.
 
     On any failure the full window is preserved (no mutations). On
-    success each chunk's ``text_original`` is populated (only when
-    currently ``None`` — re-refine keeps the very first original),
-    ``text`` is overwritten, and ``text_refined_at`` is stamped.
+    success each chunk's ``text`` is overwritten and ``text_refined_at``
+    is stamped. Originals are not preserved — refine downstream re-chunks
+    the transcript on new punctuation boundaries, which invalidates any
+    per-chunk snapshot. Revert is "re-run whisper from scratch".
     """
     if not chunks:
         return RefineResult(refined_count=0, skipped_count=0)
@@ -166,8 +167,6 @@ async def refine_chunks(
 
         for chunk in window:
             new_text = by_id[int(chunk.id)]
-            if chunk.text_original is None:
-                chunk.text_original = chunk.text
             chunk.text = new_text
             chunk.text_refined_at = now
             refined += 1
@@ -273,6 +272,105 @@ def realign_words_for_chunk(
         session.add(row)
 
     return len(aligned)
+
+
+# --- Re-chunk from word timestamps ------------------------------------------
+
+
+def rechunk_from_words(session: Any, file_id: str) -> list[int]:
+    """Rebuild ``transcript_chunks`` rows from current ``transcript_words``.
+
+    Whisper-small transcribes Japanese with almost no punctuation, so
+    original chunk boundaries are dictated by silence gaps and the
+    max-duration cap — frequently landing mid-thought. After refine the
+    LLM has inserted sentence-final 。 and phrase-level 、, and the
+    aligner has attached zero-duration rows for each punctuation char.
+    Re-chunking now uses those punctuation anchors as the primary break
+    signal, producing single-sentence chunks that embed cleanly and
+    yield precise RAG citations.
+
+    All old chunk rows + their embeddings are deleted and replaced with
+    the new set. Word rows are not touched. Returns the list of new
+    chunk IDs so the caller can drive ``recompute_chunk_embeddings``.
+    """
+    from app.workers.whisper import _build_chunks_from_words
+
+    words = (
+        session.query(TranscriptWord)
+        .filter(TranscriptWord.file_id == file_id)
+        .order_by(TranscriptWord.timestamp_start, TranscriptWord.id)
+        .all()
+    )
+    if not words:
+        return []
+
+    # Shape for the whisper helper: it expects {text, start, end, language}
+    # dicts ordered by start time. Our TranscriptWord rows already satisfy
+    # the ordering invariant by construction.
+    language = (getattr(words[0], "language", "") or "").lower()
+    word_dicts = [
+        {
+            "text": w.text or "",
+            "start": float(w.timestamp_start),
+            "end": float(w.timestamp_end),
+            "language": language,
+        }
+        for w in words
+        if (w.text or "").strip()
+    ]
+    if not word_dicts:
+        return []
+
+    import app.config as _cfg
+
+    whisper_cfg = _cfg.settings.indexing.whisper
+    new_chunks = _build_chunks_from_words(
+        word_dicts,
+        whisper_cfg.min_segment_duration,
+        whisper_cfg.max_segment_duration,
+    )
+    if not new_chunks:
+        return []
+
+    # Delete existing chunk rows AND their embedding rows in the same
+    # transaction. vec_text is scoped by embedding_id so we purge it via
+    # the resolved embedding IDs; leaving orphan vec_text rows would
+    # silently bloat the ANN search space.
+    old_embeddings = (
+        session.query(Embedding)
+        .filter(
+            Embedding.file_id == file_id,
+            Embedding.embedding_type == "whisper",
+        )
+        .all()
+    )
+    for emb in old_embeddings:
+        session.execute(
+            sql_text("DELETE FROM vec_text WHERE embedding_id = :id"),
+            {"id": emb.id},
+        )
+        session.delete(emb)
+
+    session.query(TranscriptChunk).filter_by(file_id=file_id).delete()
+    session.flush()
+
+    now = datetime.now(UTC)
+    new_ids: list[int] = []
+    for idx, chunk in enumerate(new_chunks):
+        row = TranscriptChunk(
+            file_id=file_id,
+            chunk_index=idx,
+            text=chunk["text"],
+            language=chunk.get("language", language),
+            timestamp_start=float(chunk["start"]),
+            timestamp_end=float(chunk["end"]),
+            text_refined_at=now,
+        )
+        session.add(row)
+        session.flush()
+        new_ids.append(int(row.id))
+
+    return new_ids
 
 
 # --- Embedding re-compute ---------------------------------------------------
@@ -479,7 +577,6 @@ async def _run_refine_job(
                     file_id=r.file_id,
                     chunk_index=r.chunk_index,
                     text=r.text,
-                    text_original=r.text_original,
                     text_refined_at=None,
                     timestamp_start=r.timestamp_start,
                     timestamp_end=r.timestamp_end,
@@ -561,8 +658,6 @@ async def _run_refine_job(
                             orm = by_id.get(snap.id)
                             if orm is None:
                                 continue
-                            if orm.text_original is None:
-                                orm.text_original = snap.text_original
                             orm.text = snap.text
                             orm.text_refined_at = snap.text_refined_at
                             aligned = realign_words_for_chunk(
@@ -592,6 +687,21 @@ async def _run_refine_job(
                     },
                 )
 
+            # Re-chunk at sentence boundaries now that punctuation is in
+            # place. Runs once after all windows settle so we don't
+            # thrash chunk IDs while per-window embeddings are recomputed.
+            # Skip if nothing was refined — the chunker's output would be
+            # identical to the originals and the mass-delete + re-insert
+            # would churn IDs for no RAG benefit.
+            rechunked_count = 0
+            if refined_total > 0:
+                with get_search_db() as session:
+                    new_ids = rechunk_from_words(session, file_id)
+                    if new_ids:
+                        await recompute_chunk_embeddings(session, new_ids)
+                        session.flush()
+                        rechunked_count = len(new_ids)
+
         await _emit_ws_event(
             "intelligence.refine.completed",
             {
@@ -601,6 +711,7 @@ async def _run_refine_job(
                 "skipped_count": skipped_total,
                 "aligned_count": aligned_total,
                 "aligner_skipped": aligner_skipped_total,
+                "rechunked_count": rechunked_count,
             },
         )
     except Exception as e:

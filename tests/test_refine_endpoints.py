@@ -43,7 +43,6 @@ from app.config import FeaturesConfig, LLMConfig  # noqa: E402
 # pytest reports the file as failing instead of skipped.
 from app.routers.refine import (  # noqa: E402
     refine_file,
-    revert_file,
     refine_folder,
 )
 
@@ -167,53 +166,6 @@ class TestRefineFileGating:
         if chunk_count is None and isinstance(resp, dict):
             chunk_count = resp.get("chunk_count")
         assert chunk_count == 47
-
-
-class TestRevertFile:
-    @pytest.mark.asyncio
-    async def test_revert_restores_text_original(
-        self, feature_manual, monkeypatch
-    ):
-        # Simulated chunks: refined, with text_original preserved.
-        chunk = MagicMock(
-            id=1,
-            file_id="abc",
-            text="refined text",
-            text_original="origin text",
-            text_refined_at="2026-04-15T00:00:00",
-        )
-        session = MagicMock()
-        session.query.return_value.filter.return_value.all.return_value = [chunk]
-        session.query.return_value.filter.return_value.first.return_value = (
-            MagicMock(file_id="abc", drive="family", active=True)
-        )
-
-        class _Ctx:
-            def __enter__(self):
-                return session
-            def __exit__(self, *a):
-                return False
-
-        monkeypatch.setattr(
-            "app.routers.refine.get_search_db", lambda: _Ctx()
-        )
-        # Stub realign so we don't require the unit under test here.
-        monkeypatch.setattr(
-            "app.routers.refine.realign_words_for_chunk",
-            MagicMock(return_value=0),
-        )
-        # Stub embedding re-compute to avoid pulling model deps.
-        monkeypatch.setattr(
-            "app.routers.refine.recompute_chunk_embeddings",
-            AsyncMock(return_value=None),
-        )
-
-        await revert_file(file_id="abc", drive="family")
-
-        # Revert semantics (spec): text = text_original, both reset to NULL.
-        assert chunk.text == "origin text"
-        assert chunk.text_original is None
-        assert chunk.text_refined_at is None
 
 
 class TestRefineFolder:
