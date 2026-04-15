@@ -11,8 +11,35 @@ Reference: docs/superpowers/specs/2026-04-15-whisper-word-level-subtitles.md
 
 from __future__ import annotations
 
+import logging
 import unicodedata
 from dataclasses import dataclass
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# Module-level janome tokenizer. Lazily constructed on first JA cue build,
+# then reused for subsequent calls — construction is the slow part (~100ms),
+# tokenization of a 12-minute transcript runs in <50ms. ``None`` means the
+# tokenizer isn't available (import failure) and callers should fall back
+# to the character-level behaviour.
+_ja_tokenizer: Any | None = None
+_ja_tokenizer_tried: bool = False
+
+
+def _get_ja_tokenizer() -> Any | None:
+    global _ja_tokenizer, _ja_tokenizer_tried
+    if _ja_tokenizer_tried:
+        return _ja_tokenizer
+    _ja_tokenizer_tried = True
+    try:
+        from janome.tokenizer import Tokenizer
+
+        _ja_tokenizer = Tokenizer()
+    except Exception as e:
+        logger.info("janome unavailable, falling back to char-level cues: %s", e)
+        _ja_tokenizer = None
+    return _ja_tokenizer
 
 _PUNCT_BREAK = frozenset(".。!?！？…")
 _PUNCT_SOFT = frozenset(",、;:：；")
@@ -71,6 +98,82 @@ def _format_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:06.3f}"
 
 
+def _regroup_ja_with_janome(words: list[dict]) -> list[dict]:
+    """Re-group char/subword-level timestamps along morpheme boundaries.
+
+    Japanese transcripts from Whisper ship as subword tokens ("ド",
+    "ラクエ", …) and the refine path emits pure characters. Neither grid
+    aligns with linguistic word boundaries, so width-capped cue flushes
+    land mid-word even with the safe-break rewind. Tokenising the joined
+    text with janome and re-emitting one word per morpheme fixes this at
+    the root — downstream cue packing then only ever splits between
+    complete words.
+
+    Timestamps are interpolated proportionally across each input word's
+    characters (Whisper tokens don't carry per-char timing) and the
+    resulting janome token spans the start/end of its first/last char.
+    """
+    if not words:
+        return words
+    tokenizer = _get_ja_tokenizer()
+    if tokenizer is None:
+        return words
+
+    # Build a char-indexed timeline. Each entry carries the char itself
+    # and its interpolated [start, end] window.
+    char_times: list[tuple[str, float, float]] = []
+    for w in words:
+        text = (w.get("text") or "")
+        if not text:
+            continue
+        try:
+            ts = float(w["timestamp_start"])
+            te = float(w["timestamp_end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        n = len(text)
+        if n <= 0 or te < ts:
+            continue
+        span = te - ts
+        for ci, ch in enumerate(text):
+            char_times.append((
+                ch,
+                ts + span * ci / n,
+                ts + span * (ci + 1) / n,
+            ))
+
+    if not char_times:
+        return words
+
+    joined = "".join(c[0] for c in char_times)
+    try:
+        tokens = [t for t in tokenizer.tokenize(joined, wakati=True) if t]
+    except Exception as e:
+        logger.warning("janome tokenize failed, falling back: %s", e)
+        return words
+
+    result: list[dict] = []
+    cursor = 0
+    total = len(char_times)
+    for tok in tokens:
+        tok_len = len(tok)
+        if tok_len <= 0 or cursor >= total:
+            break
+        # Clamp to available chars in case of mismatched lengths (shouldn't
+        # happen for wakati but be defensive).
+        end_pos = min(cursor + tok_len, total)
+        if end_pos <= cursor:
+            break
+        result.append({
+            "text": tok,
+            "timestamp_start": char_times[cursor][1],
+            "timestamp_end": char_times[end_pos - 1][2],
+        })
+        cursor = end_pos
+
+    return result or words
+
+
 def _first_char(word: dict) -> str:
     text = (word.get("text") or "").strip()
     return text[0] if text else ""
@@ -121,6 +224,13 @@ def build_cues(
     if not words:
         return []
     cfg = config or CueConfig()
+
+    # Japanese: re-group subword / per-char timestamps into morpheme-level
+    # words via janome so cue breaks land on real word boundaries.
+    if (language or "").lower().startswith("ja"):
+        words = _regroup_ja_with_janome(words)
+        if not words:
+            return []
 
     cues: list[dict] = []
     current: list[dict] = []
@@ -228,6 +338,35 @@ def _is_katakana(ch: str) -> bool:
     return bool(ch) and "\u30a0" <= ch <= "\u30ff"
 
 
+def _janome_break_position(text: str, target: int) -> int | None:
+    """Pick the janome token boundary closest to ``target`` char index.
+
+    Returns ``None`` when the tokenizer is unavailable or the best
+    boundary degenerates to 0 / len(text) (no useful split).
+    """
+    tokenizer = _get_ja_tokenizer()
+    if tokenizer is None:
+        return None
+    try:
+        tokens = [t for t in tokenizer.tokenize(text, wakati=True) if t]
+    except Exception:
+        return None
+    if len(tokens) < 2:
+        return None
+    # Enumerate char positions at every token boundary (exclude 0 and end).
+    boundaries: list[int] = []
+    pos = 0
+    for tok in tokens[:-1]:
+        pos += len(tok)
+        boundaries.append(pos)
+    if not boundaries:
+        return None
+    # Pick the boundary nearest the target; ties go to the later one so
+    # the first line doesn't run short.
+    best = min(boundaries, key=lambda b: (abs(b - target), -b))
+    return best
+
+
 def _adjust_cjk_break(text: str, idx: int) -> int:
     """Nudge a midpoint break index outward to a safer CJK position.
 
@@ -291,7 +430,10 @@ def _balance_two_lines(cue: dict, soft_width: int) -> dict:
         if ch in _PUNCT_SOFT and _display_width(text[: i + 1]) >= soft_width // 2:
             return {**cue, "text": text[: i + 1] + "\n" + text[i + 1 :].lstrip()}
 
-    mid = _adjust_cjk_break(text, len(text) // 2)
+    target = len(text) // 2
+    mid = _janome_break_position(text, target)
+    if mid is None or not (0 < mid < len(text)):
+        mid = _adjust_cjk_break(text, target)
     return {**cue, "text": text[:mid] + "\n" + text[mid:]}
 
 
