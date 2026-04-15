@@ -175,6 +175,25 @@ async def refine_chunks(
 # --- Word re-alignment ------------------------------------------------------
 
 _WORD_SPLIT_RE = re.compile(r"\s+")
+# CJK ranges (Hiragana, Katakana, CJK Unified Ideographs, Hangul). When the
+# chunk has no whitespace (common for Japanese/Chinese/Korean) we fall back
+# to per-character tokenisation so the re-aligned word grid stays fine.
+_CJK_CHAR_RE = re.compile(
+    r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]"
+)
+
+
+def _split_refined_text(text: str) -> list[str]:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return []
+    tokens = [t for t in _WORD_SPLIT_RE.split(cleaned) if t]
+    # Whitespace split collapses CJK chunks into a single mega-token, which
+    # destroys word-level timing. If we detect CJK content and only got one
+    # whitespace-token, re-tokenise by character instead.
+    if len(tokens) <= 1 and _CJK_CHAR_RE.search(cleaned):
+        return [c for c in cleaned if not c.isspace()]
+    return tokens
 
 
 def _load_words_in_range(
@@ -221,7 +240,7 @@ def realign_words_for_chunk(
     """
     existing = _load_words_in_range(session, file_id, chunk_start, chunk_end)
 
-    tokens = [t for t in _WORD_SPLIT_RE.split((refined_text or "").strip()) if t]
+    tokens = _split_refined_text(refined_text)
 
     if not existing:
         # HvLink path: nothing to align against. Refined text may still
