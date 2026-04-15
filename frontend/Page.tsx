@@ -214,6 +214,7 @@ function IntelligenceAskPageInner() {
   const [input, setInput] = useState(seedQuery);
   const [state, setState] = useState<AskState>({ kind: "idle" });
   const [ragAvailable, setRagAvailable] = useState<boolean | null>(null);
+  const [composing, setComposing] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   // Guard so the seed-query auto-fire runs exactly once even when the
   // status check re-renders the component. Without this an upstream
@@ -438,6 +439,9 @@ function IntelligenceAskPageInner() {
 
   const handleInputKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+      // Skip while IME composition is active (e.g. Japanese conversion),
+      // otherwise the conversion-confirming Enter would submit the form.
+      if (composing) return;
       // Enter submits; Shift+Enter inserts a newline. Matches the
       // convention used by the main search input.
       if (e.key === "Enter" && !e.shiftKey) {
@@ -445,7 +449,7 @@ function IntelligenceAskPageInner() {
         if (canSubmit) void runAsk(input);
       }
     },
-    [canSubmit, input, runAsk],
+    [canSubmit, composing, input, runAsk],
   );
 
   const handleCitationClick = useCallback((index: number) => {
@@ -496,6 +500,8 @@ function IntelligenceAskPageInner() {
           value={input}
           onChange={handleInputChange}
           onKeyDown={handleInputKeyDown}
+          onCompositionStart={() => setComposing(true)}
+          onCompositionEnd={() => setComposing(false)}
           placeholder={seedQuery || ""}
           rows={3}
           disabled={ragAvailable === false}
