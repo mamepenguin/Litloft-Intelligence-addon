@@ -165,7 +165,14 @@ def align_segment(
 
     key = "chars" if want_chars else "words"
     items = seg.get(key) or []
-    units: list[dict] = []
+
+    # First pass: collect tokens with raw timestamps. Punctuation and
+    # other chars outside wav2vec2's phoneme vocabulary come through
+    # with ``start=end=None``; keep them as sentinel rows so the second
+    # pass can sandwich them between adjacent timed neighbours. Without
+    # this, inserted 。/、 would silently disappear from the word layer
+    # after refine — defeating the punctuation-restoration goal.
+    raw: list[dict] = []
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -177,25 +184,59 @@ def align_segment(
             continue
         ts_raw = item.get("start")
         te_raw = item.get("end")
+        ts: float | None
+        te: float | None
         if ts_raw is None or te_raw is None:
-            continue
-        try:
-            ts = float(ts_raw)
-            te = float(te_raw)
-        except (TypeError, ValueError):
-            continue
-        if te < ts:
-            continue
+            ts = te = None
+        else:
+            try:
+                ts = float(ts_raw)
+                te = float(te_raw)
+            except (TypeError, ValueError):
+                continue
+            if te < ts:
+                continue
+        raw.append({"text": token_str, "ts": ts, "te": te})
+
+    # Second pass: interpolate timestamps for tokens without them.
+    # Punctuation sits at the instant between its neighbours; consecutive
+    # untimed tokens split that gap evenly. Lead/trail untimed tokens
+    # snap to the chunk window edge so they stay inside the caller's
+    # range.
+    units: list[dict] = []
+    for i, tok in enumerate(raw):
+        if tok["ts"] is not None and tok["te"] is not None:
+            ts = tok["ts"]
+            te = tok["te"]
+        else:
+            # Find previous timed anchor.
+            prev_te: float | None = None
+            for j in range(i - 1, -1, -1):
+                if raw[j]["te"] is not None:
+                    prev_te = raw[j]["te"]
+                    break
+            # Find next timed anchor.
+            next_ts: float | None = None
+            for j in range(i + 1, len(raw)):
+                if raw[j]["ts"] is not None:
+                    next_ts = raw[j]["ts"]
+                    break
+            if prev_te is None and next_ts is None:
+                # Entire chunk had no phoneme-alignable tokens; skip.
+                continue
+            # Midpoint between neighbours (or snap to available edge).
+            anchor_lo = prev_te if prev_te is not None else chunk_start
+            anchor_hi = next_ts if next_ts is not None else chunk_end
+            mid = (anchor_lo + anchor_hi) / 2.0
+            ts = te = mid
+
         # Clamp to the caller's window: WhisperX wav2vec2 CTC can emit
         # edge tokens with timestamps that slightly overflow the
         # [chunk_start, chunk_end] segment (rounding, padding frames).
-        # Dropping those here is the aligner's responsibility, not the
-        # caller's — every downstream consumer gets a window-bounded
-        # result by construction.
         if ts < chunk_start or te > chunk_end:
             continue
         units.append({
-            "text": token_str,
+            "text": tok["text"],
             "timestamp_start": ts,
             "timestamp_end": te,
         })
