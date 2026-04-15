@@ -98,6 +98,30 @@ def _format_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:06.3f}"
 
 
+def _should_attach_to_previous(pos: str) -> bool:
+    """Heuristic bunsetsu post-merge: decide whether a token glues to its
+    predecessor to form a phrasal unit.
+
+    Janome returns morphemes; subtitle readers want phrasal chunks. These
+    categories bind to the preceding content word in practice:
+
+    - 助詞 (particles: は/が/を/に/で/と/も/…): postpositions, always bind
+    - 助動詞 (auxiliary verbs: です/ます/た/ない/…): verb endings, bind
+    - 接尾 (suffixes: さん/的/化/性/…): bind by definition
+    - 記号 (punctuation, brackets): visually awkward to start a line with
+
+    Everything else (名詞/動詞/形容詞/副詞/接続詞/連体詞/感動詞) is a
+    phrase head and starts a new bunsetsu.
+    """
+    if not pos:
+        return False
+    head = pos.split(",", 1)[0]
+    if head in ("助詞", "助動詞", "記号"):
+        return True
+    # "接尾" can appear at any position in the feature tuple.
+    return "接尾" in pos
+
+
 def _regroup_ja_with_janome(words: list[dict]) -> list[dict]:
     """Re-group char/subword-level timestamps along morpheme boundaries.
 
@@ -147,7 +171,13 @@ def _regroup_ja_with_janome(words: list[dict]) -> list[dict]:
 
     joined = "".join(c[0] for c in char_times)
     try:
-        tokens = [t for t in tokenizer.tokenize(joined, wakati=True) if t]
+        # POS-tagged output so the bunsetsu post-merge below can tell
+        # particles / auxiliaries from content words.
+        tagged = [
+            (tok.surface, tok.part_of_speech)
+            for tok in tokenizer.tokenize(joined)
+            if tok.surface
+        ]
     except Exception as e:
         logger.warning("janome tokenize failed, falling back: %s", e)
         return words
@@ -155,8 +185,8 @@ def _regroup_ja_with_janome(words: list[dict]) -> list[dict]:
     result: list[dict] = []
     cursor = 0
     total = len(char_times)
-    for tok in tokens:
-        tok_len = len(tok)
+    for surface, pos in tagged:
+        tok_len = len(surface)
         if tok_len <= 0 or cursor >= total:
             break
         # Clamp to available chars in case of mismatched lengths (shouldn't
@@ -164,11 +194,22 @@ def _regroup_ja_with_janome(words: list[dict]) -> list[dict]:
         end_pos = min(cursor + tok_len, total)
         if end_pos <= cursor:
             break
-        result.append({
-            "text": tok,
-            "timestamp_start": char_times[cursor][1],
-            "timestamp_end": char_times[end_pos - 1][2],
-        })
+        start_ts = char_times[cursor][1]
+        end_ts = char_times[end_pos - 1][2]
+        # Bunsetsu-style merge: particles, auxiliaries, suffixes and
+        # punctuation glue to the preceding content word. Timestamps
+        # stay exact because adjacent morphemes share char-timeline
+        # boundaries (end_prev == start_curr).
+        if result and _should_attach_to_previous(pos):
+            prev = result[-1]
+            prev["text"] = prev["text"] + surface
+            prev["timestamp_end"] = end_ts
+        else:
+            result.append({
+                "text": surface,
+                "timestamp_start": start_ts,
+                "timestamp_end": end_ts,
+            })
         cursor = end_pos
 
     return result or words
@@ -348,16 +389,24 @@ def _janome_break_position(text: str, target: int) -> int | None:
     if tokenizer is None:
         return None
     try:
-        tokens = [t for t in tokenizer.tokenize(text, wakati=True) if t]
+        tagged = [
+            (tok.surface, tok.part_of_speech)
+            for tok in tokenizer.tokenize(text)
+            if tok.surface
+        ]
     except Exception:
         return None
-    if len(tokens) < 2:
+    if len(tagged) < 2:
         return None
-    # Enumerate char positions at every token boundary (exclude 0 and end).
+    # Bunsetsu-aware boundaries: skip positions where the next token glues
+    # to its predecessor (particle / auxiliary / suffix / punctuation).
     boundaries: list[int] = []
     pos = 0
-    for tok in tokens[:-1]:
-        pos += len(tok)
+    for i, (surface, token_pos) in enumerate(tagged[:-1]):
+        pos += len(surface)
+        next_pos = tagged[i + 1][1]
+        if _should_attach_to_previous(next_pos):
+            continue
         boundaries.append(pos)
     if not boundaries:
         return None
