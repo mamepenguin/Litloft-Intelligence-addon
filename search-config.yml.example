@@ -74,6 +74,14 @@ rag:
 
 models:
   # Whisper model for audio transcription (multilingual)
+  # Default: openai/whisper-small (244M, ~500MB int8 RAM)
+  # Alternatives (multilingual, CT2 int8):
+  #   openai/whisper-large-v3-turbo  (809M, ~1.0-1.2GB RAM; best accuracy/speed balance)
+  #   openai/whisper-large-v3        (1550M, ~2-3GB RAM; highest accuracy)
+  # Any faster-whisper size string or CT2-compatible HuggingFace repo ID
+  # is also accepted verbatim (e.g. "deepdml/faster-whisper-large-v3-turbo-ct2").
+  # Raise memory.whisper_idle_unload cost: larger models evict slower if you
+  # keep the default 300s.
   whisper: "openai/whisper-small"
 
   # Text embedding model (multilingual, used for metadata + transcript)
@@ -154,6 +162,8 @@ workers:
 # the search query path on every request.
 memory:
   # Unload Whisper model after idle (seconds, 0 = never unload)
+  # Lower this (e.g. 60-120) if you run a local LLM alongside intelligence
+  # and want Whisper to release RAM sooner between indexing bursts.
   whisper_idle_unload: 300
   # Unload BLIP model after idle (seconds, 0 = never unload)
   blip_idle_unload: 300

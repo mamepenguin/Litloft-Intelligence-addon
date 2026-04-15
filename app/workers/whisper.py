@@ -88,13 +88,15 @@ def _ensure_loaded() -> tuple[object, object | None]:
 
 
 def _resolve_model_size(config_name: str) -> str:
-    """Resolve config model name to faster-whisper model size.
+    """Resolve config model name to a faster-whisper model identifier.
 
-    Args:
-        config_name: Model name from config (e.g., "openai/whisper-small").
-
-    Returns:
-        Model size string for faster-whisper.
+    Known ``openai/whisper-*`` aliases are mapped to faster-whisper size
+    shortcuts. Any other value is returned verbatim so users can point at
+    faster-whisper size strings (e.g. ``large-v3-turbo``) or
+    CT2-compatible HuggingFace repo IDs (e.g.
+    ``deepdml/faster-whisper-large-v3-turbo-ct2``) without a schema
+    change. Invalid names surface as a clear faster-whisper load error
+    rather than silently falling back to a different model.
     """
     size_map = {
         "openai/whisper-tiny": "tiny",
@@ -102,8 +104,10 @@ def _resolve_model_size(config_name: str) -> str:
         "openai/whisper-small": "small",
         "openai/whisper-medium": "medium",
         "openai/whisper-large": "large-v3",
+        "openai/whisper-large-v3": "large-v3",
+        "openai/whisper-large-v3-turbo": "large-v3-turbo",
     }
-    return size_map.get(config_name, "small")
+    return size_map.get(config_name, config_name)
 
 
 def unload_model() -> None:
