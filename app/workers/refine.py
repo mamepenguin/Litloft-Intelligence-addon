@@ -451,58 +451,113 @@ async def _run_refine_job(
         )
         return
 
+    # Snapshot phase: load chunk data into plain objects then release the
+    # write lock so the minutes-long LLM round-trips below don't hold it.
+    # The original implementation held get_search_db() (threading.Lock +
+    # session) across every window's LLM call, which froze every other
+    # intelligence endpoint (including /status) for the entire job.
+    from types import SimpleNamespace
+
     try:
         with get_search_db() as session:
-            chunks = (
+            rows = (
                 session.query(TranscriptChunk)
                 .filter(TranscriptChunk.file_id == file_id)
                 .order_by(TranscriptChunk.chunk_index)
                 .all()
             )
-            if not chunks:
-                await _emit_ws_event(
-                    "intelligence.refine.completed",
-                    {
-                        "file_id": file_id,
-                        "job_id": job_id,
-                        "refined_count": 0,
-                        "skipped_count": 0,
-                    },
+            snapshots = [
+                SimpleNamespace(
+                    id=int(r.id),
+                    file_id=r.file_id,
+                    chunk_index=r.chunk_index,
+                    text=r.text,
+                    text_original=r.text_original,
+                    text_refined_at=None,
+                    timestamp_start=r.timestamp_start,
+                    timestamp_end=r.timestamp_end,
                 )
-                return
+                for r in rows
+            ]
+    except Exception as e:
+        logger.exception("refine job snapshot failed for %s", file_id)
+        await _emit_ws_event(
+            "intelligence.refine.failed",
+            {"file_id": file_id, "job_id": job_id, "error": str(e)},
+        )
+        return
 
-            total = len(chunks)
-            refined_total = 0
-            skipped_total = 0
+    if not snapshots:
+        await _emit_ws_event(
+            "intelligence.refine.completed",
+            {
+                "file_id": file_id,
+                "job_id": job_id,
+                "refined_count": 0,
+                "skipped_count": 0,
+            },
+        )
+        return
 
-            for offset in range(0, total, WINDOW_SIZE):
-                window = chunks[offset : offset + WINDOW_SIZE]
-                result = await refine_chunks(session, llm, window)
-                refined_total += result.refined_count
-                skipped_total += result.skipped_count
+    total = len(snapshots)
+    refined_total = 0
+    skipped_total = 0
 
-                if result.refined_count > 0:
-                    refined_ids = [int(c.id) for c in window]
-                    for chunk in window:
+    try:
+        for offset in range(0, total, WINDOW_SIZE):
+            window = snapshots[offset : offset + WINDOW_SIZE]
+
+            # LLM call runs WITHOUT the write lock. refine_chunks only
+            # mutates the passed-in objects (no ORM / session access).
+            result = await refine_chunks(None, llm, window)
+            refined_total += result.refined_count
+            skipped_total += result.skipped_count
+
+            refined_window = [s for s in window if s.text_refined_at is not None]
+            if refined_window:
+                # Short-lived session per window: apply mutations, realign
+                # words, recompute embeddings, release lock.
+                with get_search_db() as session:
+                    fresh = (
+                        session.query(TranscriptChunk)
+                        .filter(
+                            TranscriptChunk.id.in_(
+                                [s.id for s in refined_window]
+                            )
+                        )
+                        .all()
+                    )
+                    by_id = {int(c.id): c for c in fresh}
+                    applied_ids: list[int] = []
+                    for snap in refined_window:
+                        orm = by_id.get(snap.id)
+                        if orm is None:
+                            continue
+                        if orm.text_original is None:
+                            orm.text_original = snap.text_original
+                        orm.text = snap.text
+                        orm.text_refined_at = snap.text_refined_at
                         realign_words_for_chunk(
                             session,
-                            chunk.file_id,
-                            chunk.timestamp_start,
-                            chunk.timestamp_end,
-                            chunk.text,
+                            orm.file_id,
+                            orm.timestamp_start,
+                            orm.timestamp_end,
+                            orm.text,
                         )
-                    await recompute_chunk_embeddings(session, refined_ids)
-                    session.flush()
+                        applied_ids.append(int(orm.id))
+                    if applied_ids:
+                        await recompute_chunk_embeddings(session, applied_ids)
+                        session.flush()
 
-                await _emit_ws_event(
-                    "intelligence.refine.progress",
-                    {
-                        "file_id": file_id,
-                        "job_id": job_id,
-                        "done": min(offset + WINDOW_SIZE, total),
-                        "total": total,
-                    },
-                )
+            await _emit_ws_event(
+                "intelligence.refine.progress",
+                {
+                    "file_id": file_id,
+                    "job_id": job_id,
+                    "done": min(offset + WINDOW_SIZE, total),
+                    "total": total,
+                },
+            )
 
         await _emit_ws_event(
             "intelligence.refine.completed",
