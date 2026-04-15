@@ -244,24 +244,11 @@ def realign_words_for_chunk(
         language=language,
     )
     if not aligned:
-        # Aligner failed or produced nothing useful — preserve existing rows.
+        # Aligner failed or produced nothing useful — preserve existing
+        # rows. align_segment already clamps output to the chunk window,
+        # so anything returned is safe to DELETE-and-replace below.
         return 0
 
-    # Clamp aligner output to the chunk window. Units that leak outside
-    # [chunk_start, chunk_end] would not be cleared by the timestamp-
-    # scoped DELETE below, so dropping them upfront guarantees the
-    # "unique timestamp_start per file" invariant (no collision with a
-    # surviving neighbour-chunk row).
-    clean = tuple(
-        unit
-        for unit in aligned
-        if float(unit["timestamp_start"]) >= chunk_start
-        and float(unit["timestamp_end"]) <= chunk_end
-    )
-    if not clean:
-        return 0
-
-    # Commit-stage now that we have a valid replacement.
     session.execute(
         sql_text(
             "DELETE FROM transcript_words "
@@ -272,7 +259,7 @@ def realign_words_for_chunk(
         {"fid": file_id, "ts": chunk_start, "te": chunk_end},
     )
 
-    for unit in clean:
+    for unit in aligned:
         row = TranscriptWord(
             file_id=file_id,
             text=unit["text"],
@@ -282,7 +269,7 @@ def realign_words_for_chunk(
         )
         session.add(row)
 
-    return len(clean)
+    return len(aligned)
 
 
 # --- Embedding re-compute ---------------------------------------------------
@@ -527,77 +514,80 @@ async def _run_refine_job(
     # the original Whisper word timestamps untouched.
     from app.config import validate_file_path
 
-    aligner.acquire_job()
-    waveform: Any = None
-    if audio_path and validate_file_path(audio_path):
-        waveform = aligner.load_waveform(audio_path)
-
     total = len(snapshots)
     refined_total = 0
     skipped_total = 0
     aligned_total = 0
     aligner_skipped_total = 0
 
+    # ``job_scope`` ref-counts the wav2vec2 model cache across parallel
+    # folder-batch jobs and releases it (plus waveform cache) once the
+    # last scope exits — on normal return, exception, or cancellation.
     try:
-        for offset in range(0, total, WINDOW_SIZE):
-            window = snapshots[offset : offset + WINDOW_SIZE]
+        with aligner.job_scope():
+            waveform: Any = None
+            if audio_path and validate_file_path(audio_path):
+                waveform = aligner.load_waveform(audio_path)
 
-            # LLM call runs WITHOUT the write lock. refine_chunks only
-            # mutates the passed-in objects (no ORM / session access).
-            result = await refine_chunks(None, llm, window)
-            refined_total += result.refined_count
-            skipped_total += result.skipped_count
+            for offset in range(0, total, WINDOW_SIZE):
+                window = snapshots[offset : offset + WINDOW_SIZE]
 
-            refined_window = [s for s in window if s.text_refined_at is not None]
-            if refined_window:
-                # Short-lived session per window: apply mutations, realign
-                # words, recompute embeddings, release lock.
-                with get_search_db() as session:
-                    fresh = (
-                        session.query(TranscriptChunk)
-                        .filter(
-                            TranscriptChunk.id.in_(
-                                [s.id for s in refined_window]
+                # LLM call runs WITHOUT the write lock. refine_chunks only
+                # mutates the passed-in objects (no ORM / session access).
+                result = await refine_chunks(None, llm, window)
+                refined_total += result.refined_count
+                skipped_total += result.skipped_count
+
+                refined_window = [s for s in window if s.text_refined_at is not None]
+                if refined_window:
+                    # Short-lived session per window: apply mutations, realign
+                    # words, recompute embeddings, release lock.
+                    with get_search_db() as session:
+                        fresh = (
+                            session.query(TranscriptChunk)
+                            .filter(
+                                TranscriptChunk.id.in_(
+                                    [s.id for s in refined_window]
+                                )
                             )
+                            .all()
                         )
-                        .all()
-                    )
-                    by_id = {int(c.id): c for c in fresh}
-                    applied_ids: list[int] = []
-                    for snap in refined_window:
-                        orm = by_id.get(snap.id)
-                        if orm is None:
-                            continue
-                        if orm.text_original is None:
-                            orm.text_original = snap.text_original
-                        orm.text = snap.text
-                        orm.text_refined_at = snap.text_refined_at
-                        aligned = realign_words_for_chunk(
-                            session,
-                            orm.file_id,
-                            orm.timestamp_start,
-                            orm.timestamp_end,
-                            orm.text,
-                            waveform=waveform,
-                        )
-                        if aligned > 0:
-                            aligned_total += 1
-                        else:
-                            aligner_skipped_total += 1
-                        applied_ids.append(int(orm.id))
-                    if applied_ids:
-                        await recompute_chunk_embeddings(session, applied_ids)
-                        session.flush()
+                        by_id = {int(c.id): c for c in fresh}
+                        applied_ids: list[int] = []
+                        for snap in refined_window:
+                            orm = by_id.get(snap.id)
+                            if orm is None:
+                                continue
+                            if orm.text_original is None:
+                                orm.text_original = snap.text_original
+                            orm.text = snap.text
+                            orm.text_refined_at = snap.text_refined_at
+                            aligned = realign_words_for_chunk(
+                                session,
+                                orm.file_id,
+                                orm.timestamp_start,
+                                orm.timestamp_end,
+                                orm.text,
+                                waveform=waveform,
+                            )
+                            if aligned > 0:
+                                aligned_total += 1
+                            else:
+                                aligner_skipped_total += 1
+                            applied_ids.append(int(orm.id))
+                        if applied_ids:
+                            await recompute_chunk_embeddings(session, applied_ids)
+                            session.flush()
 
-            await _emit_ws_event(
-                "intelligence.refine.progress",
-                {
-                    "file_id": file_id,
-                    "job_id": job_id,
-                    "done": min(offset + WINDOW_SIZE, total),
-                    "total": total,
-                },
-            )
+                await _emit_ws_event(
+                    "intelligence.refine.progress",
+                    {
+                        "file_id": file_id,
+                        "job_id": job_id,
+                        "done": min(offset + WINDOW_SIZE, total),
+                        "total": total,
+                    },
+                )
 
         await _emit_ws_event(
             "intelligence.refine.completed",
@@ -616,13 +606,6 @@ async def _run_refine_job(
             "intelligence.refine.failed",
             {"file_id": file_id, "job_id": job_id, "error": str(e)},
         )
-    finally:
-        # Ref-counted release so concurrent folder-batch jobs share one
-        # loaded wav2vec2 model. The last job out frees ~1 GB of RAM.
-        try:
-            aligner.release_job()
-        except Exception:
-            logger.warning("aligner.release_job failed", exc_info=True)
 
 
 async def start_refine_job(session: Any, file_id: str) -> str:

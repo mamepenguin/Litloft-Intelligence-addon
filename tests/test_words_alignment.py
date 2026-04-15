@@ -539,55 +539,11 @@ class TestVttEndpointOrderingInvariant:
         )
 
 
-class TestUniqueTimestamps:
-    def test_word_rows_have_unique_timestamps_per_file(
-        self, real_session, monkeypatch
-    ):
-        """After realign, ``COUNT(*) == COUNT(DISTINCT timestamp_start)``
-        per file_id — the new identity invariant replacing word_index
-        uniqueness. The overflow bug violates this because surviving
-        chunk-2 rows can collide on timestamp_start with the relocated
-        overflow rows from chunk 1 in pathological cases; even when
-        they don't collide, duplicates can be introduced if a refine
-        is re-run before commit.
-        """
-        fid = "fileuniq"
-        # Chunk 1 originals.
-        _insert_word(real_session, fid, "a", 0.0, 1.0)
-        _insert_word(real_session, fid, "b", 1.0, 2.0)
-        # Chunk 2 originals — will be left alone.
-        _insert_word(real_session, fid, "X", 10.0, 11.0)
-        real_session.commit()
-
-        # Aligner returns rows whose timestamps overlap (collide on
-        # ts_start) with chunk 2 — simulating a buggy aligner output
-        # window or a run that re-uses the same ts_start as an existing
-        # row outside the deleted range.
-        bad_units = [
-            {"text": "p", "timestamp_start": 0.0, "timestamp_end": 0.5},
-            {"text": "q", "timestamp_start": 0.5, "timestamp_end": 1.0},
-            # This one collides with chunk 2's "X" at ts=10.0 — the
-            # DELETE [0, 10] won't remove it, leaving two rows at 10.0.
-            {"text": "r", "timestamp_start": 10.0, "timestamp_end": 10.2},
-        ]
-        monkeypatch.setattr(
-            refine_module,
-            "aligner",
-            MagicMock(align_segment=MagicMock(return_value=bad_units)),
-        )
-        realign_words_for_chunk(
-            real_session, fid, 0.0, 10.0, "p q r", waveform=object()
-        )
-        real_session.commit()
-
-        total, distinct = real_session.execute(
-            sql_text(
-                "SELECT COUNT(*), COUNT(DISTINCT timestamp_start) "
-                "FROM transcript_words WHERE file_id = :fid"
-            ),
-            {"fid": fid},
-        ).fetchone()
-        assert total == distinct, (
-            f"Expected unique timestamp_start per file, got "
-            f"total={total} distinct={distinct}"
-        )
+# The previous ``TestUniqueTimestamps`` class was removed as part of
+# the clamp-in-aligner refactor. The "unique timestamp_start per file"
+# invariant was over-claimed: back-to-back ASR segments and zero-
+# duration units can legitimately share a ``timestamp_start`` while
+# remaining distinct rows. The weaker, exact invariant — "chunk N
+# realign cannot damage chunk N+1's rows" — is covered by
+# ``TestNoOverflowIntoNeighborChunk`` above. Aligner-window clamp
+# behaviour itself is covered in ``tests/test_refine_aligner.py``.

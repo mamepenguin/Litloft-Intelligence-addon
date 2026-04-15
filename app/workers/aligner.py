@@ -14,14 +14,20 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Any
+from collections import OrderedDict
+from contextlib import contextmanager
+from typing import Any, Iterator
 
 import app.config as config
 
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
-_align_models: dict[str, tuple[Any, Any]] = {}
+# LRU-capped so pathological language diversity can't pin unbounded
+# memory (each wav2vec2 model is ~1 GB). OrderedDict preserves insertion
+# order; move_to_end marks recent use; popitem(last=False) evicts LRU.
+_MODEL_CACHE_MAX = 2
+_align_models: OrderedDict[str, tuple[Any, Any]] = OrderedDict()
 _waveform_cache: dict[str, Any] = {}
 # Reference counter: folder-batch refine can fan out multiple parallel
 # _run_refine_job tasks; we want to release the wav2vec2 model only
@@ -49,13 +55,10 @@ def _load_align_model(language: str) -> tuple[Any, Any] | None:
     if not lang:
         return None
 
-    cached = _align_models.get(lang)
-    if cached is not None:
-        return cached
-
     with _lock:
         cached = _align_models.get(lang)
         if cached is not None:
+            _align_models.move_to_end(lang)
             return cached
         try:
             import whisperx
@@ -67,6 +70,12 @@ def _load_align_model(language: str) -> tuple[Any, Any] | None:
                 device="cpu",
                 model_dir=model_dir,
             )
+            while len(_align_models) >= _MODEL_CACHE_MAX:
+                evicted_lang, _ = _align_models.popitem(last=False)
+                logger.info(
+                    "aligner: evicting LRU model lang=%s (cap=%d)",
+                    evicted_lang, _MODEL_CACHE_MAX,
+                )
             _align_models[lang] = (model, metadata)
             return (model, metadata)
         except Exception as e:
@@ -177,6 +186,14 @@ def align_segment(
             continue
         if te < ts:
             continue
+        # Clamp to the caller's window: WhisperX wav2vec2 CTC can emit
+        # edge tokens with timestamps that slightly overflow the
+        # [chunk_start, chunk_end] segment (rounding, padding frames).
+        # Dropping those here is the aligner's responsibility, not the
+        # caller's — every downstream consumer gets a window-bounded
+        # result by construction.
+        if ts < chunk_start or te > chunk_end:
+            continue
         units.append({
             "text": token_str,
             "timestamp_start": ts,
@@ -184,6 +201,27 @@ def align_segment(
         })
 
     return units or None
+
+
+@contextmanager
+def job_scope() -> Iterator[None]:
+    """Ref-counted scope for a refine job.
+
+    Pair entry/exit so wav2vec2 models stay resident across parallel
+    folder-batch jobs and release once all exit (normal, exception, or
+    asyncio cancellation — all of which drive ``__exit__``). Prefer
+    this over raw :func:`acquire_job` / :func:`release_job` so the
+    release cannot be skipped by an early return / unanticipated
+    exception path.
+    """
+    acquire_job()
+    try:
+        yield
+    finally:
+        try:
+            release_job()
+        except Exception:
+            logger.warning("aligner.release_job failed", exc_info=True)
 
 
 def acquire_job() -> None:
@@ -216,7 +254,7 @@ def release_job() -> None:
                 logger.info(
                     "aligner: releasing %d model(s)", len(_align_models)
                 )
-                _align_models = {}
+                _align_models = OrderedDict()
                 _waveform_cache = {}
                 do_release = True
     if do_release:
@@ -236,7 +274,7 @@ def release_all() -> None:
     with _lock:
         if _align_models:
             logger.info("aligner: force-releasing %d model(s)", len(_align_models))
-        _align_models = {}
+        _align_models = OrderedDict()
         _waveform_cache = {}
         _active_jobs = 0
     import gc
