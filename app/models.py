@@ -167,7 +167,6 @@ class TranscriptWord(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     file_id: Mapped[str] = mapped_column(String(12), nullable=False, index=True)
-    word_index: Mapped[int] = mapped_column(Integer, nullable=False)
 
     text: Mapped[str] = mapped_column(Text, nullable=False)
     language: Mapped[str] = mapped_column(String(10), nullable=False, default="")
@@ -180,8 +179,7 @@ class TranscriptWord(Base):
     )
 
     __table_args__ = (
-        Index("idx_transcript_words_file_idx", "file_id", "word_index"),
-        Index("idx_transcript_words_file_time", "file_id", "timestamp_start"),
+        Index("idx_transcript_words_file_ts", "file_id", "timestamp_start"),
     )
 
 

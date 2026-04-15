@@ -24,7 +24,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -35,6 +34,7 @@ from sqlalchemy import text as sql_text
 import app.config as config
 from app.database import get_search_db
 from app.models import Embedding, IndexedFile, TranscriptChunk, TranscriptWord
+from app.workers import aligner
 
 logger = logging.getLogger(__name__)
 
@@ -174,28 +174,6 @@ async def refine_chunks(
 
 # --- Word re-alignment ------------------------------------------------------
 
-_WORD_SPLIT_RE = re.compile(r"\s+")
-# CJK ranges (Hiragana, Katakana, CJK Unified Ideographs, Hangul). When the
-# chunk has no whitespace (common for Japanese/Chinese/Korean) we fall back
-# to per-character tokenisation so the re-aligned word grid stays fine.
-_CJK_CHAR_RE = re.compile(
-    r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]"
-)
-
-
-def _split_refined_text(text: str) -> list[str]:
-    cleaned = (text or "").strip()
-    if not cleaned:
-        return []
-    tokens = [t for t in _WORD_SPLIT_RE.split(cleaned) if t]
-    # Whitespace split collapses CJK chunks into a single mega-token, which
-    # destroys word-level timing. If we detect CJK content and only got one
-    # whitespace-token, re-tokenise by character instead.
-    if len(tokens) <= 1 and _CJK_CHAR_RE.search(cleaned):
-        return [c for c in cleaned if not c.isspace()]
-    return tokens
-
-
 def _load_words_in_range(
     session: Any, file_id: str, chunk_start: float, chunk_end: float
 ) -> list[Any]:
@@ -214,7 +192,7 @@ def _load_words_in_range(
                 TranscriptWord.timestamp_start >= chunk_start,
                 TranscriptWord.timestamp_end <= chunk_end,
             )
-            .order_by(TranscriptWord.word_index)
+            .order_by(TranscriptWord.timestamp_start, TranscriptWord.id)
             .all()
         )
     except Exception:
@@ -230,24 +208,60 @@ def realign_words_for_chunk(
     chunk_start: float,
     chunk_end: float,
     refined_text: str,
+    waveform: Any = None,
+    language_override: str | None = None,
 ) -> int:
-    """Redistribute word timestamps proportionally across refined tokens.
+    """Re-derive ``transcript_words`` rows via acoustic forced alignment.
 
-    Whisper-origin chunks have ``TranscriptWord`` rows inside their
-    ``[chunk_start, chunk_end]`` span; HvLink-origin chunks don't —
-    those are skipped silently (no INSERT, no DELETE, no exception).
-    Returns the number of new word rows inserted.
+    Calls :mod:`app.workers.aligner` to map ``refined_text`` back onto
+    the audio inside ``[chunk_start, chunk_end]``. On any aligner
+    failure (missing waveform, unsupported language, OOM, …) we return
+    0 **without touching existing rows** — the original Whisper word
+    timestamps stay as-is rather than being replaced by a degraded
+    time-proportional fallback (decision: hako iG6Uotc_uQ8cpXufZQf6v).
+
+    HvLink-origin chunks have no ``TranscriptWord`` rows and no audio
+    we can realign against; they're short-circuited here so the
+    aligner is never invoked for them.
     """
     existing = _load_words_in_range(session, file_id, chunk_start, chunk_end)
-
-    tokens = _split_refined_text(refined_text)
-
     if not existing:
-        # HvLink path: nothing to align against. Refined text may still
-        # be non-empty; we refuse to fabricate word rows out of thin air.
+        # HvLink path or never-indexed chunk — nothing to align against.
         return 0
 
-    # Always clear the old range before writing new rows.
+    if waveform is None:
+        # Audio unavailable (missing file / failed decode). Keep the
+        # original Whisper word rows untouched.
+        return 0
+
+    language = language_override or getattr(existing[0], "language", "") or ""
+
+    aligned = aligner.align_segment(
+        waveform=waveform,
+        chunk_start=chunk_start,
+        chunk_end=chunk_end,
+        text=refined_text,
+        language=language,
+    )
+    if not aligned:
+        # Aligner failed or produced nothing useful — preserve existing rows.
+        return 0
+
+    # Clamp aligner output to the chunk window. Units that leak outside
+    # [chunk_start, chunk_end] would not be cleared by the timestamp-
+    # scoped DELETE below, so dropping them upfront guarantees the
+    # "unique timestamp_start per file" invariant (no collision with a
+    # surviving neighbour-chunk row).
+    clean = tuple(
+        unit
+        for unit in aligned
+        if float(unit["timestamp_start"]) >= chunk_start
+        and float(unit["timestamp_end"]) <= chunk_end
+    )
+    if not clean:
+        return 0
+
+    # Commit-stage now that we have a valid replacement.
     session.execute(
         sql_text(
             "DELETE FROM transcript_words "
@@ -258,34 +272,17 @@ def realign_words_for_chunk(
         {"fid": file_id, "ts": chunk_start, "te": chunk_end},
     )
 
-    if not tokens:
-        return 0
-
-    language = getattr(existing[0], "language", "") or ""
-    base_index = min(
-        (getattr(w, "word_index", 0) for w in existing),
-        default=0,
-    )
-    span = max(chunk_end - chunk_start, 0.0)
-    if span <= 0 or len(tokens) == 1:
-        step = span
-    else:
-        step = span / len(tokens)
-
-    for i, token in enumerate(tokens):
-        start = chunk_start + step * i
-        end = chunk_end if i == len(tokens) - 1 else chunk_start + step * (i + 1)
+    for unit in clean:
         row = TranscriptWord(
             file_id=file_id,
-            word_index=base_index + i,
-            text=token,
+            text=unit["text"],
             language=language,
-            timestamp_start=start,
-            timestamp_end=end,
+            timestamp_start=float(unit["timestamp_start"]),
+            timestamp_end=float(unit["timestamp_end"]),
         )
         session.add(row)
 
-    return len(tokens)
+    return len(clean)
 
 
 # --- Embedding re-compute ---------------------------------------------------
@@ -477,6 +474,7 @@ async def _run_refine_job(
     # intelligence endpoint (including /status) for the entire job.
     from types import SimpleNamespace
 
+    audio_path: str | None = None
     try:
         with get_search_db() as session:
             rows = (
@@ -498,6 +496,11 @@ async def _run_refine_job(
                 )
                 for r in rows
             ]
+            file_row = (
+                session.query(IndexedFile).filter_by(file_id=file_id).first()
+            )
+            if file_row is not None:
+                audio_path = file_row.file_path
     except Exception as e:
         logger.exception("refine job snapshot failed for %s", file_id)
         await _emit_ws_event(
@@ -518,9 +521,22 @@ async def _run_refine_job(
         )
         return
 
+    # Load audio waveform once for the whole job so per-chunk alignment
+    # doesn't re-decode the file each time. Missing/unreadable audio is
+    # non-fatal: realign_words_for_chunk will see waveform=None and keep
+    # the original Whisper word timestamps untouched.
+    from app.config import validate_file_path
+
+    aligner.acquire_job()
+    waveform: Any = None
+    if audio_path and validate_file_path(audio_path):
+        waveform = aligner.load_waveform(audio_path)
+
     total = len(snapshots)
     refined_total = 0
     skipped_total = 0
+    aligned_total = 0
+    aligner_skipped_total = 0
 
     try:
         for offset in range(0, total, WINDOW_SIZE):
@@ -556,13 +572,18 @@ async def _run_refine_job(
                             orm.text_original = snap.text_original
                         orm.text = snap.text
                         orm.text_refined_at = snap.text_refined_at
-                        realign_words_for_chunk(
+                        aligned = realign_words_for_chunk(
                             session,
                             orm.file_id,
                             orm.timestamp_start,
                             orm.timestamp_end,
                             orm.text,
+                            waveform=waveform,
                         )
+                        if aligned > 0:
+                            aligned_total += 1
+                        else:
+                            aligner_skipped_total += 1
                         applied_ids.append(int(orm.id))
                     if applied_ids:
                         await recompute_chunk_embeddings(session, applied_ids)
@@ -585,6 +606,8 @@ async def _run_refine_job(
                 "job_id": job_id,
                 "refined_count": refined_total,
                 "skipped_count": skipped_total,
+                "aligned_count": aligned_total,
+                "aligner_skipped": aligner_skipped_total,
             },
         )
     except Exception as e:
@@ -593,6 +616,13 @@ async def _run_refine_job(
             "intelligence.refine.failed",
             {"file_id": file_id, "job_id": job_id, "error": str(e)},
         )
+    finally:
+        # Ref-counted release so concurrent folder-batch jobs share one
+        # loaded wav2vec2 model. The last job out frees ~1 GB of RAM.
+        try:
+            aligner.release_job()
+        except Exception:
+            logger.warning("aligner.release_job failed", exc_info=True)
 
 
 async def start_refine_job(session: Any, file_id: str) -> str:

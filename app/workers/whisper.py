@@ -571,13 +571,12 @@ def _index_whisper_sync(file_id: str) -> bool:
                 [
                     {
                         "file_id": file_id,
-                        "word_index": i,
                         "text": w["text"],
                         "language": w.get("language", ""),
                         "timestamp_start": w["start"],
                         "timestamp_end": w["end"],
                     }
-                    for i, w in enumerate(words)
+                    for w in words
                 ],
             )
 

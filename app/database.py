@@ -99,6 +99,10 @@ def init_search_db() -> None:
     with _search_engine.begin() as conn:
         _migrate_transcript_chunks_if_needed(conn)
 
+    # Migrate transcript_words: drop legacy word_index column (idempotent).
+    with _search_engine.begin() as conn:
+        _migrate_transcript_words_if_needed(conn)
+
     # Create suggested_tags table for auto-tagging
     with _search_engine.connect() as conn:
         _create_suggested_tags_table(conn)
@@ -235,6 +239,69 @@ def _migrate_transcript_chunks_if_needed(conn: object) -> None:
             text(
                 "ALTER TABLE transcript_chunks ADD COLUMN text_refined_at TIMESTAMP"
             )
+        )
+
+
+def _migrate_transcript_words_if_needed(conn: object) -> None:
+    """Drop legacy ``word_index`` column from ``transcript_words``.
+
+    ``word_index`` had no externally-defined invariant and caused
+    overflow bugs in refine (hako GfJ-m48_jisu3dpMfRkcg). Ordering
+    now relies on ``(timestamp_start, id)``. Idempotent: running twice
+    is a no-op. Requires SQLite 3.35+ for ``DROP COLUMN`` (the Docker
+    image ships 3.40+).
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    # PRAGMA table_info is safe if the table doesn't exist yet (returns []).
+    cols = {
+        row[1]
+        for row in conn.execute(
+            text("PRAGMA table_info(transcript_words)")
+        ).fetchall()
+    }
+    if not cols:
+        # Table will be created fresh by Base.metadata.create_all — nothing
+        # to migrate and nothing to log.
+        return
+
+    idx_names = {
+        row[1]
+        for row in conn.execute(
+            text("PRAGMA index_list(transcript_words)")
+        ).fetchall()
+    }
+
+    did_migrate = False
+
+    if "idx_transcript_words_file_idx" in idx_names:
+        conn.execute(text("DROP INDEX IF EXISTS idx_transcript_words_file_idx"))
+        did_migrate = True
+
+    # Legacy composite index using old naming — drop if it slipped through.
+    if "idx_transcript_words_file_time" in idx_names:
+        conn.execute(text("DROP INDEX IF EXISTS idx_transcript_words_file_time"))
+        did_migrate = True
+
+    if "word_index" in cols:
+        conn.execute(text("ALTER TABLE transcript_words DROP COLUMN word_index"))
+        did_migrate = True
+
+    # Recreate the timestamp-based index if absent (covers both legacy
+    # rename and fresh-drop paths).
+    if "idx_transcript_words_file_ts" not in idx_names:
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_transcript_words_file_ts "
+                "ON transcript_words(file_id, timestamp_start)"
+            )
+        )
+
+    if did_migrate:
+        logger.info(
+            "Migrated transcript_words: dropped legacy word_index column + index"
         )
 
 

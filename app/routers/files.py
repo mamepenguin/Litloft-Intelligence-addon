@@ -151,7 +151,7 @@ async def get_subtitles_vtt(
         rows = (
             db.query(TranscriptWord)
             .filter(TranscriptWord.file_id == file_id)
-            .order_by(TranscriptWord.word_index)
+            .order_by(TranscriptWord.timestamp_start, TranscriptWord.id)
             .all()
         )
 
