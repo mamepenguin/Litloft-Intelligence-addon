@@ -30,6 +30,7 @@ from app.rag.retriever import RetrievedFile
 from app.search import MatchInfo, SegmentGroup
 from app.text_utils import trim_to_sentence_boundary
 from app.workers.embedder import embed_query
+from app.workers.whisper import HVLINK_MIME
 
 logger = logging.getLogger(__name__)
 
@@ -573,8 +574,12 @@ def build_file_context(
     a sentence boundary so the last snippet still ends cleanly.
     """
     file_type = candidate.file_type
+    # HvLink files carry host file_type="other" from MIME heuristics but
+    # have VTT-derived TranscriptChunks — route them through the transcript
+    # path so the LLM sees the subtitles (mirrors summaries._classify_file_type).
+    is_hvlink = candidate.mime_type == HVLINK_MIME
 
-    if file_type in ("video", "audio"):
+    if file_type in ("video", "audio") or is_hvlink:
         snippets = _collect_transcript_snippets(candidate, rag_config)
     elif file_type in ("document", "text"):
         snippets = _collect_document_snippets(

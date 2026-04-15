@@ -74,6 +74,7 @@ class RetrievedFile:
     score: float
     match_types: tuple[str, ...]
     segments: tuple[SegmentGroup, ...]
+    mime_type: str | None = None
 
 
 def _internal_api_base_url() -> str:
@@ -189,6 +190,7 @@ def _get_indexed_files_meta(file_ids: list[str]) -> dict[str, dict]:
                 "file_id": row.file_id,
                 "title": row.title or None,
                 "description": row.description or None,
+                "mime_type": row.mime_type or None,
             }
             for row in rows
         }
@@ -201,11 +203,13 @@ def _to_retrieved_file(
     """Merge a SearchResult and its IndexedFile metadata into a RetrievedFile."""
     title = meta.get("title") if meta else None
     description = meta.get("description") if meta else None
+    mime_type = meta.get("mime_type") if meta else None
     return RetrievedFile(
         file_id=result.file_id,
         drive=result.drive,
         filename=result.filename,
         file_type=result.file_type,
+        mime_type=mime_type,
         title=title,
         description=description,
         score=result.score,

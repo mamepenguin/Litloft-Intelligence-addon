@@ -212,6 +212,46 @@ class TestBuildFileContextVideo:
         assert ctx.file_id == "a1"
         assert any(s.source == "transcript" for s in ctx.snippets)
 
+    def test_hvlink_file_uses_transcript_path(self, monkeypatch):
+        # HvLink files have file_type="other" from host MIME heuristics
+        # but carry VTT-derived TranscriptChunks — Ask must feed those
+        # to the LLM instead of falling back to metadata only.
+        monkeypatch.setattr(
+            "app.rag.context._fetch_transcript_chunks_around",
+            MagicMock(return_value=[("subtitle text", 0.0, 10.0)]),
+        )
+
+        candidate = RetrievedFile(
+            file_id="h1",
+            drive="YouTube",
+            filename="video.hvlink",
+            file_type="other",
+            title="External video",
+            description="",
+            score=0.8,
+            match_types=("transcript",),
+            segments=(
+                SegmentGroup(
+                    time_range=(5.0, 15.0),
+                    matches=(
+                        MatchInfo(
+                            match_type="transcript",
+                            text="subtitle",
+                            score=0.9,
+                            timestamp_start=5.0,
+                            timestamp_end=15.0,
+                        ),
+                    ),
+                ),
+            ),
+            mime_type="application/vnd.homevault.link+json",
+        )
+
+        ctx = build_file_context(candidate, RagConfig())
+
+        assert ctx.file_id == "h1"
+        assert any(s.source == "transcript" for s in ctx.snippets)
+
 
 # ---------------------------------------------------------------------------
 # build_file_context: document
