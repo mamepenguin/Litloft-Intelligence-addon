@@ -133,7 +133,7 @@ class TestAnswerQuestionHappyPath:
         )
         monkeypatch.setattr(
             "app.rag.service.assemble_contexts",
-            lambda cands, cfg: [_context(c.file_id) for c in cands],
+            lambda cands, cfg, **_kw: [_context(c.file_id) for c in cands],
         )
 
         llm = _make_llm_mock({
@@ -219,7 +219,7 @@ class TestAnswerQuestionLLMFailure:
         )
         monkeypatch.setattr(
             "app.rag.service.assemble_contexts",
-            lambda cands, cfg: [_context(c.file_id) for c in cands],
+            lambda cands, cfg, **_kw: [_context(c.file_id) for c in cands],
         )
         # LLM returned unparseable output.
         llm = _make_llm_mock(None)
@@ -248,7 +248,7 @@ class TestAnswerQuestionLLMFailure:
         )
         monkeypatch.setattr(
             "app.rag.service.assemble_contexts",
-            lambda cands, cfg: [_context(c.file_id) for c in cands],
+            lambda cands, cfg, **_kw: [_context(c.file_id) for c in cands],
         )
         llm = _make_llm_mock([{"wrong": "shape"}])
         monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
@@ -279,7 +279,7 @@ class TestAnswerQuestionCitationFiltering:
         )
         monkeypatch.setattr(
             "app.rag.service.assemble_contexts",
-            lambda cands, cfg: [_context(c.file_id) for c in cands],
+            lambda cands, cfg, **_kw: [_context(c.file_id) for c in cands],
         )
 
         llm = _make_llm_mock({
@@ -310,7 +310,7 @@ class TestAnswerQuestionCitationFiltering:
         )
         monkeypatch.setattr(
             "app.rag.service.assemble_contexts",
-            lambda cands, cfg: [_context(c.file_id) for c in cands],
+            lambda cands, cfg, **_kw: [_context(c.file_id) for c in cands],
         )
         llm = _make_llm_mock({
             "answer": "Some answer",
@@ -424,7 +424,7 @@ class TestAnswerQuestionTookMs:
         )
         monkeypatch.setattr(
             "app.rag.service.assemble_contexts",
-            lambda cands, cfg: [_context(c.file_id) for c in cands],
+            lambda cands, cfg, **_kw: [_context(c.file_id) for c in cands],
         )
         monkeypatch.setattr(
             "app.rag.service.get_llm_client",
@@ -524,7 +524,7 @@ class TestStreamAnswerHappyPath:
         )
         monkeypatch.setattr(
             "app.rag.service.assemble_contexts",
-            lambda cands, cfg: [_context(c.file_id) for c in cands],
+            lambda cands, cfg, **_kw: [_context(c.file_id) for c in cands],
         )
 
         # Two-chunk stream that together reconstitutes valid JSON with
@@ -542,14 +542,16 @@ class TestStreamAnswerHappyPath:
         ))
 
         kinds = [e.kind for e in events]
-        # Exactly one answer_chunk carrying the extracted answer-field
-        # value: the stream extractor swallows the surrounding JSON
-        # syntax (``{"answer": "``, the closing quote, the citations
-        # array) so the UI never sees raw JSON scroll past.
+        # Order: keywords -> sources -> answer_chunk(s) -> citation(s)
+        # (progressive, one per parsed citation) -> terminal citations
+        # (full validated list) -> done. The progressive ``citation``
+        # events let the UI render cards as each closing brace arrives
+        # instead of waiting for the whole JSON to buffer.
         assert kinds == [
             "keywords",
             "sources",
             "answer_chunk",
+            "citation",
             "citations",
             "done",
         ]
@@ -563,14 +565,22 @@ class TestStreamAnswerHappyPath:
         # object are stripped by the extractor.
         assert events[2].data["delta"] == "京都の紅葉 [1]"
 
-        # Citations are parsed from the full buffered JSON and the
-        # f1 citation survives the allowed-id check.
-        citations = events[3].data["citations"]
+        # Progressive citation event: same shape as a terminal-list
+        # element, plus a 1-based index so the UI can show order.
+        progressive = events[3].data
+        assert progressive["index"] == 1
+        assert progressive["citation"]["file_id"] == "f1"
+
+        # Terminal citations are parsed from the full buffered JSON
+        # and the f1 citation survives the allowed-id check. This is
+        # also what legacy UIs (that ignore progressive ``citation``
+        # events) consume.
+        citations = events[4].data["citations"]
         assert len(citations) == 1
         assert citations[0]["file_id"] == "f1"
 
         # done carries timing metadata.
-        done_payload = events[4].data
+        done_payload = events[5].data
         assert done_payload.get("retrieved_count") == 2
         assert "took_ms" in done_payload
 
@@ -621,7 +631,7 @@ class TestStreamAnswerHallucinationFilter:
         )
         monkeypatch.setattr(
             "app.rag.service.assemble_contexts",
-            lambda cands, cfg: [_context(c.file_id) for c in cands],
+            lambda cands, cfg, **_kw: [_context(c.file_id) for c in cands],
         )
 
         # The LLM claims a citation pointing at "f999" which was NOT
@@ -644,6 +654,196 @@ class TestStreamAnswerHallucinationFilter:
         assert kept[0]["file_id"] == "f1"
 
 
+class TestStreamAnswerProgressiveCitations:
+    """stream_answer emits one ``citation`` event per citation as the
+    LLM finishes each object, before the terminal ``citations`` event.
+
+    This is what unblocks the UI's "citation card appears as soon as
+    its closing brace arrives" behaviour and is the whole point of the
+    progressive streaming work.
+    """
+
+    @pytest.mark.asyncio
+    async def test_emits_progressive_citation_events_in_order(
+        self, monkeypatch, patched_rag_enabled
+    ):
+        candidates = [_retrieved("f1"), _retrieved("f2")]
+        monkeypatch.setattr(
+            "app.rag.service.transform_query",
+            AsyncMock(return_value="kw"),
+        )
+        monkeypatch.setattr(
+            "app.rag.service.retrieve_with_keywords",
+            AsyncMock(return_value=candidates),
+        )
+        monkeypatch.setattr(
+            "app.rag.service.assemble_contexts",
+            lambda cands, cfg, **_kw: [_context(c.file_id) for c in cands],
+        )
+
+        # Split the payload so the answer field closes first, then
+        # each citation arrives in its own chunk. This mimics what a
+        # real streaming LLM does and lets us assert that each
+        # citation event appears before the next chunk is fed.
+        deltas = [
+            '{"answer": "see [1] and [2]", "citations": [',
+            '{"file_id": "f1", "quote": "q1", "relevance": 0.9}',
+            ',{"file_id": "f2", "quote": "q2", "relevance": 0.8}',
+            "]}",
+        ]
+        llm = _make_stream_llm_mock(deltas)
+        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+
+        events = await _collect(stream_answer(query="q", hv_token="t"))
+
+        kinds = [e.kind for e in events]
+        # Two progressive citation events, one per cited file, between
+        # the answer chunks and the terminal citations list.
+        citation_events = [e for e in events if e.kind == "citation"]
+        assert len(citation_events) == 2
+        # 1-based index, preserving LLM order.
+        assert citation_events[0].data["index"] == 1
+        assert citation_events[1].data["index"] == 2
+        assert citation_events[0].data["citation"]["file_id"] == "f1"
+        assert citation_events[1].data["citation"]["file_id"] == "f2"
+
+        # Each progressive event payload has the same shape as a
+        # terminal-list element (file_id / drive / filename / file_type
+        # / quote / relevance / segment_location) so frontend code can
+        # reuse its citation card renderer.
+        cit0 = citation_events[0].data["citation"]
+        for key in (
+            "file_id",
+            "drive",
+            "filename",
+            "file_type",
+            "quote",
+            "relevance",
+            "segment_location",
+        ):
+            assert key in cit0
+
+        # All progressive ``citation`` events come AFTER the last
+        # ``answer_chunk`` and BEFORE the terminal ``citations`` event.
+        last_chunk_idx = max(i for i, k in enumerate(kinds) if k == "answer_chunk")
+        first_cit_idx = kinds.index("citation")
+        terminal_idx = kinds.index("citations")
+        assert last_chunk_idx < first_cit_idx < terminal_idx
+
+    @pytest.mark.asyncio
+    async def test_hallucinated_citation_is_dropped_from_both_streams(
+        self, monkeypatch, patched_rag_enabled
+    ):
+        """Unknown file_id must not escape as a progressive ``citation``.
+
+        The hallucination filter is the one security-critical guard in
+        the whole RAG path; it must be applied to the new progressive
+        stream too, not just the terminal list.
+        """
+        candidates = [_retrieved("real-1")]
+        monkeypatch.setattr(
+            "app.rag.service.transform_query",
+            AsyncMock(return_value="kw"),
+        )
+        monkeypatch.setattr(
+            "app.rag.service.retrieve_with_keywords",
+            AsyncMock(return_value=candidates),
+        )
+        monkeypatch.setattr(
+            "app.rag.service.assemble_contexts",
+            lambda cands, cfg, **_kw: [_context(c.file_id) for c in cands],
+        )
+
+        full_json = (
+            '{"answer": "text", "citations": ['
+            '{"file_id": "real-1", "quote": "q", "relevance": 0.9},'
+            '{"file_id": "HALLUCINATED", "quote": "fake", "relevance": 0.5}'
+            "]}"
+        )
+        llm = _make_stream_llm_mock([full_json])
+        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+
+        events = await _collect(stream_answer(query="q", hv_token="t"))
+
+        # Progressive path: only real-1 comes through.
+        progressive_ids = [
+            e.data["citation"]["file_id"] for e in events if e.kind == "citation"
+        ]
+        assert progressive_ids == ["real-1"]
+
+        # Terminal path: also only real-1 (unchanged from old behaviour).
+        terminal = next(e for e in events if e.kind == "citations")
+        terminal_ids = [c["file_id"] for c in terminal.data["citations"]]
+        assert terminal_ids == ["real-1"]
+
+    @pytest.mark.asyncio
+    async def test_terminal_citations_still_contains_full_list(
+        self, monkeypatch, patched_rag_enabled
+    ):
+        """Back-compat: terminal event keeps the complete validated list.
+
+        Older clients that ignore the new ``citation`` event kind must
+        still work — they rely on the terminal ``citations`` event to
+        render every citation.
+        """
+        candidates = [_retrieved("f1"), _retrieved("f2")]
+        monkeypatch.setattr(
+            "app.rag.service.transform_query",
+            AsyncMock(return_value="kw"),
+        )
+        monkeypatch.setattr(
+            "app.rag.service.retrieve_with_keywords",
+            AsyncMock(return_value=candidates),
+        )
+        monkeypatch.setattr(
+            "app.rag.service.assemble_contexts",
+            lambda cands, cfg, **_kw: [_context(c.file_id) for c in cands],
+        )
+
+        full_json = (
+            '{"answer": "a", "citations": ['
+            '{"file_id": "f1", "quote": "q1", "relevance": 0.9},'
+            '{"file_id": "f2", "quote": "q2", "relevance": 0.8}'
+            "]}"
+        )
+        llm = _make_stream_llm_mock([full_json])
+        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+
+        events = await _collect(stream_answer(query="q", hv_token="t"))
+
+        terminal = next(e for e in events if e.kind == "citations")
+        terminal_ids = [c["file_id"] for c in terminal.data["citations"]]
+        assert terminal_ids == ["f1", "f2"]
+
+    @pytest.mark.asyncio
+    async def test_no_citation_events_when_prose_only(
+        self, monkeypatch, patched_rag_enabled
+    ):
+        """Prose-only LLM output emits zero progressive ``citation`` events."""
+        candidates = [_retrieved("f1")]
+        monkeypatch.setattr(
+            "app.rag.service.transform_query",
+            AsyncMock(return_value="kw"),
+        )
+        monkeypatch.setattr(
+            "app.rag.service.retrieve_with_keywords",
+            AsyncMock(return_value=candidates),
+        )
+        monkeypatch.setattr(
+            "app.rag.service.assemble_contexts",
+            lambda cands, cfg, **_kw: [_context(c.file_id) for c in cands],
+        )
+        llm = _make_stream_llm_mock(["sorry I cannot answer"])
+        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+
+        events = await _collect(stream_answer(query="q", hv_token="t"))
+
+        assert [e for e in events if e.kind == "citation"] == []
+        # Terminal event still fires with an empty list.
+        terminal = next(e for e in events if e.kind == "citations")
+        assert terminal.data["citations"] == []
+
+
 class TestStreamAnswerUnparseableJSON:
     @pytest.mark.asyncio
     async def test_unparseable_stream_yields_empty_citations(
@@ -661,7 +861,7 @@ class TestStreamAnswerUnparseableJSON:
         )
         monkeypatch.setattr(
             "app.rag.service.assemble_contexts",
-            lambda cands, cfg: [_context(c.file_id) for c in cands],
+            lambda cands, cfg, **_kw: [_context(c.file_id) for c in cands],
         )
         llm = _make_stream_llm_mock(["this is not json at all"])
         monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)

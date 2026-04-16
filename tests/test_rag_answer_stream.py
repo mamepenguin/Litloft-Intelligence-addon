@@ -20,7 +20,7 @@ These tests cover:
 
 from __future__ import annotations
 
-from app.rag.answer_stream import AnswerStreamExtractor
+from app.rag.answer_stream import AnswerStreamExtractor, CitationStreamExtractor
 
 
 def _feed_all(ex: AnswerStreamExtractor, chunks: list[str]) -> str:
@@ -241,3 +241,234 @@ class TestIdempotency:
         # must not accidentally leak any of that into a delta.
         assert ex.feed(', "citations": [{"file_id": "f1"}]}') == ""
         assert ex.finalize() == ""
+
+
+# ---------------------------------------------------------------------------
+# CitationStreamExtractor
+#
+# This extractor is a sibling of ``AnswerStreamExtractor`` but focused on
+# the ``citations`` array. It is fed the SAME raw chunks (so callers do
+# not need to coordinate two state machines about where the answer
+# string ends) and yields each completed citation object as a parsed
+# dict, one at a time, as soon as its closing ``}`` arrives. This is
+# what lets the UI render citation cards progressively instead of
+# waiting for the whole JSON to close.
+#
+# Choosing "feed the extractor every chunk" (same data as the answer
+# extractor) rather than "hand off chunks once the answer extractor
+# reports done" keeps the two classes independent of each other's
+# internal timing and makes unit testing trivial: we just feed a
+# string and assert on the returned list. The extractor has its own
+# small state machine that skips past the answer-field region
+# deterministically.
+# ---------------------------------------------------------------------------
+
+
+def _feed_citations_all(
+    ex: CitationStreamExtractor, chunks: list[str]
+) -> list[dict]:
+    """Feed all chunks then finalize, returning the concatenated output."""
+    out: list[dict] = []
+    for c in chunks:
+        out = [*out, *ex.feed(c)]
+    out = [*out, *ex.finalize()]
+    return out
+
+
+class TestCitationStreamExtractorHappyPath:
+    def test_emits_each_citation_after_its_closing_brace(self):
+        ex = CitationStreamExtractor()
+        src = (
+            '{"answer": "text", "citations": ['
+            '{"file_id": "f1", "quote": "q1", "relevance": 0.9},'
+            '{"file_id": "f2", "quote": "q2", "relevance": 0.8}'
+            "]}"
+        )
+        citations = _feed_citations_all(ex, [src])
+        assert [c["file_id"] for c in citations] == ["f1", "f2"]
+        assert citations[0]["quote"] == "q1"
+        assert citations[1]["relevance"] == 0.8
+
+    def test_emits_citation_progressively_not_all_at_end(self):
+        """Each citation should be returned as soon as its closing ``}`` arrives."""
+        ex = CitationStreamExtractor()
+        # Feed up to just before the first citation's closing brace.
+        first = ex.feed(
+            '{"answer": "text", "citations": ['
+            '{"file_id": "f1", "quote": "q1", "relevance": 0.9'
+        )
+        # Object isn't closed yet — nothing to yield.
+        assert first == []
+        # Now feed the closing brace: the object completes and f1 emits.
+        second = ex.feed("}")
+        assert [c["file_id"] for c in second] == ["f1"]
+        # Feed second citation; it emits as soon as its ``}`` arrives.
+        third = ex.feed(
+            ',{"file_id": "f2", "quote": "q2", "relevance": 0.8}'
+        )
+        assert [c["file_id"] for c in third] == ["f2"]
+        # Closing ``]`` of the array — nothing more to yield.
+        fourth = ex.feed("]}")
+        assert fourth == []
+        # Finalize returns nothing — we've already emitted everything.
+        assert ex.finalize() == []
+
+    def test_empty_citations_array(self):
+        ex = CitationStreamExtractor()
+        src = '{"answer": "text", "citations": []}'
+        assert _feed_citations_all(ex, [src]) == []
+
+
+class TestCitationStreamExtractorSplits:
+    def test_split_inside_citation_object(self):
+        ex = CitationStreamExtractor()
+        chunks = [
+            '{"answer": "a", "citations": [{"file_id": "f1",',
+            ' "quote": "hello", "relevance": 0.5}]}',
+        ]
+        citations = _feed_citations_all(ex, chunks)
+        assert [c["file_id"] for c in citations] == ["f1"]
+        assert citations[0]["quote"] == "hello"
+
+    def test_split_between_citations(self):
+        ex = CitationStreamExtractor()
+        chunks = [
+            '{"answer": "a", "citations": [{"file_id": "f1", "quote": "q1", "relevance": 0.1}',
+            ',{"file_id": "f2", "quote": "q2", "relevance": 0.2}]}',
+        ]
+        citations = _feed_citations_all(ex, chunks)
+        assert [c["file_id"] for c in citations] == ["f1", "f2"]
+
+    def test_split_at_every_character(self):
+        """Character-by-character streaming still produces the right dicts."""
+        ex = CitationStreamExtractor()
+        src = (
+            '{"answer": "x", "citations": ['
+            '{"file_id": "f1", "quote": "q1", "relevance": 0.9},'
+            '{"file_id": "f2", "quote": "q2", "relevance": 0.8}'
+            "]}"
+        )
+        citations = _feed_citations_all(ex, list(src))
+        assert [c["file_id"] for c in citations] == ["f1", "f2"]
+
+
+class TestCitationStreamExtractorQuoteContent:
+    def test_brace_inside_quote_is_not_object_boundary(self):
+        """A ``{`` inside a string value must not be mistaken for an object start."""
+        ex = CitationStreamExtractor()
+        src = (
+            '{"answer": "a", "citations": ['
+            '{"file_id": "f1", "quote": "code {block} here", "relevance": 0.9}'
+            "]}"
+        )
+        citations = _feed_citations_all(ex, [src])
+        assert len(citations) == 1
+        assert citations[0]["quote"] == "code {block} here"
+
+    def test_escaped_quote_inside_string(self):
+        """An escaped ``\\"`` must not end the string early."""
+        ex = CitationStreamExtractor()
+        src = (
+            '{"answer": "a", "citations": ['
+            '{"file_id": "f1", "quote": "he said \\"hi\\" loud", "relevance": 0.9}'
+            "]}"
+        )
+        citations = _feed_citations_all(ex, [src])
+        assert len(citations) == 1
+        assert citations[0]["quote"] == 'he said "hi" loud'
+
+    def test_escaped_backslash_then_quote(self):
+        """``\\\\"`` (escaped backslash followed by real closing quote) terminates the string."""
+        ex = CitationStreamExtractor()
+        src = (
+            '{"answer": "a", "citations": ['
+            '{"file_id": "f1", "quote": "path\\\\", "relevance": 0.9}'
+            "]}"
+        )
+        citations = _feed_citations_all(ex, [src])
+        assert len(citations) == 1
+        assert citations[0]["quote"] == "path\\"
+
+    def test_nested_object_in_value(self):
+        """Future-proofing: nested sub-object inside a citation is tracked correctly."""
+        ex = CitationStreamExtractor()
+        src = (
+            '{"answer": "a", "citations": ['
+            '{"file_id": "f1", "meta": {"k": "v"}, "relevance": 0.9}'
+            "]}"
+        )
+        citations = _feed_citations_all(ex, [src])
+        assert len(citations) == 1
+        assert citations[0]["file_id"] == "f1"
+        assert citations[0]["meta"] == {"k": "v"}
+
+
+class TestCitationStreamExtractorEdgeCases:
+    def test_non_array_citations_emits_nothing(self):
+        ex = CitationStreamExtractor()
+        src = '{"answer": "a", "citations": null}'
+        assert _feed_citations_all(ex, [src]) == []
+
+    def test_missing_citations_key_emits_nothing(self):
+        ex = CitationStreamExtractor()
+        src = '{"answer": "a"}'
+        assert _feed_citations_all(ex, [src]) == []
+
+    def test_prose_mode_emits_nothing(self):
+        """Bare prose (no JSON at all) means no citations to extract."""
+        ex = CitationStreamExtractor()
+        assert _feed_citations_all(ex, ["this is not json at all"]) == []
+
+    def test_incomplete_trailing_object_is_dropped(self):
+        """A half-written citation object at stream end is NOT emitted."""
+        ex = CitationStreamExtractor()
+        chunks = [
+            '{"answer": "a", "citations": [{"file_id": "f1", "quote": "q1", "relevance": 0.9},{"file_',
+        ]
+        # First citation completes; second is mid-write at stream end.
+        citations = _feed_citations_all(ex, chunks)
+        assert [c["file_id"] for c in citations] == ["f1"]
+
+    def test_malformed_object_is_skipped_silently(self):
+        """A ``{... }`` that fails json.loads must not crash the extractor."""
+        ex = CitationStreamExtractor()
+        src = (
+            '{"answer": "a", "citations": ['
+            '{not valid json},'
+            '{"file_id": "f2", "quote": "q2", "relevance": 0.8}'
+            "]}"
+        )
+        citations = _feed_citations_all(ex, [src])
+        # The first garbage object is dropped silently; the second survives.
+        assert [c["file_id"] for c in citations] == ["f2"]
+
+    def test_code_fenced_json_works(self):
+        """Code-fenced output still yields citations (fence is discarded)."""
+        ex = CitationStreamExtractor()
+        src = (
+            "```json\n"
+            '{"answer": "a", "citations": ['
+            '{"file_id": "f1", "quote": "q", "relevance": 0.9}'
+            "]}\n```"
+        )
+        citations = _feed_citations_all(ex, [src])
+        assert [c["file_id"] for c in citations] == ["f1"]
+
+
+class TestCitationStreamExtractorIdempotency:
+    def test_empty_chunk_is_noop(self):
+        ex = CitationStreamExtractor()
+        assert ex.feed("") == []
+
+    def test_post_done_chunks_are_noops(self):
+        ex = CitationStreamExtractor()
+        src = (
+            '{"answer": "a", "citations": ['
+            '{"file_id": "f1", "quote": "q", "relevance": 0.9}'
+            "]}"
+        )
+        first_pass = ex.feed(src)
+        assert [c["file_id"] for c in first_pass] == ["f1"]
+        # Trailing whitespace / garbage after array close — ignored.
+        assert ex.feed("  \n  garbage") == []
+        assert ex.finalize() == []
