@@ -184,6 +184,14 @@ def _transcribe_batched(
             transcribe_kwargs["compression_ratio_threshold"] = (
                 whisper_config.compression_ratio_threshold
             )
+        if whisper_config.no_speech_threshold > 0:
+            transcribe_kwargs["no_speech_threshold"] = (
+                whisper_config.no_speech_threshold
+            )
+        if whisper_config.log_prob_threshold != 0:
+            transcribe_kwargs["log_prob_threshold"] = (
+                whisper_config.log_prob_threshold
+            )
         segments_iter, info = pipeline.transcribe(
             file_path, **transcribe_kwargs
         )
@@ -246,6 +254,14 @@ def _transcribe_sequential(
             if whisper_config.compression_ratio_threshold > 0:
                 transcribe_kwargs["compression_ratio_threshold"] = (
                     whisper_config.compression_ratio_threshold
+                )
+            if whisper_config.no_speech_threshold > 0:
+                transcribe_kwargs["no_speech_threshold"] = (
+                    whisper_config.no_speech_threshold
+                )
+            if whisper_config.log_prob_threshold != 0:
+                transcribe_kwargs["log_prob_threshold"] = (
+                    whisper_config.log_prob_threshold
                 )
             if use_vad:
                 transcribe_kwargs["vad_parameters"] = {

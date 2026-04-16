@@ -77,6 +77,12 @@ class WhisperIndexConfig:
     # Segments with compression ratio above this threshold are discarded
     # (repetitive/looping output). Lower = stricter. 0 = disabled.
     compression_ratio_threshold: float = 2.0
+    # Segments with no-speech probability above this are discarded.
+    # Lower = more aggressive silence removal. 0 = disabled.
+    no_speech_threshold: float = 0.45
+    # Segments with average log probability below this are discarded.
+    # 0 = disabled.
+    log_prob_threshold: float = -1.0
 
 
 @dataclass(frozen=True)

@@ -144,6 +144,13 @@ indexing:
     # repetitive (looping hallucinations). Lower = stricter. 0 = disabled.
     # faster-whisper default is 2.4; 2.0 is recommended to catch chanting/BGM loops.
     compression_ratio_threshold: 2.0
+    # No-speech threshold: segments with no-speech probability above this
+    # are discarded. Default 0.6 is too aggressive for videos with BGM;
+    # 0.45 keeps more speech. 0 = disabled.
+    no_speech_threshold: 0.45
+    # Log probability threshold: segments with average log prob below this
+    # are discarded as low-confidence. -1.0 is lenient. 0 = disabled.
+    log_prob_threshold: -1.0
     # Short example sentence fed to the Whisper decoder to bias its style,
     # primarily for punctuation insertion in languages that often omit it
     # (Japanese, Chinese). Keep under ~1-2 sentences; longer prompts waste
