@@ -758,6 +758,103 @@ class TestTranscriptMultiMethod:
         assert cfg.transcript_vector_top_n == 4
 
 
+# ---------------------------------------------------------------------------
+# Summary snippet integration
+# ---------------------------------------------------------------------------
+
+
+class TestSummarySnippet:
+    """Tests for AI summary inclusion in file context."""
+
+    def test_summary_prepended_when_available(self, monkeypatch):
+        """Summary appears as first snippet when available."""
+        monkeypatch.setattr(
+            "app.rag.context._fetch_transcript_chunks_around",
+            MagicMock(return_value=[("transcript text", 10.0, 20.0)]),
+        )
+        monkeypatch.setattr(
+            "app.rag.context._fetch_long_summary",
+            MagicMock(return_value="AI generated summary of the video."),
+        )
+
+        candidate = _retrieved_video()
+        ctx = build_file_context(candidate, RagConfig())
+
+        assert ctx.snippets[0].source == "summary"
+        assert "AI generated summary" in ctx.snippets[0].text
+        assert ctx.snippets[0].location is None
+
+    def test_no_summary_no_snippet(self, monkeypatch):
+        """When no summary exists, no summary snippet is added."""
+        monkeypatch.setattr(
+            "app.rag.context._fetch_transcript_chunks_around",
+            MagicMock(return_value=[("transcript text", 10.0, 20.0)]),
+        )
+        monkeypatch.setattr(
+            "app.rag.context._fetch_long_summary",
+            MagicMock(return_value=None),
+        )
+
+        candidate = _retrieved_video()
+        ctx = build_file_context(candidate, RagConfig())
+
+        assert not any(s.source == "summary" for s in ctx.snippets)
+
+    def test_summary_survives_budget_trim(self, monkeypatch):
+        """Summary is first so it survives even when budget is tight."""
+        huge = "x" * 5000
+        monkeypatch.setattr(
+            "app.rag.context._fetch_transcript_chunks_around",
+            MagicMock(return_value=[(huge, 0.0, 100.0)]),
+        )
+        monkeypatch.setattr(
+            "app.rag.context._fetch_long_summary",
+            MagicMock(return_value="Short summary that fits."),
+        )
+
+        cfg = RagConfig(max_context_chars_per_file=500)
+        candidate = _retrieved_video()
+        ctx = build_file_context(candidate, cfg)
+
+        # Summary must survive — it's first and short.
+        assert ctx.snippets[0].source == "summary"
+        assert ctx.total_chars <= cfg.max_context_chars_per_file + 100
+
+    def test_image_does_not_get_summary(self, monkeypatch):
+        """Image files don't get summary snippets."""
+        monkeypatch.setattr(
+            "app.rag.context._fetch_blip_caption",
+            MagicMock(return_value="A sunset."),
+        )
+        summary_spy = MagicMock(return_value="Should not appear.")
+        monkeypatch.setattr(
+            "app.rag.context._fetch_long_summary", summary_spy,
+        )
+
+        candidate = _retrieved_image()
+        ctx = build_file_context(candidate, RagConfig())
+
+        summary_spy.assert_not_called()
+        assert not any(s.source == "summary" for s in ctx.snippets)
+
+    def test_document_gets_summary(self, monkeypatch):
+        """Document files also get summary snippets."""
+        monkeypatch.setattr(
+            "app.rag.context._fetch_document_chunks_around",
+            MagicMock(return_value=[(3, "chunk text")]),
+        )
+        monkeypatch.setattr(
+            "app.rag.context._fetch_long_summary",
+            MagicMock(return_value="Document summary."),
+        )
+
+        candidate = _retrieved_document()
+        ctx = build_file_context(candidate, RagConfig())
+
+        assert ctx.snippets[0].source == "summary"
+        assert "Document summary" in ctx.snippets[0].text
+
+
 class TestContextSnippetDataclass:
     """ContextSnippet fields and immutability."""
 

@@ -458,6 +458,28 @@ def _fetch_transcript_chunks_by_keyword_or(
     ]
 
 
+def _fetch_long_summary(file_id: str) -> str | None:
+    """Fetch the AI-generated long summary for a file, if available.
+
+    Only returns summaries with ``status='generated'`` (not hidden).
+    Returns None when no summary exists — the caller falls back to
+    chunk-only context.
+    """
+    try:
+        with get_search_db() as session:
+            row = session.execute(
+                sql_text(
+                    "SELECT long_summary FROM file_summaries "
+                    "WHERE file_id = :fid AND status = 'generated'"
+                ),
+                {"fid": file_id},
+            ).fetchone()
+            return row[0] if row and row[0] else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Summary lookup failed for %s: %s", file_id, e)
+        return None
+
+
 def _fetch_blip_caption(file_id: str) -> str | None:
     """Fetch the BLIP caption for an image file, if any.
 
@@ -862,6 +884,23 @@ def build_file_context(
     # Fallback: if no type-specific snippets were produced, use metadata.
     if not snippets:
         snippets = _build_metadata_snippets(candidate)
+
+    # Prepend AI summary when available. The summary gives the LLM a
+    # bird's-eye view of the file, which is essential for "summarize
+    # this video/document" queries where chunk-level excerpts cannot
+    # cover the full content under the per-file budget. Listed first
+    # so it always survives _cap_snippets trimming.
+    if file_type in ("video", "audio", "document", "text") or is_hvlink:
+        summary = _fetch_long_summary(candidate.file_id)
+        if summary:
+            snippets = [
+                ContextSnippet(
+                    source="summary",
+                    text=summary,
+                    location=None,
+                ),
+                *snippets,
+            ]
 
     kept, total_chars = _cap_snippets(
         snippets, rag_config.max_context_chars_per_file
