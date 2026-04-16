@@ -197,7 +197,16 @@
                 "response_filter": null
             },
             {
-                "path": "/files/{file_id}/summary/hide",
+                "path": "/files/{file_id}/summary/edit",
+                "methods": ["POST"],
+                "pre_check": {
+                    "type": "file_access",
+                    "param": "file_id"
+                },
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/summary/revert",
                 "methods": ["POST"],
                 "pre_check": {
                     "type": "file_access",

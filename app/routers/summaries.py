@@ -2,10 +2,15 @@
 
 Provides CRUD-like endpoints for LLM-generated file summaries:
 
-- GET /files/{file_id}/summary            — fetch current summary
+- GET /files/{file_id}/summary             — fetch current summary
 - POST /files/{file_id}/summary/regenerate — delete + re-enqueue
-- POST /files/{file_id}/summary/hide       — mark as hidden
+- POST /files/{file_id}/summary/edit       — user overwrite (keeps AI snapshot)
+- POST /files/{file_id}/summary/revert     — restore AI snapshot
 - POST /batch/summaries                    — queue a batch of files
+
+Hide is handled entirely client-side (session-scoped) — the server
+does not persist a hidden state so users always have a way to bring
+a summary back by reloading the page.
 
 Access control is enforced by the Generic Addon Proxy in the host
 via pre_check rules; this router assumes the caller has permission
@@ -13,6 +18,7 @@ for the file_ids it receives.
 """
 
 import logging
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text as sql_text
@@ -26,6 +32,7 @@ from app.schemas import (
     BatchSummariesRequest,
     BatchSummariesResponse,
     MessageResponse,
+    SummaryEditRequest,
     SummaryResponse,
 )
 from app.workers.summaries import classify_missing_reason
@@ -78,7 +85,6 @@ async def get_summary(
     Returns available=False when:
     - the summaries feature is disabled
     - no summary has been generated yet
-    - the summary has been hidden by the user
     - the underlying file has been soft-deleted (active=False)
 
     The soft-delete check matches the host's drive_access filter so a
@@ -93,7 +99,8 @@ async def get_summary(
         row = session.execute(
             sql_text(
                 "SELECT s.file_id, s.short_summary, s.long_summary, s.model, "
-                "s.context_type, s.was_truncated, s.status, s.created_at "
+                "s.context_type, s.was_truncated, s.status, s.created_at, "
+                "s.edited_at, s.short_original, s.long_original "
                 "FROM file_summaries s "
                 "INNER JOIN indexed_files f ON s.file_id = f.file_id "
                 "WHERE s.file_id = :fid AND f.active = 1"
@@ -103,17 +110,13 @@ async def get_summary(
 
     if row is None:
         # Classify *why* there's no summary so the frontend can render
-        # a useful state (button / "insufficient content" / hidden)
+        # a useful state (button / "insufficient content" / "generate")
         # instead of always offering a generate button that would
         # silently skip when the file lacks usable content.
         return SummaryResponse(
             available=False,
             reason=classify_missing_reason(file_id),
         )
-
-    status_value = row[6]
-    if status_value == "hidden":
-        return SummaryResponse(available=False)
 
     return SummaryResponse(
         available=True,
@@ -123,8 +126,10 @@ async def get_summary(
         model=row[3],
         context_type=row[4],
         was_truncated=bool(row[5]),
-        status=status_value,
+        status=row[6],
         created_at=row[7],
+        edited_at=row[8],
+        has_original=row[9] is not None and row[10] is not None,
     )
 
 
@@ -165,31 +170,162 @@ async def regenerate_summary(
     )
 
 
-@router.post("/files/{file_id}/summary/hide", response_model=MessageResponse)
-async def hide_summary(
+def _row_to_response(row: object) -> SummaryResponse:
+    """Build a ``SummaryResponse`` from a file_summaries row.
+
+    Expected column order:
+    ``(file_id, short_summary, long_summary, model, context_type,
+      was_truncated, status, created_at, edited_at,
+      short_original, long_original)``.
+
+    Shared between edit / revert so their responses stay consistent
+    with GET without re-reading through the feature-flag-gated GET
+    path (edits are allowed while ``features.summaries = "false"``,
+    but GET hides summaries in that state).
+    """
+    return SummaryResponse(
+        available=True,
+        file_id=row[0],
+        short_summary=row[1],
+        long_summary=row[2],
+        model=row[3],
+        context_type=row[4],
+        was_truncated=bool(row[5]),
+        status=row[6],
+        created_at=row[7],
+        edited_at=row[8],
+        has_original=row[9] is not None and row[10] is not None,
+    )
+
+
+def _fetch_summary_row(session: object, file_id: str) -> object | None:
+    """Load the file_summaries row in the column order expected by ``_row_to_response``."""
+    return session.execute(
+        sql_text(
+            "SELECT file_id, short_summary, long_summary, model, context_type, "
+            "was_truncated, status, created_at, edited_at, "
+            "short_original, long_original "
+            "FROM file_summaries WHERE file_id = :fid"
+        ),
+        {"fid": file_id},
+    ).fetchone()
+
+
+@router.post("/files/{file_id}/summary/edit", response_model=SummaryResponse)
+async def edit_summary(
+    file_id: str,
+    body: SummaryEditRequest,
+    drive: str = Depends(require_drive),
+) -> SummaryResponse:
+    """Overwrite the stored summary with user-edited text.
+
+    The first edit snapshots the current AI output into ``short_original`` /
+    ``long_original`` so the user can revert. Subsequent edits do not
+    overwrite the snapshot — original always refers to the last AI version.
+
+    ``features.summaries = "false"`` still allows edits: disabling the
+    feature only gates new generation, not curation of existing records.
+    ``status = "hidden"`` is preserved (editing does not un-hide).
+    """
+    _require_file_in_drive(file_id, drive)
+
+    now = datetime.now(UTC).isoformat()
+
+    with get_search_db() as session:
+        existing = session.execute(
+            sql_text(
+                "SELECT short_summary, long_summary, short_original, long_original "
+                "FROM file_summaries WHERE file_id = :fid"
+            ),
+            {"fid": file_id},
+        ).fetchone()
+
+        if existing is None:
+            raise HTTPException(status_code=404, detail="No summary to edit")
+
+        # Snapshot the AI output only on the first edit. On re-edit, keep
+        # the snapshot pinned to the original AI version so revert always
+        # reaches "the generation this row started with" rather than a
+        # previous user edit.
+        short_original = existing[2] if existing[2] is not None else existing[0]
+        long_original = existing[3] if existing[3] is not None else existing[1]
+
+        session.execute(
+            sql_text(
+                "UPDATE file_summaries SET "
+                "short_summary = :short, long_summary = :long, "
+                "short_original = :short_original, "
+                "long_original = :long_original, "
+                "edited_at = :edited_at "
+                "WHERE file_id = :fid"
+            ),
+            {
+                "fid": file_id,
+                "short": body.short_summary,
+                "long": body.long_summary,
+                "short_original": short_original,
+                "long_original": long_original,
+                "edited_at": now,
+            },
+        )
+
+        row = _fetch_summary_row(session, file_id)
+
+    # ``row`` is never None here — we just updated it inside the same
+    # session. Build the response directly so edit works regardless of
+    # ``features.summaries`` (GET's feature gate would hide it otherwise).
+    assert row is not None
+    return _row_to_response(row)
+
+
+@router.post("/files/{file_id}/summary/revert", response_model=SummaryResponse)
+async def revert_summary(
     file_id: str,
     drive: str = Depends(require_drive),
-) -> MessageResponse:
-    """Mark a summary as hidden so it stops being displayed.
+) -> SummaryResponse:
+    """Restore the AI snapshot for a user-edited summary.
 
-    The row is preserved (not deleted) so the data is still available
-    for audit / debugging / potential un-hide UI.
+    Fails with 400 when no snapshot exists (never edited, or the row was
+    regenerated after an edit — regenerate starts fresh with NULL originals).
     """
     _require_file_in_drive(file_id, drive)
 
     with get_search_db() as session:
-        result = session.execute(
+        existing = session.execute(
             sql_text(
-                "UPDATE file_summaries SET status = 'hidden' "
-                "WHERE file_id = :fid"
+                "SELECT short_original, long_original "
+                "FROM file_summaries WHERE file_id = :fid"
             ),
             {"fid": file_id},
+        ).fetchone()
+
+        if existing is None:
+            raise HTTPException(status_code=404, detail="No summary found")
+
+        if existing[0] is None or existing[1] is None:
+            raise HTTPException(
+                status_code=400, detail="No AI version to revert to"
+            )
+
+        session.execute(
+            sql_text(
+                "UPDATE file_summaries SET "
+                "short_summary = :short, long_summary = :long, "
+                "short_original = NULL, long_original = NULL, "
+                "edited_at = NULL "
+                "WHERE file_id = :fid"
+            ),
+            {
+                "fid": file_id,
+                "short": existing[0],
+                "long": existing[1],
+            },
         )
 
-    if result.rowcount == 0:
-        raise HTTPException(status_code=404, detail="No summary found")
+        row = _fetch_summary_row(session, file_id)
 
-    return MessageResponse(status="ok", message="Summary hidden")
+    assert row is not None
+    return _row_to_response(row)
 
 
 @router.post("/batch/summaries", response_model=BatchSummariesResponse)

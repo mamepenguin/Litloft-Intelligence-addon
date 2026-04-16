@@ -435,6 +435,11 @@ export interface SummaryResponse {
   was_truncated?: boolean;
   status?: "generated" | "hidden" | string;
   created_at?: string;
+  // ISO timestamp of the last user edit. Absent/null means the
+  // displayed text is the raw AI output.
+  edited_at?: string | null;
+  // True when an AI snapshot is stored and revert is possible.
+  has_original?: boolean;
   reason?: SummaryMissingReason | string;
 }
 
@@ -462,12 +467,27 @@ export async function regenerateSummary(
   );
 }
 
-export async function hideSummary(
+export async function editSummary(
   fileId: string,
   drive: string,
-): Promise<void> {
-  await fetchJSON(
-    `${API_BASE}/addons/intelligence/files/${fileId}/summary/hide`,
+  payload: { short_summary: string; long_summary: string },
+): Promise<SummaryResponse> {
+  return fetchJSON<SummaryResponse>(
+    `${API_BASE}/addons/intelligence/files/${fileId}/summary/edit`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...driveHeaders(drive) },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function revertSummary(
+  fileId: string,
+  drive: string,
+): Promise<SummaryResponse> {
+  return fetchJSON<SummaryResponse>(
+    `${API_BASE}/addons/intelligence/files/${fileId}/summary/revert`,
     { method: "POST", headers: driveHeaders(drive) },
   );
 }

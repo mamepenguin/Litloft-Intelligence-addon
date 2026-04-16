@@ -113,6 +113,10 @@ def init_search_db() -> None:
         _create_file_summaries_table(conn)
         conn.commit()
 
+    # Migrate file_summaries for user-edit support (idempotent).
+    with _search_engine.begin() as conn:
+        _migrate_file_summaries_if_needed(conn)
+
     # Backfill fts_transcripts from existing transcript_chunks
     _backfill_fts_transcripts()
 
@@ -372,6 +376,10 @@ def _create_file_summaries_table(conn: object) -> None:
     Unlike suggested_tags, summaries have no approve/dismiss workflow —
     the intelligence DB stays self-contained and the host DB is never touched.
     Status is either 'generated' (displayed) or 'hidden' (user opted out).
+
+    ``short_original`` / ``long_original`` hold the AI output snapshot taken
+    on first edit so the user can revert. ``edited_at`` flags a user-edited
+    row (NULL = AI-generated, timestamp = last edit time).
     """
     conn.execute(text(
         "CREATE TABLE IF NOT EXISTS file_summaries ("
@@ -383,9 +391,43 @@ def _create_file_summaries_table(conn: object) -> None:
         "  context_chars INTEGER NOT NULL,"
         "  was_truncated INTEGER NOT NULL DEFAULT 0,"
         "  status TEXT NOT NULL DEFAULT 'generated',"
-        "  created_at TEXT NOT NULL"
+        "  created_at TEXT NOT NULL,"
+        "  edited_at TEXT,"
+        "  short_original TEXT,"
+        "  long_original TEXT"
         ")"
     ))
+
+
+def _migrate_file_summaries_if_needed(conn: object) -> None:
+    """Evolve ``file_summaries`` schema for user-edit support.
+
+    Adds ``edited_at`` / ``short_original`` / ``long_original`` if missing.
+    Idempotent: running twice is a no-op.
+
+    Unlike ``transcript_chunks`` (where refine re-chunks and 1:1 mapping
+    is lost), summaries are one row per file and ``*_original`` can safely
+    hold the last AI version for revert. Snapshot is taken lazily on the
+    first edit so AI-only rows stay lean.
+    """
+    cols = {
+        row[1]
+        for row in conn.execute(
+            text("PRAGMA table_info(file_summaries)")
+        ).fetchall()
+    }
+    if "edited_at" not in cols:
+        conn.execute(
+            text("ALTER TABLE file_summaries ADD COLUMN edited_at TEXT")
+        )
+    if "short_original" not in cols:
+        conn.execute(
+            text("ALTER TABLE file_summaries ADD COLUMN short_original TEXT")
+        )
+    if "long_original" not in cols:
+        conn.execute(
+            text("ALTER TABLE file_summaries ADD COLUMN long_original TEXT")
+        )
 
 
 def init_homevault_db() -> None:

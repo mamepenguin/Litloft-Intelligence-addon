@@ -250,6 +250,11 @@ class SummaryResponse(BaseModel):
     was_truncated: bool | None = None
     status: str | None = None
     created_at: str | None = None
+    # Set to an ISO timestamp when the user has edited the summary;
+    # NULL means the displayed text is the raw AI output.
+    edited_at: str | None = None
+    # True when a pre-edit AI snapshot is stored and revert is possible.
+    has_original: bool = False
     # When available=False, explains why:
     #   "not_generated"        — file is eligible but user hasn't generated yet
     #   "insufficient_content" — transcript/text below min_context_chars
@@ -257,6 +262,11 @@ class SummaryResponse(BaseModel):
     #   "file_not_found"       — no indexed_files row
     #   None                   — feature disabled or summary hidden by user
     reason: str | None = None
+
+
+class SummaryEditRequest(BaseModel):
+    short_summary: str = Field(..., min_length=1, max_length=200)
+    long_summary: str = Field(..., min_length=1, max_length=4000)
 
 
 class BatchSummariesRequest(BaseModel):
