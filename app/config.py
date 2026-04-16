@@ -67,6 +67,16 @@ class WhisperIndexConfig:
     beam_size: int = 1
     batch_size: int = 16
     condition_on_previous_text: bool = False
+    # Short example sentence (≤224 tokens) used to bias the decoder
+    # toward a desired style — primarily punctuation insertion. Written
+    # in the user's primary content language; an irrelevant prompt mostly
+    # wastes token budget rather than corrupting output. Do not include
+    # filenames or curated vocabulary here; put those in a dedicated
+    # glossary layer if needed.
+    initial_prompt: str = ""
+    # Segments with compression ratio above this threshold are discarded
+    # (repetitive/looping output). Lower = stricter. 0 = disabled.
+    compression_ratio_threshold: float = 2.0
 
 
 @dataclass(frozen=True)

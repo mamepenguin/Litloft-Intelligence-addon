@@ -172,12 +172,19 @@ def _transcribe_batched(
 ) -> list[dict]:
     """Transcribe using BatchedInferencePipeline for faster throughput."""
     try:
+        transcribe_kwargs: dict = {
+            "batch_size": whisper_config.batch_size,
+            "beam_size": whisper_config.beam_size,
+            "language": None,
+            "word_timestamps": True,
+            "initial_prompt": whisper_config.initial_prompt or None,
+        }
+        if whisper_config.compression_ratio_threshold > 0:
+            transcribe_kwargs["compression_ratio_threshold"] = (
+                whisper_config.compression_ratio_threshold
+            )
         segments_iter, info = pipeline.transcribe(
-            file_path,
-            batch_size=whisper_config.batch_size,
-            beam_size=whisper_config.beam_size,
-            language=None,
-            word_timestamps=True,
+            file_path, **transcribe_kwargs
         )
 
         detected_language = info.language
@@ -233,7 +240,12 @@ def _transcribe_sequential(
                 "vad_filter": use_vad,
                 "condition_on_previous_text": whisper_config.condition_on_previous_text,
                 "word_timestamps": True,
+                "initial_prompt": whisper_config.initial_prompt or None,
             }
+            if whisper_config.compression_ratio_threshold > 0:
+                transcribe_kwargs["compression_ratio_threshold"] = (
+                    whisper_config.compression_ratio_threshold
+                )
             if use_vad:
                 transcribe_kwargs["vad_parameters"] = {
                     "min_silence_duration_ms": 500
