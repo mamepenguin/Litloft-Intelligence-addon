@@ -11,9 +11,11 @@
  *     actually looked up when their question got noisy-word-stripped).
  *  2. The list of retrieved source files (shown as soon as they come
  *     in, before the answer finishes generating).
- *  3. The answer text, with inline `[N]` citation chips that link to
- *     the referenced file / timestamp.
- *  4. The final citations sidebar with quotes.
+ *  3. The answer text, rendered as sanitized Markdown. The prompt bans
+ *     `[1][2]` markers (commit 637f238) so attribution lives entirely
+ *     in the citations list below — no inline chips.
+ *  4. The citations list (filename + location + quote per entry), each
+ *     card linking to the source file.
  *
  * Seed query: when the URL contains `?q=<query>`, the page auto-fires
  * the Ask pipeline on mount. The input stays editable so the user can
@@ -28,7 +30,6 @@ import {
   type ChangeEvent,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
-  type ReactNode,
   Suspense,
   useCallback,
   useEffect,
@@ -42,6 +43,7 @@ import { useSearchParams } from "next/navigation";
 import { AlertCircle, Send, Sparkles, Square, X } from "lucide-react";
 
 import { useCurrentDrive } from "@/components/CurrentDriveProvider";
+import { MarkdownPreview } from "@/components/MarkdownPreview";
 import {
   askQuestionStream,
   getIntelligenceStatus,
@@ -117,42 +119,6 @@ function buildCitationUrl(citation: Citation): string {
     return `/files/${citation.file_id}?t=${parsed.seconds}`;
   }
   return `/files/${citation.file_id}`;
-}
-
-/**
- * Render an answer string with `[N]` markers converted to interactive
- * chip buttons. Out-of-range indices are left as plain text so a
- * mid-stream partial answer never crashes the render.
- */
-function renderAnswerWithCitations(
-  answer: string,
-  citations: Citation[],
-  onCitationClick: (index: number) => void,
-): ReactNode[] {
-  const parts = answer.split(/(\[\d+\])/g);
-  return parts.map((part, i) => {
-    const match = part.match(/^\[(\d+)\]$/);
-    if (!match) return <span key={i}>{part}</span>;
-    const n = parseInt(match[1], 10);
-    if (n < 1 || n > citations.length) {
-      return (
-        <span key={i} className="text-text-muted/60">
-          {part}
-        </span>
-      );
-    }
-    return (
-      <button
-        key={i}
-        type="button"
-        onClick={() => onCitationClick(n)}
-        className="mx-0.5 inline-flex items-center rounded px-1 py-0 align-super text-[10px] font-semibold text-accent bg-accent/10 hover:bg-accent/20 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
-        aria-label={`Jump to citation ${n}`}
-      >
-        {n}
-      </button>
-    );
-  });
 }
 
 function CitationCard({
@@ -537,14 +503,6 @@ function IntelligenceAskPageInner() {
     [canSubmit, composing, input, runAsk],
   );
 
-  const handleCitationClick = useCallback((index: number) => {
-    const el = document.getElementById(`ask-citation-${index}`);
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-      el.focus();
-    }
-  }, []);
-
   const handleAbort = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -666,34 +624,30 @@ function IntelligenceAskPageInner() {
           aria-live="polite"
           className="rounded-md border border-bg-border bg-bg-card p-4"
         >
-          <div className="whitespace-pre-wrap text-sm leading-relaxed text-text-primary">
-            {state.kind === "streaming"
-              ? renderAnswerWithCitations(
-                  state.answerBuffer,
-                  // Use progressively-accumulated citations so `[N]`
-                  // chips become interactive the moment their citation
-                  // arrives. Unseen indices stay greyed-out via the
-                  // out-of-range branch in renderAnswerWithCitations.
-                  state.citations,
-                  handleCitationClick,
-                )
-              : renderAnswerWithCitations(
-                  state.answer,
-                  state.citations,
-                  handleCitationClick,
-                )}
-            {state.kind === "streaming" && state.answerBuffer === "" ? (
-              // "Thinking" indicator — shown while retrieval / LLM
-              // warm-up is happening and no answer tokens have been
-              // emitted yet. Stable `data-testid` keeps the unit test
-              // decoupled from the visual / i18n choice.
-              <ThinkingIndicator label={t("thinking")} />
-            ) : (
-              state.kind === "streaming" && (
-                <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-accent align-baseline" />
-              )
-            )}
-          </div>
+          {state.kind === "streaming" && state.answerBuffer === "" ? (
+            // "Thinking" indicator — shown while retrieval / LLM
+            // warm-up is happening and no answer tokens have been
+            // emitted yet. Stable `data-testid` keeps the unit test
+            // decoupled from the visual / i18n choice.
+            <ThinkingIndicator label={t("thinking")} />
+          ) : (
+            <div className="text-sm leading-relaxed text-text-primary">
+              <MarkdownPreview
+                source={
+                  state.kind === "streaming" ? state.answerBuffer : state.answer
+                }
+                chrome={false}
+                mermaid={false}
+                showFrontmatter={false}
+              />
+              {state.kind === "streaming" && (
+                <span
+                  aria-hidden="true"
+                  className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-accent align-baseline"
+                />
+              )}
+            </div>
+          )}
           {state.kind === "answered" && state.tookMs != null && (
             <p className="mt-2 text-[10px] text-text-muted/70">
               {t("takenMs", { ms: state.tookMs })}

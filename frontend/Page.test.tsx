@@ -8,8 +8,9 @@
  *   2. The terminal `event: citations` (plural) is still parsed.
  *   3. The Ask page renders citations progressively — each per-citation
  *      event appends a CitationCard immediately.
- *   4. Inline `[N]` chips render as interactive buttons once citation N
- *      has arrived, and as muted text while it is still pending.
+ *   4. The answer body renders as Markdown (sanitized). The prompt
+ *      bans `[1][2]` markers so attribution lives in the citations
+ *      list, not as inline chips.
  *   5. While the stream is live and no answer has begun, a `Thinking`
  *      indicator (stable testid `ask-thinking`) is visible; it goes
  *      away once the first answer_chunk lands.
@@ -247,36 +248,27 @@ describe("IntelligenceAskPage — progressive citations + thinking indicator", (
     });
   });
 
-  it("renders pending [N] chips as muted until their citation arrives", async () => {
-    await mountAndStart();
+  it("renders the answer body as Markdown (bold, headings, lists)", async () => {
+    const utils = await mountAndStart();
     await act(async () => {
       streamState.current.push({ kind: "keywords", keywords: "x" });
       streamState.current.push({ kind: "sources", sources: [] });
       streamState.current.push({
         kind: "answer_chunk",
-        delta: "See [1] soon.",
+        delta: "## Heading\n\n**bold text** and a list:\n\n- one\n- two",
       });
     });
     await waitFor(() => {
-      expect(screen.getByText(/See/)).toBeInTheDocument();
+      expect(utils.container.querySelector("h2")).toHaveTextContent("Heading");
     });
-    // Citation 1 hasn't arrived; the chip must NOT be a button.
+    expect(utils.container.querySelector("strong")).toHaveTextContent(
+      "bold text",
+    );
+    expect(utils.container.querySelectorAll("li")).toHaveLength(2);
+    // No `[N]` chips are created — attribution lives in the citations list.
     expect(
-      screen.queryByRole("button", { name: /Jump to citation 1/ }),
+      screen.queryByRole("button", { name: /Jump to citation/ }),
     ).toBeNull();
-
-    await act(async () => {
-      streamState.current.push({
-        kind: "citation",
-        citation: sampleCitation(1),
-        index: 1,
-      });
-    });
-    await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: /Jump to citation 1/ }),
-      ).toBeInTheDocument();
-    });
 
     await act(async () => {
       streamState.current.push({ kind: "done" });
