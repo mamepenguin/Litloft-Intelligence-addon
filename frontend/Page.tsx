@@ -64,6 +64,10 @@ type AskState =
       keywords: string | null;
       sources: Source[];
       answerBuffer: string;
+      // Progressive citations — populated by per-citation events as
+      // they arrive. The terminal `citations` (plural) event replaces
+      // this list with the server's canonical final ordering.
+      citations: Citation[];
     }
   | {
       kind: "answered";
@@ -191,6 +195,40 @@ function CitationCard({
   );
 }
 
+/**
+ * "Thinking" placeholder shown while the backend is still retrieving
+ * / warming up the LLM and no `answer_chunk` has arrived yet. Uses
+ * three bouncing dots (staggered `animate-pulse`) next to the i18n
+ * label. Stable `data-testid="ask-thinking"` is how unit tests pin
+ * the indicator without depending on the label copy.
+ */
+function ThinkingIndicator({ label }: { label: string }) {
+  return (
+    <span
+      data-testid="ask-thinking"
+      role="status"
+      aria-live="polite"
+      className="ml-0.5 inline-flex items-center gap-1 align-baseline text-xs text-text-muted"
+    >
+      <span className="inline-flex items-center gap-0.5">
+        <span
+          className="inline-block h-1 w-1 animate-pulse rounded-full bg-accent/70"
+          style={{ animationDelay: "0ms" }}
+        />
+        <span
+          className="inline-block h-1 w-1 animate-pulse rounded-full bg-accent/70"
+          style={{ animationDelay: "150ms" }}
+        />
+        <span
+          className="inline-block h-1 w-1 animate-pulse rounded-full bg-accent/70"
+          style={{ animationDelay: "300ms" }}
+        />
+      </span>
+      <span className="ml-1">{label}</span>
+    </span>
+  );
+}
+
 function SourceCard({ source }: { source: Source }) {
   return (
     <a
@@ -275,6 +313,7 @@ function IntelligenceAskPageInner() {
         keywords: null,
         sources: [],
         answerBuffer: "",
+        citations: [],
       });
 
       if (!drive) {
@@ -298,6 +337,10 @@ function IntelligenceAskPageInner() {
         let liveKeywords: string | null = null;
         let liveSources: Source[] = [];
         let liveAnswer = "";
+        // Progressive citations accumulated from per-event updates.
+        // Replaced wholesale by the terminal `citations` (plural) event
+        // so the server's final ordering wins.
+        let liveCitations: Citation[] = [];
         let finalCitations: Citation[] = [];
         let finalTookMs: number | null = null;
         let finalError: string | null = null;
@@ -313,6 +356,7 @@ function IntelligenceAskPageInner() {
                 keywords: liveKeywords,
                 sources: liveSources,
                 answerBuffer: liveAnswer,
+                citations: liveCitations,
               });
               break;
             case "sources":
@@ -322,6 +366,7 @@ function IntelligenceAskPageInner() {
                 keywords: liveKeywords,
                 sources: liveSources,
                 answerBuffer: liveAnswer,
+                citations: liveCitations,
               });
               break;
             case "answer_chunk":
@@ -337,19 +382,52 @@ function IntelligenceAskPageInner() {
               // network actually streamed the tokens progressively.
               // Forcing a synchronous flush per chunk restores the
               // character-by-character typewriter effect. The other
-              // event kinds (keywords/sources/citations) fire at most
-              // once each, so they keep the default batched behavior.
+              // event kinds (keywords/sources) fire at most once each,
+              // so they keep the default batched behavior.
               flushSync(() => {
                 setState({
                   kind: "streaming",
                   keywords: liveKeywords,
                   sources: liveSources,
                   answerBuffer: liveAnswer,
+                  citations: liveCitations,
+                });
+              });
+              break;
+            case "citation":
+              // Append — immutable spread to respect the repo's
+              // immutability rule. flushSync keeps the citation from
+              // being swallowed by a back-to-back answer_chunk batch:
+              // if the server interleaves a citation between two token
+              // chunks, the auto-batch would otherwise paint the chip
+              // and the next chunk in one render and the user never
+              // sees the progressive reveal.
+              liveCitations = [...liveCitations, event.citation];
+              flushSync(() => {
+                setState({
+                  kind: "streaming",
+                  keywords: liveKeywords,
+                  sources: liveSources,
+                  answerBuffer: liveAnswer,
+                  citations: liveCitations,
                 });
               });
               break;
             case "citations":
+              // Terminal list is canonical — replace whatever we built
+              // from per-citation events. Also push the replacement to
+              // the visible state so the DOM mirrors the final order
+              // before the `answered` transition (tests assert on the
+              // streaming-time replacement).
               finalCitations = event.citations;
+              liveCitations = event.citations;
+              setState({
+                kind: "streaming",
+                keywords: liveKeywords,
+                sources: liveSources,
+                answerBuffer: liveAnswer,
+                citations: liveCitations,
+              });
               break;
             case "done":
               if (event.error) finalError = event.error;
@@ -357,6 +435,13 @@ function IntelligenceAskPageInner() {
                 finalTookMs = event.took_ms;
               break;
           }
+        }
+
+        // If the stream ended without a terminal `citations` frame
+        // (older backends, or a test stub), fall through with whatever
+        // progressive citations we accumulated.
+        if (finalCitations.length === 0 && liveCitations.length > 0) {
+          finalCitations = liveCitations;
         }
 
         if (controller.signal.aborted) return;
@@ -585,7 +670,11 @@ function IntelligenceAskPageInner() {
             {state.kind === "streaming"
               ? renderAnswerWithCitations(
                   state.answerBuffer,
-                  [],
+                  // Use progressively-accumulated citations so `[N]`
+                  // chips become interactive the moment their citation
+                  // arrives. Unseen indices stay greyed-out via the
+                  // out-of-range branch in renderAnswerWithCitations.
+                  state.citations,
                   handleCitationClick,
                 )
               : renderAnswerWithCitations(
@@ -593,8 +682,16 @@ function IntelligenceAskPageInner() {
                   state.citations,
                   handleCitationClick,
                 )}
-            {state.kind === "streaming" && (
-              <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-accent align-baseline" />
+            {state.kind === "streaming" && state.answerBuffer === "" ? (
+              // "Thinking" indicator — shown while retrieval / LLM
+              // warm-up is happening and no answer tokens have been
+              // emitted yet. Stable `data-testid` keeps the unit test
+              // decoupled from the visual / i18n choice.
+              <ThinkingIndicator label={t("thinking")} />
+            ) : (
+              state.kind === "streaming" && (
+                <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-accent align-baseline" />
+              )
             )}
           </div>
           {state.kind === "answered" && state.tookMs != null && (
@@ -605,7 +702,8 @@ function IntelligenceAskPageInner() {
         </section>
       )}
 
-      {state.kind === "answered" && state.citations.length > 0 && (
+      {((state.kind === "streaming" && state.citations.length > 0) ||
+        (state.kind === "answered" && state.citations.length > 0)) && (
         <section>
           <h2 className="mb-2 text-sm font-semibold text-text-primary">
             {t("citationsTitle")}

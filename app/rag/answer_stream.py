@@ -49,6 +49,7 @@ The class is **not** thread-safe. Use one instance per stream.
 
 from __future__ import annotations
 
+import json
 import re
 
 
@@ -302,3 +303,361 @@ class AnswerStreamExtractor:
                 out.append(ch)
                 i += 1
         return i
+
+
+# ---------------------------------------------------------------------------
+# CitationStreamExtractor
+# ---------------------------------------------------------------------------
+
+
+# Upper bound on the buffered "searching for citations array" tail. A
+# non-conforming model that emits a huge JSON preamble must not be
+# able to pin memory; we trim to the last 32 chars (enough to hold
+# a partial ``"citations"`` key) once we cross the cap.
+_CITATION_SEARCH_CAP = 1024
+
+# Hard upper bound on a single buffered citation object. Stops a
+# broken model from growing the buffer without bound if it never
+# closes the object; we bail out by skipping to the next ``,`` or
+# ``]`` rather than crashing.
+_CITATION_OBJECT_CAP = 16384
+
+
+class CitationStreamExtractor:
+    """Stateful extractor that yields each citation object as a dict.
+
+    Designed to be fed the SAME raw LLM chunks as
+    ``AnswerStreamExtractor`` — the two classes do not need to
+    coordinate because this one runs its own small state machine:
+
+    1. ``waiting_for_answer_close``: swallow everything until the
+       answer string closes (handling ``\\"`` escape and the JSON
+       object's opening brace on the way). We track just enough
+       string-state to know when the unescaped closing quote of the
+       answer value arrives.
+    2. ``searching_key``: scan for ``"citations"`` + ``:`` + ``[``.
+       We also accept a preamble with whitespace / code-fence wrappers
+       so the extractor behaves the same way as
+       ``AnswerStreamExtractor``.
+    3. ``in_array``: skip whitespace and commas until an opening
+       ``{`` is found; transition to ``in_object``.
+    4. ``in_object``: buffer the object body, tracking nested brace
+       depth and string state so ``{``/``}`` inside a quoted value do
+       not confuse boundary detection. When depth returns to 0 we
+       call ``json.loads`` on the accumulated text and — on success —
+       return the resulting dict to the caller via ``feed``'s return
+       list.
+    5. ``done``: the closing ``]`` was seen (or the extractor
+       committed to "no citations to extract" due to prose / null /
+       missing key); further chunks are no-ops.
+
+    The class never raises on malformed input. Garbage objects are
+    skipped silently (logged at debug in the service layer via the
+    hallucination filter). Partial final objects at stream end are
+    dropped by ``finalize``.
+    """
+
+    __slots__ = (
+        "_state",
+        "_buffer",
+        "_escape_next",
+        "_in_string",
+        "_depth",
+        "_obj_buffer",
+    )
+
+    def __init__(self) -> None:
+        self._state = "waiting_for_answer_close"
+        # Shared search buffer (states 1+2). Rolled over when it
+        # grows past _CITATION_SEARCH_CAP so memory stays bounded.
+        self._buffer = ""
+        # String-aware flags for state 1 (skipping the answer value)
+        # and state 4 (object brace tracking that must not be fooled
+        # by ``{``/``}`` inside strings).
+        self._escape_next = False
+        self._in_string = False
+        # Brace depth for the object currently being accumulated.
+        self._depth = 0
+        # Accumulator for the in-progress citation object text.
+        self._obj_buffer = ""
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def feed(self, chunk: str) -> list[dict]:
+        """Process one upstream chunk and return completed citations.
+
+        The returned list may be empty (most of the time), contain one
+        dict (when the chunk closes a single object), or contain
+        several (e.g. when a single chunk holds the tail of the JSON
+        payload with multiple citations).
+
+        Implementation note: all states read from and write to
+        ``self._buffer``. The incoming chunk is appended once up
+        front, then each state drains as much as it can before
+        transitioning. This means a single large chunk holding the
+        whole JSON is processed in one call, while chunks that split
+        anywhere (mid-key, mid-object, mid-escape) naturally resume
+        on the next feed — the buffer is the only cross-call state.
+        """
+        if not chunk or self._state == "done":
+            return []
+        self._buffer = self._buffer + chunk
+        results: list[dict] = []
+
+        while self._state != "done":
+            before_state = self._state
+            before_len = len(self._buffer)
+            if self._state == "waiting_for_answer_close":
+                self._drain_answer_value()
+            elif self._state == "searching_key":
+                self._try_enter_array()
+            elif self._state == "in_array":
+                self._drain_array_until_object()
+            elif self._state == "in_object":
+                self._drain_object(results)
+            else:
+                break
+            # Break when the handler made no progress AND did not
+            # transition. Otherwise loop: a transition may unlock
+            # more buffer consumption in the next state.
+            if (
+                self._state == before_state
+                and len(self._buffer) == before_len
+            ):
+                break
+        return results
+
+    def finalize(self) -> list[dict]:
+        """Flush state; return any completed citations still buffered.
+
+        A partially-written final object is dropped silently — we
+        prefer "show nothing" over "show a malformed card".
+        """
+        # No extra work needed today; all completions are emitted as
+        # soon as their closing ``}`` arrives. The method exists for
+        # symmetry with AnswerStreamExtractor and so a future
+        # tolerant-parse mode can graft on here without changing the
+        # caller.
+        self._state = "done"
+        self._buffer = ""
+        self._obj_buffer = ""
+        return []
+
+    # ------------------------------------------------------------------
+    # State 1: waiting_for_answer_close
+    # ------------------------------------------------------------------
+
+    def _drain_answer_value(self) -> None:
+        """Advance past the answer string's closing quote if possible.
+
+        Consumes from ``self._buffer``. On success, transitions to
+        ``searching_key`` and leaves any post-quote tail in the
+        buffer. On stream exhaustion without finding the close, we
+        either wait (keeping the buffer trimmed) or commit to
+        ``done`` when the output is clearly prose.
+        """
+        if not self._in_string:
+            idx = AnswerStreamExtractor._find_answer_key(self._buffer)
+            if idx is None:
+                if len(self._buffer) > _CITATION_SEARCH_CAP:
+                    # Keep a small tail so a late-arriving key is
+                    # still discoverable when a chunk boundary splits
+                    # the literal.
+                    self._buffer = self._buffer[-64:]
+                # If we've clearly crossed the mode-decision
+                # threshold without finding ``{``, give up entirely
+                # — this is prose, no citations ever.
+                if (
+                    "{" not in self._buffer
+                    and len(self._buffer) >= _MODE_LOOKAHEAD
+                ):
+                    self._state = "done"
+                    self._buffer = ""
+                return
+            # idx points one past the opening ``"`` of the answer
+            # value. Discard everything up to it and commit to
+            # "inside the string".
+            self._buffer = self._buffer[idx:]
+            self._in_string = True
+            self._escape_next = False
+
+        # Scan self._buffer for the unescaped closing quote.
+        buf = self._buffer
+        i = 0
+        n = len(buf)
+        while i < n:
+            ch = buf[i]
+            if self._escape_next:
+                self._escape_next = False
+                i += 1
+                continue
+            if ch == "\\":
+                self._escape_next = True
+                i += 1
+                continue
+            if ch == '"':
+                self._in_string = False
+                self._state = "searching_key"
+                self._buffer = buf[i + 1 :]
+                return
+            i += 1
+        # Buffer exhausted inside the value. Drop everything — it's
+        # answer body we don't need to retain. ``_escape_next`` is
+        # preserved on the instance so the next chunk's first char
+        # is interpreted as the escape payload.
+        self._buffer = ""
+
+    # ------------------------------------------------------------------
+    # State 2: searching_key
+    # ------------------------------------------------------------------
+
+    def _try_enter_array(self) -> None:
+        """Look for ``"citations": [`` in ``self._buffer``.
+
+        Commits the extractor to one of three outcomes:
+
+        * ``[`` found → enter ``in_array`` and drop the consumed
+          prefix from the buffer.
+        * ``"citations"`` found followed by a non-array value
+          (``null``, ``false``, ``123``) → enter ``done`` (no
+          citations available).
+        * Not yet found → stay in ``searching_key`` and wait for
+          more data. The buffer is trimmed if it grows past the cap.
+        """
+        key_idx = self._buffer.find('"citations"')
+        if key_idx == -1:
+            if len(self._buffer) > _CITATION_SEARCH_CAP:
+                # Keep the tail so a late-arriving key is still
+                # discoverable when the boundary splits the literal.
+                self._buffer = self._buffer[-32:]
+            return
+
+        pos = key_idx + len('"citations"')
+        n = len(self._buffer)
+        while pos < n and self._buffer[pos] in _WS:
+            pos += 1
+        if pos >= n or self._buffer[pos] != ":":
+            return  # wait for ``:``
+        pos += 1
+        while pos < n and self._buffer[pos] in _WS:
+            pos += 1
+        if pos >= n:
+            return  # wait for value
+        ch = self._buffer[pos]
+        if ch == "[":
+            # Happy path: entering the array.
+            self._buffer = self._buffer[pos + 1 :]
+            self._state = "in_array"
+            return
+        # Anything else after the colon (null, false, 0, etc.) means
+        # there are no citations to extract. We commit to done and
+        # stop buffering.
+        self._state = "done"
+        self._buffer = ""
+
+    # ------------------------------------------------------------------
+    # State 3: in_array — scan for next ``{`` or ``]``
+    # ------------------------------------------------------------------
+
+    def _drain_array_until_object(self) -> None:
+        """Skip whitespace and commas in ``self._buffer`` until ``{`` or ``]``.
+
+        On ``{`` we switch to ``in_object`` with a depth of 1 and
+        seed ``_obj_buffer`` with the opening brace. On ``]`` the
+        array is closed and we move to ``done``.
+        """
+        buf = self._buffer
+        i = 0
+        n = len(buf)
+        while i < n:
+            ch = buf[i]
+            if ch == "{":
+                self._obj_buffer = "{"
+                self._depth = 1
+                self._in_string = False
+                self._escape_next = False
+                self._state = "in_object"
+                self._buffer = buf[i + 1 :]
+                return
+            if ch == "]":
+                self._state = "done"
+                self._buffer = ""
+                return
+            # Whitespace, commas, anything else — skip defensively.
+            i += 1
+        # All whitespace/commas — wait for more.
+        self._buffer = ""
+
+    # ------------------------------------------------------------------
+    # State 4: in_object — accumulate until matching ``}``
+    # ------------------------------------------------------------------
+
+    def _drain_object(self, results: list[dict]) -> None:
+        """Accumulate ``self._buffer`` bytes into the object under parse.
+
+        Depth tracking ignores braces that appear inside string
+        literals. On depth returning to 0 we try ``json.loads``; a
+        success appends the dict to ``results`` and we transition
+        back to ``in_array`` with the post-close tail returned to
+        ``self._buffer``. A parse failure silently discards the
+        object.
+        """
+        buf = self._buffer
+        i = 0
+        n = len(buf)
+        while i < n:
+            ch = buf[i]
+            self._obj_buffer = self._obj_buffer + ch
+            i += 1
+
+            # Safety valve: fires on every char, including those inside
+            # string values. A model that opens a 1-megabyte quote and
+            # never closes it must not grow the buffer indefinitely.
+            if len(self._obj_buffer) > _CITATION_OBJECT_CAP:
+                self._obj_buffer = ""
+                self._depth = 0
+                self._in_string = False
+                self._escape_next = False
+                self._state = "in_array"
+                self._buffer = buf[i:]
+                return
+
+            if self._escape_next:
+                self._escape_next = False
+                continue
+            if self._in_string:
+                if ch == "\\":
+                    self._escape_next = True
+                elif ch == '"':
+                    self._in_string = False
+                continue
+            # Outside strings.
+            if ch == '"':
+                self._in_string = True
+                continue
+            if ch == "{":
+                self._depth += 1
+                continue
+            if ch == "}":
+                self._depth -= 1
+                if self._depth == 0:
+                    self._flush_object(results)
+                    self._state = "in_array"
+                    self._buffer = buf[i:]
+                    return
+                continue
+        # Buffer exhausted inside the object — wait for more.
+        self._buffer = ""
+
+    def _flush_object(self, results: list[dict]) -> None:
+        """Parse the accumulated buffer and push to ``results`` on success."""
+        buf = self._obj_buffer
+        self._obj_buffer = ""
+        try:
+            obj = json.loads(buf)
+        except (json.JSONDecodeError, ValueError):
+            return
+        if isinstance(obj, dict):
+            results.append(obj)

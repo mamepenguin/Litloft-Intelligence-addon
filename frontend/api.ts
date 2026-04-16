@@ -584,6 +584,10 @@ export type AskStreamEvent =
   | { kind: "keywords"; keywords: string }
   | { kind: "sources"; sources: Source[] }
   | { kind: "answer_chunk"; delta: string }
+  // Single-citation event — emitted 0..N times between the first
+  // `answer_chunk` and the terminal `citations`. `index` is 1-based so
+  // it matches the inline `[N]` markers in the answer text.
+  | { kind: "citation"; citation: Citation; index: number }
   | { kind: "citations"; citations: Citation[] }
   | {
       kind: "done";
@@ -601,7 +605,10 @@ export type AskStreamEvent =
  * (missing event or unparseable JSON payload) so the caller can drop
  * it rather than crash the stream.
  */
-function parseSseFrame(frame: string): AskStreamEvent | null {
+// Exported so the addon's unit tests can assert per-event parsing
+// without spinning up the full `askQuestionStream` generator. The
+// production consumers only need `askQuestionStream`.
+export function parseSseFrame(frame: string): AskStreamEvent | null {
   let eventName = "";
   let dataLine = "";
   const lines = frame.split(/\r?\n/);
@@ -634,6 +641,29 @@ function parseSseFrame(frame: string): AskStreamEvent | null {
       };
     case "answer_chunk":
       return { kind: "answer_chunk", delta: String(data.delta ?? "") };
+    case "citation": {
+      // Single citation frame — { citation: <Citation>, index: <int> }.
+      // Validate the shape: we are about to interpolate these strings
+      // into JSX text nodes and a file-detail href, so keep the cast
+      // gated on the fields we actually render.
+      const citation = data.citation;
+      const index = typeof data.index === "number" ? data.index : NaN;
+      if (
+        !citation ||
+        typeof citation !== "object" ||
+        Array.isArray(citation) ||
+        typeof (citation as Record<string, unknown>).file_id !== "string" ||
+        typeof (citation as Record<string, unknown>).filename !== "string" ||
+        !Number.isFinite(index)
+      ) {
+        return null;
+      }
+      return {
+        kind: "citation",
+        citation: citation as Citation,
+        index,
+      };
+    }
     case "citations":
       return {
         kind: "citations",

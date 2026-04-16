@@ -34,6 +34,7 @@
   "askSearch": {
     "button": "「{query}」について AI に質問する",
     "loading": "回答を生成中...",
+    "thinking": "回答を生成中…",
     "loadingHint": "(数秒かかることがあります)",
     "answerTitle": "AI 回答",
     "citationsTitle": "引用",

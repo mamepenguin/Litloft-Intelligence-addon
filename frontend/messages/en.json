@@ -34,6 +34,7 @@
   "askSearch": {
     "button": "Ask AI about “{query}”",
     "loading": "Generating answer...",
+    "thinking": "Thinking…",
     "loadingHint": "(may take a few seconds)",
     "answerTitle": "AI Answer",
     "citationsTitle": "Citations",

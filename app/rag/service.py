@@ -31,9 +31,9 @@ from typing import Any, Literal
 
 from app.config import settings
 from app.dependencies import get_llm_client
-from app.rag.answer_stream import AnswerStreamExtractor
+from app.rag.answer_stream import AnswerStreamExtractor, CitationStreamExtractor
 from app.rag.context import assemble_contexts
-from app.rag.parser import Citation, parse_answer
+from app.rag.parser import Citation, _parse_citation, parse_answer
 from app.rag.prompt import build_system_prompt, build_user_prompt
 from app.rag.query_transform import transform_query
 from app.rag.retriever import RetrievedFile, retrieve_candidates, retrieve_with_keywords
@@ -428,6 +428,7 @@ async def answer_question(
 AnswerEventKind = Literal[
     "keywords",
     "answer_chunk",
+    "citation",
     "citations",
     "sources",
     "done",
@@ -447,9 +448,18 @@ class AnswerEvent:
     * ``sources`` → ``{"sources": [...]}`` — emitted once, after the
       retrieval step so the UI can show "I looked at these files"
       even before the answer finishes generating.
+    * ``citation`` → ``{"citation": dict, "index": int}`` — emitted
+      zero or more times, once per citation as its closing ``}``
+      arrives from the LLM stream. The index is 1-based and reflects
+      the order the citations appeared in the model output. This is
+      progressive: the UI should render a card per event as they
+      arrive. The dict shape matches a terminal-list element so
+      existing card renderers can be reused.
     * ``citations`` → ``{"citations": [...]}`` — emitted once, after
       the LLM stream ends and the answer JSON has been parsed and
-      anti-hallucination-filtered.
+      anti-hallucination-filtered. Kept for backwards compatibility:
+      clients that ignore the progressive ``citation`` events still
+      get the full validated list here.
     * ``done`` → ``{}`` — terminal marker. The router closes the
       response after sending this.
 
@@ -487,14 +497,20 @@ async def stream_answer(
 
     Event ordering (always):
 
-    ``keywords`` → ``sources`` → 0..N ``answer_chunk`` → ``citations`` → ``done``
+    ``keywords`` → ``sources`` → 0..N ``answer_chunk`` →
+    0..N ``citation`` → terminal ``citations`` → ``done``
+
+    The progressive ``citation`` events are emitted as each citation's
+    closing ``}`` arrives from the LLM; the terminal ``citations``
+    event always carries the full validated list for older clients.
 
     On retrieval-empty the pipeline short-circuits: ``keywords`` +
     empty ``sources`` + empty ``citations`` + ``done`` with no
-    ``answer_chunk`` events. On LLM failure the pipeline emits as
-    many ``answer_chunk`` events as it managed to receive, then tries
-    to parse whatever it buffered; an unparseable buffer produces an
-    empty ``citations`` payload (consistent with ``answer_question``).
+    ``answer_chunk`` or ``citation`` events. On LLM failure the
+    pipeline emits as many ``answer_chunk`` events as it managed to
+    receive, then tries to parse whatever it buffered; an unparseable
+    buffer produces an empty ``citations`` payload (consistent with
+    ``answer_question``).
     """
     rag_config = settings.rag
     effective_top_k = top_k if top_k is not None else rag_config.top_k
@@ -546,11 +562,24 @@ async def stream_answer(
     buffered: list[str] = []
     # The LLM is asked for a JSON object `{"answer": "...", "citations": [...]}`,
     # so forwarding raw provider chunks would make the UI display JSON
-    # syntax instead of the answer. The extractor parses the stream on
-    # the fly and yields only the decoded characters of the ``answer``
-    # field value, while ``buffered`` keeps the full raw payload for
-    # post-stream citations parsing.
+    # syntax instead of the answer. ``AnswerStreamExtractor`` parses
+    # the stream on the fly and yields only the decoded characters of
+    # the ``answer`` field value, while ``buffered`` keeps the full
+    # raw payload for the post-stream terminal citations parse.
+    #
+    # ``CitationStreamExtractor`` is fed the same raw chunks and
+    # returns completed citation dicts one at a time as each closing
+    # ``}`` arrives. This lets us yield progressive ``citation``
+    # events to the UI instead of making it wait until the whole
+    # JSON closes. Each raw citation still runs through the
+    # ``_parse_citation`` hallucination filter before it's emitted —
+    # the progressive path is NOT an escape hatch around the
+    # allowed-file-id gate.
     extractor = AnswerStreamExtractor()
+    citation_extractor = CitationStreamExtractor()
+    allowed = frozenset(c.file_id for c in candidates)
+    emitted_keys: set[tuple[str, str]] = set()
+    progressive_index = 0
     # Explicit aiter/aclose lifecycle so a client disconnect mid-stream
     # deterministically tears down the upstream LLM connection instead
     # of waiting on async-generator GC. Without this, a cancelled SSE
@@ -569,12 +598,39 @@ async def stream_answer(
                 yield AnswerEvent(
                     kind="answer_chunk", data={"delta": extracted}
                 )
+            for raw in citation_extractor.feed(delta):
+                event = _build_progressive_citation_event(
+                    raw,
+                    allowed,
+                    candidates,
+                    contexts,
+                    emitted_keys,
+                    progressive_index,
+                )
+                if event is not None:
+                    progressive_index += 1
+                    yield event
         # Flush any content still held back by the extractor — happens
         # when the LLM truncated the answer string or emitted short
         # prose that never crossed the mode-decision threshold.
         tail = extractor.finalize()
         if tail:
             yield AnswerEvent(kind="answer_chunk", data={"delta": tail})
+        # CitationStreamExtractor.finalize is a no-op for completed
+        # streams but may return late objects in future tolerant-parse
+        # modes. Apply the same hallucination filter + dedup gate.
+        for raw in citation_extractor.finalize():
+            event = _build_progressive_citation_event(
+                raw,
+                allowed,
+                candidates,
+                contexts,
+                emitted_keys,
+                progressive_index,
+            )
+            if event is not None:
+                progressive_index += 1
+                yield event
     finally:
         aclose = getattr(llm_stream, "aclose", None)
         if aclose is not None:
@@ -605,6 +661,41 @@ async def stream_answer(
             "retrieved_count": len(candidates),
             "took_ms": int((time.monotonic() - start) * 1000),
         }
+    )
+
+
+def _build_progressive_citation_event(
+    raw: dict,
+    allowed_file_ids: frozenset[str],
+    candidates: list[RetrievedFile],
+    contexts: list,
+    emitted_keys: set[tuple[str, str]],
+    current_index: int,
+) -> "AnswerEvent | None":
+    """Validate a raw streamed citation dict and wrap it in an event.
+
+    Runs the same hallucination filter and ``(file_id, location)``
+    dedup gate as the non-streaming parser so the progressive path
+    is not an escape hatch around any security-critical check. Returns
+    None when the citation fails validation or was already emitted.
+
+    ``current_index`` is the index this citation *would* receive
+    (1-based, so callers pass the current running count and increment
+    on a non-None return). Keeping the counter outside this helper
+    means filtered/duplicate citations don't create gaps in the
+    published numbering.
+    """
+    parsed = _parse_citation(raw, allowed_file_ids)
+    if parsed is None:
+        return None
+    key = (parsed.file_id, parsed.location)
+    if key in emitted_keys:
+        return None
+    emitted_keys.add(key)
+    cit_dict = _to_citation_dict(parsed, candidates, contexts=contexts)
+    return AnswerEvent(
+        kind="citation",
+        data={"citation": cit_dict, "index": current_index + 1},
     )
 
 
