@@ -545,6 +545,183 @@ class TestAssembleContexts:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Transcript: 3-method context (window + keyword + vector)
+# ---------------------------------------------------------------------------
+
+
+class TestTranscriptMultiMethod:
+    """Tests for the enhanced transcript context with keyword-OR and vector
+    chunk retrieval in addition to the time-window approach."""
+
+    def _stub_all(self, monkeypatch, *, window_chunks=None, kw_chunks=None, vec_chunks=None):
+        """Set up monkeypatches for all three transcript fetch helpers."""
+        monkeypatch.setattr(
+            "app.rag.context._fetch_transcript_chunks_around",
+            MagicMock(return_value=window_chunks or []),
+        )
+        monkeypatch.setattr(
+            "app.rag.context._fetch_transcript_chunks_by_keyword_or",
+            MagicMock(return_value=kw_chunks or []),
+        )
+        monkeypatch.setattr(
+            "app.rag.context._fetch_transcript_chunks_by_vector",
+            MagicMock(return_value=vec_chunks or []),
+        )
+        monkeypatch.setattr(
+            "app.rag.context.filter_keywords",
+            MagicMock(side_effect=lambda k: k),
+        )
+
+    def test_keyword_chunks_added_when_no_overlap(self, monkeypatch):
+        """Keyword-OR chunks at a distant timestamp are included."""
+        self._stub_all(
+            monkeypatch,
+            window_chunks=[("window text", 10.0, 20.0)],
+            kw_chunks=[("keyword match far away", 300.0, 310.0)],
+        )
+        candidate = _retrieved_video()
+        cfg = RagConfig(transcript_vector_top_n=4)
+
+        ctx = build_file_context(candidate, cfg, keywords="keyword")
+
+        sources = [s.source for s in ctx.snippets]
+        assert "transcript" in sources
+        assert "transcript_keyword" in sources
+        assert any("keyword match" in s.text for s in ctx.snippets)
+
+    def test_vector_chunks_added_when_no_overlap(self, monkeypatch):
+        """Vector-similar chunks at a distant timestamp are included."""
+        fake_vec = MagicMock()
+        self._stub_all(
+            monkeypatch,
+            window_chunks=[("window text", 10.0, 20.0)],
+            vec_chunks=[("vector match far away", 500.0, 510.0)],
+        )
+        candidate = _retrieved_video()
+        cfg = RagConfig(transcript_vector_top_n=4)
+
+        ctx = build_file_context(candidate, cfg, query_vector=fake_vec)
+
+        sources = [s.source for s in ctx.snippets]
+        assert "transcript" in sources
+        assert "transcript_vector" in sources
+        assert any("vector match" in s.text for s in ctx.snippets)
+
+    def test_overlapping_keyword_chunk_is_deduplicated(self, monkeypatch):
+        """Keyword chunk whose timestamp overlaps the window is skipped."""
+        self._stub_all(
+            monkeypatch,
+            window_chunks=[("window text", 10.0, 20.0)],
+            # This chunk is inside the ±60s window (45-60 segment → -15 to 120)
+            kw_chunks=[("overlapping kw", 50.0, 55.0)],
+        )
+        candidate = _retrieved_video()  # segment at 45-60
+        cfg = RagConfig(transcript_vector_top_n=4)
+
+        ctx = build_file_context(candidate, cfg, keywords="test")
+
+        # The keyword chunk should be skipped due to overlap.
+        assert not any(s.source == "transcript_keyword" for s in ctx.snippets)
+
+    def test_overlapping_vector_chunk_is_deduplicated(self, monkeypatch):
+        """Vector chunk whose timestamp overlaps the window is skipped."""
+        fake_vec = MagicMock()
+        self._stub_all(
+            monkeypatch,
+            window_chunks=[("window text", 10.0, 20.0)],
+            vec_chunks=[("overlapping vec", 50.0, 55.0)],
+        )
+        candidate = _retrieved_video()  # segment at 45-60
+        cfg = RagConfig(transcript_vector_top_n=4)
+
+        ctx = build_file_context(candidate, cfg, query_vector=fake_vec)
+
+        assert not any(s.source == "transcript_vector" for s in ctx.snippets)
+
+    def test_all_three_methods_combined(self, monkeypatch):
+        """All three methods produce snippets when non-overlapping."""
+        fake_vec = MagicMock()
+        self._stub_all(
+            monkeypatch,
+            window_chunks=[("window text", 10.0, 20.0)],
+            kw_chunks=[("keyword hit", 200.0, 210.0)],
+            vec_chunks=[("vector hit", 400.0, 410.0)],
+        )
+        candidate = _retrieved_video()
+        cfg = RagConfig(transcript_vector_top_n=4)
+
+        ctx = build_file_context(
+            candidate, cfg, query_vector=fake_vec, keywords="test"
+        )
+
+        sources = {s.source for s in ctx.snippets}
+        assert sources == {"transcript", "transcript_keyword", "transcript_vector"}
+
+    def test_disabled_when_top_n_is_zero(self, monkeypatch):
+        """transcript_vector_top_n=0 disables extra passes."""
+        kw_spy = MagicMock(return_value=[("kw", 300.0, 310.0)])
+        vec_spy = MagicMock(return_value=[("vec", 500.0, 510.0)])
+        monkeypatch.setattr(
+            "app.rag.context._fetch_transcript_chunks_around",
+            MagicMock(return_value=[("window", 10.0, 20.0)]),
+        )
+        monkeypatch.setattr(
+            "app.rag.context._fetch_transcript_chunks_by_keyword_or", kw_spy,
+        )
+        monkeypatch.setattr(
+            "app.rag.context._fetch_transcript_chunks_by_vector", vec_spy,
+        )
+        monkeypatch.setattr(
+            "app.rag.context.filter_keywords",
+            MagicMock(side_effect=lambda k: k),
+        )
+
+        candidate = _retrieved_video()
+        cfg = RagConfig(transcript_vector_top_n=0)
+
+        ctx = build_file_context(
+            candidate, cfg, query_vector=MagicMock(), keywords="test"
+        )
+
+        kw_spy.assert_not_called()
+        vec_spy.assert_not_called()
+        assert all(s.source == "transcript" for s in ctx.snippets)
+
+    def test_keyword_dedup_prevents_vector_double_add(self, monkeypatch):
+        """A chunk already added by keyword is not re-added by vector."""
+        fake_vec = MagicMock()
+        self._stub_all(
+            monkeypatch,
+            window_chunks=[("window text", 10.0, 20.0)],
+            kw_chunks=[("shared chunk", 300.0, 310.0)],
+            vec_chunks=[("shared chunk", 300.0, 310.0)],
+        )
+        candidate = _retrieved_video()
+        cfg = RagConfig(transcript_vector_top_n=4)
+
+        ctx = build_file_context(
+            candidate, cfg, query_vector=fake_vec, keywords="test"
+        )
+
+        # The chunk at 300-310 should appear exactly once.
+        extra = [
+            s for s in ctx.snippets
+            if s.source in ("transcript_keyword", "transcript_vector")
+        ]
+        assert len(extra) == 1
+
+    def test_window_seconds_default_is_60(self):
+        """Default transcript_window_seconds should be 60."""
+        cfg = RagConfig()
+        assert cfg.transcript_window_seconds == 60.0
+
+    def test_transcript_vector_top_n_default_is_4(self):
+        """Default transcript_vector_top_n should be 4."""
+        cfg = RagConfig()
+        assert cfg.transcript_vector_top_n == 4
+
+
 class TestContextSnippetDataclass:
     """ContextSnippet fields and immutability."""
 

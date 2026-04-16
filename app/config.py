@@ -152,7 +152,7 @@ class RagConfig:
     max_tokens: int = 1024
     # How many characters around a timestamped transcript match
     # to include as "context window" (only when segments have times).
-    transcript_window_seconds: float = 30.0
+    transcript_window_seconds: float = 60.0
     # For document files: number of top vector-similar chunks to pull
     # into the LLM context, in addition to keyword-match chunks. This
     # rescues queries whose natural-language vocabulary doesn't overlap
@@ -161,6 +161,12 @@ class RagConfig:
     # selection can still miss the actual answer passage. 0 disables
     # the vector pass and restores keyword-only behaviour.
     document_vector_top_n: int = 6
+    # For transcript files: number of top vector-similar / keyword-OR
+    # chunks to pull in addition to the time-window segments. Smaller
+    # than document_vector_top_n because Whisper chunks are short
+    # (2-3 sentences) so more fit under the per-file budget.
+    # 0 disables the additional passes.
+    transcript_vector_top_n: int = 4
 
 
 @dataclass(frozen=True)

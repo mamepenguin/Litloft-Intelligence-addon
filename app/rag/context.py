@@ -140,6 +140,7 @@ def _fetch_document_chunks_around(
 
 
 _TEXT_EMBEDDING_ID_CHUNK_RE = re.compile(r"^txt_[^_]+_(\d+)_")
+_WHISPER_EMBEDDING_ID_CHUNK_RE = re.compile(r"^wh_[^_]+_(\d+)_")
 
 
 def _fetch_document_chunks_by_vector(
@@ -289,6 +290,174 @@ def _fetch_document_chunks_by_keyword_or(
     return indices
 
 
+def _fetch_transcript_chunks_by_vector(
+    file_id: str,
+    query_vector: np.ndarray,
+    top_n: int,
+) -> list[tuple[str, float, float]]:
+    """Return top-N transcript chunks by vector similarity.
+
+    Queries ``vec_text`` for the ``top_n`` nearest ``whisper``
+    embeddings belonging to ``file_id``, extracts the chunk index
+    from each embedding id (format ``wh_{file_id}_{idx}_{hash}``),
+    then fetches the actual text and timestamps from
+    ``TranscriptChunk``.
+
+    Returns:
+        List of ``(text, timestamp_start, timestamp_end)`` tuples
+        in vector-similarity order (nearest first).
+    """
+    if top_n <= 0:
+        return []
+
+    try:
+        vec_bytes = np.asarray(query_vector, dtype=np.float32).tobytes()
+    except (TypeError, ValueError) as e:
+        logger.warning("Invalid query vector for %s: %s", file_id, e)
+        return []
+
+    knn_k = min(200, max(top_n * 20, 40))
+
+    try:
+        with get_search_db() as session:
+            rows = session.execute(
+                sql_text(
+                    "SELECT v.embedding_id, v.distance "
+                    "FROM vec_text v "
+                    "JOIN embeddings e "
+                    "ON CAST(e.id AS TEXT) = v.embedding_id "
+                    "WHERE v.vector MATCH :vec AND k = :k "
+                    "AND e.file_id = :fid "
+                    "AND e.embedding_type = 'whisper' "
+                    "ORDER BY v.distance"
+                ),
+                {"vec": vec_bytes, "k": knn_k, "fid": file_id},
+            ).fetchall()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "Transcript vector chunk lookup failed for %s: %s",
+            file_id, e,
+        )
+        return []
+
+    chunk_indices: list[int] = []
+    seen: set[int] = set()
+    for emb_id, _distance in rows:
+        match = _WHISPER_EMBEDDING_ID_CHUNK_RE.match(emb_id or "")
+        if not match:
+            continue
+        idx = int(match.group(1))
+        if idx in seen:
+            continue
+        seen = {*seen, idx}
+        chunk_indices = [*chunk_indices, idx]
+        if len(chunk_indices) >= top_n:
+            break
+
+    if not chunk_indices:
+        return []
+
+    with get_search_db() as session:
+        chunks = (
+            session.query(TranscriptChunk)
+            .filter(
+                TranscriptChunk.file_id == file_id,
+                TranscriptChunk.chunk_index.in_(chunk_indices),
+            )
+            .all()
+        )
+        by_idx = {c.chunk_index: c for c in chunks}
+
+    return [
+        (by_idx[idx].text, by_idx[idx].timestamp_start, by_idx[idx].timestamp_end)
+        for idx in chunk_indices
+        if idx in by_idx and by_idx[idx].text
+    ]
+
+
+def _fetch_transcript_chunks_by_keyword_or(
+    file_id: str,
+    keywords: str,
+    top_n: int,
+) -> list[tuple[str, float, float]]:
+    """Return transcript chunks that literally contain any keyword.
+
+    FTS5 OR search on ``fts_transcripts`` within the target file,
+    then fetches timestamps from ``TranscriptChunk``.
+
+    Returns:
+        List of ``(text, timestamp_start, timestamp_end)`` tuples
+        in FTS rank order.
+    """
+    if top_n <= 0:
+        return []
+
+    terms = [t.strip() for t in (keywords or "").split() if t.strip()]
+    if not terms:
+        return []
+
+    quoted = [
+        f'"{t.replace(chr(34), "")}"' for t in terms if t.replace(chr(34), "")
+    ]
+    if not quoted:
+        return []
+    fts_query = " OR ".join(quoted)
+
+    try:
+        with get_search_db() as session:
+            rows = session.execute(
+                sql_text(
+                    "SELECT chunk_index "
+                    "FROM fts_transcripts "
+                    "WHERE fts_transcripts MATCH :q "
+                    "AND file_id = :fid "
+                    "ORDER BY rank "
+                    "LIMIT :lim"
+                ),
+                {"q": fts_query, "fid": file_id, "lim": top_n * 3},
+            ).fetchall()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "Transcript keyword chunk lookup failed for %s: %s",
+            file_id, e,
+        )
+        return []
+
+    chunk_indices: list[int] = []
+    seen: set[int] = set()
+    for row in rows:
+        try:
+            idx = int(row[0])
+        except (TypeError, ValueError):
+            continue
+        if idx in seen:
+            continue
+        seen = {*seen, idx}
+        chunk_indices = [*chunk_indices, idx]
+        if len(chunk_indices) >= top_n:
+            break
+
+    if not chunk_indices:
+        return []
+
+    with get_search_db() as session:
+        chunks = (
+            session.query(TranscriptChunk)
+            .filter(
+                TranscriptChunk.file_id == file_id,
+                TranscriptChunk.chunk_index.in_(chunk_indices),
+            )
+            .all()
+        )
+        by_idx = {c.chunk_index: c for c in chunks}
+
+    return [
+        (by_idx[idx].text, by_idx[idx].timestamp_start, by_idx[idx].timestamp_end)
+        for idx in chunk_indices
+        if idx in by_idx and by_idx[idx].text
+    ]
+
+
 def _fetch_blip_caption(file_id: str) -> str | None:
     """Fetch the BLIP caption for an image file, if any.
 
@@ -395,12 +564,46 @@ def _cap_snippets(
     return (kept, running)
 
 
+def _overlaps_any(
+    start: float,
+    end: float,
+    covered: list[tuple[float, float]],
+) -> bool:
+    """Check if a time range overlaps any of the already-covered ranges."""
+    return any(s <= end and start <= e for s, e in covered)
+
+
 def _collect_transcript_snippets(
     candidate: RetrievedFile,
     rag_config: RagConfig,
+    query_vector: np.ndarray | None = None,
+    keywords: str | None = None,
 ) -> list[ContextSnippet]:
-    """Build transcript snippets for a video / audio file."""
+    """Build transcript snippets for a video / audio file.
+
+    Combines three chunk-selection strategies (mirroring
+    ``_collect_document_snippets``):
+
+    1. **Time-window segments** (historical path): each search-matched
+       segment expanded by ``transcript_window_seconds`` on each side.
+    2. **Keyword-OR chunks**: literal keyword matches via
+       ``fts_transcripts``, without window expansion.
+    3. **Vector-similar chunks**: nearest embeddings in ``vec_text``
+       (``embedding_type='whisper'``), without window expansion.
+
+    Strategies 2 and 3 rescue the case where a relevant passage sits
+    far from any search-matched timestamp — e.g. the topic is
+    introduced at the start but detailed in the middle of the video.
+
+    Deduplication is timestamp-based: a chunk from strategy 2 or 3 is
+    skipped if its time range overlaps a window already emitted by
+    strategy 1.
+    """
     snippets: list[ContextSnippet] = []
+    # Track covered time ranges for deduplication.
+    covered_ranges: list[tuple[float, float]] = []
+
+    # (1) Existing: time-window around each matched segment.
     for segment in candidate.segments:
         if segment.time_range is None:
             continue
@@ -425,6 +628,53 @@ def _collect_transcript_snippets(
                 location=location,
             ),
         ]
+        # Record the actual covered range (with window expansion).
+        window = rag_config.transcript_window_seconds
+        covered_ranges = [
+            *covered_ranges,
+            (max(0.0, start - window), end + window),
+        ]
+
+    # Helper to add non-overlapping chunks from keyword / vector passes.
+    def _add_extra_chunks(
+        extra: list[tuple[str, float, float]],
+        source_tag: str,
+    ) -> None:
+        nonlocal snippets, covered_ranges
+        for text, ts_start, ts_end in extra:
+            if not text:
+                continue
+            if _overlaps_any(ts_start, ts_end, covered_ranges):
+                continue
+            snippets = [
+                *snippets,
+                ContextSnippet(
+                    source=source_tag,
+                    text=text,
+                    location=_format_timestamp(ts_start),
+                ),
+            ]
+            covered_ranges = [*covered_ranges, (ts_start, ts_end)]
+
+    top_n = rag_config.transcript_vector_top_n
+
+    # (2) Keyword-OR chunks (literal anchor words, surfaces terse
+    # passages that vector similarity would rank low).
+    if keywords and top_n > 0:
+        cleaned = filter_keywords(keywords)
+        if cleaned:
+            kw_chunks = _fetch_transcript_chunks_by_keyword_or(
+                candidate.file_id, cleaned, top_n,
+            )
+            _add_extra_chunks(kw_chunks, "transcript_keyword")
+
+    # (3) Vector-similar chunks (vocabulary-mismatch rescue).
+    if query_vector is not None and top_n > 0:
+        vec_chunks = _fetch_transcript_chunks_by_vector(
+            candidate.file_id, query_vector, top_n,
+        )
+        _add_extra_chunks(vec_chunks, "transcript_vector")
+
     return snippets
 
 
@@ -580,7 +830,12 @@ def build_file_context(
     is_hvlink = candidate.mime_type == HVLINK_MIME
 
     if file_type in ("video", "audio") or is_hvlink:
-        snippets = _collect_transcript_snippets(candidate, rag_config)
+        snippets = _collect_transcript_snippets(
+            candidate,
+            rag_config,
+            query_vector=query_vector,
+            keywords=keywords,
+        )
     elif file_type in ("document", "text"):
         snippets = _collect_document_snippets(
             candidate,
@@ -643,12 +898,19 @@ def assemble_contexts(
 
     # Embed the query once (rather than per-file) when it's worth
     # doing — i.e., the vector pass is enabled and at least one
-    # candidate is a document. Transcripts / images / audio don't use
-    # this vector so we don't pay the embedding cost for them.
+    # candidate is a document or transcript file.
     query_vector: np.ndarray | None = None
-    if query and rag_config.document_vector_top_n > 0 and any(
-        c.file_type in ("document", "text") for c in candidates
-    ):
+    _needs_vector = (
+        rag_config.document_vector_top_n > 0
+        and any(c.file_type in ("document", "text") for c in candidates)
+    ) or (
+        rag_config.transcript_vector_top_n > 0
+        and any(
+            c.file_type in ("video", "audio") or c.mime_type == HVLINK_MIME
+            for c in candidates
+        )
+    )
+    if query and _needs_vector:
         try:
             query_vector = embed_query(query)
         except Exception as e:  # noqa: BLE001 - fail soft, don't break RAG
