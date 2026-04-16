@@ -8,6 +8,7 @@ Only one Whisper task runs at a time (controlled by the indexer's semaphore).
 
 import asyncio
 import logging
+import re
 import threading
 import time
 import uuid
@@ -397,6 +398,20 @@ def _build_chunks_from_words(
     return chunks
 
 
+_RE_CJK_SPACE = re.compile(
+    r"(?<=[ぁ-んァ-ヶー一-龯々]) (?=[ぁ-んァ-ヶー一-龯々])"
+)
+
+
+def _strip_cjk_spaces(text: str) -> str:
+    """Remove half-width spaces between CJK characters.
+
+    Whisper sometimes inserts spurious spaces inside Japanese tokens
+    (e.g. "お 香" → "お香"). Spaces between CJK and Latin are kept.
+    """
+    return _RE_CJK_SPACE.sub("", text)
+
+
 def _join_words(tokens: list[str], language: str) -> str:
     """Join tokens with a space when the language expects inter-word spaces.
 
@@ -408,7 +423,7 @@ def _join_words(tokens: list[str], language: str) -> str:
         return ""
     lang = (language or "").lower()
     if lang.startswith(("ja", "zh", "ko", "th")):
-        return "".join(tokens)
+        return _strip_cjk_spaces("".join(tokens))
     return " ".join(tokens)
 
 
@@ -441,7 +456,7 @@ def _merge_segments(
             chunks = [
                 *chunks,
                 {
-                    "text": " ".join(current_texts),
+                    "text": _join_words(current_texts, current_language),
                     "start": current_start,
                     "end": current_end,
                     "language": current_language,
@@ -459,7 +474,7 @@ def _merge_segments(
             chunks = [
                 *chunks,
                 {
-                    "text": " ".join(current_texts),
+                    "text": _join_words(current_texts, current_language),
                     "start": current_start,
                     "end": current_end,
                     "language": current_language,
@@ -473,7 +488,7 @@ def _merge_segments(
         chunks = [
             *chunks,
             {
-                "text": " ".join(current_texts),
+                "text": _join_words(current_texts, current_language),
                 "start": current_start,
                 "end": current_end,
                 "language": current_language,
