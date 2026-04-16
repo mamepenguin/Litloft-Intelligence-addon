@@ -609,35 +609,46 @@ class TestTranscriptMultiMethod:
         assert any("vector match" in s.text for s in ctx.snippets)
 
     def test_overlapping_keyword_chunk_is_deduplicated(self, monkeypatch):
-        """Keyword chunk whose timestamp overlaps the window is skipped."""
+        """Keyword chunk whose timestamp overlaps a prior keyword chunk
+        is skipped (keyword chunks are added first, before window)."""
         self._stub_all(
             monkeypatch,
             window_chunks=[("window text", 10.0, 20.0)],
-            # This chunk is inside the ±60s window (45-60 segment → -15 to 120)
-            kw_chunks=[("overlapping kw", 50.0, 55.0)],
+            # Two keyword chunks at the same timestamp — second should dedup.
+            kw_chunks=[
+                ("first kw", 50.0, 55.0),
+                ("duplicate kw", 52.0, 54.0),
+            ],
         )
-        candidate = _retrieved_video()  # segment at 45-60
+        candidate = _retrieved_video()
         cfg = RagConfig(transcript_vector_top_n=4)
 
         ctx = build_file_context(candidate, cfg, keywords="test")
 
-        # The keyword chunk should be skipped due to overlap.
-        assert not any(s.source == "transcript_keyword" for s in ctx.snippets)
+        kw_snippets = [s for s in ctx.snippets if s.source == "transcript_keyword"]
+        # Only the first keyword chunk should survive; the second overlaps.
+        assert len(kw_snippets) == 1
+        assert "first kw" in kw_snippets[0].text
 
     def test_overlapping_vector_chunk_is_deduplicated(self, monkeypatch):
-        """Vector chunk whose timestamp overlaps the window is skipped."""
+        """Vector chunk whose timestamp overlaps a keyword chunk is skipped."""
         fake_vec = MagicMock()
         self._stub_all(
             monkeypatch,
             window_chunks=[("window text", 10.0, 20.0)],
-            vec_chunks=[("overlapping vec", 50.0, 55.0)],
+            kw_chunks=[("keyword hit", 50.0, 55.0)],
+            vec_chunks=[("overlapping vec", 52.0, 54.0)],
         )
-        candidate = _retrieved_video()  # segment at 45-60
+        candidate = _retrieved_video()
         cfg = RagConfig(transcript_vector_top_n=4)
 
-        ctx = build_file_context(candidate, cfg, query_vector=fake_vec)
+        ctx = build_file_context(
+            candidate, cfg, query_vector=fake_vec, keywords="test"
+        )
 
+        # Vector chunk at 52-54 overlaps keyword chunk at 50-55, should be skipped.
         assert not any(s.source == "transcript_vector" for s in ctx.snippets)
+        assert any(s.source == "transcript_keyword" for s in ctx.snippets)
 
     def test_all_three_methods_combined(self, monkeypatch):
         """All three methods produce snippets when non-overlapping."""
@@ -710,6 +721,31 @@ class TestTranscriptMultiMethod:
             if s.source in ("transcript_keyword", "transcript_vector")
         ]
         assert len(extra) == 1
+
+    def test_keyword_vector_before_window_in_snippet_order(self, monkeypatch):
+        """Keyword and vector snippets appear before window snippets,
+        so they win the per-file char budget."""
+        fake_vec = MagicMock()
+        self._stub_all(
+            monkeypatch,
+            window_chunks=[("window text", 10.0, 20.0)],
+            kw_chunks=[("keyword hit", 200.0, 210.0)],
+            vec_chunks=[("vector hit", 400.0, 410.0)],
+        )
+        candidate = _retrieved_video()
+        cfg = RagConfig(transcript_vector_top_n=4)
+
+        ctx = build_file_context(
+            candidate, cfg, query_vector=fake_vec, keywords="test"
+        )
+
+        sources = [s.source for s in ctx.snippets]
+        kw_idx = sources.index("transcript_keyword")
+        vec_idx = sources.index("transcript_vector")
+        win_idx = sources.index("transcript")
+        # Keyword and vector must come before window.
+        assert kw_idx < win_idx
+        assert vec_idx < win_idx
 
     def test_window_seconds_default_is_60(self):
         """Default transcript_window_seconds should be 60."""

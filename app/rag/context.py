@@ -584,26 +584,77 @@ def _collect_transcript_snippets(
     Combines three chunk-selection strategies (mirroring
     ``_collect_document_snippets``):
 
-    1. **Time-window segments** (historical path): each search-matched
-       segment expanded by ``transcript_window_seconds`` on each side.
-    2. **Keyword-OR chunks**: literal keyword matches via
-       ``fts_transcripts``, without window expansion.
-    3. **Vector-similar chunks**: nearest embeddings in ``vec_text``
+    1. **Keyword-OR chunks** (listed first): literal keyword matches
+       via ``fts_transcripts``, without window expansion. Listed first
+       so they win the per-file character budget — terse answer
+       passages (e.g. "卒業の理由は膝と腰が…") often sit far from
+       the search-matched timestamp and would be crowded out by
+       verbose window context if appended last.
+    2. **Vector-similar chunks**: nearest embeddings in ``vec_text``
        (``embedding_type='whisper'``), without window expansion.
+    3. **Time-window segments** (historical path): each search-matched
+       segment expanded by ``transcript_window_seconds`` on each side.
 
-    Strategies 2 and 3 rescue the case where a relevant passage sits
+    Strategies 1 and 2 rescue the case where a relevant passage sits
     far from any search-matched timestamp — e.g. the topic is
     introduced at the start but detailed in the middle of the video.
 
-    Deduplication is timestamp-based: a chunk from strategy 2 or 3 is
-    skipped if its time range overlaps a window already emitted by
-    strategy 1.
+    Deduplication is timestamp-based: chunks are skipped if their time
+    range overlaps an already-covered range from a prior strategy.
     """
     snippets: list[ContextSnippet] = []
     # Track covered time ranges for deduplication.
     covered_ranges: list[tuple[float, float]] = []
 
-    # (1) Existing: time-window around each matched segment.
+    # Helper to add non-overlapping chunks from keyword / vector passes.
+    def _add_extra_chunks(
+        extra: list[tuple[str, float, float]],
+        source_tag: str,
+    ) -> None:
+        nonlocal snippets, covered_ranges
+        for text, ts_start, ts_end in extra:
+            if not text:
+                continue
+            if _overlaps_any(ts_start, ts_end, covered_ranges):
+                continue
+            snippets = [
+                *snippets,
+                ContextSnippet(
+                    source=source_tag,
+                    text=text,
+                    location=_format_timestamp(ts_start),
+                ),
+            ]
+            covered_ranges = [*covered_ranges, (ts_start, ts_end)]
+
+    top_n = rag_config.transcript_vector_top_n
+
+    # (1) Keyword-OR chunks first (literal anchor words). Terse answer
+    # passages rank low in vector space against a wordy question but
+    # contain the question's literal anchor words — surface them
+    # before window context so they win the per-file char budget.
+    if keywords and top_n > 0:
+        cleaned = filter_keywords(keywords)
+        if cleaned:
+            kw_chunks = _fetch_transcript_chunks_by_keyword_or(
+                candidate.file_id, cleaned, top_n,
+            )
+            _add_extra_chunks(kw_chunks, "transcript_keyword")
+
+    # (2) Vector-similar chunks (vocabulary-mismatch rescue).
+    if query_vector is not None and top_n > 0:
+        vec_chunks = _fetch_transcript_chunks_by_vector(
+            candidate.file_id, query_vector, top_n,
+        )
+        _add_extra_chunks(vec_chunks, "transcript_vector")
+
+    # (3) Time-window around each search-matched segment (historical
+    # path). Listed last so keyword/vector results that directly
+    # answer the query are not crowded out by verbose surrounding
+    # context. Window chunks that overlap keyword/vector ranges are
+    # still included — their time ranges won't collide because window
+    # dedup checks against the per-chunk ranges above, not the
+    # expanded ±window range.
     for segment in candidate.segments:
         if segment.time_range is None:
             continue
@@ -634,46 +685,6 @@ def _collect_transcript_snippets(
             *covered_ranges,
             (max(0.0, start - window), end + window),
         ]
-
-    # Helper to add non-overlapping chunks from keyword / vector passes.
-    def _add_extra_chunks(
-        extra: list[tuple[str, float, float]],
-        source_tag: str,
-    ) -> None:
-        nonlocal snippets, covered_ranges
-        for text, ts_start, ts_end in extra:
-            if not text:
-                continue
-            if _overlaps_any(ts_start, ts_end, covered_ranges):
-                continue
-            snippets = [
-                *snippets,
-                ContextSnippet(
-                    source=source_tag,
-                    text=text,
-                    location=_format_timestamp(ts_start),
-                ),
-            ]
-            covered_ranges = [*covered_ranges, (ts_start, ts_end)]
-
-    top_n = rag_config.transcript_vector_top_n
-
-    # (2) Keyword-OR chunks (literal anchor words, surfaces terse
-    # passages that vector similarity would rank low).
-    if keywords and top_n > 0:
-        cleaned = filter_keywords(keywords)
-        if cleaned:
-            kw_chunks = _fetch_transcript_chunks_by_keyword_or(
-                candidate.file_id, cleaned, top_n,
-            )
-            _add_extra_chunks(kw_chunks, "transcript_keyword")
-
-    # (3) Vector-similar chunks (vocabulary-mismatch rescue).
-    if query_vector is not None and top_n > 0:
-        vec_chunks = _fetch_transcript_chunks_by_vector(
-            candidate.file_id, query_vector, top_n,
-        )
-        _add_extra_chunks(vec_chunks, "transcript_vector")
 
     return snippets
 
