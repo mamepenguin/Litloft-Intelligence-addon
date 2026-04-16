@@ -149,7 +149,9 @@ class RagConfig:
     # When exceeded, lower-scoring files are dropped.
     max_total_context_chars: int = 17500
     # LLM max_tokens override for answer + citations generation.
-    max_tokens: int = 1024
+    # The answer JSON includes both the prose answer and a citations
+    # array, so 2048 gives room for detailed answers without truncation.
+    max_tokens: int = 2048
     # How many characters around a timestamped transcript match
     # to include as "context window" (only when segments have times).
     transcript_window_seconds: float = 60.0
