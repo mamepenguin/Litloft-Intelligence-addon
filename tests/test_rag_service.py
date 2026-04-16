@@ -674,3 +674,150 @@ class TestStreamAnswerUnparseableJSON:
         # see whatever the model said even if we can't build citations.
         chunks = [e for e in events if e.kind == "answer_chunk"]
         assert chunks and chunks[0].data["delta"] == "this is not json at all"
+
+
+# ---------------------------------------------------------------------------
+# _quote_from_contexts: server-side quote population (replaces LLM quotes)
+# ---------------------------------------------------------------------------
+
+
+class TestQuoteFromContexts:
+    """The backend now auto-fills citation quotes from retrieved snippets.
+
+    The LLM no longer generates quote strings — this saves 5-10 seconds
+    of end-of-stream latency and removes any risk of quote fabrication.
+    """
+
+    def test_picks_first_snippet_of_matching_context(self):
+        from app.rag.service import _quote_from_contexts
+
+        ctx = FileContext(
+            file_id="abc",
+            filename="video.mp4",
+            drive="Videos",
+            file_type="video",
+            title="Title",
+            description=None,
+            snippets=(
+                ContextSnippet(
+                    source="transcript",
+                    text="この動画の冒頭で重要なことが語られています。",
+                    location="0:15",
+                ),
+                ContextSnippet(
+                    source="transcript",
+                    text="後半はあまり関係ない内容です。",
+                    location="2:30",
+                ),
+            ),
+            total_chars=80,
+        )
+
+        quote = _quote_from_contexts("abc", [ctx])
+
+        assert quote == "この動画の冒頭で重要なことが語られています。"
+
+    def test_returns_empty_when_file_id_not_found(self):
+        from app.rag.service import _quote_from_contexts
+
+        ctx = FileContext(
+            file_id="abc",
+            filename="video.mp4",
+            drive="Videos",
+            file_type="video",
+            title=None,
+            description=None,
+            snippets=(
+                ContextSnippet(source="transcript", text="hi", location=None),
+            ),
+            total_chars=2,
+        )
+
+        assert _quote_from_contexts("xyz", [ctx]) == ""
+
+    def test_returns_empty_when_contexts_is_none(self):
+        from app.rag.service import _quote_from_contexts
+
+        assert _quote_from_contexts("abc", None) == ""
+
+    def test_returns_empty_when_context_has_no_snippets(self):
+        from app.rag.service import _quote_from_contexts
+
+        ctx = FileContext(
+            file_id="abc",
+            filename="video.mp4",
+            drive="Videos",
+            file_type="video",
+            title=None,
+            description=None,
+            snippets=(),
+            total_chars=0,
+        )
+
+        assert _quote_from_contexts("abc", [ctx]) == ""
+
+    def test_picks_snippet_matching_location(self):
+        """When LLM supplies location, pick the snippet at that location.
+
+        This restores the "same file cited at multiple points" behaviour
+        that plain file_id citations can't express.
+        """
+        from app.rag.service import _quote_from_contexts
+
+        ctx = FileContext(
+            file_id="abc",
+            filename="video.mp4",
+            drive="Videos",
+            file_type="video",
+            title=None,
+            description=None,
+            snippets=(
+                ContextSnippet(
+                    source="transcript",
+                    text="冒頭の話",
+                    location="0:15",
+                ),
+                ContextSnippet(
+                    source="transcript",
+                    text="中盤の話",
+                    location="1:30",
+                ),
+                ContextSnippet(
+                    source="transcript",
+                    text="終盤の話",
+                    location="3:00",
+                ),
+            ),
+            total_chars=50,
+        )
+
+        # Location matches middle snippet.
+        assert _quote_from_contexts("abc", [ctx], location="1:30") == "中盤の話"
+        # Location matches last snippet.
+        assert _quote_from_contexts("abc", [ctx], location="3:00") == "終盤の話"
+        # No location -> first snippet.
+        assert _quote_from_contexts("abc", [ctx]) == "冒頭の話"
+        # Non-matching location falls back to first snippet.
+        assert _quote_from_contexts("abc", [ctx], location="99:99") == "冒頭の話"
+
+    def test_truncates_long_snippet_with_ellipsis(self):
+        from app.rag.service import _quote_from_contexts
+
+        long_text = "a" * 500
+        ctx = FileContext(
+            file_id="abc",
+            filename="doc.pdf",
+            drive="Docs",
+            file_type="document",
+            title=None,
+            description=None,
+            snippets=(
+                ContextSnippet(source="text_content", text=long_text, location=None),
+            ),
+            total_chars=500,
+        )
+
+        quote = _quote_from_contexts("abc", [ctx], max_chars=100)
+
+        assert len(quote) <= 101  # 100 chars + "…"
+        assert quote.endswith("…")

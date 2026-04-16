@@ -1,12 +1,18 @@
-"""Async LLM client using OpenAI-compatible API.
+"""Async LLM clients with pluggable provider backends.
 
-Supports any OpenAI-compatible endpoint including ollama, vLLM,
-LM Studio, and OpenAI itself via configurable base_url.
+Two backends are available, selected via ``config.provider``:
 
-Includes retry with exponential backoff for transient failures
-(timeouts, rate limits, server errors) and an optional minimum
-request interval to rate-limit outbound requests. Permanent errors
-(400, 401, 402, 403, 404) are not retried to avoid wasting API calls.
+* ``openai_compatible`` — ``LLMClient`` uses the official OpenAI SDK.
+  Works with OpenAI, ollama's /v1 layer, vLLM, LM Studio, DeepSeek, etc.
+* ``ollama`` — ``OllamaLLMClient`` uses ollama's native ``/api/chat``
+  HTTP API via httpx, sending ``think: false`` to skip chain-of-thought
+  reasoning. This eliminates the 10-20 second thinking delay that
+  reasoning models (Gemma 4, DeepSeek-R1, QwQ) would otherwise incur.
+
+Both classes expose the same interface (``generate``,
+``generate_stream``, ``generate_json``, ``enabled``).
+
+Use ``create_llm_client(config)`` to instantiate the correct backend.
 """
 
 import asyncio
@@ -64,6 +70,38 @@ def _uses_max_completion_tokens(model: str) -> bool:
     """
     lowered = (model or "").lower()
     return any(lowered.startswith(p) for p in _MAX_COMPLETION_TOKENS_PREFIXES)
+
+
+def _parse_json_response(raw: str) -> list | dict | None:
+    """Parse a raw LLM response as JSON with regex fallback.
+
+    Tries direct json.loads first. On failure, scans for a
+    ``{…}`` object then ``[…]`` array with a greedy regex — this
+    handles the common cases where the model wraps JSON in prose or
+    a Markdown code fence. Returns None if nothing parses.
+    """
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # Fallback: try object first (dict), then array (list).
+    # Object match is prioritized because array fallback was
+    # historically the only option and we don't want to regress.
+    for pattern in (r"\{.*\}", r"\[.*\]"):
+        match = re.search(pattern, raw, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+    preview = (raw[:40] + "…") if len(raw) > 40 else raw
+    logger.warning(
+        "Failed to parse LLM response as JSON (len=%d, head=%r)",
+        len(raw), preview,
+    )
+    return None
 
 
 class LLMClient:
@@ -421,29 +459,380 @@ class LLMClient:
             if raw is None:
                 return None
 
-        # Try direct JSON parse
-        try:
-            return json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            pass
+        return _parse_json_response(raw)
 
-        # Fallback: try object first (dict), then array (list).
-        # Object match is prioritized because array fallback was
-        # historically the only option and we don't want to regress.
-        for pattern in (r"\{.*\}", r"\[.*\]"):
-            match = re.search(pattern, raw, re.DOTALL)
-            if match:
-                try:
-                    return json.loads(match.group(0))
-                except (json.JSONDecodeError, TypeError):
-                    continue
 
-        # Log only a short excerpt so error logs don't contain long
-        # slices of file content on parse failures — LLM output often
-        # echoes bits of the prompt context.
-        preview = (raw[:40] + "…") if len(raw) > 40 else raw
-        logger.warning(
-            "Failed to parse LLM response as JSON (len=%d, head=%r)",
-            len(raw), preview,
+# ---------------------------------------------------------------------------
+# Ollama native API backend
+# ---------------------------------------------------------------------------
+
+
+# Transient HTTP status codes worth retrying for ollama's native API.
+_OLLAMA_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+
+class OllamaLLMClient:
+    """Async LLM client using ollama's native ``/api/chat`` HTTP API.
+
+    The key reason this exists alongside the OpenAI-compatible
+    :class:`LLMClient` is that ollama's ``/v1`` compatibility layer
+    silently ignores ``think: false`` during streaming, so reasoning
+    models (Gemma 4, DeepSeek-R1, QwQ) incur 10-20s of thinking delay
+    before the first visible token. The native ``/api/chat`` endpoint
+    honours ``think: false``, eliminating that delay entirely.
+
+    Same public interface as :class:`LLMClient` — callers obtain
+    either instance via :func:`create_llm_client` and never branch
+    on the provider.
+    """
+
+    def __init__(self, config: LLMConfig) -> None:
+        self._config = config
+        self._enabled = (
+            config.provider != "disabled"
+            and bool(config.base_url)
+            and bool(config.model)
         )
+        # Normalise base_url: strip trailing slash and any /v1 suffix
+        # so users can paste the same URL they had for openai_compatible
+        # and the native-API paths still resolve correctly.
+        base = (config.base_url or "").rstrip("/")
+        if base.endswith("/v1"):
+            base = base[:-3]
+        self._base_url = base
+
+        if self._enabled:
+            total = config.request_timeout_seconds
+            connect = config.request_connect_timeout_seconds
+            timeout = httpx.Timeout(
+                float(total) if isinstance(total, (int, float)) and total > 0 else 90.0,
+                connect=(
+                    float(connect)
+                    if isinstance(connect, (int, float)) and connect > 0
+                    else 10.0
+                ),
+            )
+            self._http = httpx.AsyncClient(timeout=timeout)
+        # Rate-limiting state (None = no previous request yet)
+        self._rate_lock = asyncio.Lock()
+        self._last_request_time: float | None = None
+
+    @property
+    def enabled(self) -> bool:
+        """True if LLM is properly configured and not disabled."""
+        return self._enabled
+
+    async def _wait_for_rate_limit(self) -> None:
+        """Enforce minimum interval between requests if configured."""
+        interval = self._config.min_request_interval_ms / 1000.0
+        if interval <= 0:
+            return
+
+        async with self._rate_lock:
+            if self._last_request_time is not None:
+                elapsed = time.monotonic() - self._last_request_time
+                wait = interval - elapsed
+                if wait > 0:
+                    await asyncio.sleep(wait)
+            self._last_request_time = time.monotonic()
+
+    def _backoff_delay(self, attempt: int) -> float:
+        """Compute exponential backoff delay for a given attempt."""
+        delay = self._config.retry_base_delay * (2**attempt)
+        return min(delay, self._config.retry_max_delay)
+
+    def _build_body(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        stream: bool,
+        temperature: float,
+        max_tokens: int,
+        response_format: dict | None,
+    ) -> dict:
+        """Construct the request body for /api/chat.
+
+        ``think: false`` is always set so reasoning models skip the
+        chain-of-thought phase. Ollama's format field takes a string
+        ("json") rather than OpenAI's ``{"type": "json_object"}``, so
+        we translate here.
+        """
+        body: dict = {
+            "model": self._config.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "stream": stream,
+            "think": False,
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+            },
+        }
+        if response_format is not None:
+            # OpenAI sends {"type": "json_object"}; ollama wants "json".
+            fmt = response_format.get("type", "json")
+            body["format"] = "json" if fmt in ("json_object", "json") else fmt
+        return body
+
+    async def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens_override: int | None = None,
+        response_format: dict | None = None,
+        temperature: float | None = None,
+    ) -> str | None:
+        """Generate a non-streamed completion via /api/chat."""
+        if not self._enabled:
+            return None
+
+        max_attempts = max(1, self._config.retry_attempts + 1)
+        effective_max_tokens = (
+            max_tokens_override
+            if max_tokens_override is not None
+            else self._config.max_tokens
+        )
+        effective_temperature = (
+            temperature
+            if temperature is not None
+            else self._config.temperature
+        )
+
+        body = self._build_body(
+            system_prompt,
+            user_prompt,
+            stream=False,
+            temperature=effective_temperature,
+            max_tokens=effective_max_tokens,
+            response_format=response_format,
+        )
+
+        for attempt in range(max_attempts):
+            await self._wait_for_rate_limit()
+
+            try:
+                resp = await self._http.post(
+                    f"{self._base_url}/api/chat",
+                    json=body,
+                )
+            except httpx.TimeoutException as e:
+                if attempt + 1 >= max_attempts:
+                    logger.error(
+                        "Ollama generation timed out after %d attempts: %s",
+                        max_attempts, e,
+                    )
+                    return None
+                delay = self._backoff_delay(attempt)
+                logger.warning(
+                    "Ollama generation attempt %d/%d timed out, "
+                    "retrying in %.1fs",
+                    attempt + 1, max_attempts, delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+            except httpx.HTTPError as e:
+                if attempt + 1 >= max_attempts:
+                    logger.error(
+                        "Ollama generation failed after %d attempts: %s",
+                        max_attempts, e,
+                    )
+                    return None
+                delay = self._backoff_delay(attempt)
+                logger.warning(
+                    "Ollama generation attempt %d/%d failed (%s), "
+                    "retrying in %.1fs",
+                    attempt + 1, max_attempts, type(e).__name__, delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            if resp.status_code in _PERMANENT_STATUS_CODES:
+                logger.warning(
+                    "Ollama generation failed with permanent error %d",
+                    resp.status_code,
+                )
+                return None
+
+            if resp.status_code in _OLLAMA_RETRY_STATUSES:
+                if attempt + 1 >= max_attempts:
+                    logger.error(
+                        "Ollama generation failed after %d attempts (status %d)",
+                        max_attempts, resp.status_code,
+                    )
+                    return None
+                delay = self._backoff_delay(attempt)
+                logger.warning(
+                    "Ollama generation attempt %d/%d got status %d, "
+                    "retrying in %.1fs",
+                    attempt + 1, max_attempts, resp.status_code, delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            if resp.status_code != 200:
+                logger.warning(
+                    "Ollama generation got unexpected status %d",
+                    resp.status_code,
+                )
+                return None
+
+            try:
+                data = resp.json()
+            except Exception:
+                logger.warning(
+                    "Ollama returned non-JSON response (status %d)",
+                    resp.status_code,
+                )
+                return None
+
+            return data.get("message", {}).get("content", "")
+
         return None
+
+    async def generate_stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens_override: int | None = None,
+        temperature: float | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream a completion via /api/chat (NDJSON response).
+
+        Ollama's streaming response is newline-delimited JSON, one
+        object per line with ``{"message": {"content": "…"}, "done": bool}``.
+        We yield each non-empty content delta and stop when ``done``
+        becomes true.
+
+        Like :meth:`LLMClient.generate_stream`, this does not retry
+        after bytes have started flowing — silently restarting would
+        produce a disjoint output stream.
+        """
+        if not self._enabled:
+            return
+
+        await self._wait_for_rate_limit()
+
+        effective_max_tokens = (
+            max_tokens_override
+            if max_tokens_override is not None
+            else self._config.max_tokens
+        )
+        effective_temperature = (
+            temperature
+            if temperature is not None
+            else self._config.temperature
+        )
+
+        body = self._build_body(
+            system_prompt,
+            user_prompt,
+            stream=True,
+            temperature=effective_temperature,
+            max_tokens=effective_max_tokens,
+            response_format=None,
+        )
+
+        try:
+            async with self._http.stream(
+                "POST",
+                f"{self._base_url}/api/chat",
+                json=body,
+            ) as resp:
+                if resp.status_code != 200:
+                    logger.warning(
+                        "Ollama stream open failed with status %d",
+                        resp.status_code,
+                    )
+                    return
+
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    content = data.get("message", {}).get("content", "")
+                    if content:
+                        yield content
+
+                    if data.get("done", False):
+                        return
+        except httpx.TimeoutException:
+            logger.warning("Ollama stream timed out; terminating")
+            return
+        except httpx.HTTPError as e:
+            logger.warning(
+                "Ollama stream interrupted (%s); terminating",
+                type(e).__name__,
+            )
+            return
+        except Exception as e:
+            logger.warning(
+                "Ollama stream error (%s); terminating",
+                type(e).__name__,
+            )
+            return
+
+    async def generate_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens_override: int | None = None,
+        temperature: float | None = None,
+    ) -> list | dict | None:
+        """Generate a completion and parse the result as JSON."""
+        raw = await self.generate(
+            system_prompt,
+            user_prompt,
+            max_tokens_override=max_tokens_override,
+            response_format={"type": "json_object"},
+            temperature=temperature,
+        )
+        if raw is None:
+            return None
+
+        if not raw.strip():
+            logger.info(
+                "Ollama returned empty body with format=json; "
+                "retrying without format"
+            )
+            raw = await self.generate(
+                system_prompt,
+                user_prompt,
+                max_tokens_override=max_tokens_override,
+                temperature=temperature,
+            )
+            if raw is None:
+                return None
+
+        return _parse_json_response(raw)
+
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+
+def create_llm_client(config: LLMConfig) -> LLMClient | OllamaLLMClient:
+    """Instantiate the correct LLM client based on ``config.provider``.
+
+    Supported providers:
+    * ``"openai_compatible"`` — :class:`LLMClient` (OpenAI SDK)
+    * ``"ollama"`` — :class:`OllamaLLMClient` (native API with think=false)
+    * ``"disabled"`` — returns a disabled :class:`LLMClient`
+      (the ``enabled`` flag is False; all methods no-op)
+
+    Both classes expose the same interface, so callers do not need
+    to branch on the return type.
+    """
+    if config.provider == "ollama":
+        return OllamaLLMClient(config)
+    return LLMClient(config)

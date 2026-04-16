@@ -18,7 +18,7 @@ from openai import (
 )
 
 from app.config import LLMConfig
-from app.llm import LLMClient
+from app.llm import LLMClient, OllamaLLMClient, create_llm_client
 
 
 def _make_response_obj(text: str) -> MagicMock:
@@ -701,3 +701,276 @@ class TestGenerateStream:
         # The two successfully-received chunks survive; the crash is
         # swallowed and the iterator terminates cleanly.
         assert deltas == ["partial ", "output"]
+
+
+# ---------------------------------------------------------------------------
+# OllamaLLMClient
+# ---------------------------------------------------------------------------
+
+
+def _make_ollama_client(
+    base_url: str = "http://localhost:11434",
+    retry_attempts: int = 3,
+    retry_base_delay: float = 0.01,
+    retry_max_delay: float = 0.1,
+) -> OllamaLLMClient:
+    """Build an enabled OllamaLLMClient with fast retry for tests."""
+    config = LLMConfig(
+        provider="ollama",
+        base_url=base_url,
+        model="gemma4:e4b",
+        retry_attempts=retry_attempts,
+        retry_base_delay=retry_base_delay,
+        retry_max_delay=retry_max_delay,
+    )
+    return OllamaLLMClient(config)
+
+
+class TestOllamaLLMClientInit:
+    """Initialisation / config handling for OllamaLLMClient."""
+
+    def test_enabled_when_configured(self):
+        client = _make_ollama_client()
+        assert client.enabled is True
+
+    def test_disabled_when_provider_disabled(self):
+        config = LLMConfig(
+            provider="disabled",
+            base_url="http://localhost:11434",
+            model="gemma4:e4b",
+        )
+        assert OllamaLLMClient(config).enabled is False
+
+    def test_base_url_strips_v1_suffix(self):
+        """Users who paste an openai_compatible URL shouldn't get /v1/api/chat."""
+        client = _make_ollama_client(base_url="http://localhost:11434/v1")
+        assert client._base_url == "http://localhost:11434"
+
+    def test_base_url_strips_trailing_slash(self):
+        client = _make_ollama_client(base_url="http://localhost:11434/")
+        assert client._base_url == "http://localhost:11434"
+
+
+class TestOllamaLLMClientGenerate:
+    """Non-streaming generate() behaviour."""
+
+    @pytest.mark.asyncio
+    async def test_sends_think_false(self):
+        """The body MUST include think: false to skip reasoning."""
+        client = _make_ollama_client()
+
+        captured: dict = {}
+
+        async def fake_post(url, json):
+            captured["url"] = url
+            captured["json"] = json
+            return httpx.Response(
+                status_code=200,
+                content=b'{"message": {"content": "hi"}}',
+            )
+
+        client._http.post = fake_post
+
+        result = await client.generate("sys", "usr")
+
+        assert result == "hi"
+        assert captured["url"] == "http://localhost:11434/api/chat"
+        assert captured["json"]["think"] is False
+        assert captured["json"]["stream"] is False
+        assert captured["json"]["model"] == "gemma4:e4b"
+        assert captured["json"]["messages"] == [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "usr"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_translates_openai_json_object_to_ollama_json(self):
+        """response_format={'type': 'json_object'} → format='json'."""
+        client = _make_ollama_client()
+
+        captured: dict = {}
+
+        async def fake_post(url, json):
+            captured["json"] = json
+            return httpx.Response(
+                status_code=200,
+                content=b'{"message": {"content": "{}"}}',
+            )
+
+        client._http.post = fake_post
+
+        await client.generate(
+            "sys", "usr", response_format={"type": "json_object"}
+        )
+
+        assert captured["json"]["format"] == "json"
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_disabled(self):
+        config = LLMConfig(provider="disabled", base_url="", model="")
+        client = OllamaLLMClient(config)
+        assert await client.generate("sys", "usr") is None
+
+    @pytest.mark.asyncio
+    async def test_retries_on_transient_status(self):
+        """5xx and 429 should trigger exponential backoff retries."""
+        client = _make_ollama_client(retry_attempts=2)
+
+        call_count = {"n": 0}
+
+        async def fake_post(url, json):
+            call_count["n"] += 1
+            if call_count["n"] < 3:
+                return httpx.Response(
+                    status_code=503, content=b'{"error": "busy"}'
+                )
+            return httpx.Response(
+                status_code=200,
+                content=b'{"message": {"content": "ok"}}',
+            )
+
+        client._http.post = fake_post
+
+        result = await client.generate("sys", "usr")
+
+        assert result == "ok"
+        assert call_count["n"] == 3
+
+    @pytest.mark.asyncio
+    async def test_permanent_error_not_retried(self):
+        """400/401/403/404 should fail immediately."""
+        client = _make_ollama_client(retry_attempts=3)
+
+        call_count = {"n": 0}
+
+        async def fake_post(url, json):
+            call_count["n"] += 1
+            return httpx.Response(
+                status_code=404, content=b'{"error": "not found"}'
+            )
+
+        client._http.post = fake_post
+
+        result = await client.generate("sys", "usr")
+
+        assert result is None
+        assert call_count["n"] == 1
+
+
+class TestOllamaLLMClientStream:
+    """Streaming generate_stream() behaviour."""
+
+    @pytest.mark.asyncio
+    async def test_yields_content_deltas_from_ndjson(self):
+        """Each {"message": {"content": "..."}} line → one yielded delta."""
+        client = _make_ollama_client()
+
+        class FakeStreamResponse:
+            status_code = 200
+
+            async def aiter_lines(self):
+                yield '{"message": {"content": "Hello"}, "done": false}'
+                yield '{"message": {"content": " world"}, "done": false}'
+                yield '{"message": {"content": "!"}, "done": true}'
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+        captured: dict = {}
+
+        def fake_stream(method, url, json):
+            captured["method"] = method
+            captured["url"] = url
+            captured["json"] = json
+            return FakeStreamResponse()
+
+        client._http.stream = fake_stream
+
+        deltas = [d async for d in client.generate_stream("sys", "usr")]
+
+        assert deltas == ["Hello", " world", "!"]
+        assert captured["method"] == "POST"
+        assert captured["url"] == "http://localhost:11434/api/chat"
+        assert captured["json"]["stream"] is True
+        assert captured["json"]["think"] is False
+
+    @pytest.mark.asyncio
+    async def test_stream_handles_malformed_lines(self):
+        """Non-JSON lines should be skipped without breaking the stream."""
+        client = _make_ollama_client()
+
+        class FakeStreamResponse:
+            status_code = 200
+
+            async def aiter_lines(self):
+                yield ""
+                yield "not json"
+                yield '{"message": {"content": "ok"}, "done": true}'
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+        client._http.stream = lambda method, url, json: FakeStreamResponse()
+
+        deltas = [d async for d in client.generate_stream("sys", "usr")]
+
+        assert deltas == ["ok"]
+
+    @pytest.mark.asyncio
+    async def test_stream_yields_nothing_on_failed_open(self):
+        """Non-200 response → empty iterator, no exception."""
+        client = _make_ollama_client()
+
+        class FakeStreamResponse:
+            status_code = 500
+
+            async def aiter_lines(self):
+                return
+                yield  # unreachable
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+        client._http.stream = lambda method, url, json: FakeStreamResponse()
+
+        deltas = [d async for d in client.generate_stream("sys", "usr")]
+
+        assert deltas == []
+
+
+class TestCreateLLMClient:
+    """Factory dispatch based on config.provider."""
+
+    def test_ollama_provider_returns_ollama_client(self):
+        config = LLMConfig(
+            provider="ollama",
+            base_url="http://localhost:11434",
+            model="gemma4:e4b",
+        )
+        client = create_llm_client(config)
+        assert isinstance(client, OllamaLLMClient)
+
+    def test_openai_compatible_returns_llm_client(self):
+        config = LLMConfig(
+            provider="openai_compatible",
+            base_url="http://localhost:11434/v1",
+            model="gemma4:e4b",
+        )
+        client = create_llm_client(config)
+        assert isinstance(client, LLMClient)
+
+    def test_disabled_returns_llm_client(self):
+        """Disabled provider gets LLMClient with enabled=False."""
+        config = LLMConfig(provider="disabled", base_url="", model="")
+        client = create_llm_client(config)
+        assert isinstance(client, LLMClient)
+        assert client.enabled is False

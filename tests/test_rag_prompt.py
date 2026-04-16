@@ -64,26 +64,36 @@ class TestBuildSystemPrompt:
         assert "Answers must be in English" not in result
 
     def test_prompt_contains_json_schema_hint(self):
-        """The system prompt must describe the expected JSON shape."""
+        """The system prompt must describe the expected JSON shape.
+
+        Quote/relevance fields were removed from the LLM contract to
+        shorten the citation tail generation; the backend populates
+        quotes from retrieved snippets instead.
+        """
         result = build_system_prompt("auto")
 
         assert '"answer"' in result
         assert '"citations"' in result
         assert '"file_id"' in result
-        assert '"quote"' in result
 
-    def test_prompt_instructs_no_fabrication(self):
-        """The system prompt must tell the LLM not to invent file info."""
+    def test_prompt_does_not_require_quote(self):
+        """Quote/relevance are populated server-side, not by the LLM."""
         result = build_system_prompt("auto")
 
-        # The spec's system prompt includes a "捏造しないこと" rule.
-        # Also accept an equivalent English phrase.
-        assert (
-            "捏造" in result
-            or "コンテキストにあるものだけ" in result
-            or "do not fabricate" in result.lower()
-            or "not hallucinate" in result.lower()
-        )
+        assert '"quote"' not in result
+        assert '"relevance"' not in result
+
+    def test_prompt_instructs_no_fabrication_of_file_ids(self):
+        """The prompt must pin file_ids to the context blocks.
+
+        Direct-quote fabrication is no longer possible because the LLM
+        doesn't generate quotes; the remaining fabrication risk is
+        citing a file_id not in context, which this rule addresses.
+        """
+        result = build_system_prompt("auto")
+
+        assert "file_id" in result
+        assert "[file_id:" in result or "[file_id:" in result
 
     def test_prompt_instructs_json_only(self):
         """Model should be told to return JSON only, no wrapper text."""

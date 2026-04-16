@@ -16,7 +16,7 @@ from app import dependencies
 from app.config import settings
 from app.database import init_homevault_db, init_search_db
 from app.indexer import IndexManager
-from app.llm import LLMClient
+from app.llm import create_llm_client
 from app.routers import files, queue, rag, refine, search, similar, summaries, webhooks
 from app.schemas import FeaturesStatus, LLMStatus, StatusResponse
 from app.workers.auto_tags import AutoTagsWorker
@@ -103,7 +103,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.exception("Per-drive policy purge failed; continuing startup")
 
     # Initialize LLM client and auto-tags worker
-    llm_client = LLMClient(settings.llm)
+    llm_client = create_llm_client(settings.llm)
     dependencies._llm_client = llm_client
 
     if llm_client.enabled:

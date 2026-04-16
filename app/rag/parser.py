@@ -23,11 +23,17 @@ class Citation:
 
     ``relevance`` is always a float in [0.0, 1.0]; the parser clamps
     or drops any value the LLM returns outside that range.
+
+    ``location`` is a short marker copied from the prompt's snippet
+    headers (e.g. "0:45", "page 3"). Used to disambiguate when the
+    same file is cited at multiple points. Empty string when the LLM
+    doesn't supply one or the file has no segment-level locations.
     """
 
     file_id: str
     quote: str
     relevance: float
+    location: str = ""
 
 
 @dataclass(frozen=True)
@@ -95,11 +101,19 @@ def _parse_citation(
     quote_raw = entry.get("quote", "")
     quote = quote_raw if isinstance(quote_raw, str) else ""
 
+    location_raw = entry.get("location", "")
+    location = location_raw if isinstance(location_raw, str) else ""
+
     relevance = _coerce_relevance(entry.get("relevance"))
     if relevance is None:
         relevance = 0.0
 
-    return Citation(file_id=file_id, quote=quote, relevance=relevance)
+    return Citation(
+        file_id=file_id,
+        quote=quote,
+        relevance=relevance,
+        location=location,
+    )
 
 
 def parse_answer(
@@ -136,10 +150,19 @@ def parse_answer(
     if not isinstance(citations_raw, list):
         citations_raw = []
 
+    # Deduplicate by (file_id, location). Small local LLMs often repeat
+    # the same citation when uncertain — we keep only the first
+    # occurrence so the UI shows each source once.
     citations: list[Citation] = []
+    seen: set[tuple[str, str]] = set()
     for entry in citations_raw:
         parsed = _parse_citation(entry, allowed_file_ids)
-        if parsed is not None:
-            citations = [*citations, parsed]
+        if parsed is None:
+            continue
+        key = (parsed.file_id, parsed.location)
+        if key in seen:
+            continue
+        seen.add(key)
+        citations = [*citations, parsed]
 
     return ParsedAnswer(answer=answer, citations=tuple(citations))

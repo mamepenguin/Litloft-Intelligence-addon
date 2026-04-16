@@ -189,7 +189,7 @@ class SummariesConfig:
 
 @dataclass(frozen=True)
 class LLMConfig:
-    provider: str = "disabled"  # "openai_compatible" | "disabled"
+    provider: str = "disabled"  # "openai_compatible" | "ollama" | "disabled"
     base_url: str = ""
     api_key: str = ""
     model: str = ""

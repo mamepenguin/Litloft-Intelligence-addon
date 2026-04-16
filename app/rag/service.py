@@ -212,6 +212,53 @@ def _quote_overlap_score(quote: str, text: str) -> int:
     return len(set(quote) & set(text))
 
 
+def _quote_from_contexts(
+    file_id: str,
+    contexts: list | None,
+    location: str = "",
+    max_chars: int = 200,
+) -> str:
+    """Pull a representative quote from the already-retrieved contexts.
+
+    The LLM no longer generates quote strings (see build_system_prompt
+    rationale). Instead, we display the snippet text as the quote.
+
+    When ``location`` is provided (e.g. "0:45", "page 3"), we look for
+    the snippet whose ``location`` field matches and return its text —
+    this lets the LLM cite the same file at multiple points and each
+    citation gets the correct excerpt. Falls back to the first snippet
+    when no location is given or none matches.
+    """
+    if not contexts:
+        return ""
+    for ctx in contexts:
+        if getattr(ctx, "file_id", None) != file_id:
+            continue
+        snippets = getattr(ctx, "snippets", None)
+        if not snippets:
+            return ""
+
+        chosen = snippets[0]
+        if location:
+            for snippet in snippets:
+                snippet_loc = snippet.location or ""
+                # Accept exact match or substring match so
+                # "0:45" matches a snippet tagged "0:45" even when
+                # the location happens to be embedded in a longer
+                # label like "transcript @ 0:45".
+                if snippet_loc == location or (
+                    snippet_loc and location in snippet_loc
+                ):
+                    chosen = snippet
+                    break
+
+        text = chosen.text.strip()
+        if len(text) > max_chars:
+            text = text[:max_chars].rstrip() + "…"
+        return text
+    return ""
+
+
 def _to_citation_dict(
     citation: Citation,
     candidates: list[RetrievedFile],
@@ -229,6 +276,23 @@ def _to_citation_dict(
             source_file = candidate
             break
 
+    # Quote is populated from the actual context snippet when the LLM
+    # didn't provide one (the new default) — this is both faster and
+    # safer than letting the model generate quotes freely. The LLM's
+    # optional ``location`` lets us pick the right snippet when the
+    # same file is cited at multiple points.
+    quote = citation.quote or _quote_from_contexts(
+        citation.file_id, contexts, location=citation.location
+    )
+
+    # Prefer the LLM-provided location (exact marker from the prompt)
+    # over the quote-based lookup. The latter is still used as a
+    # fallback when location is empty (e.g. older prompt behaviour,
+    # or documents without timestamps).
+    segment_location = citation.location or _segment_location_for(
+        citation.file_id, candidates, quote, contexts=contexts
+    )
+
     if source_file is None:
         # Defensive: parser already dropped unknown file_ids, but guard
         # anyway so a race between parser and response assembly cannot
@@ -238,9 +302,9 @@ def _to_citation_dict(
             "drive": "",
             "filename": "",
             "file_type": "",
-            "quote": citation.quote,
+            "quote": quote,
             "relevance": citation.relevance,
-            "segment_location": None,
+            "segment_location": segment_location or None,
         }
 
     return {
@@ -248,11 +312,9 @@ def _to_citation_dict(
         "drive": source_file.drive,
         "filename": source_file.filename,
         "file_type": source_file.file_type,
-        "quote": citation.quote,
+        "quote": quote,
         "relevance": citation.relevance,
-        "segment_location": _segment_location_for(
-            citation.file_id, candidates, citation.quote, contexts=contexts
-        ),
+        "segment_location": segment_location,
     }
 
 

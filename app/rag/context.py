@@ -58,6 +58,59 @@ class FileContext:
     total_chars: int
 
 
+# Character-level shingle size for duplicate detection. 5-grams give
+# enough specificity to distinguish topics while tolerating minor
+# wording differences (e.g. re-encoded transcripts or filler words).
+_DUP_SHINGLE_SIZE = 5
+
+# Jaccard similarity above this threshold treats two contexts as
+# duplicates. 0.6 catches near-identical transcripts (same video with
+# different Whisper runs, re-uploads, etc.) while preserving distinct
+# but related content.
+_DUP_JACCARD_THRESHOLD = 0.6
+
+
+def _content_shingles(ctx: FileContext) -> frozenset[str]:
+    """Build a set of character n-grams from a context's snippet text.
+
+    Uses a compact character-level shingle representation rather than
+    word tokenisation so it works on Japanese text without needing
+    a tokeniser. All snippets are concatenated with spaces and
+    lowercased before shingling.
+    """
+    combined = " ".join(s.text for s in ctx.snippets).lower()
+    if len(combined) < _DUP_SHINGLE_SIZE:
+        return frozenset({combined})
+    return frozenset(
+        combined[i : i + _DUP_SHINGLE_SIZE]
+        for i in range(len(combined) - _DUP_SHINGLE_SIZE + 1)
+    )
+
+
+def _is_duplicate(
+    candidate_shingles: frozenset[str],
+    existing_shingles: list[frozenset[str]],
+) -> bool:
+    """Return True if the candidate shares enough content with any
+    already-accepted context to be considered a duplicate.
+
+    Uses Jaccard similarity (|A∩B| / |A∪B|). Skips comparison with an
+    empty existing set to keep the first context always accepted.
+    """
+    if not candidate_shingles:
+        return False
+    for existing in existing_shingles:
+        if not existing:
+            continue
+        intersection = len(candidate_shingles & existing)
+        if intersection == 0:
+            continue
+        union = len(candidate_shingles | existing)
+        if intersection / union >= _DUP_JACCARD_THRESHOLD:
+            return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Fetch helpers (tests monkeypatch these)
 # ---------------------------------------------------------------------------
@@ -973,6 +1026,10 @@ def assemble_contexts(
     ordered = sorted(candidates, key=lambda c: c.score, reverse=True)
 
     results: list[FileContext] = []
+    # Parallel array of shingle sets for the duplicate check below.
+    # Kept alongside ``results`` rather than on FileContext so the
+    # dataclass stays immutable and cheap to hash.
+    accepted_shingles: list[frozenset[str]] = []
     running_total = 0
     budget = rag_config.max_total_context_chars
 
@@ -990,6 +1047,21 @@ def assemble_contexts(
         )
         if not ctx.snippets:
             continue
+
+        # Near-duplicate filter: when two candidates carry
+        # substantially overlapping text (e.g. the same video
+        # re-uploaded under a different filename, or a transcript
+        # mirrored across drives), including both wastes prompt
+        # budget without adding information and measurably slows the
+        # LLM prefill. Keep only the first (highest-scored) one.
+        shingles = _content_shingles(ctx)
+        if _is_duplicate(shingles, accepted_shingles):
+            logger.info(
+                "RAG dedup: dropped %s (duplicate of higher-scored candidate)",
+                ctx.file_id,
+            )
+            continue
+
         if running_total + ctx.total_chars > budget:
             # This context would overflow the shared budget — drop it
             # and every lower-scored candidate. Keeping partial files
@@ -997,6 +1069,7 @@ def assemble_contexts(
             # harder to reason about.
             break
         results = [*results, ctx]
+        accepted_shingles = [*accepted_shingles, shingles]
         running_total += ctx.total_chars
 
     return results

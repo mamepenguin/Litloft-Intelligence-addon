@@ -83,13 +83,13 @@ def _init_llm() -> None:
     """Bring up the dependency container so RAG calls find the LLM client."""
     from app.config import settings
     from app import dependencies
-    from app.llm import LLMClient
+    from app.llm import create_llm_client
 
     # No public setter exists in the production code path (clients are
     # bound during the FastAPI lifespan). Mutating the module attribute
     # is the established pattern in this codebase for dev-time tooling
     # — the eval runner is the only non-router caller of get_llm_client.
-    dependencies._llm_client = LLMClient(settings.llm)
+    dependencies._llm_client = create_llm_client(settings.llm)
 
 
 async def _run(args: argparse.Namespace) -> int:

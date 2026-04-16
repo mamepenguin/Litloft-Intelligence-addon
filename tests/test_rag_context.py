@@ -519,10 +519,75 @@ class TestAssembleContexts:
         else:
             assert contexts == []
 
-    def test_within_budget_keeps_everyone(self, monkeypatch):
+    def test_near_duplicate_candidates_dropped(self, monkeypatch):
+        """Files with nearly identical transcript text are deduped.
+
+        Only the highest-scored among a near-duplicate cluster is kept.
+        This protects the LLM prefill budget from the common case of
+        the same video being stored under multiple filenames (e.g.
+        YouTube re-uploads, mirrored drives).
+        """
+        duplicate_text = (
+            "ドラクエをプレイしていると誰もが共感するあるあるを紹介します。"
+            "序盤でゴールドが足りなくなる、レベル上げで夜更かしする、"
+            "ラスボス前のセーブでやたら緊張する、みたいな話です。"
+        )
+        unique_text = (
+            "ファイナルファンタジー14はMMORPGで、レイドやPvPなど多彩な"
+            "コンテンツを楽しめます。職業システムが柔軟で1キャラで全職可能。"
+        )
+
+        def fetch_chunks(file_id, *args, **kwargs):
+            # Three files share the same transcript, a fourth is unrelated.
+            if file_id in ("dup1", "dup2", "dup3"):
+                return [(duplicate_text, 0.0, 60.0)]
+            return [(unique_text, 0.0, 60.0)]
+
         monkeypatch.setattr(
             "app.rag.context._fetch_transcript_chunks_around",
-            MagicMock(return_value=[("small text", 0.0, 5.0)]),
+            fetch_chunks,
+        )
+
+        candidates = [
+            _retrieved_video(file_id="dup1", score=0.99),
+            _retrieved_video(file_id="dup2", score=0.97),
+            _retrieved_video(file_id="dup3", score=0.95),
+            _retrieved_video(file_id="unique", score=0.80),
+        ]
+        cfg = RagConfig(
+            max_context_chars_per_file=3500,
+            max_total_context_chars=100000,
+        )
+
+        contexts = assemble_contexts(candidates, cfg)
+
+        surviving_ids = [c.file_id for c in contexts]
+        # Highest-scored duplicate kept, others dropped.
+        assert "dup1" in surviving_ids
+        assert "dup2" not in surviving_ids
+        assert "dup3" not in surviving_ids
+        # Unrelated file is preserved.
+        assert "unique" in surviving_ids
+
+    def test_within_budget_keeps_everyone(self, monkeypatch):
+        # Return wildly distinct text per candidate so the
+        # near-duplicate filter doesn't drop any — that filter is
+        # covered by test_near_duplicate_candidates_dropped above.
+        topics = (
+            "cats sleep sixteen hours a day and dream of hunting birds",
+            "quantum entanglement lets particles correlate across distances",
+            "bread fermentation relies on wild yeast from the environment",
+            "volcanic islands form when tectonic plates drift over hotspots",
+            "origami cranes are symbols of peace in Japanese culture",
+        )
+        topic_iter = iter(topics)
+
+        def fetch_unique(*args, **kwargs):
+            return [(next(topic_iter), 0.0, 5.0)]
+
+        monkeypatch.setattr(
+            "app.rag.context._fetch_transcript_chunks_around",
+            fetch_unique,
         )
 
         candidates = [

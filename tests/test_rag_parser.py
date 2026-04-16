@@ -382,3 +382,72 @@ class TestParsedAnswerDataclass:
         pa = ParsedAnswer(answer="t", citations=())
         with pytest.raises(Exception):
             pa.answer = "changed"  # type: ignore[misc]
+
+
+class TestCitationDeduplication:
+    """Local LLMs often repeat the same (file_id, location) when
+    uncertain. The parser drops duplicates so the UI shows each
+    source once.
+    """
+
+    def test_exact_duplicate_citations_collapse(self):
+        raw = {
+            "answer": "Here is the answer.",
+            "citations": [
+                {"file_id": "abc", "location": "0:15"},
+                {"file_id": "abc", "location": "0:15"},
+                {"file_id": "abc", "location": "0:15"},
+            ],
+        }
+
+        result = parse_answer(raw, frozenset({"abc"}))
+
+        assert result is not None
+        assert len(result.citations) == 1
+        assert result.citations[0].file_id == "abc"
+        assert result.citations[0].location == "0:15"
+
+    def test_distinct_locations_preserved(self):
+        raw = {
+            "answer": "Answer.",
+            "citations": [
+                {"file_id": "abc", "location": "0:15"},
+                {"file_id": "abc", "location": "1:30"},
+                {"file_id": "abc", "location": "1:30"},  # dup of #2
+                {"file_id": "abc", "location": "3:00"},
+            ],
+        }
+
+        result = parse_answer(raw, frozenset({"abc"}))
+
+        assert result is not None
+        assert len(result.citations) == 3
+        locations = [c.location for c in result.citations]
+        assert locations == ["0:15", "1:30", "3:00"]
+
+    def test_first_occurrence_wins(self):
+        """When duplicates differ in non-key fields, the first wins."""
+        raw = {
+            "answer": "Answer.",
+            "citations": [
+                {
+                    "file_id": "abc",
+                    "location": "0:15",
+                    "quote": "first quote",
+                    "relevance": 0.9,
+                },
+                {
+                    "file_id": "abc",
+                    "location": "0:15",
+                    "quote": "second quote",
+                    "relevance": 0.3,
+                },
+            ],
+        }
+
+        result = parse_answer(raw, frozenset({"abc"}))
+
+        assert result is not None
+        assert len(result.citations) == 1
+        assert result.citations[0].quote == "first quote"
+        assert result.citations[0].relevance == 0.9

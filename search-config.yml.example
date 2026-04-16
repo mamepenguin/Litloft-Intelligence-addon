@@ -17,14 +17,23 @@ features:
                       # Requires llm.provider != "disabled".
 
 # LLM provider configuration (required for auto_tags and future LLM features)
-# Supports any OpenAI-compatible API: ollama, vLLM, LM Studio, OpenAI, DeepSeek, etc.
+# Supported providers:
+#   "ollama"            — ollama's native /api/chat API. Sends think: false so
+#                         reasoning models (Gemma 4, DeepSeek-R1, QwQ) skip
+#                         chain-of-thought and respond immediately. Use this
+#                         for any ollama instance, even non-reasoning models.
+#   "openai_compatible" — OpenAI SDK. Works with OpenAI, DeepSeek, vLLM,
+#                         LM Studio, etc. Also works with ollama, but thinking
+#                         cannot be disabled over this API.
+#   "disabled"          — no LLM features.
 # Note: File content (transcripts, captions, text) is sent to the LLM API.
 # For privacy-sensitive content, use a local LLM (e.g., ollama).
 llm:
-  provider: "disabled"       # "openai_compatible" | "disabled"
-  base_url: ""               # e.g. "http://host.docker.internal:11434/v1" (ollama)
-  api_key: ""                # or use env var LLM_API_KEY
-  model: ""                  # e.g. "gemma2:9b", "gpt-4o-mini", "deepseek-chat"
+  provider: "disabled"       # "ollama" | "openai_compatible" | "disabled"
+  base_url: ""               # ollama: "http://host.docker.internal:11434"
+                             # openai_compatible: "http://host.docker.internal:11434/v1"
+  api_key: ""                # or use env var LLM_API_KEY (ignored for ollama)
+  model: ""                  # e.g. "gemma4:e4b", "gpt-4o-mini", "deepseek-chat"
   max_tokens: 2048
   temperature: 0.3
   output_language: "auto"    # "auto" | "ja" | "en" — applies to auto_tags and summaries
@@ -42,10 +51,10 @@ llm:
   # lower. The host addon proxy times the browser side out at 15s anyway.
   request_timeout_seconds: 90.0
   request_connect_timeout_seconds: 10.0
-  # Example: ollama with auto_tags
-  # provider: "openai_compatible"
-  # base_url: "http://host.docker.internal:11434/v1"
-  # model: "gemma2:9b"
+  # Example: ollama (preferred — supports think: false for reasoning models)
+  # provider: "ollama"
+  # base_url: "http://host.docker.internal:11434"
+  # model: "gemma4:e4b"
   # Example: DeepSeek API
   # provider: "openai_compatible"
   # base_url: "https://api.deepseek.com/v1"
