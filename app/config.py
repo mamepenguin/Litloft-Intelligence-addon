@@ -65,8 +65,8 @@ class WhisperIndexConfig:
     min_segment_duration: int = 10
     max_segment_duration: int = 20
     beam_size: int = 1
-    batch_size: int = 16
-    condition_on_previous_text: bool = False
+    batch_size: int = 0
+    condition_on_previous_text: bool = True
     # Short example sentence (≤224 tokens) used to bias the decoder
     # toward a desired style — primarily punctuation insertion. Written
     # in the user's primary content language; an irrelevant prompt mostly

@@ -167,10 +167,16 @@ indexing:
     max_segment_duration: 60
     # Beam size (1 = greedy decoding, faster; 5 = beam search, slightly more accurate)
     beam_size: 1
-    # Batch size for parallel inference (0 = sequential, >0 = batched with VAD)
-    batch_size: 16
-    # Use previous segment text as context (false = faster, less hallucination)
-    condition_on_previous_text: false
+    # Batch size for parallel inference (0 = sequential, >0 = batched with VAD).
+    # Sequential mode (0) is recommended: batched mode's VAD can drop speech
+    # segments in videos with BGM, and compression_ratio_threshold is less
+    # effective per-VAD-chunk. Trade-off: ~2x slower than batched.
+    batch_size: 0
+    # Use previous segment text as context for the next segment.
+    # Propagates punctuation style from initial_prompt across the full
+    # transcript. Safe when compression_ratio_threshold guards against
+    # hallucination loops.
+    condition_on_previous_text: true
     # Compression ratio threshold: segments above this are discarded as
     # repetitive (looping hallucinations). Lower = stricter. 0 = disabled.
     # faster-whisper default is 2.4; 2.0 is recommended to catch chanting/BGM loops.
