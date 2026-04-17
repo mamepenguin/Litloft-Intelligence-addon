@@ -158,7 +158,7 @@ export default function SuggestedTagsSection({ fileId, drive }: SuggestedTagsSec
   return (
     <div>
       <div className="mb-2 flex items-center gap-2">
-        <Sparkles size={14} className="text-amber-400" />
+        <Sparkles size={14} className="text-accent-amber" />
         <h2 className="text-sm font-semibold text-text-muted">
           {t("suggestedTags", { defaultMessage: "AI Suggested Tags" })}
         </h2>
@@ -187,13 +187,13 @@ export default function SuggestedTagsSection({ fileId, drive }: SuggestedTagsSec
           return (
             <span
               key={tag}
-              className="group flex items-center gap-1 rounded-full border border-dashed border-amber-400/40 bg-amber-400/5 px-2.5 py-1 text-xs font-medium text-amber-300/80"
+              className="group flex items-center gap-1 rounded-full border border-dashed border-accent-amber/40 bg-accent-amber/8 px-2.5 py-1 text-xs font-medium text-accent-amber"
             >
               {tag}
               <button
                 onClick={() => handleAcceptTag(tag)}
                 disabled={isAccepting}
-                className="rounded-full p-0.5 text-amber-400/60 transition-colors hover:bg-amber-400/15 hover:text-amber-300 disabled:opacity-50"
+                className="rounded-full p-0.5 text-accent-amber/70 transition-colors hover:bg-accent-amber/20 hover:text-accent-amber disabled:opacity-50"
                 aria-label={t("acceptTag", { defaultMessage: "Add tag {tag}", tag })}
               >
                 {isAccepting ? (
