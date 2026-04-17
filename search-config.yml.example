@@ -71,9 +71,18 @@ llm:
 summaries:
   min_context_chars: 50      # skip files with less usable content than this
                              # (prevents hallucinated summaries from near-empty transcripts)
-  max_context_chars: 8000    # threshold: smaller contexts are sent in full
+  max_context_chars: 8000    # short/long path: full text up to this length,
+                             # otherwise sample windows
   window_chars: 2500         # per-window size when sampling long content
-  window_count: 3            # number of windows (first/middle/last; use odd numbers)
+  window_count: 3            # number of windows for the short/long path
+                             # (first/middle/last; use odd numbers)
+  # Detailed (Markdown long-form) summary uses its own threshold so the
+  # "重要ポイントまとめ" table has broad coverage. Generation is manual /
+  # on-demand so extra prefill cost is acceptable. Raise carefully on
+  # local LLMs with small context windows (e.g. 8K-32K models).
+  detailed_max_context_chars: 24000
+  detailed_window_count: 5   # fallback window count when detailed context
+                             # exceeds the threshold above
 
 # RAG (question answering) configuration (used when features.rag = true)
 # Retrieves top-k files for a user question, builds a bounded context

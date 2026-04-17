@@ -217,21 +217,42 @@ def _sample_windows(text: str, window_chars: int, window_count: int) -> str:
     return _WINDOW_SEPARATOR.join(snippets)
 
 
-def _prepare_context(text: str) -> tuple[str, bool]:
+def _prepare_context(
+    text: str,
+    *,
+    max_chars: int | None = None,
+    window_chars: int | None = None,
+    window_count: int | None = None,
+) -> tuple[str, bool]:
     """Prepare the context text for the LLM, sampling windows if needed.
 
     Args:
         text: Raw context text (full transcript, full document, etc.).
+        max_chars: Full-text threshold override. Falls back to
+            ``settings.summaries.max_context_chars`` when None.
+        window_chars: Per-window width override for the sampling
+            fallback. Falls back to ``settings.summaries.window_chars``.
+        window_count: Window-count override for the sampling fallback.
+            Falls back to ``settings.summaries.window_count``.
 
     Returns:
         Tuple of (prepared_text, was_truncated). was_truncated is True
         when the input exceeded the threshold and windows were sampled.
     """
     cfg = settings.summaries
-    if len(text) <= cfg.max_context_chars:
+    effective_max = cfg.max_context_chars if max_chars is None else max_chars
+    effective_window_chars = (
+        cfg.window_chars if window_chars is None else window_chars
+    )
+    effective_window_count = (
+        cfg.window_count if window_count is None else window_count
+    )
+    if len(text) <= effective_max:
         return (text, False)
 
-    sampled = _sample_windows(text, cfg.window_chars, cfg.window_count)
+    sampled = _sample_windows(
+        text, effective_window_chars, effective_window_count
+    )
     return (sampled, True)
 
 
@@ -722,7 +743,11 @@ async def generate_detailed_summary(
         )
         return
 
-    prepared, was_truncated = _prepare_context(raw_context)
+    prepared, was_truncated = _prepare_context(
+        raw_context,
+        max_chars=settings.summaries.detailed_max_context_chars,
+        window_count=settings.summaries.detailed_window_count,
+    )
     system_prompt = _build_detailed_system_prompt()
     user_prompt = _build_detailed_user_prompt(
         indexed_file, context_type, prepared, was_truncated

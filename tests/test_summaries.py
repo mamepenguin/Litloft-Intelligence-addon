@@ -329,6 +329,48 @@ class TestPrepareContext:
         assert truncated is False
         assert prepared == text
 
+    def test_max_chars_override_keeps_full_text(
+        self, monkeypatch, make_settings
+    ):
+        # Override must win even when settings threshold is smaller.
+        settings = make_settings(
+            summaries=SummariesConfig(max_context_chars=10)
+        )
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        text = "a" * 500
+        prepared, truncated = _prepare_context(text, max_chars=1000)
+        assert truncated is False
+        assert prepared == text
+
+    def test_window_count_override_propagates_to_sampler(
+        self, monkeypatch, make_settings
+    ):
+        # window_count override must reach _sample_windows.
+        settings = make_settings(
+            summaries=SummariesConfig(
+                max_context_chars=99999,
+                window_chars=50,
+                window_count=3,
+            )
+        )
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        spy = MagicMock(return_value="sampled")
+        monkeypatch.setattr("app.workers.summaries._sample_windows", spy)
+
+        text = "a" * 500
+        prepared, truncated = _prepare_context(
+            text, max_chars=100, window_count=5
+        )
+        assert truncated is True
+        assert prepared == "sampled"
+        spy.assert_called_once()
+        # Positional signature: (text, window_chars, window_count).
+        assert spy.call_args.args[2] == 5
+
 
 # ---------------------------------------------------------------------------
 # _build_user_prompt
@@ -1459,6 +1501,98 @@ class TestGenerateDetailedSummary:
         assert kwargs["file_id"] == "abc"
         assert kwargs["detailed_summary"].startswith("## 導入")
         assert kwargs["model"] == "test-model"
+
+    @pytest.mark.asyncio
+    async def test_uses_detailed_threshold_not_short_threshold(
+        self, monkeypatch, make_settings, mock_llm_client,
+        mock_detailed_db_helpers,
+    ):
+        # Content that would truncate on the short path but fits under
+        # the detailed threshold must pass through as full text.
+        settings = make_settings(
+            features=FeaturesConfig(detailed_summaries="manual"),
+            llm=LLMConfig(provider="openai_compatible", model="test-model"),
+            summaries=SummariesConfig(
+                max_context_chars=100,
+                detailed_max_context_chars=50000,
+            ),
+        )
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        monkeypatch.setattr(
+            "app.workers.summaries._get_indexed_file",
+            lambda fid: {
+                "file_id": fid,
+                "filename": "lecture.mp4",
+                "file_type": "video",
+                "mime_type": "video/mp4",
+                "title": "",
+                "description": "",
+            },
+        )
+        transcript = "a" * 5000
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_transcript",
+            lambda fid: transcript,
+        )
+        mock_llm_client.generate = AsyncMock(return_value="## 導入\n\n本動画…")
+
+        await generate_detailed_summary("abc", mock_llm_client)
+
+        kwargs = mock_detailed_db_helpers.save.call_args.kwargs
+        assert kwargs["was_truncated"] is False
+        assert kwargs["context_chars"] == 5000
+
+    @pytest.mark.asyncio
+    async def test_uses_detailed_window_count_when_sampling(
+        self, monkeypatch, make_settings, mock_llm_client,
+        mock_detailed_db_helpers,
+    ):
+        # When the text exceeds the detailed threshold, sampling must use
+        # detailed_window_count (not the short-path window_count).
+        settings = make_settings(
+            features=FeaturesConfig(detailed_summaries="manual"),
+            llm=LLMConfig(provider="openai_compatible", model="test-model"),
+            summaries=SummariesConfig(
+                max_context_chars=99999,
+                window_chars=30,
+                window_count=3,
+                detailed_max_context_chars=100,
+                detailed_window_count=5,
+            ),
+        )
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        monkeypatch.setattr(
+            "app.workers.summaries._get_indexed_file",
+            lambda fid: {
+                "file_id": fid,
+                "filename": "long.mp4",
+                "file_type": "video",
+                "mime_type": "video/mp4",
+                "title": "",
+                "description": "",
+            },
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_transcript",
+            lambda fid: "a" * 10000,
+        )
+        sample_spy = MagicMock(return_value="sampled")
+        monkeypatch.setattr(
+            "app.workers.summaries._sample_windows", sample_spy
+        )
+        mock_llm_client.generate = AsyncMock(return_value="ok")
+
+        await generate_detailed_summary("abc", mock_llm_client)
+
+        sample_spy.assert_called_once()
+        # Positional signature: (text, window_chars, window_count).
+        assert sample_spy.call_args.args[2] == 5
+        save_kwargs = mock_detailed_db_helpers.save.call_args.kwargs
+        assert save_kwargs["was_truncated"] is True
 
 
 # ---------------------------------------------------------------------------

@@ -188,6 +188,14 @@ class SummariesConfig:
     window_chars: int = 2500
     # Number of windows to sample (first/middle/last; use odd numbers).
     window_count: int = 3
+    # Detailed-summary threshold: full text is sent up to this length.
+    # Higher than the short/long path because the detailed prompt's
+    # "重要ポイントまとめ" table wants broad coverage, and detailed
+    # generation is manual/on-demand so extra prefill cost is acceptable.
+    detailed_max_context_chars: int = 24000
+    # Detailed-summary fallback window count. Larger than the short path
+    # to preserve coverage when the detailed threshold is exceeded.
+    detailed_window_count: int = 5
 
 
 @dataclass(frozen=True)
