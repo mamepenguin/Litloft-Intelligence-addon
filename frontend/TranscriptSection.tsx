@@ -23,10 +23,16 @@ interface TranscriptSectionProps {
 
 type Source = "chunks" | "words" | "external";
 
+const CJK_LANGUAGES = /^(ja|zh|ko|th)/i;
+
 function parseVttCues(vtt: string): TranscriptChunkItem[] {
   const lines = vtt.split(/\r?\n/);
   const cues: TranscriptChunkItem[] = [];
   const tsRe = /(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})/;
+  // Extract language from VTT header (e.g. "Language: ja")
+  const langMatch = vtt.match(/^Language:\s*(\S+)/m);
+  const isCjk = langMatch ? CJK_LANGUAGES.test(langMatch[1]) : false;
+  const joiner = isCjk ? "" : " ";
   let current: { start: number; end: number; text: string[] } | null = null;
   let idx = 0;
   const flush = () => {
@@ -35,7 +41,7 @@ function parseVttCues(vtt: string): TranscriptChunkItem[] {
         index: idx++,
         start: current.start,
         end: current.end,
-        text: current.text.join(" ").trim(),
+        text: current.text.join(joiner).trim(),
       });
       current = null;
     }
