@@ -7,6 +7,11 @@ features:
   search: true
   auto_tags: false    # "false" | "manual" | "on_index" (requires llm.provider != "disabled")
   summaries: false    # "false" | "manual" | "on_index" (requires llm.provider != "disabled")
+  detailed_summaries: false
+                      # "false" | "manual" — long-form Markdown summary.
+                      # Manual-only trigger; generation is expensive.
+                      # Independent of "summaries": may be enabled alone.
+                      # Requires llm.provider != "disabled".
   rag: false          # true | false — question answering (requires llm.provider != "disabled")
                       # SECURITY: when enabled, file content (transcripts, captions,
                       # text) is sent to the LLM API on every ask. For privacy-sensitive

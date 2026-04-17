@@ -4,6 +4,7 @@
 
 * add ``edited_at`` / ``short_original`` / ``long_original`` to
   pre-existing rows without disturbing stored data
+* add ``detailed_summary`` et al for the Markdown long-form summary
 * be idempotent (running twice on an up-to-date schema is a no-op)
 
 Fresh installs get the columns from ``_create_file_summaries_table``;
@@ -141,6 +142,47 @@ def test_migration_is_idempotent(legacy_engine):
     assert "long_original" in cols
 
 
+def test_migration_adds_detailed_summary_columns(legacy_engine):
+    """Markdown long-form summary columns appear after migration."""
+    from app.database import _migrate_file_summaries_if_needed
+
+    with legacy_engine.begin() as conn:
+        _migrate_file_summaries_if_needed(conn)
+
+    cols = _columns(legacy_engine)
+    assert "detailed_summary" in cols
+    assert "detailed_status" in cols
+    assert "detailed_model" in cols
+    assert "detailed_generated_at" in cols
+    assert "detailed_context_chars" in cols
+    assert "detailed_was_truncated" in cols
+    assert "detailed_error" in cols
+
+
+def test_migration_preserves_row_after_detailed_migration(legacy_engine):
+    """Detailed-column migration must not disturb pre-existing short/long data."""
+    from app.database import _migrate_file_summaries_if_needed
+
+    with legacy_engine.begin() as conn:
+        _migrate_file_summaries_if_needed(conn)
+
+    with legacy_engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT short_summary, long_summary, detailed_summary, "
+                "detailed_status FROM file_summaries WHERE file_id = :fid"
+            ),
+            {"fid": "legacy-1"},
+        ).fetchone()
+
+    assert row is not None
+    assert row[0] == "short text"
+    assert row[1] == "long text"
+    # Detailed columns default to NULL for pre-existing rows.
+    assert row[2] is None
+    assert row[3] is None
+
+
 def test_fresh_schema_includes_edit_columns(tmp_path):
     """``_create_file_summaries_table`` on a clean DB produces all columns."""
     from app.database import _create_file_summaries_table
@@ -156,3 +198,11 @@ def test_fresh_schema_includes_edit_columns(tmp_path):
     # Original columns still present.
     assert "short_summary" in cols
     assert "long_summary" in cols
+    # Detailed-summary columns are part of the fresh schema too.
+    assert "detailed_summary" in cols
+    assert "detailed_status" in cols
+    assert "detailed_model" in cols
+    assert "detailed_generated_at" in cols
+    assert "detailed_context_chars" in cols
+    assert "detailed_was_truncated" in cols
+    assert "detailed_error" in cols

@@ -40,6 +40,19 @@ _LANGUAGE_INSTRUCTIONS: dict[str, str] = {
     "en": "- Summaries must be in English\n",
 }
 
+# Language instructions for the detailed (Markdown long-form) summary.
+# Unlike the short/long prompt above these spell out the required writing
+# style because the detailed output is user-facing prose, not a caption.
+_DETAILED_LANGUAGE_INSTRUCTIONS: dict[str, str] = {
+    "ja": (
+        "- 日本語で、自然で読みやすい文体。各セクションの見出しを使用\n"
+    ),
+    "en": (
+        "- Write in English with a natural, readable style. "
+        "Use headings for each section\n"
+    ),
+}
+
 # Context types this worker produces summaries for.
 # Images are intentionally excluded — BLIP captions already fill
 # that role and running a second LLM pass adds no value.
@@ -47,6 +60,19 @@ _SUPPORTED_CONTEXT_TYPES: frozenset[str] = frozenset({"video", "audio", "documen
 
 # Separator inserted between sampled windows in truncated contexts.
 _WINDOW_SEPARATOR = "\n\n[...中略...]\n\n"
+
+# Per-request token budget for detailed summaries. Generous because the
+# output is a full Markdown document (intro + bullets + table + conclusion)
+# and can legitimately run past the default 2048 cap. 4096 leaves head
+# room for Japanese output where each character costs one token.
+_DETAILED_MAX_TOKENS = 4096
+
+# detailed_status transitions: None → "generating" → "generated" | "failed".
+# "generating" is the only non-terminal state; transitions through it are
+# taken while a background task is working on the file.
+DETAILED_STATUS_GENERATING = "generating"
+DETAILED_STATUS_GENERATED = "generated"
+DETAILED_STATUS_FAILED = "failed"
 
 
 def _build_system_prompt() -> str:
@@ -65,6 +91,73 @@ def _build_system_prompt() -> str:
         f"{lang_line}"
         "- JSONのみ返し、他のテキストは含めないこと"
     )
+
+
+def _build_detailed_system_prompt() -> str:
+    """Build the system prompt for detailed (Markdown long-form) summaries.
+
+    The user-visible output is a structured Markdown document with four
+    sections (intro / detailed bullets / key-points table / conclusion).
+    Language style is selected from ``settings.llm.output_language``;
+    ``"auto"`` omits the style line so the model mirrors the source.
+    """
+    lang = settings.llm.output_language
+    lang_line = _DETAILED_LANGUAGE_INSTRUCTIONS.get(lang, "")
+
+    return (
+        "あなたはファイル管理システムの要約アシスタントです。\n"
+        "以下のコンテンツを読んで、長文の構造化要約を Markdown 形式で生成してください。\n"
+        "\n"
+        "規則:\n"
+        "- 出力は Markdown のみ。JSON や他のラッパーで包まないこと\n"
+        "- 次のセクションで構成すること:\n"
+        "  1. **導入**（1-2文）: 全体像と魅力を簡潔に\n"
+        "  2. **詳細内容**: 時系列や論理順で箇条書き"
+        "（各項目に簡潔な説明文を添える。「・」で開始）\n"
+        "  3. **重要ポイントまとめ**: Markdown 表で数値・比較・注意点を整理\n"
+        "  4. **結論**（1-2文）: 価値や次のアクションを提案\n"
+        "- 要約者の視点ではなく、語り手の視点をそのまま維持する\n"
+        "- 原文にない事実やニュアンスを付け加えないこと\n"
+        f"{lang_line}"
+    )
+
+
+def _build_detailed_user_prompt(
+    indexed_file: dict,
+    context_type: str,
+    context: str,
+    was_truncated: bool,
+) -> str:
+    """Build the user prompt for detailed-summary generation.
+
+    Shares the same header layout (filename / type / title / description
+    / truncation notice / content marker) as ``_build_user_prompt`` so
+    the LLM sees a consistent structure across both summary variants.
+    Labels stay Japanese regardless of output language — they are model
+    instructions, not output, and the model does not mirror them.
+    """
+    parts: list[str] = [
+        f"ファイル名: {indexed_file['filename']}",
+        f"タイプ: {context_type}",
+    ]
+
+    title = indexed_file.get("title") or ""
+    if title and title != indexed_file["filename"]:
+        parts = [*parts, f"タイトル: {title}"]
+
+    description = indexed_file.get("description") or ""
+    if description:
+        parts = [*parts, f"説明: {description}"]
+
+    if was_truncated:
+        parts = [
+            *parts,
+            "\n注: 以下は長いコンテンツの抜粋です。冒頭・中盤・終盤から取得しています。",
+        ]
+
+    parts = [*parts, "\n--- コンテンツ ---", context]
+
+    return "\n".join(parts)
 
 
 def _sample_windows(text: str, window_chars: int, window_count: int) -> str:
@@ -363,6 +456,320 @@ def _save_summary(
                 "created_at": now,
             },
         )
+
+
+def _has_detailed_summary(file_id: str) -> bool:
+    """True if a detailed summary exists for this file (any status).
+
+    ``generating`` rows count as "has" — the router uses this to 409 a
+    second generation request while one is already in flight.
+    """
+    with get_search_db() as session:
+        row = session.execute(
+            sql_text(
+                "SELECT 1 FROM file_summaries "
+                "WHERE file_id = :fid AND detailed_status IS NOT NULL"
+            ),
+            {"fid": file_id},
+        ).fetchone()
+        return row is not None
+
+
+def _set_detailed_status(
+    file_id: str,
+    status: str,
+    *,
+    error: str | None = None,
+    model: str | None = None,
+) -> None:
+    """Upsert the row and set detailed_status.
+
+    On first write we may land on a file that has no file_summaries row
+    at all (short/long never generated). INSERT OR IGNORE establishes
+    the row with empty short/long placeholders, then UPDATE writes the
+    detailed-related columns. Using placeholders keeps the NOT NULL
+    constraints on short_summary/long_summary happy without lying about
+    their presence — the status column is the source of truth for
+    "does detailed exist".
+    """
+    now = datetime.now(UTC).isoformat()
+    with get_search_db() as session:
+        session.execute(
+            sql_text(
+                "INSERT OR IGNORE INTO file_summaries "
+                "(file_id, short_summary, long_summary, model, context_type, "
+                "context_chars, was_truncated, status, created_at) "
+                "VALUES (:fid, '', '', '', '', 0, 0, 'hidden', :now)"
+            ),
+            {"fid": file_id, "now": now},
+        )
+        session.execute(
+            sql_text(
+                "UPDATE file_summaries SET "
+                "detailed_status = :status, "
+                "detailed_error = :error, "
+                "detailed_model = COALESCE(:model, detailed_model) "
+                "WHERE file_id = :fid"
+            ),
+            {
+                "fid": file_id,
+                "status": status,
+                "error": error,
+                "model": model,
+            },
+        )
+
+
+def _save_detailed_summary(
+    *,
+    file_id: str,
+    detailed_summary: str,
+    model: str,
+    context_chars: int,
+    was_truncated: bool,
+) -> None:
+    """Write the generated Markdown summary and transition to 'generated'."""
+    now = datetime.now(UTC).isoformat()
+    with get_search_db() as session:
+        session.execute(
+            sql_text(
+                "UPDATE file_summaries SET "
+                "detailed_summary = :detailed_summary, "
+                "detailed_status = :status, "
+                "detailed_model = :model, "
+                "detailed_generated_at = :generated_at, "
+                "detailed_context_chars = :context_chars, "
+                "detailed_was_truncated = :was_truncated, "
+                "detailed_error = NULL "
+                "WHERE file_id = :fid"
+            ),
+            {
+                "fid": file_id,
+                "detailed_summary": detailed_summary,
+                "status": DETAILED_STATUS_GENERATED,
+                "model": model,
+                "generated_at": now,
+                "context_chars": context_chars,
+                "was_truncated": 1 if was_truncated else 0,
+            },
+        )
+
+
+def _get_detailed_summary(file_id: str) -> dict | None:
+    """Fetch the detailed-summary record for a file.
+
+    Returns a dict with the user-facing fields, or None if no detailed
+    work has been started yet (status column NULL).
+    """
+    with get_search_db() as session:
+        row = session.execute(
+            sql_text(
+                "SELECT detailed_summary, detailed_status, detailed_model, "
+                "detailed_generated_at, detailed_context_chars, "
+                "detailed_was_truncated, detailed_error "
+                "FROM file_summaries WHERE file_id = :fid"
+            ),
+            {"fid": file_id},
+        ).fetchone()
+        if row is None or row[1] is None:
+            return None
+        return {
+            "detailed_summary": row[0],
+            "detailed_status": row[1],
+            "detailed_model": row[2],
+            "detailed_generated_at": row[3],
+            "detailed_context_chars": row[4],
+            "detailed_was_truncated": (
+                bool(row[5]) if row[5] is not None else None
+            ),
+            "detailed_error": row[6],
+        }
+
+
+def _delete_detailed_summary(file_id: str) -> bool:
+    """Clear all detailed-* columns for a file.
+
+    Returns True when at least one row matched, False when the file had
+    no summary row at all. The row itself is preserved when short/long
+    are still present; if it has no other content, the row is deleted
+    entirely so repeat generation starts from a clean slate.
+    """
+    with get_search_db() as session:
+        row = session.execute(
+            sql_text(
+                "SELECT short_summary, long_summary FROM file_summaries "
+                "WHERE file_id = :fid"
+            ),
+            {"fid": file_id},
+        ).fetchone()
+        if row is None:
+            return False
+
+        short_val = row[0] or ""
+        long_val = row[1] or ""
+        if short_val or long_val:
+            session.execute(
+                sql_text(
+                    "UPDATE file_summaries SET "
+                    "detailed_summary = NULL, "
+                    "detailed_status = NULL, "
+                    "detailed_model = NULL, "
+                    "detailed_generated_at = NULL, "
+                    "detailed_context_chars = NULL, "
+                    "detailed_was_truncated = NULL, "
+                    "detailed_error = NULL "
+                    "WHERE file_id = :fid"
+                ),
+                {"fid": file_id},
+            )
+        else:
+            # Placeholder row created by _set_detailed_status on a file
+            # that never had short/long — drop it to return to the
+            # pristine "no summary" state.
+            session.execute(
+                sql_text(
+                    "DELETE FROM file_summaries WHERE file_id = :fid"
+                ),
+                {"fid": file_id},
+            )
+        return True
+
+
+def classify_detailed_missing_reason(file_id: str) -> str:
+    """Explain why no detailed summary exists for a file.
+
+    Mirrors :func:`classify_missing_reason` for the detailed column so
+    the router can tell the frontend why a "Generate" button would be
+    a no-op. Return values match the short/long variant:
+
+    * ``"file_not_found"``       — no indexed_files row
+    * ``"unsupported_type"``     — image / archive / other
+    * ``"insufficient_content"`` — supported type but below threshold
+    * ``"not_generated"``        — ready to generate
+    """
+    indexed_file = _get_indexed_file(file_id)
+    if indexed_file is None:
+        return "file_not_found"
+
+    context_type = _classify_file_type(
+        indexed_file["file_type"], indexed_file.get("mime_type")
+    )
+    if context_type is None:
+        return "unsupported_type"
+
+    if _build_context(indexed_file, context_type) is None:
+        return "insufficient_content"
+
+    return "not_generated"
+
+
+async def generate_detailed_summary(
+    file_id: str,
+    llm_client: LLMClient,
+) -> None:
+    """Generate a detailed Markdown summary for a single file.
+
+    Intended to be scheduled via FastAPI BackgroundTasks from the router
+    — runs synchronously against the configured LLM and takes tens of
+    seconds to a few minutes for long transcripts on local ollama.
+
+    Lifecycle:
+    1. Policy gate: skip if ``features.detailed_summaries`` is off.
+    2. LLM gate: skip if the client is disabled.
+    3. Pre-checks via :func:`classify_detailed_missing_reason` — any
+       non ``"not_generated"`` result is a silent skip (router has
+       already rejected the request in that case, this is a defence).
+    4. Status transitions: ``generating`` → ``generated`` or ``failed``
+       (with the error message stored in ``detailed_error``).
+
+    Raises nothing — all failure modes land in the ``failed`` row so
+    the frontend polling surface is uniform. The background-task
+    harness only sees a clean return.
+    """
+    if settings.features.detailed_summaries == "false":
+        return
+
+    if not llm_client.enabled:
+        _set_detailed_status(
+            file_id,
+            DETAILED_STATUS_FAILED,
+            error="LLM provider is disabled",
+        )
+        return
+
+    indexed_file = _get_indexed_file(file_id)
+    if indexed_file is None:
+        # Router would have returned 404 already; defence in depth.
+        return
+
+    context_type = _classify_file_type(
+        indexed_file["file_type"], indexed_file.get("mime_type")
+    )
+    if context_type not in _SUPPORTED_CONTEXT_TYPES:
+        _set_detailed_status(
+            file_id,
+            DETAILED_STATUS_FAILED,
+            error=f"Unsupported file type: {indexed_file['file_type']}",
+        )
+        return
+
+    raw_context = _build_context(indexed_file, context_type)
+    if not raw_context:
+        _set_detailed_status(
+            file_id,
+            DETAILED_STATUS_FAILED,
+            error="No usable content to summarize",
+        )
+        return
+
+    prepared, was_truncated = _prepare_context(raw_context)
+    system_prompt = _build_detailed_system_prompt()
+    user_prompt = _build_detailed_user_prompt(
+        indexed_file, context_type, prepared, was_truncated
+    )
+
+    _set_detailed_status(
+        file_id,
+        DETAILED_STATUS_GENERATING,
+        model=settings.llm.model,
+    )
+
+    try:
+        raw = await llm_client.generate(
+            system_prompt,
+            user_prompt,
+            max_tokens_override=_DETAILED_MAX_TOKENS,
+        )
+    except Exception as e:  # noqa: BLE001 - surface any LLM error uniformly
+        logger.exception(
+            "Detailed summary generation crashed for %s", file_id
+        )
+        _set_detailed_status(
+            file_id,
+            DETAILED_STATUS_FAILED,
+            error=f"LLM error: {e}",
+        )
+        return
+
+    if not raw or not raw.strip():
+        _set_detailed_status(
+            file_id,
+            DETAILED_STATUS_FAILED,
+            error="LLM returned empty output",
+        )
+        return
+
+    _save_detailed_summary(
+        file_id=file_id,
+        detailed_summary=raw.strip(),
+        model=settings.llm.model,
+        context_chars=len(prepared),
+        was_truncated=was_truncated,
+    )
+    logger.info(
+        "Detailed summary: saved for %s (%s, %d chars, truncated=%s)",
+        file_id, context_type, len(prepared), was_truncated,
+    )
 
 
 class SummariesWorker:

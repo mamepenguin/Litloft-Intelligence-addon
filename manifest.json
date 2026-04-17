@@ -11,6 +11,7 @@
         "file-detail-sections": [
             {"id": "suggested-tags", "label": "Suggested Tags", "priority": 5},
             {"id": "summary", "label": "AI Summary", "priority": 6},
+            {"id": "detailed-summary", "label": "AI Detailed Summary", "priority": 7},
             {"id": "transcript", "label": "Transcript", "priority": 10},
             {"id": "clip-frames", "label": "CLIP Frames", "priority": 20},
             {"id": "index-details", "label": "Index Details", "priority": 30},
@@ -218,6 +219,39 @@
                 "path": "/batch/summaries",
                 "methods": ["POST"],
                 "pre_check": {"type": "addon_feature", "feature": "summaries"},
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/summary/detailed",
+                "methods": ["GET"],
+                "pre_check": {
+                    "type": "file_access",
+                    "param": "file_id"
+                },
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/summary/detailed",
+                "methods": ["POST"],
+                "pre_check": {"type": "addon_feature", "feature": "detailed_summaries"},
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/summary/detailed",
+                "methods": ["DELETE"],
+                "pre_check": {
+                    "type": "file_access",
+                    "param": "file_id"
+                },
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/summary/detailed.md",
+                "methods": ["GET"],
+                "pre_check": {
+                    "type": "file_access",
+                    "param": "file_id"
+                },
                 "response_filter": null
             },
             {

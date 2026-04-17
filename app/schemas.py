@@ -278,6 +278,39 @@ class BatchSummariesResponse(BaseModel):
     skipped: int
 
 
+# --- Detailed (long-form Markdown) summary ---
+
+
+class DetailedSummaryResponse(BaseModel):
+    """Response for GET /files/{id}/summary/detailed.
+
+    ``available`` is True only when ``status == "generated"`` — callers
+    look at ``status`` for the finer-grained state of in-progress work.
+    """
+
+    available: bool
+    file_id: str | None = None
+    detailed_summary: str | None = None
+    # "generating" | "generated" | "failed" — None when nothing has been
+    # started yet, in which case ``reason`` explains eligibility.
+    status: str | None = None
+    model: str | None = None
+    generated_at: str | None = None
+    context_chars: int | None = None
+    was_truncated: bool | None = None
+    error: str | None = None
+    # Same semantics as SummaryResponse.reason — populated when
+    # ``available`` is False so the frontend can render the right state.
+    reason: str | None = None
+
+
+class DetailedSummaryStartResponse(BaseModel):
+    """Response for POST /files/{id}/summary/detailed."""
+
+    status: str
+    message: str
+
+
 # --- RAG (question answering) ---
 
 

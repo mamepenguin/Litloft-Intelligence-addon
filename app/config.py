@@ -121,6 +121,9 @@ class FeaturesConfig:
     search: bool = True
     auto_tags: str = "false"  # "false" | "manual" | "on_index"
     summaries: str = "false"  # "false" | "manual" | "on_index"
+    # Detailed (long-form, Markdown) summary. Manual-only trigger since
+    # generation is expensive; no on_index auto-generation.
+    detailed_summaries: str = "false"  # "false" | "manual"
     # RAG (question answering) is a simple on/off switch: there is no
     # index-time equivalent to "on_index" because RAG only runs in
     # response to user queries. Default off for security — file content

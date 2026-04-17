@@ -7,6 +7,10 @@ Provides CRUD-like endpoints for LLM-generated file summaries:
 - POST /files/{file_id}/summary/edit       — user overwrite (keeps AI snapshot)
 - POST /files/{file_id}/summary/revert     — restore AI snapshot
 - POST /batch/summaries                    — queue a batch of files
+- GET /files/{file_id}/summary/detailed    — fetch long-form Markdown summary
+- POST /files/{file_id}/summary/detailed   — start generation (BackgroundTasks)
+- DELETE /files/{file_id}/summary/detailed — clear detailed summary
+- GET /files/{file_id}/summary/detailed.md — download Markdown file
 
 Hide is handled entirely client-side (session-scoped) — the server
 does not persist a hidden state so users always have a way to bring
@@ -18,9 +22,12 @@ for the file_ids it receives.
 """
 
 import logging
+import re
 from datetime import UTC, datetime
+from urllib.parse import quote as urlquote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi.responses import Response
 from sqlalchemy import text as sql_text
 
 from app.config import settings
@@ -31,11 +38,22 @@ from app.models import IndexedFile
 from app.schemas import (
     BatchSummariesRequest,
     BatchSummariesResponse,
+    DetailedSummaryResponse,
+    DetailedSummaryStartResponse,
     MessageResponse,
     SummaryEditRequest,
     SummaryResponse,
 )
-from app.workers.summaries import classify_missing_reason
+from app.workers.summaries import (
+    DETAILED_STATUS_GENERATED,
+    DETAILED_STATUS_GENERATING,
+    _delete_detailed_summary,
+    _get_detailed_summary,
+    _has_detailed_summary,
+    classify_detailed_missing_reason,
+    classify_missing_reason,
+    generate_detailed_summary,
+)
 
 
 def _require_file_in_drive(file_id: str, drive: str) -> None:
@@ -70,6 +88,21 @@ def _require_llm_enabled() -> None:
     if settings.features.summaries == "false":
         raise HTTPException(
             status_code=400, detail="Summaries feature is disabled"
+        )
+    if not get_llm_client().enabled:
+        raise HTTPException(status_code=400, detail="LLM is not enabled")
+
+
+def _require_detailed_enabled() -> None:
+    """Raise 400 if detailed_summaries feature or LLM is unavailable.
+
+    Independent of ``features.summaries`` so operators can enable the
+    long-form variant without the short/long pair (or vice versa).
+    """
+    if settings.features.detailed_summaries == "false":
+        raise HTTPException(
+            status_code=400,
+            detail="Detailed summaries feature is disabled",
         )
     if not get_llm_client().enabled:
         raise HTTPException(status_code=400, detail="LLM is not enabled")
@@ -377,3 +410,215 @@ async def batch_summaries(
             queued += 1
 
     return BatchSummariesResponse(queued=queued, skipped=skipped)
+
+
+# ---------------------------------------------------------------------------
+# Detailed (long-form Markdown) summary endpoints
+# ---------------------------------------------------------------------------
+
+
+def _get_indexed_file_basics(file_id: str) -> tuple[str, str] | None:
+    """Return ``(drive, filename)`` for an active file, or None if absent."""
+    with get_search_db() as session:
+        row = (
+            session.query(IndexedFile.drive, IndexedFile.filename)
+            .filter(
+                IndexedFile.file_id == file_id,
+                IndexedFile.active.is_(True),
+            )
+            .first()
+        )
+    if row is None:
+        return None
+    return (row[0], row[1])
+
+
+def _detailed_row_to_response(
+    file_id: str, data: dict
+) -> DetailedSummaryResponse:
+    """Shape ``_get_detailed_summary`` output into the API response."""
+    status = data["detailed_status"]
+    available = status == DETAILED_STATUS_GENERATED
+    return DetailedSummaryResponse(
+        available=available,
+        file_id=file_id,
+        detailed_summary=data["detailed_summary"] if available else None,
+        status=status,
+        model=data["detailed_model"],
+        generated_at=data["detailed_generated_at"],
+        context_chars=data["detailed_context_chars"],
+        was_truncated=data["detailed_was_truncated"],
+        error=data["detailed_error"],
+    )
+
+
+@router.get(
+    "/files/{file_id}/summary/detailed",
+    response_model=DetailedSummaryResponse,
+)
+async def get_detailed_summary_route(
+    file_id: str,
+    drive: str = Depends(require_drive),
+) -> DetailedSummaryResponse:
+    """Fetch the long-form Markdown summary and its generation status.
+
+    Returns ``available=False`` with a ``reason`` when the feature is
+    disabled or no work has been started yet. Intermediate states
+    (``generating`` / ``failed``) are returned with ``available=False``
+    and the ``status`` field set so the frontend can poll or surface
+    the error.
+    """
+    if settings.features.detailed_summaries == "false":
+        return DetailedSummaryResponse(available=False)
+
+    _require_file_in_drive(file_id, drive)
+
+    data = _get_detailed_summary(file_id)
+    if data is None:
+        return DetailedSummaryResponse(
+            available=False,
+            reason=classify_detailed_missing_reason(file_id),
+        )
+
+    return _detailed_row_to_response(file_id, data)
+
+
+@router.post(
+    "/files/{file_id}/summary/detailed",
+    response_model=DetailedSummaryStartResponse,
+)
+async def start_detailed_summary(
+    file_id: str,
+    background_tasks: BackgroundTasks,
+    drive: str = Depends(require_drive),
+) -> DetailedSummaryStartResponse:
+    """Kick off detailed-summary generation in the background.
+
+    Pre-flight validation matches the short/long regenerate path:
+    unsupported type / insufficient content / missing file are 400
+    so the frontend can render an immediate error rather than polling
+    a ``generating`` row that would never complete.
+
+    A second request while one is in flight (``status = 'generating'``)
+    returns 409. Completed / failed rows must be cleared via DELETE
+    before re-generation — this mirrors the short/long regenerate
+    contract (delete + re-enqueue) and avoids accidental overwrite.
+    """
+    _require_detailed_enabled()
+    _require_file_in_drive(file_id, drive)
+
+    reason = classify_detailed_missing_reason(file_id)
+    if reason in (
+        "unsupported_type", "insufficient_content", "file_not_found",
+    ):
+        raise HTTPException(status_code=400, detail=reason)
+
+    if _has_detailed_summary(file_id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Detailed summary already exists — "
+                "DELETE first to regenerate"
+            ),
+        )
+
+    background_tasks.add_task(
+        generate_detailed_summary, file_id, get_llm_client()
+    )
+    return DetailedSummaryStartResponse(
+        status="accepted", message="Detailed summary generation started"
+    )
+
+
+@router.delete(
+    "/files/{file_id}/summary/detailed",
+    response_model=MessageResponse,
+)
+async def delete_detailed_summary_route(
+    file_id: str,
+    drive: str = Depends(require_drive),
+) -> MessageResponse:
+    """Clear any detailed-summary state for the file.
+
+    Used by the "regenerate" flow in the UI — the client deletes first,
+    then POSTs a new generation request. Returns 404 when no row was
+    touched so clients don't silently get a success for stray IDs.
+    """
+    _require_file_in_drive(file_id, drive)
+
+    deleted = _delete_detailed_summary(file_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="No summary to delete")
+
+    return MessageResponse(
+        status="ok", message="Detailed summary cleared"
+    )
+
+
+# Characters considered safe in a filename when sanitising the download
+# disposition. Everything else is replaced with an underscore so callers
+# can't inject headers or break the Content-Disposition parser.
+_FILENAME_SANITIZER = re.compile(r"[^A-Za-z0-9._\- ]")
+
+
+def _sanitize_ascii_filename(name: str) -> str:
+    """Strip non-ASCII chars so legacy clients get a usable filename."""
+    cleaned = _FILENAME_SANITIZER.sub("_", name)
+    # Collapse runs of underscores so replaced Unicode runs don't leave
+    # "________" noise in the fallback filename.
+    cleaned = re.sub(r"_+", "_", cleaned).strip("._ ")
+    return cleaned or "summary"
+
+
+@router.get("/files/{file_id}/summary/detailed.md")
+async def download_detailed_summary(
+    file_id: str,
+    drive: str = Depends(require_drive),
+) -> Response:
+    """Return the stored detailed summary as ``text/markdown`` for download.
+
+    404 when:
+
+    * the feature is disabled
+    * no summary row exists
+    * ``status != 'generated'`` (still working, or failed)
+
+    The download filename is ``{stem}_summary.md``; non-ASCII filenames
+    are exposed via RFC 5987 ``filename*`` alongside an ASCII fallback.
+    """
+    if settings.features.detailed_summaries == "false":
+        raise HTTPException(status_code=404, detail="Feature disabled")
+
+    basics = _get_indexed_file_basics(file_id)
+    if basics is None:
+        raise HTTPException(status_code=404, detail="File not indexed")
+    file_drive, filename = basics
+    assert_file_in_drive(file_drive, drive)
+
+    data = _get_detailed_summary(file_id)
+    if (
+        data is None
+        or data["detailed_status"] != DETAILED_STATUS_GENERATED
+        or not data["detailed_summary"]
+    ):
+        raise HTTPException(status_code=404, detail="No summary available")
+
+    # Strip the original extension so we produce ``lecture_summary.md``
+    # rather than ``lecture.mp4_summary.md``. Works for any filename by
+    # splitting on the last dot.
+    stem = filename.rsplit(".", 1)[0] if "." in filename else filename
+    download_name = f"{stem}_summary.md"
+    ascii_name = _sanitize_ascii_filename(download_name)
+    # RFC 5987 ``filename*=UTF-8''…`` carries the Unicode name for
+    # modern browsers; the ASCII ``filename=`` fallback keeps legacy
+    # clients on a readable name.
+    disposition = (
+        f'attachment; filename="{ascii_name}"; '
+        f"filename*=UTF-8''{urlquote(download_name)}"
+    )
+
+    return Response(
+        content=data["detailed_summary"],
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": disposition},
+    )

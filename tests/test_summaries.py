@@ -14,8 +14,13 @@ import pytest
 
 from app.config import FeaturesConfig, LLMConfig, SummariesConfig
 from app.workers.summaries import (
+    DETAILED_STATUS_FAILED,
+    DETAILED_STATUS_GENERATED,
+    DETAILED_STATUS_GENERATING,
     _WINDOW_SEPARATOR,
     SummariesWorker,
+    _build_detailed_system_prompt,
+    _build_detailed_user_prompt,
     _build_system_prompt,
     _build_user_prompt,
     _classify_file_type,
@@ -23,7 +28,9 @@ from app.workers.summaries import (
     _prepare_context,
     _sample_windows,
     _trim_to_sentence_boundary,
+    classify_detailed_missing_reason,
     classify_missing_reason,
+    generate_detailed_summary,
 )
 
 
@@ -1076,3 +1083,460 @@ class TestSummariesWorkerProcessFile:
         assert save_spy.call_args.kwargs["was_truncated"] is True
         # context_chars is the length of the PREPARED context, not raw.
         assert save_spy.call_args.kwargs["context_chars"] < 5000
+
+
+# ---------------------------------------------------------------------------
+# _build_detailed_system_prompt
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDetailedSystemPrompt:
+    """Detailed-summary system prompt reflects llm.output_language."""
+
+    def test_japanese_style_line(self, monkeypatch, make_settings):
+        settings = make_settings(llm=LLMConfig(output_language="ja"))
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        result = _build_detailed_system_prompt()
+
+        assert "日本語で" in result
+        assert "Markdown" in result
+
+    def test_english_style_line(self, monkeypatch, make_settings):
+        settings = make_settings(llm=LLMConfig(output_language="en"))
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        result = _build_detailed_system_prompt()
+
+        assert "English" in result
+        assert "Markdown" in result
+
+    def test_auto_language_no_style_line(self, monkeypatch, make_settings):
+        settings = make_settings(llm=LLMConfig(output_language="auto"))
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        result = _build_detailed_system_prompt()
+
+        assert "日本語で、自然" not in result
+        assert "Write in English" not in result
+
+    def test_prompt_enumerates_four_sections(
+        self, monkeypatch, make_settings
+    ):
+        """The prompt must list all four expected Markdown sections."""
+        settings = make_settings(llm=LLMConfig(output_language="auto"))
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        result = _build_detailed_system_prompt()
+
+        assert "導入" in result
+        assert "詳細内容" in result
+        assert "重要ポイントまとめ" in result
+        assert "結論" in result
+
+    def test_prompt_forbids_json_wrapping(
+        self, monkeypatch, make_settings
+    ):
+        """The model must return raw Markdown, not wrapped JSON."""
+        settings = make_settings(llm=LLMConfig(output_language="auto"))
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        result = _build_detailed_system_prompt()
+
+        assert "JSON" in result  # i.e. the "no JSON" rule is present
+
+
+# ---------------------------------------------------------------------------
+# _build_detailed_user_prompt
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDetailedUserPrompt:
+    """User prompt aggregates filename, type, title, description, content."""
+
+    def test_includes_filename_and_type(self):
+        result = _build_detailed_user_prompt(
+            indexed_file={
+                "file_id": "abc",
+                "filename": "lecture.mp4",
+                "file_type": "video",
+                "title": "",
+                "description": "",
+            },
+            context_type="video",
+            context="transcript body",
+            was_truncated=False,
+        )
+
+        assert "lecture.mp4" in result
+        assert "video" in result
+        assert "transcript body" in result
+
+    def test_omits_title_when_same_as_filename(self):
+        result = _build_detailed_user_prompt(
+            indexed_file={
+                "file_id": "abc",
+                "filename": "lecture.mp4",
+                "file_type": "video",
+                "title": "lecture.mp4",
+                "description": "",
+            },
+            context_type="video",
+            context="body",
+            was_truncated=False,
+        )
+
+        # Title line should not appear when it duplicates the filename.
+        assert "タイトル: lecture.mp4" not in result
+
+    def test_includes_truncation_notice(self):
+        result = _build_detailed_user_prompt(
+            indexed_file={
+                "file_id": "abc",
+                "filename": "lecture.mp4",
+                "file_type": "video",
+                "title": "",
+                "description": "",
+            },
+            context_type="video",
+            context="body",
+            was_truncated=True,
+        )
+
+        assert "抜粋" in result
+
+
+# ---------------------------------------------------------------------------
+# generate_detailed_summary
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def patched_detailed_settings_enabled(monkeypatch, make_settings):
+    """Settings with detailed_summaries='manual' enabled."""
+    settings = make_settings(
+        features=FeaturesConfig(detailed_summaries="manual"),
+        llm=LLMConfig(provider="openai_compatible", model="test-model"),
+    )
+    monkeypatch.setattr("app.config.settings", settings)
+    monkeypatch.setattr("app.workers.summaries.settings", settings)
+    return settings
+
+
+@pytest.fixture()
+def mock_detailed_db_helpers(monkeypatch):
+    """Replace DB helpers with spies so tests don't need a real SQLite."""
+    set_status = MagicMock()
+    save = MagicMock()
+    monkeypatch.setattr(
+        "app.workers.summaries._set_detailed_status", set_status
+    )
+    monkeypatch.setattr(
+        "app.workers.summaries._save_detailed_summary", save
+    )
+    return SimpleNamespace(set_status=set_status, save=save)
+
+
+class TestGenerateDetailedSummary:
+    """generate_detailed_summary transitions status and calls the LLM."""
+
+    @pytest.mark.asyncio
+    async def test_skips_when_feature_disabled(
+        self, monkeypatch, make_settings, mock_llm_client,
+        mock_detailed_db_helpers,
+    ):
+        settings = make_settings(
+            features=FeaturesConfig(detailed_summaries="false"),
+        )
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        await generate_detailed_summary("abc", mock_llm_client)
+
+        mock_llm_client.generate.assert_not_called()
+        mock_detailed_db_helpers.set_status.assert_not_called()
+        mock_detailed_db_helpers.save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_marks_failed_when_llm_disabled(
+        self, patched_detailed_settings_enabled, mock_detailed_db_helpers,
+    ):
+        llm = MagicMock()
+        llm.enabled = False
+        llm.generate = AsyncMock()
+
+        await generate_detailed_summary("abc", llm)
+
+        llm.generate.assert_not_called()
+        mock_detailed_db_helpers.save.assert_not_called()
+        # Status transition: -> failed with a reason.
+        mock_detailed_db_helpers.set_status.assert_called_once()
+        args, kwargs = mock_detailed_db_helpers.set_status.call_args
+        assert args[0] == "abc"
+        assert args[1] == DETAILED_STATUS_FAILED
+        assert kwargs.get("error")
+
+    @pytest.mark.asyncio
+    async def test_silently_returns_when_file_not_indexed(
+        self, monkeypatch, patched_detailed_settings_enabled,
+        mock_llm_client, mock_detailed_db_helpers,
+    ):
+        monkeypatch.setattr(
+            "app.workers.summaries._get_indexed_file", lambda fid: None
+        )
+
+        await generate_detailed_summary("abc", mock_llm_client)
+
+        mock_llm_client.generate.assert_not_called()
+        # No DB writes — router is expected to have returned 404 already.
+        mock_detailed_db_helpers.set_status.assert_not_called()
+        mock_detailed_db_helpers.save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_marks_failed_for_unsupported_type(
+        self, monkeypatch, patched_detailed_settings_enabled,
+        mock_llm_client, mock_detailed_db_helpers,
+    ):
+        monkeypatch.setattr(
+            "app.workers.summaries._get_indexed_file",
+            lambda fid: {
+                "file_id": fid,
+                "filename": "photo.jpg",
+                "file_type": "image",
+                "mime_type": "image/jpeg",
+                "title": "",
+                "description": "",
+            },
+        )
+
+        await generate_detailed_summary("abc", mock_llm_client)
+
+        mock_llm_client.generate.assert_not_called()
+        mock_detailed_db_helpers.set_status.assert_called_once()
+        assert (
+            mock_detailed_db_helpers.set_status.call_args.args[1]
+            == DETAILED_STATUS_FAILED
+        )
+
+    @pytest.mark.asyncio
+    async def test_marks_failed_when_context_empty(
+        self, monkeypatch, patched_detailed_settings_enabled,
+        mock_llm_client, mock_detailed_db_helpers,
+    ):
+        monkeypatch.setattr(
+            "app.workers.summaries._get_indexed_file",
+            lambda fid: {
+                "file_id": fid,
+                "filename": "video.mp4",
+                "file_type": "video",
+                "mime_type": "video/mp4",
+                "title": "",
+                "description": "",
+            },
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_transcript", lambda fid: ""
+        )
+
+        await generate_detailed_summary("abc", mock_llm_client)
+
+        mock_llm_client.generate.assert_not_called()
+        mock_detailed_db_helpers.set_status.assert_called_once()
+        assert (
+            mock_detailed_db_helpers.set_status.call_args.args[1]
+            == DETAILED_STATUS_FAILED
+        )
+
+    @pytest.mark.asyncio
+    async def test_marks_failed_on_empty_llm_response(
+        self, monkeypatch, patched_detailed_settings_enabled,
+        mock_llm_client, mock_detailed_db_helpers,
+    ):
+        monkeypatch.setattr(
+            "app.workers.summaries._get_indexed_file",
+            lambda fid: {
+                "file_id": fid,
+                "filename": "lecture.mp4",
+                "file_type": "video",
+                "mime_type": "video/mp4",
+                "title": "",
+                "description": "",
+            },
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_transcript",
+            lambda fid: "a" * 500,
+        )
+        mock_llm_client.generate = AsyncMock(return_value="")
+
+        await generate_detailed_summary("abc", mock_llm_client)
+
+        # Two set_status calls: generating, then failed.
+        assert mock_detailed_db_helpers.set_status.call_count == 2
+        assert (
+            mock_detailed_db_helpers.set_status.call_args_list[0].args[1]
+            == DETAILED_STATUS_GENERATING
+        )
+        assert (
+            mock_detailed_db_helpers.set_status.call_args_list[1].args[1]
+            == DETAILED_STATUS_FAILED
+        )
+        mock_detailed_db_helpers.save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_marks_failed_on_llm_exception(
+        self, monkeypatch, patched_detailed_settings_enabled,
+        mock_llm_client, mock_detailed_db_helpers,
+    ):
+        monkeypatch.setattr(
+            "app.workers.summaries._get_indexed_file",
+            lambda fid: {
+                "file_id": fid,
+                "filename": "lecture.mp4",
+                "file_type": "video",
+                "mime_type": "video/mp4",
+                "title": "",
+                "description": "",
+            },
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_transcript",
+            lambda fid: "a" * 500,
+        )
+        mock_llm_client.generate = AsyncMock(
+            side_effect=RuntimeError("connection refused")
+        )
+
+        await generate_detailed_summary("abc", mock_llm_client)
+
+        assert mock_detailed_db_helpers.set_status.call_count == 2
+        assert (
+            mock_detailed_db_helpers.set_status.call_args_list[1].args[1]
+            == DETAILED_STATUS_FAILED
+        )
+        mock_detailed_db_helpers.save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_happy_path_saves_generated_summary(
+        self, monkeypatch, patched_detailed_settings_enabled,
+        mock_llm_client, mock_detailed_db_helpers,
+    ):
+        monkeypatch.setattr(
+            "app.workers.summaries._get_indexed_file",
+            lambda fid: {
+                "file_id": fid,
+                "filename": "lecture.mp4",
+                "file_type": "video",
+                "mime_type": "video/mp4",
+                "title": "",
+                "description": "",
+            },
+        )
+        transcript = "a" * 500
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_transcript",
+            lambda fid: transcript,
+        )
+        mock_llm_client.generate = AsyncMock(
+            return_value="## 導入\n\n本動画は…\n\n"
+        )
+
+        await generate_detailed_summary("abc", mock_llm_client)
+
+        # generating first, then save (no failed).
+        mock_detailed_db_helpers.set_status.assert_called_once()
+        assert (
+            mock_detailed_db_helpers.set_status.call_args.args[1]
+            == DETAILED_STATUS_GENERATING
+        )
+        mock_detailed_db_helpers.save.assert_called_once()
+        kwargs = mock_detailed_db_helpers.save.call_args.kwargs
+        assert kwargs["file_id"] == "abc"
+        assert kwargs["detailed_summary"].startswith("## 導入")
+        assert kwargs["model"] == "test-model"
+
+
+# ---------------------------------------------------------------------------
+# classify_detailed_missing_reason
+# ---------------------------------------------------------------------------
+
+
+def _install_detailed_missing_harness(
+    monkeypatch,
+    *,
+    indexed_file: dict | None,
+    transcript: str = "",
+    document_text: str = "",
+) -> None:
+    """Wire monkeypatches so classify_detailed_missing_reason runs pure."""
+    monkeypatch.setattr(
+        "app.workers.summaries._get_indexed_file",
+        lambda fid: indexed_file,
+    )
+    monkeypatch.setattr(
+        "app.workers.summaries._get_full_transcript",
+        lambda fid: transcript,
+    )
+    monkeypatch.setattr(
+        "app.workers.summaries._get_full_document_text",
+        lambda fid: document_text,
+    )
+
+
+class TestClassifyDetailedMissingReason:
+    """Routing decision for the frontend when no detailed summary exists."""
+
+    def test_file_not_found(self, monkeypatch):
+        _install_detailed_missing_harness(monkeypatch, indexed_file=None)
+        assert classify_detailed_missing_reason("abc") == "file_not_found"
+
+    def test_unsupported_type(self, monkeypatch):
+        _install_detailed_missing_harness(
+            monkeypatch,
+            indexed_file={
+                "file_id": "abc",
+                "filename": "photo.jpg",
+                "file_type": "image",
+                "mime_type": "image/jpeg",
+                "title": "",
+                "description": "",
+            },
+        )
+        assert classify_detailed_missing_reason("abc") == "unsupported_type"
+
+    def test_insufficient_content(self, monkeypatch):
+        _install_detailed_missing_harness(
+            monkeypatch,
+            indexed_file={
+                "file_id": "abc",
+                "filename": "video.mp4",
+                "file_type": "video",
+                "mime_type": "video/mp4",
+                "title": "",
+                "description": "",
+            },
+            transcript="hi",  # below 50-char min
+        )
+        assert (
+            classify_detailed_missing_reason("abc") == "insufficient_content"
+        )
+
+    def test_not_generated_when_ready(self, monkeypatch):
+        _install_detailed_missing_harness(
+            monkeypatch,
+            indexed_file={
+                "file_id": "abc",
+                "filename": "video.mp4",
+                "file_type": "video",
+                "mime_type": "video/mp4",
+                "title": "",
+                "description": "",
+            },
+            transcript="a" * 500,
+        )
+        assert classify_detailed_missing_reason("abc") == "not_generated"

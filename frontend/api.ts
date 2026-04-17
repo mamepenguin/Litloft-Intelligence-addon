@@ -511,6 +511,153 @@ export async function batchSummaries(
   );
 }
 
+// --- Detailed (long-form Markdown) summary ---
+
+export type DetailedSummaryStatus =
+  | "generating"
+  | "generated"
+  | "failed"
+  | string;
+
+export interface DetailedSummaryResponse {
+  available: boolean;
+  file_id?: string;
+  detailed_summary?: string;
+  status?: DetailedSummaryStatus;
+  model?: string;
+  generated_at?: string;
+  context_chars?: number;
+  was_truncated?: boolean;
+  error?: string;
+  reason?: SummaryMissingReason | string;
+}
+
+export async function getDetailedSummary(
+  fileId: string,
+  drive: string,
+): Promise<DetailedSummaryResponse> {
+  try {
+    return await fetchJSON<DetailedSummaryResponse>(
+      `${API_BASE}/addons/intelligence/files/${fileId}/summary/detailed`,
+      { headers: driveHeaders(drive) },
+    );
+  } catch {
+    return { available: false };
+  }
+}
+
+/**
+ * Kick off detailed-summary generation.
+ *
+ * Returns a 202-style ack immediately; the row flips to
+ * ``status: "generating"`` in the DB and the caller polls
+ * `getDetailedSummary` until `available` flips true (or a `failed`
+ * status surfaces).
+ *
+ * Errors are rethrown so the UI can distinguish 400 (feature off /
+ * unsupported file) from 409 (already exists — regenerate flow must
+ * call `deleteDetailedSummary` first).
+ */
+export async function startDetailedSummary(
+  fileId: string,
+  drive: string,
+): Promise<{ status: string; message: string }> {
+  return fetchJSON<{ status: string; message: string }>(
+    `${API_BASE}/addons/intelligence/files/${fileId}/summary/detailed`,
+    { method: "POST", headers: driveHeaders(drive) },
+  );
+}
+
+export async function deleteDetailedSummary(
+  fileId: string,
+  drive: string,
+): Promise<void> {
+  await fetchJSON(
+    `${API_BASE}/addons/intelligence/files/${fileId}/summary/detailed`,
+    { method: "DELETE", headers: driveHeaders(drive) },
+  );
+}
+
+/**
+ * Build the URL for the ``.md`` download endpoint.
+ *
+ * Returned as a string so the UI can use it directly in an ``<a
+ * download>`` tag or ``window.location`` navigation. The host proxy
+ * requires ``X-HV-Drive`` for every intelligence route, so the caller
+ * cannot use a plain anchor — instead, fetch the blob and create an
+ * object URL:
+ *
+ * ```ts
+ * const res = await fetch(getDetailedSummaryDownloadUrl(id), {
+ *   credentials: "include",
+ *   headers: driveHeaders(drive),
+ * });
+ * ```
+ */
+export function getDetailedSummaryDownloadUrl(fileId: string): string {
+  return `${API_BASE}/addons/intelligence/files/${fileId}/summary/detailed.md`;
+}
+
+/**
+ * Fetch the detailed-summary Markdown with the drive header and
+ * trigger a browser download via a temporary object URL.
+ *
+ * Kept as an API-layer helper so the UI code doesn't have to repeat
+ * the header plumbing. Extracts the ``filename`` from the server's
+ * Content-Disposition header when present so the download lands with
+ * a meaningful name.
+ */
+export async function downloadDetailedSummary(
+  fileId: string,
+  drive: string,
+): Promise<void> {
+  const res = await fetch(getDetailedSummaryDownloadUrl(fileId), {
+    credentials: "include",
+    headers: driveHeaders(drive),
+  });
+  if (!res.ok) {
+    throw new Error(`Download failed: ${res.status} ${res.statusText}`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = extractFilenameFromDisposition(
+    res.headers.get("content-disposition"),
+  ) ?? `${fileId}_summary.md`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Give the browser a tick to start the download before releasing
+  // the blob URL; doing it synchronously has been observed to
+  // cancel the download on Safari.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+/**
+ * Extract the filename from a Content-Disposition header value.
+ *
+ * Prefers the RFC 5987 ``filename*=UTF-8''...`` form (needed for
+ * non-ASCII filenames) and falls back to the ASCII ``filename="..."``
+ * parameter. Returns null when neither is present.
+ */
+function extractFilenameFromDisposition(
+  disposition: string | null,
+): string | null {
+  if (!disposition) return null;
+  // RFC 5987 extended parameter: filename*=UTF-8''<percent-encoded>
+  const starMatch = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(disposition);
+  if (starMatch) {
+    try {
+      return decodeURIComponent(starMatch[1]);
+    } catch {
+      // fall through to the ASCII fallback
+    }
+  }
+  const asciiMatch = /filename\s*=\s*"([^"]+)"/i.exec(disposition);
+  return asciiMatch ? asciiMatch[1] : null;
+}
+
 // --- RAG (question answering) ---
 
 export interface Citation {

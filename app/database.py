@@ -394,7 +394,14 @@ def _create_file_summaries_table(conn: object) -> None:
         "  created_at TEXT NOT NULL,"
         "  edited_at TEXT,"
         "  short_original TEXT,"
-        "  long_original TEXT"
+        "  long_original TEXT,"
+        "  detailed_summary TEXT,"
+        "  detailed_status TEXT,"
+        "  detailed_model TEXT,"
+        "  detailed_generated_at TEXT,"
+        "  detailed_context_chars INTEGER,"
+        "  detailed_was_truncated INTEGER,"
+        "  detailed_error TEXT"
         ")"
     ))
 
@@ -427,6 +434,45 @@ def _migrate_file_summaries_if_needed(conn: object) -> None:
     if "long_original" not in cols:
         conn.execute(
             text("ALTER TABLE file_summaries ADD COLUMN long_original TEXT")
+        )
+    # Detailed (long-form Markdown) summary columns. Nullable so the row
+    # can exist with only short/long generated and detailed added later.
+    if "detailed_summary" not in cols:
+        conn.execute(
+            text("ALTER TABLE file_summaries ADD COLUMN detailed_summary TEXT")
+        )
+    if "detailed_status" not in cols:
+        conn.execute(
+            text("ALTER TABLE file_summaries ADD COLUMN detailed_status TEXT")
+        )
+    if "detailed_model" not in cols:
+        conn.execute(
+            text("ALTER TABLE file_summaries ADD COLUMN detailed_model TEXT")
+        )
+    if "detailed_generated_at" not in cols:
+        conn.execute(
+            text(
+                "ALTER TABLE file_summaries "
+                "ADD COLUMN detailed_generated_at TEXT"
+            )
+        )
+    if "detailed_context_chars" not in cols:
+        conn.execute(
+            text(
+                "ALTER TABLE file_summaries "
+                "ADD COLUMN detailed_context_chars INTEGER"
+            )
+        )
+    if "detailed_was_truncated" not in cols:
+        conn.execute(
+            text(
+                "ALTER TABLE file_summaries "
+                "ADD COLUMN detailed_was_truncated INTEGER"
+            )
+        )
+    if "detailed_error" not in cols:
+        conn.execute(
+            text("ALTER TABLE file_summaries ADD COLUMN detailed_error TEXT")
         )
 
 
