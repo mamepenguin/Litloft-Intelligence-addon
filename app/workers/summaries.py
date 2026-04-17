@@ -61,6 +61,51 @@ _SUPPORTED_CONTEXT_TYPES: frozenset[str] = frozenset({"video", "audio", "documen
 # Separator inserted between sampled windows in truncated contexts.
 _WINDOW_SEPARATOR = "\n\n[...中略...]\n\n"
 
+# Proper-noun handling rules shared by short/long and detailed prompts.
+# The design accepts that plausible-substitution errors (e.g. "堀井雄二" →
+# "堀江雄三") can't be detected from the transcript alone. Instead we:
+#   1. Fix what we CAN verify — names that appear in filename/title/description
+#   2. Leave the rest alone rather than guess (LLM "correction" tends to
+#      invent new errors when no trusted anchor exists)
+#   3. (detailed only) Surface low-confidence names via a dedicated annotation
+#      section so the user knows where to manually verify
+# See hako: "LLM による要約... 固有名詞を間違うこと" (2026-04-17).
+_PROPER_NOUN_CORRECTION_RULES = (
+    "## 固有名詞の扱い\n"
+    "\n"
+    "このコンテンツはトランスクリプト（音声認識やテキスト抽出）由来のため、"
+    "固有名詞の誤認識が含まれる可能性があります。誤認識はカタカナ化だけでなく、"
+    "漢字の取り違え、もっともらしい別語への置換など多様な形で現れます。\n"
+    "\n"
+    "### 積極的に修正すべきもの\n"
+    "- ファイル名・タイトル・説明文に登場する固有名詞について、"
+    "トランスクリプト中で異なる表記（カタカナ化、区切り違い、漢字違い、音素類似など）"
+    "がされている場合は、ファイル名・説明文側の表記に統一する\n"
+    "- 同一対象と明確に判断できる複数の表記が登場する場合、最も妥当な一つに統一する\n"
+    "\n"
+    "### 慎重に扱うもの\n"
+    "- ファイル名・タイトル・説明文に登場しない固有名詞は、"
+    "トランスクリプトの表記を原則そのまま使う\n"
+    "- 元の表記が誤っている可能性はあっても、"
+    "推測で別の漢字や読みに置き換えないこと（別の誤りを生むリスクのほうが高い）\n"
+    "- 明らかに日本語として意味不明な場合や、同一対象が複数の異なる表記で登場する場合のみ、"
+    "文脈から最も妥当な表記を選ぶ\n"
+)
+
+# Annotation section (modification history) was attempted in two designs
+# (2026-04-17) and both failed. v1 asked the LLM to list "low-confidence
+# names" but LLMs report high confidence on the context-driven recoveries
+# we most want humans to verify. v2 switched to "list every modification"
+# to bypass self-confidence judgment, but the LLM produced entries that
+# did not match what it actually wrote in the body (hallucinated history).
+# Conclusion: self-reflective tasks on proper-noun edits cannot be
+# reliably embedded in the same prompt that produces the summary. A
+# two-pass implementation (separate LLM call diffing summary against
+# transcript) would be more trustworthy but is out of scope here. The
+# correction rules themselves still work — anchor-based normalization
+# and conservative preservation do fix the core issue — so we keep them
+# and drop only the annotation. See hako: yIKMeQpNJXNGw1TYaiPN2 → A.
+
 # Per-request token budget for detailed summaries. Generous because the
 # output is a full Markdown document (intro + bullets + table + conclusion)
 # and can legitimately run past the default 2048 cap. 4096 leaves head
@@ -84,12 +129,39 @@ def _build_system_prompt() -> str:
         "あなたはファイル管理システムの要約アシスタントです。\n"
         "以下のコンテンツを読んで、短いサマリーと段落要約を生成してください。\n"
         "\n"
-        "規則:\n"
-        '- JSON形式で返すこと: {"short": "1文サマリー", "long": "段落要約"}\n'
-        "- short: 1文（30-80文字）で要点を表す。断定的な誇張を避けること\n"
-        "- long: 3-5文（200-400文字）で主要内容を説明する。原文にないニュアンスを付け加えないこと\n"
+        "## 出力形式\n"
+        "\n"
+        'JSON形式で返すこと: {"short": "1文サマリー", "long": "段落要約"}\n'
+        "JSONのみ返し、他のテキストは含めないこと\n"
+        "\n"
+        "## short（1文サマリー）の規則\n"
+        "\n"
+        "- 1文（30-80文字）で最も重要な要点を表す\n"
+        "- 原文が複数トピックを扱う場合、最も中心的なテーマを選ぶか、"
+        "「〜など複数の話題」のように明示する\n"
+        "- 断定的な誇張を避ける。原文が推測・予想なら"
+        "「〜の可能性」「〜の見通し」などの表現を保持する\n"
+        "- 原文にない評価語（「画期的」「衝撃の」等）を加えない\n"
+        "\n"
+        "## long（段落要約）の規則\n"
+        "\n"
+        "- 3-5文（200-400文字）で主要内容を説明する\n"
+        "- 原文の流れ（時系列または論理順）に沿って記述する\n"
+        "- 複数トピックがある場合は、重要度順または原文の順序で触れる\n"
+        "- 語り手の温度感は維持するが、視点は観察者（三人称）で書く\n"
+        "  例: 「〜と述べている」「〜と推測している」「〜への期待を示している」\n"
+        "- 事実・発言・推測・評価を区別する\n"
+        "  - 発言を紹介する場合、可能な限り発言者を明示する\n"
+        "  - 推測は「〜と推測している」「〜の可能性を示唆している」と明記する\n"
+        "  - 評価語（「神ゲー」「傑作」「素晴らしい」等）を含める場合は、"
+        "必ず誰による評価かを明示する（「語り手は〜と評している」「投稿者が〜と呼ぶ」等）。"
+        "無帰属の評価語は要約者視点と誤解されるため避ける\n"
+        "- 原文の不確実性マーカー（「かもしれない」「〜ではないか」）を"
+        "字数削減のために省略しないこと\n"
+        "- 原文にないニュアンス・一般化・総括を付け加えないこと\n"
+        "\n"
+        f"{_PROPER_NOUN_CORRECTION_RULES}"
         f"{lang_line}"
-        "- JSONのみ返し、他のテキストは含めないこと"
     )
 
 
@@ -106,21 +178,58 @@ def _build_detailed_system_prompt() -> str:
 
     return (
         "あなたはファイル管理システムの要約アシスタントです。\n"
-        "以下のコンテンツを読んで、長文の構造化要約を Markdown 形式で生成してください。\n"
+         "以下のコンテンツを読んで、長文の構造化要約を Markdown 形式で生成してください。\n"
         "\n"
-        "規則:\n"
-        "- 出力は Markdown のみ。JSON や他のラッパーで包まないこと\n"
-        "- 次のセクションで構成すること:\n"
-        "  1. **導入**（1-2文）: 全体像と主要テーマを簡潔に\n"
-        "  2. **詳細内容**: 原文の流れ（時系列が明確ならその順、"
-        "そうでなければ論理・章構成）に沿って Markdown 箇条書き（`-` 開始）"
-        "で整理し、各項目に簡潔な説明文を添える\n"
-        "  3. **重要ポイントまとめ**: 数値・比較・注意点が実際に存在する場合のみ "
+        "## 手順\n"
+        "\n"
+        "**ステップ1: コンテンツの種別を見極める**\n"
+        "冒頭を読んで、以下のどれに近いかを判断してください（内部処理のみ、出力不要）:\n"
+        "- 情報伝達型（ニュース、速報、まとめ）: 複数の出典が混在、事実と推測の区別が重要\n"
+        "- 解説型（講義、技術記事、ハウツー）: 論理展開と因果関係が重要\n"
+        "- 手順型（レシピ、チュートリアル、攻略）: 順序と具体値が重要\n"
+        "- 評価型（レビュー、比較、感想）: 評価軸と主観の帰属が重要\n"
+        "- 対話型（インタビュー、対談、座談会）: 発言者と立場の区別が重要\n"
+        "- 物語型（アニメ、ドラマ、小説、映画）: 時系列と因果、登場人物の関係が重要\n"
+        "- 文書型（報告書、論文、契約書）: 章構成と論旨が重要\n"
+        "- その他: 原文の構造に従う\n"
+        "\n"
+        "**ステップ2: 種別に応じて構造を調整する**\n"
+        "下記の基本構成をベースに、種別に合わせて見出しや粒度を柔軟に変えてください。\n"
+        "例えば手順型なら「材料/手順」、物語型なら「あらすじ/主要な展開/登場人物」、\n"
+        "対話型なら「論点/各発言者の主張」など、コンテンツに最も適した構成を選びます。\n"
+        "\n"
+        "## 基本構成\n"
+        "\n"
+        "1. **導入**（1-2文）: 全体像と主要テーマを簡潔に\n"
+        "2. **詳細内容**: 原文の流れ（時系列が明確ならその順、"
+        "そうでなければ論理・章構成）に沿って整理。\n"
+        "   並列な情報は箇条書き、因果・順序・対比が重要な部分は文章で記述する。\n"
+        "   箇条書きの強制ではなく、内容に応じて使い分けること。\n"
+        "3. **重要ポイントまとめ**: 数値・比較・対応関係が実際に存在する場合のみ "
         "Markdown 表で整理する。該当する内容がなければこのセクションは省略する"
         "（無理に表を作らない）\n"
-        "  4. **結論**（1-2文）: 価値や次のアクションを提案\n"
-        "- 要約者の視点ではなく、語り手の視点をそのまま維持する\n"
-        "- 原文にない事実やニュアンスを付け加えないこと\n"
+        "4. **結論**（1-2文）: 原文で示されている結論・締めくくり・示唆を要約する。"
+        "原文にない提案や一般化を加えないこと。\n"
+        "\n"
+        "## 共通規則\n"
+        "\n"
+        "- 出力は Markdown のみ。JSON や他のラッパーで包まないこと\n"
+        "- 語り手の温度感・熱量は維持するが、視点は観察者（三人称）で書く\n"
+        "  例: 「〜と述べている」「〜と推測している」「〜と強い期待を示している」\n"
+        "- 事実・発言・推測・評価を区別する\n"
+        "  - 事実: 「〜が発表された」「〜が実施されている」\n"
+        "  - 発言: 「誰それは〜と述べた」（可能なら出典も明示）\n"
+        "  - 推測: 「語り手は〜と推測している」「〜の可能性を示唆している」\n"
+        "  - 評価: 「語り手は〜と評価している」「〜を好意的に捉えている」\n"
+        "  - 評価語（「神ゲー」「傑作」「素晴らしい」等）を本文に含める場合は、"
+        "必ず誰による評価かを明示する（「語り手は〜と評している」「投稿者が〜と呼ぶ」等）。"
+        "無帰属の評価語は要約者視点と誤解されるため避ける\n"
+        "- 原文の不確実性マーカー（「かもしれない」「〜ではないか」「おそらく」）を"
+        "省略せず保持する\n"
+        "- 原文にない事実・一般化・総括・提案を付け加えないこと\n"
+        "- 複数の情報源や発言者が登場する場合、誰の発言・情報かを明示する\n"
+        "\n"
+        f"{_PROPER_NOUN_CORRECTION_RULES}"
         f"{lang_line}"
     )
 

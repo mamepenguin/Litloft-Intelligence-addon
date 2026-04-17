@@ -151,6 +151,48 @@ class TestBuildSystemPrompt:
         assert "30-80" in result
         assert "200-400" in result
 
+    def test_proper_noun_rules_anchor_to_trusted_sources(
+        self, monkeypatch, make_settings
+    ):
+        """Aggressive correction must be anchored to filename/description,
+        so the LLM doesn't invent substitutions based on nothing."""
+        settings = make_settings(llm=LLMConfig(output_language="auto"))
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        result = _build_system_prompt()
+
+        assert "固有名詞" in result
+        assert "ファイル名" in result
+        assert "説明文" in result
+
+    def test_proper_noun_rules_forbid_speculative_rewrite(
+        self, monkeypatch, make_settings
+    ):
+        """Unanchored proper nouns must be preserved, not "corrected"
+        via guesswork (which tends to introduce new errors)."""
+        settings = make_settings(llm=LLMConfig(output_language="auto"))
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        result = _build_system_prompt()
+
+        assert "推測で別の漢字や読みに置き換えない" in result
+
+    def test_evaluation_words_require_attribution(
+        self, monkeypatch, make_settings
+    ):
+        """Evaluation words like "神ゲー" must be attributed to a speaker —
+        unattributed they get mistaken for the summarizer's own view."""
+        settings = make_settings(llm=LLMConfig(output_language="auto"))
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        result = _build_system_prompt()
+
+        assert "評価語" in result
+        assert "誰による評価か" in result
+
 
 # ---------------------------------------------------------------------------
 # _trim_to_sentence_boundary
@@ -1406,6 +1448,65 @@ class TestBuildDetailedSystemPrompt:
         result = _build_detailed_system_prompt()
 
         assert "魅力" not in result
+
+    def test_proper_noun_rules_anchor_to_trusted_sources(
+        self, monkeypatch, make_settings
+    ):
+        """Detailed summary must also anchor corrections to filename/
+        description rather than guess based on transcript alone."""
+        settings = make_settings(llm=LLMConfig(output_language="auto"))
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        result = _build_detailed_system_prompt()
+
+        assert "固有名詞" in result
+        assert "ファイル名" in result
+        assert "説明文" in result
+
+    def test_proper_noun_rules_forbid_speculative_rewrite(
+        self, monkeypatch, make_settings
+    ):
+        """Same conservative rule as short/long: don't guess replacements."""
+        settings = make_settings(llm=LLMConfig(output_language="auto"))
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        result = _build_detailed_system_prompt()
+
+        assert "推測で別の漢字や読みに置き換えない" in result
+
+    def test_detailed_prompt_omits_modification_history_section(
+        self, monkeypatch, make_settings
+    ):
+        """Regression guard: two attempts at a modification-history
+        annotation section produced unreliable self-report (v1 missed
+        key recoveries, v2 hallucinated entries that did not match the
+        summary body). Section removed; a two-pass diff would be more
+        trustworthy but is out of scope. Keep this test so the broken
+        pattern isn't reintroduced without reviewing the history."""
+        settings = make_settings(llm=LLMConfig(output_language="auto"))
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        result = _build_detailed_system_prompt()
+
+        assert "表記の修正履歴" not in result
+        assert "要確認の固有名詞" not in result
+
+    def test_detailed_prompt_evaluation_words_require_attribution(
+        self, monkeypatch, make_settings
+    ):
+        """Detailed prompt mirrors the short/long rule: evaluation words
+        in the body must be attributed to a named speaker."""
+        settings = make_settings(llm=LLMConfig(output_language="auto"))
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        result = _build_detailed_system_prompt()
+
+        assert "評価語" in result
+        assert "誰による評価か" in result
 
 
 # ---------------------------------------------------------------------------
