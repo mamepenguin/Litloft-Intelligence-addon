@@ -70,7 +70,9 @@ function parseVttCues(vtt: string): TranscriptChunkItem[] {
   return cues.filter((c) => c.text);
 }
 
-export default function TranscriptSection({ fileId, drive, videoRef, subtitles = [] }: TranscriptSectionProps) {
+const EMPTY_SUBTITLES: SubtitleInfo[] = [];
+
+export default function TranscriptSection({ fileId, drive, videoRef, subtitles = EMPTY_SUBTITLES }: TranscriptSectionProps) {
   const t = useTranslations("searchIndex");
   const addonStatus = useAddonStatus("intelligence");
   const refineFeature = addonStatus.features?.transcript_refine;
