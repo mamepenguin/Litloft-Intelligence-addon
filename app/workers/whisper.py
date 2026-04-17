@@ -731,6 +731,12 @@ def _parse_vtt_cues(vtt_path: str) -> list[dict]:
         lang = parts[1]
 
     content = path.read_text(encoding="utf-8", errors="replace")
+
+    # Detect language from VTT header (e.g. "Language: ja")
+    if not lang:
+        lang_match = re.search(r"^Language:\s*(\S+)", content, re.MULTILINE)
+        if lang_match:
+            lang = lang_match.group(1)
     timestamp_re = re.compile(
         r"(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})"
     )
@@ -799,6 +805,54 @@ def _parse_vtt_cues(vtt_path: str) -> list[dict]:
     return cues
 
 
+def _dedup_rolling_cues(cues: list[dict]) -> list[dict]:
+    """Remove duplicates caused by YouTube's rolling-subtitle format.
+
+    YouTube auto-captions use a "scroll" style where each cue carries
+    the tail of the previous cue as its first line(s), plus new text on
+    the last line.  Snapshot cues (≤0.01 s) are pure duplicates of the
+    preceding text and are dropped entirely.  For remaining cues, any
+    leading lines that appeared in the previous cue's text are stripped
+    so only genuinely new content survives.
+    """
+    if not cues:
+        return []
+
+    # Phase 1: drop snapshot cues (duration ≤ 0.01s)
+    filtered = [c for c in cues if c["end"] - c["start"] > 0.015]
+    if not filtered:
+        return []
+
+    # Phase 2: strip overlapping leading lines between consecutive cues
+    deduped: list[dict] = []
+    prev_text = ""
+    for cue in filtered:
+        text = cue["text"]
+        # If this cue's text starts with the previous cue's text, keep
+        # only the new suffix.
+        if prev_text and text.startswith(prev_text):
+            new_text = text[len(prev_text):].strip()
+        else:
+            # Fallback: try line-level dedup.  Split both into lines and
+            # drop leading lines that match the tail of the previous cue.
+            prev_lines = prev_text.split(" ") if prev_text else []
+            cur_lines = text.split(" ")
+            # Find how many leading lines of cur match trailing lines of prev
+            overlap = 0
+            for k in range(1, min(len(prev_lines), len(cur_lines)) + 1):
+                if prev_lines[-k:] == cur_lines[:k]:
+                    overlap = k
+            new_text = " ".join(cur_lines[overlap:]).strip() if overlap else text
+        if new_text:
+            deduped.append({
+                **cue,
+                "text": new_text,
+            })
+        prev_text = text
+
+    return deduped
+
+
 def _index_hvlink_vtt(file_id: str, file_path: str) -> bool:
     """Index an .hvlink file using adjacent .vtt subtitles instead of Whisper.
 
@@ -827,7 +881,7 @@ def _index_hvlink_vtt(file_id: str, file_path: str) -> bool:
             best_vtt = c
             break
 
-    raw_segments = _parse_vtt_cues(str(best_vtt))
+    raw_segments = _dedup_rolling_cues(_parse_vtt_cues(str(best_vtt)))
     if not raw_segments:
         logger.info("VTT empty for hvlink %s, marking as indexed", file_id)
         with get_search_db() as session:
