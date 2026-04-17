@@ -1351,6 +1351,62 @@ class TestBuildDetailedSystemPrompt:
 
         assert "JSON" in result  # i.e. the "no JSON" rule is present
 
+    def test_table_is_conditional_not_mandatory(
+        self, monkeypatch, make_settings
+    ):
+        """The summary table must be optional to avoid hallucinated rows
+        when a file has no numbers/comparisons/notes (poems, diaries,
+        informal interviews, etc.)."""
+        settings = make_settings(llm=LLMConfig(output_language="auto"))
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        result = _build_detailed_system_prompt()
+
+        # The prompt should mention skipping / 省略 for the table when
+        # no suitable content exists.
+        assert "省略" in result
+
+    def test_prompt_does_not_force_non_markdown_bullet(
+        self, monkeypatch, make_settings
+    ):
+        """Use standard Markdown "- " rather than the Japanese middle-dot
+        "・" which some renderers treat as plain text."""
+        settings = make_settings(llm=LLMConfig(output_language="auto"))
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        result = _build_detailed_system_prompt()
+
+        assert "「・」で開始" not in result
+
+    def test_order_instruction_is_soft_guidance(
+        self, monkeypatch, make_settings
+    ):
+        """Order should follow the source material, not be hard-branched
+        by content type (video ≠ always chronological, doc ≠ always
+        logical)."""
+        settings = make_settings(llm=LLMConfig(output_language="auto"))
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        result = _build_detailed_system_prompt()
+
+        assert "原文の流れ" in result
+
+    def test_intro_avoids_marketing_tone_word(
+        self, monkeypatch, make_settings
+    ):
+        """"魅力" (appeal) contradicts the "語り手の視点を維持" rule by
+        biasing toward reviewer prose."""
+        settings = make_settings(llm=LLMConfig(output_language="auto"))
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+
+        result = _build_detailed_system_prompt()
+
+        assert "魅力" not in result
+
 
 # ---------------------------------------------------------------------------
 # _build_detailed_user_prompt
