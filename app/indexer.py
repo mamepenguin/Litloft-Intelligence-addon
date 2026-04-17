@@ -748,11 +748,17 @@ class IndexManager:
                         for file_id in file_ids:
                             await self._auto_tags_worker.enqueue(file_id)
 
-                    # Queue summary generation for successfully indexed files (on_index mode only)
+                    # Queue summary generation for successfully indexed files.
+                    # Triggered for on_index mode on either the short/long
+                    # path or the detailed path — the worker decides which
+                    # layer actually runs per file.
                     if (
                         self._summaries_worker is not None
-                        and settings.features.summaries == "on_index"
                         and count > 0
+                        and (
+                            settings.features.summaries == "on_index"
+                            or settings.features.detailed_summaries == "on_index"
+                        )
                     ):
                         for file_id in file_ids:
                             await self._summaries_worker.enqueue(file_id)

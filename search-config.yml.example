@@ -8,8 +8,13 @@ features:
   auto_tags: false    # "false" | "manual" | "on_index" (requires llm.provider != "disabled")
   summaries: false    # "false" | "manual" | "on_index" (requires llm.provider != "disabled")
   detailed_summaries: false
-                      # "false" | "manual" — long-form Markdown summary.
-                      # Manual-only trigger; generation is expensive.
+                      # "false" | "manual" | "on_index" — long-form Markdown summary.
+                      # - "manual":   generated on user request
+                      # - "on_index": generated automatically after each indexing
+                      #               pass. COST WARNING: scales linearly with new
+                      #               files per day. Recommended only with cheap
+                      #               cloud LLMs (GPT-5/4.1 nano/mini, DeepSeek V3)
+                      #               or a patient local LLM.
                       # Independent of "summaries": may be enabled alone.
                       # Requires llm.provider != "disabled".
   rag: false          # true | false — question answering (requires llm.provider != "disabled")

@@ -807,48 +807,97 @@ class SummariesWorker:
     async def enqueue(self, file_id: str) -> None:
         """Add a file to the summaries queue.
 
-        Per-drive policy (``intelligence.summaries``) is checked here
-        so files in opted-out drives never enter the queue. Fails open
-        on transient internal-API failure.
+        The queue is shared between the short/long path and the
+        detailed-summary chain, so a file is accepted when either
+        per-drive policy allows its respective feature. Drives that
+        disable both features drop out here. Fails open on transient
+        internal-API failure (`is_file_feature_enabled` returns True).
         """
         from app.policy_client import is_file_feature_enabled
-        if not await is_file_feature_enabled(file_id, "summaries"):
+        if await is_file_feature_enabled(file_id, "summaries"):
+            await self._queue.put(file_id)
             return
-        await self._queue.put(file_id)
+        # Short/long blocked — still enqueue if detailed is enabled for
+        # this drive so the detailed chain in _process_file can run.
+        if (
+            settings.features.detailed_summaries == "on_index"
+            and await is_file_feature_enabled(file_id, "detailed_summaries")
+        ):
+            await self._queue.put(file_id)
 
     async def enqueue_unprocessed(self) -> int:
-        """Find indexed files without summaries and enqueue them.
+        """Find indexed files needing summary work and enqueue them.
 
-        Only enqueues files whose file_type is supported by summaries
-        (video/audio/document) and whose metadata has been indexed.
-        Per-drive policy (``intelligence.summaries``) is consulted once
-        per drive so opted-out drives don't generate any summary work.
+        Walks two gaps in the search DB:
+        - short/long: files with no ``file_summaries`` row at all
+        - detailed:   files that have short/long but no detailed yet
+          (``detailed_status IS NULL``)
+
+        The short/long gap is only walked when
+        ``features.summaries == "on_index"``; the detailed gap only
+        when ``features.detailed_summaries == "on_index"``. Per-drive
+        policy for each feature is consulted once per drive so
+        opted-out drives don't generate work.
 
         Returns:
             Number of files queued (after policy filtering).
         """
         from app.policy_client import is_feature_enabled
 
-        with get_search_db() as session:
-            rows = session.execute(
-                sql_text(
-                    "SELECT f.file_id, f.drive FROM indexed_files f "
-                    "WHERE f.active = 1 AND f.metadata_indexed = 1 "
-                    "AND f.file_type IN ('video', 'audio', 'document', 'text') "
-                    "AND f.file_id NOT IN (SELECT file_id FROM file_summaries)"
-                )
-            ).fetchall()
+        want_short = settings.features.summaries == "on_index"
+        want_detailed = settings.features.detailed_summaries == "on_index"
+        if not want_short and not want_detailed:
+            return 0
 
-        drive_allowed: dict[str, bool] = {}
+        pending: list[tuple[str, str, str]] = []  # (file_id, drive, feature)
+        with get_search_db() as session:
+            if want_short:
+                rows = session.execute(
+                    sql_text(
+                        "SELECT f.file_id, f.drive FROM indexed_files f "
+                        "WHERE f.active = 1 AND f.metadata_indexed = 1 "
+                        "AND f.file_type IN ('video', 'audio', 'document', 'text') "
+                        "AND f.file_id NOT IN (SELECT file_id FROM file_summaries)"
+                    )
+                ).fetchall()
+                pending.extend(
+                    (file_id, drive, "summaries") for file_id, drive in rows
+                )
+            if want_detailed:
+                rows = session.execute(
+                    sql_text(
+                        "SELECT f.file_id, f.drive FROM indexed_files f "
+                        "WHERE f.active = 1 AND f.metadata_indexed = 1 "
+                        "AND f.file_type IN ('video', 'audio', 'document', 'text') "
+                        "AND f.file_id NOT IN ("
+                        "  SELECT file_id FROM file_summaries "
+                        "  WHERE detailed_status IS NOT NULL"
+                        ")"
+                    )
+                ).fetchall()
+                pending.extend(
+                    (file_id, drive, "detailed_summaries")
+                    for file_id, drive in rows
+                )
+
+        # De-dupe file_ids: a file may appear in both gaps. Keep the
+        # first occurrence (short/long if both modes are on, detailed
+        # otherwise) — _process_file handles each layer independently.
+        seen: set[str] = set()
+        allowed_cache: dict[tuple[str, str], bool] = {}
         count = 0
-        for file_id, drive in rows:
-            allowed = drive_allowed.get(drive)
+        for file_id, drive, feature in pending:
+            if file_id in seen:
+                continue
+            key = (drive, feature)
+            allowed = allowed_cache.get(key)
             if allowed is None:
-                allowed = await is_feature_enabled(drive, "summaries")
-                drive_allowed[drive] = allowed
+                allowed = await is_feature_enabled(drive, feature)
+                allowed_cache[key] = allowed
             if not allowed:
                 continue
             await self._queue.put(file_id)
+            seen.add(file_id)
             count += 1
         return count
 
@@ -864,19 +913,30 @@ class SummariesWorker:
                 logger.error("Summaries worker error: %s", e)
 
     async def _process_file(self, file_id: str) -> None:
-        """Generate a summary for a single file.
+        """Generate summaries for a single file.
 
-        Skips the file if summaries are disabled, the LLM client is
-        unavailable, a summary already exists, the file is unsupported,
-        or no context can be extracted.
+        Handles both the short/long summary and (when configured) the
+        detailed summary. Each layer has its own feature gate and
+        existence check, so callers can enable them independently:
+
+        - ``features.summaries``: ``"manual"`` or ``"on_index"`` runs the
+          short/long generation when no file_summaries row exists yet
+        - ``features.detailed_summaries``: only ``"on_index"`` triggers
+          automatic detailed generation from this worker; ``"manual"``
+          is handled by the router's BackgroundTasks route instead
         """
-        if settings.features.summaries == "false":
-            return
-
         if not self._llm_client.enabled:
             return
 
-        if _has_summary(file_id):
+        want_short = (
+            settings.features.summaries != "false"
+            and not _has_summary(file_id)
+        )
+        want_detailed = (
+            settings.features.detailed_summaries == "on_index"
+            and not _has_detailed_summary(file_id)
+        )
+        if not want_short and not want_detailed:
             return
 
         indexed_file = _get_indexed_file(file_id)
@@ -897,6 +957,27 @@ class SummariesWorker:
             )
             return
 
+        if want_short:
+            await self._generate_short_long(
+                file_id, indexed_file, context_type, raw_context
+            )
+
+        if want_detailed:
+            # Per-drive policy for "detailed_summaries" gates independently
+            # of "summaries" so operators can opt individual drives in/out
+            # without disabling the short/long path.
+            from app.policy_client import is_file_feature_enabled
+            if await is_file_feature_enabled(file_id, "detailed_summaries"):
+                await generate_detailed_summary(file_id, self._llm_client)
+
+    async def _generate_short_long(
+        self,
+        file_id: str,
+        indexed_file: dict,
+        context_type: str,
+        raw_context: str,
+    ) -> None:
+        """Run the short/long generation path and persist the result."""
         prepared, was_truncated = _prepare_context(raw_context)
         user_prompt = _build_user_prompt(
             indexed_file, context_type, prepared, was_truncated

@@ -1127,6 +1127,165 @@ class TestSummariesWorkerProcessFile:
         assert save_spy.call_args.kwargs["context_chars"] < 5000
 
 
+class TestSummariesWorkerOnIndexDetailedChain:
+    """_process_file chains detailed generation when detailed_summaries=on_index."""
+
+    @staticmethod
+    def _stub_file(monkeypatch, transcript: str = "abcdefghij" * 20) -> None:
+        monkeypatch.setattr(
+            "app.workers.summaries._has_summary", lambda fid: False
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._has_detailed_summary", lambda fid: False
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._get_indexed_file",
+            lambda fid: {
+                "file_id": fid,
+                "filename": "lecture.mp4",
+                "file_type": "video",
+                "mime_type": "video/mp4",
+                "title": "",
+                "description": "",
+            },
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_transcript",
+            lambda fid: transcript,
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._save_summary", MagicMock()
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._save_detailed_summary", MagicMock()
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._set_detailed_status", MagicMock()
+        )
+        # Bypass per-drive policy for the chain: treat as always allowed.
+        async def _always(*a, **k):
+            return True
+        monkeypatch.setattr(
+            "app.policy_client.is_file_feature_enabled", _always
+        )
+
+    @pytest.mark.asyncio
+    async def test_manual_mode_does_not_chain_detailed(
+        self, monkeypatch, make_settings, mock_llm_client
+    ):
+        settings = make_settings(
+            features=FeaturesConfig(
+                summaries="on_index",
+                detailed_summaries="manual",
+            ),
+            llm=LLMConfig(provider="openai_compatible", model="m"),
+        )
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+        self._stub_file(monkeypatch)
+
+        mock_llm_client.generate_json = AsyncMock(
+            return_value={"short": "s", "long": "l"}
+        )
+        mock_llm_client.generate = AsyncMock(return_value="## 導入\n\n本文…")
+
+        worker = SummariesWorker(mock_llm_client)
+        await worker._process_file("abc")
+
+        # Short summary generation runs (generate_json) but the detailed
+        # LLM call (generate) must not.
+        mock_llm_client.generate_json.assert_called_once()
+        mock_llm_client.generate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_on_index_chains_detailed_after_short(
+        self, monkeypatch, make_settings, mock_llm_client
+    ):
+        settings = make_settings(
+            features=FeaturesConfig(
+                summaries="on_index",
+                detailed_summaries="on_index",
+            ),
+            llm=LLMConfig(provider="openai_compatible", model="m"),
+        )
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+        self._stub_file(monkeypatch)
+
+        mock_llm_client.generate_json = AsyncMock(
+            return_value={"short": "s", "long": "l"}
+        )
+        mock_llm_client.generate = AsyncMock(return_value="## 導入\n\n本文…")
+
+        worker = SummariesWorker(mock_llm_client)
+        await worker._process_file("abc")
+
+        mock_llm_client.generate_json.assert_called_once()
+        mock_llm_client.generate.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_on_index_skips_detailed_when_drive_policy_denies(
+        self, monkeypatch, make_settings, mock_llm_client
+    ):
+        settings = make_settings(
+            features=FeaturesConfig(
+                summaries="on_index",
+                detailed_summaries="on_index",
+            ),
+            llm=LLMConfig(provider="openai_compatible", model="m"),
+        )
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+        self._stub_file(monkeypatch)
+
+        async def _policy(file_id, feature):
+            # Allow short summaries, block detailed for this drive.
+            return feature != "detailed_summaries"
+        monkeypatch.setattr(
+            "app.policy_client.is_file_feature_enabled", _policy
+        )
+
+        mock_llm_client.generate_json = AsyncMock(
+            return_value={"short": "s", "long": "l"}
+        )
+        mock_llm_client.generate = AsyncMock(return_value="## 導入\n\n本文…")
+
+        worker = SummariesWorker(mock_llm_client)
+        await worker._process_file("abc")
+
+        mock_llm_client.generate_json.assert_called_once()
+        mock_llm_client.generate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_on_index_skips_detailed_when_already_present(
+        self, monkeypatch, make_settings, mock_llm_client
+    ):
+        settings = make_settings(
+            features=FeaturesConfig(
+                summaries="on_index",
+                detailed_summaries="on_index",
+            ),
+            llm=LLMConfig(provider="openai_compatible", model="m"),
+        )
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.summaries.settings", settings)
+        self._stub_file(monkeypatch)
+        monkeypatch.setattr(
+            "app.workers.summaries._has_detailed_summary", lambda fid: True
+        )
+
+        mock_llm_client.generate_json = AsyncMock(
+            return_value={"short": "s", "long": "l"}
+        )
+        mock_llm_client.generate = AsyncMock(return_value="## 導入\n\n本文…")
+
+        worker = SummariesWorker(mock_llm_client)
+        await worker._process_file("abc")
+
+        mock_llm_client.generate_json.assert_called_once()
+        mock_llm_client.generate.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # _build_detailed_system_prompt
 # ---------------------------------------------------------------------------

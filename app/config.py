@@ -121,9 +121,15 @@ class FeaturesConfig:
     search: bool = True
     auto_tags: str = "false"  # "false" | "manual" | "on_index"
     summaries: str = "false"  # "false" | "manual" | "on_index"
-    # Detailed (long-form, Markdown) summary. Manual-only trigger since
-    # generation is expensive; no on_index auto-generation.
-    detailed_summaries: str = "false"  # "false" | "manual"
+    # Detailed (long-form, Markdown) summary modes:
+    # - "false":    no generation
+    # - "manual":   generated on user request (file-detail button)
+    # - "on_index": generated automatically after short/long summary
+    #               finishes for each newly indexed file. Cost scales
+    #               linearly with new files per day — recommended only
+    #               with cheap cloud LLMs (nano/mini tier) or patient
+    #               local LLMs.
+    detailed_summaries: str = "false"  # "false" | "manual" | "on_index"
     # RAG (question answering) is a simple on/off switch: there is no
     # index-time equivalent to "on_index" because RAG only runs in
     # response to user queries. Default off for security — file content

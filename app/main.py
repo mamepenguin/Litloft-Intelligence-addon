@@ -141,16 +141,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     dependencies._summaries_worker = summaries_worker
     summaries_task: asyncio.Task | None = None
 
-    if settings.features.summaries != "false" and llm_client.enabled:
+    summaries_active = settings.features.summaries != "false"
+    detailed_on_index = settings.features.detailed_summaries == "on_index"
+    if (summaries_active or detailed_on_index) and llm_client.enabled:
         summaries_task = asyncio.create_task(
             summaries_worker.run(), name="summaries_worker"
         )
         logger.info(
-            "Summaries worker started (mode=%s)", settings.features.summaries
+            "Summaries worker started (summaries=%s, detailed=%s)",
+            settings.features.summaries,
+            settings.features.detailed_summaries,
         )
 
-        # on_index: queue already-indexed files that don't have summaries yet
-        if settings.features.summaries == "on_index":
+        # on_index: queue already-indexed files that still need summary work.
+        # Triggered when either the short/long path or the detailed path is
+        # on_index; enqueue_unprocessed walks both gaps in the search DB.
+        if settings.features.summaries == "on_index" or detailed_on_index:
             pending = await summaries_worker.enqueue_unprocessed()
             if pending > 0:
                 logger.info(
