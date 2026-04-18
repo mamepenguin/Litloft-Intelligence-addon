@@ -31,6 +31,7 @@ import {
   type ReactNode,
 } from "react";
 import { useTranslations } from "next-intl";
+import { MarkdownPreview } from "@/components/MarkdownPreview";
 import {
   ChevronDown,
   ChevronRight,
@@ -854,7 +855,6 @@ function renderSegmentLine(
   ) : null;
 
   const text = segment.text;
-  const className = "whitespace-pre-wrap break-words";
 
   if (segment.type === "bullet") {
     const padding = segment.indent > 0 ? segment.indent * 8 : 0;
@@ -869,7 +869,9 @@ function renderSegmentLine(
           •
         </span>
         {marker}
-        <span className={className}>{renderInline(text)}</span>
+        <div className="min-w-0 flex-1">
+          <SegmentMarkdown source={text} />
+        </div>
       </div>
     );
   }
@@ -881,32 +883,55 @@ function renderSegmentLine(
         className="flex items-start gap-1 font-mono text-xs"
       >
         {marker}
-        <span className={className}>{renderInline(text)}</span>
+        <div className="min-w-0 flex-1 whitespace-pre-wrap break-words">
+          {text}
+        </div>
       </div>
     );
   }
-  // paragraph
+  // Paragraph + backend-folded ``###``+ heading lines. MarkdownPreview
+  // returns block-level HTML (<p>, <h3>, …), so align the marker on
+  // its own flex row rather than trying to nest it inside the prose.
   return (
-    <p
+    <div
       key={segment.section_path}
       data-citation-section-path={segment.section_path}
-      className={`${className} mb-2`}
+      className="mb-2 flex items-start gap-1"
     >
       {marker}
-      {renderInline(text)}
-    </p>
+      <div className="min-w-0 flex-1">
+        <SegmentMarkdown source={text} />
+      </div>
+    </div>
   );
 }
 
-/**
- * Minimal inline Markdown rendering — strips the surrounding Markdown
- * punctuation for bold/italic/inline code so the text is readable in
- * the citation-anchored view. We deliberately do NOT render full HTML
- * here (see MarkdownPreview for that path); the edit workflow asks the
- * user to preserve Markdown syntax in their saved content.
- */
-function renderInline(text: string): string {
-  return text;
+// Segment-level Markdown rendering. We delegate to the project's
+// shared MarkdownPreview for parity with the rest of the app (sanitize
+// pipeline, typography, code/table/quote styles, link hardening, etc.)
+// and drop the two chrome layers that only make sense for a whole
+// document: the outer card and mermaid rendering. Citation anchoring
+// stays stable because segment boundaries are still established by
+// our own parser (parseSections / parseSegments) — MarkdownPreview only
+// sees one segment's worth of text at a time and its output nests
+// cleanly inside the ``data-citation-section-path`` wrapper. See the
+// file header for the broader design rationale.
+function SegmentMarkdown({ source }: { source: string }) {
+  // Match the chrome=true MarkdownPreview look (text-sm + leading-relaxed
+  // + text-text-primary — the same classes the full-document pipeline
+  // applies) so the detailed summary is visually indistinguishable from
+  // the Markdown viewer used elsewhere. ``markdown-segment`` only
+  // strips the first/last-child outer margins so adjacent segments
+  // stack tightly next to the citation marker.
+  return (
+    <MarkdownPreview
+      source={source}
+      chrome={false}
+      mermaid={false}
+      showFrontmatter={false}
+      className="markdown-segment text-sm leading-relaxed text-text-primary"
+    />
+  );
 }
 
 // Re-export the popover excerpt type for consumers that want to wire a

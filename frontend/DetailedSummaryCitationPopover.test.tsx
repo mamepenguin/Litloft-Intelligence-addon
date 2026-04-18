@@ -144,6 +144,35 @@ describe("DetailedSummaryCitationPopover", () => {
     expect(fakeVideo.currentTime).toBe(42);
   });
 
+  it("stays open when the pointer moves from the trigger into the popover", async () => {
+    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        chunk_id: "c1",
+        file_id: "f1",
+        text: "抜粋",
+        start_time: 0,
+        end_time: 1,
+        page: null,
+      });
+
+    renderPopover({ citation: linkedCitation });
+
+    const trigger = screen.getByRole("button", { name: /出典を表示/ });
+    fireEvent.mouseEnter(trigger);
+    const dialog = await screen.findByRole("dialog");
+
+    // User drifts off the trigger — schedules a close — then reaches
+    // the popover within the grace period, which must cancel it.
+    fireEvent.mouseLeave(trigger);
+    fireEvent.mouseEnter(dialog);
+
+    // Wait past the grace period. Without the cancel, the popover
+    // would have closed; with it, the dialog must still be present.
+    await new Promise((r) => setTimeout(r, 300));
+
+    expect(screen.queryByRole("dialog")).not.toBeNull();
+  });
+
   it("closes on outside pointer click", async () => {
     (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
       .mockResolvedValue({

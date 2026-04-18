@@ -19,6 +19,12 @@ import {
   useRef,
   useState,
 } from "react";
+
+// Grace period between leaving the trigger / popover and auto-dismissal.
+// Long enough to tolerate the sub-pixel vertical travel between the 🔗
+// icon and the popover body (and the user's hand-off hesitation); short
+// enough that an actual intent-to-leave feels responsive.
+const CLOSE_GRACE_MS = 160;
 import { useTranslations } from "next-intl";
 import { Link2, AlertTriangle, PlayCircle } from "lucide-react";
 
@@ -56,6 +62,16 @@ export function DetailedSummaryCitationPopover({
   const [state, setState] = useState<PopoverState>({ kind: "idle" });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cancelClose = useCallback(() => {
+    if (closeTimerRef.current != null) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => cancelClose(), [cancelClose]);
 
   const hasCitation = citation.has_citation;
   const topChunkId = citation.chunk_ids[0] ?? null;
@@ -80,15 +96,28 @@ export function DetailedSummaryCitationPopover({
   }, [fileId, drive, topChunkId]);
 
   const handleOpen = useCallback(() => {
+    cancelClose();
     setOpen(true);
     if (state.kind === "idle" || state.kind === "error") {
       void loadExcerpt();
     }
-  }, [state.kind, loadExcerpt]);
+  }, [state.kind, loadExcerpt, cancelClose]);
 
   const handleClose = useCallback(() => {
+    cancelClose();
     setOpen(false);
-  }, []);
+  }, [cancelClose]);
+
+  // Schedule a deferred close. Either re-entering the trigger or the
+  // popover body cancels the timer, so the user can freely traverse the
+  // sub-pixel gap between them without the popover dismissing.
+  const scheduleClose = useCallback(() => {
+    cancelClose();
+    closeTimerRef.current = setTimeout(() => {
+      closeTimerRef.current = null;
+      setOpen(false);
+    }, CLOSE_GRACE_MS);
+  }, [cancelClose]);
 
   // Outside-click + Escape dismissal.
   useEffect(() => {
@@ -172,12 +201,7 @@ export function DetailedSummaryCitationPopover({
         type="button"
         onMouseEnter={handleOpen}
         onFocus={handleOpen}
-        onMouseLeave={(e) => {
-          // Don't close if the mouse moved into the popover itself.
-          const related = e.relatedTarget as Node | null;
-          if (related && popoverRef.current?.contains(related)) return;
-          handleClose();
-        }}
+        onMouseLeave={scheduleClose}
         onClick={() => (open ? handleClose() : handleOpen())}
         className={`mx-1 inline-flex h-4 w-4 items-center justify-center rounded align-middle transition-colors ${
           hasCitation
@@ -218,9 +242,10 @@ export function DetailedSummaryCitationPopover({
           aria-label={t("citations.popoverLabel", {
             defaultMessage: "Citation preview",
           })}
-          onMouseLeave={handleClose}
+          onMouseEnter={cancelClose}
+          onMouseLeave={scheduleClose}
           className={`absolute z-40 w-80 rounded-lg border border-bg-border bg-bg-card p-3 text-xs shadow-lg ${
-            placement === "above" ? "bottom-full mb-1" : "top-full mt-1"
+            placement === "above" ? "bottom-full" : "top-full"
           } left-0`}
         >
           {state.kind === "loading" && (

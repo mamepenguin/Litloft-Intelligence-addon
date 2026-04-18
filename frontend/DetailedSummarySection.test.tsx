@@ -476,6 +476,119 @@ describe("DetailedSummarySection — edit flow", () => {
   });
 });
 
+// ----- Inline Markdown rendering ----------------------------------------
+
+describe("DetailedSummarySection — inline markdown rendering", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWsLastEvent.current = null;
+    (getDetailedSummaryCitations as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({ available: true, citations: [] });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders **bold** / *italic* / `code` / links inside segment text", async () => {
+    const md = `## 見どころ
+この作品は **重要な瞬間** と *印象的なシーン* があります。
+- \`setup()\` 関数を [参照](https://example.com) してください。
+`;
+    (getDetailedSummary as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        available: true,
+        status: "generated",
+        file_id: "f1",
+        detailed_summary: md,
+        model: "test-model",
+        edited_at: null,
+        has_original: false,
+      });
+
+    const { container } = renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+
+    await waitFor(() => {
+      expect(container.querySelector("strong")?.textContent).toBe(
+        "重要な瞬間",
+      );
+    });
+    expect(container.querySelector("em")?.textContent).toBe("印象的なシーン");
+    expect(container.querySelector("code")?.textContent).toBe("setup()");
+    const link = container.querySelector<HTMLAnchorElement>("a[href]");
+    expect(link?.getAttribute("href")).toBe("https://example.com");
+    expect(link?.getAttribute("target")).toBe("_blank");
+    expect(link?.getAttribute("rel")).toContain("noopener");
+  });
+
+  it("renders ### subheadings as styled heading elements", async () => {
+    const md = `## 章構成
+### 第一幕
+
+ここから物語が始まります。
+
+### 第二幕
+
+山場の展開。
+`;
+    (getDetailedSummary as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        available: true,
+        status: "generated",
+        file_id: "f1",
+        detailed_summary: md,
+        model: "test-model",
+        edited_at: null,
+        has_original: false,
+      });
+
+    const { container } = renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+
+    await screen.findByText(/ここから物語が始まります/);
+
+    // MarkdownPreview renders native <h3> for ``###`` subheadings.
+    const h3s = container.querySelectorAll("h3");
+    const headingTexts = Array.from(h3s).map((el) => el.textContent);
+    expect(headingTexts).toEqual(expect.arrayContaining(["第一幕", "第二幕"]));
+
+    // The raw ``### `` marker must not leak into the rendered DOM.
+    expect(container.textContent ?? "").not.toContain("### 第一幕");
+    expect(container.textContent ?? "").not.toContain("### 第二幕");
+  });
+
+  it("neutralises javascript: URLs in links", async () => {
+    const md = `## 危険リンク
+- [クリック](javascript:alert('xss')) という文があります
+`;
+    (getDetailedSummary as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        available: true,
+        status: "generated",
+        file_id: "f1",
+        detailed_summary: md,
+        model: "test-model",
+        edited_at: null,
+        has_original: false,
+      });
+
+    const { container } = renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+
+    // Wait for the expanded body to render — look for the surrounding
+    // text so we know markdown-it has processed the segment.
+    await screen.findByText(/という文があります/);
+
+    // markdown-it's default validateLink rejects javascript: URIs at
+    // parse time, so either no anchor renders at all OR (if another
+    // layer in the pipeline were to render one) the href must not
+    // carry the javascript: scheme. Both outcomes are safe.
+    const link = container.querySelector<HTMLAnchorElement>("a[href]");
+    expect(link?.getAttribute("href") ?? "").not.toMatch(/^javascript:/i);
+  });
+});
+
 // ----- Markdown parser unit tests ---------------------------------------
 
 describe("parseSections", () => {
