@@ -151,6 +151,16 @@ def parse_segments(markdown: str) -> list[Segment]:
             row_idx = 0
             continue
 
+        # H3 subheading: structural marker, not a claim. Terminate any
+        # in-progress paragraph / table but emit no segment and leave
+        # ``plain_idx`` untouched so downstream bullets keep the
+        # H2-scoped counter the frontend parser also uses.
+        if _H3_HEADING_RE.match(line):
+            flush_paragraph()
+            in_table = False
+            table_header_consumed = False
+            continue
+
         # Blank line: terminates paragraph and table.
         if not line.strip():
             flush_paragraph()

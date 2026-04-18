@@ -156,6 +156,71 @@ class TestParseSegments:
         assert len(segments) == 1
         assert segments[0].section_path == "詳細/0"
 
+    def test_h3_heading_is_not_segmented(self):
+        """``### subheading`` is a structural marker, not a citation target.
+
+        The parser must flush any in-progress paragraph at the H3
+        boundary but emit no segment for the heading line itself and
+        leave ``plain_idx`` untouched so subsequent bullets line up
+        with what the frontend parser counts. Any drift here makes
+        frontend lookup (``citationByPath.get(section_path)``) resolve
+        to the wrong segment's citation — the bug that motivated this
+        test.
+        """
+        from app.summary_parser import parse_segments
+
+        markdown = (
+            "## 詳細内容\n"
+            "### 1. 塩もみキャベツ\n"
+            "- 春キャベツをざく切り\n"
+            "- 塩を振って揉む\n"
+            "### 2. ニンジンのナムル\n"
+            "- 千切りにして茹でる\n"
+            "- ごま油で和える\n"
+        )
+        segments = parse_segments(markdown)
+        # No segment for either ``### ...`` heading; indices are the
+        # same before and after the subheading boundary (0..3).
+        assert [s.section_path for s in segments] == [
+            "詳細内容/0",
+            "詳細内容/1",
+            "詳細内容/2",
+            "詳細内容/3",
+        ]
+        assert [s.segment_text for s in segments] == [
+            "春キャベツをざく切り",
+            "塩を振って揉む",
+            "千切りにして茹でる",
+            "ごま油で和える",
+        ]
+        assert all(s.segment_type == "bullet" for s in segments)
+
+    def test_h3_terminates_in_progress_paragraph(self):
+        """A ``###`` line closes the current paragraph (no merge).
+
+        Without this, an un-blank-line-separated paragraph immediately
+        followed by a ``### subheading`` would absorb or drop the
+        subheading depending on other line kinds — both behaviours
+        break the section_path contract.
+        """
+        from app.summary_parser import parse_segments
+
+        markdown = (
+            "## 詳細内容\n"
+            "導入の段落。\n"
+            "### サブ見出し\n"
+            "- サブ1\n"
+        )
+        segments = parse_segments(markdown)
+        assert [s.section_path for s in segments] == [
+            "詳細内容/0",
+            "詳細内容/1",
+        ]
+        assert segments[0].segment_type == "paragraph"
+        assert segments[0].segment_text == "導入の段落。"
+        assert segments[1].segment_type == "bullet"
+        assert segments[1].segment_text == "サブ1"
+
     def test_full_4_section_document(self):
         from app.summary_parser import parse_segments
 
