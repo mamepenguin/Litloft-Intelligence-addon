@@ -78,9 +78,9 @@ def _query_top_chunks(
     embedding types (``whisper`` / ``text_content``).
 
     Scores are returned as cosine similarity (higher = better). The
-    virtual table exposes ``distance`` which for normalised vectors is
-    ``1 - cos_sim``; we convert back for caller convenience so the
-    threshold comparison reads naturally.
+    virtual table exposes ``distance`` as Euclidean (L2). For
+    L2-normalised vectors ``L2² = 2 − 2·cos(θ)``, so we invert to
+    ``cos_sim = 1 − d²/2`` — the same conversion ``app.search`` uses.
     """
     if top_k <= 0:
         return []
@@ -129,7 +129,10 @@ def _query_top_chunks(
             dist = float(distance)
         except (TypeError, ValueError):
             continue
-        score = max(0.0, 1.0 - dist)
+        # sqlite-vec returns L2 distance; invert to cosine similarity
+        # for normalised vectors: cos = 1 − d²/2. Clamp to [0, 1] so
+        # float noise near identical vectors can't trip the threshold.
+        score = max(0.0, min(1.0, 1.0 - (dist * dist) / 2.0))
         seen = {*seen, chunk_id}
         results = [*results, (chunk_id, score)]
         if len(results) >= top_k:

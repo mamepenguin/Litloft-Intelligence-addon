@@ -463,6 +463,98 @@ class TestComputeCitations:
         assert len(rows) == 2
 
 
+class TestQueryTopChunksDistanceConversion:
+    """sqlite-vec returns L2 distance; citations must convert to cosine.
+
+    Regression test for the bug where ``_query_top_chunks`` used the
+    naive ``score = 1 - distance`` formula. sqlite-vec's ``vec0`` virtual
+    table returns Euclidean distance, and for L2-normalised vectors the
+    correct inversion is ``cos = 1 − d²/2``. Using the wrong formula
+    under-estimates cosine similarity for every non-identical match
+    (e.g. true cos 0.55 ⇢ L2 ≈ 0.949 ⇢ naive ≈ 0.05), which silently
+    drops almost every real summary segment below the default 0.55
+    threshold — leaving the UI stuck on ⚠ for everything.
+    """
+
+    def _stub_execute(self, rows):
+        """Build a ``session.execute`` stub returning the given rows."""
+        class _FakeResult:
+            def __init__(self, data):
+                self._data = data
+
+            def fetchall(self):
+                return list(self._data)
+
+        class _FakeSession:
+            def execute(self, _stmt, _params):
+                return _FakeResult(rows)
+
+        @contextmanager
+        def _get_search_db():
+            yield _FakeSession()
+
+        return _get_search_db
+
+    def test_l2_zero_maps_to_cosine_one(self, monkeypatch):
+        """Identical vectors (L2 = 0) must score 1.0, not 1.0 by luck."""
+        from app import citations
+
+        monkeypatch.setattr(
+            citations, "get_search_db",
+            self._stub_execute([("wh_file-1_0_abc", 0.0)]),
+        )
+        results = citations._query_top_chunks(
+            "file-1", np.ones(4, dtype=np.float32), top_k=3
+        )
+        assert results == [("transcript:0", pytest.approx(1.0))]
+
+    def test_real_distance_converts_via_cos_formula(self, monkeypatch):
+        """L2 ≈ 0.949 corresponds to cosine ≈ 0.55, not 0.05.
+
+        Before the fix this row would score 1 − 0.949 ≈ 0.051 and fail
+        the default ``citation_threshold`` 0.55. After the fix it lands
+        exactly on the threshold, matching the documented contract that
+        the config value is a cosine-similarity floor.
+        """
+        from app import citations
+
+        # L2 = sqrt(2 - 2·0.55) → cosine 0.55 exactly.
+        l2 = (2.0 * (1.0 - 0.55)) ** 0.5
+        monkeypatch.setattr(
+            citations, "get_search_db",
+            self._stub_execute([("wh_file-1_3_xyz", l2)]),
+        )
+        results = citations._query_top_chunks(
+            "file-1", np.ones(4, dtype=np.float32), top_k=3
+        )
+        assert len(results) == 1
+        chunk_id, score = results[0]
+        assert chunk_id == "transcript:3"
+        assert score == pytest.approx(0.55, abs=1e-6)
+
+    def test_scores_stay_sorted_descending(self, monkeypatch):
+        """Two rows with different L2 distances round-trip in score order."""
+        from app import citations
+
+        rows = [
+            ("wh_file-1_0_a", 0.316),  # ≈ cos 0.95
+            ("wh_file-1_1_b", 0.949),  # ≈ cos 0.55
+        ]
+        monkeypatch.setattr(
+            citations, "get_search_db", self._stub_execute(rows),
+        )
+        results = citations._query_top_chunks(
+            "file-1", np.ones(4, dtype=np.float32), top_k=3
+        )
+        assert [cid for cid, _ in results] == [
+            "transcript:0",
+            "transcript:1",
+        ]
+        assert results[0][1] > results[1][1]
+        assert results[0][1] == pytest.approx(0.95, abs=1e-3)
+        assert results[1][1] == pytest.approx(0.55, abs=1e-3)
+
+
 class TestDeleteCitations:
     def test_delete_returns_rowcount(self, citations_db):
         from app.citations import delete_citations, write_citations
