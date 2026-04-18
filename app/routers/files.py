@@ -15,6 +15,7 @@ from app.drive_context import assert_file_in_drive, require_drive
 from app.schemas import (
     BatchSuggestedTagsRequest,
     BatchSuggestedTagsResponse,
+    ChunkExcerptResponse,
     ClipTimestampItem,
     ClipTimestampsResponse,
     IndexDetailEmbeddingItem,
@@ -270,6 +271,223 @@ async def get_clip_timestamps(
             )
             for c in clips
         ],
+    )
+
+
+_EXCERPT_CONTEXT_CHARS = 100
+
+
+def _parse_chunk_id(chunk_id: str) -> tuple[str, int]:
+    """Split ``"transcript:5"`` / ``"document:12"`` into (source, index).
+
+    Raises ``HTTPException(400)`` when the format is malformed — unknown
+    prefix, missing colon, or non-integer index. Keeping the parse
+    failure as 400 (rather than 404) lets the frontend distinguish a
+    client bug from a legitimately missing chunk.
+    """
+    if not chunk_id or ":" not in chunk_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid chunk_id format; expected '<source>:<index>'",
+        )
+    source, _, raw_index = chunk_id.partition(":")
+    if source not in {"transcript", "document"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid chunk_id source; expected 'transcript' or 'document'",
+        )
+    try:
+        index = int(raw_index)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid chunk_id index; expected an integer",
+        ) from None
+    if index < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid chunk_id index; must be non-negative",
+        )
+    return source, index
+
+
+def _compose_excerpt(
+    target: str,
+    prev: str | None,
+    nxt: str | None,
+    context_chars: int = _EXCERPT_CONTEXT_CHARS,
+) -> str:
+    """Build the ±``context_chars`` excerpt around ``target``.
+
+    Takes the tail of ``prev`` and head of ``nxt`` (up to ``context_chars``
+    each) and joins them with ``" … "`` when the neighbour text was
+    actually truncated. Empty / missing neighbours are skipped silently
+    so edge chunks don't advertise phantom context.
+    """
+    parts: list[str] = []
+    if prev:
+        tail = prev[-context_chars:]
+        if len(prev) > context_chars:
+            parts = [*parts, f"… {tail}"]
+        else:
+            parts = [*parts, tail]
+    parts = [*parts, target]
+    if nxt:
+        head = nxt[:context_chars]
+        if len(nxt) > context_chars:
+            parts = [*parts, f"{head} …"]
+        else:
+            parts = [*parts, head]
+    return " ".join(parts)
+
+
+@router.get(
+    "/files/{file_id}/chunks/{chunk_id}/excerpt",
+    response_model=ChunkExcerptResponse,
+)
+async def get_chunk_excerpt(
+    file_id: str,
+    chunk_id: str,
+    drive: str = Depends(require_drive),
+) -> ChunkExcerptResponse:
+    """Return the text of a cited chunk with ±100 chars of context.
+
+    Citations in the detailed-summary response store ``chunk_id`` as a
+    prefixed identifier (``transcript:{idx}`` / ``document:{idx}``).
+    This endpoint resolves that id back to the underlying text — the
+    chunk's own body plus a short excerpt from the neighbour chunks —
+    so the UI can render a preview without refetching the whole
+    transcript or document.
+
+    Behaviour:
+
+    * 400 when ``chunk_id`` is malformed (bad prefix / non-integer index).
+    * 404 when the file is not indexed, lives in another drive, the
+      detailed-summaries feature is disabled for this drive, or the
+      specific chunk row does not exist.
+    * Transcript chunks return ``start_time`` / ``end_time``; ``page``
+      is null.
+    * Document chunks return ``page`` (when the extractor provided one);
+      ``start_time`` / ``end_time`` are null.
+    """
+    # Per-drive policy: when detailed_summaries is off the citations
+    # UX is unreachable and this endpoint serves no legitimate caller.
+    # Surface it as 404 (not 400) to match the host's addon_feature
+    # pre_check so disabled drives behave identically end-to-end.
+    if settings.features.detailed_summaries == "false":
+        raise HTTPException(status_code=404, detail="Not found")
+
+    source, chunk_index = _parse_chunk_id(chunk_id)
+
+    # Confirms file exists and belongs to the caller's drive. Raises
+    # 404 otherwise — never leaks the existence of files in other
+    # drives.
+    _get_indexed_file_or_404(file_id, drive)
+
+    from app.database import get_search_db
+    from app.models import TranscriptChunk
+
+    if source == "transcript":
+        with get_search_db() as db:
+            target_row = (
+                db.query(TranscriptChunk)
+                .filter(
+                    TranscriptChunk.file_id == file_id,
+                    TranscriptChunk.chunk_index == chunk_index,
+                )
+                .first()
+            )
+            if target_row is None:
+                raise HTTPException(status_code=404, detail="Chunk not found")
+
+            prev_row = (
+                db.query(TranscriptChunk)
+                .filter(
+                    TranscriptChunk.file_id == file_id,
+                    TranscriptChunk.chunk_index == chunk_index - 1,
+                )
+                .first()
+            )
+            next_row = (
+                db.query(TranscriptChunk)
+                .filter(
+                    TranscriptChunk.file_id == file_id,
+                    TranscriptChunk.chunk_index == chunk_index + 1,
+                )
+                .first()
+            )
+
+            text = _compose_excerpt(
+                target_row.text,
+                prev_row.text if prev_row else None,
+                next_row.text if next_row else None,
+            )
+            start = target_row.timestamp_start
+            end = target_row.timestamp_end
+
+        return ChunkExcerptResponse(
+            chunk_id=chunk_id,
+            file_id=file_id,
+            text=text,
+            start_time=start,
+            end_time=end,
+            page=None,
+        )
+
+    # source == "document": fts_text_content is an FTS5 virtual table
+    # whose ``chunk_index`` and ``page`` columns are stored as TEXT, so
+    # numeric comparisons must CAST to INTEGER (see hako memo
+    # EAiVExR4vGgOym5aAv_Up).
+    with get_search_db() as db:
+        target = db.execute(
+            sql_text(
+                "SELECT text, page FROM fts_text_content "
+                "WHERE file_id = :fid "
+                "AND CAST(chunk_index AS INTEGER) = :idx"
+            ),
+            {"fid": file_id, "idx": chunk_index},
+        ).fetchone()
+        if target is None:
+            raise HTTPException(status_code=404, detail="Chunk not found")
+
+        prev_row = db.execute(
+            sql_text(
+                "SELECT text FROM fts_text_content "
+                "WHERE file_id = :fid "
+                "AND CAST(chunk_index AS INTEGER) = :idx"
+            ),
+            {"fid": file_id, "idx": chunk_index - 1},
+        ).fetchone()
+        next_row = db.execute(
+            sql_text(
+                "SELECT text FROM fts_text_content "
+                "WHERE file_id = :fid "
+                "AND CAST(chunk_index AS INTEGER) = :idx"
+            ),
+            {"fid": file_id, "idx": chunk_index + 1},
+        ).fetchone()
+
+    target_text = target[0] or ""
+    page_raw = target[1]
+    page: int | None
+    try:
+        page = int(page_raw) if page_raw not in (None, "") else None
+    except (TypeError, ValueError):
+        page = None
+
+    text = _compose_excerpt(
+        target_text,
+        prev_row[0] if prev_row else None,
+        next_row[0] if next_row else None,
+    )
+
+    return ChunkExcerptResponse(
+        chunk_id=chunk_id,
+        file_id=file_id,
+        text=text,
+        start_time=None,
+        end_time=None,
+        page=page,
     )
 
 

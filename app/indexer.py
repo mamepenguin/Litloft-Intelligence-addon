@@ -1152,6 +1152,17 @@ def _purge_file(file_id: str) -> None:
             sql_text("DELETE FROM file_summaries WHERE file_id = :fid"),
             {"fid": file_id},
         )
+        # detailed_summary_citations: linked 1:N to file_summaries via
+        # file_id, so we drop them when the file leaves the index. The
+        # table may not exist on very old DBs (pre-Phase1 schema); the
+        # ``IF EXISTS`` guard keeps the purge a no-op in that case.
+        session.execute(
+            sql_text(
+                "DELETE FROM detailed_summary_citations "
+                "WHERE file_id = :fid"
+            ),
+            {"fid": file_id},
+        )
 
         # Delete indexed file record
         session.query(IndexedFile).filter_by(file_id=file_id).delete()

@@ -255,6 +255,39 @@
                 "response_filter": null
             },
             {
+                "path": "/files/{file_id}/summary/detailed/citations",
+                "methods": ["GET"],
+                "pre_check": {
+                    "type": "file_access",
+                    "param": "file_id"
+                },
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/chunks/{chunk_id}/excerpt",
+                "methods": ["GET"],
+                "pre_check": {"type": "file_access", "param": "file_id"},
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/summary/detailed/section",
+                "methods": ["PUT"],
+                "pre_check": {"type": "file_access", "param": "file_id"},
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/summary/detailed/revert",
+                "methods": ["POST"],
+                "pre_check": {"type": "file_access", "param": "file_id"},
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/summary/detailed/regenerate",
+                "methods": ["POST"],
+                "pre_check": {"type": "file_access", "param": "file_id"},
+                "response_filter": null
+            },
+            {
                 "path": "/ask",
                 "methods": ["POST"],
                 "pre_check": {"type": "addon_feature", "feature": "rag"},

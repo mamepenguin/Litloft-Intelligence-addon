@@ -30,6 +30,69 @@ from app.text_utils import trim_to_sentence_boundary
 
 logger = logging.getLogger(__name__)
 
+
+async def _emit_ws_event(event: str, data: dict) -> None:
+    """Best-effort WebSocket event emission via the host's internal API.
+
+    Mirrors ``app.workers.refine._emit_ws_event``. The host forwards
+    the posted JSON to its WebSocket broadcaster; delivery failures
+    are swallowed so citation calculation never fails a detailed-
+    summary generation. Tests monkeypatch this function.
+    """
+    import os
+
+    logger.info("summaries-event %s %s", event, data)
+
+    base = os.environ.get(
+        "HOMEVAULT_INTERNAL_API_URL", "http://backend:8000/api/internal"
+    )
+    url = f"{base}/addon-events"
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post(url, json={"event": event, "data": data})
+    except Exception:
+        # Host endpoint is optional; never fail the worker on WS.
+        return
+
+
+async def _recalculate_citations(file_id: str, summary_text: str) -> None:
+    """Recompute detailed_summary_citations for ``file_id``.
+
+    Executes the synchronous ``calculate_and_store`` in the default
+    thread executor so the worker event loop stays responsive during
+    embedding generation (CPU-bound). Emits
+    ``intelligence.detailed_summary.citations_ready`` on completion.
+
+    Silently swallows failures — citations are a best-effort layer on
+    top of the detailed summary, and a citation crash must never
+    invalidate the summary itself.
+    """
+    if not summary_text or not summary_text.strip():
+        return
+    try:
+        import asyncio
+        from app.citations import calculate_and_store
+
+        loop = asyncio.get_running_loop()
+        with_count, without_count = await loop.run_in_executor(
+            None, calculate_and_store, file_id, summary_text
+        )
+        await _emit_ws_event(
+            "intelligence.detailed_summary.citations_ready",
+            {
+                "file_id": file_id,
+                "citation_count": with_count,
+                "no_citation_count": without_count,
+            },
+        )
+    except Exception as e:  # noqa: BLE001 — never fail the caller
+        logger.warning(
+            "Citation recalculation failed for %s: %s", file_id, e
+        )
+
+
 # Re-export the shared helper under its legacy private name so existing
 # callers (and the summaries tests) that imported `_trim_to_sentence_boundary`
 # from this module keep working after the helper moved to app.text_utils.
@@ -70,7 +133,18 @@ _WINDOW_SEPARATOR = "\n\n[...中略...]\n\n"
 #   3. (detailed only) Surface low-confidence names via a dedicated annotation
 #      section so the user knows where to manually verify
 # See hako: "LLM による要約... 固有名詞を間違うこと" (2026-04-17).
-_PROPER_NOUN_CORRECTION_RULES = (
+_COMMON_RULES = (
+    "## トピック境界の厳守\n"
+    "\n"
+    "原文が複数の独立したトピック（別レシピ、別製品、別章、別エピソード等）を"
+    "扱っている場合、各トピックのセクションには、原文でそのトピックが扱われている"
+    "範囲内の情報のみを記載すること。\n"
+    "\n"
+    "- あるトピックで述べられた特徴・効能・ポイントを、別のトピックのセクションに"
+    "転記しないこと（隣接トピック間の情報混線を避ける）\n"
+    "- 判断に迷った場合は、該当情報を省略するか、トピック横断的なセクション"
+    "（「全体を通じたポイント」等）を別途設けて記載する\n"
+    "\n"
     "## 固有名詞の扱い\n"
     "\n"
     "このコンテンツはトランスクリプト（音声認識やテキスト抽出）由来のため、"
@@ -82,14 +156,71 @@ _PROPER_NOUN_CORRECTION_RULES = (
     "トランスクリプト中で異なる表記（カタカナ化、区切り違い、漢字違い、音素類似など）"
     "がされている場合は、ファイル名・説明文側の表記に統一する\n"
     "- 同一対象と明確に判断できる複数の表記が登場する場合、最も妥当な一つに統一する\n"
+    "- 明らかに日本語として意味不明な表記（例: 「雷にゃく」「鼻字に入れて」等の、"
+    "日本語として成立しない語句）で、文脈から一般名詞・一般的表現として"
+    "妥当な復元候補が明確な場合は、復元した表記を使用する\n"
+    "  - 復元候補が複数あり絞り込めない場合、または一般的な語として定着していない"
+    "可能性がある場合は、原文表記のまま残す\n"
     "\n"
     "### 慎重に扱うもの\n"
     "- ファイル名・タイトル・説明文に登場しない固有名詞は、"
     "トランスクリプトの表記を原則そのまま使う\n"
     "- 元の表記が誤っている可能性はあっても、"
     "推測で別の漢字や読みに置き換えないこと（別の誤りを生むリスクのほうが高い）\n"
-    "- 明らかに日本語として意味不明な場合や、同一対象が複数の異なる表記で登場する場合のみ、"
-    "文脈から最も妥当な表記を選ぶ\n"
+    "- 人名・地名・商品名・ブランド名など、誤った復元が実害につながりうる"
+    "固有名詞は、意味不明であっても安易に復元せず原文表記を保持する\n"
+    "\n"
+    "## 数値情報の扱い\n"
+    "\n"
+    "原文中の数値（分量、時間、温度、保存期間、価格、距離、年数等）は、"
+    "原則として原文の表記をそのまま維持すること。\n"
+    "\n"
+    "- 数値を勝手に変更・修正・丸めてはならない\n"
+    "- 単位の換算や表記統一も行わない（原文が「小さじ2/3」なら「小さじ2/3」のまま）\n"
+    "- ただし、数値そのものは変えずに、不確実性の注記を添えることは許容する\n"
+    "  - トランスクリプト由来で、数値が音声認識エラーの可能性が高いと"
+    "判断される場合（例: 葉物野菜の保存期間が「45日」となっている等、"
+    "一般常識と大きく乖離する場合）、以下の形式で注記を添えてよい:\n"
+    "    「保存期間の目安はおよそ45日程度である（※原文表記。"
+    "音声認識エラーの可能性あり）」\n"
+    "  - 注記を添える基準は保守的に。迷う程度なら注記は不要。"
+    "明確に常識的範囲を逸脱している場合のみに限定する\n"
+    "\n"
+    "## 種別固有の注意点\n"
+    "\n"
+    "### 手順型（レシピ、チュートリアル、攻略）の場合\n"
+    "- 材料名・分量・調理時間・保存期間・温度などの具体値は特に正確に記載する\n"
+    "- 工程の順序を入れ替えない\n"
+    "- あるレシピ・手順のポイントを別のレシピ・手順のセクションに混入させない"
+    "（トピック境界の厳守を特に意識する）\n"
+    "- 料理名・技名・操作名など、音声認識で崩れがちだが一般名詞として"
+    "復元可能な用語は、固有名詞ルールに従い妥当な表記に修正する\n"
+    "\n"
+    "### 物語型（アニメ、ドラマ、小説、映画）の場合\n"
+    "- 登場人物名の表記ゆれに注意し、同一人物は一つの表記に統一する\n"
+    "- 時系列と因果関係を崩さない\n"
+    "- ネタバレの扱いは原文の提示順に従う（結末を冒頭に持ってこない）\n"
+    "\n"
+    "### 対話型（インタビュー、対談、座談会）の場合\n"
+    "- 誰の発言かを必ず明示する\n"
+    "- 発言者間で意見が対立している箇所は、対立構造を残す"
+    "（片方の主張だけを採用して整理しない）\n"
+    "\n"
+    "### 評価型（レビュー、比較、感想）の場合\n"
+    "- 評価は必ず誰による評価かを明示する\n"
+    "- 評価軸（価格、性能、使いやすさ等）を可能な限り明確に区別する\n"
+    "\n"
+    "### 情報伝達型（ニュース、速報、まとめ）の場合\n"
+    "- 情報源が複数ある場合、各情報の出典を区別する\n"
+    "- 確定情報と未確定情報（「〜と報じられている」「〜の可能性がある」等）を区別する\n"
+    "\n"
+    "### 解説型（講義、技術記事、ハウツー）の場合\n"
+    "- 主張と根拠の対応関係を崩さない\n"
+    "- 前提条件や適用範囲（「〜の場合に限る」等）を省略しない\n"
+    "\n"
+    "### 文書型（報告書、論文、契約書）の場合\n"
+    "- 章構成をできる限り原文の構造に合わせる\n"
+    "- 定義された用語は初出時の定義を尊重し、勝手に言い換えない\n"
 )
 
 # Annotation section (modification history) was attempted in two designs
@@ -134,7 +265,7 @@ def _build_system_prompt() -> str:
         'JSON形式で返すこと: {"short": "1文サマリー", "long": "段落要約"}\n'
         "JSONのみ返し、他のテキストは含めないこと\n"
         "\n"
-        "## short（1文サマリー）の規則\n"
+        "## short(1文サマリー)の規則\n"
         "\n"
         "- 1文（30-80文字）で最も重要な要点を表す\n"
         "- 原文が複数トピックを扱う場合、最も中心的なテーマを選ぶか、"
@@ -143,7 +274,7 @@ def _build_system_prompt() -> str:
         "「〜の可能性」「〜の見通し」などの表現を保持する\n"
         "- 原文にない評価語（「画期的」「衝撃の」等）を加えない\n"
         "\n"
-        "## long（段落要約）の規則\n"
+        "## long(段落要約)の規則\n"
         "\n"
         "- 3-5文（200-400文字）で主要内容を説明する\n"
         "- 原文の流れ（時系列または論理順）に沿って記述する\n"
@@ -160,7 +291,7 @@ def _build_system_prompt() -> str:
         "字数削減のために省略しないこと\n"
         "- 原文にないニュアンス・一般化・総括を付け加えないこと\n"
         "\n"
-        f"{_PROPER_NOUN_CORRECTION_RULES}"
+        f"{_COMMON_RULES}"
         f"{lang_line}"
     )
 
@@ -178,7 +309,7 @@ def _build_detailed_system_prompt() -> str:
 
     return (
         "あなたはファイル管理システムの要約アシスタントです。\n"
-         "以下のコンテンツを読んで、長文の構造化要約を Markdown 形式で生成してください。\n"
+        "以下のコンテンツを読んで、長文の構造化要約を Markdown 形式で生成してください。\n"
         "\n"
         "## 手順\n"
         "\n"
@@ -198,9 +329,13 @@ def _build_detailed_system_prompt() -> str:
         "例えば手順型なら「材料/手順」、物語型なら「あらすじ/主要な展開/登場人物」、\n"
         "対話型なら「論点/各発言者の主張」など、コンテンツに最も適した構成を選びます。\n"
         "\n"
+        "**ステップ3: 種別固有の注意点を適用する**\n"
+        "「## 種別固有の注意点」セクションに、種別ごとの追加ルールを記載しています。\n"
+        "ステップ1で判定した種別に該当する注意点を、要約作成時に必ず適用してください。\n"
+        "\n"
         "## 基本構成\n"
         "\n"
-        "1. **導入**（1-2文）: 全体像と主要テーマを簡潔に\n"
+        "1. **導入**(1-2文): 全体像と主要テーマを簡潔に\n"
         "2. **詳細内容**: 原文の流れ（時系列が明確ならその順、"
         "そうでなければ論理・章構成）に沿って整理。\n"
         "   並列な情報は箇条書き、因果・順序・対比が重要な部分は文章で記述する。\n"
@@ -208,7 +343,7 @@ def _build_detailed_system_prompt() -> str:
         "3. **重要ポイントまとめ**: 数値・比較・対応関係が実際に存在する場合のみ "
         "Markdown 表で整理する。該当する内容がなければこのセクションは省略する"
         "（無理に表を作らない）\n"
-        "4. **結論**（1-2文）: 原文で示されている結論・締めくくり・示唆を要約する。"
+        "4. **結論**(1-2文): 原文で示されている結論・締めくくり・示唆を要約する。"
         "原文にない提案や一般化を加えないこと。\n"
         "\n"
         "## 共通規則\n"
@@ -229,7 +364,7 @@ def _build_detailed_system_prompt() -> str:
         "- 原文にない事実・一般化・総括・提案を付け加えないこと\n"
         "- 複数の情報源や発言者が登場する場合、誰の発言・情報かを明示する\n"
         "\n"
-        f"{_PROPER_NOUN_CORRECTION_RULES}"
+        f"{_COMMON_RULES}"
         f"{lang_line}"
     )
 
@@ -699,7 +834,8 @@ def _get_detailed_summary(file_id: str) -> dict | None:
             sql_text(
                 "SELECT detailed_summary, detailed_status, detailed_model, "
                 "detailed_generated_at, detailed_context_chars, "
-                "detailed_was_truncated, detailed_error "
+                "detailed_was_truncated, detailed_error, "
+                "detailed_original, detailed_edited_at "
                 "FROM file_summaries WHERE file_id = :fid"
             ),
             {"fid": file_id},
@@ -716,6 +852,8 @@ def _get_detailed_summary(file_id: str) -> dict | None:
                 bool(row[5]) if row[5] is not None else None
             ),
             "detailed_error": row[6],
+            "detailed_original": row[7],
+            "detailed_edited_at": row[8],
         }
 
 
@@ -726,6 +864,10 @@ def _delete_detailed_summary(file_id: str) -> bool:
     no summary row at all. The row itself is preserved when short/long
     are still present; if it has no other content, the row is deleted
     entirely so repeat generation starts from a clean slate.
+
+    Always drops the file's ``detailed_summary_citations`` rows — the
+    citation set is derived from the body text, so it's meaningless
+    after the body is cleared. No-op when no citations exist.
     """
     with get_search_db() as session:
         row = session.execute(
@@ -750,7 +892,9 @@ def _delete_detailed_summary(file_id: str) -> bool:
                     "detailed_generated_at = NULL, "
                     "detailed_context_chars = NULL, "
                     "detailed_was_truncated = NULL, "
-                    "detailed_error = NULL "
+                    "detailed_error = NULL, "
+                    "detailed_original = NULL, "
+                    "detailed_edited_at = NULL "
                     "WHERE file_id = :fid"
                 ),
                 {"fid": file_id},
@@ -765,6 +909,16 @@ def _delete_detailed_summary(file_id: str) -> bool:
                 ),
                 {"fid": file_id},
             )
+
+        # Always drop citations: their lifetime is pegged to the
+        # summary body.
+        session.execute(
+            sql_text(
+                "DELETE FROM detailed_summary_citations "
+                "WHERE file_id = :fid"
+            ),
+            {"fid": file_id},
+        )
         return True
 
 
@@ -896,9 +1050,10 @@ async def generate_detailed_summary(
         )
         return
 
+    saved_text = raw.strip()
     _save_detailed_summary(
         file_id=file_id,
-        detailed_summary=raw.strip(),
+        detailed_summary=saved_text,
         model=settings.llm.model,
         context_chars=len(prepared),
         was_truncated=was_truncated,
@@ -907,6 +1062,12 @@ async def generate_detailed_summary(
         "Detailed summary: saved for %s (%s, %d chars, truncated=%s)",
         file_id, context_type, len(prepared), was_truncated,
     )
+
+    # Post-generation hook: compute citations so the UI can overlay
+    # source badges onto the freshly generated summary. Failures are
+    # logged + swallowed inside ``_recalculate_citations`` — they must
+    # not mark the summary itself as failed.
+    await _recalculate_citations(file_id, saved_text)
 
 
 class SummariesWorker:

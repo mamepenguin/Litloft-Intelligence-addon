@@ -45,7 +45,11 @@ from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.config import FeaturesConfig, LLMConfig  # noqa: E402
-from app.database import Base, _create_file_summaries_table  # noqa: E402
+from app.database import (  # noqa: E402
+    Base,
+    _create_detailed_summary_citations_table,
+    _create_file_summaries_table,
+)
 from app.routers.summaries import (  # noqa: E402
     delete_detailed_summary_route,
     download_detailed_summary,
@@ -72,6 +76,10 @@ def search_db(tmp_path, monkeypatch):
     Base.metadata.create_all(engine)
     with engine.begin() as conn:
         _create_file_summaries_table(conn)
+        # Phase 1 citations table — _delete_detailed_summary now also
+        # wipes citation rows, so the table must exist even when the
+        # test doesn't write any citations of its own.
+        _create_detailed_summary_citations_table(conn)
 
     from app.models import IndexedFile
 

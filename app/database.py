@@ -117,6 +117,11 @@ def init_search_db() -> None:
     with _search_engine.begin() as conn:
         _migrate_file_summaries_if_needed(conn)
 
+    # Create detailed_summary_citations table (idempotent).
+    with _search_engine.connect() as conn:
+        _create_detailed_summary_citations_table(conn)
+        conn.commit()
+
     # Backfill fts_transcripts from existing transcript_chunks
     _backfill_fts_transcripts()
 
@@ -401,7 +406,9 @@ def _create_file_summaries_table(conn: object) -> None:
         "  detailed_generated_at TEXT,"
         "  detailed_context_chars INTEGER,"
         "  detailed_was_truncated INTEGER,"
-        "  detailed_error TEXT"
+        "  detailed_error TEXT,"
+        "  detailed_original TEXT,"
+        "  detailed_edited_at TEXT"
         ")"
     ))
 
@@ -474,6 +481,53 @@ def _migrate_file_summaries_if_needed(conn: object) -> None:
         conn.execute(
             text("ALTER TABLE file_summaries ADD COLUMN detailed_error TEXT")
         )
+    # User-edit support for detailed_summary. Mirrors the short/long
+    # pair: ``detailed_original`` holds the pre-edit AI snapshot,
+    # ``detailed_edited_at`` flags the row as user-edited.
+    if "detailed_original" not in cols:
+        conn.execute(
+            text("ALTER TABLE file_summaries ADD COLUMN detailed_original TEXT")
+        )
+    if "detailed_edited_at" not in cols:
+        conn.execute(
+            text(
+                "ALTER TABLE file_summaries ADD COLUMN detailed_edited_at TEXT"
+            )
+        )
+
+
+def _create_detailed_summary_citations_table(conn: object) -> None:
+    """Create ``detailed_summary_citations`` if it doesn't exist.
+
+    One row per (file_id, section_path) — ``section_path`` comes from
+    ``app.summary_parser`` and uniquely identifies a bullet / paragraph
+    / table row within a detailed_summary document. ``has_citation``
+    is True when the top-1 ``top_score`` crosses the configured
+    threshold; rows with ``has_citation = False`` are still stored so
+    the UI can render the "⚠ no source found" badge.
+
+    ``citation_chunk_ids`` is a JSON-encoded array of chunk identifiers
+    (e.g. ``["wh_abc_0", "txt_abc_3"]``). The prefix disambiguates
+    transcript vs document chunks so the frontend can jump appropriately.
+    """
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS detailed_summary_citations ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  file_id TEXT NOT NULL,"
+        "  section_path TEXT NOT NULL,"
+        "  segment_type TEXT NOT NULL,"
+        "  segment_text TEXT NOT NULL,"
+        "  citation_chunk_ids TEXT NOT NULL,"
+        "  top_score REAL NOT NULL,"
+        "  has_citation BOOLEAN NOT NULL,"
+        "  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+        "  UNIQUE (file_id, section_path)"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_detailed_citations_file "
+        "ON detailed_summary_citations(file_id)"
+    ))
 
 
 def init_homevault_db() -> None:

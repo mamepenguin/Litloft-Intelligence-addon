@@ -178,7 +178,11 @@ def test_purge_file_also_wipes_detailed_summary_columns(tmp_path, monkeypatch):
     from sqlalchemy import create_engine, text
     from sqlalchemy.orm import sessionmaker
 
-    from app.database import Base, _create_file_summaries_table
+    from app.database import (
+        Base,
+        _create_detailed_summary_citations_table,
+        _create_file_summaries_table,
+    )
     from app.models import IndexedFile
 
     db_path = tmp_path / "search.db"
@@ -189,6 +193,9 @@ def test_purge_file_also_wipes_detailed_summary_columns(tmp_path, monkeypatch):
     Base.metadata.create_all(engine)
     with engine.begin() as conn:
         _create_file_summaries_table(conn)
+        # Phase 1: _purge_file now also wipes citations, so the table
+        # must exist even for tests that never insert citations.
+        _create_detailed_summary_citations_table(conn)
         # suggested_tags is a raw-SQL table like file_summaries.
         from app.database import _create_suggested_tags_table
         _create_suggested_tags_table(conn)

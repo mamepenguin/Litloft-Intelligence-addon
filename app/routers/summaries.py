@@ -38,6 +38,10 @@ from app.models import IndexedFile
 from app.schemas import (
     BatchSummariesRequest,
     BatchSummariesResponse,
+    DetailedSummaryCitationItem,
+    DetailedSummaryCitationsResponse,
+    DetailedSummaryEditRequest,
+    DetailedSummaryRegenerateRequest,
     DetailedSummaryResponse,
     DetailedSummaryStartResponse,
     MessageResponse,
@@ -48,8 +52,10 @@ from app.workers.summaries import (
     DETAILED_STATUS_GENERATED,
     DETAILED_STATUS_GENERATING,
     _delete_detailed_summary,
+    _emit_ws_event,
     _get_detailed_summary,
     _has_detailed_summary,
+    _recalculate_citations,
     classify_detailed_missing_reason,
     classify_missing_reason,
     generate_detailed_summary,
@@ -93,17 +99,27 @@ def _require_llm_enabled() -> None:
         raise HTTPException(status_code=400, detail="LLM is not enabled")
 
 
-def _require_detailed_enabled() -> None:
-    """Raise 400 if detailed_summaries feature or LLM is unavailable.
+def _require_detailed_feature_enabled() -> None:
+    """Raise 400 if the detailed_summaries feature flag is disabled.
 
-    Independent of ``features.summaries`` so operators can enable the
-    long-form variant without the short/long pair (or vice versa).
+    Unlike ``_require_detailed_enabled``, this does NOT require the
+    LLM to be enabled — it's for operations that work on stored text
+    only (section edit, revert) and don't need to call the LLM.
     """
     if settings.features.detailed_summaries == "false":
         raise HTTPException(
             status_code=400,
             detail="Detailed summaries feature is disabled",
         )
+
+
+def _require_detailed_enabled() -> None:
+    """Raise 400 if detailed_summaries feature or LLM is unavailable.
+
+    Independent of ``features.summaries`` so operators can enable the
+    long-form variant without the short/long pair (or vice versa).
+    """
+    _require_detailed_feature_enabled()
     if not get_llm_client().enabled:
         raise HTTPException(status_code=400, detail="LLM is not enabled")
 
@@ -449,6 +465,8 @@ def _detailed_row_to_response(
         context_chars=data["detailed_context_chars"],
         was_truncated=data["detailed_was_truncated"],
         error=data["detailed_error"],
+        edited_at=data.get("detailed_edited_at"),
+        has_original=data.get("detailed_original") is not None,
     )
 
 
@@ -621,4 +639,343 @@ async def download_detailed_summary(
         content=data["detailed_summary"],
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": disposition},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Citations (Phase 1)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/files/{file_id}/summary/detailed/citations",
+    response_model=DetailedSummaryCitationsResponse,
+)
+async def get_detailed_summary_citations(
+    file_id: str,
+    drive: str = Depends(require_drive),
+) -> DetailedSummaryCitationsResponse:
+    """Return per-segment citations for a detailed summary.
+
+    Each citation row carries the segment's source ``section_path``
+    (matching the UI-side parser output), the top-1 cosine similarity
+    ``top_score``, and a ``has_citation`` flag driven by the
+    ``summaries.citation_threshold`` setting. The list is empty when
+    citations haven't been computed yet (e.g. detailed summary still
+    generating, or an older summary that predates this feature — run
+    the backfill script to populate).
+    """
+    _require_file_in_drive(file_id, drive)
+
+    # Import lazily so test suites that stub out app.citations still
+    # work — the module imports embedder which pulls sentence-transformers
+    # at import time in some paths.
+    from app.citations import get_citations
+
+    rows = get_citations(file_id)
+    return DetailedSummaryCitationsResponse(
+        file_id=file_id,
+        citations=[DetailedSummaryCitationItem(**row) for row in rows],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Detailed-summary edit / revert (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+def _fetch_detailed_edit_state(
+    session: object, file_id: str
+) -> tuple[str | None, str | None, str | None] | None:
+    """Return ``(detailed_summary, detailed_original, detailed_edited_at)``.
+
+    Used by edit / revert / regenerate-check. Returns ``None`` when
+    no file_summaries row exists for ``file_id``; the callers shape
+    their own 404 from that.
+    """
+    row = session.execute(
+        sql_text(
+            "SELECT detailed_summary, detailed_original, detailed_edited_at "
+            "FROM file_summaries WHERE file_id = :fid"
+        ),
+        {"fid": file_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return (row[0], row[1], row[2])
+
+
+@router.put(
+    "/files/{file_id}/summary/detailed/section",
+    response_model=DetailedSummaryResponse,
+)
+async def edit_detailed_summary_section(
+    file_id: str,
+    body: DetailedSummaryEditRequest,
+    background_tasks: BackgroundTasks,
+    drive: str = Depends(require_drive),
+) -> DetailedSummaryResponse:
+    """Replace the body of one ``## section`` in the detailed summary.
+
+    Behaviour:
+
+    1. 404 if no detailed summary exists (nothing to edit).
+    2. First edit snapshots ``detailed_summary`` into
+       ``detailed_original`` so revert can restore it. Subsequent
+       edits leave the snapshot pinned to the original AI output.
+    3. ``detailed_summary`` is rewritten with the heading preserved
+       and the body between it and the next ``##`` replaced.
+    4. ``detailed_edited_at`` is set to the current UTC timestamp.
+    5. Citations are recalculated via FastAPI ``BackgroundTasks`` so
+       the HTTP response returns immediately without waiting for
+       embedding (which runs via ``run_in_executor`` and can take
+       seconds). The frontend picks up citations via WebSocket
+       ``citations_ready``, emitted from inside
+       ``_recalculate_citations`` once it completes.
+    6. ``intelligence.detailed_summary.updated`` is emitted synchronously
+       (it's just a cheap notification) with ``citations_ready: false``.
+
+    400 when the requested heading doesn't exist in the current
+    summary. This prevents silently creating orphaned sections.
+    """
+    _require_detailed_feature_enabled()
+    _require_file_in_drive(file_id, drive)
+
+    now = datetime.now(UTC).isoformat()
+
+    with get_search_db() as session:
+        state = _fetch_detailed_edit_state(session, file_id)
+        if state is None or state[0] is None:
+            raise HTTPException(
+                status_code=404, detail="No detailed summary to edit"
+            )
+        current, original, _edited_at = state
+
+        # Lazy-import so the parser is only paid for on the edit path.
+        from app.summary_parser import replace_section_body
+
+        try:
+            new_summary = replace_section_body(
+                current, body.section_heading, body.new_content
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        # Snapshot the AI output on the first edit only. On re-edit we
+        # keep the snapshot pinned to the *original* AI version so
+        # revert always reaches the generation's starting point.
+        snapshot = original if original is not None else current
+
+        session.execute(
+            sql_text(
+                "UPDATE file_summaries SET "
+                "detailed_summary = :summary, "
+                "detailed_original = :original, "
+                "detailed_edited_at = :edited_at "
+                "WHERE file_id = :fid"
+            ),
+            {
+                "fid": file_id,
+                "summary": new_summary,
+                "original": snapshot,
+                "edited_at": now,
+            },
+        )
+
+    # Cheap WS notification — emit synchronously so the frontend knows
+    # the summary body changed before the (slow) citation recompute
+    # finishes.
+    await _emit_ws_event(
+        "intelligence.detailed_summary.updated",
+        {
+            "file_id": file_id,
+            "edited_at": now,
+            "citations_ready": False,
+        },
+    )
+    # Defer the expensive embedding work to a BackgroundTask so the
+    # HTTP response goes out immediately. ``_recalculate_citations``
+    # emits ``citations_ready`` itself when the work completes.
+    background_tasks.add_task(_recalculate_citations, file_id, new_summary)
+
+    data = _get_detailed_summary(file_id)
+    if data is None:
+        # Defensive: we just wrote the row, so this should be impossible.
+        raise HTTPException(
+            status_code=500, detail="Detailed summary vanished post-edit"
+        )
+    return _detailed_row_to_response(file_id, data)
+
+
+@router.post(
+    "/files/{file_id}/summary/detailed/revert",
+    response_model=DetailedSummaryResponse,
+)
+async def revert_detailed_summary(
+    file_id: str,
+    background_tasks: BackgroundTasks,
+    drive: str = Depends(require_drive),
+) -> DetailedSummaryResponse:
+    """Restore the AI-generated detailed summary from the snapshot.
+
+    400 when no snapshot exists — either the summary was never edited,
+    or a previous regenerate cleared the snapshot. The frontend hides
+    the revert button in that state, but the 400 is a defensive check.
+
+    Citation recompute runs in a ``BackgroundTask`` so the response
+    does not block on embedding. See ``edit_detailed_summary_section``
+    for the matching pattern.
+    """
+    _require_detailed_feature_enabled()
+    _require_file_in_drive(file_id, drive)
+
+    with get_search_db() as session:
+        state = _fetch_detailed_edit_state(session, file_id)
+        if state is None:
+            raise HTTPException(
+                status_code=404, detail="No detailed summary found"
+            )
+        _current, original, _edited_at = state
+        if original is None:
+            raise HTTPException(
+                status_code=400, detail="No AI version to revert to"
+            )
+
+        session.execute(
+            sql_text(
+                "UPDATE file_summaries SET "
+                "detailed_summary = :summary, "
+                "detailed_original = NULL, "
+                "detailed_edited_at = NULL "
+                "WHERE file_id = :fid"
+            ),
+            {"fid": file_id, "summary": original},
+        )
+
+    await _emit_ws_event(
+        "intelligence.detailed_summary.updated",
+        {
+            "file_id": file_id,
+            "edited_at": None,
+            "citations_ready": False,
+        },
+    )
+    # Defer citation recompute — see edit_detailed_summary_section.
+    background_tasks.add_task(_recalculate_citations, file_id, original)
+
+    data = _get_detailed_summary(file_id)
+    if data is None:
+        raise HTTPException(
+            status_code=500, detail="Detailed summary vanished post-revert"
+        )
+    return _detailed_row_to_response(file_id, data)
+
+
+@router.post(
+    "/files/{file_id}/summary/detailed/regenerate",
+    response_model=DetailedSummaryStartResponse,
+)
+async def regenerate_detailed_summary(
+    file_id: str,
+    background_tasks: BackgroundTasks,
+    body: DetailedSummaryRegenerateRequest | None = None,
+    drive: str = Depends(require_drive),
+) -> DetailedSummaryStartResponse:
+    """Re-run detailed-summary generation for a file.
+
+    Convenience endpoint that combines DELETE + POST and adds the
+    edit-conflict check:
+
+    * 409 when ``detailed_edited_at IS NOT NULL`` and the request
+      did not set ``force: true``. Frontend surfaces a confirmation
+      dialog ("your edits will be lost — continue?") and resubmits
+      with ``force: true`` on confirm.
+    * 400 propagates the same pre-flight checks as ``start_detailed_summary``
+      (unsupported type / insufficient content / missing file).
+    """
+    _require_detailed_enabled()
+    _require_file_in_drive(file_id, drive)
+
+    force = bool(body.force) if body is not None else False
+
+    reason = classify_detailed_missing_reason(file_id)
+    if reason in (
+        "unsupported_type", "insufficient_content", "file_not_found",
+    ):
+        raise HTTPException(status_code=400, detail=reason)
+
+    # Atomic conflict-check + delete: hold a single session across the
+    # check and the clear so a concurrent edit cannot slip in between
+    # ``_fetch_detailed_edit_state`` and the row wipe. Without this
+    # guard, an edit landing mid-window would silently be overwritten
+    # instead of producing 409. The delete logic is inlined (rather
+    # than calling ``_delete_detailed_summary`` which opens its own
+    # session) so the write lock is held continuously.
+    with get_search_db() as session:
+        state = _fetch_detailed_edit_state(session, file_id)
+        edited_at = state[2] if state is not None else None
+        if edited_at is not None and not force:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Detailed summary has user edits — "
+                    "pass force=true to overwrite"
+                ),
+            )
+
+        # Clear any existing row (AI or edited) so the generation path
+        # starts from a pristine state — mirrors the DELETE + POST flow
+        # the frontend previously did in two steps. Kept in the same
+        # session as the edit-flag check above to close the TOCTOU
+        # window.
+        row = session.execute(
+            sql_text(
+                "SELECT short_summary, long_summary FROM file_summaries "
+                "WHERE file_id = :fid"
+            ),
+            {"fid": file_id},
+        ).fetchone()
+        if row is not None:
+            short_val = row[0] or ""
+            long_val = row[1] or ""
+            if short_val or long_val:
+                session.execute(
+                    sql_text(
+                        "UPDATE file_summaries SET "
+                        "detailed_summary = NULL, "
+                        "detailed_status = NULL, "
+                        "detailed_model = NULL, "
+                        "detailed_generated_at = NULL, "
+                        "detailed_context_chars = NULL, "
+                        "detailed_was_truncated = NULL, "
+                        "detailed_error = NULL, "
+                        "detailed_original = NULL, "
+                        "detailed_edited_at = NULL "
+                        "WHERE file_id = :fid"
+                    ),
+                    {"fid": file_id},
+                )
+            else:
+                # Placeholder row with no short/long content — drop it
+                # so repeat generation starts from the pristine state.
+                session.execute(
+                    sql_text(
+                        "DELETE FROM file_summaries WHERE file_id = :fid"
+                    ),
+                    {"fid": file_id},
+                )
+            session.execute(
+                sql_text(
+                    "DELETE FROM detailed_summary_citations "
+                    "WHERE file_id = :fid"
+                ),
+                {"fid": file_id},
+            )
+
+    background_tasks.add_task(
+        generate_detailed_summary, file_id, get_llm_client()
+    )
+    return DetailedSummaryStartResponse(
+        status="accepted",
+        message="Detailed summary regeneration started",
     )

@@ -202,6 +202,13 @@ class SummariesConfig:
     # Detailed-summary fallback window count. Larger than the short path
     # to preserve coverage when the detailed threshold is exceeded.
     detailed_window_count: int = 5
+    # Citation linking: cosine similarity threshold for "has_citation".
+    # top-1 score >= this counts as a confirmed citation; below is
+    # surfaced in the UI as a "no strong source" warning.
+    citation_threshold: float = 0.55
+    # Number of citation candidates retrieved per segment. The UI can
+    # surface all of them; ``has_citation`` is driven by the top one.
+    citation_top_k: int = 3
 
 
 @dataclass(frozen=True)

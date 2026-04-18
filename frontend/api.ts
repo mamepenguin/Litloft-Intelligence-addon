@@ -530,6 +530,162 @@ export interface DetailedSummaryResponse {
   was_truncated?: boolean;
   error?: string;
   reason?: SummaryMissingReason | string;
+  // ISO timestamp of the last user edit to the detailed summary. When
+  // non-null the UI surfaces the "edited" badge and the "revert to AI
+  // version" button. Backend column is `detailed_edited_at`, but the
+  // response field drops the `detailed_` prefix because the response
+  // schema is detailed-only (matches short/long pattern).
+  edited_at?: string | null;
+  // True when the backend still has the original AI-generated text
+  // available for revert. Matches `detailed_original IS NOT NULL`.
+  has_original?: boolean;
+}
+
+// --- Detailed summary citations (Phase 1: embedding-based backlinks) ---
+
+/**
+ * A single citation row returned by
+ * GET /files/{file_id}/summary/detailed/citations.
+ *
+ * `segment_text` is the literal bullet/paragraph text the backend
+ * computed similarity for; the UI uses it to locate the corresponding
+ * DOM node and wrap it with the hover-trigger icon. `has_citation`
+ * false means the top-1 score fell below the configured threshold —
+ * the UI surfaces an amber ⚠ marker to flag potential hallucinations.
+ */
+export interface DetailedSummaryCitation {
+  section_path: string;
+  segment_type: "bullet" | "paragraph";
+  segment_text: string;
+  chunk_ids: string[];
+  top_score: number;
+  has_citation: boolean;
+}
+
+export interface DetailedSummaryCitationsResponse {
+  available: boolean;
+  file_id?: string;
+  citations?: DetailedSummaryCitation[];
+}
+
+/**
+ * Fetch the latest citation backlinks for a detailed summary.
+ *
+ * The backend recomputes citations automatically whenever the summary
+ * is generated, edited, or reverted; the frontend listens for the
+ * `intelligence.detailed_summary.citations_ready` WS event and re-calls
+ * this endpoint. Failure falls back to an empty list so a missing
+ * backend (older intelligence build) doesn't crash the detail page.
+ */
+export async function getDetailedSummaryCitations(
+  fileId: string,
+  drive: string,
+): Promise<DetailedSummaryCitationsResponse> {
+  try {
+    return await fetchJSON<DetailedSummaryCitationsResponse>(
+      `${API_BASE}/addons/intelligence/files/${fileId}/summary/detailed/citations`,
+      { headers: driveHeaders(drive) },
+    );
+  } catch {
+    return { available: false, citations: [] };
+  }
+}
+
+/**
+ * Excerpt payload for a single chunk, fetched on hover.
+ *
+ * The backend returns the chunk's raw text surrounded by ±100 chars of
+ * context (best-effort — shorter when the chunk sits near the file
+ * boundary). `start_time` is non-null for audio/video chunks; the UI
+ * uses it to seek the <video>/<audio> element. `page` is non-null for
+ * document chunks (pdf/epub) and drives the text-preview scroll.
+ */
+export interface CitationChunkExcerpt {
+  chunk_id: string;
+  file_id: string;
+  text: string;
+  start_time: number | null;
+  end_time: number | null;
+  page: number | null;
+}
+
+export async function getCitationChunkExcerpt(
+  fileId: string,
+  chunkId: string,
+  drive: string,
+): Promise<CitationChunkExcerpt | null> {
+  try {
+    return await fetchJSON<CitationChunkExcerpt>(
+      `${API_BASE}/addons/intelligence/files/${fileId}/chunks/${chunkId}/excerpt`,
+      { headers: driveHeaders(drive) },
+    );
+  } catch {
+    return null;
+  }
+}
+
+// --- Detailed summary editing (Phase 2) ---
+
+/**
+ * Replace the body of a single `## Heading` section with user-edited
+ * Markdown. The backend locates the section by heading name, swaps
+ * the content, snapshots the previous full summary into
+ * `detailed_original` on first edit, bumps `detailed_edited_at`, and
+ * recomputes citations. Response mirrors `getDetailedSummary` so the
+ * UI can rehydrate from a single call.
+ */
+export async function editDetailedSummarySection(
+  fileId: string,
+  drive: string,
+  payload: { section_heading: string; new_content: string },
+): Promise<DetailedSummaryResponse> {
+  return fetchJSON<DetailedSummaryResponse>(
+    `${API_BASE}/addons/intelligence/files/${fileId}/summary/detailed/section`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...driveHeaders(drive) },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+/**
+ * Restore the AI-generated snapshot, discarding all user edits and
+ * clearing `detailed_edited_at`. Returns the refreshed summary so
+ * the UI can rehydrate without a follow-up GET.
+ */
+export async function revertDetailedSummary(
+  fileId: string,
+  drive: string,
+): Promise<DetailedSummaryResponse> {
+  return fetchJSON<DetailedSummaryResponse>(
+    `${API_BASE}/addons/intelligence/files/${fileId}/summary/detailed/revert`,
+    { method: "POST", headers: driveHeaders(drive) },
+  );
+}
+
+/**
+ * Regenerate the detailed summary from scratch.
+ *
+ * When the current summary is user-edited (`detailed_edited_at !== null`)
+ * the server returns 409 unless `force: true` is passed. The UI detects
+ * the 409 in a prior step and calls this helper with `{ force: true }`
+ * after confirming with the user. The regenerate path always bypasses
+ * `detailed_original` — the edited body is simply overwritten.
+ */
+export async function regenerateDetailedSummary(
+  fileId: string,
+  drive: string,
+  options?: { force?: boolean },
+): Promise<{ status: string; message: string }> {
+  return fetchJSON<{ status: string; message: string }>(
+    `${API_BASE}/addons/intelligence/files/${fileId}/summary/detailed/regenerate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...driveHeaders(drive) },
+      body: JSON.stringify({ force: options?.force ?? false }),
+    },
+  );
 }
 
 export async function getDetailedSummary(

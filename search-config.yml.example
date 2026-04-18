@@ -91,6 +91,17 @@ summaries:
   detailed_max_context_chars: 24000
   detailed_window_count: 5   # fallback window count when detailed context
                              # exceeds the threshold above
+  # Citation linking for detailed summaries.
+  # After generation (and after every edit/revert) each bullet/paragraph
+  # is embedded and matched against transcript/document chunks of the
+  # same file. Segments whose top-1 cosine similarity is below
+  # ``citation_threshold`` are surfaced in the UI as "no strong source"
+  # (⚠), which doubles as a hallucination signal.
+  # Tune up if too many ⚠ warnings appear on obviously-grounded bullets,
+  # down if hallucinated bullets are slipping through without a warning.
+  citation_threshold: 0.55   # cosine similarity floor for has_citation=true
+  citation_top_k: 3          # number of candidate chunks stored per segment
+                             # (UI can cycle through them; top-1 drives ⚠)
 
 # RAG (question answering) configuration (used when features.rag = true)
 # Retrieves top-k files for a user question, builds a bounded context

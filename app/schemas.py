@@ -302,6 +302,11 @@ class DetailedSummaryResponse(BaseModel):
     # Same semantics as SummaryResponse.reason — populated when
     # ``available`` is False so the frontend can render the right state.
     reason: str | None = None
+    # User-edit metadata. ``edited_at`` is an ISO timestamp when the
+    # user has edited any section; ``has_original`` is True when a
+    # pre-edit snapshot is stored and revert is possible.
+    edited_at: str | None = None
+    has_original: bool = False
 
 
 class DetailedSummaryStartResponse(BaseModel):
@@ -309,6 +314,76 @@ class DetailedSummaryStartResponse(BaseModel):
 
     status: str
     message: str
+
+
+class DetailedSummaryCitationItem(BaseModel):
+    """One row of the citations response.
+
+    ``chunk_ids`` is already decoded from its JSON storage. ``top_score``
+    is the cosine similarity of the best-matching chunk regardless of
+    whether it cleared the threshold, so the UI can surface a ⚠ badge
+    with the weak score when ``has_citation = False``.
+    """
+
+    section_path: str
+    segment_type: str  # "bullet" | "paragraph"
+    segment_text: str
+    chunk_ids: list[str] = []
+    top_score: float
+    has_citation: bool
+
+
+class DetailedSummaryCitationsResponse(BaseModel):
+    """Response for GET /files/{id}/summary/detailed/citations."""
+
+    file_id: str
+    citations: list[DetailedSummaryCitationItem]
+
+
+class ChunkExcerptResponse(BaseModel):
+    """Response for GET /files/{id}/chunks/{chunk_id}/excerpt.
+
+    ``chunk_id`` echoes the prefixed identifier stored in the citations
+    table (``transcript:{idx}`` or ``document:{idx}``). ``text`` carries
+    the chunk's own text with up to ±100 characters of surrounding
+    context from its immediate neighbours, joined with ellipses when
+    either side was truncated.
+
+    Transcript chunks populate ``start_time`` / ``end_time`` (float
+    seconds) and leave ``page`` null. Document chunks do the inverse —
+    ``page`` is the page number (when the source extractor produced
+    one) while the timestamps are null.
+    """
+
+    chunk_id: str
+    file_id: str
+    text: str
+    start_time: float | None = None
+    end_time: float | None = None
+    page: int | None = None
+
+
+class DetailedSummaryEditRequest(BaseModel):
+    """Request body for PUT /files/{id}/summary/detailed/section.
+
+    ``section_heading`` is the canonical ``## 見出し`` text without the
+    leading hashes (e.g. ``"全体像"``). ``new_content`` replaces the
+    body between this heading and the next ``##`` / end-of-string.
+    """
+
+    section_heading: str = Field(..., min_length=1, max_length=200)
+    new_content: str = Field(..., min_length=1, max_length=20000)
+
+
+class DetailedSummaryRegenerateRequest(BaseModel):
+    """Optional request body for POST /files/{id}/summary/detailed/regenerate.
+
+    ``force=True`` suppresses the 409-Conflict when the current
+    detailed summary has been user-edited. The frontend uses the
+    unforced path first and re-submits after a confirmation dialog.
+    """
+
+    force: bool = False
 
 
 # --- RAG (question answering) ---
