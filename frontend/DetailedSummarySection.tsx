@@ -64,7 +64,7 @@ import type {
 } from "./api";
 import { DetailedSummaryCitationPopover } from "./DetailedSummaryCitationPopover";
 import { CitationInlinePanel } from "./CitationInlinePanel";
-import { CitationRailProvider } from "./CitationRailContext";
+import { CitationRailProvider, useCitationRail } from "./CitationRailContext";
 
 interface DetailedSummarySectionProps {
   fileId: string;
@@ -1279,6 +1279,14 @@ function TableGroup({
     videoRef?: React.RefObject<HTMLVideoElement | null>;
   };
 }) {
+  // Subscribe to the active citation so we only mount the expansion
+  // row for the currently-open panel. An always-mounted empty row —
+  // even one styled to `height: 0` — still let the table-layout
+  // heuristic peek at the panel's intrinsic width and drift column
+  // widths when the excerpt loaded. Rendering the row only while the
+  // panel is live keeps the table geometry stable.
+  const { active } = useCitationRail();
+  const activeSectionPath = active?.citation.section_path ?? null;
   const header = rows[0]?.tableHeader ?? [];
   const anyMarker = rows.some((r) => citationByPath.has(r.section_path));
   // The citation column sits outside the `.markdown-body` cell grid so
@@ -1353,21 +1361,30 @@ function TableGroup({
                     </td>
                   ))}
                 </tr>
-                {citation && (
-                  // Expansion row hosts the inline panel spanning the
-                  // full width of the table. Tables use the panel's
-                  // in-flow (push-down) mode because an absolutely
-                  // positioned child inside a <td> breaks the table
-                  // layout grid.
+                {citation && activeSectionPath === row.section_path && (
+                  // Zero-height relative host for the absolutely-
+                  // positioned panel. The panel escapes the flow so it
+                  // can't influence column-width autolayout (which
+                  // previously widened/narrowed columns as the excerpt
+                  // loaded) and doesn't add a visible row height — the
+                  // panel itself paints the gap below the cited row.
+                  // Rendering only while the row is active keeps
+                  // inactive rows from contributing a stray ~1px each.
                   <tr style={transparentRowStyle}>
                     <td
                       colSpan={totalCols}
-                      style={{ border: "none", padding: 0, background: "transparent" }}
+                      style={{
+                        border: "none",
+                        padding: 0,
+                        height: 0,
+                        lineHeight: 0,
+                        position: "relative",
+                        background: "transparent",
+                      }}
                     >
                       <CitationInlinePanel
                         sectionPath={row.section_path}
                         videoRef={ctx.videoRef}
-                        overlay={false}
                       />
                     </td>
                   </tr>
