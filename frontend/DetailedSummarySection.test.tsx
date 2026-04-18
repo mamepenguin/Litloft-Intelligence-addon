@@ -559,10 +559,11 @@ describe("DetailedSummarySection — inline markdown rendering", () => {
     await screen.findByText(/ここから物語が始まります/);
 
     // ``###`` is captured at parse time as a subsection edit target
-    // and rendered as an <h4> label by SectionView (the outer H2
-    // uses <h3>). The raw marker never reaches the DOM.
-    const h4s = container.querySelectorAll("h4");
-    const headingTexts = Array.from(h4s).map((el) => el.textContent);
+    // and rendered as an <h3> label by SectionView (the outer ``##``
+    // uses <h2> so the GitHub-flavored .markdown-body typography
+    // cascade applies). The raw marker never reaches the DOM.
+    const h3s = container.querySelectorAll("h3");
+    const headingTexts = Array.from(h3s).map((el) => el.textContent);
     expect(headingTexts).toEqual(expect.arrayContaining(["第一幕", "第二幕"]));
 
     // The raw ``### `` marker must not leak into the rendered DOM.
@@ -715,6 +716,130 @@ describe("DetailedSummarySection — inline markdown rendering", () => {
     const link = container.querySelector<HTMLAnchorElement>("a[href]");
     expect(link?.getAttribute("href") ?? "").not.toMatch(/^javascript:/i);
   });
+
+  it("renders fenced code blocks as <pre><code> via MarkdownPreview", async () => {
+    // Regression guard: the legacy renderer fed bullets + fences into
+    // the line parser's paragraph buffer, flattening code into a
+    // single-line pseudo-paragraph. The fix captures the fence as its
+    // own segment and pipes it through SegmentMarkdown so
+    // markdown-it emits ``<pre>`` + ``<code>``.
+    const md = `## コード例
+\`\`\`python
+def foo():
+    return 42
+\`\`\`
+`;
+    (getDetailedSummary as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        available: true,
+        status: "generated",
+        file_id: "f1",
+        detailed_summary: md,
+        model: "test-model",
+        edited_at: null,
+        has_original: false,
+      });
+
+    const { container } = renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+    // Syntax-highlighted markup splits ``return 42`` across hljs span
+    // boundaries, so we poll for the ``<pre>`` appearing instead of
+    // the raw text — findByText can't span sibling elements.
+    await waitFor(() => {
+      expect(container.querySelector("pre")).not.toBeNull();
+    });
+
+    const pre = container.querySelector("pre");
+    const code = pre!.querySelector("code");
+    expect(code).not.toBeNull();
+    // ``textContent`` concatenates across hljs spans, so indentation
+    // and the full ``return 42`` literal both survive.
+    expect(code!.textContent ?? "").toContain("    return 42");
+    // Backtick markers must not leak into the rendered DOM as plain
+    // text — that was the old fallback's signature.
+    const visible = container.textContent ?? "";
+    expect(visible).not.toMatch(/`{3}python/);
+  });
+
+  it("renders bullets inside <ul><li> so .markdown-body list typography applies", async () => {
+    const md = `## ポイント
+- 第一項
+- 第二項
+- 第三項
+`;
+    (getDetailedSummary as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        available: true,
+        status: "generated",
+        file_id: "f1",
+        detailed_summary: md,
+        model: "test-model",
+        edited_at: null,
+        has_original: false,
+      });
+
+    const { container } = renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+    await screen.findByText(/第一項/);
+
+    const ul = container.querySelector("ul.markdown-body");
+    expect(ul).not.toBeNull();
+    const lis = Array.from(ul!.querySelectorAll(":scope > li"));
+    expect(lis).toHaveLength(3);
+    expect(lis[0].getAttribute("data-citation-section-path")).toBe(
+      "ポイント/0",
+    );
+    expect(lis[0].textContent).toContain("第一項");
+    expect(lis[2].textContent).toContain("第三項");
+  });
+
+  it("renders markdown tables as <table> with <thead> + <tbody>", async () => {
+    // Previously table rows surfaced as flat ``| a | b |`` flex rows —
+    // the segments were captured but the renderer only stacked them as
+    // plain text. This test locks in the new ``.markdown-body``-backed
+    // table render.
+    const md = `## 重要ポイントまとめ
+| 項目 | 値 |
+|---|---|
+| 長さ | 120分 |
+| 主題 | 冒険 |
+`;
+    (getDetailedSummary as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        available: true,
+        status: "generated",
+        file_id: "f1",
+        detailed_summary: md,
+        model: "test-model",
+        edited_at: null,
+        has_original: false,
+      });
+
+    const { container } = renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+    await screen.findByText(/長さ/);
+
+    const table = container.querySelector("table");
+    expect(table).not.toBeNull();
+    const theadCells = Array.from(table!.querySelectorAll("thead th")).map(
+      (el) => el.textContent?.trim() ?? "",
+    );
+    expect(theadCells).toEqual(["項目", "値"]);
+    const bodyRows = Array.from(table!.querySelectorAll("tbody tr"));
+    expect(bodyRows).toHaveLength(2);
+    const firstRowCells = Array.from(bodyRows[0].querySelectorAll("td")).map(
+      (el) => el.textContent?.trim() ?? "",
+    );
+    expect(firstRowCells).toEqual(["長さ", "120分"]);
+    // The row carries the citation anchor so the downstream popover
+    // layer can find the DOM target.
+    expect(bodyRows[0].getAttribute("data-citation-section-path")).toBe(
+      "重要ポイントまとめ/row/0",
+    );
+    // Sanity: raw ``|`` separators must not leak into the rendered DOM
+    // (that was the old fallback path's signature).
+    expect(container.textContent ?? "").not.toMatch(/\|\s*項目\s*\|/);
+  });
 });
 
 // ----- Markdown parser unit tests ---------------------------------------
@@ -774,6 +899,59 @@ describe("parseSections", () => {
     ]);
     expect(rows[0].text).toContain("長さ");
     expect(rows[1].text).toContain("主題");
+  });
+
+  it("captures fenced code blocks as a single segment with newlines preserved", () => {
+    // The legacy line-by-line parser swallowed fences into the
+    // paragraph buffer and joined with " ", flattening the code block
+    // into a single-line pseudo-paragraph that MarkdownPreview could
+    // no longer recognise. This test locks in fence-aware parsing.
+    const md = `## コード例
+以下のように書きます。
+
+\`\`\`python
+def foo():
+    return 42
+\`\`\`
+
+補足の説明。
+`;
+    const [section] = parseSections(md);
+    const types = section.segments.map((s) => s.type);
+    expect(types).toEqual(["paragraph", "code-block", "paragraph"]);
+    const code = section.segments[1];
+    // The fenced content is preserved verbatim including indentation,
+    // so MarkdownPreview can recognise the fence and emit ``<pre>``.
+    expect(code.text).toContain("\`\`\`python");
+    expect(code.text).toContain("    return 42");
+    expect(code.text.trim().endsWith("\`\`\`")).toBe(true);
+    // Code blocks consume a plain_idx slot (aligning with the
+    // backend's merged-paragraph behaviour for blank-line-separated
+    // fences) so surrounding paragraph indices shift up by one.
+    expect(section.segments.map((s) => s.section_path)).toEqual([
+      "コード例/0",
+      "コード例/1",
+      "コード例/2",
+    ]);
+  });
+
+  it("attaches tableCells to every body row and tableHeader only to the first", () => {
+    // Needed so the renderer can emit a proper ``<table>`` with a
+    // ``<thead>`` instead of the legacy flat ``| a | b |`` text.
+    const md = `## 重要ポイントまとめ
+| 項目 | 値 |
+|---|---|
+| 長さ | 120分 |
+| 主題 | 冒険 |
+`;
+    const [section] = parseSections(md);
+    const rows = section.segments.filter((s) => s.type === "table-row");
+    expect(rows[0].tableCells).toEqual(["長さ", "120分"]);
+    expect(rows[1].tableCells).toEqual(["主題", "冒険"]);
+    expect(rows[0].tableHeader).toEqual(["項目", "値"]);
+    // Only the first body row carries the header — duplicating it
+    // would make the renderer emit multiple ``<thead>`` elements.
+    expect(rows[1].tableHeader).toBeUndefined();
   });
 
   it("uses a shared counter for paragraphs + bullets in the same section", () => {

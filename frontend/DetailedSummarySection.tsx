@@ -597,12 +597,17 @@ interface ParsedSubsection {
 
 interface ParsedSegment {
   // section_path follows the backend convention:
-  //   "<heading>/<index>" for paragraphs / bullets
+  //   "<heading>/<index>" for paragraphs / bullets / code blocks
   //   "<heading>/row/<index>" for table rows
   // The path is always H2-scoped — ``###`` lines do not bump the
   // counter, preserving compatibility with existing citations.
+  // ``code-block`` consumes a plain index so it lines up with the
+  // backend's merged-paragraph behaviour for fenced blocks surrounded
+  // by blank lines (the common case): backend emits one paragraph per
+  // flattened fence, so we emit one ``code-block`` per fence and the
+  // indices match.
   section_path: string;
-  type: "paragraph" | "bullet" | "table-row";
+  type: "paragraph" | "bullet" | "table-row" | "code-block";
   // The raw display text. For nested bullets the parent indentation is
   // trimmed so the popover hit-target sits at the text start.
   text: string;
@@ -615,6 +620,15 @@ interface ParsedSegment {
   // in the preamble between ``##`` and the first ``###``. Used by the
   // renderer to group segments and interleave H3 edit controls.
   subHeading: string | null;
+  // Only set when ``type === 'table-row'``. Cells parsed from the raw
+  // row so the renderer can emit a proper ``<table>`` instead of a
+  // pipe-laden one-line fallback.
+  tableCells?: string[];
+  // Only set on the first body row of each consecutive table group —
+  // the header cells from the line preceding the ``|---|---|`` separator.
+  // Used by ``TableGroup`` to build ``<thead>``; subsequent body rows
+  // leave this undefined so we don't duplicate the header.
+  tableHeader?: string[];
 }
 
 /**
@@ -743,13 +757,55 @@ function parseH2Body(
   const isSeparator = (line: string) =>
     /^\s*\|[\s\-:|]+\|\s*$/.test(line);
 
+  const parseTableCells = (line: string): string[] => {
+    const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+    return trimmed.split("|").map((cell) => cell.trim());
+  };
+
+  // Header cells captured from the line that opened the current table.
+  // Attached to the first emitted body row so ``TableGroup`` can build
+  // ``<thead>``; subsequent body rows leave it ``undefined``.
+  let pendingTableHeader: string[] | null = null;
+
+  // Fenced code block state. While ``inCodeBlock`` is true we short-
+  // circuit the normal bullet / table / blank / prose branches and
+  // buffer the raw source verbatim so MarkdownPreview can recognise
+  // the fence when we emit the segment.
+  let inCodeBlock = false;
+  let codeBlockBuf: string[] = [];
+  let codeBlockFence = "";
+
+  const flushCodeBlock = () => {
+    if (codeBlockBuf.length === 0) {
+      inCodeBlock = false;
+      codeBlockFence = "";
+      return;
+    }
+    const raw = codeBlockBuf.join("\n");
+    segments.push({
+      section_path: `${heading}/${plainIdx++}`,
+      type: "code-block",
+      text: raw,
+      raw,
+      indent: 0,
+      subHeading: currentSub,
+    });
+    codeBlockBuf = [];
+    inCodeBlock = false;
+    codeBlockFence = "";
+  };
+
   for (const line of lines) {
     const h3Match = /^###\s+(.+?)\s*$/.exec(line);
     if (h3Match) {
+      // Unterminated fence before an H3 boundary — emit what we have
+      // so the H3 subsection starts cleanly.
+      if (inCodeBlock) flushCodeBlock();
       flushParagraph();
       flushSubsection();
       tableOpen = false;
       tableHeaderConsumed = false;
+      pendingTableHeader = null;
       currentSub = h3Match[1].trim();
       currentSubHeadingLine = line;
       continue;
@@ -762,6 +818,29 @@ function parseH2Body(
       currentSubBodyLines.push(line);
     }
 
+    // Fenced code blocks: detected BEFORE bullet / table / blank /
+    // prose so their content is preserved verbatim (indentation, blank
+    // lines, backticks) instead of being chewed by those branches and
+    // flattened with ``join(" ")`` in the paragraph buffer.
+    const codeFenceMatch = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (inCodeBlock) {
+      codeBlockBuf.push(line);
+      if (codeFenceMatch && line.trim() === codeBlockFence) {
+        flushCodeBlock();
+      }
+      continue;
+    }
+    if (codeFenceMatch) {
+      flushParagraph();
+      tableOpen = false;
+      tableHeaderConsumed = false;
+      pendingTableHeader = null;
+      inCodeBlock = true;
+      codeBlockFence = codeFenceMatch[1];
+      codeBlockBuf = [line];
+      continue;
+    }
+
     const bulletMatch = /^(\s*)[-*]\s+(.*)$/.exec(line);
     const tableMatch = /^\s*\|.+\|\s*$/.test(line);
     const isBlank = line.trim() === "";
@@ -770,6 +849,7 @@ function parseH2Body(
       flushParagraph();
       tableOpen = false;
       tableHeaderConsumed = false;
+      pendingTableHeader = null;
       const indent = bulletMatch[1].length;
       const text = bulletMatch[2].trim();
       segments.push({
@@ -793,7 +873,11 @@ function parseH2Body(
         continue;
       }
       if (!tableOpen) {
-        // First row of a new table — treat as header, skip.
+        // First row of a new table — stash cells as the pending header
+        // so the first body row can carry them into the rendered
+        // ``<thead>``. Still skipped from ``segments`` to preserve
+        // existing ``row/N`` section_path indexing.
+        pendingTableHeader = parseTableCells(line);
         tableOpen = true;
         tableHeaderConsumed = false;
         continue;
@@ -810,7 +894,10 @@ function parseH2Body(
         raw: line,
         indent: 0,
         subHeading: currentSub,
+        tableCells: parseTableCells(line),
+        tableHeader: pendingTableHeader ?? undefined,
       });
+      pendingTableHeader = null;
       continue;
     }
 
@@ -818,6 +905,7 @@ function parseH2Body(
       flushParagraph();
       tableOpen = false;
       tableHeaderConsumed = false;
+      pendingTableHeader = null;
       continue;
     }
 
@@ -826,6 +914,11 @@ function parseH2Body(
       paragraphBuf.push(line.trim());
     }
   }
+  // EOF cleanup: unterminated fence still gets emitted so malformed
+  // LLM output doesn't silently swallow everything after the open
+  // fence. Order matters — fence first (so its plainIdx precedes any
+  // trailing paragraph), then paragraph, then subsection.
+  if (inCodeBlock) flushCodeBlock();
   flushParagraph();
   flushSubsection();
   return { segments, subsections };
@@ -874,13 +967,11 @@ function SectionView({
     // button (there's nothing to name the section by on the backend).
     return (
       <div className="text-sm leading-relaxed text-text-muted">
-        {section.segments.map((seg) =>
-          renderSegmentLine(seg, citationByPath.get(seg.section_path), {
-            fileId,
-            drive,
-            videoRef,
-          }),
-        )}
+        {renderSegments(section.segments, citationByPath, {
+          fileId,
+          drive,
+          videoRef,
+        })}
       </div>
     );
   }
@@ -903,16 +994,14 @@ function SectionView({
 
   return (
     <section data-section-heading={section.heading}>
-      <div className="mb-1 flex items-center gap-2">
-        <h3 className="text-sm font-semibold text-text-primary">
-          {section.heading}
-        </h3>
+      <div className="markdown-body markdown-segment mb-2 flex items-center gap-2">
+        <h2 className="flex-1">{section.heading}</h2>
         {!editingTarget && (
           <button
             type="button"
             onClick={() => onStartEdit(null)}
             aria-label={td("edit.button", { defaultMessage: "Edit" })}
-            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
+            className="shrink-0 flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
           >
             <Pencil size={11} />
             {td("edit.button", { defaultMessage: "Edit" })}
@@ -930,13 +1019,11 @@ function SectionView({
         />
       ) : (
         <div className="text-sm leading-relaxed text-text-muted">
-          {preambleSegments.map((seg) =>
-            renderSegmentLine(seg, citationByPath.get(seg.section_path), {
-              fileId,
-              drive,
-              videoRef,
-            }),
-          )}
+          {renderSegments(preambleSegments, citationByPath, {
+            fileId,
+            drive,
+            videoRef,
+          })}
           {section.subsections.map((sub) => {
             const subEditing =
               editingTarget !== null
@@ -944,10 +1031,8 @@ function SectionView({
             const subSegments = segmentsBySub.get(sub.heading) ?? [];
             return (
               <div key={sub.heading} data-subsection-heading={sub.heading}>
-                <div className="mt-3 mb-1 flex items-center gap-2">
-                  <h4 className="text-[13px] font-semibold text-text-primary">
-                    {sub.heading}
-                  </h4>
+                <div className="markdown-body markdown-segment mt-3 mb-1 flex items-center gap-2">
+                  <h3 className="flex-1">{sub.heading}</h3>
                   {!editingTarget && (
                     <button
                       type="button"
@@ -955,7 +1040,7 @@ function SectionView({
                       aria-label={td("edit.button", {
                         defaultMessage: "Edit",
                       })}
-                      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
+                      className="shrink-0 flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
                     >
                       <Pencil size={11} />
                       {td("edit.button", { defaultMessage: "Edit" })}
@@ -971,13 +1056,11 @@ function SectionView({
                     onCancelEdit={onCancelEdit}
                   />
                 ) : (
-                  subSegments.map((seg) =>
-                    renderSegmentLine(
-                      seg,
-                      citationByPath.get(seg.section_path),
-                      { fileId, drive, videoRef },
-                    ),
-                  )
+                  renderSegments(subSegments, citationByPath, {
+                    fileId,
+                    drive,
+                    videoRef,
+                  })
                 )}
               </div>
             );
@@ -1051,6 +1134,222 @@ function EditTextarea({
   );
 }
 
+// Walk a segment list and emit React nodes, folding consecutive
+// ``table-row`` segments into a single ``<table>`` and consecutive
+// ``bullet`` segments into a single ``<ul>``. Grouping is required so
+// the ``.markdown-body`` list-item typography (disc marker, per-li
+// spacing, padding-left) applies — a flat ``<div>`` chain of bullets
+// misses all of that. Non-grouped segments (paragraphs, code blocks)
+// are forwarded to ``renderSegmentLine``.
+function renderSegments(
+  segments: ParsedSegment[],
+  citationByPath: Map<string, DetailedSummaryCitation>,
+  ctx: {
+    fileId: string;
+    drive: string;
+    videoRef?: React.RefObject<HTMLVideoElement | null>;
+  },
+): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let tableBuf: ParsedSegment[] = [];
+  let bulletBuf: ParsedSegment[] = [];
+  let groupCounter = 0;
+  const flushTable = () => {
+    if (tableBuf.length === 0) return;
+    nodes.push(
+      <TableGroup
+        key={`tbl-${groupCounter++}-${tableBuf[0].section_path}`}
+        rows={tableBuf}
+        citationByPath={citationByPath}
+        ctx={ctx}
+      />,
+    );
+    tableBuf = [];
+  };
+  const flushBullets = () => {
+    if (bulletBuf.length === 0) return;
+    nodes.push(
+      <BulletGroup
+        key={`ul-${groupCounter++}-${bulletBuf[0].section_path}`}
+        bullets={bulletBuf}
+        citationByPath={citationByPath}
+        ctx={ctx}
+      />,
+    );
+    bulletBuf = [];
+  };
+  for (const seg of segments) {
+    if (seg.type === "table-row") {
+      flushBullets();
+      tableBuf.push(seg);
+      continue;
+    }
+    if (seg.type === "bullet") {
+      flushTable();
+      bulletBuf.push(seg);
+      continue;
+    }
+    flushTable();
+    flushBullets();
+    nodes.push(
+      renderSegmentLine(seg, citationByPath.get(seg.section_path), ctx),
+    );
+  }
+  flushTable();
+  flushBullets();
+  return nodes;
+}
+
+function BulletGroup({
+  bullets,
+  citationByPath,
+  ctx,
+}: {
+  bullets: ParsedSegment[];
+  citationByPath: Map<string, DetailedSummaryCitation>;
+  ctx: {
+    fileId: string;
+    drive: string;
+    videoRef?: React.RefObject<HTMLVideoElement | null>;
+  };
+}) {
+  // The first bullet's indent anchors the group — anything deeper gets
+  // proportional extra ``margin-left`` so nested items still read as
+  // hierarchy. We avoid re-building a proper ``<ul>`` tree here because
+  // the segment list is flat (backend doesn't preserve bullet depth)
+  // and a single-level ``<ul>`` with visual indent matches what the
+  // MarkdownPreview output looks like for simple nested lists.
+  const minIndent = Math.min(...bullets.map((b) => b.indent));
+  return (
+    // ``mb-[1.15em]`` mirrors ``.markdown-body ul``'s bottom margin so
+    // the bullet block has the same rhythm as MarkdownPreview output.
+    // The Tailwind arbitrary variants on each ``<li>`` below collapse
+    // the inner SegmentMarkdown ``<p>`` into the li line so the marker
+    // and text flow next to the disc instead of wrapping to a new row.
+    <ul className="markdown-body markdown-segment mb-[1.15em] list-disc pl-[1.75em]">
+      {bullets.map((b) => {
+        const citation = citationByPath.get(b.section_path);
+        const marker = citation ? (
+          <DetailedSummaryCitationPopover
+            fileId={ctx.fileId}
+            drive={ctx.drive}
+            citation={citation}
+            videoRef={ctx.videoRef ?? null}
+          />
+        ) : null;
+        const extraPad = (b.indent - minIndent) * 8;
+        return (
+          <li
+            key={b.section_path}
+            data-citation-section-path={b.section_path}
+            className="[&>div]:inline [&>div>p]:m-0 [&>div>p]:inline"
+            style={extraPad ? { marginLeft: `${extraPad}px` } : undefined}
+          >
+            {marker}
+            {marker ? " " : null}
+            <SegmentMarkdown source={b.text} />
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function TableGroup({
+  rows,
+  citationByPath,
+  ctx,
+}: {
+  rows: ParsedSegment[];
+  citationByPath: Map<string, DetailedSummaryCitation>;
+  ctx: {
+    fileId: string;
+    drive: string;
+    videoRef?: React.RefObject<HTMLVideoElement | null>;
+  };
+}) {
+  const header = rows[0]?.tableHeader ?? [];
+  const anyMarker = rows.some((r) => citationByPath.has(r.section_path));
+  // The citation column sits outside the `.markdown-body` cell grid so
+  // the popover trigger doesn't inherit the cell border / padding /
+  // zebra striping. A zero-width column keeps the header alignment
+  // honest when only some rows have citations.
+  const markerCellStyle: React.CSSProperties = {
+    border: "none",
+    padding: "0 0.4em 0 0",
+    width: 0,
+    whiteSpace: "nowrap",
+    background: "transparent",
+    verticalAlign: "top",
+  };
+  // Override `.markdown-body tr:nth-child(even) { background: bg-elevated }`
+  // inline. The tr-level stripe paints the full row width — including
+  // the transparent citation ``<td>`` — so the citation column reads as
+  // part of the table. We disable the tr stripe and re-apply it per
+  // data cell below, preserving zebra striping while letting the
+  // citation column stay visually outside the frame.
+  const transparentRowStyle: React.CSSProperties = { background: "transparent" };
+  const stripedCellStyle: React.CSSProperties = {
+    background: "var(--bg-elevated)",
+  };
+  // We deliberately do NOT wrap the table in `overflow-x-auto` — that
+  // caused the citation popover (which extends beyond the table's right
+  // edge on hover) to trigger a horizontal scrollbar on the table alone.
+  // Wide tables flow into the section's natural overflow instead.
+  return (
+    <div className="markdown-body markdown-segment my-2">
+      <table>
+        {header.length > 0 && (
+          <thead>
+            <tr style={transparentRowStyle}>
+              {anyMarker && <th aria-hidden style={markerCellStyle} />}
+              {header.map((cell, i) => (
+                <th key={i}>{cell}</th>
+              ))}
+            </tr>
+          </thead>
+        )}
+        <tbody>
+          {rows.map((row, idx) => {
+            const citation = citationByPath.get(row.section_path);
+            const marker = citation ? (
+              <DetailedSummaryCitationPopover
+                fileId={ctx.fileId}
+                drive={ctx.drive}
+                citation={citation}
+                videoRef={ctx.videoRef ?? null}
+              />
+            ) : null;
+            const cells = row.tableCells ?? [];
+            // Replicate `.markdown-body tr:nth-child(even)` striping on
+            // the data cells only. idx is 0-based; the matching
+            // 1-based even rows (2nd, 4th, …) are idx=1, 3, …
+            const stripe = idx % 2 === 1;
+            return (
+              <tr
+                key={row.section_path}
+                data-citation-section-path={row.section_path}
+                style={transparentRowStyle}
+              >
+                {anyMarker && (
+                  <td aria-hidden style={markerCellStyle}>
+                    {marker}
+                  </td>
+                )}
+                {cells.map((cell, i) => (
+                  <td key={i} style={stripe ? stripedCellStyle : undefined}>
+                    {cell}
+                  </td>
+                ))}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function renderSegmentLine(
   segment: ParsedSegment,
   citation: DetailedSummaryCitation | undefined,
@@ -1071,47 +1370,21 @@ function renderSegmentLine(
 
   const text = segment.text;
 
-  if (segment.type === "bullet") {
-    const padding = segment.indent > 0 ? segment.indent * 8 : 0;
-    return (
-      <div
-        key={segment.section_path}
-        data-citation-section-path={segment.section_path}
-        className="flex items-start gap-1"
-        style={{ paddingLeft: padding }}
-      >
-        <span aria-hidden className="mt-[2px] shrink-0 text-text-muted/60">
-          •
-        </span>
-        {marker}
-        <div className="min-w-0 flex-1">
-          <SegmentMarkdown source={text} />
-        </div>
-      </div>
-    );
-  }
-  if (segment.type === "table-row") {
-    return (
-      <div
-        key={segment.section_path}
-        data-citation-section-path={segment.section_path}
-        className="flex items-start gap-1 font-mono text-xs"
-      >
-        {marker}
-        <div className="min-w-0 flex-1 whitespace-pre-wrap break-words">
-          {text}
-        </div>
-      </div>
-    );
-  }
-  // Paragraph + backend-folded ``###``+ heading lines. MarkdownPreview
-  // returns block-level HTML (<p>, <h3>, …), so align the marker on
-  // its own flex row rather than trying to nest it inside the prose.
+  // ``bullet`` and ``table-row`` never reach this function — they are
+  // folded into ``BulletGroup`` / ``TableGroup`` by ``renderSegments``
+  // so ``.markdown-body`` ul/table typography applies. Any other
+  // segment type (paragraph, code-block, future additions) renders
+  // through SegmentMarkdown below; MarkdownPreview knows how to turn
+  // fenced text into ``<pre><code>`` and prose into ``<p>``, so we do
+  // not need to branch on ``code-block`` here.
+  // ``mb-[1.15em]`` matches ``.markdown-body p``'s bottom margin so the
+  // spacing between consecutive paragraphs / code blocks lines up with
+  // the MarkdownPreview rhythm.
   return (
     <div
       key={segment.section_path}
       data-citation-section-path={segment.section_path}
-      className="mb-2 flex items-start gap-1"
+      className="mb-[1.15em] flex items-start gap-1"
     >
       {marker}
       <div className="min-w-0 flex-1">
