@@ -627,17 +627,26 @@ export async function getCitationChunkExcerpt(
 // --- Detailed summary editing (Phase 2) ---
 
 /**
- * Replace the body of a single `## Heading` section with user-edited
- * Markdown. The backend locates the section by heading name, swaps
- * the content, snapshots the previous full summary into
- * `detailed_original` on first edit, bumps `detailed_edited_at`, and
- * recomputes citations. Response mirrors `getDetailedSummary` so the
- * UI can rehydrate from a single call.
+ * Splice a heading-anchored range of the detailed summary with a
+ * user-edited Markdown fragment.
+ *
+ * `section_heading` is the H2 anchor; set `subsection_heading` to
+ * narrow the edit to a single `### Heading` inside that H2. The
+ * fragment is verbatim — it may include `##` / `###` lines, restructure
+ * the hierarchy, or drop a heading entirely; the backend re-parses on
+ * save so structural changes propagate to the next render.
+ *
+ * Response mirrors `getDetailedSummary` so the UI can rehydrate from a
+ * single call.
  */
 export async function editDetailedSummarySection(
   fileId: string,
   drive: string,
-  payload: { section_heading: string; new_content: string },
+  payload: {
+    section_heading: string;
+    subsection_heading?: string | null;
+    new_content: string;
+  },
 ): Promise<DetailedSummaryResponse> {
   return fetchJSON<DetailedSummaryResponse>(
     `${API_BASE}/addons/intelligence/files/${fileId}/summary/detailed/section`,

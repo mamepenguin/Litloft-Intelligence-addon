@@ -216,7 +216,7 @@ class TestEditDetailedSummarySection:
 
         body = DetailedSummaryEditRequest(
             section_heading="全体像",
-            new_content="ユーザーが書き直した全体像。",
+            new_content="## 全体像\nユーザーが書き直した全体像。",
         )
         result = await edit_detailed_summary_section(
             "abc123", body, BackgroundTasks(), "drive1"
@@ -251,7 +251,7 @@ class TestEditDetailedSummarySection:
             "abc123",
             DetailedSummaryEditRequest(
                 section_heading="全体像",
-                new_content="v1 body",
+                new_content="## 全体像\nv1 body",
             ),
             BackgroundTasks(),
             "drive1",
@@ -260,7 +260,7 @@ class TestEditDetailedSummarySection:
             "abc123",
             DetailedSummaryEditRequest(
                 section_heading="全体像",
-                new_content="v2 body",
+                new_content="## 全体像\nv2 body",
             ),
             BackgroundTasks(),
             "drive1",
@@ -294,9 +294,13 @@ class TestEditDetailedSummarySection:
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_400_when_section_missing(
+    async def test_409_when_section_missing(
         self, search_db, feature_enabled, stub_side_effects,
     ):
+        """Missing anchor = stale client state, not malformed request.
+
+        Frontend treats this as "document changed under you, reload".
+        """
         engine, _ = search_db
         _insert_detailed_row(engine, "abc123")
 
@@ -310,7 +314,118 @@ class TestEditDetailedSummarySection:
                 BackgroundTasks(),
                 "drive1",
             )
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_409_when_subsection_missing(
+        self, search_db, feature_enabled, stub_side_effects,
+    ):
+        engine, _ = search_db
+        _insert_detailed_row(
+            engine,
+            "abc123",
+            detailed_summary=(
+                "## 全体像\n"
+                "### 第一幕\n"
+                "a body\n"
+            ),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await edit_detailed_summary_section(
+                "abc123",
+                DetailedSummaryEditRequest(
+                    section_heading="全体像",
+                    subsection_heading="存在しないサブ",
+                    new_content="body",
+                ),
+                BackgroundTasks(),
+                "drive1",
+            )
+        assert exc_info.value.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_h3_edit_narrows_to_subsection(
+        self, search_db, feature_enabled, stub_side_effects,
+    ):
+        """H3 splice must leave siblings untouched.
+
+        ``plain_idx`` stays H2-scoped (the parser treats ``###`` as
+        plain text), so existing citations under neighbouring H3s
+        survive the edit. This test also pins the behaviour that a
+        user can narrow an edit from H2 to a single H3 subrange.
+        """
+        engine, _ = search_db
+        _insert_detailed_row(
+            engine,
+            "abc123",
+            detailed_summary=(
+                "## 全体像\n"
+                "### 第一幕\n"
+                "alpha body\n"
+                "\n"
+                "### 第二幕\n"
+                "beta body\n"
+            ),
+        )
+
+        await edit_detailed_summary_section(
+            "abc123",
+            DetailedSummaryEditRequest(
+                section_heading="全体像",
+                subsection_heading="第一幕",
+                new_content="### 第一幕\nedited alpha body",
+            ),
+            BackgroundTasks(),
+            "drive1",
+        )
+        with engine.connect() as conn:
+            stored = conn.execute(
+                text(
+                    "SELECT detailed_summary FROM file_summaries "
+                    "WHERE file_id = 'abc123'"
+                )
+            ).fetchone()[0]
+        assert "edited alpha body" in stored
+        # Original alpha body wiped (substring check: "edited alpha body"
+        # also contains "alpha body", so assert the sentence-standalone
+        # form is gone by checking the bare heading-body adjacency).
+        assert "第一幕\nalpha body" not in stored
+        # Sibling H3 preserved intact.
+        assert "### 第二幕" in stored
+        assert "beta body" in stored
+
+    @pytest.mark.asyncio
+    async def test_h2_rename_accepted(
+        self, search_db, feature_enabled, stub_side_effects,
+    ):
+        """Including a renamed ``## heading`` in the fragment is a valid edit.
+
+        The heading line is part of the editable range precisely so
+        the user can rename a section. No validation rejects the
+        rename — the new heading surfaces on the next render.
+        """
+        engine, _ = search_db
+        _insert_detailed_row(engine, "abc123")
+
+        await edit_detailed_summary_section(
+            "abc123",
+            DetailedSummaryEditRequest(
+                section_heading="全体像",
+                new_content="## 全体像（改題）\n新しい本文",
+            ),
+            BackgroundTasks(),
+            "drive1",
+        )
+        with engine.connect() as conn:
+            stored = conn.execute(
+                text(
+                    "SELECT detailed_summary FROM file_summaries "
+                    "WHERE file_id = 'abc123'"
+                )
+            ).fetchone()[0]
+        assert "## 全体像（改題）" in stored
+        assert "新しい本文" in stored
 
     @pytest.mark.asyncio
     async def test_emits_ws_event_and_schedules_citations(

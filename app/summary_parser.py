@@ -32,8 +32,17 @@ from dataclasses import dataclass
 # ``## 見出し`` — leading whitespace tolerated so snippets that got
 # indented by the LLM still parse. We deliberately match exactly two
 # hashes (level-2 heading) so ``###`` subsections merge into the
-# parent section's paragraph run.
+# parent section's paragraph run. Keeping parsing H2-only preserves
+# the ``plain_idx`` numbering scheme that backs existing
+# ``section_path`` citations, so H3-granularity edits don't
+# invalidate older rows.
 _HEADING_RE = re.compile(r"^\s{0,3}##\s+(?P<title>.+?)\s*$")
+
+# ``### 見出し`` — used only by the splice helper to locate an H3
+# boundary inside an H2 body. Matches exactly three hashes so
+# subsections of subsections (``####``) don't accidentally terminate
+# the splice range.
+_H3_HEADING_RE = re.compile(r"^\s{0,3}###\s+(?P<title>.+?)\s*$")
 
 # ``- item`` or ``* item`` with any indent. The indent is preserved so
 # nested bullets get their own segments instead of merging into the
@@ -228,75 +237,124 @@ def _flatten_table_row(line: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Section replacement (Phase 2: edit)
+# Section splice (Phase 2: edit)
 # ---------------------------------------------------------------------------
 
 
-def replace_section_body(
-    markdown: str, section_heading: str, new_body: str
+def splice_section(
+    markdown: str,
+    h2_heading: str,
+    h3_heading: str | None,
+    new_content: str,
 ) -> str:
-    """Replace the body of a ``## section_heading`` while preserving layout.
+    """Replace a heading-anchored range with an arbitrary Markdown fragment.
 
-    The body is everything between the target ``##`` line and the next
-    ``##`` line (or end-of-string). The heading itself is kept intact so
-    the heading-counting logic in ``parse_segments`` stays stable.
+    The splice range is inclusive of the heading line itself so the
+    user can rename it. ``new_content`` is treated as opaque Markdown:
+    it may add / drop / rearrange ``##`` or ``###`` lines and the
+    document is always re-parsed downstream for citation alignment,
+    so structural changes propagate naturally.
 
-    * Trailing whitespace on ``new_body`` is stripped; a single blank
-      line is inserted between the heading and the body for readability.
-    * If the section is not found, ``ValueError`` is raised — callers
-      should catch this and surface a 400.
-    * If there are multiple sections with the same heading (shouldn't
-      happen in our prompt output but defensive), only the first is
-      replaced.
+    Boundary rules:
+
+    * ``h3_heading is None`` (H2-grained edit): splice from the matched
+      ``##`` line to the line before the next ``##`` (or EOF).
+    * ``h3_heading`` set (H3-grained edit): locate the ``##`` first;
+      within its body locate the matched ``###`` line; splice from
+      that ``###`` to the line before the next ``###`` *or* ``##``
+      (whichever comes first), or EOF.
+
+    The only validation is anchor-existence — if the heading can't be
+    located, raise ``ValueError`` so the caller surfaces a 409 Conflict
+    (optimistic lock: "the document changed under you, reload"). The
+    fragment itself is never validated: users may accidentally delete
+    the heading line, write junk, or splice in an entirely new section
+    hierarchy. All of those are accepted and reflected on reload.
 
     Args:
         markdown: Full detailed_summary text.
-        section_heading: Exact heading text *without* the ``## `` prefix
+        h2_heading: Exact H2 heading text without the ``## `` prefix
             (e.g. ``"全体像"``).
-        new_body: User-edited body text. Leading/trailing whitespace is
-            trimmed.
+        h3_heading: Exact H3 heading text without the ``### `` prefix,
+            or ``None`` for H2-grained edits.
+        new_content: User-edited fragment. May include its own heading
+            line(s).
 
     Returns:
-        New markdown string with the section body replaced.
+        New markdown string.
 
     Raises:
-        ValueError: If the heading is not found.
+        ValueError: If the H2 anchor (or, when given, the H3 anchor
+            inside it) is not found.
     """
     if not markdown:
-        raise ValueError(f"Section not found: {section_heading}")
+        raise ValueError(f"Section not found: {h2_heading}")
 
-    target = section_heading.strip()
     lines = markdown.splitlines()
+    h2_start = _find_h2_start(lines, h2_heading)
+    if h2_start is None:
+        raise ValueError(f"Section not found: {h2_heading}")
+    h2_end = _find_h2_end(lines, h2_start)
 
-    start_idx: int | None = None
+    if h3_heading is None:
+        start, end = h2_start, h2_end
+    else:
+        h3_start = _find_h3_start(lines, h2_start + 1, h2_end, h3_heading)
+        if h3_start is None:
+            raise ValueError(
+                f"Subsection not found: {h2_heading}/{h3_heading}"
+            )
+        end = _find_h3_end(lines, h3_start + 1, h2_end)
+        start = h3_start
+
+    body = new_content.strip("\n")
+    body_lines = body.splitlines() if body else []
+
+    # Preserve a blank-line separator before the following lines when
+    # the fragment doesn't already end with one — keeps adjacent ``##``
+    # / ``###`` headings from butting up against user content after the
+    # splice.
+    if end < len(lines) and body_lines and body_lines[-1].strip() != "":
+        body_lines = [*body_lines, ""]
+
+    return "\n".join([*lines[:start], *body_lines, *lines[end:]])
+
+
+def _find_h2_start(lines: list[str], target: str) -> int | None:
+    """Return the index of the first ``## target`` line, or ``None``."""
+    target = target.strip()
     for i, line in enumerate(lines):
         match = _HEADING_RE.match(line)
         if match and match.group("title").strip() == target:
-            start_idx = i
-            break
+            return i
+    return None
 
-    if start_idx is None:
-        raise ValueError(f"Section not found: {section_heading}")
 
-    # Scan forward for the next ``##`` (body ends there).
-    end_idx = len(lines)
-    for j in range(start_idx + 1, len(lines)):
+def _find_h2_end(lines: list[str], h2_start: int) -> int:
+    """Return the index of the next ``##`` line after ``h2_start``, or len."""
+    for j in range(h2_start + 1, len(lines)):
         if _HEADING_RE.match(lines[j]):
-            end_idx = j
-            break
+            return j
+    return len(lines)
 
-    # Preserve the original heading line; replace lines between it and
-    # the next heading with the new body. A single blank line separates
-    # the heading from the body so the rendered markdown stays tidy.
-    heading_line = lines[start_idx]
-    body = new_body.strip("\n")
-    body_lines = body.splitlines() if body else [""]
-    # Build the replacement block. Leading blank line so readers see a
-    # visual break between heading and body. Trailing blank line so the
-    # next section's heading doesn't butt up against user content.
-    replacement: list[str] = [heading_line, "", *body_lines]
-    if end_idx < len(lines):
-        replacement = [*replacement, ""]
 
-    new_lines = [*lines[:start_idx], *replacement, *lines[end_idx:]]
-    return "\n".join(new_lines)
+def _find_h3_start(
+    lines: list[str], start: int, end: int, target: str
+) -> int | None:
+    """Return the index of the first ``### target`` line within ``[start, end)``."""
+    target = target.strip()
+    for i in range(start, end):
+        match = _H3_HEADING_RE.match(lines[i])
+        if match and match.group("title").strip() == target:
+            return i
+    return None
+
+
+def _find_h3_end(
+    lines: list[str], search_from: int, h2_end: int
+) -> int:
+    """Return the index of the next ``###`` (or ``h2_end``) boundary."""
+    for j in range(search_from, h2_end):
+        if _H3_HEADING_RE.match(lines[j]):
+            return j
+    return h2_end

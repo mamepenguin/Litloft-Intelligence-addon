@@ -715,7 +715,7 @@ async def edit_detailed_summary_section(
     background_tasks: BackgroundTasks,
     drive: str = Depends(require_drive),
 ) -> DetailedSummaryResponse:
-    """Replace the body of one ``## section`` in the detailed summary.
+    """Splice one heading-anchored range of the detailed summary.
 
     Behaviour:
 
@@ -723,8 +723,10 @@ async def edit_detailed_summary_section(
     2. First edit snapshots ``detailed_summary`` into
        ``detailed_original`` so revert can restore it. Subsequent
        edits leave the snapshot pinned to the original AI output.
-    3. ``detailed_summary`` is rewritten with the heading preserved
-       and the body between it and the next ``##`` replaced.
+    3. ``detailed_summary`` is rewritten by splicing ``new_content``
+       over the range anchored by ``section_heading`` (H2) and
+       optionally ``subsection_heading`` (H3). The heading line is
+       part of the replaced range so the user can rename it.
     4. ``detailed_edited_at`` is set to the current UTC timestamp.
     5. Citations are recalculated via FastAPI ``BackgroundTasks`` so
        the HTTP response returns immediately without waiting for
@@ -735,8 +737,12 @@ async def edit_detailed_summary_section(
     6. ``intelligence.detailed_summary.updated`` is emitted synchronously
        (it's just a cheap notification) with ``citations_ready: false``.
 
-    400 when the requested heading doesn't exist in the current
-    summary. This prevents silently creating orphaned sections.
+    409 when the requested heading(s) no longer exist in the stored
+    summary — treated as optimistic-lock failure ("the document
+    changed, reload"), not client-side validation. The fragment
+    itself is never validated; adding, removing, or restructuring
+    ``##`` / ``###`` inside ``new_content`` is all accepted and
+    reflected on reload.
     """
     _require_detailed_feature_enabled()
     _require_file_in_drive(file_id, drive)
@@ -752,14 +758,19 @@ async def edit_detailed_summary_section(
         current, original, _edited_at = state
 
         # Lazy-import so the parser is only paid for on the edit path.
-        from app.summary_parser import replace_section_body
+        from app.summary_parser import splice_section
 
         try:
-            new_summary = replace_section_body(
-                current, body.section_heading, body.new_content
+            new_summary = splice_section(
+                current,
+                body.section_heading,
+                body.subsection_heading,
+                body.new_content,
             )
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
+            # 409 (not 400): anchor missing = stale client state, not
+            # a malformed request. Frontend prompts a reload.
+            raise HTTPException(status_code=409, detail=str(e)) from e
 
         # Snapshot the AI output on the first edit only. On re-edit we
         # keep the snapshot pinned to the *original* AI version so

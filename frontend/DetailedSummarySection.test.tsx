@@ -308,7 +308,7 @@ describe("DetailedSummarySection — edit flow", () => {
     cleanup();
   });
 
-  it("opens a textarea pre-filled with the section body on Edit click", async () => {
+  it("opens a textarea pre-filled with the full H2 fragment (heading + body) on Edit click", async () => {
     (getDetailedSummary as unknown as ReturnType<typeof vi.fn>)
       .mockResolvedValue(generatedResponse);
 
@@ -326,8 +326,10 @@ describe("DetailedSummarySection — edit flow", () => {
     const textarea = (await screen.findByLabelText(
       /セクション内容を編集/,
     )) as HTMLTextAreaElement;
-    // The draft should be seeded with the section body (all lines
-    // between `## 全体像` and the next `##`).
+    // The draft should be seeded with the entire H2 fragment so the
+    // user can rename the heading or restructure the section in one
+    // pass. This is the behaviour pinned in hako ``CURC61BSCLdE6uMd31k_4``.
+    expect(textarea.value).toContain("## 全体像");
     expect(textarea.value).toContain("本作の概要を述べる段落");
   });
 
@@ -348,7 +350,9 @@ describe("DetailedSummarySection — edit flow", () => {
     const textarea = (await screen.findByLabelText(
       /セクション内容を編集/,
     )) as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: "編集後の概要。" } });
+    fireEvent.change(textarea, {
+      target: { value: "## 全体像\n編集後の概要。" },
+    });
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /^保存$/ }));
@@ -358,7 +362,13 @@ describe("DetailedSummarySection — edit flow", () => {
       expect(editDetailedSummarySection).toHaveBeenCalledWith(
         "f1",
         "drive1",
-        { section_heading: "全体像", new_content: "編集後の概要。" },
+        {
+          section_heading: "全体像",
+          // H2-level edit → subsection_heading: null so the backend
+          // splices the whole H2 range. H3 edits carry the H3 title.
+          subsection_heading: null,
+          new_content: "## 全体像\n編集後の概要。",
+        },
       );
     });
 
@@ -522,7 +532,7 @@ describe("DetailedSummarySection — inline markdown rendering", () => {
     expect(link?.getAttribute("rel")).toContain("noopener");
   });
 
-  it("renders ### subheadings as styled heading elements", async () => {
+  it("renders ### subheadings as H3 edit targets with their own edit buttons", async () => {
     const md = `## 章構成
 ### 第一幕
 
@@ -548,14 +558,132 @@ describe("DetailedSummarySection — inline markdown rendering", () => {
 
     await screen.findByText(/ここから物語が始まります/);
 
-    // MarkdownPreview renders native <h3> for ``###`` subheadings.
-    const h3s = container.querySelectorAll("h3");
-    const headingTexts = Array.from(h3s).map((el) => el.textContent);
+    // ``###`` is captured at parse time as a subsection edit target
+    // and rendered as an <h4> label by SectionView (the outer H2
+    // uses <h3>). The raw marker never reaches the DOM.
+    const h4s = container.querySelectorAll("h4");
+    const headingTexts = Array.from(h4s).map((el) => el.textContent);
     expect(headingTexts).toEqual(expect.arrayContaining(["第一幕", "第二幕"]));
 
     // The raw ``### `` marker must not leak into the rendered DOM.
     expect(container.textContent ?? "").not.toContain("### 第一幕");
     expect(container.textContent ?? "").not.toContain("### 第二幕");
+
+    // One edit button per H3 plus one for the outer H2.
+    const editButtons = container.querySelectorAll('button[aria-label="編集"]');
+    expect(editButtons.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("seeds the H3 edit draft with the full subsection fragment", async () => {
+    const md = `## 章構成
+### 第一幕
+
+ここから物語が始まります。
+
+### 第二幕
+
+山場の展開。
+`;
+    (getDetailedSummary as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        available: true,
+        status: "generated",
+        file_id: "f1",
+        detailed_summary: md,
+        model: "test-model",
+        edited_at: null,
+        has_original: false,
+      });
+
+    const { container } = renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+
+    await screen.findByText(/ここから物語が始まります/);
+
+    // Identify the H3 subsection block and click its edit button.
+    const sub = container.querySelector(
+      '[data-subsection-heading="第一幕"]',
+    ) as HTMLElement | null;
+    expect(sub).not.toBeNull();
+    const editButton = sub!.querySelector(
+      'button[aria-label="編集"]',
+    ) as HTMLButtonElement | null;
+    expect(editButton).not.toBeNull();
+    fireEvent.click(editButton!);
+
+    const textarea = (await screen.findByLabelText(
+      /セクション内容を編集/,
+    )) as HTMLTextAreaElement;
+    // Draft carries the H3 heading line so the user can rename it,
+    // and the subsection body up to the next ``###``.
+    expect(textarea.value).toContain("### 第一幕");
+    expect(textarea.value).toContain("ここから物語が始まります");
+    // The sibling subsection must NOT be in this H3 draft.
+    expect(textarea.value).not.toContain("### 第二幕");
+    expect(textarea.value).not.toContain("山場の展開");
+  });
+
+  it("sends subsection_heading when saving an H3 edit", async () => {
+    const md = `## 章構成
+### 第一幕
+
+ここから物語が始まります。
+`;
+    (getDetailedSummary as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        available: true,
+        status: "generated",
+        file_id: "f1",
+        detailed_summary: md,
+        model: "test-model",
+        edited_at: null,
+        has_original: false,
+      });
+    (editDetailedSummarySection as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        available: true,
+        status: "generated",
+        file_id: "f1",
+        detailed_summary: md,
+        edited_at: "2026-04-18T12:00:00Z",
+        has_original: true,
+      });
+
+    const { container } = renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+
+    await screen.findByText(/ここから物語が始まります/);
+
+    const sub = container.querySelector(
+      '[data-subsection-heading="第一幕"]',
+    ) as HTMLElement;
+    const editButton = sub.querySelector(
+      'button[aria-label="編集"]',
+    ) as HTMLButtonElement;
+    fireEvent.click(editButton);
+
+    const textarea = (await screen.findByLabelText(
+      /セクション内容を編集/,
+    )) as HTMLTextAreaElement;
+    fireEvent.change(textarea, {
+      target: { value: "### 第一幕\n書き直し本文" },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^保存$/ }));
+    });
+
+    await waitFor(() => {
+      expect(editDetailedSummarySection).toHaveBeenCalledWith(
+        "f1",
+        "drive1",
+        {
+          section_heading: "章構成",
+          subsection_heading: "第一幕",
+          new_content: "### 第一幕\n書き直し本文",
+        },
+      );
+    });
   });
 
   it("neutralises javascript: URLs in links", async () => {
@@ -663,5 +791,71 @@ describe("parseSections", () => {
     expect(section.segments[0].type).toBe("paragraph");
     expect(section.segments[1].type).toBe("bullet");
     expect(section.segments[2].type).toBe("bullet");
+  });
+
+  it("captures ### subsections and attributes segments to them", () => {
+    const md = `## 章構成
+冒頭説明。
+
+### 第一幕
+一幕目の内容。
+
+### 第二幕
+二幕目の内容。
+- ポイント1
+- ポイント2
+`;
+    const [section] = parseSections(md);
+    expect(section.subsections.map((s) => s.heading)).toEqual([
+      "第一幕",
+      "第二幕",
+    ]);
+    // Preamble segment has no subHeading.
+    const preamble = section.segments.find((s) => s.subHeading === null);
+    expect(preamble?.text).toContain("冒頭説明");
+    // Segments under first/second act are attributed correctly.
+    const firstAct = section.segments.filter((s) => s.subHeading === "第一幕");
+    const secondAct = section.segments.filter((s) => s.subHeading === "第二幕");
+    expect(firstAct.map((s) => s.text)).toContain("一幕目の内容。");
+    expect(secondAct.some((s) => s.text === "ポイント1")).toBe(true);
+    expect(secondAct.some((s) => s.text === "ポイント2")).toBe(true);
+  });
+
+  it("keeps plain_idx H2-scoped even when ### subsections intervene", () => {
+    // Existing citations are anchored by ``<H2>/<plain_idx>``. The
+    // frontend must treat ``###`` as plain content from the counter's
+    // perspective so those paths remain valid after adding H3 edit
+    // affordances. See hako ``6DcHGrYOBmehO7RJFXUN0`` — "plain_idx の
+    // 番号規則を保つことで既存 citation の section_path を壊さない".
+    const md = `## S
+段落1。
+
+### サブ
+段落2。
+- 箇条書き
+`;
+    const [section] = parseSections(md);
+    const paths = section.segments.map((s) => s.section_path);
+    expect(paths).toEqual(["S/0", "S/1", "S/2"]);
+  });
+
+  it("exposes fullFragment for H2 and H3 edit draft seeds", () => {
+    const md = `## 章構成
+冒頭。
+
+### 第一幕
+一幕目。
+`;
+    const [section] = parseSections(md);
+    // H2 fullFragment covers the heading + everything up to (but not
+    // including) the next ``##``.
+    expect(section.fullFragment).toContain("## 章構成");
+    expect(section.fullFragment).toContain("冒頭。");
+    expect(section.fullFragment).toContain("### 第一幕");
+    expect(section.fullFragment).toContain("一幕目。");
+    // H3 fullFragment is the standalone subsection.
+    expect(section.subsections[0].fullFragment).toContain("### 第一幕");
+    expect(section.subsections[0].fullFragment).toContain("一幕目。");
+    expect(section.subsections[0].fullFragment).not.toContain("冒頭。");
   });
 });

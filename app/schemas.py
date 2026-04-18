@@ -366,12 +366,22 @@ class ChunkExcerptResponse(BaseModel):
 class DetailedSummaryEditRequest(BaseModel):
     """Request body for PUT /files/{id}/summary/detailed/section.
 
-    ``section_heading`` is the canonical ``## 見出し`` text without the
-    leading hashes (e.g. ``"全体像"``). ``new_content`` replaces the
-    body between this heading and the next ``##`` / end-of-string.
+    ``section_heading`` is the H2 anchor text (``## 見出し`` without the
+    leading hashes, e.g. ``"全体像"``). ``subsection_heading`` narrows
+    the edit to a single ``### 見出し`` inside that H2 body; omit it
+    to splice the whole H2 section.
+
+    ``new_content`` is the full Markdown fragment that replaces the
+    range — *including the heading line itself* so the user can rename
+    the heading or restructure it with nested ``###`` subsections. The
+    fragment is spliced verbatim; structural changes propagate on the
+    next parse/render cycle.
     """
 
     section_heading: str = Field(..., min_length=1, max_length=200)
+    subsection_heading: str | None = Field(
+        default=None, max_length=200
+    )
     new_content: str = Field(..., min_length=1, max_length=20000)
 
 

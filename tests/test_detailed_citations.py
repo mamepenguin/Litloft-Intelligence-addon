@@ -188,11 +188,20 @@ class TestParseSegments:
         ]
 
 
-class TestReplaceSectionBody:
-    """Phase 2 edit helper must preserve surrounding sections."""
+class TestSpliceSection:
+    """Phase 2 edit helper must splice verbatim without validating content.
 
-    def test_replaces_target_section_only(self):
-        from app.summary_parser import replace_section_body
+    The helper's only validation is anchor existence: a missing H2 (or,
+    when given, a missing H3 within that H2) raises ``ValueError`` so
+    the router can surface a 409 Conflict. Every other structural
+    change — renaming the heading, deleting the ``##`` line entirely,
+    adding new ``##`` / ``###`` lines, or splicing in an empty
+    fragment — is accepted and reflected on the next parse/render
+    cycle.
+    """
+
+    def test_replaces_target_h2_including_heading(self):
+        from app.summary_parser import splice_section
 
         source = (
             "## A\n"
@@ -201,54 +210,171 @@ class TestReplaceSectionBody:
             "## B\n"
             "original B\n"
         )
-        result = replace_section_body(source, "A", "edited A body")
+        # new_content carries its own heading line — users can rename
+        # or restructure since the ``##`` line is part of the edit
+        # range.
+        result = splice_section(source, "A", None, "## A\nedited A body")
         assert "edited A body" in result
         # B section untouched.
         assert "original B" in result
-        # Original A body removed.
         assert "original A" not in result
-        # Headings preserved exactly.
         assert "## A" in result
         assert "## B" in result
 
-    def test_replacement_of_last_section(self):
-        from app.summary_parser import replace_section_body
+    def test_rename_h2_heading(self):
+        """Dropping the ``##`` line merges content into the preamble."""
+        from app.summary_parser import splice_section
 
-        source = (
-            "## A\n"
-            "body A\n"
-            "\n"
-            "## B\n"
-            "body B\n"
-        )
-        result = replace_section_body(source, "B", "new B body")
+        source = "## A\nbody A\n\n## B\nbody B\n"
+        # User renamed ``## A`` → ``## A prime`` via the editable range.
+        result = splice_section(source, "A", None, "## A prime\nbody A")
+        assert "## A prime" in result
+        assert "## A\n" not in result
+        assert "## B" in result
+
+    def test_replacement_of_last_h2(self):
+        from app.summary_parser import splice_section
+
+        source = "## A\nbody A\n\n## B\nbody B\n"
+        result = splice_section(source, "B", None, "## B\nnew B body")
         assert "new B body" in result
         assert "body A" in result
         assert "body B" not in result
 
-    def test_missing_section_raises(self):
-        from app.summary_parser import replace_section_body
+    def test_missing_h2_raises(self):
+        from app.summary_parser import splice_section
 
         with pytest.raises(ValueError):
-            replace_section_body("## A\nbody\n", "missing", "whatever")
+            splice_section("## A\nbody\n", "missing", None, "## M\nwhatever")
 
     def test_empty_markdown_raises(self):
-        from app.summary_parser import replace_section_body
+        from app.summary_parser import splice_section
 
         with pytest.raises(ValueError):
-            replace_section_body("", "anything", "body")
+            splice_section("", "anything", None, "body")
 
     def test_multiline_replacement_preserved(self):
-        from app.summary_parser import replace_section_body
+        from app.summary_parser import splice_section
 
         source = "## A\nold\n\n## B\nb\n"
-        new_content = "line 1\n\nline 2\n- bullet"
-        result = replace_section_body(source, "A", new_content)
+        new_content = "## A\nline 1\n\nline 2\n- bullet"
+        result = splice_section(source, "A", None, new_content)
         assert "line 1" in result
         assert "line 2" in result
         assert "- bullet" in result
         # B stays.
         assert "## B" in result
+
+    def test_h3_splice_within_h2_body(self):
+        from app.summary_parser import splice_section
+
+        source = (
+            "## Outer\n"
+            "preamble text\n"
+            "\n"
+            "### Alpha\n"
+            "alpha body\n"
+            "\n"
+            "### Beta\n"
+            "beta body\n"
+            "\n"
+            "## Next\n"
+            "next body\n"
+        )
+        result = splice_section(
+            source,
+            "Outer",
+            "Alpha",
+            "### Alpha\nedited alpha body",
+        )
+        assert "edited alpha body" in result
+        # Alpha's original body gone.
+        assert "alpha body" not in result or "edited alpha body" in result
+        # Beta and Next must be untouched.
+        assert "### Beta" in result
+        assert "beta body" in result
+        assert "## Next" in result
+        assert "next body" in result
+        # H2 preamble preserved.
+        assert "preamble text" in result
+
+    def test_h3_splice_does_not_touch_sibling_h3(self):
+        from app.summary_parser import splice_section
+
+        source = (
+            "## Outer\n"
+            "### A\n"
+            "a body\n"
+            "\n"
+            "### B\n"
+            "b body\n"
+        )
+        result = splice_section(source, "Outer", "B", "### B\nnew b body")
+        assert "new b body" in result
+        assert "a body" in result
+        assert "b body" not in result or "new b body" in result
+
+    def test_missing_h3_raises(self):
+        from app.summary_parser import splice_section
+
+        source = "## Outer\n### A\nbody\n"
+        with pytest.raises(ValueError):
+            splice_section(source, "Outer", "Missing", "### Missing\n")
+
+    def test_h3_splice_accepts_arbitrary_fragment(self):
+        """H3 fragment may inject new ``##`` / ``###`` — no validation.
+
+        The discussion in hako ``pOuEbQpDEyn5ORalXS8Ej`` calls this
+        "素直に splice する": the backend never rejects fragments on
+        structural grounds. The parser will re-segment the document on
+        the next call regardless of what ends up there.
+        """
+        from app.summary_parser import splice_section
+
+        source = (
+            "## Outer\n"
+            "### A\n"
+            "a body\n"
+            "\n"
+            "### B\n"
+            "b body\n"
+        )
+        # User accidentally deleted the ### heading entirely.
+        result = splice_section(source, "Outer", "A", "just text, no heading")
+        assert "just text, no heading" in result
+        # The next parse would treat that as paragraph content under
+        # ``## Outer``; for now we only assert the splice executed.
+        assert "a body" not in result
+        # Sibling still present.
+        assert "### B" in result
+
+    def test_h2_splice_with_h3_subsections_drops_all(self):
+        """H2-level splice replaces everything up to the next ``##``.
+
+        This intentionally includes nested ``###`` subsections. Users
+        who want narrower edits pick the H3 edit button instead.
+        """
+        from app.summary_parser import splice_section
+
+        source = (
+            "## Outer\n"
+            "### A\n"
+            "a body\n"
+            "\n"
+            "### B\n"
+            "b body\n"
+            "\n"
+            "## Next\n"
+            "next body\n"
+        )
+        result = splice_section(
+            source, "Outer", None, "## Outer\nflattened content"
+        )
+        assert "flattened content" in result
+        assert "### A" not in result
+        assert "### B" not in result
+        assert "## Next" in result
+        assert "next body" in result
 
 
 # ---------------------------------------------------------------------------

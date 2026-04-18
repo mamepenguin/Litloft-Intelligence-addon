@@ -102,10 +102,16 @@ export default function DetailedSummarySection({
   // visible; refetched on the WS `citations_ready` event.
   const [citations, setCitations] = useState<DetailedSummaryCitation[]>([]);
 
-  // Phase 2 — per-section edit state. Only one section is editable at
-  // a time; opening another cancels the current draft (parallel edits
+  // Phase 2 — per-section edit state. Only one target is editable at a
+  // time; opening another cancels the current draft (parallel edits
   // don't compose with the single-section PUT endpoint anyway).
-  const [editingHeading, setEditingHeading] = useState<string | null>(null);
+  // ``subsectionHeading = null`` means the whole H2 block is the edit
+  // range (heading line included). A non-null value narrows the range
+  // to one ``### subsection``.
+  const [editingTarget, setEditingTarget] = useState<{
+    sectionHeading: string;
+    subsectionHeading: string | null;
+  } | null>(null);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [reverting, setReverting] = useState(false);
@@ -133,7 +139,7 @@ export default function DetailedSummarySection({
     setDownloading(false);
     setCollapsed(true);
     setCitations([]);
-    setEditingHeading(null);
+    setEditingTarget(null);
     setDraft("");
     setSaving(false);
     setReverting(false);
@@ -260,32 +266,47 @@ export default function DetailedSummarySection({
   }, [citations]);
 
   const handleStartEdit = useCallback(
-    (sectionName: string) => {
+    (sectionName: string, subsectionName: string | null) => {
       const section = sections.find((s) => s.heading === sectionName);
       if (!section) return;
-      setDraft(section.body);
-      setEditingHeading(sectionName);
+      if (subsectionName !== null) {
+        const sub = section.subsections.find(
+          (s) => s.heading === subsectionName,
+        );
+        if (!sub) return;
+        setDraft(sub.fullFragment);
+      } else {
+        // H2 edit: seed with the full H2 fragment (heading line +
+        // body), so the user can rename or restructure everything
+        // including nested ``###`` subsections.
+        setDraft(section.fullFragment);
+      }
+      setEditingTarget({
+        sectionHeading: sectionName,
+        subsectionHeading: subsectionName,
+      });
     },
     [sections],
   );
 
   const handleCancelEdit = useCallback(() => {
-    setEditingHeading(null);
+    setEditingTarget(null);
     setDraft("");
   }, []);
 
   const handleSaveEdit = useCallback(async () => {
-    if (!editingHeading) return;
+    if (!editingTarget) return;
     const trimmed = draft.trim();
     if (!trimmed) return;
     setSaving(true);
     try {
       const updated = await editDetailedSummarySection(fileId, drive, {
-        section_heading: editingHeading,
+        section_heading: editingTarget.sectionHeading,
+        subsection_heading: editingTarget.subsectionHeading,
         new_content: trimmed,
       });
       setData(updated);
-      setEditingHeading(null);
+      setEditingTarget(null);
       setDraft("");
       // Fire-and-forget: citations are recomputed server-side and the
       // WS event will trigger another fetch; in tests / WS-less
@@ -296,7 +317,7 @@ export default function DetailedSummarySection({
     } finally {
       setSaving(false);
     }
-  }, [editingHeading, draft, fileId, drive, fetchCitations]);
+  }, [editingTarget, draft, fileId, drive, fetchCitations]);
 
   const handleRevert = useCallback(async () => {
     setConfirmRevertOpen(false);
@@ -451,10 +472,16 @@ export default function DetailedSummarySection({
               <SectionView
                 key={section.heading || "__root__"}
                 section={section}
-                editing={editingHeading === section.heading}
+                editingTarget={
+                  editingTarget?.sectionHeading === section.heading
+                    ? editingTarget
+                    : null
+                }
                 draft={draft}
                 saving={saving}
-                onStartEdit={() => handleStartEdit(section.heading)}
+                onStartEdit={(subsectionName) =>
+                  handleStartEdit(section.heading, subsectionName)
+                }
                 onCancelEdit={handleCancelEdit}
                 onSaveEdit={handleSaveEdit}
                 onDraftChange={setDraft}
@@ -551,13 +578,29 @@ export default function DetailedSummarySection({
 interface ParsedSection {
   heading: string; // "" for pre-heading preamble
   body: string;    // raw markdown body for this section
+  // Full fragment including the ``## heading`` line — used as the
+  // draft seed when the user opens the H2-level editor so they can
+  // rename the heading or restructure the whole section in one pass.
+  fullFragment: string;
   segments: ParsedSegment[];
+  // H3 subdivisions, in source order. Empty when the section has no
+  // ``###`` lines, in which case only the H2-level edit button shows.
+  subsections: ParsedSubsection[];
+}
+
+interface ParsedSubsection {
+  heading: string;       // H3 title
+  // Full fragment including the ``### heading`` line, used as the
+  // draft seed when the user opens the H3-level editor.
+  fullFragment: string;
 }
 
 interface ParsedSegment {
   // section_path follows the backend convention:
   //   "<heading>/<index>" for paragraphs / bullets
   //   "<heading>/row/<index>" for table rows
+  // The path is always H2-scoped — ``###`` lines do not bump the
+  // counter, preserving compatibility with existing citations.
   section_path: string;
   type: "paragraph" | "bullet" | "table-row";
   // The raw display text. For nested bullets the parent indentation is
@@ -568,6 +611,10 @@ interface ParsedSegment {
   raw: string;
   // Indent depth in spaces (bullet nesting only, used for CSS padding).
   indent: number;
+  // H3 subsection this segment falls under, or ``null`` when it sits
+  // in the preamble between ``##`` and the first ``###``. Used by the
+  // renderer to group segments and interleave H3 edit controls.
+  subHeading: string | null;
 }
 
 /**
@@ -576,23 +623,47 @@ interface ParsedSegment {
  * anchor to. Mirrors the backend parser in
  * `docs/superpowers/specs/...Phase 1` — keep the two in sync or
  * citations won't align.
+ *
+ * ``###`` subheadings are captured as edit targets (``subsections``)
+ * and attributed to each ``segment.subHeading``, but they do not
+ * increment the H2-scoped ``plain_idx`` counter so existing
+ * ``section_path`` citations remain stable.
  */
 export function parseSections(markdown: string): ParsedSection[] {
   if (!markdown) return [];
   const lines = markdown.split(/\r?\n/);
   const sections: ParsedSection[] = [];
-  let current: { heading: string; lines: string[] } = {
+  let current: {
+    heading: string;
+    headingLine: string;
+    lines: string[];
+  } = {
     heading: "",
+    headingLine: "",
     lines: [],
   };
 
   const flush = () => {
     const body = current.lines.join("\n").replace(/\n+$/, "");
-    const segments = parseSegments(current.heading, current.lines);
+    const { segments, subsections } = parseH2Body(
+      current.heading,
+      current.lines,
+    );
     // Drop empty preambles entirely (no heading, no body) — they just
     // create phantom sections in the UI.
     if (current.heading || body || segments.length > 0) {
-      sections.push({ heading: current.heading, body, segments });
+      const fullFragment = current.headingLine
+        ? body
+          ? `${current.headingLine}\n${body}`
+          : current.headingLine
+        : body;
+      sections.push({
+        heading: current.heading,
+        body,
+        fullFragment,
+        segments,
+        subsections,
+      });
     }
   };
 
@@ -600,7 +671,11 @@ export function parseSections(markdown: string): ParsedSection[] {
     const h = /^##\s+(.+?)\s*$/.exec(line);
     if (h) {
       flush();
-      current = { heading: h[1].trim(), lines: [] };
+      current = {
+        heading: h[1].trim(),
+        headingLine: line,
+        lines: [],
+      };
       continue;
     }
     current.lines.push(line);
@@ -609,8 +684,12 @@ export function parseSections(markdown: string): ParsedSection[] {
   return sections;
 }
 
-function parseSegments(heading: string, lines: string[]): ParsedSegment[] {
+function parseH2Body(
+  heading: string,
+  lines: string[],
+): { segments: ParsedSegment[]; subsections: ParsedSubsection[] } {
   const segments: ParsedSegment[] = [];
+  const subsections: ParsedSubsection[] = [];
   // Shared counter for paragraphs + bullets. Matches the backend's
   // ``plain_idx`` so ``section_path`` stays aligned between the two
   // parsers — otherwise citations land on the wrong DOM element.
@@ -623,6 +702,25 @@ function parseSegments(heading: string, lines: string[]): ParsedSegment[] {
   let tableOpen = false;
   let tableHeaderConsumed = false;
 
+  // H3 tracking — capture the raw lines under each ``###`` so the
+  // H3-level edit button can seed a draft that preserves the exact
+  // user-visible formatting (blank lines, bullet layout, etc.).
+  let currentSub: string | null = null;
+  let currentSubHeadingLine = "";
+  let currentSubBodyLines: string[] = [];
+
+  const flushSubsection = () => {
+    if (currentSub === null) return;
+    const body = currentSubBodyLines.join("\n").replace(/\n+$/, "");
+    const fullFragment = body
+      ? `${currentSubHeadingLine}\n${body}`
+      : currentSubHeadingLine;
+    subsections.push({ heading: currentSub, fullFragment });
+    currentSub = null;
+    currentSubHeadingLine = "";
+    currentSubBodyLines = [];
+  };
+
   let paragraphBuf: string[] = [];
   const flushParagraph = () => {
     if (paragraphBuf.length === 0) return;
@@ -634,6 +732,7 @@ function parseSegments(heading: string, lines: string[]): ParsedSegment[] {
         text,
         raw: paragraphBuf.join("\n"),
         indent: 0,
+        subHeading: currentSub,
       });
     }
     paragraphBuf = [];
@@ -645,6 +744,24 @@ function parseSegments(heading: string, lines: string[]): ParsedSegment[] {
     /^\s*\|[\s\-:|]+\|\s*$/.test(line);
 
   for (const line of lines) {
+    const h3Match = /^###\s+(.+?)\s*$/.exec(line);
+    if (h3Match) {
+      flushParagraph();
+      flushSubsection();
+      tableOpen = false;
+      tableHeaderConsumed = false;
+      currentSub = h3Match[1].trim();
+      currentSubHeadingLine = line;
+      continue;
+    }
+
+    // Attribute every subsequent raw line to the active H3 for later
+    // reconstruction of the edit draft. ``slice`` after the heading
+    // line guarantees we don't include ``### Heading`` itself twice.
+    if (currentSub !== null) {
+      currentSubBodyLines.push(line);
+    }
+
     const bulletMatch = /^(\s*)[-*]\s+(.*)$/.exec(line);
     const tableMatch = /^\s*\|.+\|\s*$/.test(line);
     const isBlank = line.trim() === "";
@@ -661,6 +778,7 @@ function parseSegments(heading: string, lines: string[]): ParsedSegment[] {
         text,
         raw: line,
         indent,
+        subHeading: currentSub,
       });
       continue;
     }
@@ -691,6 +809,7 @@ function parseSegments(heading: string, lines: string[]): ParsedSegment[] {
         text: line.replace(/^\s*\|/, "").replace(/\|\s*$/, "").trim(),
         raw: line,
         indent: 0,
+        subHeading: currentSub,
       });
       continue;
     }
@@ -708,12 +827,19 @@ function parseSegments(heading: string, lines: string[]): ParsedSegment[] {
     }
   }
   flushParagraph();
-  return segments;
+  flushSubsection();
+  return { segments, subsections };
 }
 
 interface SectionViewProps {
   section: ParsedSection;
-  editing: boolean;
+  // Either null (nothing in this section is being edited) or the
+  // target descriptor. ``subsectionHeading === null`` means the whole
+  // H2 is being edited; otherwise a single ``### subsection``.
+  editingTarget: {
+    sectionHeading: string;
+    subsectionHeading: string | null;
+  } | null;
   draft: string;
   saving: boolean;
   edited: boolean;
@@ -721,7 +847,7 @@ interface SectionViewProps {
   drive: string;
   videoRef?: React.RefObject<HTMLVideoElement | null>;
   citationByPath: Map<string, DetailedSummaryCitation>;
-  onStartEdit: () => void;
+  onStartEdit: (subsectionHeading: string | null) => void;
   onCancelEdit: () => void;
   onSaveEdit: () => void;
   onDraftChange: (value: string) => void;
@@ -729,7 +855,7 @@ interface SectionViewProps {
 
 function SectionView({
   section,
-  editing,
+  editingTarget,
   draft,
   saving,
   fileId,
@@ -759,16 +885,32 @@ function SectionView({
     );
   }
 
+  // Group segments by their H3 subsection so the renderer can
+  // interleave per-H3 edit controls. Segments with ``subHeading: null``
+  // form the preamble (content between ``## heading`` and the first
+  // ``###``).
+  const preambleSegments = section.segments.filter((s) => s.subHeading === null);
+  const segmentsBySub = new Map<string, ParsedSegment[]>();
+  for (const seg of section.segments) {
+    if (seg.subHeading === null) continue;
+    const existing = segmentsBySub.get(seg.subHeading) ?? [];
+    existing.push(seg);
+    segmentsBySub.set(seg.subHeading, existing);
+  }
+
+  const editingH2 =
+    editingTarget !== null && editingTarget.subsectionHeading === null;
+
   return (
     <section data-section-heading={section.heading}>
       <div className="mb-1 flex items-center gap-2">
         <h3 className="text-sm font-semibold text-text-primary">
           {section.heading}
         </h3>
-        {!editing && (
+        {!editingTarget && (
           <button
             type="button"
-            onClick={onStartEdit}
+            onClick={() => onStartEdit(null)}
             aria-label={td("edit.button", { defaultMessage: "Edit" })}
             className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
           >
@@ -778,61 +920,134 @@ function SectionView({
         )}
       </div>
 
-      {editing ? (
-        <div>
-          <textarea
-            aria-label={td("edit.textareaLabel", {
-              defaultMessage: "Edit section content",
-            })}
-            value={draft}
-            onChange={(e) => onDraftChange(e.target.value)}
-            rows={Math.max(4, draft.split("\n").length + 1)}
-            className="block w-full resize-y rounded border border-bg-border bg-bg-card px-2 py-2 font-mono text-xs text-text-primary outline-none focus:border-accent-teal"
-          />
-          <div className="mt-2 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onSaveEdit}
-              disabled={saving || draft.trim().length === 0}
-              className="flex items-center gap-1 rounded bg-accent-teal px-2 py-1 text-[11px] text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-            >
-              {saving ? (
-                <RefreshCw size={11} className="animate-spin" />
-              ) : (
-                <Save size={11} />
-              )}
-              {td("edit.save", { defaultMessage: "Save" })}
-            </button>
-            <button
-              type="button"
-              onClick={onCancelEdit}
-              disabled={saving}
-              className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
-            >
-              <X size={11} />
-              {td("edit.cancel", { defaultMessage: "Cancel" })}
-            </button>
-            {saving && (
-              <span className="text-[11px] text-text-muted">
-                {td("edit.recomputing", {
-                  defaultMessage: "Recomputing citations…",
-                })}
-              </span>
-            )}
-          </div>
-        </div>
+      {editingH2 ? (
+        <EditTextarea
+          draft={draft}
+          saving={saving}
+          onDraftChange={onDraftChange}
+          onSaveEdit={onSaveEdit}
+          onCancelEdit={onCancelEdit}
+        />
       ) : (
         <div className="text-sm leading-relaxed text-text-muted">
-          {section.segments.map((seg) =>
+          {preambleSegments.map((seg) =>
             renderSegmentLine(seg, citationByPath.get(seg.section_path), {
               fileId,
               drive,
               videoRef,
             }),
           )}
+          {section.subsections.map((sub) => {
+            const subEditing =
+              editingTarget !== null
+              && editingTarget.subsectionHeading === sub.heading;
+            const subSegments = segmentsBySub.get(sub.heading) ?? [];
+            return (
+              <div key={sub.heading} data-subsection-heading={sub.heading}>
+                <div className="mt-3 mb-1 flex items-center gap-2">
+                  <h4 className="text-[13px] font-semibold text-text-primary">
+                    {sub.heading}
+                  </h4>
+                  {!editingTarget && (
+                    <button
+                      type="button"
+                      onClick={() => onStartEdit(sub.heading)}
+                      aria-label={td("edit.button", {
+                        defaultMessage: "Edit",
+                      })}
+                      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
+                    >
+                      <Pencil size={11} />
+                      {td("edit.button", { defaultMessage: "Edit" })}
+                    </button>
+                  )}
+                </div>
+                {subEditing ? (
+                  <EditTextarea
+                    draft={draft}
+                    saving={saving}
+                    onDraftChange={onDraftChange}
+                    onSaveEdit={onSaveEdit}
+                    onCancelEdit={onCancelEdit}
+                  />
+                ) : (
+                  subSegments.map((seg) =>
+                    renderSegmentLine(
+                      seg,
+                      citationByPath.get(seg.section_path),
+                      { fileId, drive, videoRef },
+                    ),
+                  )
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </section>
+  );
+}
+
+// Shared textarea + save/cancel toolbar used by both H2 and H3 edits.
+// Extracted so the outer SectionView stays legible and the two edit
+// sites share identical styling / keyboard behaviour.
+function EditTextarea({
+  draft,
+  saving,
+  onDraftChange,
+  onSaveEdit,
+  onCancelEdit,
+}: {
+  draft: string;
+  saving: boolean;
+  onDraftChange: (value: string) => void;
+  onSaveEdit: () => void;
+  onCancelEdit: () => void;
+}) {
+  const td = useTranslations("detailedSummary");
+  return (
+    <div>
+      <textarea
+        aria-label={td("edit.textareaLabel", {
+          defaultMessage: "Edit section content",
+        })}
+        value={draft}
+        onChange={(e) => onDraftChange(e.target.value)}
+        rows={Math.max(4, draft.split("\n").length + 1)}
+        className="block w-full resize-y rounded border border-bg-border bg-bg-card px-2 py-2 font-mono text-xs text-text-primary outline-none focus:border-accent-teal"
+      />
+      <div className="mt-2 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onSaveEdit}
+          disabled={saving || draft.trim().length === 0}
+          className="flex items-center gap-1 rounded bg-accent-teal px-2 py-1 text-[11px] text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+        >
+          {saving ? (
+            <RefreshCw size={11} className="animate-spin" />
+          ) : (
+            <Save size={11} />
+          )}
+          {td("edit.save", { defaultMessage: "Save" })}
+        </button>
+        <button
+          type="button"
+          onClick={onCancelEdit}
+          disabled={saving}
+          className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+        >
+          <X size={11} />
+          {td("edit.cancel", { defaultMessage: "Cancel" })}
+        </button>
+        {saving && (
+          <span className="text-[11px] text-text-muted">
+            {td("edit.recomputing", {
+              defaultMessage: "Recomputing citations…",
+            })}
+          </span>
+        )}
+      </div>
+    </div>
   );
 }
 
