@@ -344,10 +344,17 @@ class ChunkExcerptResponse(BaseModel):
     """Response for GET /files/{id}/chunks/{chunk_id}/excerpt.
 
     ``chunk_id`` echoes the prefixed identifier stored in the citations
-    table (``transcript:{idx}`` or ``document:{idx}``). ``text`` carries
-    the chunk's own text with up to ±100 characters of surrounding
-    context from its immediate neighbours, joined with ellipses when
-    either side was truncated.
+    table (``transcript:{idx}`` or ``document:{idx}``). The excerpt is
+    split into ``prefix`` / ``target`` / ``suffix`` so the UI can
+    visually highlight the cited chunk against its surrounding
+    context. Concatenating the three strings reproduces the flat
+    rendering used before this shape was introduced.
+
+    * ``target`` — the cited chunk's own text, verbatim.
+    * ``prefix`` / ``suffix`` — up to ±100 characters of neighbour
+      context, already including their trailing / leading space
+      separator and a ``"… "`` marker when truncated. Empty string
+      when the chunk sits at the edge of the source.
 
     Transcript chunks populate ``start_time`` / ``end_time`` (float
     seconds) and leave ``page`` null. Document chunks do the inverse —
@@ -357,7 +364,9 @@ class ChunkExcerptResponse(BaseModel):
 
     chunk_id: str
     file_id: str
-    text: str
+    prefix: str
+    target: str
+    suffix: str
     start_time: float | None = None
     end_time: float | None = None
     page: int | None = None

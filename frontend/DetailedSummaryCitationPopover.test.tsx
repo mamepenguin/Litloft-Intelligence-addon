@@ -91,7 +91,9 @@ describe("DetailedSummaryCitationPopover", () => {
       .mockResolvedValue({
         chunk_id: "c1",
         file_id: "f1",
-        text: "これは抜粋テキストです。",
+        prefix: "前の文。 ",
+        target: "これは抜粋テキストです。",
+        suffix: " 次の文。",
         start_time: 42,
         end_time: 46,
         page: null,
@@ -109,12 +111,81 @@ describe("DetailedSummaryCitationPopover", () => {
     expect(await screen.findByText(/抜粋テキスト/)).toBeInTheDocument();
   });
 
+  it("renders the target text inside a highlighted <mark> with surrounding context", async () => {
+    // The popover's whole UX premise is that the user can see at a
+    // glance which substring inside the excerpt is the actual match
+    // vs. neighbour context. We assert the DOM shape here so a
+    // refactor that accidentally flattens everything back into a
+    // single span (the pre-case-A bug that prompted this split)
+    // fails loudly instead of silently regressing the UI.
+    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        chunk_id: "c1",
+        file_id: "f1",
+        prefix: "前の文脈。 ",
+        target: "ここがマッチ箇所。",
+        suffix: " 後ろの文脈。",
+        start_time: 0,
+        end_time: 5,
+        page: null,
+      });
+
+    renderPopover({ citation: linkedCitation });
+    fireEvent.mouseEnter(
+      screen.getByRole("button", { name: /出典を表示/ }),
+    );
+
+    const mark = await screen.findByTestId("citation-target");
+    expect(mark.tagName).toBe("MARK");
+    expect(mark.textContent).toBe("ここがマッチ箇所。");
+
+    // Prefix / suffix sit as sibling spans beside the <mark>; they
+    // must render as plain text (no extra highlighting) so the mark
+    // remains the visual anchor.
+    const paragraph = mark.parentElement!;
+    expect(paragraph.textContent).toBe(
+      "前の文脈。 ここがマッチ箇所。 後ろの文脈。",
+    );
+  });
+
+  it("omits the prefix / suffix elements when they are empty", async () => {
+    // Edge chunks (first/last in a transcript) return empty prefix or
+    // suffix. Rendering empty ``<span>``s would still inflate the DOM
+    // and add phantom whitespace around the mark, so the component
+    // should skip them entirely.
+    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        chunk_id: "c1",
+        file_id: "f1",
+        prefix: "",
+        target: "最初のチャンク。",
+        suffix: "",
+        start_time: 0,
+        end_time: 5,
+        page: null,
+      });
+
+    renderPopover({ citation: linkedCitation });
+    fireEvent.mouseEnter(
+      screen.getByRole("button", { name: /出典を表示/ }),
+    );
+
+    const mark = await screen.findByTestId("citation-target");
+    const paragraph = mark.parentElement!;
+    // Only the <mark> should sit inside the paragraph when both
+    // neighbours are empty.
+    expect(paragraph.children.length).toBe(1);
+    expect(paragraph.textContent).toBe("最初のチャンク。");
+  });
+
   it("jump button seeks the video ref when start_time is present", async () => {
     (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
       .mockResolvedValue({
         chunk_id: "c1",
         file_id: "f1",
-        text: "これは抜粋テキストです。",
+        prefix: "前の文。 ",
+        target: "これは抜粋テキストです。",
+        suffix: " 次の文。",
         start_time: 42,
         end_time: 46,
         page: null,
@@ -149,7 +220,9 @@ describe("DetailedSummaryCitationPopover", () => {
       .mockResolvedValue({
         chunk_id: "c1",
         file_id: "f1",
-        text: "抜粋",
+        prefix: "",
+        target: "抜粋",
+        suffix: "",
         start_time: 0,
         end_time: 1,
         page: null,
@@ -178,7 +251,9 @@ describe("DetailedSummaryCitationPopover", () => {
       .mockResolvedValue({
         chunk_id: "c1",
         file_id: "f1",
-        text: "抜粋",
+        prefix: "",
+        target: "抜粋",
+        suffix: "",
         start_time: 0,
         end_time: 1,
         page: null,

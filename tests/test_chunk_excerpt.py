@@ -241,42 +241,61 @@ class TestParseChunkId:
 
 
 class TestComposeExcerpt:
-    """Context windowing around the target chunk."""
+    """Context windowing around the target chunk.
+
+    The helper returns a ``(prefix, target, suffix)`` triple so the
+    UI can render the target as a visual highlight against muted
+    neighbour context. Concatenating the three strings must still
+    reproduce the single-line layout the popover relied on before
+    the split.
+    """
 
     def test_returns_target_when_no_neighbours(self):
-        assert _compose_excerpt("target", None, None) == "target"
+        assert _compose_excerpt("target", None, None) == ("", "target", "")
 
     def test_short_neighbours_included_verbatim(self):
-        out = _compose_excerpt("target", "prev", "next")
-        assert out == "prev target next"
+        prefix, target, suffix = _compose_excerpt("target", "prev", "next")
+        assert prefix == "prev "
+        assert target == "target"
+        assert suffix == " next"
+        # Concatenation still matches the legacy single-line layout.
+        assert prefix + target + suffix == "prev target next"
 
     def test_long_prev_truncated_with_leading_ellipsis(self):
         prev = "A" * 250
-        out = _compose_excerpt("target", prev, None, context_chars=100)
-        # tail(100) preceded by "… "
-        assert out.startswith("… ")
-        assert "A" * 100 in out
-        # Target still present, unmodified.
-        assert out.endswith("target")
+        prefix, target, suffix = _compose_excerpt(
+            "target", prev, None, context_chars=100
+        )
+        # Tail(100) preceded by "… " so the UI can render a visual
+        # truncation marker on the leading edge.
+        assert prefix.startswith("… ")
+        assert "A" * 100 in prefix
+        # Target stays isolated and unmodified.
+        assert target == "target"
+        assert suffix == ""
 
     def test_long_next_truncated_with_trailing_ellipsis(self):
         nxt = "B" * 250
-        out = _compose_excerpt("target", None, nxt, context_chars=100)
-        assert out.endswith(" …")
-        assert "B" * 100 in out
-        assert out.startswith("target")
+        prefix, target, suffix = _compose_excerpt(
+            "target", None, nxt, context_chars=100
+        )
+        assert prefix == ""
+        assert target == "target"
+        assert suffix.endswith(" …")
+        assert "B" * 100 in suffix
 
     def test_empty_neighbour_skipped(self):
-        out = _compose_excerpt("target", "", None)
-        assert out == "target"
+        assert _compose_excerpt("target", "", None) == ("", "target", "")
 
     def test_both_neighbours_truncated(self):
         prev = "P" * 250
         nxt = "N" * 250
-        out = _compose_excerpt("target", prev, nxt, context_chars=100)
-        assert out.startswith("… ")
-        assert out.endswith(" …")
-        assert "target" in out
+        prefix, target, suffix = _compose_excerpt(
+            "target", prev, nxt, context_chars=100
+        )
+        assert prefix.startswith("… ")
+        assert suffix.endswith(" …")
+        assert target == "target"
 
 
 # ---------------------------------------------------------------------------
@@ -303,9 +322,15 @@ class TestTranscriptExcerpt:
         assert result.page is None
         assert result.start_time == pytest.approx(40.5)
         assert result.end_time == pytest.approx(50.0)
-        assert "The target sentence." in result.text
-        # Neighbours are short → no ellipsis markers.
-        assert result.text == "Earlier sentence here. The target sentence. Following sentence here."
+        assert result.target == "The target sentence."
+        # Neighbours are short → no ellipsis markers; prefix / suffix
+        # retain their space separators so concatenation is seamless.
+        assert result.prefix == "Earlier sentence here. "
+        assert result.suffix == " Following sentence here."
+        assert (
+            result.prefix + result.target + result.suffix
+            == "Earlier sentence here. The target sentence. Following sentence here."
+        )
 
     @pytest.mark.asyncio
     async def test_context_window_trimmed(self, search_db, feature_enabled):
@@ -318,13 +343,13 @@ class TestTranscriptExcerpt:
 
         result = await get_chunk_excerpt("abc123", "transcript:1", "drive1")
 
-        # ±100 chars each side, so total ≤ ~210 chars plus ellipses + target.
-        assert "Target." in result.text
-        assert result.text.startswith("…")  # leading ellipsis from prev truncation
-        assert result.text.endswith("…")    # trailing ellipsis from next truncation
+        # ±100 chars each side; target stays isolated and verbatim.
+        assert result.target == "Target."
+        assert result.prefix.startswith("…")  # leading ellipsis from prev truncation
+        assert result.suffix.endswith("…")    # trailing ellipsis from next truncation
         # The full 500-char neighbours must NOT be present verbatim.
-        assert "X" * 500 not in result.text
-        assert "Y" * 500 not in result.text
+        assert "X" * 500 not in result.prefix
+        assert "Y" * 500 not in result.suffix
 
     @pytest.mark.asyncio
     async def test_edge_chunk_only_has_forward_context(self, search_db, feature_enabled):
@@ -335,7 +360,9 @@ class TestTranscriptExcerpt:
         ])
 
         result = await get_chunk_excerpt("abc123", "transcript:0", "drive1")
-        assert result.text == "First chunk. Second chunk."
+        assert result.prefix == ""
+        assert result.target == "First chunk."
+        assert result.suffix == " Second chunk."
 
     @pytest.mark.asyncio
     async def test_nonexistent_chunk_404(self, search_db, feature_enabled):
@@ -373,8 +400,9 @@ class TestDocumentExcerpt:
         assert result.start_time is None
         assert result.end_time is None
         assert result.page == 2
-        assert "The target paragraph." in result.text
-        assert result.text == "Intro paragraph. The target paragraph. Conclusion paragraph."
+        assert result.target == "The target paragraph."
+        assert result.prefix == "Intro paragraph. "
+        assert result.suffix == " Conclusion paragraph."
 
     @pytest.mark.asyncio
     async def test_page_null_when_extractor_did_not_provide(self, search_db, feature_enabled):
@@ -397,11 +425,11 @@ class TestDocumentExcerpt:
 
         result = await get_chunk_excerpt("doc456", "document:1", "drive1")
 
-        assert "target body" in result.text
-        assert result.text.startswith("…")
-        assert result.text.endswith("…")
-        assert "P" * 400 not in result.text
-        assert "N" * 400 not in result.text
+        assert result.target == "target body"
+        assert result.prefix.startswith("…")
+        assert result.suffix.endswith("…")
+        assert "P" * 400 not in result.prefix
+        assert "N" * 400 not in result.suffix
 
     @pytest.mark.asyncio
     async def test_nonexistent_document_chunk_404(self, search_db, feature_enabled):

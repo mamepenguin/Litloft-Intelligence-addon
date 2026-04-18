@@ -269,8 +269,33 @@ export function DetailedSummaryCitationPopover({
           )}
           {state.kind === "ready" && state.excerpt && (
             <>
-              <p className="mb-2 whitespace-pre-wrap leading-relaxed text-text-primary">
-                {state.excerpt.text}
+              <p className="mb-2 whitespace-pre-wrap leading-relaxed">
+                {state.excerpt.prefix && (
+                  <span className="text-text-muted/80">
+                    {state.excerpt.prefix}
+                  </span>
+                )}
+                <mark
+                  data-testid="citation-target"
+                  className="rounded px-0.5 text-text-primary"
+                  style={{
+                    // Inline style sidesteps both the browser's UA
+                    // default ``mark { background: yellow }`` and any
+                    // Tailwind JIT miss on the ``bg-accent-teal/20``
+                    // utility. ``color-mix`` mixes 20% of the theme
+                    // token with transparent, matching the Tailwind
+                    // opacity modifier semantics.
+                    backgroundColor:
+                      "color-mix(in oklab, var(--color-accent-teal) 22%, transparent)",
+                  }}
+                >
+                  {state.excerpt.target}
+                </mark>
+                {state.excerpt.suffix && (
+                  <span className="text-text-muted/80">
+                    {state.excerpt.suffix}
+                  </span>
+                )}
               </p>
               <div className="flex items-center justify-between gap-2 text-[11px] text-text-muted">
                 <span>

@@ -316,29 +316,30 @@ def _compose_excerpt(
     prev: str | None,
     nxt: str | None,
     context_chars: int = _EXCERPT_CONTEXT_CHARS,
-) -> str:
+) -> tuple[str, str, str]:
     """Build the ±``context_chars`` excerpt around ``target``.
 
-    Takes the tail of ``prev`` and head of ``nxt`` (up to ``context_chars``
-    each) and joins them with ``" … "`` when the neighbour text was
-    actually truncated. Empty / missing neighbours are skipped silently
-    so edge chunks don't advertise phantom context.
+    Returns ``(prefix, target, suffix)`` so the UI can render the
+    target chunk as a visual highlight and the surrounding neighbour
+    text as muted context. The prefix trails the target with a single
+    space separator and the suffix leads with one — both already baked
+    into the returned strings, so concatenation reproduces the old
+    single-line layout. A leading / trailing ``"… "`` marker is
+    appended only when the neighbour was actually truncated at
+    ``context_chars``. Empty / missing neighbours yield empty strings
+    rather than phantom context.
     """
-    parts: list[str] = []
     if prev:
         tail = prev[-context_chars:]
-        if len(prev) > context_chars:
-            parts = [*parts, f"… {tail}"]
-        else:
-            parts = [*parts, tail]
-    parts = [*parts, target]
+        prefix = f"… {tail} " if len(prev) > context_chars else f"{tail} "
+    else:
+        prefix = ""
     if nxt:
         head = nxt[:context_chars]
-        if len(nxt) > context_chars:
-            parts = [*parts, f"{head} …"]
-        else:
-            parts = [*parts, head]
-    return " ".join(parts)
+        suffix = f" {head} …" if len(nxt) > context_chars else f" {head}"
+    else:
+        suffix = ""
+    return prefix, target, suffix
 
 
 @router.get(
@@ -417,7 +418,7 @@ async def get_chunk_excerpt(
                 .first()
             )
 
-            text = _compose_excerpt(
+            prefix, target_text, suffix = _compose_excerpt(
                 target_row.text,
                 prev_row.text if prev_row else None,
                 next_row.text if next_row else None,
@@ -428,7 +429,9 @@ async def get_chunk_excerpt(
         return ChunkExcerptResponse(
             chunk_id=chunk_id,
             file_id=file_id,
-            text=text,
+            prefix=prefix,
+            target=target_text,
+            suffix=suffix,
             start_time=start,
             end_time=end,
             page=None,
@@ -475,7 +478,7 @@ async def get_chunk_excerpt(
     except (TypeError, ValueError):
         page = None
 
-    text = _compose_excerpt(
+    prefix, target_out, suffix = _compose_excerpt(
         target_text,
         prev_row[0] if prev_row else None,
         next_row[0] if next_row else None,
@@ -484,7 +487,9 @@ async def get_chunk_excerpt(
     return ChunkExcerptResponse(
         chunk_id=chunk_id,
         file_id=file_id,
-        text=text,
+        prefix=prefix,
+        target=target_out,
+        suffix=suffix,
         start_time=None,
         end_time=None,
         page=page,

@@ -594,16 +594,23 @@ export async function getDetailedSummaryCitations(
 /**
  * Excerpt payload for a single chunk, fetched on hover.
  *
- * The backend returns the chunk's raw text surrounded by ±100 chars of
- * context (best-effort — shorter when the chunk sits near the file
- * boundary). `start_time` is non-null for audio/video chunks; the UI
- * uses it to seek the <video>/<audio> element. `page` is non-null for
- * document chunks (pdf/epub) and drives the text-preview scroll.
+ * The excerpt is split into `prefix` / `target` / `suffix` so the UI
+ * can highlight the actual cited chunk against muted neighbour
+ * context. `target` is the chunk's own text; `prefix` / `suffix` each
+ * carry up to ±100 chars of neighbour text (with their space
+ * separator and a "… " marker when the neighbour was truncated).
+ * Concatenating the three strings reproduces the flat single-line
+ * rendering used before the split was introduced. `start_time` is
+ * non-null for audio/video chunks; the UI uses it to seek the
+ * <video>/<audio> element. `page` is non-null for document chunks
+ * (pdf/epub) and drives the text-preview scroll.
  */
 export interface CitationChunkExcerpt {
   chunk_id: string;
   file_id: string;
-  text: string;
+  prefix: string;
+  target: string;
+  suffix: string;
   start_time: number | null;
   end_time: number | null;
   page: number | null;
