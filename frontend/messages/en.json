@@ -107,6 +107,10 @@
       "pageLabel": "p.{page}",
       "jump": "Jump"
     },
+    "inline": {
+      "label": "Citation excerpt",
+      "close": "Close"
+    },
     "edit": {
       "button": "Edit",
       "save": "Save",

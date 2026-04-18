@@ -1,12 +1,15 @@
 /**
- * Tests for DetailedSummaryCitationPopover — hover/focus-driven
- * disclosure, excerpt fetch, and jump action for video/audio chunks.
+ * Tests for the detailed-summary citation surface: marker (this file)
+ * plus the absolute-overlay `CitationInlinePanel` directly beneath the
+ * citing segment.
  *
- * We render the popover in isolation to decouple it from the
- * DetailedSummarySection plumbing; that way we can assert the
- * behaviour the parent component relies on (lazy fetch,
- * videoRef.currentTime seek) without re-building the whole file
- * detail page.
+ * Interaction contract under test:
+ *   - Hover opens the panel; grace-period cancellation lets the cursor
+ *     move from marker → panel without dismissing.
+ *   - Click pins the panel so the reader can actually reach the Jump
+ *     button without a cursor-race; re-click or close button dismiss.
+ *   - Missing-citation markers don't open anything (title tooltip is
+ *     the only affordance).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -26,6 +29,8 @@ vi.mock("@/addons/intelligence/api", () => ({
 }));
 
 import { DetailedSummaryCitationPopover } from "@/addons/intelligence/DetailedSummaryCitationPopover";
+import { CitationInlinePanel } from "@/addons/intelligence/CitationInlinePanel";
+import { CitationRailProvider } from "@/addons/intelligence/CitationRailContext";
 import { getCitationChunkExcerpt } from "@/addons/intelligence/api";
 
 const linkedCitation = {
@@ -46,23 +51,24 @@ const unlinkedCitation = {
   has_citation: false,
 };
 
-function renderPopover(props: {
+function renderMarkerWithPanel(props: {
   citation: typeof linkedCitation | typeof unlinkedCitation;
   videoRef?: React.RefObject<HTMLVideoElement | null>;
 }) {
   return render(
     <NextIntlClientProvider locale="ja" messages={{}}>
-      <DetailedSummaryCitationPopover
-        fileId="f1"
-        drive="drive1"
-        citation={props.citation}
-        videoRef={props.videoRef ?? null}
-      />
+      <CitationRailProvider fileId="f1" drive="drive1">
+        <DetailedSummaryCitationPopover citation={props.citation} />
+        <CitationInlinePanel
+          sectionPath={props.citation.section_path}
+          videoRef={props.videoRef ?? null}
+        />
+      </CitationRailProvider>
     </NextIntlClientProvider>,
   );
 }
 
-describe("DetailedSummaryCitationPopover", () => {
+describe("DetailedSummaryCitationPopover + CitationInlinePanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -72,13 +78,13 @@ describe("DetailedSummaryCitationPopover", () => {
   });
 
   it("renders a link marker when has_citation is true", () => {
-    const { container } = renderPopover({ citation: linkedCitation });
+    const { container } = renderMarkerWithPanel({ citation: linkedCitation });
     const marker = container.querySelector('[data-citation-marker="linked"]');
     expect(marker).not.toBeNull();
   });
 
   it("renders a missing marker with an alert tooltip when has_citation is false", () => {
-    const { container } = renderPopover({ citation: unlinkedCitation });
+    const { container } = renderMarkerWithPanel({ citation: unlinkedCitation });
     const marker = container.querySelector(
       '[data-citation-marker="missing"]',
     );
@@ -86,7 +92,7 @@ describe("DetailedSummaryCitationPopover", () => {
     expect(marker?.getAttribute("title")).toMatch(/強い根拠/);
   });
 
-  it("opens on hover and fetches the top-1 chunk excerpt", async () => {
+  it("opens the inline panel on hover and fetches the top-1 chunk excerpt", async () => {
     (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
       .mockResolvedValue({
         chunk_id: "c1",
@@ -99,7 +105,7 @@ describe("DetailedSummaryCitationPopover", () => {
         page: null,
       });
 
-    renderPopover({ citation: linkedCitation });
+    renderMarkerWithPanel({ citation: linkedCitation });
 
     fireEvent.mouseEnter(
       screen.getByRole("button", { name: /出典を表示/ }),
@@ -112,12 +118,6 @@ describe("DetailedSummaryCitationPopover", () => {
   });
 
   it("renders the target text inside a highlighted <mark> with surrounding context", async () => {
-    // The popover's whole UX premise is that the user can see at a
-    // glance which substring inside the excerpt is the actual match
-    // vs. neighbour context. We assert the DOM shape here so a
-    // refactor that accidentally flattens everything back into a
-    // single span (the pre-case-A bug that prompted this split)
-    // fails loudly instead of silently regressing the UI.
     (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
       .mockResolvedValue({
         chunk_id: "c1",
@@ -130,7 +130,7 @@ describe("DetailedSummaryCitationPopover", () => {
         page: null,
       });
 
-    renderPopover({ citation: linkedCitation });
+    renderMarkerWithPanel({ citation: linkedCitation });
     fireEvent.mouseEnter(
       screen.getByRole("button", { name: /出典を表示/ }),
     );
@@ -139,9 +139,6 @@ describe("DetailedSummaryCitationPopover", () => {
     expect(mark.tagName).toBe("MARK");
     expect(mark.textContent).toBe("ここがマッチ箇所。");
 
-    // Prefix / suffix sit as sibling spans beside the <mark>; they
-    // must render as plain text (no extra highlighting) so the mark
-    // remains the visual anchor.
     const paragraph = mark.parentElement!;
     expect(paragraph.textContent).toBe(
       "前の文脈。 ここがマッチ箇所。 後ろの文脈。",
@@ -149,10 +146,6 @@ describe("DetailedSummaryCitationPopover", () => {
   });
 
   it("omits the prefix / suffix elements when they are empty", async () => {
-    // Edge chunks (first/last in a transcript) return empty prefix or
-    // suffix. Rendering empty ``<span>``s would still inflate the DOM
-    // and add phantom whitespace around the mark, so the component
-    // should skip them entirely.
     (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
       .mockResolvedValue({
         chunk_id: "c1",
@@ -165,20 +158,104 @@ describe("DetailedSummaryCitationPopover", () => {
         page: null,
       });
 
-    renderPopover({ citation: linkedCitation });
+    renderMarkerWithPanel({ citation: linkedCitation });
     fireEvent.mouseEnter(
       screen.getByRole("button", { name: /出典を表示/ }),
     );
 
     const mark = await screen.findByTestId("citation-target");
     const paragraph = mark.parentElement!;
-    // Only the <mark> should sit inside the paragraph when both
-    // neighbours are empty.
     expect(paragraph.children.length).toBe(1);
     expect(paragraph.textContent).toBe("最初のチャンク。");
   });
 
-  it("jump button seeks the video ref when start_time is present", async () => {
+  it("cursor handoff from marker to panel keeps the panel open past the grace window", async () => {
+    // Core UX invariant for the hover pattern: dragging the cursor off
+    // the marker into the panel body must not race the close timer.
+    // The panel's own mouseenter has to cancel the scheduled close.
+    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        chunk_id: "c1",
+        file_id: "f1",
+        prefix: "",
+        target: "抜粋",
+        suffix: "",
+        start_time: 0,
+        end_time: 1,
+        page: null,
+      });
+
+    renderMarkerWithPanel({ citation: linkedCitation });
+
+    const marker = screen.getByRole("button", { name: /出典を表示/ });
+    fireEvent.mouseEnter(marker);
+    const panel = await screen.findByRole("region");
+
+    fireEvent.mouseLeave(marker);
+    fireEvent.mouseEnter(panel);
+
+    await new Promise((r) => setTimeout(r, 250));
+
+    expect(screen.queryByRole("region")).not.toBeNull();
+  });
+
+  it("closes on mouseleave once the grace window elapses", async () => {
+    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        chunk_id: "c1",
+        file_id: "f1",
+        prefix: "",
+        target: "抜粋",
+        suffix: "",
+        start_time: 0,
+        end_time: 1,
+        page: null,
+      });
+
+    renderMarkerWithPanel({ citation: linkedCitation });
+
+    const marker = screen.getByRole("button", { name: /出典を表示/ });
+    fireEvent.mouseEnter(marker);
+    await screen.findByRole("region");
+
+    fireEvent.mouseLeave(marker);
+
+    // Grace is 160 ms; wait comfortably past it inside an act() so the
+    // setState triggered by the timer fires under React's test harness.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 250));
+    });
+    expect(screen.queryByRole("region")).toBeNull();
+  });
+
+  it("click pins the panel so mouseleave does not dismiss it", async () => {
+    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        chunk_id: "c1",
+        file_id: "f1",
+        prefix: "",
+        target: "抜粋",
+        suffix: "",
+        start_time: 0,
+        end_time: 1,
+        page: null,
+      });
+
+    renderMarkerWithPanel({ citation: linkedCitation });
+
+    const marker = screen.getByRole("button", { name: /出典を表示/ });
+    fireEvent.mouseEnter(marker);
+    fireEvent.click(marker);
+    await screen.findByRole("region");
+
+    // Even leaving the marker without a handoff must not close it —
+    // pinning is the whole point of click support.
+    fireEvent.mouseLeave(marker);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(screen.queryByRole("region")).not.toBeNull();
+  });
+
+  it("jump button seeks the video ref after the panel is pinned", async () => {
     (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
       .mockResolvedValue({
         chunk_id: "c1",
@@ -199,13 +276,11 @@ describe("DetailedSummaryCitationPopover", () => {
       current: fakeVideo,
     } as React.RefObject<HTMLVideoElement | null>;
 
-    renderPopover({ citation: linkedCitation, videoRef });
+    renderMarkerWithPanel({ citation: linkedCitation, videoRef });
 
-    fireEvent.mouseEnter(
-      screen.getByRole("button", { name: /出典を表示/ }),
-    );
-
-    // Wait for excerpt to load so the Jump button enables.
+    const marker = screen.getByRole("button", { name: /出典を表示/ });
+    fireEvent.mouseEnter(marker);
+    fireEvent.click(marker);
     await screen.findByText(/抜粋テキスト/);
 
     await act(async () => {
@@ -215,69 +290,71 @@ describe("DetailedSummaryCitationPopover", () => {
     expect(fakeVideo.currentTime).toBe(42);
   });
 
-  it("stays open when the pointer moves from the trigger into the popover", async () => {
+  it("re-clicking a pinned marker dismisses the panel", async () => {
     (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
       .mockResolvedValue({
         chunk_id: "c1",
         file_id: "f1",
         prefix: "",
-        target: "抜粋",
+        target: "抜粋テキスト",
         suffix: "",
         start_time: 0,
         end_time: 1,
         page: null,
       });
 
-    renderPopover({ citation: linkedCitation });
+    renderMarkerWithPanel({ citation: linkedCitation });
 
-    const trigger = screen.getByRole("button", { name: /出典を表示/ });
-    fireEvent.mouseEnter(trigger);
-    const dialog = await screen.findByRole("dialog");
+    const marker = screen.getByRole("button", { name: /出典を表示/ });
+    fireEvent.mouseEnter(marker);
+    fireEvent.click(marker);
+    await screen.findByText(/抜粋テキスト/);
 
-    // User drifts off the trigger — schedules a close — then reaches
-    // the popover within the grace period, which must cancel it.
-    fireEvent.mouseLeave(trigger);
-    fireEvent.mouseEnter(dialog);
-
-    // Wait past the grace period. Without the cancel, the popover
-    // would have closed; with it, the dialog must still be present.
-    await new Promise((r) => setTimeout(r, 300));
-
-    expect(screen.queryByRole("dialog")).not.toBeNull();
+    fireEvent.click(marker);
+    await waitFor(() => {
+      expect(screen.queryByText(/抜粋テキスト/)).toBeNull();
+    });
   });
 
-  it("closes on outside pointer click", async () => {
+  it("does not open a panel for a missing-citation marker", async () => {
+    renderMarkerWithPanel({ citation: unlinkedCitation });
+
+    fireEvent.mouseEnter(
+      screen.getByRole("button", { name: /強い根拠/ }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /強い根拠/ }),
+    );
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(getCitationChunkExcerpt).not.toHaveBeenCalled();
+    expect(screen.queryByRole("region")).toBeNull();
+  });
+
+  it("panel close button clears a pinned activation", async () => {
     (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
       .mockResolvedValue({
         chunk_id: "c1",
         file_id: "f1",
         prefix: "",
-        target: "抜粋",
+        target: "抜粋テキスト",
         suffix: "",
         start_time: 0,
         end_time: 1,
         page: null,
       });
 
-    renderPopover({ citation: linkedCitation });
+    renderMarkerWithPanel({ citation: linkedCitation });
 
-    fireEvent.mouseEnter(
-      screen.getByRole("button", { name: /出典を表示/ }),
-    );
+    const marker = screen.getByRole("button", { name: /出典を表示/ });
+    fireEvent.mouseEnter(marker);
+    fireEvent.click(marker);
+    await screen.findByText(/抜粋テキスト/);
 
-    await screen.findByRole("dialog");
-
-    // The popover's Escape handler is wired via window.addEventListener.
-    // Clicking outside the trigger+popover fires the same dismiss path
-    // (mousedown handler), which is simpler to drive from jsdom.
-    act(() => {
-      document.body.dispatchEvent(
-        new MouseEvent("mousedown", { bubbles: true }),
-      );
-    });
+    fireEvent.click(screen.getByRole("button", { name: /閉じる/ }));
 
     await waitFor(() => {
-      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(screen.queryByText(/抜粋テキスト/)).toBeNull();
     });
   });
 });

@@ -23,6 +23,7 @@
  */
 
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -62,6 +63,8 @@ import type {
   DetailedSummaryResponse,
 } from "./api";
 import { DetailedSummaryCitationPopover } from "./DetailedSummaryCitationPopover";
+import { CitationInlinePanel } from "./CitationInlinePanel";
+import { CitationRailProvider } from "./CitationRailContext";
 
 interface DetailedSummarySectionProps {
   fileId: string;
@@ -424,6 +427,7 @@ export default function DetailedSummarySection({
   const canRevert = edited && (data.has_original !== false);
 
   return (
+    <CitationRailProvider fileId={fileId} drive={drive}>
     <div>
       <div className={`flex flex-wrap items-center gap-2 ${collapsed ? "" : "mb-2"}`}>
         <button
@@ -568,6 +572,7 @@ export default function DetailedSummarySection({
         onCancel={() => setConfirmRegenerateOpen(false)}
       />
     </div>
+    </CitationRailProvider>
   );
 }
 
@@ -1230,24 +1235,30 @@ function BulletGroup({
       {bullets.map((b) => {
         const citation = citationByPath.get(b.section_path);
         const marker = citation ? (
-          <DetailedSummaryCitationPopover
-            fileId={ctx.fileId}
-            drive={ctx.drive}
-            citation={citation}
-            videoRef={ctx.videoRef ?? null}
-          />
+          <DetailedSummaryCitationPopover citation={citation} />
         ) : null;
         const extraPad = (b.indent - minIndent) * 8;
         return (
           <li
             key={b.section_path}
             data-citation-section-path={b.section_path}
-            className="[&>div]:inline [&>div>p]:m-0 [&>div>p]:inline"
+            // ``relative`` anchors the absolutely-positioned overlay
+            // panel to this <li>. The `[&>div]:inline` selector only
+            // targets <div> children — the panel renders as an
+            // <aside>, so it stays a block-level overlay instead of
+            // being flattened onto the bullet line.
+            className="relative [&>div]:inline [&>div>p]:m-0 [&>div>p]:inline"
             style={extraPad ? { marginLeft: `${extraPad}px` } : undefined}
           >
             {marker}
             {marker ? " " : null}
             <SegmentMarkdown source={b.text} />
+            {citation && (
+              <CitationInlinePanel
+                sectionPath={b.section_path}
+                videoRef={ctx.videoRef}
+              />
+            )}
           </li>
         );
       })}
@@ -1313,35 +1324,55 @@ function TableGroup({
           {rows.map((row, idx) => {
             const citation = citationByPath.get(row.section_path);
             const marker = citation ? (
-              <DetailedSummaryCitationPopover
-                fileId={ctx.fileId}
-                drive={ctx.drive}
-                citation={citation}
-                videoRef={ctx.videoRef ?? null}
-              />
+              <DetailedSummaryCitationPopover citation={citation} />
             ) : null;
             const cells = row.tableCells ?? [];
             // Replicate `.markdown-body tr:nth-child(even)` striping on
             // the data cells only. idx is 0-based; the matching
             // 1-based even rows (2nd, 4th, …) are idx=1, 3, …
             const stripe = idx % 2 === 1;
+            // Total column count for the inline-panel colSpan — header
+            // + data cells + optional marker column. Tables without a
+            // header fall back to the cell count.
+            const totalCols =
+              (cells.length || header.length || 1) + (anyMarker ? 1 : 0);
             return (
-              <tr
-                key={row.section_path}
-                data-citation-section-path={row.section_path}
-                style={transparentRowStyle}
-              >
-                {anyMarker && (
-                  <td aria-hidden style={markerCellStyle}>
-                    {marker}
-                  </td>
+              <Fragment key={row.section_path}>
+                <tr
+                  data-citation-section-path={row.section_path}
+                  style={transparentRowStyle}
+                >
+                  {anyMarker && (
+                    <td aria-hidden style={markerCellStyle}>
+                      {marker}
+                    </td>
+                  )}
+                  {cells.map((cell, i) => (
+                    <td key={i} style={stripe ? stripedCellStyle : undefined}>
+                      {cell}
+                    </td>
+                  ))}
+                </tr>
+                {citation && (
+                  // Expansion row hosts the inline panel spanning the
+                  // full width of the table. Tables use the panel's
+                  // in-flow (push-down) mode because an absolutely
+                  // positioned child inside a <td> breaks the table
+                  // layout grid.
+                  <tr style={transparentRowStyle}>
+                    <td
+                      colSpan={totalCols}
+                      style={{ border: "none", padding: 0, background: "transparent" }}
+                    >
+                      <CitationInlinePanel
+                        sectionPath={row.section_path}
+                        videoRef={ctx.videoRef}
+                        overlay={false}
+                      />
+                    </td>
+                  </tr>
                 )}
-                {cells.map((cell, i) => (
-                  <td key={i} style={stripe ? stripedCellStyle : undefined}>
-                    {cell}
-                  </td>
-                ))}
-              </tr>
+              </Fragment>
             );
           })}
         </tbody>
@@ -1360,12 +1391,7 @@ function renderSegmentLine(
   },
 ): ReactNode {
   const marker = citation ? (
-    <DetailedSummaryCitationPopover
-      fileId={ctx.fileId}
-      drive={ctx.drive}
-      citation={citation}
-      videoRef={ctx.videoRef ?? null}
-    />
+    <DetailedSummaryCitationPopover citation={citation} />
   ) : null;
 
   const text = segment.text;
@@ -1379,17 +1405,30 @@ function renderSegmentLine(
   // not need to branch on ``code-block`` here.
   // ``mb-[1.15em]`` matches ``.markdown-body p``'s bottom margin so the
   // spacing between consecutive paragraphs / code blocks lines up with
-  // the MarkdownPreview rhythm.
+  // the MarkdownPreview rhythm. The outer block hosts the text row +
+  // the inline citation panel that expands directly beneath it when a
+  // citation is active.
   return (
+    // ``relative`` anchors the absolutely-positioned overlay panel to
+    // this segment so it drops directly beneath the citing line without
+    // shifting the surrounding layout when it opens.
     <div
       key={segment.section_path}
       data-citation-section-path={segment.section_path}
-      className="mb-[1.15em] flex items-start gap-1"
+      className="relative mb-[1.15em]"
     >
-      {marker}
-      <div className="min-w-0 flex-1">
-        <SegmentMarkdown source={text} />
+      <div className="flex items-start gap-1">
+        {marker}
+        <div className="min-w-0 flex-1">
+          <SegmentMarkdown source={text} />
+        </div>
       </div>
+      {citation && (
+        <CitationInlinePanel
+          sectionPath={segment.section_path}
+          videoRef={ctx.videoRef}
+        />
+      )}
     </div>
   );
 }
