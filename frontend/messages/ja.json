@@ -99,6 +99,7 @@
   "detailedSummary": {
     "citations": {
       "linkLabel": "出典を表示",
+      "weakLinkLabel": "弱い出典マッチ — 要確認",
       "noCitation": "原文に強い根拠が見つかりませんでした。誤情報の可能性があります",
       "popoverLabel": "出典プレビュー",
       "loading": "読み込み中…",

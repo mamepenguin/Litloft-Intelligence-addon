@@ -38,6 +38,15 @@ const linkedCitation = {
   segment_type: "paragraph" as const,
   segment_text: "本作の概要を述べる段落。",
   chunk_ids: ["c1"],
+  top_score: 0.95,
+  has_citation: true,
+};
+
+const weakLinkedCitation = {
+  section_path: "主要な章/場面/2",
+  segment_type: "bullet" as const,
+  segment_text: "確信度の低い bullet。",
+  chunk_ids: ["c2"],
   top_score: 0.72,
   has_citation: true,
 };
@@ -77,10 +86,94 @@ describe("DetailedSummaryCitationPopover + CitationInlinePanel", () => {
     cleanup();
   });
 
-  it("renders a link marker when has_citation is true", () => {
+  it("renders a strong link marker when top_score >= 0.90", () => {
     const { container } = renderMarkerWithPanel({ citation: linkedCitation });
-    const marker = container.querySelector('[data-citation-marker="linked"]');
+    const marker = container.querySelector(
+      '[data-citation-marker="linked-strong"]',
+    );
     expect(marker).not.toBeNull();
+  });
+
+  it("renders a weak link marker when has_citation is true but top_score < 0.90", () => {
+    const { container } = renderMarkerWithPanel({
+      citation: weakLinkedCitation,
+    });
+    const marker = container.querySelector(
+      '[data-citation-marker="linked-weak"]',
+    );
+    expect(marker).not.toBeNull();
+    // Weak tier communicates "verify" via aria-label and title.
+    expect(marker?.getAttribute("aria-label")).toMatch(/弱い|要確認/);
+    expect(marker?.getAttribute("title")).toMatch(/弱い|要確認/);
+  });
+
+  it("treats top_score exactly 0.90 as strong (boundary inclusive)", () => {
+    const { container } = renderMarkerWithPanel({
+      citation: { ...linkedCitation, top_score: 0.9 },
+    });
+    expect(
+      container.querySelector('[data-citation-marker="linked-strong"]'),
+    ).not.toBeNull();
+  });
+
+  it("treats top_score just below 0.90 as weak", () => {
+    const { container } = renderMarkerWithPanel({
+      citation: { ...linkedCitation, top_score: 0.8999 },
+    });
+    expect(
+      container.querySelector('[data-citation-marker="linked-weak"]'),
+    ).not.toBeNull();
+  });
+
+  it("applies dashed stroke styling to the weak-tier Link2 icon", () => {
+    const { container } = renderMarkerWithPanel({
+      citation: weakLinkedCitation,
+    });
+    const marker = container.querySelector(
+      '[data-citation-marker="linked-weak"]',
+    );
+    const icon = marker?.querySelector("svg");
+    expect(icon?.className.baseVal ?? icon?.getAttribute("class") ?? "").toMatch(
+      /stroke-dasharray/,
+    );
+  });
+
+  it("does not apply dashed stroke styling to the strong-tier icon", () => {
+    const { container } = renderMarkerWithPanel({ citation: linkedCitation });
+    const marker = container.querySelector(
+      '[data-citation-marker="linked-strong"]',
+    );
+    const icon = marker?.querySelector("svg");
+    expect(
+      icon?.className.baseVal ?? icon?.getAttribute("class") ?? "",
+    ).not.toMatch(/stroke-dasharray/);
+  });
+
+  it("opens the inline panel on hover for weak-tier citations too", async () => {
+    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        chunk_id: "c2",
+        file_id: "f1",
+        prefix: "",
+        target: "弱いが関連する抜粋",
+        suffix: "",
+        start_time: 10,
+        end_time: 15,
+        page: null,
+      });
+
+    renderMarkerWithPanel({ citation: weakLinkedCitation });
+
+    fireEvent.mouseEnter(screen.getByRole("button", { name: /弱い|要確認/ }));
+
+    await waitFor(() => {
+      expect(getCitationChunkExcerpt).toHaveBeenCalledWith(
+        "f1",
+        "c2",
+        "drive1",
+      );
+    });
+    expect(await screen.findByText(/弱いが関連する抜粋/)).toBeInTheDocument();
   });
 
   it("renders a missing marker with an alert tooltip when has_citation is false", () => {

@@ -226,8 +226,10 @@ describe("DetailedSummarySection — citations", () => {
     fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
 
     await waitFor(() => {
+      // top_score=0.72 below the strong threshold (0.90), so this
+      // renders as "linked-weak". Either linked tier is acceptable here.
       const markers = container.querySelectorAll(
-        '[data-citation-marker="linked"]',
+        '[data-citation-marker^="linked-"]',
       );
       expect(markers.length).toBeGreaterThanOrEqual(1);
     });

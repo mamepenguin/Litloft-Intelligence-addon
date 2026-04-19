@@ -30,6 +30,19 @@ import { Link2, AlertTriangle } from "lucide-react";
 import { useCitationRail } from "./CitationRailContext";
 import type { DetailedSummaryCitation } from "./api";
 
+// Confidence tier derived from top_score. Calibrated against citation
+// eval baseline (ruri-v3-30m, N=69, 2026-04-19): top_score ≥ 0.90 hits
+// location offset 0 at 86% vs ~68% for [0.80, 0.90). See
+// docs/CITATION-PIPELINE.md Stage 5 and hako Uxs06_pOPfbkGtvwIK_Vq.
+const CITATION_STRONG_THRESHOLD = 0.9;
+
+type CitationTier = "strong" | "weak" | "missing";
+
+function deriveTier(citation: DetailedSummaryCitation): CitationTier {
+  if (!citation.has_citation) return "missing";
+  return citation.top_score >= CITATION_STRONG_THRESHOLD ? "strong" : "weak";
+}
+
 interface DetailedSummaryCitationPopoverProps {
   citation: DetailedSummaryCitation;
 }
@@ -42,6 +55,7 @@ export function DetailedSummaryCitationPopover({
     useCitationRail();
 
   const hasCitation = citation.has_citation;
+  const tier = deriveTier(citation);
   const isActive =
     active?.citation.section_path === citation.section_path && hasCitation;
   const isPinned = isActive && active?.pinned === true;
@@ -91,25 +105,41 @@ export function DetailedSummaryCitationPopover({
           : "text-accent-amber hover:text-accent-amber/80 cursor-default"
       }`}
       aria-label={
-        hasCitation
+        tier === "strong"
           ? t("citations.linkLabel", { defaultMessage: "Show citation" })
-          : t("citations.noCitation", {
-              defaultMessage:
-                "No strong source match found. This may be inaccurate.",
-            })
+          : tier === "weak"
+            ? t("citations.weakLinkLabel", {
+                defaultMessage: "Weak source match — verify",
+              })
+            : t("citations.noCitation", {
+                defaultMessage:
+                  "No strong source match found. This may be inaccurate.",
+              })
       }
       title={
-        hasCitation
+        tier === "strong"
           ? undefined
-          : t("citations.noCitation", {
-              defaultMessage:
-                "No strong source match found. This may be inaccurate.",
-            })
+          : tier === "weak"
+            ? t("citations.weakLinkLabel", {
+                defaultMessage: "Weak source match — verify",
+              })
+            : t("citations.noCitation", {
+                defaultMessage:
+                  "No strong source match found. This may be inaccurate.",
+              })
       }
-      data-citation-marker={hasCitation ? "linked" : "missing"}
+      data-citation-marker={
+        tier === "missing" ? "missing" : `linked-${tier}`
+      }
     >
       {hasCitation ? (
-        <Link2 size={11} aria-hidden />
+        <Link2
+          size={11}
+          aria-hidden
+          className={
+            tier === "weak" ? "[stroke-dasharray:2_1.5]" : undefined
+          }
+        />
       ) : (
         <AlertTriangle size={11} aria-hidden />
       )}

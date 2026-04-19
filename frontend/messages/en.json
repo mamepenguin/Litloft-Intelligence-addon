@@ -99,6 +99,7 @@
   "detailedSummary": {
     "citations": {
       "linkLabel": "Show citation",
+      "weakLinkLabel": "Weak source match — verify",
       "noCitation": "No strong source match found. This may be inaccurate.",
       "popoverLabel": "Citation preview",
       "loading": "Loading…",
