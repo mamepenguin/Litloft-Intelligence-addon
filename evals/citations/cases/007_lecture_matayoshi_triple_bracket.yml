@@ -39,8 +39,9 @@ expectations:
     chunk_ids: ["transcript:40", "transcript:41"]
     must_have_citation: true
 
-  # 比喩 compound: 水の比喩 + しんどさ後の甘み
-  # chunk 76 (しんどい夜は次にいいことの不利), chunk 77 (水の比喩 verbatim)
+  # 比喩 compound: 水の比喩 + しんどさ後の甘み + 信じるようにしている
+  # chunk 76 (しんどい夜は次にいいことの不利), chunk 77 (水の比喩 verbatim),
+  # chunk 78 (信じるようにしてる verbatim) — bullet の 3 anchor 全部
   - section_path: "詳細内容/10"
-    chunk_ids: ["transcript:76", "transcript:77"]
+    chunk_ids: ["transcript:76", "transcript:77", "transcript:78"]
     must_have_citation: true

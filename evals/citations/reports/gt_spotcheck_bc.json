@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-04-19T16:20:10.677082+00:00",
-  "label": "strict-gt-baseline",
+  "generated_at": "2026-04-19T16:19:10.798694+00:00",
+  "label": "gt-spotcheck-BC-expanded",
   "aggregate": {
     "total_segments": 69,
     "top1_accuracy": 0.782608695652174,

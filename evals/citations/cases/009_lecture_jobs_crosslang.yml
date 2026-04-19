@@ -42,7 +42,9 @@ expectations:
     must_have_citation: true
 
   # Stay Hungry, Stay Foolish (latin identifier in JP summary)
-  # chunk 57 (final issue back cover "Stay Hungry, Stay Foolish")
+  # 3 chunks すべてに "Stay Hungry, Stay Foolish" verbatim + paragraph の
+  # 後半 "卒業を控えた聴衆に対し心から願う" は chunk 58 "as you graduate" +
+  # chunk 59 "I wish that for you" に verbatim 一致
   - section_path: "結論/0"
-    chunk_ids: ["transcript:57"]
+    chunk_ids: ["transcript:57", "transcript:58", "transcript:59"]
     must_have_citation: true
