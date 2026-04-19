@@ -569,8 +569,14 @@ class TestComputeCitations:
         # Simulate "file has only loose matches" — score below default 0.55.
         monkeypatch.setattr(
             citations,
-            "_query_top_chunks",
-            lambda fid, vec, k: [("transcript:0", 0.3)],
+            "_retrieve_candidates",
+            lambda fid, seg, vec, k, **_kw: [("transcript:0", 0.3)],
+        )
+        # Bypass section anchoring — covered by its own test class; here
+        # we only care about the threshold / margin-gate logic on the
+        # candidate list the retriever returns.
+        monkeypatch.setattr(
+            citations, "_fetch_file_vectors", lambda fid, chunk_range=None: []
         )
 
         markdown = "## 全体像\n段落本文。\n- 箇条書き\n"
@@ -591,12 +597,15 @@ class TestComputeCitations:
         # Three candidates; only the first two clear the default 0.55.
         monkeypatch.setattr(
             citations,
-            "_query_top_chunks",
-            lambda fid, vec, k: [
+            "_retrieve_candidates",
+            lambda fid, seg, vec, k, **_kw: [
                 ("transcript:0", 0.82),
                 ("transcript:1", 0.64),
                 ("transcript:2", 0.40),
             ],
+        )
+        monkeypatch.setattr(
+            citations, "_fetch_file_vectors", lambda fid, chunk_range=None: []
         )
 
         computed = citations.compute_citations(
@@ -619,6 +628,9 @@ class TestComputeCitations:
         # Embedder returns None to simulate a vectoriser failure; the
         # row must still be produced so UI can render the ⚠ badge.
         monkeypatch.setattr(citations, "_embed_segment", lambda seg: None)
+        monkeypatch.setattr(
+            citations, "_fetch_file_vectors", lambda fid, chunk_range=None: []
+        )
 
         computed = citations.compute_citations(
             "file-1", "## A\n- item\n"
@@ -641,8 +653,11 @@ class TestComputeCitations:
             [("transcript:1", 0.20)],
         ])
         monkeypatch.setattr(
-            citations, "_query_top_chunks",
-            lambda fid, vec, k: next(scores),
+            citations, "_retrieve_candidates",
+            lambda fid, seg, vec, k, **_kw: next(scores),
+        )
+        monkeypatch.setattr(
+            citations, "_fetch_file_vectors", lambda fid, chunk_range=None: []
         )
 
         markdown = "## A\n- one\n- two\n"
@@ -654,21 +669,22 @@ class TestComputeCitations:
         assert len(rows) == 2
 
 
-class TestQueryTopChunksDistanceConversion:
-    """sqlite-vec returns L2 distance; citations must convert to cosine.
+class TestQueryTopChunksDenseExhaustive:
+    """`_query_top_chunks_dense` is per-file exhaustive cosine, not KNN.
 
-    Regression test for the bug where ``_query_top_chunks`` used the
-    naive ``score = 1 - distance`` formula. sqlite-vec's ``vec0`` virtual
-    table returns Euclidean distance, and for L2-normalised vectors the
-    correct inversion is ``cos = 1 − d²/2``. Using the wrong formula
-    under-estimates cosine similarity for every non-identical match
-    (e.g. true cos 0.55 ⇢ L2 ≈ 0.949 ⇢ naive ≈ 0.05), which silently
-    drops almost every real summary segment below the default 0.55
-    threshold — leaving the UI stuck on ⚠ for everything.
+    Previous implementation used sqlite-vec's global ``MATCH`` with
+    post-fetch file filtering, which silently dropped in-file
+    candidates once the DB grew enough that other files' chunks
+    crowded the global top-K. The current path fetches all of the
+    file's vectors and computes cosine in numpy — scaling with file
+    chunk count, independent of DB size.
     """
 
-    def _stub_execute(self, rows):
-        """Build a ``session.execute`` stub returning the given rows."""
+    def _stub_fetch(self, rows):
+        """Stub ``get_search_db`` to yield ``(embedding_id, vector_bytes)`` rows.
+
+        The new ``_fetch_file_vectors`` consumes this shape.
+        """
         class _FakeResult:
             def __init__(self, data):
                 self._data = data
@@ -686,64 +702,1702 @@ class TestQueryTopChunksDistanceConversion:
 
         return _get_search_db
 
-    def test_l2_zero_maps_to_cosine_one(self, monkeypatch):
-        """Identical vectors (L2 = 0) must score 1.0, not 1.0 by luck."""
+    def _vec_bytes(self, *values: float) -> bytes:
+        """Convenience: build a float32 vector in the byte layout the
+        vec_text virtual table returns.
+        """
+        return np.asarray(values, dtype=np.float32).tobytes()
+
+    def test_identical_vector_scores_cosine_one(self, monkeypatch):
+        """Query == chunk (unit vector) must return exactly 1.0."""
         from app import citations
 
+        rows = [("wh_file-1_0_abc12345", self._vec_bytes(1.0, 0.0, 0.0, 0.0))]
         monkeypatch.setattr(
-            citations, "get_search_db",
-            self._stub_execute([("wh_file-1_0_abc", 0.0)]),
+            citations, "get_search_db", self._stub_fetch(rows),
         )
-        results = citations._query_top_chunks(
-            "file-1", np.ones(4, dtype=np.float32), top_k=3
+        results = citations._query_top_chunks_dense(
+            "file-1",
+            np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+            top_k=3,
         )
         assert results == [("transcript:0", pytest.approx(1.0))]
 
-    def test_real_distance_converts_via_cos_formula(self, monkeypatch):
-        """L2 ≈ 0.949 corresponds to cosine ≈ 0.55, not 0.05.
-
-        Before the fix this row would score 1 − 0.949 ≈ 0.051 and fail
-        the default ``citation_threshold`` 0.55. After the fix it lands
-        exactly on the threshold, matching the documented contract that
-        the config value is a cosine-similarity floor.
-        """
+    def test_orthogonal_vector_scores_zero(self, monkeypatch):
+        """Perpendicular unit vectors: cosine 0 → clamped to 0.0."""
         from app import citations
 
-        # L2 = sqrt(2 - 2·0.55) → cosine 0.55 exactly.
-        l2 = (2.0 * (1.0 - 0.55)) ** 0.5
+        rows = [("wh_file-1_5_deadbeef", self._vec_bytes(0.0, 1.0, 0.0, 0.0))]
         monkeypatch.setattr(
-            citations, "get_search_db",
-            self._stub_execute([("wh_file-1_3_xyz", l2)]),
+            citations, "get_search_db", self._stub_fetch(rows),
         )
-        results = citations._query_top_chunks(
-            "file-1", np.ones(4, dtype=np.float32), top_k=3
+        results = citations._query_top_chunks_dense(
+            "file-1",
+            np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+            top_k=3,
         )
         assert len(results) == 1
-        chunk_id, score = results[0]
-        assert chunk_id == "transcript:3"
-        assert score == pytest.approx(0.55, abs=1e-6)
+        assert results[0][0] == "transcript:5"
+        assert results[0][1] == pytest.approx(0.0, abs=1e-6)
 
-    def test_scores_stay_sorted_descending(self, monkeypatch):
-        """Two rows with different L2 distances round-trip in score order."""
+    def test_scores_sorted_descending(self, monkeypatch):
+        """Top-K must come back in descending cosine order."""
+        from app import citations
+
+        # Three chunks, cosines (with query=[1,0,0,0]) should be 0.6, 0.8, 0.2.
+        rows = [
+            ("wh_file-1_0_abc12345", self._vec_bytes(0.6, 0.8, 0.0, 0.0)),
+            ("wh_file-1_1_deadbeef", self._vec_bytes(0.8, 0.6, 0.0, 0.0)),
+            ("wh_file-1_2_cafebabe", self._vec_bytes(0.2, 0.98, 0.0, 0.0)),
+        ]
+        monkeypatch.setattr(
+            citations, "get_search_db", self._stub_fetch(rows),
+        )
+        results = citations._query_top_chunks_dense(
+            "file-1",
+            np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+            top_k=3,
+        )
+        ids = [cid for cid, _ in results]
+        scores = [round(s, 2) for _, s in results]
+        assert ids == ["transcript:1", "transcript:0", "transcript:2"]
+        assert scores == [0.8, 0.6, 0.2]
+
+    def test_respects_top_k(self, monkeypatch):
+        """More chunks than top_k: only the best K are returned."""
         from app import citations
 
         rows = [
-            ("wh_file-1_0_a", 0.316),  # ≈ cos 0.95
-            ("wh_file-1_1_b", 0.949),  # ≈ cos 0.55
+            (f"wh_file-1_{i}_abc12345", self._vec_bytes(1 - i * 0.1, 0.0, 0.0, 0.0))
+            for i in range(5)
         ]
         monkeypatch.setattr(
-            citations, "get_search_db", self._stub_execute(rows),
+            citations, "get_search_db", self._stub_fetch(rows),
         )
-        results = citations._query_top_chunks(
-            "file-1", np.ones(4, dtype=np.float32), top_k=3
+        results = citations._query_top_chunks_dense(
+            "file-1",
+            np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+            top_k=2,
         )
-        assert [cid for cid, _ in results] == [
-            "transcript:0",
-            "transcript:1",
+        assert len(results) == 2
+        # First two rows have the largest magnitudes on dim 0.
+        assert [cid for cid, _ in results] == ["transcript:0", "transcript:1"]
+
+    def test_empty_file_returns_empty(self, monkeypatch):
+        """File with no text embeddings → []."""
+        from app import citations
+
+        monkeypatch.setattr(
+            citations, "get_search_db", self._stub_fetch([]),
+        )
+        results = citations._query_top_chunks_dense(
+            "file-1",
+            np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+            top_k=3,
+        )
+        assert results == []
+
+    def test_dimension_mismatch_vectors_are_skipped(self, monkeypatch):
+        """Stored vectors with a different dim than the query are dropped.
+
+        This is a safety rail for the edge case where the embedding
+        model changed and stale vectors are still in the DB — rather
+        than crashing on a dot product shape mismatch, we skip them.
+        """
+        from app import citations
+
+        rows = [
+            ("wh_file-1_0_abc12345", self._vec_bytes(1.0, 0.0, 0.0, 0.0)),
+            # 3-dim vector — mismatches a 4-dim query.
+            ("wh_file-1_1_deadbeef", self._vec_bytes(1.0, 0.0, 0.0)),
         ]
-        assert results[0][1] > results[1][1]
-        assert results[0][1] == pytest.approx(0.95, abs=1e-3)
-        assert results[1][1] == pytest.approx(0.55, abs=1e-3)
+        monkeypatch.setattr(
+            citations, "get_search_db", self._stub_fetch(rows),
+        )
+        results = citations._query_top_chunks_dense(
+            "file-1",
+            np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+            top_k=3,
+        )
+        # Only the matching-dim row survives.
+        assert [cid for cid, _ in results] == ["transcript:0"]
+
+    def test_chunk_range_filters_post_parse(self, monkeypatch):
+        """chunk_range keeps only chunks whose index is inside [lo, hi]."""
+        from app import citations
+
+        rows = [
+            ("wh_file-1_3_abc12345", self._vec_bytes(1.0, 0.0, 0.0, 0.0)),
+            ("wh_file-1_8_deadbeef", self._vec_bytes(0.9, 0.0, 0.0, 0.0)),
+            ("wh_file-1_50_cafebabe", self._vec_bytes(0.8, 0.0, 0.0, 0.0)),
+        ]
+        monkeypatch.setattr(
+            citations, "get_search_db", self._stub_fetch(rows),
+        )
+        results = citations._query_top_chunks_dense(
+            "file-1",
+            np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+            top_k=5,
+            chunk_range=(5, 40),
+        )
+        # Only transcript:8 is in [5, 40].
+        assert [cid for cid, _ in results] == ["transcript:8"]
+
+    def test_zero_query_vector_returns_empty(self, monkeypatch):
+        """A zero-norm query can't be normalised → fail soft with []."""
+        from app import citations
+
+        rows = [("wh_file-1_0_abc12345", self._vec_bytes(1.0, 0.0, 0.0, 0.0))]
+        monkeypatch.setattr(
+            citations, "get_search_db", self._stub_fetch(rows),
+        )
+        results = citations._query_top_chunks_dense(
+            "file-1",
+            np.zeros(4, dtype=np.float32),
+            top_k=3,
+        )
+        assert results == []
+
+
+class TestMakeChunkId:
+    """`_make_chunk_id` parses embedding ids into ``<kind>:<chunk_index>``.
+
+    Regression coverage for a pre-existing bug: the original regex used
+    ``^wh_[^_]+_(\\d+)_`` which stops at the first underscore inside
+    ``file_id``. Nanoid-style ids can contain ``_``, e.g.
+    ``KtVKUiry6S_d`` — the parser then returned ``None`` for every row
+    of such files, which silently emptied the dense retrieve pool and
+    made all citations read ⚠ in the UI.
+    """
+
+    def test_simple_file_id(self):
+        from app.citations import _make_chunk_id
+
+        assert _make_chunk_id("wh_abc123_5_deadbeef") == "transcript:5"
+        assert _make_chunk_id("txt_abc123_7_cafebabe") == "document:7"
+
+    def test_file_id_with_underscore_parses_chunk_index(self):
+        """file_id containing ``_`` must not confuse the parser."""
+        from app.citations import _make_chunk_id
+
+        # The real-world case that exposed the bug.
+        assert _make_chunk_id(
+            "wh_KtVKUiry6S_d_21_a4ec69ff"
+        ) == "transcript:21"
+        # Multiple underscores in file_id also work.
+        assert _make_chunk_id(
+            "wh_a_b_c_99_e908c091"
+        ) == "transcript:99"
+        assert _make_chunk_id(
+            "txt_foo_bar_baz_3_cafebabe"
+        ) == "document:3"
+
+    def test_file_id_with_hyphen_still_works(self):
+        """Legacy hyphen-style file ids (e.g. ``file-1``) must not regress."""
+        from app.citations import _make_chunk_id
+
+        assert _make_chunk_id("wh_file-1_0_abc12345") == "transcript:0"
+
+    def test_malformed_embedding_id_returns_none(self):
+        """Unknown prefix or missing trailing hex → no parse."""
+        from app.citations import _make_chunk_id
+
+        # No trailing hex hash.
+        assert _make_chunk_id("wh_abc_5") is None
+        # Unknown prefix.
+        assert _make_chunk_id("clip_abc_5_deadbeef") is None
+        # Empty string.
+        assert _make_chunk_id("") is None
+
+    def test_uppercase_hash_not_matched(self):
+        """The indexer emits lowercase hex; uppercase is an anomaly → None.
+
+        Keeping the character class strict avoids accidentally accepting
+        non-hash suffixes (e.g. human-edited test rows) that could
+        otherwise pass as valid chunk ids.
+        """
+        from app.citations import _make_chunk_id
+
+        assert _make_chunk_id("wh_abc_5_DEADBEEF") is None
+
+
+class TestTableCellEmbedPooling:
+    """Table rows with multiple cells pool per-cell vectors.
+
+    The single-string embedding of "保存期間 | 3 日" gets pulled toward
+    the header noun because the joined text is dominated by the longer
+    kanji run. Pooling per cell so "3 日" contributes its own signal
+    is the Phase 2-B fix for the "表の値には出典が当たらない" observation.
+    """
+
+    def test_parser_populates_cells_for_table_rows(self):
+        from app.summary_parser import parse_segments
+
+        md = (
+            "## T\n"
+            "| 項目 | 期間 |\n"
+            "|---|---|\n"
+            "| 卵 | 3日 |\n"
+            "| 肉 | 5日 |\n"
+        )
+        segs = parse_segments(md)
+        table_rows = [s for s in segs if s.section_path.startswith("T/row/")]
+        assert len(table_rows) == 2
+        assert table_rows[0].cells == ("卵", "3日")
+        assert table_rows[1].cells == ("肉", "5日")
+        # Bullets / paragraphs have no cells.
+        non_rows = [s for s in segs if not s.section_path.startswith("T/row/")]
+        for s in non_rows:
+            assert s.cells is None
+
+    def test_parser_single_cell_row_keeps_cells_tuple(self):
+        """A one-column body row still yields a one-cell tuple."""
+        from app.summary_parser import parse_segments
+
+        md = "## T\n| A |\n|---|\n| solo |\n"
+        segs = parse_segments(md)
+        rows = [s for s in segs if s.section_path.startswith("T/row/")]
+        assert len(rows) == 1
+        # Single-cell rows: cells tuple present but citation embedding
+        # will bypass pooling because it needs >= 2 cells.
+        assert rows[0].cells == ("solo",)
+
+    def test_paragraph_and_bullet_have_no_cells(self):
+        from app.summary_parser import parse_segments
+
+        segs = parse_segments("## A\nparagraph body.\n- one bullet\n")
+        assert all(s.cells is None for s in segs)
+
+    def test_embed_segment_pools_multi_cell_row(self, monkeypatch):
+        """Multi-cell table rows call the encoder with the cell list.
+
+        Checks both that ``embed_passages`` receives the cells (not the
+        joined string) and that the pooled vector is unit-norm so
+        downstream cosine lookups remain comparable.
+        """
+        from app import citations
+        from app.summary_parser import Segment
+
+        captured: dict = {}
+
+        def _fake_embed(texts):
+            captured["texts"] = list(texts)
+            # Two normalised unit vectors differing in which dim is "hot".
+            return np.asarray(
+                [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                ],
+                dtype=np.float32,
+            )
+
+        import app.workers.embedder as embedder
+        monkeypatch.setattr(embedder, "embed_passages", _fake_embed)
+
+        seg = Segment(
+            section_path="T/row/0",
+            segment_type="bullet",
+            segment_text="卵 | 3日",
+            cells=("卵", "3日"),
+        )
+        vec = citations._embed_segment(seg)
+
+        # Embedder was called once with the cell list, not the joined text.
+        assert captured["texts"] == ["卵", "3日"]
+        # Result is unit-norm (renormalised after element-wise max).
+        assert vec is not None
+        assert float(np.linalg.norm(vec)) == pytest.approx(1.0, abs=1e-5)
+        # Max-pool preserves the "hot" dim from each cell.
+        assert vec[0] > 0
+        assert vec[1] > 0
+        assert vec[2] == pytest.approx(0.0)
+
+    def test_embed_segment_falls_back_for_single_cell_row(self, monkeypatch):
+        """Single-cell rows take the joined-text path (same as paragraph)."""
+        from app import citations
+        from app.summary_parser import Segment
+
+        captured: dict = {}
+
+        def _fake_embed(texts):
+            captured["texts"] = list(texts)
+            return np.asarray(
+                [[1.0, 0.0, 0.0, 0.0]], dtype=np.float32
+            )
+
+        import app.workers.embedder as embedder
+        monkeypatch.setattr(embedder, "embed_passages", _fake_embed)
+
+        seg = Segment(
+            section_path="T/row/0",
+            segment_type="bullet",
+            segment_text="solo",
+            cells=("solo",),
+        )
+        vec = citations._embed_segment(seg)
+        assert captured["texts"] == ["solo"]
+        assert vec is not None
+
+    def test_embed_segment_paragraph_unchanged(self, monkeypatch):
+        """Paragraphs (no cells) still embed as a single text."""
+        from app import citations
+        from app.summary_parser import Segment
+
+        captured: dict = {}
+
+        def _fake_embed(texts):
+            captured["texts"] = list(texts)
+            return np.asarray([[0.3, 0.4, 0.0, 0.0]], dtype=np.float32)
+
+        import app.workers.embedder as embedder
+        monkeypatch.setattr(embedder, "embed_passages", _fake_embed)
+
+        seg = Segment(
+            section_path="A/0",
+            segment_type="paragraph",
+            segment_text="This is a paragraph.",
+        )
+        citations._embed_segment(seg)
+        # Paragraph path: embedder gets one string (the segment_text).
+        assert captured["texts"] == ["This is a paragraph."]
+
+
+class TestBuildSegmentFtsQuery:
+    """`_build_segment_fts_query` extracts salient tokens for BM25.
+
+    The hybrid retrieval pass only helps if the FTS5 query captures the
+    parts of a segment that are likely to appear verbatim in the source
+    chunks (numbers, proper nouns, katakana loans). Grammar particles
+    and filler kana are noise and must be excluded.
+    """
+
+    def test_empty_text_returns_empty_query(self):
+        from app.citations import _build_segment_fts_query
+
+        assert _build_segment_fts_query("") == ""
+        assert _build_segment_fts_query("   ") == ""
+
+    def test_hiragana_only_text_returns_empty(self):
+        """Pure hiragana (particles, fillers) produces nothing."""
+        from app.citations import _build_segment_fts_query
+
+        # "はいそうですね" contains no kanji/katakana/digit runs — all
+        # tokens get dropped.
+        assert _build_segment_fts_query("はいそうですね") == ""
+
+    def test_extracts_kanji_and_numbers(self):
+        from app.citations import _build_segment_fts_query
+
+        q = _build_segment_fts_query("保存期間は3日です")
+        # Kanji run "保存期間" should be in the query. "3日" is split:
+        # "3" is a number token (>=2 chars, so included).
+        assert '"保存期間"' in q
+        # OR-join keeps union semantics.
+        assert " OR " in q
+
+    def test_extracts_katakana_and_latin(self):
+        from app.citations import _build_segment_fts_query
+
+        q = _build_segment_fts_query("Pythonで機械学習するコツ")
+        assert '"Python"' in q
+        assert '"機械学習"' in q
+
+    def test_dedupes_tokens(self):
+        """Same token appearing twice should only be quoted once."""
+        from app.citations import _build_segment_fts_query
+
+        q = _build_segment_fts_query("機械学習と機械学習と機械学習")
+        assert q.count('"機械学習"') == 1
+
+    def test_caps_token_count_at_twenty(self):
+        """Pathological segments don't blow up the FTS5 query."""
+        from app.citations import _build_segment_fts_query, _FTS_MAX_TOKENS
+
+        # 30 distinct katakana tokens — capped at _FTS_MAX_TOKENS.
+        text = " ".join(f"トークン{chr(0x30A1 + i)}" for i in range(30))
+        q = _build_segment_fts_query(text)
+        # Each term contributes one quoted OR-clause; check cap.
+        assert q.count('"') == _FTS_MAX_TOKENS * 2
+
+
+class TestQueryTopChunksBm25:
+    """`_query_top_chunks_bm25` queries the FTS5 mirrors."""
+
+    def _stub_fts_rows(self, transcript_rows, text_content_rows):
+        """Build a stub session yielding alternating FTS5 result sets."""
+        results_iter = iter([transcript_rows, text_content_rows])
+
+        class _FakeResult:
+            def __init__(self, data):
+                self._data = data
+
+            def fetchall(self):
+                return list(self._data)
+
+        class _FakeSession:
+            def execute(self, _stmt, _params):
+                return _FakeResult(next(results_iter))
+
+        @contextmanager
+        def _get_search_db():
+            yield _FakeSession()
+
+        return _get_search_db
+
+    def test_empty_query_returns_empty_list(self, monkeypatch):
+        """No salient tokens → BM25 skipped entirely."""
+        from app import citations
+
+        # Pure hiragana produces empty FTS5 query.
+        results = citations._query_top_chunks_bm25(
+            "file-1", "はいそうですね", top_k=5
+        )
+        assert results == []
+
+    def test_zero_top_k_short_circuits(self, monkeypatch):
+        from app import citations
+
+        results = citations._query_top_chunks_bm25(
+            "file-1", "機械学習", top_k=0
+        )
+        assert results == []
+
+    def test_returns_transcript_and_document_hits_deduped(
+        self, monkeypatch,
+    ):
+        from app import citations
+
+        monkeypatch.setattr(
+            citations,
+            "get_search_db",
+            self._stub_fts_rows(
+                transcript_rows=[(0,), (2,), (5,)],
+                text_content_rows=[("1",), ("3",)],
+            ),
+        )
+        results = citations._query_top_chunks_bm25(
+            "file-1", "保存期間", top_k=10
+        )
+        # Transcript comes first because the query runs first, then
+        # document chunks. No overlap expected here but the dedupe
+        # set also applies.
+        assert results[:3] == [
+            "transcript:0",
+            "transcript:2",
+            "transcript:5",
+        ]
+        assert "document:1" in results
+        assert "document:3" in results
+
+    def test_malformed_document_chunk_index_is_skipped(self, monkeypatch):
+        """Non-int chunk_index rows in fts_text_content are dropped."""
+        from app import citations
+
+        monkeypatch.setattr(
+            citations,
+            "get_search_db",
+            self._stub_fts_rows(
+                transcript_rows=[],
+                text_content_rows=[("1",), ("page-extra",), ("4",)],
+            ),
+        )
+        results = citations._query_top_chunks_bm25(
+            "file-1", "保存期間", top_k=10
+        )
+        assert results == ["document:1", "document:4"]
+
+    def test_fts5_failure_returns_empty_and_doesnt_raise(self, monkeypatch):
+        """BM25 is optional — DB errors must fail soft."""
+        from app import citations
+
+        class _BrokenSession:
+            def execute(self, *_a, **_k):
+                raise RuntimeError("fts5 table missing")
+
+        @contextmanager
+        def _broken_db():
+            yield _BrokenSession()
+
+        monkeypatch.setattr(citations, "get_search_db", _broken_db)
+        results = citations._query_top_chunks_bm25(
+            "file-1", "機械学習", top_k=5
+        )
+        assert results == []
+
+
+class TestRetrieveCandidatesHybrid:
+    """`_retrieve_candidates` orchestrates dense + BM25 with RRF fusion."""
+
+    def _make_segment(self, text="保存期間は3日"):
+        from app.summary_parser import Segment
+
+        return Segment(
+            section_path="A/0",
+            segment_type="paragraph",
+            segment_text=text,
+        )
+
+    def test_zero_top_k_returns_empty(self):
+        from app import citations
+
+        assert citations._retrieve_candidates(
+            "file-1",
+            self._make_segment(),
+            np.ones(4, dtype=np.float32),
+            top_k=0,
+        ) == []
+
+    def test_hybrid_disabled_returns_dense_only(self, monkeypatch):
+        """With ``citation_hybrid_enabled = False`` BM25 is never queried."""
+        from app import citations, config as cfg_module
+
+        # Patch settings to disable hybrid.
+        object.__setattr__(
+            cfg_module.settings.summaries, "citation_hybrid_enabled", False
+        )
+        try:
+            calls = []
+
+            def _fake_dense(fid, vec, k, **_kw):
+                calls.append(("dense", k))
+                return [
+                    ("transcript:0", 0.8),
+                    ("transcript:1", 0.7),
+                    ("transcript:2", 0.6),
+                ]
+
+            def _fail_bm25(*_a, **_kw):
+                calls.append(("bm25",))
+                return ["transcript:9"]
+
+            monkeypatch.setattr(
+                citations, "_query_top_chunks_dense", _fake_dense
+            )
+            monkeypatch.setattr(
+                citations, "_query_top_chunks_bm25", _fail_bm25
+            )
+
+            out = citations._retrieve_candidates(
+                "file-1",
+                self._make_segment(),
+                np.ones(4, dtype=np.float32),
+                top_k=2,
+            )
+            assert out == [("transcript:0", 0.8), ("transcript:1", 0.7)]
+            # BM25 must not have been called in the disabled path.
+            assert all(c[0] != "bm25" for c in calls)
+        finally:
+            object.__setattr__(
+                cfg_module.settings.summaries,
+                "citation_hybrid_enabled",
+                True,
+            )
+
+    def test_bm25_empty_falls_back_to_dense_order(self, monkeypatch):
+        """BM25 returning no hits must not silently drop dense results."""
+        from app import citations
+
+        monkeypatch.setattr(
+            citations,
+            "_query_top_chunks_dense",
+            lambda fid, vec, k, **_kw: [
+                ("transcript:0", 0.8),
+                ("transcript:1", 0.7),
+                ("transcript:2", 0.6),
+            ],
+        )
+        monkeypatch.setattr(
+            citations, "_query_top_chunks_bm25", lambda *_a, **_kw: []
+        )
+        out = citations._retrieve_candidates(
+            "file-1",
+            self._make_segment(),
+            np.ones(4, dtype=np.float32),
+            top_k=3,
+        )
+        assert out == [
+            ("transcript:0", 0.8),
+            ("transcript:1", 0.7),
+            ("transcript:2", 0.6),
+        ]
+
+    def test_bm25_reorders_dense_pool_via_rrf(self, monkeypatch):
+        """A candidate ranked low by dense but high by BM25 moves up.
+
+        This simulates the "table row / numeric value" case: the row
+        text ``保存期間は3日`` lexically matches a transcript chunk that
+        dense put at position 3, but BM25 ranked first because it
+        contains the verbatim number.
+        """
+        from app import citations
+
+        monkeypatch.setattr(
+            citations,
+            "_query_top_chunks_dense",
+            lambda fid, vec, k, **_kw: [
+                ("transcript:0", 0.75),  # dense rank 0
+                ("transcript:1", 0.72),  # dense rank 1
+                ("transcript:2", 0.70),  # dense rank 2
+                ("transcript:3", 0.68),  # dense rank 3 — but BM25 #0
+                ("transcript:4", 0.65),  # dense rank 4
+            ],
+        )
+        # BM25 says transcript:3 is the verbatim match; transcript:0
+        # does not appear.
+        monkeypatch.setattr(
+            citations,
+            "_query_top_chunks_bm25",
+            lambda *_a, **_kw: [
+                "transcript:3",
+                "transcript:1",
+                "transcript:99",  # BM25-only (outside dense pool — ignored)
+            ],
+        )
+        out = citations._retrieve_candidates(
+            "file-1",
+            self._make_segment(),
+            np.ones(4, dtype=np.float32),
+            top_k=3,
+        )
+        # transcript:3 rose from dense rank 3 to top-3 thanks to BM25.
+        returned_ids = [cid for cid, _ in out]
+        assert "transcript:3" in returned_ids
+        # BM25-only candidates outside the dense pool are dropped —
+        # this keeps ``top_score`` semantics intact.
+        assert "transcript:99" not in returned_ids
+        # Score is the dense cosine, not the RRF score.
+        for cid, score in out:
+            if cid == "transcript:3":
+                assert score == pytest.approx(0.68)
+
+    def test_empty_dense_returns_empty_even_with_bm25(self, monkeypatch):
+        """No dense pool → nothing to fuse, even if BM25 has hits."""
+        from app import citations
+
+        monkeypatch.setattr(
+            citations, "_query_top_chunks_dense", lambda *_a, **_kw: []
+        )
+        monkeypatch.setattr(
+            citations,
+            "_query_top_chunks_bm25",
+            lambda *_a, **_kw: ["transcript:7"],
+        )
+        out = citations._retrieve_candidates(
+            "file-1",
+            self._make_segment(),
+            np.ones(4, dtype=np.float32),
+            top_k=3,
+        )
+        assert out == []
+
+
+class TestAncestorHeadings:
+    """`parse_segments` populates ``ancestor_headings`` for each segment.
+
+    The citation linker uses these to anchor searches to the transcript
+    region where a heading is discussed — fixing the "multi-recipe
+    video, wrong-recipe chunk cited" case where the content chunks
+    themselves don't repeat the topic name.
+    """
+
+    def test_h2_only_structure(self):
+        from app.summary_parser import parse_segments
+
+        segs = parse_segments(
+            "## 全体像\nbody\n- bullet\n"
+        )
+        for s in segs:
+            assert s.ancestor_headings == ("全体像",)
+
+    def test_h3_nests_inside_h2(self):
+        from app.summary_parser import parse_segments
+
+        segs = parse_segments(
+            "## 主要な章\n"
+            "### カレー\n"
+            "- 保存方法は冷蔵庫\n"
+            "### ハンバーグ\n"
+            "- 保存方法は冷凍\n"
+        )
+        # Both bullets live under "主要な章" but with different H3.
+        by_text = {s.segment_text: s.ancestor_headings for s in segs}
+        assert by_text["保存方法は冷蔵庫"] == ("主要な章", "カレー")
+        assert by_text["保存方法は冷凍"] == ("主要な章", "ハンバーグ")
+
+    def test_h3_reset_on_new_h2(self):
+        """Entering a new H2 clears the pending H3 so context doesn't leak."""
+        from app.summary_parser import parse_segments
+
+        segs = parse_segments(
+            "## A\n"
+            "### sub1\n"
+            "- inside sub1\n"
+            "## B\n"
+            "- inside B only\n"
+        )
+        by_text = {s.segment_text: s.ancestor_headings for s in segs}
+        assert by_text["inside sub1"] == ("A", "sub1")
+        # Next H2 must drop the previous H3.
+        assert by_text["inside B only"] == ("B",)
+
+    def test_segments_without_heading_have_empty_tuple(self):
+        """Malformed input without any ## emits segments with empty ancestors."""
+        from app.summary_parser import parse_segments
+
+        segs = parse_segments("orphan paragraph\n- orphan bullet\n")
+        for s in segs:
+            assert s.ancestor_headings == ()
+
+
+class TestPoolSegmentVectors:
+    """`_pool_segment_vectors` averages unit-normalised vectors then renormalises.
+
+    Unit-normalising each input first prevents a single high-magnitude
+    embedding from dominating the pool; renormalising the mean keeps
+    the output usable as a cosine query.
+    """
+
+    def test_empty_list_returns_none(self):
+        from app.citations import _pool_segment_vectors
+
+        assert _pool_segment_vectors([]) is None
+
+    def test_all_none_returns_none(self):
+        from app.citations import _pool_segment_vectors
+
+        assert _pool_segment_vectors([None, None]) is None
+
+    def test_pools_and_renormalises(self):
+        """Two orthogonal unit vectors pool to a unit 45-degree vector."""
+        from app.citations import _pool_segment_vectors
+
+        a = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        b = np.asarray([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+        out = _pool_segment_vectors([a, b])
+        assert out is not None
+        # Unit norm.
+        assert float(np.linalg.norm(out)) == pytest.approx(1.0, abs=1e-5)
+        # Symmetric contribution: components on dim 0 and 1 match.
+        assert out[0] == pytest.approx(out[1], abs=1e-5)
+        # Dims 2 and 3 stay zero.
+        assert out[2] == pytest.approx(0.0, abs=1e-5)
+
+    def test_unit_normalises_inputs_first(self):
+        """A 10x-magnitude vector should not dominate a unit vector."""
+        from app.citations import _pool_segment_vectors
+
+        # Raw magnitudes differ but both point along dim 0.
+        a = np.asarray([10.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        b = np.asarray([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+        out = _pool_segment_vectors([a, b])
+        assert out is not None
+        # After unit-normalising a and b first, the pool is the mean of
+        # [1,0,0,0] and [0,1,0,0] → unit 45-deg vector.
+        assert out[0] == pytest.approx(out[1], abs=1e-5)
+
+
+class TestPickDenseCluster:
+    """`_pick_dense_cluster` isolates the strongest contiguous cluster.
+
+    The reason this exists: for a video whose whole content is
+    "ドラクエのリメイク", a section pool like "近年のリメイクの流れ"
+    legitimately matches chunks near chunk 0 *and* high-scoring
+    outliers near the outro. Naïve min/max of top-M then widens the
+    range to the whole file. Picking the strongest contiguous cluster
+    instead lets each section settle into its actual discussion zone.
+    """
+
+    def test_empty_input_returns_empty(self):
+        from app.citations import _pick_dense_cluster
+
+        assert _pick_dense_cluster([], gap=5, union_ratio=0.8) == []
+
+    def test_single_cluster_returned_as_is(self):
+        from app.citations import _pick_dense_cluster
+
+        # All indices within gap: one cluster.
+        pairs = [(0, 0.9), (1, 0.85), (3, 0.8), (5, 0.75)]
+        picked = _pick_dense_cluster(pairs, gap=5, union_ratio=0.8)
+        assert sorted(picked) == [0, 1, 3, 5]
+
+    def test_two_clusters_picks_heavier(self):
+        """Two non-adjacent clusters: the one with higher total score wins."""
+        from app.citations import _pick_dense_cluster
+
+        # cluster A: indices 0,1,3,4,8 total ~4.6
+        # cluster B: indices 40,42 total ~1.8
+        pairs = [
+            (0, 0.94), (1, 0.93), (3, 0.93), (4, 0.91), (8, 0.91),
+            (40, 0.92), (42, 0.90),
+        ]
+        picked = _pick_dense_cluster(pairs, gap=5, union_ratio=0.8)
+        assert sorted(picked) == [0, 1, 3, 4, 8]
+        assert 40 not in picked and 42 not in picked
+
+    def test_near_tied_runner_up_is_unioned(self):
+        """Clusters whose weights are within union_ratio stay together.
+
+        Covers the "まとめ references both intro and outro" case: we
+        want the returned range to cover both zones, not collapse to
+        one of them.
+        """
+        from app.citations import _pick_dense_cluster
+
+        # cluster A: 0,1 total 1.80
+        # cluster B: 40,41,42 total 2.70 ← primary
+        # cluster A's weight = 1.80, primary = 2.70, ratio 0.67 < 0.8 → drop A
+        pairs = [(0, 0.9), (1, 0.9), (40, 0.9), (41, 0.9), (42, 0.9)]
+        picked = _pick_dense_cluster(pairs, gap=5, union_ratio=0.8)
+        assert sorted(picked) == [40, 41, 42]
+
+        # Now A is closer to B in weight: A=2.70, B=2.70 → union.
+        pairs = [
+            (0, 0.9), (1, 0.9), (2, 0.9),
+            (40, 0.9), (41, 0.9), (42, 0.9),
+        ]
+        picked = _pick_dense_cluster(pairs, gap=5, union_ratio=0.8)
+        assert sorted(picked) == [0, 1, 2, 40, 41, 42]
+
+    def test_gap_defines_boundary(self):
+        """Widening the gap merges what ``gap=1`` would have split."""
+        from app.citations import _pick_dense_cluster
+
+        pairs = [(0, 0.9), (2, 0.9), (4, 0.9)]
+        # gap=2 groups all three (2-0=2, 4-2=2, both <= gap) into one cluster.
+        picked = _pick_dense_cluster(pairs, gap=2, union_ratio=0.8)
+        assert sorted(picked) == [0, 2, 4]
+        # gap=1 splits at every step (2-0=2 > 1, 4-2=2 > 1). With a very
+        # strict union_ratio (> 1.0) no runner-up gets unioned, so the
+        # earliest tied cluster (just {0}) is returned alone.
+        picked = _pick_dense_cluster(pairs, gap=1, union_ratio=1.5)
+        assert picked == [0]
+
+
+class TestFindRangeFromPool:
+    """`_find_range_from_pool` returns ``(range, top1_cosine)`` for a pool."""
+
+    def _file_vectors(self, indices_and_vecs):
+        """Build ``[(chunk_id, vector)]`` from ``[(idx, [...]), ...]``."""
+        return [
+            (f"transcript:{i}", np.asarray(v, dtype=np.float32))
+            for i, v in indices_and_vecs
+        ]
+
+    def test_empty_vectors_returns_none(self):
+        from app.citations import _find_range_from_pool
+
+        pool = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        rng, score = _find_range_from_pool(
+            pool, [], None, top_m=5, score_floor=0.5,
+        )
+        assert rng is None
+        assert score == 0.0
+
+    def test_returns_min_max_of_above_floor_indices(self):
+        """Only chunks >= score_floor shape the range; weak outliers
+        don't widen it.
+        """
+        from app.citations import _find_range_from_pool
+
+        pool = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        vecs = self._file_vectors([
+            (2, [0.9, 0.1, 0.0, 0.0]),
+            (5, [0.8, 0.2, 0.0, 0.0]),
+            (10, [0.6, 0.4, 0.0, 0.0]),
+            (50, [0.0, 1.0, 0.0, 0.0]),  # cos 0 — dropped by floor
+        ])
+        rng, score = _find_range_from_pool(
+            pool, vecs, None, top_m=5, score_floor=0.5,
+        )
+        assert rng == (2, 10)
+        assert score > 0.9
+
+    def test_below_floor_returns_none(self):
+        """All top-M below score_floor → range None (inherit parent)."""
+        from app.citations import _find_range_from_pool
+
+        pool = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        vecs = self._file_vectors([
+            (2, [0.3, 0.7, 0.0, 0.0]),
+            (5, [0.2, 0.8, 0.0, 0.0]),
+        ])
+        rng, score = _find_range_from_pool(
+            pool, vecs, None, top_m=5, score_floor=0.5,
+        )
+        assert rng is None
+        # Top score is still reported so the caller can log why.
+        assert 0.0 < score < 0.5
+
+    def test_parent_range_restricts_search(self):
+        from app.citations import _find_range_from_pool
+
+        pool = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        vecs = self._file_vectors([
+            (0, [1.0, 0.0, 0.0, 0.0]),
+            (5, [0.9, 0.1, 0.0, 0.0]),
+            (50, [0.95, 0.05, 0.0, 0.0]),
+        ])
+        rng, score = _find_range_from_pool(
+            pool, vecs, parent_range=(3, 40), top_m=3, score_floor=0.5,
+        )
+        # Only index 5 survives the parent range filter.
+        assert rng == (5, 5)
+        assert score > 0.9
+
+    def test_cluster_detection_drops_outliers(self):
+        """A far-away high-scoring outlier must not widen the range.
+
+        This is the ドラクエ動画 case: section 1 "近年のドラクエリメイク"
+        pools strongly with both the intro chunks (0-5) and a handful
+        of outro chunks (40+). Dense-cluster detection should keep
+        only the earlier cluster as the section's range.
+        """
+        from app.citations import _find_range_from_pool
+
+        pool = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        # Cluster A at indices 0-4 with slightly higher scores; outlier
+        # cluster at indices 40-42 with comparable (but lower-total) scores.
+        vecs = self._file_vectors([
+            (0, [0.95, 0.3, 0.0, 0.0]),
+            (1, [0.94, 0.34, 0.0, 0.0]),
+            (3, [0.93, 0.37, 0.0, 0.0]),
+            (4, [0.92, 0.39, 0.0, 0.0]),
+            (5, [0.9, 0.44, 0.0, 0.0]),
+            (40, [0.85, 0.53, 0.0, 0.0]),
+            (42, [0.83, 0.56, 0.0, 0.0]),
+        ])
+        rng, _score = _find_range_from_pool(
+            pool, vecs, None,
+            top_m=12, score_floor=0.5,
+            cluster_gap=5, cluster_union_ratio=0.8,
+        )
+        assert rng is not None
+        lo, hi = rng
+        # Primary cluster wins: range is the 0..5 block, not (0, 42).
+        assert lo == 0
+        assert hi <= 5
+
+
+class TestDiscriminativeScoring:
+    """`_find_range_from_pool` with ``sibling_pools`` filters by relative score.
+
+    In the recipe-video scenario, every chunk in the file is about
+    cooking, so every section's pool scores high (~0.9) on every
+    chunk. Raw cosine alone can't tell which chunk is the "kyabetsu
+    chunk" vs the "小松菜 chunk". Subtracting the max sibling
+    cosine surfaces the chunks that are *distinctively* this section.
+    """
+
+    def _file_vectors(self, indices_and_vecs):
+        return [
+            (f"transcript:{i}", np.asarray(v, dtype=np.float32))
+            for i, v in indices_and_vecs
+        ]
+
+    def test_discriminative_filters_sibling_dominant_chunks(self):
+        """A chunk that matches a sibling pool more than the target pool
+        is filtered out, even if its raw cosine is above score_floor.
+        """
+        from app.citations import _find_range_from_pool
+
+        # Target pool points on dim 0. Sibling pool points on dim 1.
+        pool = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        sibling = np.asarray([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+
+        vecs = self._file_vectors([
+            # Distinctively target: high on dim 0, low on dim 1.
+            (2, [0.95, 0.1, 0.0, 0.0]),
+            (3, [0.93, 0.2, 0.0, 0.0]),
+            # Sibling-dominated: high on BOTH dims (whole-video shared
+            # topic) but sibling scores higher on dim 1.
+            (30, [0.82, 0.92, 0.0, 0.0]),
+            (31, [0.80, 0.95, 0.0, 0.0]),
+        ])
+        rng, _ = _find_range_from_pool(
+            pool, vecs, None,
+            top_m=10, score_floor=0.5,
+            cluster_gap=5, cluster_union_ratio=0.8,
+            sibling_pools=[sibling],
+            disc_margin=0.01,
+        )
+        assert rng is not None
+        lo, hi = rng
+        # Only the distinctively-target chunks survive.
+        assert lo == 2
+        assert hi <= 3
+
+    def test_no_siblings_falls_back_to_raw(self):
+        """Without sibling pools the scoring is identical to the old
+        raw-cosine path.
+        """
+        from app.citations import _find_range_from_pool
+
+        pool = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        vecs = self._file_vectors([
+            (2, [0.9, 0.1, 0.0, 0.0]),
+            (5, [0.85, 0.15, 0.0, 0.0]),
+        ])
+        rng, _ = _find_range_from_pool(
+            pool, vecs, None,
+            top_m=10, score_floor=0.5,
+            cluster_gap=5, cluster_union_ratio=0.8,
+            sibling_pools=None,  # disc off
+        )
+        assert rng == (2, 5)
+
+    def test_disc_margin_adjusts_strictness(self):
+        """Higher ``disc_margin`` requires a bigger edge over siblings.
+
+        Chunks are chosen so one barely clears a tiny margin (edge
+        ~0.01) while the other clears a large one (edge ~0.13). The
+        strict margin filters out the barely-passing chunk.
+        """
+        from app.citations import _find_range_from_pool
+
+        pool = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        # Unit-norm sibling picked so the numbers work out cleanly:
+        # cos(chunk_A, sibling) ≈ 0.89, cos(chunk_B, sibling) ≈ 0.82.
+        sibling = np.asarray([0.6, 0.8, 0.0, 0.0], dtype=np.float32)
+        vecs = self._file_vectors([
+            # Unit vector; raw cos to pool = 0.9, to sibling = 0.889 → edge ~0.011.
+            (2, [0.9, 0.436, 0.0, 0.0]),
+            # Unit vector; raw cos to pool = 0.95, to sibling = 0.82 → edge ~0.13.
+            (3, [0.95, 0.312, 0.0, 0.0]),
+        ])
+        # Small margin (0.005): both chunks clear the edge.
+        rng_loose, _ = _find_range_from_pool(
+            pool, vecs, None,
+            top_m=10, score_floor=0.5,
+            cluster_gap=5, cluster_union_ratio=0.8,
+            sibling_pools=[sibling], disc_margin=0.005,
+        )
+        assert rng_loose == (2, 3)
+
+        # Strict margin (0.10): the barely-edging chunk gets filtered.
+        rng_strict, _ = _find_range_from_pool(
+            pool, vecs, None,
+            top_m=10, score_floor=0.5,
+            cluster_gap=5, cluster_union_ratio=0.8,
+            sibling_pools=[sibling], disc_margin=0.10,
+        )
+        assert rng_strict == (3, 3)
+
+    def test_returned_top_score_remains_raw_cosine(self):
+        """The returned ``top_score`` is raw cosine (not disc), so the
+        caller's threshold logic keeps working.
+        """
+        from app.citations import _find_range_from_pool
+
+        pool = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        sibling = np.asarray([0.5, 0.5, 0.0, 0.0], dtype=np.float32)
+        vecs = self._file_vectors([
+            (2, [1.0, 0.0, 0.0, 0.0]),  # raw 1.0, sibling 0.707, disc 0.293
+        ])
+        _rng, top_score = _find_range_from_pool(
+            pool, vecs, None,
+            top_m=5, score_floor=0.5,
+            cluster_gap=5, cluster_union_ratio=0.8,
+            sibling_pools=[sibling], disc_margin=0.01,
+        )
+        # The returned top_score is the raw cosine (≈1.0), not the
+        # disc value (≈0.29). This preserves the caller's semantics.
+        assert top_score == pytest.approx(1.0, abs=1e-5)
+
+
+class TestViterbiMonotonicPath:
+    """`_viterbi_monotonic_path` returns the best-score monotonic state sequence.
+
+    The DP can only stay or advance by one state; it can never go
+    backward or skip. Tests exercise: forced start, plain preference
+    of staying vs advancing, noisy emissions smoothed by the path
+    maximisation.
+    """
+
+    def test_empty_emissions_return_empty(self):
+        from app.citations import _viterbi_monotonic_path
+
+        assert _viterbi_monotonic_path(np.zeros((0, 0))) == []
+        assert _viterbi_monotonic_path(np.zeros((0, 3))) == []
+        assert _viterbi_monotonic_path(np.zeros((5, 0))) == []
+
+    def test_single_chunk_returns_state_zero(self):
+        """Forced start means the only chunk lands in state 0."""
+        from app.citations import _viterbi_monotonic_path
+
+        # Even if state 1 scores higher, forced start keeps us at 0.
+        emissions = np.array([[0.1, 0.9]], dtype=np.float64)
+        assert _viterbi_monotonic_path(emissions) == [0]
+
+    def test_strict_monotonic_two_sections(self):
+        """Two chunks, clean signal: stay in 0, advance to 1."""
+        from app.citations import _viterbi_monotonic_path
+
+        emissions = np.array([
+            [0.9, 0.1],  # clearly state 0
+            [0.1, 0.9],  # clearly state 1
+        ])
+        assert _viterbi_monotonic_path(emissions) == [0, 1]
+
+    def test_no_backward(self):
+        """Once advanced, the path can't return to an earlier state,
+        even if a later chunk scores highest on the earlier state.
+        """
+        from app.citations import _viterbi_monotonic_path
+
+        # Chunk 1 is so strongly state 1 that the DP advances to
+        # state 1. Chunk 2's best absolute score is on state 0, but
+        # the path must stay in state 1.
+        emissions = np.array([
+            [0.9, 0.1],
+            [0.0, 1.0],
+            [0.95, 0.0],
+        ])
+        path = _viterbi_monotonic_path(emissions)
+        for a, b in zip(path, path[1:]):
+            assert b >= a
+        assert path[-1] == 1
+
+    def test_noise_smoothed_by_path(self):
+        """A single noisy chunk doesn't flip the path."""
+        from app.citations import _viterbi_monotonic_path
+
+        # Six chunks that should be 0,0,0,1,1,1 but with one noisy
+        # chunk at t=1 that has higher state 1 score.
+        emissions = np.array([
+            [0.9, 0.1],
+            [0.45, 0.55],  # noisy: very slight edge for state 1
+            [0.9, 0.1],
+            [0.1, 0.9],
+            [0.1, 0.9],
+            [0.1, 0.9],
+        ])
+        path = _viterbi_monotonic_path(emissions)
+        # DP picks global max. A one-step early advance at t=1 is
+        # strictly monotonic, so it's legal — but the path is allowed
+        # to stay at 0 there if the overall sum is higher.
+        assert path[0] == 0
+        assert path[-1] == 1
+        # Monotonic non-decreasing.
+        for a, b in zip(path, path[1:]):
+            assert b >= a
+
+
+class TestAlignSiblingGroup:
+    """`_align_sibling_group` assigns chunks to sibling sections.
+
+    Verifies: the DP output maps each chunk to the section whose pool
+    it best matches under the monotonic constraint, and the returned
+    per-section assignments are monotonic contiguous runs (roughly).
+    Also covers the discriminative-emission path.
+    """
+
+    def _file_vectors(self, indices_and_vecs):
+        return [
+            (f"transcript:{i}", np.asarray(v, dtype=np.float32))
+            for i, v in indices_and_vecs
+        ]
+
+    def test_empty_pools_returns_empty(self):
+        from app.citations import _align_sibling_group
+
+        assert _align_sibling_group([], [], discriminative=True) == []
+
+    def test_assigns_chunks_to_correct_sections(self):
+        """Two sections pointing on disjoint dims; chunks align to the
+        closer section within monotonic order.
+        """
+        from app.citations import _align_sibling_group
+
+        pool_a = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        pool_b = np.asarray([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+
+        vecs = self._file_vectors([
+            (0, [1.0, 0.0, 0.0, 0.0]),
+            (1, [0.9, 0.1, 0.0, 0.0]),
+            (2, [0.7, 0.3, 0.0, 0.0]),
+            (3, [0.3, 0.7, 0.0, 0.0]),
+            (4, [0.1, 0.9, 0.0, 0.0]),
+            (5, [0.0, 1.0, 0.0, 0.0]),
+        ])
+        assignments = _align_sibling_group(
+            [pool_a, pool_b], vecs, discriminative=False,
+        )
+        # Section A should own the early chunks, B the late chunks.
+        assert assignments[0] == [0, 1, 2]
+        assert assignments[1] == [3, 4, 5]
+
+    def test_discriminative_emission_picks_distinctive_chunks(self):
+        """With disc emission, chunks that slightly match both sections
+        are decided by path — not by the absolute higher cosine alone.
+        """
+        from app.citations import _align_sibling_group
+
+        pool_a = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        pool_b = np.asarray([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+        vecs = self._file_vectors([
+            (0, [0.9, 0.3, 0.0, 0.0]),
+            (1, [0.9, 0.3, 0.0, 0.0]),
+            (2, [0.3, 0.9, 0.0, 0.0]),
+            (3, [0.3, 0.9, 0.0, 0.0]),
+        ])
+        assignments = _align_sibling_group(
+            [pool_a, pool_b], vecs, discriminative=True,
+        )
+        # A owns chunks {0, 1}, B owns {2, 3}. Monotonic advance.
+        assert assignments[0] == [0, 1]
+        assert assignments[1] == [2, 3]
+
+    def test_assignments_are_monotonic(self):
+        """Regardless of noisy individual chunks, each section's
+        assignment is contiguous (no chunk goes back to an earlier
+        section after a later one was entered).
+        """
+        from app.citations import _align_sibling_group
+
+        pool_a = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        pool_b = np.asarray([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+
+        vecs = self._file_vectors([
+            (0, [1.0, 0.0, 0.0, 0.0]),
+            (1, [0.0, 1.0, 0.0, 0.0]),
+            # Noisy: looks like state 0 again, but monotonic forbids.
+            (2, [0.9, 0.1, 0.0, 0.0]),
+            (3, [0.0, 1.0, 0.0, 0.0]),
+        ])
+        assignments = _align_sibling_group(
+            [pool_a, pool_b], vecs, discriminative=False,
+        )
+        # Confirm monotonicity: A's last index < B's first index.
+        if assignments[0] and assignments[1]:
+            assert max(assignments[0]) < min(assignments[1])
+
+
+class TestBuildHierarchicalRangeMap:
+    """`_build_hierarchical_range_map` narrows top-down via ancestor prefixes."""
+
+    def _seg(self, section_path, text, ancestors):
+        from app.summary_parser import Segment
+
+        return Segment(
+            section_path=section_path,
+            segment_type="bullet",
+            segment_text=text,
+            ancestor_headings=ancestors,
+        )
+
+    def test_empty_segments_return_empty_map(self):
+        from app.citations import _build_hierarchical_range_map
+
+        assert _build_hierarchical_range_map([], [], []) == {}
+
+    def test_segments_without_ancestors_not_in_map(self):
+        from app.citations import _build_hierarchical_range_map
+
+        seg = self._seg("/0", "orphan", ())
+        vec = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        m = _build_hierarchical_range_map([seg], [vec], [])
+        assert m == {}
+
+    def test_single_level_resolves_to_range(self, monkeypatch):
+        """Top-level prefix with a strong pool match produces a range."""
+        from app import citations
+
+        seg = self._seg("A/0", "text about cats", ("cats section",))
+        vec = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        # File has matches on indices 2, 5, 10 — all strongly on dim 0.
+        file_vecs = [
+            (f"transcript:{i}", np.asarray(v, dtype=np.float32))
+            for i, v in [
+                (2, [0.9, 0.1, 0.0, 0.0]),
+                (5, [0.85, 0.15, 0.0, 0.0]),
+                (10, [0.8, 0.2, 0.0, 0.0]),
+                (50, [0.0, 1.0, 0.0, 0.0]),
+            ]
+        ]
+        m = citations._build_hierarchical_range_map([seg], [vec], file_vecs)
+        assert m[("cats section",)] == (2, 10)
+
+    def test_weak_prefix_maps_to_none(self, monkeypatch):
+        """A prefix whose pool doesn't cluster well → None (full-file search).
+
+        Under the non-cascading design, each prefix resolves against
+        the full file independently. A prefix whose pool fails to
+        match any chunk above the narrow threshold doesn't inherit
+        its parent's (possibly wrong) range; it simply maps to
+        ``None`` so the caller falls back to full-file retrieval for
+        segments under it. This is the right behaviour even when a
+        sibling prefix did resolve to a narrow range — siblings don't
+        constrain each other.
+        """
+        from app import citations
+
+        # H3 pool points orthogonally to everything in the file, so
+        # its top-1 match stays below threshold.
+        seg = self._seg(
+            "A/sub/0", "off-topic subsection",
+            ("cats section", "off-topic sub"),
+        )
+        vec_h3 = np.asarray([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+        file_vecs = [
+            (f"transcript:{i}", np.asarray(v, dtype=np.float32))
+            for i, v in [
+                (2, [1.0, 0.0, 0.0, 0.0]),
+                (5, [0.9, 0.1, 0.0, 0.0]),
+                (10, [0.85, 0.15, 0.0, 0.0]),
+            ]
+        ]
+        object.__setattr__(
+            citations.settings.summaries,
+            "citation_section_narrow_threshold", 0.5,
+        )
+        m = citations._build_hierarchical_range_map([seg], [vec_h3], file_vecs)
+        # Under non-cascading: the H3 prefix maps to None, regardless
+        # of the parent's range. Caller treats that as "no narrowing".
+        assert m[("cats section", "off-topic sub")] is None
+
+    def test_multiple_segments_share_prefix_pool(self):
+        """Two segments under the same H3 get the same resolved range."""
+        from app.citations import _build_hierarchical_range_map
+
+        s1 = self._seg("A/s/0", "one", ("A", "s"))
+        s2 = self._seg("A/s/1", "two", ("A", "s"))
+        v = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        file_vecs = [
+            (f"transcript:{i}", np.asarray(vv, dtype=np.float32))
+            for i, vv in [
+                (2, [1.0, 0.0, 0.0, 0.0]),
+                (7, [0.9, 0.1, 0.0, 0.0]),
+            ]
+        ]
+        m = _build_hierarchical_range_map([s1, s2], [v, v], file_vecs)
+        assert m[("A", "s")] == (2, 7)
+        # The H2 prefix is also present and points to the same range
+        # (it pools the same segments).
+        assert m[("A",)] == (2, 7)
+
+    def test_container_parent_does_not_drag_children(self):
+        """Recipe-video regression: an H2 that holds multiple unrelated
+        H3 topics (a pure "container" section) must not constrain its
+        children.
+
+        Setup: H2 ``詳細内容`` holds two H3 sections whose pools point
+        to disjoint dimensions (different recipes). The H2's average-
+        pool picks one zone, but each H3 should land on its own zone
+        independently.
+        """
+        from app.citations import _build_hierarchical_range_map
+
+        # Two H3 children: "キャベツ" and "小松菜", pointing to very
+        # different dims. H2 pool (average) is a blend.
+        s_cab = self._seg(
+            "詳細内容/0", "kyabetsu bullet",
+            ("詳細内容", "キャベツ"),
+        )
+        s_kom = self._seg(
+            "詳細内容/1", "komatsuna bullet",
+            ("詳細内容", "小松菜"),
+        )
+        v_cab = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        v_kom = np.asarray([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+        file_vecs = [
+            (f"transcript:{i}", np.asarray(v, dtype=np.float32))
+            for i, v in [
+                # Cabbage zone
+                (0, [1.0, 0.0, 0.0, 0.0]),
+                (1, [0.9, 0.1, 0.0, 0.0]),
+                (2, [0.85, 0.15, 0.0, 0.0]),
+                # Komatsuna zone, much later
+                (50, [0.0, 1.0, 0.0, 0.0]),
+                (51, [0.1, 0.9, 0.0, 0.0]),
+                (52, [0.15, 0.85, 0.0, 0.0]),
+            ]
+        ]
+        m = _build_hierarchical_range_map(
+            [s_cab, s_kom], [v_cab, v_kom], file_vecs,
+        )
+        cab_rng = m[("詳細内容", "キャベツ")]
+        kom_rng = m[("詳細内容", "小松菜")]
+        # Each H3 finds its own zone — the H2 parent doesn't drag them
+        # into a single shared range.
+        assert cab_rng is not None and kom_rng is not None
+        assert cab_rng[1] < 10  # cabbage stays early
+        assert kom_rng[0] > 40  # komatsuna stays late
+        # The ranges are clearly disjoint.
+        assert cab_rng[1] < kom_rng[0]
+
+    def test_cross_cutting_section_picks_densest_cluster(self):
+        """With dense-cluster detection, a cross-cutting pool no longer
+        returns one artificially-wide range. Isolated matches in
+        different file regions are split into clusters and the
+        strongest single cluster (or unioned near-ties) wins — the
+        returned range is the cluster's span, not min-max across all
+        high scorers.
+        """
+        from app.citations import _build_hierarchical_range_map
+
+        # Two orthogonal segments under the same H3 → pool is a
+        # 45-degree unit vector.
+        s1 = self._seg("T/s/0", "a", ("T", "s"))
+        s2 = self._seg("T/s/1", "b", ("T", "s"))
+        v1 = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        v2 = np.asarray([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+        file_vecs = [
+            (f"transcript:{i}", np.asarray(vv, dtype=np.float32))
+            for i, vv in [
+                (2, [1.0, 0.0, 0.0, 0.0]),   # cos vs pool ≈ 0.707
+                (20, [0.0, 1.0, 0.0, 0.0]),  # cos vs pool ≈ 0.707
+                (40, [0.707, 0.707, 0.0, 0.0]),  # cos vs pool ≈ 1.0
+            ]
+        ]
+        m = _build_hierarchical_range_map([s1, s2], [v1, v2], file_vecs)
+        rng = m[("T", "s")]
+        assert rng is not None
+        lo, hi = rng
+        # Cluster detection keeps only the strongest region; the
+        # isolated outliers on either side don't widen the range.
+        assert (hi - lo) < 10
+
+
+class TestDenseAndBm25ChunkRangeFilter:
+    """``chunk_range`` filters BM25 hits in SQL (transcripts) / Python (docs).
+
+    Dense range-filter behaviour is covered in
+    :class:`TestQueryTopChunksDenseExhaustive`; this class now focuses
+    on the BM25 path where the SQL ``BETWEEN`` clause on
+    ``fts_transcripts.chunk_index`` and the post-int-parse filter on
+    ``fts_text_content`` diverge.
+    """
+
+    def test_bm25_range_filter_applied_to_document_indices(self, monkeypatch):
+        """fts_text_content rows outside the window are dropped in Python."""
+        from app import citations
+
+        # First FTS5 call (fts_transcripts) returns nothing; second
+        # (fts_text_content) returns three indices — only one is in range.
+        results_iter = iter([[], [("3",), ("20",), ("8",)]])
+
+        class _FakeResult:
+            def __init__(self, data):
+                self._data = data
+
+            def fetchall(self):
+                return list(self._data)
+
+        class _FakeSession:
+            def execute(self, _stmt, _params):
+                return _FakeResult(next(results_iter))
+
+        @contextmanager
+        def _db():
+            yield _FakeSession()
+
+        monkeypatch.setattr(citations, "get_search_db", _db)
+        results = citations._query_top_chunks_bm25(
+            "file-1", "機械学習", top_k=10, chunk_range=(5, 15)
+        )
+        assert results == ["document:8"]
+
+
+class TestRetrieveCandidatesWithSectionRange:
+    """`_retrieve_candidates` passes ``section_range`` through and falls back."""
+
+    def _make_segment(self, text="body"):
+        from app.summary_parser import Segment
+
+        return Segment(
+            section_path="A/0",
+            segment_type="paragraph",
+            segment_text=text,
+            ancestor_headings=("A",),
+        )
+
+    def test_section_range_forwarded_to_dense_and_bm25(self, monkeypatch):
+        from app import citations
+
+        observed: dict = {}
+
+        def _fake_dense(fid, vec, k, **kw):
+            observed["dense_range"] = kw.get("chunk_range")
+            return [
+                ("transcript:3", 0.8),
+                ("transcript:4", 0.7),
+            ]
+
+        def _fake_bm25(fid, text, k, **kw):
+            observed["bm25_range"] = kw.get("chunk_range")
+            return ["transcript:3"]
+
+        monkeypatch.setattr(citations, "_query_top_chunks_dense", _fake_dense)
+        monkeypatch.setattr(citations, "_query_top_chunks_bm25", _fake_bm25)
+
+        citations._retrieve_candidates(
+            "file-1",
+            self._make_segment(),
+            np.ones(4, dtype=np.float32),
+            top_k=2,
+            section_range=(2, 10),
+        )
+        assert observed["dense_range"] == (2, 10)
+        assert observed["bm25_range"] == (2, 10)
+
+    def test_empty_dense_with_range_falls_back_to_full_file(self, monkeypatch):
+        """If the anchored pool is empty, retry without the range."""
+        from app import citations
+
+        call_count = {"n": 0}
+
+        def _fake_dense(fid, vec, k, **kw):
+            call_count["n"] += 1
+            if kw.get("chunk_range") is not None:
+                return []  # anchored pool empty
+            return [("transcript:99", 0.8)]  # full-file fallback has a hit
+
+        monkeypatch.setattr(citations, "_query_top_chunks_dense", _fake_dense)
+        monkeypatch.setattr(
+            citations, "_query_top_chunks_bm25", lambda *_a, **_kw: []
+        )
+
+        out = citations._retrieve_candidates(
+            "file-1",
+            self._make_segment(),
+            np.ones(4, dtype=np.float32),
+            top_k=1,
+            section_range=(100, 200),
+        )
+        assert out == [("transcript:99", 0.8)]
+        assert call_count["n"] == 2  # first with range, second without
+
+
+class TestMarginGate:
+    """Margin gate demotes top-1 when the runner-up is nearly as close."""
+
+    def _citations_db_setup(self):
+        # Simpler than invoking the fixture; just ensure the table exists.
+        from contextlib import contextmanager
+
+        return contextmanager(lambda: iter([None]))
+
+    def test_small_margin_flips_has_citation_to_false(
+        self, citations_db, monkeypatch,
+    ):
+        """top1 clears threshold, but top1 - top2 < margin → ⚠."""
+        from app import citations
+
+        monkeypatch.setattr(
+            citations, "_embed_segment",
+            lambda seg: np.ones(4, dtype=np.float32),
+        )
+        # top1=0.58, top2=0.57 → margin 0.01 < default 0.05, and
+        # top1 < margin_bypass (0.75) → gate should activate.
+        monkeypatch.setattr(
+            citations, "_retrieve_candidates",
+            lambda fid, seg, vec, k, **_kw: [
+                ("transcript:0", 0.58),
+                ("transcript:1", 0.57),
+                ("transcript:2", 0.40),
+            ],
+        )
+        monkeypatch.setattr(
+            citations, "_fetch_file_vectors",
+            lambda fid, chunk_range=None: [],
+        )
+
+        out = citations.compute_citations("file-1", "## A\n- near tie\n")
+        assert len(out) == 1
+        assert out[0]["has_citation"] is False
+        # When the gate demotes the segment, chunk_ids are cleared so
+        # the UI doesn't render misleadingly-confident anchors.
+        assert out[0]["citation_chunk_ids"] == []
+        # top_score is still recorded so the ⚠ marker can fire.
+        assert out[0]["top_score"] == pytest.approx(0.58)
+
+    def test_large_margin_keeps_has_citation_true(
+        self, citations_db, monkeypatch,
+    ):
+        from app import citations
+
+        monkeypatch.setattr(
+            citations, "_embed_segment",
+            lambda seg: np.ones(4, dtype=np.float32),
+        )
+        # top1=0.65, top2=0.40 → margin 0.25 > 0.05 → stays True.
+        monkeypatch.setattr(
+            citations, "_retrieve_candidates",
+            lambda fid, seg, vec, k, **_kw: [
+                ("transcript:0", 0.65),
+                ("transcript:1", 0.40),
+            ],
+        )
+        monkeypatch.setattr(
+            citations, "_fetch_file_vectors",
+            lambda fid, chunk_range=None: [],
+        )
+
+        out = citations.compute_citations("file-1", "## A\n- clear\n")
+        assert out[0]["has_citation"] is True
+        assert out[0]["citation_chunk_ids"] == ["transcript:0"]
+
+    def test_high_top_score_bypasses_margin_gate(
+        self, citations_db, monkeypatch,
+    ):
+        """A strong top-1 (>= margin_bypass_score) stays True even with
+        a close runner-up — the leader is clearly a real match.
+        """
+        from app import citations
+
+        monkeypatch.setattr(
+            citations, "_embed_segment",
+            lambda seg: np.ones(4, dtype=np.float32),
+        )
+        # top1=0.82, top2=0.81 → margin 0.01 but top1 >= 0.75 bypass.
+        monkeypatch.setattr(
+            citations, "_retrieve_candidates",
+            lambda fid, seg, vec, k, **_kw: [
+                ("transcript:0", 0.82),
+                ("transcript:1", 0.81),
+            ],
+        )
+        monkeypatch.setattr(
+            citations, "_fetch_file_vectors",
+            lambda fid, chunk_range=None: [],
+        )
+
+        out = citations.compute_citations("file-1", "## A\n- strong\n")
+        assert out[0]["has_citation"] is True
+
+    def test_margin_gate_disabled_keeps_legacy_behaviour(
+        self, citations_db, monkeypatch,
+    ):
+        """With margin_gate = 0, a close runner-up has no effect."""
+        from app import citations, config as cfg_module
+
+        object.__setattr__(
+            cfg_module.settings.summaries, "citation_margin_gate", 0.0
+        )
+        try:
+            monkeypatch.setattr(
+                citations, "_embed_segment",
+                lambda seg: np.ones(4, dtype=np.float32),
+            )
+            monkeypatch.setattr(
+                citations, "_retrieve_candidates",
+                lambda fid, seg, vec, k, **_kw: [
+                    ("transcript:0", 0.58),
+                    ("transcript:1", 0.57),
+                ],
+            )
+            monkeypatch.setattr(
+                citations, "_fetch_file_vectors",
+                lambda fid, chunk_range=None: [],
+            )
+            out = citations.compute_citations("file-1", "## A\n- near tie\n")
+            assert out[0]["has_citation"] is True
+        finally:
+            object.__setattr__(
+                cfg_module.settings.summaries,
+                "citation_margin_gate",
+                0.05,
+            )
 
 
 class TestDeleteCitations:

@@ -209,6 +209,102 @@ class SummariesConfig:
     # Number of citation candidates retrieved per segment. The UI can
     # surface all of them; ``has_citation`` is driven by the top one.
     citation_top_k: int = 3
+    # Hybrid retrieval: when True, dense-KNN top-N is reranked by a
+    # BM25 (FTS5) pass over the same chunk pool. Keyword-aligned
+    # candidates bubble up when the segment shares salient tokens with
+    # the source (numbers, proper nouns, katakana). Dense cosine is
+    # still used as ``top_score`` so ``citation_threshold`` keeps its
+    # meaning. False restores the legacy dense-only behaviour.
+    citation_hybrid_enabled: bool = True
+    # Candidate pool size for hybrid retrieval — dense pulls this many
+    # candidates, BM25 reorders within. Must be >= citation_top_k.
+    citation_top_k_internal: int = 10
+    # RRF fusion constant. Standard IR value is 60; smaller values
+    # amplify the weight of top ranks (more "winner-takes-all").
+    citation_rrf_k: int = 60
+    # Section anchoring: hierarchical top-down narrowing. For every
+    # prefix of a segment's ancestor_headings chain, pool the
+    # embeddings of all segments under that prefix and find the
+    # tightest transcript chunk range where that pool's content is
+    # discussed. Deeper prefixes narrow within shallower prefixes'
+    # ranges, and narrowing stops (inheriting the parent range) as
+    # soon as the pool's top-1 match falls below ``citation_section_narrow_threshold``.
+    # Naturally handles both focused bullets (narrowed deep) and
+    # cross-cutting summaries like まとめ / 結論 (stop early at a wide
+    # range or at full file). Disable to fall back to full-file
+    # retrieval for every segment.
+    citation_section_anchor_enabled: bool = True
+    # Top-M chunks whose indices define a range at each narrowing
+    # level. Higher values tolerate spread topics (wider range);
+    # lower values insist on tighter focus.
+    citation_section_range_top_m: int = 12
+    # Score floor for continuing to narrow. When the pool's top-1
+    # cosine similarity within the parent range is below this, we
+    # stop and inherit the parent range. 0.5 is a moderate floor:
+    # strong enough to avoid chasing noise, loose enough to let
+    # loosely-related summaries pass through.
+    citation_section_narrow_threshold: float = 0.5
+    # Dense-cluster detection: after picking the top-M scoring chunks
+    # for a section pool, split them into contiguous clusters by
+    # chunk_index gap. A gap of more than this many positions starts
+    # a new cluster. The largest cluster (by total score) defines the
+    # section's range, so a few high-scoring outliers on the other
+    # side of the file can't drag the range open. Increase on long
+    # files where legitimate topics span wider spans.
+    citation_section_cluster_gap: int = 5
+    # Union the runner-up cluster with the primary when its total
+    # score is this fraction of the primary's or higher. Catches
+    # sections that legitimately reference two separate parts of the
+    # video (e.g. a 結論 that revisits both an intro and a conclusion).
+    # 0.8 is conservative: only near-tied runners-up get unioned.
+    citation_section_cluster_union_ratio: float = 0.8
+    # Discriminative scoring: subtract the highest sibling-section
+    # cosine from the target section's cosine before top-M / cluster
+    # detection. This handles the "whole video shares one topic"
+    # case (e.g. a recipe video where every chunk mentions cooking
+    # and every section's pool matches every chunk at ~0.9) by
+    # ranking chunks on "how specifically does this match THIS
+    # section vs any sibling section" rather than on absolute cosine.
+    # Chunks that match a sibling section more strongly get filtered
+    # out of the range.
+    citation_section_discriminative_enabled: bool = True
+    # Margin required above sibling cosines when discriminative is
+    # enabled. A chunk is kept for this section only when
+    # ``this_cos - max_sibling_cos >= disc_margin``. 0.01 is a small
+    # margin that catches clear outliers while tolerating minor noise;
+    # raise to be more strict about assigning chunks to sections.
+    citation_section_disc_margin: float = 0.01
+    # Monotonic DP alignment: for sibling section groups (2+ prefixes
+    # with a shared parent), assign each chunk to exactly one section
+    # via a Viterbi pass that forbids going backward through the
+    # summary's section order. This formalises the user intuition
+    # "summary sections appear in chronological order of the source"
+    # and fixes cases where a section's pool matches broadly across
+    # the video (e.g. a DQ-remake video's "近年のリメイクの流れ" H3
+    # whose content overlaps the whole video). When disabled, or for
+    # prefixes with fewer than two siblings that have usable pools,
+    # the code falls back to the pool + cluster-detection path.
+    citation_section_alignment_enabled: bool = True
+    # DP's strict 1:1 chunk→section assignment creates hard borders;
+    # a chunk on the boundary between two adjacent sections ends up
+    # in exactly one section's range, even if it legitimately serves
+    # both (e.g. the speaker's transition sentence). Expanding each
+    # section's DP-assigned range by this many chunks on each side
+    # creates a small overlap at the borders so the "transition
+    # chunk" is reachable by either section's retrieval. 2 is a
+    # gentle default; 0 disables smoothing (use strict DP boundaries).
+    citation_section_boundary_margin: int = 2
+    # Margin gate: when ``top1_score - top2_score`` is smaller than
+    # this, flip ``has_citation`` to False because the top pick is
+    # low-confidence (many chunks look comparably close). 0 disables
+    # the gate. 0.05 is a mild default that demotes the worst
+    # "misleadingly-confident" segments without punishing genuine
+    # strong matches. Only active when top_score < margin_bypass_score.
+    citation_margin_gate: float = 0.05
+    # Bypass threshold: segments whose top_score >= this value skip
+    # the margin gate entirely. A close runner-up is fine when the
+    # leader is already strongly matched.
+    citation_margin_bypass_score: float = 0.75
 
 
 @dataclass(frozen=True)

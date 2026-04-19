@@ -102,6 +102,100 @@ summaries:
   citation_threshold: 0.55   # cosine similarity floor for has_citation=true
   citation_top_k: 3          # number of candidate chunks stored per segment
                              # (UI can cycle through them; top-1 drives ⚠)
+  # Hybrid retrieval: reranks dense-KNN candidates with BM25 over the
+  # FTS5 mirrors so numeric values and proper nouns (e.g. "3 日",
+  # "京都") aren't drowned out by the dominant noun when the segment
+  # is a table row or a general-topic bullet. Dense cosine is still
+  # used as the stored ``top_score`` so ``citation_threshold`` keeps
+  # its documented meaning.
+  # Disable (set to false) if you see BM25 introducing lexically-close
+  # but semantically-wrong hits on a specific corpus; this restores
+  # the legacy dense-only behaviour.
+  citation_hybrid_enabled: true
+  # Candidate pool size used by hybrid retrieval. Dense KNN pulls this
+  # many candidates; BM25 only reorders within the pool (never adds
+  # outside candidates, so cosine-based ``top_score`` stays intact).
+  # Must be >= ``citation_top_k``.
+  citation_top_k_internal: 10
+  # RRF fusion constant. 60 is the canonical IR value; lower numbers
+  # amplify the weight of top-ranked candidates.
+  citation_rrf_k: 60
+  # Section anchoring: for every prefix of a segment's ancestor_headings
+  # chain (H2, H2+H3, ...), pool the embeddings of all segments under
+  # that prefix and find the transcript chunk range where that pool's
+  # content is discussed. Each prefix is resolved independently
+  # against the full file — a parent prefix does NOT constrain its
+  # children. This keeps structural parents like "## 詳細内容"
+  # (a container that holds unrelated H3 recipe sections) from
+  # dragging every child into whatever zone their average pool
+  # happens to score on. Segments look up the deepest prefix's range
+  # only; prefixes don't inherit from each other. Disable to revert
+  # to full-file retrieval for every segment.
+  citation_section_anchor_enabled: true
+  # Top-M chunks whose cosine clears ``citation_section_narrow_threshold``
+  # define the range at each hierarchy level. Raise M to tolerate
+  # spread topics (wider range); lower M insists on tighter focus.
+  citation_section_range_top_m: 12
+  # Score floor for continuing to narrow AND for keeping a chunk in
+  # the range. When no chunk at the current level clears this cosine,
+  # narrowing stops and the prefix inherits its parent's range.
+  # 0.5 is a moderate default; lower it if useful sections start
+  # getting ignored on loose-match summaries.
+  citation_section_narrow_threshold: 0.5
+  # Dense-cluster detection: after picking the top-M scoring chunks,
+  # split them into contiguous clusters by chunk_index gap. A gap of
+  # more than this many positions starts a new cluster. The largest
+  # cluster (by total score) defines the section's range so a few
+  # high-scoring outliers on the far side of the file don't widen
+  # the range to span the whole video. Increase on long files where
+  # legitimate topics span wider stretches.
+  citation_section_cluster_gap: 5
+  # Union the runner-up cluster with the primary when its total
+  # score is this fraction of the primary's or higher. Catches
+  # sections that legitimately reference two parts of the video
+  # (e.g. a 結論 revisiting both intro and outro). 0.8 is
+  # conservative — only near-tied runners-up get unioned.
+  citation_section_cluster_union_ratio: 0.8
+  # Discriminative scoring: for each section, compute per-chunk
+  # cosine against its pool AND against every sibling section's
+  # pool, then use (this_cos - max_sibling_cos) for ranking and
+  # filtering. This handles the "whole video shares one topic"
+  # case (e.g. a recipe video where every chunk is about cooking):
+  # absolute cosine can't tell sibling recipes apart, but the
+  # relative edge over the best sibling can. Disable (false) for
+  # corpora where sibling pools are known to be noisy or where
+  # strict relative ranking causes legitimate cross-cuts to drop.
+  citation_section_discriminative_enabled: true
+  # Minimum margin a chunk needs over its best-sibling cosine to be
+  # kept in the range. 0.01 catches clear outliers while tolerating
+  # minor noise; raise for stricter section boundaries.
+  citation_section_disc_margin: 0.01
+  # Monotonic DP alignment: for sibling section groups (2+ prefixes
+  # sharing a parent), assign each chunk to exactly one section via
+  # a Viterbi pass that forbids going backward through the summary's
+  # section order. Formalises "summary sections appear in source
+  # order" and fixes cases where a section's pool matches broadly
+  # across the video. Falls back to pool + cluster detection when
+  # a prefix has fewer than 2 siblings or alignment is disabled.
+  citation_section_alignment_enabled: true
+  # Boundary smoothing: DP's strict 1:1 assignment creates hard
+  # borders; a "transition chunk" that legitimately serves two
+  # sections falls on one side only. Expanding each section's
+  # DP-assigned range by this many chunks on each side restores
+  # overlap at the borders. 2 is gentle; 0 disables smoothing.
+  citation_section_boundary_margin: 2
+  # Margin gate: when top-1 - top-2 is smaller than this cosine gap,
+  # flip has_citation to False because the pick is low-confidence
+  # (several candidates look comparably close). Reduces "misleadingly
+  # confident" citations on abstract bullets and on table rows whose
+  # content spans multiple transcript chunks (no single chunk really
+  # matches). 0 disables the gate and restores the pre-gate behaviour.
+  citation_margin_gate: 0.05
+  # Bypass threshold: top-1 scores at or above this value skip the
+  # margin gate. When the leader is already strongly matched, a close
+  # runner-up usually means the segment has multiple legitimate
+  # sources — not uncertainty.
+  citation_margin_bypass_score: 0.75
 
 # RAG (question answering) configuration (used when features.rag = true)
 # Retrieves top-k files for a user question, builds a bounded context

@@ -63,11 +63,31 @@ class Segment:
     detailed_summary. ``segment_type`` is either ``"bullet"`` or
     ``"paragraph"`` (table rows are classified as bullets because the
     UI and citation lookup both treat a single row as one atomic unit).
+
+    ``cells`` is populated only for table rows — each tuple entry is
+    one body-row cell in source order. Citation embedding pools one
+    vector per cell so header/value asymmetry (e.g. "保存期間 | 3 日")
+    doesn't let the header noun dominate the " | "-joined text
+    embedding. For paragraphs, bullets, and single-cell rows the
+    field is ``None`` and callers use ``segment_text`` directly.
+
+    ``ancestor_headings`` captures the section context above the
+    segment: ``(h2,)`` when no H3 is active, ``(h2, h3)`` when the
+    parser is inside an H3 subsection. Citation linking uses this to
+    anchor the segment's search to the transcript region where that
+    heading is discussed — necessary when the content chunks
+    themselves don't mention the topic name (e.g. the speaker says
+    "保存方法は冷蔵庫で" without repeating "カレーの" because the
+    dish was established a few turns earlier). Empty tuple when the
+    segment was emitted outside any heading (the parser tolerates
+    malformed documents).
     """
 
     section_path: str
     segment_type: str  # "bullet" | "paragraph"
     segment_text: str
+    cells: tuple[str, ...] | None = None
+    ancestor_headings: tuple[str, ...] = ()
 
 
 def parse_segments(markdown: str) -> list[Segment]:
@@ -105,6 +125,7 @@ def parse_segments(markdown: str) -> list[Segment]:
 
     segments: list[Segment] = []
     current_section = ""
+    current_h3 = ""
     # Separate counter for plain segments (paragraph/bullet) vs table rows
     # so the two namespaces don't collide in section_path.
     plain_idx = 0
@@ -112,6 +133,14 @@ def parse_segments(markdown: str) -> list[Segment]:
     # Buffer for an in-progress paragraph. ``None`` means no paragraph
     # is currently open.
     paragraph_buf: list[str] | None = None
+
+    def _current_ancestors() -> tuple[str, ...]:
+        """H2 only when no H3 is active, else (H2, H3)."""
+        if not current_section:
+            return ()
+        if current_h3:
+            return (current_section, current_h3)
+        return (current_section,)
 
     def flush_paragraph() -> None:
         nonlocal paragraph_buf, plain_idx
@@ -126,6 +155,7 @@ def parse_segments(markdown: str) -> list[Segment]:
                 section_path=f"{current_section}/{plain_idx}",
                 segment_type="paragraph",
                 segment_text=text,
+                ancestor_headings=_current_ancestors(),
             )
         )
         plain_idx += 1
@@ -147,6 +177,10 @@ def parse_segments(markdown: str) -> list[Segment]:
             in_table = False
             table_header_consumed = False
             current_section = heading_match.group("title").strip()
+            # Reset the nested H3 context whenever we enter a new H2 so
+            # subsequent segments don't inherit the previous H2's
+            # trailing H3 as their heading context.
+            current_h3 = ""
             plain_idx = 0
             row_idx = 0
             continue
@@ -154,11 +188,16 @@ def parse_segments(markdown: str) -> list[Segment]:
         # H3 subheading: structural marker, not a claim. Terminate any
         # in-progress paragraph / table but emit no segment and leave
         # ``plain_idx`` untouched so downstream bullets keep the
-        # H2-scoped counter the frontend parser also uses.
-        if _H3_HEADING_RE.match(line):
+        # H2-scoped counter the frontend parser also uses. Tracking the
+        # title itself is new — citation linking uses it to anchor
+        # searches to the transcript region where that subsection is
+        # discussed.
+        h3_match = _H3_HEADING_RE.match(line)
+        if h3_match:
             flush_paragraph()
             in_table = False
             table_header_consumed = False
+            current_h3 = h3_match.group("title").strip()
             continue
 
         # Blank line: terminates paragraph and table.
@@ -185,13 +224,15 @@ def parse_segments(markdown: str) -> list[Segment]:
                 # the implicit second row? No: once we've seen the
                 # header, any further row is body. Fall through.
                 table_header_consumed = True
-            row_text = _flatten_table_row(line)
+            row_text, cells = _flatten_table_row(line)
             if row_text:
                 segments.append(
                     Segment(
                         section_path=f"{current_section}/row/{row_idx}",
                         segment_type="bullet",
                         segment_text=row_text,
+                        cells=cells,
+                        ancestor_headings=_current_ancestors(),
                     )
                 )
                 row_idx += 1
@@ -211,6 +252,7 @@ def parse_segments(markdown: str) -> list[Segment]:
                         section_path=f"{current_section}/{plain_idx}",
                         segment_type="bullet",
                         segment_text=bullet_text,
+                        ancestor_headings=_current_ancestors(),
                     )
                 )
                 plain_idx += 1
@@ -227,12 +269,15 @@ def parse_segments(markdown: str) -> list[Segment]:
     return segments
 
 
-def _flatten_table_row(line: str) -> str:
-    """Concatenate the cells of a ``| a | b | c |`` row into one string.
+def _flatten_table_row(line: str) -> tuple[str, tuple[str, ...]]:
+    """Return ``(joined_text, cells_tuple)`` for a ``| a | b | c |`` row.
 
     The leading/trailing ``|`` are stripped and each cell is trimmed;
-    cells are joined with `` | `` so the output is still humanly
-    readable when it becomes a citation ``segment_text``.
+    cells are joined with `` | `` so ``segment_text`` stays humanly
+    readable. The cell tuple is returned alongside so downstream
+    callers (notably citation embedding) can pool per-cell vectors
+    instead of letting the header cell dominate the joined string.
+    Empty cells are dropped from both the joined text and the tuple.
     """
     stripped = line.strip()
     # Drop leading/trailing pipes so split() doesn't produce empty
@@ -243,7 +288,7 @@ def _flatten_table_row(line: str) -> str:
         stripped = stripped[:-1]
     cells = [cell.strip() for cell in stripped.split("|")]
     cells = [c for c in cells if c]
-    return " | ".join(cells)
+    return " | ".join(cells), tuple(cells)
 
 
 # ---------------------------------------------------------------------------
