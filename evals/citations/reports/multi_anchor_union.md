@@ -1,22 +1,22 @@
-# detailed_summary Citation Eval — strict-gt-baseline
+# detailed_summary Citation Eval — multi-anchor-union
 
-_Generated: 2026-04-19 13:43:47 UTC_
+_Generated: 2026-04-19 13:37:58 UTC_
 
 ## Aggregate
 
 - total segments scored: **25**
-- has_citation precision: **80.0%**  _(when a citation was returned, it pointed at an exact-hit chunk)_
+- has_citation precision: **76.0%**  _(when a citation was returned, it pointed at an exact-hit chunk)_
 - missing required citations: **0**  _(must_have_citation=true segments flipped to ⚠)_
 
 ### Location offset (primary metric)
 
 ``offset_at_top1`` = chunk-index distance between the system's top-1 chunk and the nearest ground-truth chunk. 0 = exact hit, 1–2 = adjacent, 5+ = different part of the file. Computed only for segments with known GT (25 of 25).
 
-- mean: **0.92**  median (p50): **0.0**  p95: **3.0**  max: **15**
+- mean: **0.96**  median (p50): **0.0**  p95: **3.0**  max: **15**
 
 | threshold | hit rate (offset ≤ N) |
 |---|---:|
-| offset ≤ 0 | 80.0% _(== strict top-1 accuracy)_ |
+| offset ≤ 0 | 76.0% _(== strict top-1 accuracy)_ |
 | offset ≤ 1 | 88.0% |
 | offset ≤ 2 | 88.0% |
 | offset ≤ 5 | 96.0% |
@@ -31,13 +31,13 @@ Sanity-checks whether the system's own confidence signal predicts location corre
 | [0.70-0.80) | 0 | — | — | — |
 | [0.80-0.85) | 5 | 3.00 | 0.0 | 80.0% |
 | [0.85-0.90) | 6 | 1.00 | 0.0 | 66.7% |
-| ≥0.90 | 14 | 0.14 | 0.0 | 85.7% |
+| ≥0.90 | 14 | 0.21 | 0.0 | 78.6% |
 
 ### By segment type (legacy binary)
 
 | type | top-1 (offset==0) | recall@3 | n |
 |---|---:|---:|---:|
-| bullet | 78.9% | 84.2% | 19 |
+| bullet | 73.7% | 89.5% | 19 |
 | paragraph | 83.3% | 100.0% | 6 |
 
 ## Cases
@@ -49,9 +49,9 @@ Sanity-checks whether the system's own confidence signal predicts location corre
 | section_path | type | offset | r@3 | has_cit | score | chunks |
 |---|---|:-:|:-:|:-:|---:|---|
 | `導入/0` | paragraph | 0 ✅ | ✅ | ✅ | 0.94 | `transcript:2`, `transcript:0`, `transcript:3` |
-| `詳細内容/0` | bullet | 1 | ❌ | ✅ | 0.91 | `transcript:2`, `transcript:3`, `transcript:6` |
-| `詳細内容/4` | bullet | 0 ✅ | ✅ | ✅ | 0.93 | `transcript:14`, `transcript:9`, `transcript:12` |
-| `詳細内容/7` | bullet | 0 ✅ | ✅ | ✅ | 0.90 | `transcript:29`, `transcript:30`, `transcript:28` |
+| `詳細内容/0` | bullet | 1 | ✅ | ✅ | 0.92 | `transcript:2`, `transcript:3`, `transcript:0` |
+| `詳細内容/4` | bullet | 1 | ✅ | ✅ | 0.93 | `transcript:9`, `transcript:12`, `transcript:14` |
+| `詳細内容/7` | bullet | 0 ✅ | ✅ | ✅ | 0.90 | `transcript:27`, `transcript:29`, `transcript:30` |
 | `重要ポイントまとめ/row/0` | bullet | 0 ✅ | ✅ | ✅ | 0.84 | `transcript:26`, `transcript:23`, `transcript:24` |
 | `重要ポイントまとめ/row/4` | bullet | 0 ✅ | ✅ | ✅ | 0.83 | `transcript:113`, `transcript:109`, `transcript:110` |
 
@@ -85,8 +85,8 @@ Sanity-checks whether the system's own confidence signal predicts location corre
 | section_path | type | offset | r@3 | has_cit | score | chunks |
 |---|---|:-:|:-:|:-:|---:|---|
 | `詳細内容/6` | paragraph | 1 | ✅ | ✅ | 0.93 | `transcript:5`, `transcript:4`, `transcript:3` |
-| `詳細内容/7` | bullet | 0 ✅ | ✅ | ✅ | 0.91 | `transcript:5`, `transcript:8`, `transcript:0` |
-| `詳細内容/9` | bullet | 0 ✅ | ✅ | ✅ | 0.94 | `transcript:8`, `transcript:0`, `transcript:5` |
+| `詳細内容/7` | bullet | 0 ✅ | ✅ | ✅ | 0.94 | `transcript:5`, `transcript:8`, `transcript:0` |
+| `詳細内容/9` | bullet | 0 ✅ | ✅ | ✅ | 0.96 | `transcript:8`, `transcript:0`, `transcript:5` |
 | `詳細内容/14` | bullet | 0 ✅ | ✅ | ✅ | 0.90 | `transcript:15`, `transcript:18`, `transcript:16` |
 | `詳細内容/15` | bullet | 3 | ✅ | ✅ | 0.88 | `transcript:18`, `transcript:15`, `transcript:12` |
 | `詳細内容/20` | paragraph | 0 ✅ | ✅ | ✅ | 0.94 | `transcript:18`, `transcript:13`, `transcript:14` |
@@ -99,5 +99,13 @@ Sanity-checks whether the system's own confidence signal predicts location corre
 |---|---|:-:|:-:|:-:|---:|---|
 | `詳細内容/11` | bullet | 3 | ❌ | ✅ | 0.89 | `transcript:61`, `transcript:79`, `transcript:59` |
 | `詳細内容/23` | bullet | 0 ✅ | ✅ | ✅ | 0.92 | `transcript:79`, `transcript:92`, `transcript:85` |
-| `詳細内容/29` | bullet | 0 ✅ | ✅ | ✅ | 0.91 | `transcript:93`, `transcript:95`, `transcript:92` |
+| `詳細内容/29` | bullet | 0 ✅ | ✅ | ✅ | 0.93 | `transcript:93`, `transcript:92`, `transcript:95` |
 | `詳細内容/37` | bullet | 0 ✅ | ✅ | ✅ | 0.92 | `transcript:110`, `transcript:121`, `transcript:120` |
+
+## Baseline comparison
+
+| metric | baseline | current | delta |
+|---|---:|---:|---:|
+| top1_accuracy | 76.0% | 76.0% | +0.0% (tied) |
+| recall_at_3 | 88.0% | 92.0% | +4.0% ✅ |
+| has_citation_precision | 76.0% | 76.0% | +0.0% (tied) |

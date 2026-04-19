@@ -1,6 +1,6 @@
-# detailed_summary Citation Eval — strict-gt-baseline
+# detailed_summary Citation Eval — multi-anchor-priority
 
-_Generated: 2026-04-19 13:43:47 UTC_
+_Generated: 2026-04-19 13:40:34 UTC_
 
 ## Aggregate
 
@@ -101,3 +101,11 @@ Sanity-checks whether the system's own confidence signal predicts location corre
 | `詳細内容/23` | bullet | 0 ✅ | ✅ | ✅ | 0.92 | `transcript:79`, `transcript:92`, `transcript:85` |
 | `詳細内容/29` | bullet | 0 ✅ | ✅ | ✅ | 0.91 | `transcript:93`, `transcript:95`, `transcript:92` |
 | `詳細内容/37` | bullet | 0 ✅ | ✅ | ✅ | 0.92 | `transcript:110`, `transcript:121`, `transcript:120` |
+
+## Baseline comparison
+
+| metric | baseline | current | delta |
+|---|---:|---:|---:|
+| top1_accuracy | 76.0% | 80.0% | +4.0% ✅ |
+| recall_at_3 | 88.0% | 88.0% | +0.0% (tied) |
+| has_citation_precision | 76.0% | 80.0% | +4.0% ✅ |

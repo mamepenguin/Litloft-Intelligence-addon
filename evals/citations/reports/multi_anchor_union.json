@@ -1,11 +1,11 @@
 {
-  "generated_at": "2026-04-19T13:43:47.549475+00:00",
-  "label": "strict-gt-baseline",
+  "generated_at": "2026-04-19T13:37:58.396509+00:00",
+  "label": "multi-anchor-union",
   "aggregate": {
     "total_segments": 25,
-    "top1_accuracy": 0.8,
-    "recall_at_3": 0.88,
-    "has_citation_precision": 0.8,
+    "top1_accuracy": 0.76,
+    "recall_at_3": 0.92,
+    "has_citation_precision": 0.76,
     "missing_required_citations": 0,
     "by_segment_type": {
       "paragraph": {
@@ -14,18 +14,18 @@
         "n": 6
       },
       "bullet": {
-        "top1_accuracy": 0.7894736842105263,
-        "recall_at_3": 0.8421052631578947,
+        "top1_accuracy": 0.7368421052631579,
+        "recall_at_3": 0.8947368421052632,
         "n": 19
       }
     },
     "n_with_offset": 25,
-    "mean_offset": 0.92,
+    "mean_offset": 0.96,
     "p50_offset": 0.0,
     "p95_offset": 3.0,
     "max_offset": 15,
     "hit_at_offset": {
-      "0": 0.8,
+      "0": 0.76,
       "1": 0.88,
       "2": 0.88,
       "5": 0.96
@@ -57,9 +57,9 @@
       },
       "≥0.90": {
         "n": 14,
-        "mean_offset": 0.14285714285714285,
+        "mean_offset": 0.21428571428571427,
         "median_offset": 0.0,
-        "hit_at_0": 0.8571428571428571
+        "hit_at_0": 0.7857142857142857
       }
     }
   },
@@ -89,14 +89,14 @@
           "section_path": "詳細内容/0",
           "segment_type": "bullet",
           "top1_hit": false,
-          "recall_at_3": false,
+          "recall_at_3": true,
           "has_citation": true,
           "must_have_citation": null,
-          "top_score": 0.9123454093933105,
+          "top_score": 0.9198294878005981,
           "top_chunk_ids": [
             "transcript:2",
             "transcript:3",
-            "transcript:6"
+            "transcript:0"
           ],
           "offset_at_top1": 1,
           "gt_chunk_count": 2
@@ -104,17 +104,17 @@
         {
           "section_path": "詳細内容/4",
           "segment_type": "bullet",
-          "top1_hit": true,
+          "top1_hit": false,
           "recall_at_3": true,
           "has_citation": true,
           "must_have_citation": null,
-          "top_score": 0.9278103709220886,
+          "top_score": 0.9345148801803589,
           "top_chunk_ids": [
-            "transcript:14",
             "transcript:9",
-            "transcript:12"
+            "transcript:12",
+            "transcript:14"
           ],
-          "offset_at_top1": 0,
+          "offset_at_top1": 1,
           "gt_chunk_count": 4
         },
         {
@@ -124,11 +124,11 @@
           "recall_at_3": true,
           "has_citation": true,
           "must_have_citation": null,
-          "top_score": 0.8962444067001343,
+          "top_score": 0.8975529074668884,
           "top_chunk_ids": [
+            "transcript:27",
             "transcript:29",
-            "transcript:30",
-            "transcript:28"
+            "transcript:30"
           ],
           "offset_at_top1": 0,
           "gt_chunk_count": 3
@@ -356,7 +356,7 @@
           "recall_at_3": true,
           "has_citation": true,
           "must_have_citation": null,
-          "top_score": 0.9135856628417969,
+          "top_score": 0.9365305304527283,
           "top_chunk_ids": [
             "transcript:5",
             "transcript:8",
@@ -372,7 +372,7 @@
           "recall_at_3": true,
           "has_citation": true,
           "must_have_citation": null,
-          "top_score": 0.9378143548965454,
+          "top_score": 0.9599987268447876,
           "top_chunk_ids": [
             "transcript:8",
             "transcript:0",
@@ -444,7 +444,7 @@
           "recall_at_3": false,
           "has_citation": true,
           "must_have_citation": true,
-          "top_score": 0.8861441612243652,
+          "top_score": 0.8898016214370728,
           "top_chunk_ids": [
             "transcript:61",
             "transcript:79",
@@ -476,11 +476,11 @@
           "recall_at_3": true,
           "has_citation": true,
           "must_have_citation": true,
-          "top_score": 0.9078378081321716,
+          "top_score": 0.934765100479126,
           "top_chunk_ids": [
             "transcript:93",
-            "transcript:95",
-            "transcript:92"
+            "transcript:92",
+            "transcript:95"
           ],
           "offset_at_top1": 0,
           "gt_chunk_count": 1
@@ -492,7 +492,7 @@
           "recall_at_3": true,
           "has_citation": true,
           "must_have_citation": true,
-          "top_score": 0.9172108769416809,
+          "top_score": 0.919245183467865,
           "top_chunk_ids": [
             "transcript:110",
             "transcript:121",

@@ -196,6 +196,22 @@ summaries:
   # runner-up usually means the segment has multiple legitimate
   # sources — not uncertainty.
   citation_margin_bypass_score: 0.75
+  # Compound-bullet multi-anchor retrieval. Splits a bullet on CJK
+  # punctuation (、。・，) when each fragment carries its own salient
+  # tokens, then runs retrieval per sub-segment and unions the
+  # results. Handles bullets that summarise several sub-facts / sub-
+  # steps in one line — a compound anchor where top-1 would otherwise
+  # be under-determined. Leaves table rows (cells) and paragraphs
+  # alone; 0 or 1 usable sub-segment falls back to the legacy single-
+  # embedding path. Disable to restore the legacy behaviour (e.g. to
+  # A/B the delta in an ablation).
+  citation_multi_anchor_enabled: true
+  # Minimum character length for a sub-segment to be kept when a
+  # compound bullet is split. Shorter fragments (particles, single
+  # nouns like "水分") over-match; dropping them means the parent
+  # bullet's full text stays the sole anchor for that fragment's
+  # content, which is safer than retrieving with an impoverished query.
+  citation_multi_anchor_min_len: 4
 
 # RAG (question answering) configuration (used when features.rag = true)
 # Retrieves top-k files for a user question, builds a bounded context

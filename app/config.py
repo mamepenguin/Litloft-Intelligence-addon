@@ -305,6 +305,28 @@ class SummariesConfig:
     # the margin gate entirely. A close runner-up is fine when the
     # leader is already strongly matched.
     citation_margin_bypass_score: float = 0.75
+    # Compound-bullet multi-anchor retrieval. When a summary bullet
+    # lists several sub-anchors — e.g. "洗って + 芯を切り落とし + 葉と
+    # 芯を分けて + 千切り" (four kitchen operations) or "にんじん3本、
+    # 手元分量でよい" (two facts) — a single top-1 retrieval is
+    # under-determined: the dense embedding of the joined text blurs
+    # across anchors and the retriever ends up snapping to a
+    # neighbouring "theme" chunk that matches the compound text's
+    # register (declarative summary) rather than the imperative
+    # instructional chunks where each sub-anchor lives. Splitting the
+    # bullet on CJK punctuation (、。・，) and running retrieval per
+    # sub-segment recovers each anchor independently; results are then
+    # unioned by max-score. 0-1 usable sub-segments falls back to the
+    # single-embedding path. Table rows (cells != None) and paragraphs
+    # are skipped — cell pooling and claim-vs-example are separate
+    # concerns. False restores the legacy single-embedding behaviour.
+    citation_multi_anchor_enabled: bool = True
+    # Minimum character length for a sub-segment to be kept. Anchors
+    # shorter than this (particles, single-word fragments like "水分"
+    # after "絞って") tend to over-match; dropping them leaves the
+    # parent bullet's full text as the sole anchor, which is safer
+    # than running retrieval with an impoverished query.
+    citation_multi_anchor_min_len: int = 4
 
 
 @dataclass(frozen=True)

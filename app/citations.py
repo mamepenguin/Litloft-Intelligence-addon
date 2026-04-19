@@ -1070,6 +1070,153 @@ def _pool_cell_vectors(vectors) -> np.ndarray | None:
     return pooled / norm
 
 
+# Punctuation used to split compound bullets into sub-anchors. Full-stop
+# 「。」 and the common CJK list separators are the signal we trust;
+# latin commas / semicolons are also accepted so mixed-script bullets
+# still split. We deliberately do NOT split on 「と」「や」「・」-prefix
+# particles or 「て」-form verbs — those are grammatical links that
+# connect parts of one claim, not separators that enumerate independent
+# anchors, so splitting on them inflates the sub-segment count with
+# fragments that hurt retrieval.
+_COMPOUND_BULLET_SPLIT_RE = re.compile(r"[。、，,・；;]+")
+
+
+def _split_compound_segment(segment: Segment) -> list[str]:
+    """Return sub-segment texts for a compound bullet, or ``[segment_text]``.
+
+    A summary bullet often carries multiple sub-anchors on one line —
+    e.g. "洗って芯を切り落とし、葉と芯を分けて千切りにする" (four
+    kitchen operations) or "にんじんは3本、手元の分量でもよい" (two
+    separate facts). A single embedding of the joined text blurs
+    across those anchors; the retriever ends up matching a
+    neighbouring "theme" chunk whose register matches the summary's
+    declarative tone rather than the imperative chunks where each
+    anchor actually lives.
+
+    Splitting on CJK punctuation (``、 。 ・ ， , ； ;``) recovers each
+    anchor as its own fragment, which the caller can then embed and
+    retrieve independently. The result is unioned by max-score so a
+    compound bullet ends up with chunk citations for each of its
+    sub-anchors instead of one under-determined top-1.
+
+    Rules for keeping a sub-fragment:
+
+    * it must be at least ``citation_multi_anchor_min_len`` characters
+    * it must contain at least one salient token (kanji / katakana
+      run, numeric-with-unit, or latin identifier) — hiragana-only
+      fragments are grammatical, not anchors.
+
+    Skipped unconditionally:
+
+    * table rows (``segment.cells`` is set) — per-cell pooling in
+      ``_pool_cell_vectors`` already handles multi-cell row semantics.
+    * non-bullets (paragraphs) — claim-vs-example bias on paragraphs
+      is a separate structural problem; splitting a paragraph on a
+      list-style 、 would over-fire.
+
+    Returns a list of length >= 1. A single-element list means the
+    caller should use the segment's full text unchanged (no multi-
+    anchor fan-out).
+    """
+    text = segment.segment_text.strip()
+    if not text:
+        return [text]
+    if segment.cells is not None:
+        return [text]
+    if segment.segment_type != "bullet":
+        return [text]
+
+    min_len = settings.summaries.citation_multi_anchor_min_len
+    raw_parts = _COMPOUND_BULLET_SPLIT_RE.split(text)
+
+    kept: list[str] = []
+    for part in raw_parts:
+        stripped = part.strip()
+        if len(stripped) < min_len:
+            continue
+        if not _SEG_TOKEN_RE.search(stripped):
+            continue
+        kept = [*kept, stripped]
+
+    if len(kept) < 2:
+        return [text]
+    return kept
+
+
+def _multi_anchor_retrieve(
+    file_id: str,
+    segment: Segment,
+    sub_texts: list[str],
+    top_k: int,
+    section_range: tuple[int, int] | None,
+    file_vectors: list[tuple[str, np.ndarray]] | None,
+) -> list[tuple[str, float]]:
+    """Retrieve candidates per sub-segment and union by max score.
+
+    Embeds each ``sub_texts`` entry separately, runs
+    ``_retrieve_candidates`` once per sub-segment (using the same
+    ``section_range``), and merges the results into a single
+    ``[(chunk_id, score), ...]`` list. A chunk appearing under
+    multiple sub-segments keeps its highest observed cosine — which
+    naturally boosts chunks that serve more than one anchor, without
+    double-counting.
+
+    The embedding call is per sub-segment on purpose: the whole point
+    of splitting is to ask the index about each anchor independently
+    rather than about their mean. Returns an empty list when every
+    sub-segment fails to embed (caller falls back).
+    """
+    try:
+        from app.workers.embedder import embed_passages
+    except Exception as e:  # noqa: BLE001 — fail soft
+        logger.warning(
+            "Multi-anchor embed import failed for %s: %s",
+            segment.section_path, e,
+        )
+        return []
+
+    try:
+        sub_vectors = embed_passages(sub_texts)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "Multi-anchor embed failed for %s: %s",
+            segment.section_path, e,
+        )
+        return []
+    if sub_vectors is None or len(sub_vectors) == 0:
+        return []
+
+    best_score: dict[str, float] = {}
+    # Each sub-segment needs its own ``Segment`` shape so
+    # ``_retrieve_candidates`` can build a BM25 query from the sub-
+    # text rather than from the compound bullet's joined tokens.
+    for i, sub_vec in enumerate(sub_vectors):
+        try:
+            arr = np.asarray(sub_vec, dtype=np.float32)
+        except (TypeError, ValueError):
+            continue
+        if arr.ndim != 1 or arr.size == 0:
+            continue
+        sub_seg = Segment(
+            section_path=segment.section_path,
+            segment_type=segment.segment_type,
+            segment_text=sub_texts[i],
+            ancestor_headings=segment.ancestor_headings,
+        )
+        candidates = _retrieve_candidates(
+            file_id, sub_seg, arr, top_k,
+            section_range=section_range,
+            file_vectors=file_vectors,
+        )
+        for cid, score in candidates:
+            prev = best_score.get(cid)
+            if prev is None or score > prev:
+                best_score[cid] = score
+
+    merged = sorted(best_score.items(), key=lambda kv: kv[1], reverse=True)
+    return merged[:top_k]
+
+
 def _embed_segment(segment: Segment) -> np.ndarray | None:
     """Embed one segment's text using the shared passage encoder.
 
@@ -1176,11 +1323,44 @@ def compute_citations(
             if seg.ancestor_headings
             else None
         )
+
+        # Compound-bullet multi-anchor retrieval (see
+        # ``_split_compound_segment``). When a bullet carries several
+        # punctuation-separated sub-anchors, run retrieval per sub-
+        # segment so each anchor surfaces its own chunk independently.
+        # The multi-anchor result's ordering takes precedence (each
+        # sub-segment's top-1 is the answer to the natural question
+        # "which chunk best matches this anchor"); baseline joined-
+        # text candidates fill leftover top-K slots with chunks that
+        # weakly match multiple anchors together — signal that
+        # disappears when any single anchor is considered alone. Falls
+        # through to the single-embedding path when the split yields
+        # 0-1 usable sub-segments or when the feature is disabled.
         candidates = _retrieve_candidates(
             file_id, seg, vector, top_k,
             section_range=section_range,
             file_vectors=file_vectors or None,
         )
+        if settings.summaries.citation_multi_anchor_enabled:
+            sub_texts = _split_compound_segment(seg)
+            if len(sub_texts) >= 2:
+                multi = _multi_anchor_retrieve(
+                    file_id, seg, sub_texts, top_k,
+                    section_range=section_range,
+                    file_vectors=file_vectors or None,
+                )
+                if multi:
+                    # Multi-anchor ordering wins: its top-1 is the
+                    # anchor's best match. Baseline-only chunks (not
+                    # in multi's pool) fill the tail in baseline's
+                    # score order so recall@3 doesn't regress when
+                    # the joined embed surfaced a weak multi-anchor
+                    # signal no sub-segment alone would rank highly.
+                    multi_ids = {cid for cid, _ in multi}
+                    extras = [
+                        (c, s) for c, s in candidates if c not in multi_ids
+                    ]
+                    candidates = [*multi, *extras][:top_k]
         if not candidates:
             results.append(
                 {

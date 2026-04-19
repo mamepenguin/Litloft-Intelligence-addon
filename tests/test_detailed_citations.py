@@ -2400,6 +2400,391 @@ class TestMarginGate:
             )
 
 
+class TestSplitCompoundSegment:
+    """`_split_compound_segment` returns 2+ sub-anchors or a single-element list.
+
+    Compound-bullet split is the fix for "one bullet, many sub-facts /
+    sub-steps" (e.g. "洗って、芯を切り落とし、葉と芯を分けて、千切りにする"
+    — four kitchen operations forced into one bullet). A single
+    embedding of the joined text under-determines top-1; splitting on
+    CJK punctuation gives the caller one fragment per anchor so each
+    can be retrieved independently.
+    """
+
+    def _seg(
+        self, text: str, segment_type: str = "bullet", cells=None,
+    ):
+        """Build a ``Segment`` for the helper under test."""
+        from app.summary_parser import Segment
+
+        return Segment(
+            section_path="test/0",
+            segment_type=segment_type,
+            segment_text=text,
+            cells=cells,
+        )
+
+    def test_no_punctuation_returns_single_element(self):
+        from app.citations import _split_compound_segment
+
+        seg = self._seg("塩もみキャベツを冷蔵庫で保管")
+        assert _split_compound_segment(seg) == ["塩もみキャベツを冷蔵庫で保管"]
+
+    def test_splits_on_cjk_comma(self):
+        """「、」 is the dominant CJK list separator."""
+        from app.citations import _split_compound_segment
+
+        seg = self._seg("にんじんは3本用意、手元の分量でもよい")
+        parts = _split_compound_segment(seg)
+        assert len(parts) == 2
+        assert "にんじんは3本用意" in parts
+        assert "手元の分量でもよい" in parts
+
+    def test_splits_on_full_stop_and_comma(self):
+        from app.citations import _split_compound_segment
+
+        seg = self._seg(
+            "洗って芯を切り落とし、葉と芯を分けて千切りにする。塩で揉む"
+        )
+        parts = _split_compound_segment(seg)
+        # Expect three fragments from two "、" and one "。".
+        assert len(parts) == 3
+
+    def test_drops_short_fragments(self):
+        """Fragments under ``citation_multi_anchor_min_len`` are dropped.
+
+        Shorter fragments (particles, tail markers like "水分") over-
+        match against the index; dropping them means the compound
+        bullet's other anchors still carry the retrieval.
+        """
+        from app.citations import _split_compound_segment
+
+        # "ABC、塩をたっぷり揉み込む" — "ABC" is 3 chars < default 4.
+        # Only one usable fragment remains → fall through to full text.
+        seg = self._seg("ABC、塩をたっぷり揉み込む")
+        parts = _split_compound_segment(seg)
+        assert parts == ["ABC、塩をたっぷり揉み込む"]
+
+    def test_drops_hiragana_only_fragments(self):
+        """Fragments without salient tokens (kanji/katakana/number)
+        are grammatical glue, not anchors."""
+        from app.citations import _split_compound_segment
+
+        # Second fragment is pure hiragana → dropped → only one
+        # usable fragment → fall through.
+        seg = self._seg("塩もみキャベツを冷蔵、そしてそれから")
+        parts = _split_compound_segment(seg)
+        assert parts == ["塩もみキャベツを冷蔵、そしてそれから"]
+
+    def test_table_row_not_split(self):
+        """Table rows get cell-level pooling elsewhere; don't split."""
+        from app.citations import _split_compound_segment
+
+        seg = self._seg(
+            "塩もみキャベツ | 400g | 保存3日",
+            cells=("塩もみキャベツ", "400g", "保存3日"),
+        )
+        assert _split_compound_segment(seg) == [
+            "塩もみキャベツ | 400g | 保存3日"
+        ]
+
+    def test_paragraph_not_split(self):
+        """Claim-vs-example bias on paragraphs is a separate problem."""
+        from app.citations import _split_compound_segment
+
+        seg = self._seg(
+            "グラフィックやシステムを流用する傾向、過去作を参考にする",
+            segment_type="paragraph",
+        )
+        parts = _split_compound_segment(seg)
+        assert len(parts) == 1
+
+    def test_empty_text_returns_empty(self):
+        from app.citations import _split_compound_segment
+
+        seg = self._seg("")
+        assert _split_compound_segment(seg) == [""]
+
+    def test_all_fragments_empty_falls_back(self):
+        """Punctuation-only strings produce no usable fragments."""
+        from app.citations import _split_compound_segment
+
+        seg = self._seg("、、。")
+        parts = _split_compound_segment(seg)
+        # Falls back to the original text (no useful split).
+        assert parts == ["、、。"]
+
+
+class TestMultiAnchorRetrieve:
+    """`_multi_anchor_retrieve` unions per-sub-segment retrieval by max-score.
+
+    Compound bullets like 001/4 (recipe) or 005/11 (にんじん+手元分量)
+    need each anchor to contribute to the candidate list; otherwise
+    top-1 is under-determined and snaps to a neighbouring "theme"
+    chunk whose register matches the summary's declarative tone.
+    """
+
+    def test_unions_candidates_by_max_score(self, monkeypatch):
+        from app import citations
+        from app.summary_parser import Segment
+
+        # Stub embedder so we don't load torch — each sub-text gets
+        # a unique unit vector so the stubbed retriever can key off it.
+        def _fake_embed(passages):
+            return [
+                np.full(4, fill_value=float(i + 1), dtype=np.float32)
+                for i, _ in enumerate(passages)
+            ]
+
+        import types
+        fake_module = types.SimpleNamespace(embed_passages=_fake_embed)
+        monkeypatch.setitem(sys.modules, "app.workers.embedder", fake_module)
+
+        # Stub per-sub retrieval: sub_texts[0] → [(ch10, 0.85)],
+        # sub_texts[1] → [(ch13, 0.82)]. Chunk 13 appears in both and
+        # keeps the higher score (0.82).
+        retrieval_log = []
+
+        def _fake_retrieve(fid, sub_seg, vec, k, **_kw):
+            retrieval_log.append(sub_seg.segment_text)
+            if "洗って" in sub_seg.segment_text:
+                return [("transcript:10", 0.85), ("transcript:13", 0.40)]
+            if "千切り" in sub_seg.segment_text:
+                return [("transcript:13", 0.82), ("transcript:15", 0.70)]
+            return []
+
+        monkeypatch.setattr(citations, "_retrieve_candidates", _fake_retrieve)
+
+        seg = Segment(
+            section_path="詳細内容/4",
+            segment_type="bullet",
+            segment_text="洗って芯を切り落とし、千切りにする",
+        )
+        merged = citations._multi_anchor_retrieve(
+            "file-1", seg,
+            sub_texts=["洗って芯を切り落とし", "千切りにする"],
+            top_k=3,
+            section_range=None,
+            file_vectors=None,
+        )
+        # Each sub-segment ran its own retrieval with its own BM25
+        # query built from its sub-text.
+        assert retrieval_log == ["洗って芯を切り落とし", "千切りにする"]
+        # Chunk 13 appears twice with scores 0.40 + 0.82 — max wins.
+        ids = [cid for cid, _ in merged]
+        assert "transcript:10" in ids
+        assert "transcript:13" in ids
+        # Ordered by merged score desc: 10@0.85 > 13@0.82 > 15@0.70.
+        assert ids[0] == "transcript:10"
+        assert ids[1] == "transcript:13"
+
+    def test_respects_top_k_cap(self, monkeypatch):
+        from app import citations
+        from app.summary_parser import Segment
+
+        import types
+        fake_module = types.SimpleNamespace(
+            embed_passages=lambda passages: [
+                np.full(4, float(i + 1), dtype=np.float32)
+                for i, _ in enumerate(passages)
+            ]
+        )
+        monkeypatch.setitem(sys.modules, "app.workers.embedder", fake_module)
+
+        def _fake_retrieve(fid, sub_seg, vec, k, **_kw):
+            return [
+                ("transcript:0", 0.9),
+                ("transcript:1", 0.85),
+                ("transcript:2", 0.80),
+            ]
+
+        monkeypatch.setattr(citations, "_retrieve_candidates", _fake_retrieve)
+
+        seg = Segment(
+            section_path="test/0", segment_type="bullet",
+            segment_text="a、b",
+        )
+        merged = citations._multi_anchor_retrieve(
+            "file-1", seg, sub_texts=["a", "b"], top_k=2,
+            section_range=None, file_vectors=None,
+        )
+        assert len(merged) == 2
+
+    def test_empty_embed_returns_empty(self, monkeypatch):
+        """All sub-segment embeddings failing short-circuits to empty."""
+        from app import citations
+        from app.summary_parser import Segment
+
+        import types
+        fake_module = types.SimpleNamespace(
+            embed_passages=lambda passages: []
+        )
+        monkeypatch.setitem(sys.modules, "app.workers.embedder", fake_module)
+
+        seg = Segment(
+            section_path="test/0", segment_type="bullet",
+            segment_text="a、b",
+        )
+        merged = citations._multi_anchor_retrieve(
+            "file-1", seg, sub_texts=["a", "b"], top_k=3,
+            section_range=None, file_vectors=None,
+        )
+        assert merged == []
+
+
+class TestComputeCitationsMultiAnchor:
+    """`compute_citations` routes compound bullets through multi-anchor retrieval.
+
+    End-to-end check that the compound-bullet path integrates with the
+    existing margin-gate / threshold logic: a compound bullet whose
+    sub-anchors land on distinct chunks ends up with citations for
+    each anchor instead of one top-1 snap-to-theme-chunk.
+    """
+
+    def test_compound_bullet_uses_multi_anchor_path(
+        self, citations_db, monkeypatch,
+    ):
+        from app import citations
+        from app.summary_parser import Segment
+
+        # Force the single-embedding path to "wrong answer", the
+        # multi-anchor path to "right answer": if the feature wires up
+        # correctly the test sees the multi-anchor result.
+        monkeypatch.setattr(
+            citations, "_embed_segment",
+            lambda seg: np.ones(4, dtype=np.float32),
+        )
+        monkeypatch.setattr(
+            citations, "_fetch_file_vectors",
+            lambda fid, chunk_range=None: [],
+        )
+
+        import types
+        fake_module = types.SimpleNamespace(
+            embed_passages=lambda passages: [
+                np.full(4, float(i + 1), dtype=np.float32)
+                for i, _ in enumerate(passages)
+            ]
+        )
+        monkeypatch.setitem(sys.modules, "app.workers.embedder", fake_module)
+
+        retrieval_log: list[str] = []
+
+        def _fake_retrieve(fid, seg, vec, k, **_kw):
+            retrieval_log.append(seg.segment_text)
+            # Compound-bullet sub-texts both resolve to chunk 10 or 13.
+            if "洗って" in seg.segment_text:
+                return [("transcript:10", 0.90)]
+            if "千切り" in seg.segment_text:
+                return [("transcript:13", 0.85)]
+            # Single-embedding fallback (if wired incorrectly) — make
+            # it produce a clearly wrong answer that won't be mistaken
+            # for the multi-anchor output.
+            return [("transcript:99", 0.80)]
+
+        monkeypatch.setattr(citations, "_retrieve_candidates", _fake_retrieve)
+
+        markdown = "## 詳細内容\n- 洗って芯を切り落とし、千切りにする\n"
+        out = citations.compute_citations("file-1", markdown)
+
+        assert len(out) == 1
+        # Multi-anchor path took over: both sub-texts were queried.
+        assert "洗って芯を切り落とし" in retrieval_log
+        assert "千切りにする" in retrieval_log
+        # Chunks from both anchors show up in the citation list.
+        assert "transcript:10" in out[0]["citation_chunk_ids"]
+        assert "transcript:13" in out[0]["citation_chunk_ids"]
+        # The wrong fallback chunk (99) must not appear.
+        assert "transcript:99" not in out[0]["citation_chunk_ids"]
+        # top_score is the max across sub-segments.
+        assert out[0]["top_score"] == pytest.approx(0.90)
+
+    def test_single_anchor_bullet_falls_through_to_legacy_path(
+        self, citations_db, monkeypatch,
+    ):
+        """No usable split → full-text embedding drives retrieval."""
+        from app import citations
+
+        monkeypatch.setattr(
+            citations, "_embed_segment",
+            lambda seg: np.ones(4, dtype=np.float32),
+        )
+        monkeypatch.setattr(
+            citations, "_fetch_file_vectors",
+            lambda fid, chunk_range=None: [],
+        )
+
+        import types
+        fake_module = types.SimpleNamespace(
+            embed_passages=lambda passages: [
+                np.ones(4, dtype=np.float32) for _ in passages
+            ]
+        )
+        monkeypatch.setitem(sys.modules, "app.workers.embedder", fake_module)
+
+        retrieval_log: list[str] = []
+
+        def _fake_retrieve(fid, seg, vec, k, **_kw):
+            retrieval_log.append(seg.segment_text)
+            return [("transcript:42", 0.90)]
+
+        monkeypatch.setattr(citations, "_retrieve_candidates", _fake_retrieve)
+
+        # Single anchor — no CJK separator.
+        markdown = "## 詳細内容\n- 塩もみキャベツを冷蔵保管\n"
+        out = citations.compute_citations("file-1", markdown)
+
+        # Exactly one retrieval call (single-embedding path) with the
+        # full bullet text.
+        assert retrieval_log == ["塩もみキャベツを冷蔵保管"]
+        assert out[0]["citation_chunk_ids"] == ["transcript:42"]
+
+    def test_multi_anchor_disabled_restores_legacy_path(
+        self, citations_db, monkeypatch,
+    ):
+        """Toggle-off returns exactly the pre-feature behaviour."""
+        from app import citations, config as cfg_module
+
+        object.__setattr__(
+            cfg_module.settings.summaries,
+            "citation_multi_anchor_enabled",
+            False,
+        )
+        try:
+            monkeypatch.setattr(
+                citations, "_embed_segment",
+                lambda seg: np.ones(4, dtype=np.float32),
+            )
+            monkeypatch.setattr(
+                citations, "_fetch_file_vectors",
+                lambda fid, chunk_range=None: [],
+            )
+
+            retrieval_log: list[str] = []
+
+            def _fake_retrieve(fid, seg, vec, k, **_kw):
+                retrieval_log.append(seg.segment_text)
+                return [("transcript:7", 0.95)]
+
+            monkeypatch.setattr(
+                citations, "_retrieve_candidates", _fake_retrieve
+            )
+
+            markdown = "## A\n- 洗って、千切りにする\n"
+            out = citations.compute_citations("file-1", markdown)
+
+            # Exactly one retrieval with the full compound text (no
+            # split, despite the 、 separator).
+            assert retrieval_log == ["洗って、千切りにする"]
+            assert out[0]["citation_chunk_ids"] == ["transcript:7"]
+        finally:
+            object.__setattr__(
+                cfg_module.settings.summaries,
+                "citation_multi_anchor_enabled",
+                True,
+            )
+
+
 class TestDeleteCitations:
     def test_delete_returns_rowcount(self, citations_db):
         from app.citations import delete_citations, write_citations
