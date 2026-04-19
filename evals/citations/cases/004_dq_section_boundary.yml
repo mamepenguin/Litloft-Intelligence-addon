@@ -1,0 +1,41 @@
+# ---------------------------------------------------------------------------
+# DQ remake commentary, section 2 (過去のリメイク傾向) と section 4 (アンケート結果)
+# を厳密 chunk_ids で pin. case 002 の section 1 と合わせて DP による
+# 隣接 section 分離の effectiveness を測る。
+# ---------------------------------------------------------------------------
+
+id: 004_dq_section_boundary
+file_path: YouTube/fsdjh983jhrf.mp4
+
+expectations:
+  # --- section 2: 過去のリメイク傾向 ---
+  # paragraph "直前の新作で使われたグラフィックやシステムを流用する傾向"
+  # chunk 4 "過去の傾向から見ると、新作タイトルで使われたグラフィックやシステムを流用される流れがありました"
+  - section_path: "詳細内容/6"
+    chunk_ids: ["transcript:4"]
+    must_have_citation: true
+
+  # bullet "1993年スーパーファミコン版ドラクエ1&2、前年ドラクエ5システム使用"
+  # chunk 5 "1993年に発売されたスーパーハミコン版のドラクエ1&2は、前年に発売されたドラクエ5のシステムを使って"
+  - section_path: "詳細内容/7"
+    chunk_ids: ["transcript:5"]
+
+  # bullet "2001年PlayStation版ドラクエ4、ドラクエ7描写エンジン引き継ぎ"
+  # chunk 8 "2001年に発売されたPlayStation版のドラクエ4は、前の年に発売されたドラクエ7の描写エンジン"
+  - section_path: "詳細内容/9"
+    chunk_ids: ["transcript:8"]
+
+  # --- section 4: アンケート結果 ---
+  # bullet "3Dフルリメイク" → chunk 15 (選択肢 6 つ列挙の行)
+  - section_path: "詳細内容/14"
+    chunk_ids: ["transcript:15"]
+
+  # bullet "HD2D" → 同 chunk 15
+  - section_path: "詳細内容/15"
+    chunk_ids: ["transcript:15"]
+
+  # paragraph "3Dフルリメイク最多、次点ドールルック、HD2D人気最下位"
+  # chunk 18 "3Dフルリメイクを希望する声が一番多く、時点でドールルック、HD2Dは3番目"
+  - section_path: "詳細内容/20"
+    chunk_ids: ["transcript:18"]
+    must_have_citation: true

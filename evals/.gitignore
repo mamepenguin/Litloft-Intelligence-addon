@@ -1,0 +1,4 @@
+
+# citation eval snapshot — ユーザー実 DB のコピーなのでコミットしない。
+# 再生成手順は citations/README.md 参照。
+citations/snapshot/

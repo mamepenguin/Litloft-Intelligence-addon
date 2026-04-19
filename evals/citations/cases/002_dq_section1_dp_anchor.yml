@@ -1,0 +1,42 @@
+# ---------------------------------------------------------------------------
+# DQ remake commentary (KtVKUiry6S_d), CITATION-PIPELINE.md worked example.
+# Section 1 (近年のドラクエリメイクの流れ) の 6 segments を厳密 chunk_ids 付きで pin.
+#
+# Viterbi DP + boundary margin が外れると `詳細内容/4` の top-1 が chunk 41 に
+# 飛ぶ既知 regression を catch (hako `Qu5avq5Mdxig6U_9LhE-J`).
+# ---------------------------------------------------------------------------
+
+id: 002_dq_section1_dp_anchor
+file_path: YouTube/fsdjh983jhrf.mp4
+
+expectations:
+  # 導入 paragraph: 天空シリーズ 4・5・6 のリメイク考察
+  # chunk 3 "4、5、6と続く天空シリーズ" + chunk 4 "考察、そして予想"
+  - section_path: "導入/0"
+    chunk_ids: ["transcript:3", "transcript:4"]
+    must_have_citation: true
+
+  # 語り手の驚き paragraph: "近年のドラクエ関連作品が立て続け"
+  # chunk 0 "ドラクエの勢いがすごい" + chunk 1 "正直驚きました"
+  - section_path: "詳細内容/0"
+    chunk_ids: ["transcript:0", "transcript:1"]
+    must_have_citation: true
+
+  # 年号 bullet "2024年ドラクエ3 HD-2D" → chunk 0 (verbatim)
+  - section_path: "詳細内容/1"
+    chunk_ids: ["transcript:0"]
+
+  # 年号 bullet "2025年ドラクエ1&2" → chunk 0 (verbatim)
+  - section_path: "詳細内容/2"
+    chunk_ids: ["transcript:0"]
+
+  # 年号 bullet "2026年ドラクエ7 Reimagined" → chunk 1 (verbatim)
+  - section_path: "詳細内容/3"
+    chunk_ids: ["transcript:1"]
+
+  # CITATION-PIPELINE.md walkthrough 対象 paragraph
+  # "と続き、リメイクの評価も回を重ねるごとに高まっている"
+  # chunk 2 "回を重ねるたびに進化して評価も高くなっていく" — 一致最強
+  - section_path: "詳細内容/4"
+    chunk_ids: ["transcript:2"]
+    must_have_citation: true

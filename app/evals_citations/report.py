@@ -46,23 +46,81 @@ def render_markdown(
     lines.append("")
     lines.append(f"- total segments scored: **{aggregate.total_segments}**")
     lines.append(
-        f"- top-1 accuracy: **{aggregate.top1_accuracy:.1%}**"
-    )
-    lines.append(f"- recall @ 3: **{aggregate.recall_at_3:.1%}**")
-    lines.append(
         f"- has_citation precision: "
-        f"**{aggregate.has_citation_precision:.1%}**"
+        f"**{aggregate.has_citation_precision:.1%}**  _(when a citation was returned, it pointed at an exact-hit chunk)_"
     )
     lines.append(
         f"- missing required citations: "
-        f"**{aggregate.missing_required_citations}**"
+        f"**{aggregate.missing_required_citations}**  _(must_have_citation=true segments flipped to ⚠)_"
     )
     lines.append("")
 
-    if aggregate.by_segment_type:
-        lines.append("### By segment type")
+    lines.append("### Location offset (primary metric)")
+    lines.append("")
+    lines.append(
+        "``offset_at_top1`` = chunk-index distance between the system's "
+        "top-1 chunk and the nearest ground-truth chunk. 0 = exact hit, "
+        "1–2 = adjacent, 5+ = different part of the file. Computed only "
+        f"for segments with known GT ({aggregate.n_with_offset} of "
+        f"{aggregate.total_segments})."
+    )
+    lines.append("")
+    lines.append(
+        f"- mean: **{aggregate.mean_offset:.2f}**  "
+        f"median (p50): **{aggregate.p50_offset:.1f}**  "
+        f"p95: **{aggregate.p95_offset:.1f}**  "
+        f"max: **{aggregate.max_offset}**"
+    )
+    lines.append("")
+    lines.append("| threshold | hit rate (offset ≤ N) |")
+    lines.append("|---|---:|")
+    for n, ratio in sorted(aggregate.hit_at_offset.items()):
+        tag = (
+            " _(== strict top-1 accuracy)_" if n == 0 else ""
+        )
+        lines.append(f"| offset ≤ {n} | {ratio:.1%}{tag} |")
+    lines.append("")
+
+    if any(
+        v["n"] for v in aggregate.calibration_by_score_band.values()
+    ):
+        lines.append("### Calibration by top_score band")
         lines.append("")
-        lines.append("| type | top-1 | recall@3 | n |")
+        lines.append(
+            "Sanity-checks whether the system's own confidence signal "
+            "predicts location correctness. If mean offset does NOT "
+            "decrease as score increases, the 2-state ⚠/citation UI is "
+            "discarding information."
+        )
+        lines.append("")
+        lines.append(
+            "| top_score | n | mean offset | median offset | hit@0 |"
+        )
+        lines.append("|---|---:|---:|---:|---:|")
+        band_order = [label for _, _, label in
+                      ((0.00, 0.70, "<0.70"),
+                       (0.70, 0.80, "[0.70-0.80)"),
+                       (0.80, 0.85, "[0.80-0.85)"),
+                       (0.85, 0.90, "[0.85-0.90)"),
+                       (0.90, 1.01, "≥0.90"))]
+        for label in band_order:
+            row = aggregate.calibration_by_score_band.get(label, {})
+            n = int(row.get("n", 0))
+            if n == 0:
+                lines.append(f"| {label} | 0 | — | — | — |")
+                continue
+            lines.append(
+                f"| {label} | {n} | "
+                f"{row['mean_offset']:.2f} | "
+                f"{row['median_offset']:.1f} | "
+                f"{row['hit_at_0']:.1%} |"
+            )
+        lines.append("")
+
+    if aggregate.by_segment_type:
+        lines.append("### By segment type (legacy binary)")
+        lines.append("")
+        lines.append("| type | top-1 (offset==0) | recall@3 | n |")
         lines.append("|---|---:|---:|---:|")
         for stype, (t1, r3, n) in sorted(aggregate.by_segment_type.items()):
             lines.append(
@@ -82,11 +140,16 @@ def render_markdown(
             lines.append("")
             continue
         lines.append(
-            "| section_path | type | top1 | r@3 | has_cit | score | chunks |"
+            "| section_path | type | offset | r@3 | has_cit | score | chunks |"
         )
         lines.append("|---|---|:-:|:-:|:-:|---:|---|")
         for s in r.segments:
-            top1 = "✅" if s.top1_hit else "❌"
+            if s.offset_at_top1 is None:
+                off = "—"
+            elif s.offset_at_top1 == 0:
+                off = "0 ✅"
+            else:
+                off = f"{s.offset_at_top1}"
             recall = "✅" if s.recall_at_3 else "❌"
             has_cit = "✅" if s.has_citation else "⚠"
             if s.must_have_citation and not s.has_citation:
@@ -94,7 +157,7 @@ def render_markdown(
             chunks = ", ".join(f"`{c}`" for c in s.top_chunk_ids[:3]) or "—"
             lines.append(
                 f"| `{s.section_path}` | {s.segment_type} | "
-                f"{top1} | {recall} | {has_cit} | "
+                f"{off} | {recall} | {has_cit} | "
                 f"{s.top_score:.2f} | {chunks} |"
             )
         lines.append("")
@@ -129,6 +192,13 @@ def build_sidecar(
                 k: {"top1_accuracy": t1, "recall_at_3": r3, "n": n}
                 for k, (t1, r3, n) in aggregate.by_segment_type.items()
             },
+            "n_with_offset": aggregate.n_with_offset,
+            "mean_offset": aggregate.mean_offset,
+            "p50_offset": aggregate.p50_offset,
+            "p95_offset": aggregate.p95_offset,
+            "max_offset": aggregate.max_offset,
+            "hit_at_offset": {str(k): v for k, v in aggregate.hit_at_offset.items()},
+            "calibration_by_score_band": aggregate.calibration_by_score_band,
         },
         "cases": [asdict(r) for r in reports],
     }

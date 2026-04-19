@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_CASES = "../evals/citations/cases/"
-DEFAULT_SNAPSHOT = "../evals/test-drive/snapshot/search.db"
+DEFAULT_SNAPSHOT = "../evals/citations/snapshot/search.db"
 DEFAULT_REPORTS_DIR = "../evals/citations/reports"
 
 logger = logging.getLogger("app.evals_citations")
@@ -33,7 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--cases", default=DEFAULT_CASES)
     parser.add_argument("--snapshot", default=DEFAULT_SNAPSHOT)
-    parser.add_argument("--drive", default="eval-drive")
+    parser.add_argument("--drive", default="動画")
     parser.add_argument("--filter", default=None)
     parser.add_argument("--output", default=None)
     parser.add_argument("--label", default="")

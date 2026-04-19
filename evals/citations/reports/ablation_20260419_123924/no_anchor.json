@@ -1,0 +1,415 @@
+{
+  "generated_at": "2026-04-19T12:41:31.689065+00:00",
+  "label": "no_anchor",
+  "aggregate": {
+    "total_segments": 25,
+    "top1_accuracy": 0.8,
+    "recall_at_3": 0.92,
+    "has_citation_precision": 0.8,
+    "missing_required_citations": 0,
+    "by_segment_type": {
+      "paragraph": {
+        "top1_accuracy": 0.6666666666666666,
+        "recall_at_3": 0.8333333333333334,
+        "n": 6
+      },
+      "bullet": {
+        "top1_accuracy": 0.8421052631578947,
+        "recall_at_3": 0.9473684210526315,
+        "n": 19
+      }
+    }
+  },
+  "cases": [
+    {
+      "case_id": "001_recipe_three_segment_types",
+      "file_path": "YouTube/【常備菜5選】一度覚えたら一生使える基本の副菜｜管理栄養士の作り置きレシピ.hvlink",
+      "file_id": "yFpvytc5zGpM",
+      "segments": [
+        {
+          "section_path": "導入/0",
+          "segment_type": "paragraph",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": true,
+          "top_score": 0.941386878490448,
+          "top_chunk_ids": [
+            "transcript:0",
+            "transcript:2",
+            "transcript:3"
+          ]
+        },
+        {
+          "section_path": "詳細内容/0",
+          "segment_type": "bullet",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": null,
+          "top_score": 0.9198294878005981,
+          "top_chunk_ids": [
+            "transcript:2",
+            "transcript:20",
+            "transcript:95"
+          ]
+        },
+        {
+          "section_path": "詳細内容/4",
+          "segment_type": "bullet",
+          "top1_hit": false,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": null,
+          "top_score": 0.9175772666931152,
+          "top_chunk_ids": [
+            "transcript:27",
+            "transcript:12",
+            "transcript:11"
+          ]
+        },
+        {
+          "section_path": "詳細内容/7",
+          "segment_type": "bullet",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": null,
+          "top_score": 0.883347749710083,
+          "top_chunk_ids": [
+            "transcript:29",
+            "transcript:27",
+            "transcript:23"
+          ]
+        },
+        {
+          "section_path": "重要ポイントまとめ/row/0",
+          "segment_type": "bullet",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": true,
+          "top_score": 0.8440403342247009,
+          "top_chunk_ids": [
+            "transcript:26",
+            "transcript:23",
+            "transcript:24"
+          ]
+        },
+        {
+          "section_path": "重要ポイントまとめ/row/4",
+          "segment_type": "bullet",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": true,
+          "top_score": 0.8298326730728149,
+          "top_chunk_ids": [
+            "transcript:113",
+            "transcript:109",
+            "transcript:110"
+          ]
+        }
+      ],
+      "error": null
+    },
+    {
+      "case_id": "002_dq_section1_dp_anchor",
+      "file_path": "YouTube/fsdjh983jhrf.mp4",
+      "file_id": "KtVKUiry6S_d",
+      "segments": [
+        {
+          "section_path": "導入/0",
+          "segment_type": "paragraph",
+          "top1_hit": false,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": true,
+          "top_score": 0.9614037275314331,
+          "top_chunk_ids": [
+            "transcript:40",
+            "transcript:4",
+            "transcript:15"
+          ]
+        },
+        {
+          "section_path": "詳細内容/0",
+          "segment_type": "paragraph",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": true,
+          "top_score": 0.8964835405349731,
+          "top_chunk_ids": [
+            "transcript:0",
+            "transcript:53",
+            "transcript:8"
+          ]
+        },
+        {
+          "section_path": "詳細内容/1",
+          "segment_type": "bullet",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": null,
+          "top_score": 0.9208078384399414,
+          "top_chunk_ids": [
+            "transcript:0",
+            "transcript:27",
+            "transcript:40"
+          ]
+        },
+        {
+          "section_path": "詳細内容/2",
+          "segment_type": "bullet",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": null,
+          "top_score": 0.925508439540863,
+          "top_chunk_ids": [
+            "transcript:0",
+            "transcript:53",
+            "transcript:40"
+          ]
+        },
+        {
+          "section_path": "詳細内容/3",
+          "segment_type": "bullet",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": null,
+          "top_score": 0.885493278503418,
+          "top_chunk_ids": [
+            "transcript:1",
+            "transcript:0",
+            "transcript:53"
+          ]
+        },
+        {
+          "section_path": "詳細内容/4",
+          "segment_type": "paragraph",
+          "top1_hit": false,
+          "recall_at_3": false,
+          "has_citation": true,
+          "must_have_citation": true,
+          "top_score": 0.8779482245445251,
+          "top_chunk_ids": [
+            "transcript:14",
+            "transcript:18",
+            "transcript:39"
+          ]
+        }
+      ],
+      "error": null
+    },
+    {
+      "case_id": "003_recipe_all_table_rows",
+      "file_path": "YouTube/【常備菜5選】一度覚えたら一生使える基本の副菜｜管理栄養士の作り置きレシピ.hvlink",
+      "file_id": "yFpvytc5zGpM",
+      "segments": [
+        {
+          "section_path": "重要ポイントまとめ/row/1",
+          "segment_type": "bullet",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": true,
+          "top_score": 0.8037874698638916,
+          "top_chunk_ids": [
+            "transcript:43",
+            "transcript:92",
+            "transcript:72"
+          ]
+        },
+        {
+          "section_path": "重要ポイントまとめ/row/2",
+          "segment_type": "bullet",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": true,
+          "top_score": 0.8345651626586914,
+          "top_chunk_ids": [
+            "transcript:93",
+            "transcript:43",
+            "transcript:26"
+          ]
+        },
+        {
+          "section_path": "重要ポイントまとめ/row/3",
+          "segment_type": "bullet",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": true,
+          "top_score": 0.8072692155838013,
+          "top_chunk_ids": [
+            "transcript:109",
+            "transcript:78",
+            "transcript:84"
+          ]
+        }
+      ],
+      "error": null
+    },
+    {
+      "case_id": "004_dq_section_boundary",
+      "file_path": "YouTube/fsdjh983jhrf.mp4",
+      "file_id": "KtVKUiry6S_d",
+      "segments": [
+        {
+          "section_path": "詳細内容/6",
+          "segment_type": "paragraph",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": true,
+          "top_score": 0.9278942346572876,
+          "top_chunk_ids": [
+            "transcript:5",
+            "transcript:4",
+            "transcript:47"
+          ]
+        },
+        {
+          "section_path": "詳細内容/7",
+          "segment_type": "bullet",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": null,
+          "top_score": 0.9365305304527283,
+          "top_chunk_ids": [
+            "transcript:5",
+            "transcript:8",
+            "transcript:36"
+          ]
+        },
+        {
+          "section_path": "詳細内容/9",
+          "segment_type": "bullet",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": null,
+          "top_score": 0.9599987268447876,
+          "top_chunk_ids": [
+            "transcript:8",
+            "transcript:27",
+            "transcript:40"
+          ]
+        },
+        {
+          "section_path": "詳細内容/14",
+          "segment_type": "bullet",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": null,
+          "top_score": 0.900689959526062,
+          "top_chunk_ids": [
+            "transcript:15",
+            "transcript:18",
+            "transcript:40"
+          ]
+        },
+        {
+          "section_path": "詳細内容/15",
+          "segment_type": "bullet",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": null,
+          "top_score": 0.8673623204231262,
+          "top_chunk_ids": [
+            "transcript:15",
+            "transcript:22",
+            "transcript:12"
+          ]
+        },
+        {
+          "section_path": "詳細内容/20",
+          "segment_type": "paragraph",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": true,
+          "top_score": 0.9357321262359619,
+          "top_chunk_ids": [
+            "transcript:18",
+            "transcript:34",
+            "transcript:37"
+          ]
+        }
+      ],
+      "error": null
+    },
+    {
+      "case_id": "005_recipe_section_transitions",
+      "file_path": "YouTube/【常備菜5選】一度覚えたら一生使える基本の副菜｜管理栄養士の作り置きレシピ.hvlink",
+      "file_id": "yFpvytc5zGpM",
+      "segments": [
+        {
+          "section_path": "詳細内容/11",
+          "segment_type": "bullet",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": true,
+          "top_score": 0.8898016214370728,
+          "top_chunk_ids": [
+            "transcript:61",
+            "transcript:92",
+            "transcript:79"
+          ]
+        },
+        {
+          "section_path": "詳細内容/23",
+          "segment_type": "bullet",
+          "top1_hit": false,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": true,
+          "top_score": 0.8797928690910339,
+          "top_chunk_ids": [
+            "transcript:3",
+            "transcript:2",
+            "transcript:79"
+          ]
+        },
+        {
+          "section_path": "詳細内容/29",
+          "segment_type": "bullet",
+          "top1_hit": false,
+          "recall_at_3": false,
+          "has_citation": true,
+          "must_have_citation": true,
+          "top_score": 0.9084071516990662,
+          "top_chunk_ids": [
+            "transcript:41",
+            "transcript:42",
+            "transcript:7"
+          ]
+        },
+        {
+          "section_path": "詳細内容/37",
+          "segment_type": "bullet",
+          "top1_hit": true,
+          "recall_at_3": true,
+          "has_citation": true,
+          "must_have_citation": true,
+          "top_score": 0.919245183467865,
+          "top_chunk_ids": [
+            "transcript:110",
+            "transcript:2",
+            "transcript:20"
+          ]
+        }
+      ],
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+# ---------------------------------------------------------------------------
+# Recipe video, 各 recipe section の最初の bullet / 代表的 bullet を厳密
+# chunk_ids で pin. 隣接 section に漏れる regression を offset_at_top1 で
+# 敏感に検出する。
+#
+# 注: 初版 (2026-04-19) では /29 を「こんにゃくセクション」と annotation して
+# いたが、実際の segment は切り干し大根セクションの arrangement bullet で
+# あり chunk 93 が verbatim 根拠。修正済み。
+# ---------------------------------------------------------------------------
+
+id: 005_recipe_section_transitions
+file_path: YouTube/【常備菜5選】一度覚えたら一生使える基本の副菜｜管理栄養士の作り置きレシピ.hvlink
+
+expectations:
+  # にんじんセクション冒頭 bullet: "にんじん3本を使う例、手元の分量でよい"
+  # chunk 58 "今回私はニン参ン3本も使った" が数値アンカー
+  - section_path: "詳細内容/11"
+    chunk_ids: ["transcript:58"]
+    must_have_citation: true
+
+  # 切り干し大根セクション冒頭 bullet: "以前紹介したレシピのミニマム版"
+  # chunk 78-79 "こちらは以前動画でもご紹介した / レシピのミニマムバージョンです"
+  - section_path: "詳細内容/23"
+    chunk_ids: ["transcript:78", "transcript:79"]
+    must_have_citation: true
+
+  # 切り干し大根セクション最終 bullet (前版は annotation 誤り):
+  # "アレンジ例として、塩もみキャベツや手でほぐしたカニカマを混ぜる"
+  # chunk 93 に verbatim 一致
+  - section_path: "詳細内容/29"
+    chunk_ids: ["transcript:93"]
+    must_have_citation: true
+
+  # 小松菜セクション冒頭 bullet: "小松菜が安い時に作りたい、材料最小限"
+  # chunks 109-110 "小松が安く買えた時に是非作って欲しい材料最小限"
+  - section_path: "詳細内容/37"
+    chunk_ids: ["transcript:109", "transcript:110"]
+    must_have_citation: true

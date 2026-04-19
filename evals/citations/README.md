@@ -3,7 +3,10 @@
 `detailed_summary` の citation リンカ（各段落・箇条書き・表行が原文のどのチャンクと結びつくか）を
 ゴールデンケースで評価するための開発者向けツール。
 
-Ask (RAG) 用の eval (`../README.md`) と同じスナップショット DB を読むが、ハーネスは別建て。
+Ask (RAG) 用の eval (`../README.md`) とはハーネスも snapshot も別。Ask 側は
+`../test-drive/snapshot/search.db`（合成 TTS データ）を使うが、citation eval は
+`snapshot/search.db` に prod DB のスライスを焼き込んで固定する方式。
+`detailed_summary` が実データに由来する必要があるため。
 
 ## いつ使うか
 
@@ -15,20 +18,30 @@ Ask (RAG) 用の eval (`../README.md`) と同じスナップショット DB を�
 
 ## セットアップ
 
-既存の Ask eval と同じスナップショットを使う:
+citation 専用の snapshot（prod intelligence DB の丸ごとコピー）を使う:
 
 ```bash
-# スナップショット生成（Ask eval の README を参照）
-cd addons/intelligence
-# … snapshot 生成手順 …
+# 1. intelligence コンテナを停止（live DB をコピーするため）
+docker compose stop intelligence
 
-# ケース実行
-python -m app.evals_citations \
-    --cases ../evals/citations/cases/ \
-    --snapshot ../evals/test-drive/snapshot/search.db \
-    --drive eval-drive \
-    --label "hybrid v1"
+# 2. prod DB を citation eval snapshot に焼き込む
+cp data/addons/intelligence/search.db \
+   addons/intelligence/evals/citations/snapshot/search.db
+
+# 3. intelligence を再開
+docker compose start intelligence
+
+# 4. ケース実行（コンテナ内、DRIVE_MOUNTS 経由で drive 名解決）
+docker compose exec intelligence python -m app.evals_citations \
+    --cases /eval-data/citations/cases/ \
+    --snapshot /eval-data/citations/snapshot/search.db \
+    --drive 動画 \
+    --label "baseline" \
+    --output /eval-data/citations/reports/baseline.md
 ```
+
+デフォルト値は `__main__.py` で `--snapshot /eval-data/citations/snapshot/search.db`
+`--drive 動画` に設定済みなので、--output と --label だけ指定して走らせてもよい。
 
 出力: `../evals/citations/reports/<timestamp>.md` と `<timestamp>.json`（sidecar）。
 
@@ -86,6 +99,29 @@ expectations:
 | `has_citation_precision` | `has_citation = True` のうち top-1 が正解だった割合 |
 | `missing_required_citations` | `must_have_citation: true` だが ⚠ になった数 |
 | `by_segment_type` | paragraph / bullet / bullet (row) 別の top-1 / recall@3 |
+
+## 初期ケース（baseline）
+
+2026-04-19 時点で 5 ケース 25 セグメント、全項目 100% pass の baseline が
+`reports/baseline.md` に記録されている。各ケースは別の機構を重点的に監視:
+
+| id | file | 監視ポイント |
+|---|---|---|
+| 001_recipe_three_segment_types | 常備菜 5 選 | paragraph / bullet / table row の 3 種別が各 section 帯に落ちること |
+| 002_dq_section1_dp_anchor | DQ リメイク予想 | Viterbi DP + boundary margin による section 1 → 冒頭 chunk 固定（CITATION-PIPELINE.md の worked example） |
+| 003_recipe_all_table_rows | 常備菜 5 選 | `重要ポイントまとめ` の行 1–3 が cell pooling で別 section 帯に分かれること |
+| 004_dq_section_boundary | DQ リメイク予想 | DP による隣接 section (2 と 4) の分離 — 001 と合わせて DP effectiveness が見える |
+| 005_recipe_section_transitions | 常備菜 5 選 | 各 recipe section 冒頭 bullet が隣接 section に漏れないこと |
+
+`--baseline reports/baseline.json` を渡せば、改修 PR ごとに delta を md 末尾に
+追記できる（差分が `top1_accuracy` / `recall_at_3` / `has_citation_precision`
+の表として出力される）。
+
+**判別力の注意**: baseline が 100% pass なのは現行パイプライン（hybrid +
+hierarchical narrowing + Viterbi DP + boundary margin + margin gate）が
+対象ケースで正しく動いている証。逆に言えば「全 pass のまま」は現行実装との
+一致しか測れない。新しい観察ベース regression が出たら個別ケースを追加する
+ことで測定粒度を上げる。
 
 ## 現状の既知の観測限界
 

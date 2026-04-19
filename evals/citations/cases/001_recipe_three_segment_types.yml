@@ -1,0 +1,49 @@
+# ---------------------------------------------------------------------------
+# Recipe video (yFpvytc5zGpM), paragraph / bullet / table row の 3 種別に
+# 厳密な chunk_ids を付与したケース。offset_at_top1 による location precision
+# 計測の基礎ケース。
+#
+# GT chunk はそれぞれ segment text が言及する具体的内容（固有名詞・数値・
+# 直接的な工程）が含まれる chunk を人間 curation で特定。同じ section の
+# 他 chunk は GT に入れない (wide GT は offset を常に 0 にして識別力を失う)。
+# ---------------------------------------------------------------------------
+
+id: 001_recipe_three_segment_types
+file_path: YouTube/【常備菜5選】一度覚えたら一生使える基本の副菜｜管理栄養士の作り置きレシピ.hvlink
+
+notes: |
+  offset_at_top1 が 0 なら厳密一致、1-2 なら隣接 chunk、5+ なら別 section。
+  top_score と offset の相関 (calibration band) も読む。
+
+expectations:
+  # イントロ概説 paragraph: お杉自己紹介 + ミニマム副菜コンセプト
+  - section_path: "導入/0"
+    chunk_ids: ["transcript:0", "transcript:1", "transcript:2"]
+    must_have_citation: true
+
+  # 詳細内容の冒頭 bullet: "あと1品ほしい / 野菜が足りない"
+  # chunk 0 "あと1品が決まらない" + chunk 1 "野菜が少し足りてないかも" と近似 verbatim
+  - section_path: "詳細内容/0"
+    chunk_ids: ["transcript:0", "transcript:1"]
+
+  # キャベツ下処理 bullet: "洗って + 芯を切り落とし + 葉と芯を分けて + 千切り"
+  # 洗う= chunk 10, 芯分離= chunks 13-14, 千切り= chunk 15
+  - section_path: "詳細内容/4"
+    chunk_ids: ["transcript:10", "transcript:13", "transcript:14", "transcript:15"]
+
+  # キャベツ塩もみ bullet: "揉み込み + 15分以上冷蔵 + 水気絞る"
+  # 塩揉み込み= chunk 27, 15分冷蔵= chunk 29, 水気絞る= chunk 30
+  - section_path: "詳細内容/7"
+    chunk_ids: ["transcript:27", "transcript:29", "transcript:30"]
+
+  # 重要ポイントまとめ table row: 塩もみキャベツ行
+  # 400g/4g= chunk 24, 100g:1g= chunk 26, 15分冷蔵= chunk 29
+  - section_path: "重要ポイントまとめ/row/0"
+    chunk_ids: ["transcript:24", "transcript:26", "transcript:29"]
+    must_have_citation: true
+
+  # 重要ポイントまとめ table row: 小松菜行
+  # 2束= chunk 110, 水300ml/塩昆布20g= chunk 113, 保存45日= chunk 119
+  - section_path: "重要ポイントまとめ/row/4"
+    chunk_ids: ["transcript:110", "transcript:113", "transcript:119"]
+    must_have_citation: true

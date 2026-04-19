@@ -1,0 +1,29 @@
+# ---------------------------------------------------------------------------
+# Recipe video (yFpvytc5zGpM), 重要ポイントまとめ table の行 1-3 を pin.
+# case 001 が row/0・row/4 担当、こちらが row/1-3。
+#
+# 各 row は「数値アンカー chunk」を GT として使う — table cell pooling が
+# 弱るほど offset が増える設計。
+# ---------------------------------------------------------------------------
+
+id: 003_recipe_all_table_rows
+file_path: YouTube/【常備菜5選】一度覚えたら一生使える基本の副菜｜管理栄養士の作り置きレシピ.hvlink
+
+expectations:
+  # にんじん行 | にんじん3本・水200ml・塩4g | 保存目安1週間 | アレンジあり
+  # 3本= chunk 58, 水200ml/塩4g= chunks 58-59, 保存1週間= chunk 70, 蜂蜜オリーブ= chunk 73
+  - section_path: "重要ポイントまとめ/row/1"
+    chunk_ids: ["transcript:58", "transcript:59", "transcript:70", "transcript:73"]
+    must_have_citation: true
+
+  # 切り干し大根行 | 切り干し大根70g ツナ約70g 調味料 | 熱湯 | カニカマ追加
+  # 70g= chunk 80, ツナ70g= chunk 84, 調味料= chunk 86, カニカマ= chunk 93
+  - section_path: "重要ポイントまとめ/row/2"
+    chunk_ids: ["transcript:80", "transcript:84", "transcript:86", "transcript:93"]
+    must_have_citation: true
+
+  # こんにゃく行 | 1枚 調味料 | 2分あく抜き 保存45日 | 唐辛子好みで
+  # 1枚= chunk 96, 2分あく抜き= chunks 101-102, 削り節= chunk 107, 保存45日= chunk 109
+  - section_path: "重要ポイントまとめ/row/3"
+    chunk_ids: ["transcript:96", "transcript:101", "transcript:102", "transcript:107", "transcript:109"]
+    must_have_citation: true
