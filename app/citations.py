@@ -1327,15 +1327,20 @@ def compute_citations(
         # Compound-bullet multi-anchor retrieval (see
         # ``_split_compound_segment``). When a bullet carries several
         # punctuation-separated sub-anchors, run retrieval per sub-
-        # segment so each anchor surfaces its own chunk independently.
-        # The multi-anchor result's ordering takes precedence (each
-        # sub-segment's top-1 is the answer to the natural question
-        # "which chunk best matches this anchor"); baseline joined-
-        # text candidates fill leftover top-K slots with chunks that
-        # weakly match multiple anchors together — signal that
-        # disappears when any single anchor is considered alone. Falls
-        # through to the single-embedding path when the split yields
-        # 0-1 usable sub-segments or when the feature is disabled.
+        # segment AND keep the baseline joined-text candidates, then
+        # union both pools by max score. Each sub-text surfaces
+        # chunks that specifically match one anchor; the joined text
+        # still contributes chunks that only rank because they
+        # weakly match multiple anchors together (signal that
+        # disappears when any single anchor is considered alone).
+        # Max-score union doesn't guarantee a baseline chunk keeps
+        # its rank — in principle several strong multi chunks can
+        # push a baseline chunk out of top-K — but it's far less
+        # aggressive than letting multi's ordering fully occupy the
+        # top slots, and it was the approach whose eval showed no
+        # per-segment regressions on the curated cases. Falls through
+        # to the single-embedding path when the split yields 0-1
+        # usable sub-segments or when the feature is disabled.
         candidates = _retrieve_candidates(
             file_id, seg, vector, top_k,
             section_range=section_range,
@@ -1350,17 +1355,14 @@ def compute_citations(
                     file_vectors=file_vectors or None,
                 )
                 if multi:
-                    # Multi-anchor ordering wins: its top-1 is the
-                    # anchor's best match. Baseline-only chunks (not
-                    # in multi's pool) fill the tail in baseline's
-                    # score order so recall@3 doesn't regress when
-                    # the joined embed surfaced a weak multi-anchor
-                    # signal no sub-segment alone would rank highly.
-                    multi_ids = {cid for cid, _ in multi}
-                    extras = [
-                        (c, s) for c, s in candidates if c not in multi_ids
-                    ]
-                    candidates = [*multi, *extras][:top_k]
+                    merged: dict[str, float] = dict(candidates)
+                    for cid, score in multi:
+                        prev = merged.get(cid)
+                        if prev is None or score > prev:
+                            merged[cid] = score
+                    candidates = sorted(
+                        merged.items(), key=lambda kv: kv[1], reverse=True
+                    )[:top_k]
         if not candidates:
             results.append(
                 {

@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-04-19T14:28:59.391702+00:00",
-  "label": "strict-gt-baseline",
+  "generated_at": "2026-04-19T14:27:52.578764+00:00",
+  "label": "multi-anchor-union-shipped",
   "aggregate": {
     "total_segments": 25,
     "top1_accuracy": 0.76,
