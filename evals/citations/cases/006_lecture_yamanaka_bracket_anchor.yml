@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------------------
+# 山中伸弥 卒業スピーチ（京都大学 iPS研究所所長 → 近畿大学卒業式）
+# 「塞翁が馬」を主題に据えた独立 1 話完結の講演。compound bullet の現象
+# 中でも特に `「」` でくくった並列 anchor が多く、既存 regex split (句読点)
+# では sub に分かれない。001/詳細内容/0 と同じ構造のサンプルを講演ジャンル
+# で増やす狙い。
+# ---------------------------------------------------------------------------
+
+id: 006_lecture_yamanaka_bracket_anchor
+file_path: YouTube/iPS細胞研究所 山中伸弥教授 卒業スピーチ「塞翁が馬…だから人生は楽しい」平成27年度近畿大学卒業式.mp4
+
+notes: |
+  - 「」で囲んだ anchor を複数持つ compound bullet を 2 件 (詳細内容/2 と
+    詳細内容/17) に pin。現行の CJK 句読点 split ではこの「」構造を分解
+    できないため、offset=0 を当てるには「」+「」の並列を検出する
+    parser 拡張が必要。
+  - 表の body row (重要ポイント) は cell pool が効いているかの確認。
+  - 導入/0 は summary 的 paragraph、複数 chunks を synthesize している
+    ので 3 chunks を GT に入れた（single-anchor paragraph ではない）。
+
+expectations:
+  # 導入 paragraph: 挨拶 + 塞翁が馬導入 + 教え
+  # chunks 2 (卒業祝辞), 6 (採用が馬), 10 (いいことの始まり) を合成
+  - section_path: "導入/0"
+    chunk_ids: ["transcript:2", "transcript:6", "transcript:10"]
+    must_have_citation: true
+
+  # 「」nested compound: 「どしっと構える」+「一見良くない時こそチャンス」
+  # chunk 15 "村人のように一騎一鷹するのではなくおじいさんのようにこう
+  # ごっしり構えよう" が verbatim 一致。2 つ目の anchor は本 section 内
+  # には verbatim がなく chunk 15 単独 (詳細内容セクション 1 の 教訓 行)。
+  - section_path: "詳細内容/2"
+    chunk_ids: ["transcript:15"]
+    must_have_citation: true
+
+  # 「」nested compound: 「一見良いこと」+「やりたくもない謝罪会見」+ 2回
+  # chunk 58 "一見いいことですよね" (anchor 1), chunk 59 "やりたくもない
+  # 謝罪会見というのを2回もやっているんです" (anchor 2 + 数値)
+  - section_path: "詳細内容/17"
+    chunk_ids: ["transcript:58", "transcript:59"]
+    must_have_citation: true
+
+  # Table row: 馬の逃走 | 唯一の財産の馬が逃げる | 良いことの始まり
+  # chunk 9 (馬が逃げる) + chunk 10 (いいことの始まりかもしれない)
+  - section_path: "重要ポイントまとめ/row/0"
+    chunk_ids: ["transcript:9", "transcript:10"]
+    must_have_citation: true

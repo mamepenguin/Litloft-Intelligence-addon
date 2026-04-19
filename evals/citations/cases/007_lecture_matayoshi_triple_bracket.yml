@@ -1,0 +1,46 @@
+# ---------------------------------------------------------------------------
+# ピース又吉 卒業スピーチ（近畿大学）
+# TRIPLE 「」nested anchor (「明るさ」「清潔感」「わかりやすさ」) を含む
+# compound bullet が含まれる講演。現行 split regex は「」境界を分割しない
+# ので top-1 の under-determination がどの程度出るかを測る。
+# ---------------------------------------------------------------------------
+
+id: 007_lecture_matayoshi_triple_bracket
+file_path: YouTube/ピース又吉卒業スピーチ  「バッドエンドはない、僕達は途中だ」  平成29年度近畿大学卒業式.hvlink
+
+notes: |
+  - 詳細内容/5 は「明るさ」「清潔感」「わかりやすさ」の 3 連「」anchor。
+    transcript 上は chunk 40-41 に分散 ("若手芸人に必要なのは明るさと" +
+    "清潔感とあとわかりやすさ")。現行 split では 、句読点が 1 つしかなく
+    2-way でしか split されないので 3 anchors 全てが単独でヒットするとは
+    限らない。
+  - 詳細内容/0 は 2 events compound (37歳誕生日バー + タクシー大恥)。
+    「、」の区切りがあるが、「その後、」のような時系列接続詞を含むため
+    split 結果の質が観察の対象。
+  - 詳細内容/10 は比喩構造 compound (水の喉/飲めない時/美味しい) で
+    parser がうまく分解できるか。
+
+expectations:
+  # 導入 paragraph: 卒業生向けメッセージ + 予想外の出来事
+  # chunk 4 (卒業おめでとう), chunk 7 (予想していなかったことが起こる)
+  - section_path: "導入/0"
+    chunk_ids: ["transcript:4", "transcript:7"]
+    must_have_citation: true
+
+  # 2-events compound bullet: 37歳誕生日バー + タクシー大恥
+  # chunk 13 (37歳誕生日), chunk 18 (バーでお祝い), chunk 23 (タクシー大恥)
+  - section_path: "詳細内容/0"
+    chunk_ids: ["transcript:13", "transcript:18", "transcript:23"]
+    must_have_citation: true
+
+  # TRIPLE 「」bullet: 「明るさ」「清潔感」「わかりやすさ」
+  # chunk 40 (明るさと), chunk 41 (清潔感とあとわかりやすさ)
+  - section_path: "詳細内容/5"
+    chunk_ids: ["transcript:40", "transcript:41"]
+    must_have_citation: true
+
+  # 比喩 compound: 水の比喩 + しんどさ後の甘み
+  # chunk 76 (しんどい夜は次にいいことの不利), chunk 77 (水の比喩 verbatim)
+  - section_path: "詳細内容/10"
+    chunk_ids: ["transcript:76", "transcript:77"]
+    must_have_citation: true

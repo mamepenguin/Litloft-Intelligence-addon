@@ -1,0 +1,48 @@
+# ---------------------------------------------------------------------------
+# Steve Jobs Stanford Commencement (英語原文 → 日本語要約)
+# 英語トランスクリプトに対して日本語で要約が生成されている cross-language
+# のケース。dense embedding model (ruri-v3-30m, multilingual) が
+# 日→英を橋渡しできるかの測定。BM25 側は script mismatch で機能しない
+# はずなので、hybrid の dense 側依存が強まる。
+# ---------------------------------------------------------------------------
+
+id: 009_lecture_jobs_crosslang
+file_path: YouTube/【英語スピーチ】Apple創業者スティーブ・ジョブズのスタンフォード大卒業式スピーチ｜日英字幕.mp4
+
+notes: |
+  - 英語 transcript × 日本語 detailed_summary。dense のみが cross-lang
+    retrieval を担当。BM25 は sub-text の日本語 salient token を英語
+    transcript FTS5 に打ち込むが hit しないはず → hybrid 側の RRF fusion
+    が dense-only に退化する経路になる。
+  - 詳細内容/11 は 「点と点を未来に向かって繋ぐことは不可能だが、過去を
+    振り返ることで繋がったことは非常に明確になる」 を日本語で要約、
+    原文 chunk 20 "you can't connect the dots looking forward" との
+    dense 側マッチの質を計測。
+  - 結論/0 は "Stay Hungry, Stay Foolish" が日本語要約に英語のまま
+    埋め込まれる (括弧訳付き)。FTS5 で latin identifier として hit する
+    珍しいケース。
+
+expectations:
+  # 導入 paragraph: 時間は限られている + 3つの物語 予告
+  # chunk 0 (Your time is limited), chunk 1 (three stories)
+  - section_path: "導入/0"
+    chunk_ids: ["transcript:0", "transcript:1"]
+    must_have_citation: true
+
+  # 「」anchor: 点と点を未来に繋ぐことは不可能
+  # chunk 20 (can't connect the dots looking forward / backwards)
+  - section_path: "詳細内容/11"
+    chunk_ids: ["transcript:20"]
+    must_have_citation: true
+
+  # 「ひどい味の薬」 metaphor (cross-lang)
+  # chunk 33 (awful-tasting medicine, patient needed it)
+  - section_path: "詳細内容/21"
+    chunk_ids: ["transcript:33"]
+    must_have_citation: true
+
+  # Stay Hungry, Stay Foolish (latin identifier in JP summary)
+  # chunk 57 (final issue back cover "Stay Hungry, Stay Foolish")
+  - section_path: "結論/0"
+    chunk_ids: ["transcript:57"]
+    must_have_citation: true

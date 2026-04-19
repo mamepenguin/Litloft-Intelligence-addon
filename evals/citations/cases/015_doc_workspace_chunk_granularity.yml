@@ -1,0 +1,44 @@
+# ---------------------------------------------------------------------------
+# Google Workspace 契約検討 (Markdown 文書)
+# 文書モード (text_content) で chunk_ids が document:N 形式。13 chunks で
+# 1 chunk あたり 600-700 文字と粗めの粒度 — ユーザー指摘の「チャンクの
+# 粒度に問題あり」サンプル。paragraph/bullet 境界とは独立した chunk
+# 境界で retrieval の粒度影響を検証。
+# ---------------------------------------------------------------------------
+
+id: 015_doc_workspace_chunk_granularity
+file_path: Knowledge/Google Workspaceを契約すべきかについて.md
+
+notes: |
+  - chunk_id 形式は document:N (transcript:N ではない)。
+  - 文書はチャット形式の長い対話で、各 chunk が会話数ターン分を含む。
+    同じ chunk 内に多数の論点が詰まるため top-1 が under-determined
+    になりやすい。
+  - 詳細内容/6 paragraph (numbered list 4 項目) は chunk 1-2 に跨る。
+  - 詳細内容/11 は 「新たな固定費の発生」「228,000円」など具体数値が
+    chunk 4 に集中。
+
+expectations:
+  # 一方通行 bullet (無料→有料は戻れない)
+  # chunk 0 (プラン変更は一方通行)
+  - section_path: "詳細内容/4"
+    chunk_ids: ["document:0"]
+    must_have_citation: true
+
+  # 4点判断軸 paragraph (numbered list): AI用途/ストレージ/リスク/Antigravity
+  # chunk 1 (AI用途 ストレージ), chunk 2 (Antigravity + 具体的アドバイス)
+  - section_path: "詳細内容/6"
+    chunk_ids: ["document:1", "document:2"]
+    must_have_citation: true
+
+  # コスト構造の誤解: 1,100円節約 vs 228,000円長期コスト
+  # chunk 4 verbatim
+  - section_path: "詳細内容/11"
+    chunk_ids: ["document:4"]
+    must_have_citation: true
+
+  # 結論 bullet: 完全代替可能でも Workspace 避ける + Google One 2TB 推奨
+  # chunk 6 (完全代替可能でも一方通行リスクは避ける), chunk 8 (Google One 2TB 1300円)
+  - section_path: "詳細内容/19"
+    chunk_ids: ["document:6", "document:8"]
+    must_have_citation: true

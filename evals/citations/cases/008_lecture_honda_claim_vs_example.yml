@@ -1,0 +1,45 @@
+# ---------------------------------------------------------------------------
+# 本田圭佑 卒業スピーチ（近畿大学）
+# 「欲望を解放しろ、環境にこだわれ」が主題。claim paragraph の直後に
+# bullet 列挙が続く構造 (section "詳細内容：人生を切り開くための二つの指針"
+# のトップ) があり、claim-vs-example bias (paragraph が example chunk に
+# 引き寄せられる現象) の追加サンプルになる。
+# ---------------------------------------------------------------------------
+
+id: 008_lecture_honda_claim_vs_example
+file_path: YouTube/プロサッカー選手 本田圭佑氏 卒業式スピーチ「欲望を解放しろ、環境にこだわれ」｜令和4年度近畿大学卒業式.hvlink
+
+notes: |
+  - H2 section title に ":" を含む形式 (「詳細内容：人生を切り開くための
+    二つの指針」)。section_path が長いが parser 通り。
+  - 詳細内容:.../0 は claim paragraph ("二つのアドバイスを提示した")。
+    section 冒頭 chunk 20-21 ではなく example bullet の chunk に引き寄せ
+    られるか計測。claim-vs-example bias の新規サンプル。
+  - 詳細内容:.../9 は 「いつかは死ぬ、生きたいように生きろ」 で 「」内に
+    「、」がある。句読点 split が 「」内で誤って fire しない保証の確認。
+
+expectations:
+  # 導入 paragraph: 自然体スタイル + 将来の夢質問
+  # chunk 9 (今日何話すか一切考えず), 14 (将来の夢が決まってる手上げて), 15 (10%)
+  - section_path: "導入：スピーチの心構えと現状認識/0"
+    chunk_ids: ["transcript:9", "transcript:14", "transcript:15"]
+    must_have_citation: true
+
+  # Claim paragraph: "二つの重要なアドバイスを提示した" - section 冒頭
+  # chunk 20 (お話できれば), 21 (欲望を解放しろと限界を決めるな)
+  # claim-vs-example bias テスト: 詳細 chunks に引き寄せられるかどうか
+  - section_path: "詳細内容：人生を切り開くための二つの指針/0"
+    chunk_ids: ["transcript:20", "transcript:21"]
+    must_have_citation: true
+
+  # 問題提起 bullet: 「欲望」「やりたいこと」を抑えつけている
+  # chunk 30 (欲望を押さえつけてる), 32 (人間関係が壊れるのも怖い)
+  - section_path: "詳細内容：人生を切り開くための二つの指針/1"
+    chunk_ids: ["transcript:30", "transcript:32"]
+    must_have_citation: true
+
+  # 「」内「、」: 「いつかは死ぬ、生きたいように生きろ」
+  # chunk 68 (いつかは死ぬ), 69 (行きたいように生きろと)
+  - section_path: "詳細内容：人生を切り開くための二つの指針/9"
+    chunk_ids: ["transcript:68", "transcript:69"]
+    must_have_citation: true

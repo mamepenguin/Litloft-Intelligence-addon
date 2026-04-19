@@ -1,0 +1,43 @@
+# ---------------------------------------------------------------------------
+# 閣議後 小野田経済安保相 記者会見
+# 質疑応答で 「」内に verbatim 引用された発言 (総理発言 vs 大臣発言) が
+# 食い違う質問の検出。複数 section (宇宙、海賊版、重要物資) にまたがる
+# factual compound bullets を評価。
+# ---------------------------------------------------------------------------
+
+id: 011_press_onoda_nested_bracket
+file_path: YouTube/【会見ノーカット】閣議後　小野田経済安保相 記者会見 宇宙船「オリオン」人類の最遠到達記録について──政治ニュース（日テレNEWS）.hvlink
+
+notes: |
+  - 4. 宇宙 bullet は「オリオン」anchor + アポロ13号 anchor の 2 anchor
+    compound。chunks 21-22 が verbatim (オライオン ASR 表記注意)。
+  - 8. 政治 bullet は TWO 「」内に完全引用された総理発言/大臣発言が
+    食い違う旨の指摘。chunks 64-65 verbatim。
+  - 5. 海賊版 paragraph は numbered list (1. 2. 3.) が bullet 認識されず
+    paragraph 扱いになっているため 3 items が 1 segment に圧縮される。
+    chunks 35-37 に 3 対策が順に登場。paragraph 型 compound の追加サンプル。
+
+expectations:
+  # 宇宙船「オリオン」 月裏側飛行 + アポロ13号記録更新
+  # chunk 21 (オライオン 月裏側飛行 40万7000km 再遠距離), chunk 22 (50年以上前アポロ13号 記録更新)
+  - section_path: "4. 宇宙開発・国際協力に関する質疑応答（経済安全保障担当大臣）/1"
+    chunk_ids: ["transcript:21", "transcript:22"]
+    must_have_citation: true
+
+  # 政治的発言 2 「」nested: 高市総理発言 vs 小野田大臣発言
+  # chunk 64 (日本はレアスに困らない + 小野田大臣の2月3日), chunk 65 (実用化の可能性 検討)
+  - section_path: "8. 政治的発言に関する質疑応答（AI担当大臣）/1"
+    chunk_ids: ["transcript:64", "transcript:65"]
+    must_have_citation: true
+
+  # 海賊版 3 numbered list (paragraph): エンフォースメント / 閲覧抑制 / 広告抑制
+  # chunk 35 (エンフォースメント), chunk 36 (閲覧抑制), chunk 37 (広告抑制)
+  - section_path: "5. 海賊版対策に関する質疑応答（文化庁担当者）/3"
+    chunk_ids: ["transcript:35", "transcript:36", "transcript:37"]
+    must_have_citation: true
+
+  # 重要物資 bullet: 若澤大臣 エネルギー資源担当 + 原油など供給制約
+  # chunk 46 (若沢大臣 エネルギー資源 原価 中東情勢), chunk 47 (供給制約 安定確保 中心)
+  - section_path: "6. 重要物資の安定確保に関する質疑応答（経済産業大臣）/3"
+    chunk_ids: ["transcript:46", "transcript:47"]
+    must_have_citation: true

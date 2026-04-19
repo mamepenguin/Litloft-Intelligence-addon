@@ -1,0 +1,45 @@
+# ---------------------------------------------------------------------------
+# Zenn 記事: Claude Code Skills で Apple 風デザイン自動生成 (Markdown)
+# 文書で 36 chunks、code block や YAML frontmatter が多い。
+# backtick `code` を含む技術アンカーの BM25 挙動、および doc chunk
+# 粒度下での retrieval を検証。
+# ---------------------------------------------------------------------------
+
+id: 016_doc_claude_skills_code_anchor
+file_path: Knowledge/Claude Skillsで簡単にApple風デザインを自動生成！AIっぽいデザインから脱却する方法.md
+
+notes: |
+  - 36 chunks、code block とテキストが混在。Markdown 原文が `code`
+    backtick + YAML frontmatter を多用するため、FTS5 のトークナイズで
+    backtick が切れる挙動に注意。
+  - 詳細内容/5 は YAML frontmatter (`name`, `description`) anchor。
+    chunks 7 に YAML 定義例が集中 (Critical Requirements セクション)。
+  - 詳細内容/17 (Shell) と /18 (Python) は 2 連続 bullet で各 script 型
+    の特徴が chunk 16-17 に集中。script 選択 compound の評価。
+  - 詳細内容/22 (iOS 設定画面再現) は実写画像評価の段落で chunks 33-35
+    に跨る可能性。
+
+expectations:
+  # YAML フロントマター bullet: name + description + 具体的なトリガー
+  # chunk 7 (YAML frontmatter 定義 + name/description Critical Requirements)
+  - section_path: "詳細内容/5"
+    chunk_ids: ["document:7"]
+    must_have_citation: true
+
+  # Shell Scripts: 単純・単一目的・5行程度
+  # chunk 16 (Shell Scripts simple, single-purpose, POSIX)
+  - section_path: "詳細内容/17"
+    chunk_ids: ["document:16"]
+    must_have_citation: true
+
+  # Python Scripts: 複雑ロジック・条件分岐・cross-platform
+  # chunk 17 (Python scripts complex logic, cross-platform)
+  - section_path: "詳細内容/18"
+    chunk_ids: ["document:17"]
+    must_have_citation: true
+
+  # トグルボタン iOS 設定画面再現
+  # chunk 35 (トグルボタン デザイン 近い)
+  - section_path: "詳細内容/22"
+    chunk_ids: ["document:35"]
+    must_have_citation: true

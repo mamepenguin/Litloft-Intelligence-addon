@@ -1,0 +1,46 @@
+# ---------------------------------------------------------------------------
+# S&P500 市場解説動画
+# 数値アンカーを複数持つ compound bullets が多い。3 銘柄 + 3 % の
+# triple numeric / ゴールド 2.1% + シルバー + ビットコイン 3-asset compound
+# を評価。解説ジャンル、数値重視の sample。
+# ---------------------------------------------------------------------------
+
+id: 012_commentary_snp_numeric_triple
+file_path: YouTube/S&P500は連続の急回復、でも何もするな！【S&P500, NASDAQ100】.hvlink
+
+notes: |
+  - section title に emoji (📈 📊 💡) を含む。section_path が emoji を
+    保持。parse_segments の挙動確認にも使える。
+  - 市場動向/1 bullet は "S&P500 +0.72% / NASDAQ100 +1.18% / 反動体 +2.82%"
+    の 3 numeric anchor + 2日連続反発。現行 split は 、句読点で分解する
+    が anchor の密集度が高い。
+  - 貴金属 bullet は 3 asset (ゴールド 2.1% + シルバー + ビットコイン)
+    compound。chunk 16 に全て verbatim。single chunk の GT だが
+    複数 assets を並べる pattern。
+  - サミュエルソン 「」 quote は典型 「」compound。chunk 46-47 の境界に
+    anchor が跨る。
+
+expectations:
+  # 3 銘柄 × 3 % compound + 2日連続反発
+  # chunk 1 (3 銘柄 +%), chunk 2 (2日連続力強く反発)
+  - section_path: "📈 市場の直近の動向（米国株・為替）/1"
+    chunk_ids: ["transcript:1", "transcript:2"]
+    must_have_citation: true
+
+  # 設定来最高値 4万572円 (1月14日記録), 2ヶ月更新なし
+  # chunk 10 verbatim
+  - section_path: "📊 主要指標と市場の構造分析/3"
+    chunk_ids: ["transcript:10"]
+    must_have_citation: true
+
+  # 貴金属 3-asset compound: ゴールド 2.1% / シルバー / ビットコイン
+  # chunk 16 verbatim
+  - section_path: "📊 主要指標と市場の構造分析/9"
+    chunk_ids: ["transcript:16"]
+    must_have_citation: true
+
+  # サミュエルソン 「」 quote: "5回の景気交代のうち9回を予測"
+  # chunk 46 (こんな言葉を残しています), chunk 47 (株式市場は過去5回の景気交代のうち9回を予測)
+  - section_path: "💡 投資戦略と市場の評価軸/4"
+    chunk_ids: ["transcript:46", "transcript:47"]
+    must_have_citation: true

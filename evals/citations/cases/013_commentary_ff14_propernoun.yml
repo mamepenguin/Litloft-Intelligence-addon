@@ -1,0 +1,45 @@
+# ---------------------------------------------------------------------------
+# FF14 第92回PLL 解説動画
+# ゲーム固有名詞が多く、ASR でカタカナが崩れる (例: ディルシャポ /
+# デュエルシャポ、ハルモニア戦争図書館)。script mismatch + proper-noun
+# anchor の密集度が高く、BM25 側の salient token 抽出が効くかの評価。
+# ---------------------------------------------------------------------------
+
+id: 013_commentary_ff14_propernoun
+file_path: YouTube/FF14　忙しい人のための第92回PLL要約.hvlink
+
+notes: |
+  - メインクエスト bullet: パート1/パート2 + 9月上旬、2 compound anchor。
+  - 敵キャラクター bullet: 「前方の黒い悪魔」「シャントット博士」の
+    2 「」 compound。
+  - ドロップ装備品 bullet は AF 4 種 + デュエルシャポ + 3年 multi-anchor。
+    chunks 29-31 に anchor が散在 (cross-chunk multi-anchor)。
+  - ハルモニア戦争図書館 paragraph: 1.2.3. numbered list が paragraph 扱い
+    になる (numbered は bullet regex にマッチしない)。3 items それぞれが
+    別 chunk に。記者会見 011 の海賊版 paragraph と同じ pattern を
+    解説ジャンルで再サンプル。
+
+expectations:
+  # メインクエスト: パート1とパート2 + 9月上旬
+  # chunk 3 (パート1とパート2に分れ), chunk 4 (パート2は9月上旬)
+  - section_path: "1. パッチ7.5の全体概要と主要コンテンツ/1"
+    chunk_ids: ["transcript:3", "transcript:4"]
+    must_have_citation: true
+
+  # 敵キャラクター 「」2 anchor: 前方の黒い悪魔 + シャントット博士
+  # chunks 20-21 に跨る
+  - section_path: "2. 主要コンテンツの詳細解説/1"
+    chunk_ids: ["transcript:20", "transcript:21"]
+    must_have_citation: true
+
+  # ドロップ装備品 multi-anchor: AF 4種 + デュエルシャポ 3年
+  # chunk 29 (デュエルシャポ 3年), chunk 30 (ナイトAF), chunk 31 (文句AF / シーフAF)
+  - section_path: "2. 主要コンテンツの詳細解説/10"
+    chunk_ids: ["transcript:29", "transcript:30", "transcript:31"]
+    must_have_citation: true
+
+  # ハルモニア戦争図書館 3 ギミック paragraph
+  # chunk 33 (ヒーリングサークル 50%軽減 HP回復), chunk 35 (マナチェッカー), chunk 36 (ジャンプサークル)
+  - section_path: "2. 主要コンテンツの詳細解説/11"
+    chunk_ids: ["transcript:33", "transcript:35", "transcript:36"]
+    must_have_citation: true

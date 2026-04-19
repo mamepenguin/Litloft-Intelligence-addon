@@ -1,0 +1,43 @@
+# ---------------------------------------------------------------------------
+# グラドル三橋氏インタビュー (塚本ノベル)
+# 会話スタイルで「」内 verbatim quote が多い interview 型のサンプル。
+# 2-3 並列の 「」anchor 構造や、短い anchor (単語レベル) の検証。
+# ---------------------------------------------------------------------------
+
+id: 014_interview_mihashi_quote_heavy
+file_path: YouTube/グラドル好き同人作家が人気グラドル三橋くん様に過激！？なインタビュー！同人も読んで頂いた！【塚本のべる_個人Vtuber】.hvlink
+
+notes: |
+  - 詳細内容/9 は 2 「」短 anchor (下乳 / 横乳)。短 anchor が split 後に
+    フィルタ (min_len=4) で落とされる可能性を検証。
+  - 詳細内容/22 は 3 「」quote (会えませんか/飲めませんか/やばいお仕事) +
+    「事務所が弾く」claim の複合。chunks 67-69 の範囲。
+  - 詳細内容/24 は 2 「」quote (撮影会で月給5万円 / ファンタジーすぎる)
+    が離れた chunks (73 と 76) にある、跨ぎ距離のある anchor。
+  - 詳細内容/15 はシンプルな single anchor (フライデー誌 + 1年ちょっと前)
+    で確認用 baseline。
+
+expectations:
+  # 「下乳」「横乳」短 anchor
+  # chunk 31 (下乳と横乳 区分), chunk 32 (NGとかの方もいますし 下ダメ)
+  - section_path: "詳細内容/9"
+    chunk_ids: ["transcript:31", "transcript:32"]
+    must_have_citation: true
+
+  # フライデー誌デビュー (single anchor)
+  # chunk 46 verbatim
+  - section_path: "詳細内容/15"
+    chunk_ids: ["transcript:46"]
+    must_have_citation: true
+
+  # 3 「」quote: DM 会えませんか/飲めませんか/やばいお仕事
+  # chunks 67-69
+  - section_path: "詳細内容/22"
+    chunk_ids: ["transcript:67", "transcript:68", "transcript:69"]
+    must_have_citation: true
+
+  # 2 「」quote 跨ぎ距離: 撮影会で月給5万円 / ファンタジーすぎる
+  # chunk 73 (撮影会で月給5万円), chunk 76 (ファンタジーすぎるかな)
+  - section_path: "詳細内容/24"
+    chunk_ids: ["transcript:73", "transcript:76"]
+    must_have_citation: true

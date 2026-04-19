@@ -1,0 +1,43 @@
+# ---------------------------------------------------------------------------
+# 気象庁 緊急記者会見（2026-04-18 長野県北部 M5.0）
+# 数値アンカー (M5.0, 1週間, 2日から3日, 1961年 M5.0 → 3分後 M4.5) が
+# 多い事実陳述型 compound bullet の評価。記者会見ジャンル追加。
+# ---------------------------------------------------------------------------
+
+id: 010_press_weather_agency_numeric
+file_path: YouTube/【長野県北部で震度5強】気象庁 緊急記者会見 生中継（2026年4月18日）.hvlink
+
+notes: |
+  - section title に番号 + 句点 ("1. 地震の概要と発生状況") を含む。
+    section_path が number 接頭辞を保持することの確認。
+  - 警戒期間 bullet は 2 時間 anchor (1週間 / 2日〜3日) の compound。
+    「**1週間程度**」「**地震発生から2日から3日間程度**」の bold 記法
+    で anchor 化されており、CJK 句読点 split では 2 sub に分かれない
+    (実際は 「、」 1 つなので分かれる) ので recovery を確認。
+  - 富山県東部 compound は 3 数値 (1961年, M5.0, 3分後 M4.5) が 1 chunk
+    に集中しているため chunk 40 1 つで十分。
+
+expectations:
+  # マグニチュード数値 bullet: M5.0 速報値からの変更なし
+  # chunk 4 verbatim
+  - section_path: "1. 地震の概要と発生状況/1"
+    chunk_ids: ["transcript:4"]
+    must_have_citation: true
+
+  # 発生機構 bullet: 北西〜南東方向逆断層 + 近くの内部
+  # chunk 5 (北製南頭方向 圧力軸 逆断), chunk 6 (近くの内部で発生した地震)
+  - section_path: "1. 地震の概要と発生状況/3"
+    chunk_ids: ["transcript:5", "transcript:6"]
+    must_have_citation: true
+
+  # 警戒期間 compound: 1週間 + 2日から3日
+  # chunk 13 (1週間程度), chunk 14 (2日から3日間程度)
+  - section_path: "2. 防災上の留意事項と今後の見通し/3"
+    chunk_ids: ["transcript:13", "transcript:14"]
+    must_have_citation: true
+
+  # 過去の事例: 1961年富山県東部 M5.0 → 3分後 M4.5
+  # chunk 40 に verbatim 一致
+  - section_path: "2. 防災上の留意事項と今後の見通し/6"
+    chunk_ids: ["transcript:40"]
+    must_have_citation: true

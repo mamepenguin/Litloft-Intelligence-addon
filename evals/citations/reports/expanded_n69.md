@@ -1,6 +1,6 @@
-# detailed_summary Citation Eval — strict-gt-baseline
+# detailed_summary Citation Eval — expanded-cases-N69
 
-_Generated: 2026-04-19 15:30:47 UTC_
+_Generated: 2026-04-19 15:29:01 UTC_
 
 ## Aggregate
 
@@ -222,3 +222,11 @@ Sanity-checks whether the system's own confidence signal predicts location corre
 | `詳細内容/17` | bullet | 1 | ✅ | ✅ | 0.87 | `document:17`, `document:16`, `document:18` |
 | `詳細内容/18` | bullet | 0 ✅ | ✅ | ✅ | 0.90 | `document:17`, `document:16`, `document:18` |
 | `詳細内容/22` | bullet | 1 | ✅ | ✅ | 0.89 | `document:34`, `document:35`, `document:33` |
+
+## Baseline comparison
+
+| metric | baseline | current | delta |
+|---|---:|---:|---:|
+| top1_accuracy | 76.0% | 75.4% | -0.6% (tied) |
+| recall_at_3 | 92.0% | 88.4% | -3.6% ❌ |
+| has_citation_precision | 76.0% | 75.4% | -0.6% (tied) |
