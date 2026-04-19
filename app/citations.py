@@ -1080,6 +1080,20 @@ def _pool_cell_vectors(vectors) -> np.ndarray | None:
 # fragments that hurt retrieval.
 _COMPOUND_BULLET_SPLIT_RE = re.compile(r"[。、，,・；;]+")
 
+# Japanese corner brackets 「...」 extracted as sub-anchors when a bullet
+# contains two or more pairs. 「」 is the stronger anchor signal than CJK
+# punctuation — a bullet like "「明るさ」「清潔感」「わかりやすさ」" or
+# "「あと1品ほしい」「野菜が足りない」" carries each bracketed phrase as
+# a distinct verbatim anchor that dense retrieval should pick up
+# independently. Extracted content tends to be short (down to a single
+# salient word), so we accept a lower character floor than the
+# punctuation path's ``citation_multi_anchor_min_len``. Single-bracket
+# bullets (e.g. one quote mid-sentence) are intentionally ignored —
+# those are rhetorical emphasis, not parallel-anchor enumeration, and
+# falling through to the punctuation path is safer.
+_BRACKET_SUB_RE = re.compile(r"「([^「」]+?)」")
+_BRACKET_MIN_CHARS = 2
+
 
 def _split_compound_segment(segment: Segment) -> list[str]:
     """Return sub-segment texts for a compound bullet, or ``[segment_text]``.
@@ -1125,6 +1139,28 @@ def _split_compound_segment(segment: Segment) -> list[str]:
         return [text]
     if segment.segment_type != "bullet":
         return [text]
+
+    # First try 「」corner-bracket extraction. When the bullet has two
+    # or more 「...」pairs, each bracketed phrase is an explicit verbatim
+    # anchor (the summary author is enumerating parallel items). This
+    # takes precedence over punctuation-based split because 「」 is the
+    # stronger signal — it's the marker the author *chose* to delimit
+    # anchors with, rather than an incidental sentence break.
+    #
+    # We don't apply the salient-token filter inside brackets because
+    # 「」 itself validates anchor-hood: a hiragana-only adjective like
+    # 「わかりやすさ」 is a legitimate anchor when the author enumerates
+    # it alongside 「明るさ」「清潔感」. The min-char floor (2) is the
+    # only guard, which catches single-kana bracket artefacts without
+    # rejecting genuine short Japanese anchors.
+    bracket_subs: list[str] = []
+    for m in _BRACKET_SUB_RE.findall(text):
+        stripped = m.strip()
+        if len(stripped) < _BRACKET_MIN_CHARS:
+            continue
+        bracket_subs = [*bracket_subs, stripped]
+    if len(bracket_subs) >= 2:
+        return bracket_subs
 
     min_len = settings.summaries.citation_multi_anchor_min_len
     raw_parts = _COMPOUND_BULLET_SPLIT_RE.split(text)
