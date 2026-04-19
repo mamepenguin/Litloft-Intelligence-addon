@@ -1,0 +1,38 @@
+# ---------------------------------------------------------------------------
+# Citation eval case template.
+#
+# Copy this file to ``NNN_<descriptive>.yml`` (drop the .template extension)
+# and fill in the expectations for a specific file. See
+# ``../README.md`` for the schema and the metrics the harness reports.
+#
+# The harness loads the stored ``detailed_summary`` from the snapshot DB —
+# it does NOT regenerate it. That means:
+#   1. You need to have run detailed_summary generation for the target
+#      file against the snapshot-referenced intelligence instance.
+#   2. ``section_path`` values must match exactly what the parser emits for
+#      the current markdown. When you regenerate the summary, re-verify
+#      the paths haven't drifted.
+# ---------------------------------------------------------------------------
+
+id: 000_example
+file_path: audio/recipe_curry.mp3
+
+notes: |
+  Example shell — not wired to any real ground truth. Delete once a real
+  case replaces it, or leave as a documentation anchor.
+
+expectations:
+  - section_path: "全体像/0"
+    segment_hint:
+      time_range: [0.0, 30.0]
+    must_have_citation: true
+
+  - section_path: "重要ポイントまとめ/row/0"
+    segment_hint:
+      time_range: [60.0, 120.0]
+    must_have_citation: true
+
+  # Example of an exact chunk_id match (preferred when you've inspected
+  # the DB directly).
+  # - section_path: "主要な章・場面/2"
+  #   chunk_ids: ["transcript:5", "transcript:6"]
