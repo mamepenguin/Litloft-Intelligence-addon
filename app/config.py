@@ -327,6 +327,23 @@ class SummariesConfig:
     # parent bullet's full text as the sole anchor, which is safer
     # than running retrieval with an impoverished query.
     citation_multi_anchor_min_len: int = 4
+    # Paragraph synthesis gate. When a paragraph-type segment's
+    # citation chunks are scattered across the file — normalised
+    # index-spread > this threshold — the LLM most likely synthesised
+    # the claim from multiple parts of the document and no single
+    # chunk is the source. Flip has_citation to False so the UI
+    # doesn't imply single-source provenance. 0 disables the gate.
+    #
+    # Only applies to segment_type == "paragraph". Bullets (fact-level
+    # items and table rows) are unaffected — those are almost always
+    # single-source. The signal is purely the chunk-index distribution,
+    # so it is language- and LLM-independent.
+    citation_paragraph_spread_gate: float = 0.3
+    # Files smaller than this many chunks skip the paragraph gate:
+    # short files push most chunks together and normalised spread
+    # loses its meaning (a 3-chunk song where the chorus recurs in
+    # chunks 0 and 2 looks "scattered" but is really single-source).
+    citation_paragraph_spread_min_chunks: int = 20
 
 
 @dataclass(frozen=True)

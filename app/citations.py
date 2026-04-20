@@ -1295,6 +1295,75 @@ def _embed_segment(segment: Segment) -> np.ndarray | None:
     return np.asarray(vectors[0], dtype=np.float32)
 
 
+def _fetch_max_chunk_per_kind(file_id: str) -> dict[str, int]:
+    """Return ``{'transcript': N, 'document': M}`` for ``file_id``.
+
+    Used by the paragraph spread gate to normalise chunk-index
+    spread. Missing kinds are simply absent from the dict so callers
+    can treat "no transcript chunks" / "no document chunks" as
+    "gate not applicable" for that kind. Empty dict on DB failure;
+    callers then keep the citation (fail-open — the gate is a
+    precision tweak, not an invariant).
+    """
+    try:
+        with get_search_db() as session:
+            t_row = session.execute(
+                sql_text(
+                    "SELECT MAX(chunk_index) FROM transcript_chunks "
+                    "WHERE file_id = :fid"
+                ),
+                {"fid": file_id},
+            ).fetchone()
+            d_row = session.execute(
+                sql_text(
+                    "SELECT MAX(CAST(chunk_index AS INTEGER)) "
+                    "FROM fts_text_content WHERE file_id = :fid"
+                ),
+                {"fid": file_id},
+            ).fetchone()
+    except Exception as e:  # pragma: no cover - defensive
+        logger.debug("_fetch_max_chunk_per_kind failed for %s: %s", file_id, e)
+        return {}
+    out: dict[str, int] = {}
+    if t_row and t_row[0] is not None:
+        out["transcript"] = int(t_row[0])
+    if d_row and d_row[0] is not None:
+        out["document"] = int(d_row[0])
+    return out
+
+
+def _compute_spread_norm(
+    chunk_ids: list[str], max_by_kind: dict[str, int]
+) -> float | None:
+    """Compute ``(max_idx - min_idx) / max_chunk`` for ``chunk_ids``.
+
+    Returns ``None`` when spread is ill-defined — fewer than 2
+    chunks, mixed kinds (transcript+document), malformed ids, or
+    the file has no recorded chunks for the relevant kind. Callers
+    treat ``None`` as "skip the gate" and keep the citation.
+    """
+    if len(chunk_ids) < 2:
+        return None
+    parsed: list[tuple[str, int]] = []
+    for cid in chunk_ids:
+        if ":" not in cid:
+            return None
+        kind, _, raw = cid.partition(":")
+        try:
+            parsed.append((kind, int(raw)))
+        except ValueError:
+            return None
+    kinds = {k for k, _ in parsed}
+    if len(kinds) != 1:
+        return None
+    kind = next(iter(kinds))
+    mx = max_by_kind.get(kind, 0)
+    if mx < 2:
+        return None
+    indices = [i for _, i in parsed]
+    return (max(indices) - min(indices)) / mx
+
+
 def compute_citations(
     file_id: str, detailed_summary: str
 ) -> list[dict]:
@@ -1316,9 +1385,17 @@ def compute_citations(
     top_k = settings.summaries.citation_top_k
     margin_gate = settings.summaries.citation_margin_gate
     margin_bypass = settings.summaries.citation_margin_bypass_score
+    paragraph_spread_gate = settings.summaries.citation_paragraph_spread_gate
+    paragraph_spread_min_chunks = (
+        settings.summaries.citation_paragraph_spread_min_chunks
+    )
 
     segments = parse_segments(detailed_summary)
     results: list[dict] = []
+    # Lazy-initialised once per call so we pay the DB query at most
+    # once per compute_citations invocation, only when the gate can
+    # fire (gate enabled AND at least one paragraph segment exists).
+    max_chunk_by_kind: dict[str, int] | None = None
 
     # Pre-compute all segment embeddings once so the hierarchical pool
     # (which uses the same embeddings) and per-segment retrieval share
@@ -1443,6 +1520,34 @@ def compute_citations(
             ]
         else:
             passing = []
+        # Paragraph synthesis gate. When a paragraph-type segment's
+        # passing chunks span a large fraction of the file (e.g.
+        # top-3 indices at 5, 50, 95 in a 100-chunk file), the LLM
+        # most likely synthesised the claim from multiple parts of
+        # the document and no single chunk is the source. Flip to
+        # ⚠ so the UI doesn't imply single-source provenance.
+        # Language- and LLM-agnostic: only the chunk-index
+        # distribution is consulted, never the text. Bullets are
+        # unaffected — fact-level items and table rows are almost
+        # always single-source.
+        if (
+            has_citation
+            and paragraph_spread_gate > 0
+            and seg.segment_type == "paragraph"
+            and len(passing) >= 2
+        ):
+            if max_chunk_by_kind is None:
+                max_chunk_by_kind = _fetch_max_chunk_per_kind(file_id)
+            spread_norm = _compute_spread_norm(passing, max_chunk_by_kind)
+            if spread_norm is not None:
+                kind = passing[0].split(":", 1)[0]
+                file_chunks = max_chunk_by_kind.get(kind, 0) + 1
+                if (
+                    file_chunks >= paragraph_spread_min_chunks
+                    and spread_norm > paragraph_spread_gate
+                ):
+                    has_citation = False
+                    passing = []
         results.append(
             {
                 "section_path": seg.section_path,

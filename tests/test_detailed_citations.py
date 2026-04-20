@@ -2400,6 +2400,187 @@ class TestMarginGate:
             )
 
 
+class TestParagraphSpreadGate:
+    """Paragraph with wide chunk-index spread has citation suppressed.
+
+    Rationale: a paragraph the LLM chose (vs bullets) is usually a
+    multi-chunk synthesis — "本動画では...", "教授は...", etc. When
+    its top-k chunks are scattered across the file, implying a
+    single citation is misleading. The gate looks only at chunk
+    indices (language- and LLM-agnostic) and flips has_citation to
+    False when the normalised spread exceeds the threshold.
+    """
+
+    def _setup_common(self, monkeypatch, candidates, max_by_kind):
+        """Shared setup: stub embed / retrieve / max-chunk helpers."""
+        from app import citations
+        import numpy as np
+
+        monkeypatch.setattr(
+            citations, "_embed_segment",
+            lambda seg: np.ones(4, dtype=np.float32),
+        )
+        monkeypatch.setattr(
+            citations, "_retrieve_candidates",
+            lambda fid, seg, vec, k, **_kw: candidates,
+        )
+        monkeypatch.setattr(
+            citations, "_fetch_file_vectors",
+            lambda fid, chunk_range=None: [],
+        )
+        monkeypatch.setattr(
+            citations, "_fetch_max_chunk_per_kind",
+            lambda fid: dict(max_by_kind),
+        )
+
+    def test_paragraph_high_spread_flips_to_false(
+        self, citations_db, monkeypatch,
+    ):
+        """Paragraph with top-3 chunks at 5, 50, 95 in a 100-chunk file
+        has spread 0.90 > 0.30 default → suppressed.
+        """
+        from app import citations
+
+        # Score high enough to pass threshold and bypass margin gate,
+        # so only the paragraph spread gate can flip it.
+        self._setup_common(
+            monkeypatch,
+            [
+                ("transcript:5", 0.90),
+                ("transcript:50", 0.85),
+                ("transcript:95", 0.82),
+            ],
+            {"transcript": 99},  # max chunk_index → 100 chunks total
+        )
+        # Force a paragraph segment via plain-text parsing.
+        out = citations.compute_citations(
+            "file-1",
+            "本動画は複数箇所を統合した合成説明である。\n",
+        )
+        assert len(out) == 1
+        assert out[0]["segment_type"] == "paragraph"
+        assert out[0]["has_citation"] is False
+        # Gate clears chunk_ids so the UI doesn't show misleading anchors.
+        assert out[0]["citation_chunk_ids"] == []
+        # top_score still recorded so the ⚠ marker can render.
+        assert out[0]["top_score"] == pytest.approx(0.90)
+
+    def test_paragraph_low_spread_keeps_citation(
+        self, citations_db, monkeypatch,
+    ):
+        """Top-3 chunks at 5, 6, 7 → spread 0.02, below threshold.
+
+        This is the legitimate single-source paragraph case that
+        SHOULD keep its citation (the gate must not over-fire).
+        """
+        from app import citations
+
+        self._setup_common(
+            monkeypatch,
+            [
+                ("transcript:5", 0.90),
+                ("transcript:6", 0.88),
+                ("transcript:7", 0.85),
+            ],
+            {"transcript": 99},
+        )
+        out = citations.compute_citations(
+            "file-1",
+            "特定箇所を指す記述的なパラグラフである。\n",
+        )
+        assert out[0]["has_citation"] is True
+        assert out[0]["citation_chunk_ids"] == [
+            "transcript:5", "transcript:6", "transcript:7",
+        ]
+
+    def test_bullet_high_spread_unaffected(
+        self, citations_db, monkeypatch,
+    ):
+        """Bullets are not gated by spread, even at identical spread.
+
+        Fact-level bullets are almost always single-source; the gate
+        only targets paragraph syntheses.
+        """
+        from app import citations
+
+        self._setup_common(
+            monkeypatch,
+            [
+                ("transcript:5", 0.90),
+                ("transcript:50", 0.88),
+                ("transcript:95", 0.85),
+            ],
+            {"transcript": 99},
+        )
+        out = citations.compute_citations(
+            "file-1",
+            "## A\n- some bullet item\n",
+        )
+        assert out[0]["segment_type"] == "bullet"
+        assert out[0]["has_citation"] is True
+        assert len(out[0]["citation_chunk_ids"]) == 3
+
+    def test_paragraph_short_file_skips_gate(
+        self, citations_db, monkeypatch,
+    ):
+        """Files shorter than min_chunks skip the gate entirely.
+
+        A 10-chunk song with chorus lines at indices 0 and 9 would
+        otherwise spuriously trigger the gate — normalised spread
+        is meaningless when the file has so few chunks.
+        """
+        from app import citations
+
+        self._setup_common(
+            monkeypatch,
+            [
+                ("transcript:0", 0.90),
+                ("transcript:9", 0.88),
+            ],
+            {"transcript": 9},  # 10 chunks < default min 20
+        )
+        out = citations.compute_citations(
+            "file-1",
+            "本動画は短い説明である。\n",
+        )
+        assert out[0]["has_citation"] is True
+        assert len(out[0]["citation_chunk_ids"]) == 2
+
+    def test_paragraph_gate_disabled_keeps_legacy_behaviour(
+        self, citations_db, monkeypatch,
+    ):
+        """Setting the gate to 0 restores pre-gate behaviour."""
+        from app import citations, config as cfg_module
+
+        object.__setattr__(
+            cfg_module.settings.summaries,
+            "citation_paragraph_spread_gate",
+            0.0,
+        )
+        try:
+            self._setup_common(
+                monkeypatch,
+                [
+                    ("transcript:5", 0.90),
+                    ("transcript:50", 0.85),
+                    ("transcript:95", 0.82),
+                ],
+                {"transcript": 99},
+            )
+            out = citations.compute_citations(
+                "file-1",
+                "本動画は複数箇所の合成である。\n",
+            )
+            assert out[0]["has_citation"] is True
+            assert len(out[0]["citation_chunk_ids"]) == 3
+        finally:
+            object.__setattr__(
+                cfg_module.settings.summaries,
+                "citation_paragraph_spread_gate",
+                0.3,
+            )
+
+
 class TestSplitCompoundSegment:
     """`_split_compound_segment` returns 2+ sub-anchors or a single-element list.
 
