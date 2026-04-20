@@ -2537,7 +2537,7 @@ class TestParagraphSpreadGate:
                 ("transcript:0", 0.90),
                 ("transcript:9", 0.88),
             ],
-            {"transcript": 9},  # 10 chunks < default min 20
+            {"transcript": 9},  # 10 chunks < default min 50
         )
         out = citations.compute_citations(
             "file-1",

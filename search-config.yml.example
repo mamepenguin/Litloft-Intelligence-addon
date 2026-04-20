@@ -322,10 +322,13 @@ indexing:
 
   # Text chunking settings
   text_chunking:
-    # Maximum characters per chunk
-    max_chunk_size: 1000
-    # Overlap between chunks
-    overlap: 200
+    # Maximum characters per chunk.
+    # 400 chars ≒ 256 tokens is the sweet spot for multilingual-e5-small
+    # embedders. Short enough for precise citations while long enough for
+    # hybrid BM25 retrieval (kanji/katakana runs remain salient).
+    max_chunk_size: 400
+    # Overlap between chunks (≈20% of max_chunk_size).
+    overlap: 80
 
 # Worker concurrency
 workers:

@@ -87,8 +87,8 @@ class WhisperIndexConfig:
 
 @dataclass(frozen=True)
 class TextChunkingConfig:
-    max_chunk_size: int = 1000
-    overlap: int = 200
+    max_chunk_size: int = 400
+    overlap: int = 80
 
 
 @dataclass(frozen=True)
@@ -343,7 +343,7 @@ class SummariesConfig:
     # short files push most chunks together and normalised spread
     # loses its meaning (a 3-chunk song where the chorus recurs in
     # chunks 0 and 2 looks "scattered" but is really single-source).
-    citation_paragraph_spread_min_chunks: int = 20
+    citation_paragraph_spread_min_chunks: int = 50
 
 
 @dataclass(frozen=True)
