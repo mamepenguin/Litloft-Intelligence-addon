@@ -231,13 +231,14 @@ describe("DetailedSummaryCitationPopover + CitationInlinePanel", () => {
     expect(await screen.findByText(/弱いが関連する抜粋/)).toBeInTheDocument();
   });
 
-  it("renders a missing marker with an alert tooltip when has_citation is false", () => {
+  it("renders nothing when has_citation is false", () => {
+    // "No strong single-source match" is a retrieval outcome, not a
+    // hallucination warning — real fabrications keep high cosine and
+    // land in the has_citation=true branch. The prior alert-triangle
+    // was noise, so the component should render nothing here.
     const { container } = renderMarkerWithPanel({ citation: unlinkedCitation });
-    const marker = container.querySelector(
-      '[data-citation-marker="missing"]',
-    );
-    expect(marker).not.toBeNull();
-    expect(marker?.getAttribute("title")).toMatch(/強い根拠/);
+    expect(container.querySelector("[data-citation-marker]")).toBeNull();
+    expect(container.querySelector("button")).toBeNull();
   });
 
   it("opens the inline panel on hover and fetches the top-1 chunk excerpt", async () => {
@@ -464,16 +465,11 @@ describe("DetailedSummaryCitationPopover + CitationInlinePanel", () => {
     });
   });
 
-  it("does not open a panel for a missing-citation marker", async () => {
-    renderMarkerWithPanel({ citation: unlinkedCitation });
+  it("does not render a marker or panel for a no-citation segment", async () => {
+    const { container } = renderMarkerWithPanel({ citation: unlinkedCitation });
 
-    fireEvent.mouseEnter(
-      screen.getByRole("button", { name: /強い根拠/ }),
-    );
-    fireEvent.click(
-      screen.getByRole("button", { name: /強い根拠/ }),
-    );
-
+    // No button to hover / click; nothing to fetch; no panel to open.
+    expect(container.querySelector("button")).toBeNull();
     await new Promise((r) => setTimeout(r, 0));
     expect(getCitationChunkExcerpt).not.toHaveBeenCalled();
     expect(screen.queryByRole("region")).toBeNull();

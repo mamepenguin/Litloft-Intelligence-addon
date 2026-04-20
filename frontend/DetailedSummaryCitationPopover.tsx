@@ -25,7 +25,7 @@
 
 import { useCallback } from "react";
 import { useTranslations } from "next-intl";
-import { Link2, AlertTriangle } from "lucide-react";
+import { Link2 } from "lucide-react";
 
 import { useCitationRail } from "./CitationRailContext";
 import type { DetailedSummaryCitation } from "./api";
@@ -36,10 +36,9 @@ import type { DetailedSummaryCitation } from "./api";
 // docs/CITATION-PIPELINE.md Stage 5 and hako Uxs06_pOPfbkGtvwIK_Vq.
 const CITATION_STRONG_THRESHOLD = 0.9;
 
-type CitationTier = "strong" | "weak" | "missing";
+type CitationTier = "strong" | "weak";
 
 function deriveTier(citation: DetailedSummaryCitation): CitationTier {
-  if (!citation.has_citation) return "missing";
   return citation.top_score >= CITATION_STRONG_THRESHOLD ? "strong" : "weak";
 }
 
@@ -54,39 +53,40 @@ export function DetailedSummaryCitationPopover({
   const { setActive, clearActive, scheduleClose, cancelClose, active } =
     useCitationRail();
 
-  const hasCitation = citation.has_citation;
-  const tier = deriveTier(citation);
   const isActive =
-    active?.citation.section_path === citation.section_path && hasCitation;
+    active?.citation.section_path === citation.section_path;
   const isPinned = isActive && active?.pinned === true;
 
   const handlePointerEnter = useCallback(() => {
-    if (!hasCitation) return;
     cancelClose();
-    // Hover-open is transient (pin=false). If the citation is already
-    // pinned we still call setActive to re-sync, but the existing pin
-    // is preserved via the early-return on same-citation below —
-    // actually simpler to just cancel the close and leave state alone
-    // when the same citation is already active.
     if (isActive) return;
     setActive(citation);
-  }, [hasCitation, isActive, cancelClose, setActive, citation]);
+  }, [isActive, cancelClose, setActive, citation]);
 
   const handlePointerLeave = useCallback(() => {
-    if (!hasCitation) return;
     scheduleClose();
-  }, [hasCitation, scheduleClose]);
+  }, [scheduleClose]);
 
   const handleClick = useCallback(() => {
-    if (!hasCitation) return;
     if (isPinned) {
-      // Toggle off a pinned activation.
       clearActive();
       return;
     }
-    // Promote a hover-open (or a fresh activation) to pinned.
     setActive(citation, { pin: true });
-  }, [hasCitation, isPinned, setActive, clearActive, citation]);
+  }, [isPinned, setActive, clearActive, citation]);
+
+  // When the backend couldn't pin a single source (low cosine,
+  // ambiguous tie, paragraph synthesis gate, …), render nothing.
+  // The alert-triangle we used here was over-signalling: it didn't
+  // correlate with actual hallucination risk — real fabrications
+  // (digit swaps, nuance shifts) stay at high cosine similarity and
+  // sit inside the has_citation=true branch. Drawing attention to
+  // "couldn't map to one chunk" was noise, not a warning users
+  // could act on. Early-return happens after the hooks above so hook
+  // call order stays stable across renders.
+  if (!citation.has_citation) return null;
+
+  const tier = deriveTier(citation);
 
   return (
     <button
@@ -98,51 +98,31 @@ export function DetailedSummaryCitationPopover({
       onClick={handleClick}
       aria-pressed={isActive}
       className={`mx-1 inline-flex h-4 w-4 items-center justify-center rounded align-middle transition-colors ${
-        hasCitation
-          ? isActive
-            ? "text-accent-teal"
-            : "text-accent-teal/60 hover:text-accent-teal"
-          : "text-accent-amber hover:text-accent-amber/80 cursor-default"
+        isActive
+          ? "text-accent-teal"
+          : "text-accent-teal/60 hover:text-accent-teal"
       }`}
       aria-label={
         tier === "strong"
           ? t("citations.linkLabel", { defaultMessage: "Show citation" })
-          : tier === "weak"
-            ? t("citations.weakLinkLabel", {
-                defaultMessage: "Weak source match — verify",
-              })
-            : t("citations.noCitation", {
-                defaultMessage:
-                  "No strong source match found. This may be inaccurate.",
-              })
+          : t("citations.weakLinkLabel", {
+              defaultMessage: "Weak source match — verify",
+            })
       }
       title={
         tier === "strong"
           ? undefined
-          : tier === "weak"
-            ? t("citations.weakLinkLabel", {
-                defaultMessage: "Weak source match — verify",
-              })
-            : t("citations.noCitation", {
-                defaultMessage:
-                  "No strong source match found. This may be inaccurate.",
-              })
+          : t("citations.weakLinkLabel", {
+              defaultMessage: "Weak source match — verify",
+            })
       }
-      data-citation-marker={
-        tier === "missing" ? "missing" : `linked-${tier}`
-      }
+      data-citation-marker={`linked-${tier}`}
     >
-      {hasCitation ? (
-        <Link2
-          size={11}
-          aria-hidden
-          className={
-            tier === "weak" ? "[stroke-dasharray:2_1.5]" : undefined
-          }
-        />
-      ) : (
-        <AlertTriangle size={11} aria-hidden />
-      )}
+      <Link2
+        size={11}
+        aria-hidden
+        className={tier === "weak" ? "[stroke-dasharray:2_1.5]" : undefined}
+      />
     </button>
   );
 }

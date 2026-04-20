@@ -235,7 +235,10 @@ describe("DetailedSummarySection — citations", () => {
     });
   });
 
-  it("renders a warning marker when has_citation is false", async () => {
+  it("does not render any marker when has_citation is false", async () => {
+    // Citation-missing is a retrieval outcome (synthesis, low cosine,
+    // ambiguous tie), not a hallucination warning. The UI stays quiet
+    // rather than drawing attention to an internal limitation.
     (getDetailedSummaryCitations as unknown as ReturnType<typeof vi.fn>)
       .mockResolvedValue({
         available: true,
@@ -255,12 +258,10 @@ describe("DetailedSummarySection — citations", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
 
-    await waitFor(() => {
-      const warning = container.querySelector(
-        '[data-citation-marker="missing"]',
-      );
-      expect(warning).not.toBeNull();
-    });
+    // Wait for the summary to render, then assert no citation marker
+    // is present for this segment.
+    await screen.findByText(/本作の概要を述べる段落/);
+    expect(container.querySelector("[data-citation-marker]")).toBeNull();
   });
 
   it("refetches citations when the citations_ready WS event fires", async () => {
