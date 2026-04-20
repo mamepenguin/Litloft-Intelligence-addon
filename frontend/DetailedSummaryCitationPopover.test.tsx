@@ -1,15 +1,14 @@
 /**
- * Tests for the detailed-summary citation surface: marker (this file)
- * plus the absolute-overlay `CitationInlinePanel` directly beneath the
- * citing segment.
+ * Tests for the detailed-summary citation marker (dot) and the
+ * in-flow accordion panel.
  *
- * Interaction contract under test:
- *   - Hover opens the panel; grace-period cancellation lets the cursor
- *     move from marker → panel without dismissing.
- *   - Click pins the panel so the reader can actually reach the Jump
- *     button without a cursor-race; re-click or close button dismiss.
- *   - Missing-citation markers don't open anything (title tooltip is
- *     the only affordance).
+ * New interaction contract (Phase 2-4 UI overhaul):
+ *   - The marker is a 14px SVG dot (solid teal for strong, dashed/half
+ *     amber for weak). No hover semantics — click toggles the panel.
+ *   - The panel opens in-flow directly below the citing segment;
+ *     clicking the marker again (or Esc on the section) collapses it.
+ *   - Verify OFF hides markers via ``visibility: hidden`` so the
+ *     layout slot still anchors the preceding end-cap.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -30,7 +29,10 @@ vi.mock("@/addons/intelligence/api", () => ({
 
 import { DetailedSummaryCitationPopover } from "@/addons/intelligence/DetailedSummaryCitationPopover";
 import { CitationInlinePanel } from "@/addons/intelligence/CitationInlinePanel";
-import { CitationRailProvider } from "@/addons/intelligence/CitationRailContext";
+import {
+  CitationRailProvider,
+  useCitationRail,
+} from "@/addons/intelligence/CitationRailContext";
 import { getCitationChunkExcerpt } from "@/addons/intelligence/api";
 
 const linkedCitation = {
@@ -60,188 +62,145 @@ const unlinkedCitation = {
   has_citation: false,
 };
 
-// Fixtures for adjacent-chunk highlight extension. top-1 is at
-// transcript:10 throughout; top-2/3 idx choice exercises each path.
-const citationForwardAdjacent = {
-  section_path: "全体像/forward",
-  segment_type: "paragraph" as const,
-  segment_text: "前方に隣接 chunk が続く段落。",
-  chunk_ids: ["transcript:10", "transcript:11"],
-  top_score: 0.92,
-  has_citation: true,
-};
-
-const citationBackwardAdjacent = {
-  section_path: "全体像/backward",
-  segment_type: "paragraph" as const,
-  segment_text: "後方に隣接 chunk が先行する段落。",
-  chunk_ids: ["transcript:10", "transcript:9"],
-  top_score: 0.92,
-  has_citation: true,
-};
-
-const citationBothAdjacent = {
-  section_path: "全体像/both",
-  segment_type: "paragraph" as const,
-  segment_text: "前後に隣接 chunk がある段落。",
-  chunk_ids: ["transcript:10", "transcript:11", "transcript:9"],
-  top_score: 0.93,
-  has_citation: true,
-};
-
-const citationGap2 = {
-  section_path: "全体像/gap2",
-  segment_type: "paragraph" as const,
-  segment_text: "top-2 が 2 chunks 離れている段落 (拡張しない)。",
-  chunk_ids: ["transcript:10", "transcript:12"],
-  top_score: 0.90,
-  has_citation: true,
-};
-
-const citationTop3Adjacent = {
-  section_path: "全体像/top3adj",
-  segment_type: "paragraph" as const,
-  segment_text: "top-2 は離れているが top-3 が前方隣接。",
-  chunk_ids: ["transcript:10", "transcript:20", "transcript:11"],
-  top_score: 0.90,
-  has_citation: true,
-};
+function ForceVerifyOn() {
+  const { setVerify } = useCitationRail();
+  React.useEffect(() => {
+    setVerify(true);
+  }, [setVerify]);
+  return null;
+}
 
 function renderMarkerWithPanel(props: {
   citation:
     | typeof linkedCitation
     | typeof weakLinkedCitation
-    | typeof unlinkedCitation
-    | typeof citationForwardAdjacent
-    | typeof citationBackwardAdjacent
-    | typeof citationBothAdjacent
-    | typeof citationGap2
-    | typeof citationTop3Adjacent;
+    | typeof unlinkedCitation;
   videoRef?: React.RefObject<HTMLVideoElement | null>;
+  verifyOn?: boolean;
 }) {
   return render(
     <NextIntlClientProvider locale="ja" messages={{}}>
       <CitationRailProvider fileId="f1" drive="drive1">
+        {props.verifyOn !== false && <ForceVerifyOn />}
         <DetailedSummaryCitationPopover citation={props.citation} />
-        <CitationInlinePanel
-          sectionPath={props.citation.section_path}
-          videoRef={props.videoRef ?? null}
-        />
+        {props.citation.has_citation && (
+          <CitationInlinePanel
+            sectionPath={props.citation.section_path}
+            citation={props.citation}
+            segmentType="paragraph"
+            videoRef={props.videoRef ?? null}
+          />
+        )}
       </CitationRailProvider>
     </NextIntlClientProvider>,
   );
 }
 
-describe("DetailedSummaryCitationPopover + CitationInlinePanel", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
+  try {
+    window.localStorage.removeItem("hv.intelligence.verify");
+  } catch {
+    // ignore in test envs without storage
+  }
+});
 
-  afterEach(() => {
-    cleanup();
-  });
+afterEach(() => {
+  cleanup();
+});
 
-  it("renders a strong link marker when top_score >= 0.90", () => {
+describe("DetailedSummaryCitationPopover (dot marker)", () => {
+  it("renders a strong dot marker when top_score >= 0.90", async () => {
     const { container } = renderMarkerWithPanel({ citation: linkedCitation });
-    const marker = container.querySelector(
-      '[data-citation-marker="linked-strong"]',
-    );
-    expect(marker).not.toBeNull();
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-citation-marker="linked-strong"]'),
+      ).not.toBeNull();
+    });
   });
 
-  it("renders a weak link marker when has_citation is true but top_score < 0.90", () => {
+  it("renders a weak dot marker when has_citation is true but top_score < 0.90", async () => {
     const { container } = renderMarkerWithPanel({
       citation: weakLinkedCitation,
     });
-    const marker = container.querySelector(
-      '[data-citation-marker="linked-weak"]',
-    );
-    expect(marker).not.toBeNull();
-    // Weak tier communicates "verify" via aria-label and title.
-    expect(marker?.getAttribute("aria-label")).toMatch(/弱い|要確認/);
-    expect(marker?.getAttribute("title")).toMatch(/弱い|要確認/);
+    await waitFor(() => {
+      const marker = container.querySelector(
+        '[data-citation-marker="linked-weak"]',
+      );
+      expect(marker).not.toBeNull();
+      expect(marker?.getAttribute("aria-label")).toMatch(/弱い|要確認|verify/i);
+    });
   });
 
-  it("treats top_score exactly 0.90 as strong (boundary inclusive)", () => {
+  it("treats top_score exactly 0.90 as strong (boundary inclusive)", async () => {
     const { container } = renderMarkerWithPanel({
       citation: { ...linkedCitation, top_score: 0.9 },
     });
-    expect(
-      container.querySelector('[data-citation-marker="linked-strong"]'),
-    ).not.toBeNull();
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-citation-marker="linked-strong"]'),
+      ).not.toBeNull();
+    });
   });
 
-  it("treats top_score just below 0.90 as weak", () => {
+  it("treats top_score just below 0.90 as weak", async () => {
     const { container } = renderMarkerWithPanel({
       citation: { ...linkedCitation, top_score: 0.8999 },
     });
-    expect(
-      container.querySelector('[data-citation-marker="linked-weak"]'),
-    ).not.toBeNull();
-  });
-
-  it("applies dashed stroke styling to the weak-tier Link2 icon", () => {
-    const { container } = renderMarkerWithPanel({
-      citation: weakLinkedCitation,
-    });
-    const marker = container.querySelector(
-      '[data-citation-marker="linked-weak"]',
-    );
-    const icon = marker?.querySelector("svg");
-    expect(icon?.className.baseVal ?? icon?.getAttribute("class") ?? "").toMatch(
-      /stroke-dasharray/,
-    );
-  });
-
-  it("does not apply dashed stroke styling to the strong-tier icon", () => {
-    const { container } = renderMarkerWithPanel({ citation: linkedCitation });
-    const marker = container.querySelector(
-      '[data-citation-marker="linked-strong"]',
-    );
-    const icon = marker?.querySelector("svg");
-    expect(
-      icon?.className.baseVal ?? icon?.getAttribute("class") ?? "",
-    ).not.toMatch(/stroke-dasharray/);
-  });
-
-  it("opens the inline panel on hover for weak-tier citations too", async () => {
-    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
-      .mockResolvedValue({
-        chunk_id: "c2",
-        file_id: "f1",
-        prefix: "",
-        target: "弱いが関連する抜粋",
-        suffix: "",
-        start_time: 10,
-        end_time: 15,
-        page: null,
-      });
-
-    renderMarkerWithPanel({ citation: weakLinkedCitation });
-
-    fireEvent.mouseEnter(screen.getByRole("button", { name: /弱い|要確認/ }));
-
     await waitFor(() => {
-      expect(getCitationChunkExcerpt).toHaveBeenCalledWith(
-        "f1",
-        "c2",
-        "drive1",
-      );
+      expect(
+        container.querySelector('[data-citation-marker="linked-weak"]'),
+      ).not.toBeNull();
     });
-    expect(await screen.findByText(/弱いが関連する抜粋/)).toBeInTheDocument();
   });
 
-  it("renders nothing when has_citation is false", () => {
-    // "No strong single-source match" is a retrieval outcome, not a
-    // hallucination warning — real fabrications keep high cosine and
-    // land in the has_citation=true branch. The prior alert-triangle
-    // was noise, so the component should render nothing here.
+  it("renders nothing for a no-citation (has_citation=false) segment", () => {
     const { container } = renderMarkerWithPanel({ citation: unlinkedCitation });
     expect(container.querySelector("[data-citation-marker]")).toBeNull();
     expect(container.querySelector("button")).toBeNull();
   });
 
-  it("opens the inline panel on hover and fetches the top-1 chunk excerpt", async () => {
+  it("uses visibility:hidden (not display:none) when Verify is OFF so the slot remains", () => {
+    const { container } = render(
+      <NextIntlClientProvider locale="ja" messages={{}}>
+        <CitationRailProvider fileId="f1" drive="drive1">
+          {/* No ForceVerifyOn — Verify starts OFF */}
+          <DetailedSummaryCitationPopover citation={linkedCitation} />
+        </CitationRailProvider>
+      </NextIntlClientProvider>,
+    );
+    const marker = container.querySelector<HTMLElement>(
+      '[data-citation-marker="linked-strong"]',
+    );
+    expect(marker).not.toBeNull();
+    // The slot button stays laid out; only the SVG inside is hidden.
+    expect(marker?.style.visibility).toBe("hidden");
+  });
+
+  it("uses a 14px slot with verticalAlign -2px so markers line up with end punctuation", () => {
+    const { container } = renderMarkerWithPanel({ citation: linkedCitation });
+    const marker = container.querySelector<HTMLElement>(
+      '[data-citation-marker="linked-strong"]',
+    );
+    expect(marker).not.toBeNull();
+    expect(marker!.className).toMatch(/h-\[14px\]/);
+    expect(marker!.className).toMatch(/w-\[14px\]/);
+    expect(marker!.style.verticalAlign).toBe("-2px");
+  });
+});
+
+describe("CitationInlinePanel (in-flow accordion)", () => {
+  it("does not render the panel until the marker is clicked (Verify ON)", async () => {
+    renderMarkerWithPanel({ citation: linkedCitation });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Strong|明確/ }),
+      ).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("region")).toBeNull();
+  });
+
+  it("click opens the panel and fetches the excerpt", async () => {
     (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
       .mockResolvedValue({
         chunk_id: "c1",
@@ -256,14 +215,45 @@ describe("DetailedSummaryCitationPopover + CitationInlinePanel", () => {
 
     renderMarkerWithPanel({ citation: linkedCitation });
 
-    fireEvent.mouseEnter(
-      screen.getByRole("button", { name: /出典を表示/ }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Strong|明確/ }),
+      );
+    });
 
     await waitFor(() => {
       expect(getCitationChunkExcerpt).toHaveBeenCalledWith("f1", "c1", "drive1");
     });
     expect(await screen.findByText(/抜粋テキスト/)).toBeInTheDocument();
+  });
+
+  it("second click collapses the panel (toggle)", async () => {
+    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        chunk_id: "c1",
+        file_id: "f1",
+        prefix: "",
+        target: "ターゲットX",
+        suffix: "",
+        start_time: 0,
+        end_time: 1,
+        page: null,
+      });
+
+    renderMarkerWithPanel({ citation: linkedCitation });
+
+    const marker = await screen.findByRole("button", { name: /Strong|明確/ });
+    await act(async () => {
+      fireEvent.click(marker);
+    });
+    await screen.findByTestId("citation-target");
+
+    await act(async () => {
+      fireEvent.click(marker);
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("citation-target")).toBeNull();
+    });
   });
 
   it("renders the target text inside a highlighted <mark> with surrounding context", async () => {
@@ -280,9 +270,11 @@ describe("DetailedSummaryCitationPopover + CitationInlinePanel", () => {
       });
 
     renderMarkerWithPanel({ citation: linkedCitation });
-    fireEvent.mouseEnter(
-      screen.getByRole("button", { name: /出典を表示/ }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Strong|明確/ }),
+      );
+    });
 
     const mark = await screen.findByTestId("citation-target");
     expect(mark.tagName).toBe("MARK");
@@ -294,7 +286,7 @@ describe("DetailedSummaryCitationPopover + CitationInlinePanel", () => {
     );
   });
 
-  it("omits the prefix / suffix elements when they are empty", async () => {
+  it("omits prefix / suffix elements when they are empty", async () => {
     (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
       .mockResolvedValue({
         chunk_id: "c1",
@@ -308,9 +300,11 @@ describe("DetailedSummaryCitationPopover + CitationInlinePanel", () => {
       });
 
     renderMarkerWithPanel({ citation: linkedCitation });
-    fireEvent.mouseEnter(
-      screen.getByRole("button", { name: /出典を表示/ }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Strong|明確/ }),
+      );
+    });
 
     const mark = await screen.findByTestId("citation-target");
     const paragraph = mark.parentElement!;
@@ -318,93 +312,7 @@ describe("DetailedSummaryCitationPopover + CitationInlinePanel", () => {
     expect(paragraph.textContent).toBe("最初のチャンク。");
   });
 
-  it("cursor handoff from marker to panel keeps the panel open past the grace window", async () => {
-    // Core UX invariant for the hover pattern: dragging the cursor off
-    // the marker into the panel body must not race the close timer.
-    // The panel's own mouseenter has to cancel the scheduled close.
-    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
-      .mockResolvedValue({
-        chunk_id: "c1",
-        file_id: "f1",
-        prefix: "",
-        target: "抜粋",
-        suffix: "",
-        start_time: 0,
-        end_time: 1,
-        page: null,
-      });
-
-    renderMarkerWithPanel({ citation: linkedCitation });
-
-    const marker = screen.getByRole("button", { name: /出典を表示/ });
-    fireEvent.mouseEnter(marker);
-    const panel = await screen.findByRole("region");
-
-    fireEvent.mouseLeave(marker);
-    fireEvent.mouseEnter(panel);
-
-    await new Promise((r) => setTimeout(r, 250));
-
-    expect(screen.queryByRole("region")).not.toBeNull();
-  });
-
-  it("closes on mouseleave once the grace window elapses", async () => {
-    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
-      .mockResolvedValue({
-        chunk_id: "c1",
-        file_id: "f1",
-        prefix: "",
-        target: "抜粋",
-        suffix: "",
-        start_time: 0,
-        end_time: 1,
-        page: null,
-      });
-
-    renderMarkerWithPanel({ citation: linkedCitation });
-
-    const marker = screen.getByRole("button", { name: /出典を表示/ });
-    fireEvent.mouseEnter(marker);
-    await screen.findByRole("region");
-
-    fireEvent.mouseLeave(marker);
-
-    // Grace is 160 ms; wait comfortably past it inside an act() so the
-    // setState triggered by the timer fires under React's test harness.
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 250));
-    });
-    expect(screen.queryByRole("region")).toBeNull();
-  });
-
-  it("click pins the panel so mouseleave does not dismiss it", async () => {
-    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
-      .mockResolvedValue({
-        chunk_id: "c1",
-        file_id: "f1",
-        prefix: "",
-        target: "抜粋",
-        suffix: "",
-        start_time: 0,
-        end_time: 1,
-        page: null,
-      });
-
-    renderMarkerWithPanel({ citation: linkedCitation });
-
-    const marker = screen.getByRole("button", { name: /出典を表示/ });
-    fireEvent.mouseEnter(marker);
-    fireEvent.click(marker);
-    await screen.findByRole("region");
-
-    // Even leaving the marker without a handoff must not close it —
-    // pinning is the whole point of click support.
-    fireEvent.mouseLeave(marker);
-    await new Promise((r) => setTimeout(r, 300));
-    expect(screen.queryByRole("region")).not.toBeNull();
-  });
-
-  it("jump button seeks the video ref after the panel is pinned", async () => {
+  it("jump button seeks the video ref when the panel is open", async () => {
     (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
       .mockResolvedValue({
         chunk_id: "c1",
@@ -427,174 +335,80 @@ describe("DetailedSummaryCitationPopover + CitationInlinePanel", () => {
 
     renderMarkerWithPanel({ citation: linkedCitation, videoRef });
 
-    const marker = screen.getByRole("button", { name: /出典を表示/ });
-    fireEvent.mouseEnter(marker);
-    fireEvent.click(marker);
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Strong|明確/ }),
+      );
+    });
     await screen.findByText(/抜粋テキスト/);
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /ジャンプ/ }));
+      fireEvent.click(screen.getByRole("button", { name: /ジャンプ|Jump/ }));
     });
 
     expect(fakeVideo.currentTime).toBe(42);
   });
 
-  it("re-clicking a pinned marker dismisses the panel", async () => {
+  it("renders a strong tier chip on the panel meta row", async () => {
     (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
       .mockResolvedValue({
         chunk_id: "c1",
         file_id: "f1",
         prefix: "",
-        target: "抜粋テキスト",
+        target: "T",
         suffix: "",
         start_time: 0,
         end_time: 1,
         page: null,
       });
 
-    renderMarkerWithPanel({ citation: linkedCitation });
+    const { container } = renderMarkerWithPanel({ citation: linkedCitation });
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Strong|明確/ }),
+      );
+    });
 
-    const marker = screen.getByRole("button", { name: /出典を表示/ });
-    fireEvent.mouseEnter(marker);
-    fireEvent.click(marker);
-    await screen.findByText(/抜粋テキスト/);
-
-    fireEvent.click(marker);
     await waitFor(() => {
-      expect(screen.queryByText(/抜粋テキスト/)).toBeNull();
+      expect(
+        container.querySelector('[data-citation-panel="strong"]'),
+      ).not.toBeNull();
     });
   });
 
-  it("does not render a marker or panel for a no-citation segment", async () => {
-    const { container } = renderMarkerWithPanel({ citation: unlinkedCitation });
+  it("renders a weak tier chip on the panel meta row", async () => {
+    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        chunk_id: "c2",
+        file_id: "f1",
+        prefix: "",
+        target: "T",
+        suffix: "",
+        start_time: 0,
+        end_time: 1,
+        page: null,
+      });
 
-    // No button to hover / click; nothing to fetch; no panel to open.
-    expect(container.querySelector("button")).toBeNull();
+    const { container } = renderMarkerWithPanel({
+      citation: weakLinkedCitation,
+    });
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Weak|要確認|弱い/ }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-citation-panel="weak"]'),
+      ).not.toBeNull();
+    });
+  });
+
+  it("does not open a panel for a no-citation segment", async () => {
+    renderMarkerWithPanel({ citation: unlinkedCitation });
     await new Promise((r) => setTimeout(r, 0));
     expect(getCitationChunkExcerpt).not.toHaveBeenCalled();
     expect(screen.queryByRole("region")).toBeNull();
-  });
-
-  it("panel close button clears a pinned activation", async () => {
-    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
-      .mockResolvedValue({
-        chunk_id: "c1",
-        file_id: "f1",
-        prefix: "",
-        target: "抜粋テキスト",
-        suffix: "",
-        start_time: 0,
-        end_time: 1,
-        page: null,
-      });
-
-    renderMarkerWithPanel({ citation: linkedCitation });
-
-    const marker = screen.getByRole("button", { name: /出典を表示/ });
-    fireEvent.mouseEnter(marker);
-    fireEvent.click(marker);
-    await screen.findByText(/抜粋テキスト/);
-
-    fireEvent.click(screen.getByRole("button", { name: /閉じる/ }));
-
-    await waitFor(() => {
-      expect(screen.queryByText(/抜粋テキスト/)).toBeNull();
-    });
-  });
-
-  // --- Adjacent-chunk highlight extension (idx_gap == 1 only) -----------
-  //
-  // When top-2 or top-3 chunks are immediately adjacent to top-1 (gap=1),
-  // the UI extends the highlight into the neighbour excerpt so ASR
-  // chunk-boundary splits show up as one contiguous cited region. See
-  // hako k0XoWYoUBAhtylHc94KTI and CITATION-PIPELINE.md Stage 6.
-
-  async function openPanelWithExcerpt(citation: Parameters<typeof renderMarkerWithPanel>[0]["citation"]) {
-    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
-      .mockResolvedValue({
-        chunk_id: citation.chunk_ids[0],
-        file_id: "f1",
-        prefix: "前の文。 ",
-        target: "ターゲット chunk。",
-        suffix: " 次の文。",
-        start_time: 10,
-        end_time: 15,
-        page: null,
-      });
-    renderMarkerWithPanel({ citation });
-    const marker = screen.getByRole("button");
-    fireEvent.mouseEnter(marker);
-    await screen.findByTestId("citation-target");
-  }
-
-  it("does not extend when only top-1 chunk is present", async () => {
-    await openPanelWithExcerpt(linkedCitation);
-    expect(screen.queryByTestId("citation-extended-prefix")).toBeNull();
-    expect(screen.queryByTestId("citation-extended-suffix")).toBeNull();
-  });
-
-  it("marks suffix as extended when top-2 is the forward neighbour", async () => {
-    await openPanelWithExcerpt(citationForwardAdjacent);
-    const suffixMark = screen.getByTestId("citation-extended-suffix");
-    expect(suffixMark.tagName).toBe("MARK");
-    expect(suffixMark.textContent).toContain("次の文");
-    expect(screen.queryByTestId("citation-extended-prefix")).toBeNull();
-  });
-
-  it("marks prefix as extended when top-2 is the backward neighbour", async () => {
-    await openPanelWithExcerpt(citationBackwardAdjacent);
-    const prefixMark = screen.getByTestId("citation-extended-prefix");
-    expect(prefixMark.tagName).toBe("MARK");
-    expect(prefixMark.textContent).toContain("前の文");
-    expect(screen.queryByTestId("citation-extended-suffix")).toBeNull();
-  });
-
-  it("extends only one side when both top-2 and top-3 are adjacent on opposite sides", async () => {
-    // citationBothAdjacent: chunk_ids = [t:10, t:11 (forward), t:9 (backward)]
-    // Rule: top-2 wins over top-3, so forward extends and backward is
-    // dropped. Prevents the full-excerpt highlight case that reads as
-    // noise.
-    await openPanelWithExcerpt(citationBothAdjacent);
-    expect(screen.getByTestId("citation-extended-suffix").tagName).toBe("MARK");
-    expect(screen.queryByTestId("citation-extended-prefix")).toBeNull();
-  });
-
-  it("prefers top-2's side when top-2 is backward and top-3 is forward", async () => {
-    const citation = {
-      section_path: "全体像/top2-backward",
-      segment_type: "paragraph" as const,
-      segment_text: "top-2 が後方隣接、top-3 が前方隣接。",
-      chunk_ids: ["transcript:10", "transcript:9", "transcript:11"],
-      top_score: 0.92,
-      has_citation: true,
-    };
-    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
-      .mockResolvedValue({
-        chunk_id: "transcript:10",
-        file_id: "f1",
-        prefix: "前の文。 ",
-        target: "ターゲット。",
-        suffix: " 次の文。",
-        start_time: 10,
-        end_time: 15,
-        page: null,
-      });
-    renderMarkerWithPanel({ citation });
-    fireEvent.mouseEnter(screen.getByRole("button"));
-    await screen.findByTestId("citation-target");
-    expect(screen.getByTestId("citation-extended-prefix").tagName).toBe("MARK");
-    expect(screen.queryByTestId("citation-extended-suffix")).toBeNull();
-  });
-
-  it("does not extend when top-2 is 2 chunks away (idx_gap == 2)", async () => {
-    await openPanelWithExcerpt(citationGap2);
-    expect(screen.queryByTestId("citation-extended-prefix")).toBeNull();
-    expect(screen.queryByTestId("citation-extended-suffix")).toBeNull();
-  });
-
-  it("extends when top-3 (not top-2) is the adjacent neighbour", async () => {
-    await openPanelWithExcerpt(citationTop3Adjacent);
-    expect(screen.getByTestId("citation-extended-suffix").tagName).toBe("MARK");
-    expect(screen.queryByTestId("citation-extended-prefix")).toBeNull();
   });
 });

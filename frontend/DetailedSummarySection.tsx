@@ -64,7 +64,11 @@ import type {
 } from "./api";
 import { DetailedSummaryCitationPopover } from "./DetailedSummaryCitationPopover";
 import { CitationInlinePanel } from "./CitationInlinePanel";
-import { CitationRailProvider, useCitationRail } from "./CitationRailContext";
+import {
+  CitationRailProvider,
+  useCitationRail,
+  CITATION_STRONG_THRESHOLD,
+} from "./CitationRailContext";
 
 interface DetailedSummarySectionProps {
   fileId: string;
@@ -428,10 +432,238 @@ export default function DetailedSummarySection({
 
   return (
     <CitationRailProvider fileId={fileId} drive={drive}>
-    <div>
+      <DetailedSummaryBody
+        data={data}
+        collapsed={collapsed}
+        onToggleCollapsed={handleToggleCollapsed}
+        sections={sections}
+        citations={citations}
+        citationByPath={citationByPath}
+        editingTarget={editingTarget}
+        draft={draft}
+        saving={saving}
+        edited={edited}
+        canRevert={canRevert}
+        reverting={reverting}
+        working={working}
+        downloading={downloading}
+        fileId={fileId}
+        drive={drive}
+        videoRef={videoRef}
+        confirmRevertOpen={confirmRevertOpen}
+        confirmRegenerateOpen={confirmRegenerateOpen}
+        onStartEdit={handleStartEdit}
+        onCancelEdit={handleCancelEdit}
+        onSaveEdit={handleSaveEdit}
+        onDraftChange={setDraft}
+        onDownload={handleDownload}
+        onOpenRevert={() => setConfirmRevertOpen(true)}
+        onCloseRevert={() => setConfirmRevertOpen(false)}
+        onConfirmRevert={handleRevert}
+        onGenerate={handleGenerate}
+        onCloseRegenerate={() => setConfirmRegenerateOpen(false)}
+        onConfirmRegenerate={handleConfirmRegenerate}
+      />
+    </CitationRailProvider>
+  );
+}
+
+interface DetailedSummaryBodyProps {
+  data: DetailedSummaryResponse;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
+  sections: ParsedSection[];
+  citations: DetailedSummaryCitation[];
+  citationByPath: Map<string, DetailedSummaryCitation>;
+  editingTarget: {
+    sectionHeading: string;
+    subsectionHeading: string | null;
+  } | null;
+  draft: string;
+  saving: boolean;
+  edited: boolean;
+  canRevert: boolean;
+  reverting: boolean;
+  working: boolean;
+  downloading: boolean;
+  fileId: string;
+  drive: string;
+  videoRef?: React.RefObject<HTMLVideoElement | null>;
+  confirmRevertOpen: boolean;
+  confirmRegenerateOpen: boolean;
+  onStartEdit: (sectionName: string, subsectionName: string | null) => void;
+  onCancelEdit: () => void;
+  onSaveEdit: () => void;
+  onDraftChange: (value: string) => void;
+  onDownload: () => void;
+  onOpenRevert: () => void;
+  onCloseRevert: () => void;
+  onConfirmRevert: () => void;
+  onGenerate: () => void;
+  onCloseRegenerate: () => void;
+  onConfirmRegenerate: () => void;
+}
+
+function DetailedSummaryBody({
+  data,
+  collapsed,
+  onToggleCollapsed,
+  sections,
+  citations,
+  citationByPath,
+  editingTarget,
+  draft,
+  saving,
+  edited,
+  canRevert,
+  reverting,
+  working,
+  downloading,
+  fileId,
+  drive,
+  videoRef,
+  confirmRevertOpen,
+  confirmRegenerateOpen,
+  onStartEdit,
+  onCancelEdit,
+  onSaveEdit,
+  onDraftChange,
+  onDownload,
+  onOpenRevert,
+  onCloseRevert,
+  onConfirmRevert,
+  onGenerate,
+  onCloseRegenerate,
+  onConfirmRegenerate,
+}: DetailedSummaryBodyProps) {
+  const t = useTranslations("file");
+  const td = useTranslations("detailedSummary");
+  const {
+    verify,
+    setVerify,
+    expanded,
+    collapseAll,
+    expandAll,
+    expandWeakOnly,
+  } = useCitationRail();
+
+  // Weak citations = has_citation && top_score < strong threshold.
+  // These drive the "Needs check {n}" badge.
+  const weakCitations = useMemo(
+    () =>
+      citations.filter(
+        (c) => c.has_citation && c.top_score < CITATION_STRONG_THRESHOLD,
+      ),
+    [citations],
+  );
+  const hasCitations = useMemo(
+    () => citations.some((c) => c.has_citation),
+    [citations],
+  );
+  const allCitable = useMemo(
+    () => citations.filter((c) => c.has_citation),
+    [citations],
+  );
+  const allExpanded =
+    allCitable.length > 0 && expanded.size >= allCitable.length;
+
+  const handleExpandAllToggle = useCallback(() => {
+    if (allExpanded) collapseAll();
+    else expandAll(allCitable);
+  }, [allExpanded, collapseAll, expandAll, allCitable]);
+
+  const handleExpandWeak = useCallback(() => {
+    expandWeakOnly(weakCitations);
+  }, [expandWeakOnly, weakCitations]);
+
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Keyboard shortcuts on the whole section. Registered on window so
+  // any focused citable segment inside it handles ↑/↓/Enter/j even
+  // when focus is transient (focused spans inside `<p>` lose focus
+  // when React re-renders). The input-focus guard stops shortcuts
+  // from stealing keystrokes inside the textarea / edit input.
+  useEffect(() => {
+    if (collapsed) return;
+    const host = containerRef.current;
+    if (!host) return;
+
+    const isTextInput = (el: EventTarget | null) => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      if (tag === "TEXTAREA" || tag === "INPUT") return true;
+      if (el.isContentEditable) return true;
+      return false;
+    };
+
+    const handler = (e: KeyboardEvent) => {
+      if (isTextInput(e.target)) return;
+      if (!host.contains(document.activeElement) && !host.contains(e.target as Node)) {
+        // Allow global shortcuts when the body itself has focus too.
+        if (e.key !== "v") return;
+      }
+
+      if (e.key === "v" || e.key === "V") {
+        e.preventDefault();
+        setVerify(!verify);
+        return;
+      }
+      if (e.key === "Escape") {
+        if (expanded.size > 0) {
+          e.preventDefault();
+          collapseAll();
+        }
+        return;
+      }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        const nodes = Array.from(
+          host.querySelectorAll<HTMLElement>("[data-citation-section-path]"),
+        );
+        if (nodes.length === 0) return;
+        const active = document.activeElement as HTMLElement | null;
+        let index = nodes.findIndex((n) => n === active || n.contains(active));
+        if (index < 0) index = 0;
+        else index = e.key === "ArrowDown" ? index + 1 : index - 1;
+        index = Math.max(0, Math.min(nodes.length - 1, index));
+        e.preventDefault();
+        nodes[index].focus({ preventScroll: true });
+        nodes[index].scrollIntoView({ block: "start", behavior: "smooth" });
+        return;
+      }
+      if (e.key === "Enter") {
+        const active = document.activeElement as HTMLElement | null;
+        if (!active) return;
+        const node = active.closest<HTMLElement>("[data-citation-section-path]");
+        if (!node) return;
+        const sp = node.getAttribute("data-citation-section-path");
+        if (!sp) return;
+        const citation = citationByPath.get(sp);
+        if (!citation || !citation.has_citation) return;
+        e.preventDefault();
+        // Route through the rail so the behaviour matches a marker
+        // click exactly — toggle + fetch + cache.
+        const target = node.querySelector<HTMLButtonElement>(
+          `[data-citation-marker]`,
+        );
+        target?.click();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [
+    collapsed,
+    verify,
+    setVerify,
+    expanded,
+    collapseAll,
+    citationByPath,
+  ]);
+
+  return (
+    <div ref={containerRef}>
       <div className={`flex flex-wrap items-center gap-2 ${collapsed ? "" : "mb-2"}`}>
         <button
-          onClick={handleToggleCollapsed}
+          onClick={onToggleCollapsed}
           aria-expanded={!collapsed}
           aria-label={
             collapsed
@@ -467,7 +699,72 @@ export default function DetailedSummarySection({
             {td("edit.badge", { defaultMessage: "Edited" })}
           </span>
         )}
+        {!collapsed && hasCitations && (
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setVerify(!verify)}
+              aria-pressed={verify}
+              className={`inline-flex items-center gap-1.5 rounded px-2 py-1 text-[11px] transition-colors ${
+                verify
+                  ? "bg-accent-teal text-white"
+                  : "text-text-muted hover:bg-bg-elevated hover:text-text-primary"
+              }`}
+              data-testid="verify-toggle"
+            >
+              {verify
+                ? td("verify.toggle.on", { defaultMessage: "Verify ON" })
+                : td("verify.toggle.off", { defaultMessage: "Verify OFF" })}
+            </button>
+            {verify && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleExpandAllToggle}
+                  className="rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
+                  data-testid="verify-expand-all"
+                >
+                  {allExpanded
+                    ? td("verify.collapseAll", {
+                        defaultMessage: "Collapse all",
+                      })
+                    : td("verify.expandAll", {
+                        defaultMessage: "All expanded",
+                      })}
+                </button>
+                {weakCitations.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleExpandWeak}
+                    className="inline-flex items-center gap-1 rounded border border-dashed px-2 py-1 text-[11px]"
+                    style={{
+                      backgroundColor:
+                        "color-mix(in srgb, var(--accent-amber) 12%, transparent)",
+                      color: "var(--accent-amber)",
+                      borderColor:
+                        "color-mix(in srgb, var(--accent-amber) 55%, transparent)",
+                    }}
+                    data-testid="verify-weak-only"
+                  >
+                    {td("verify.weakOnly", {
+                      defaultMessage: "Needs check {n}",
+                      n: weakCitations.length,
+                    })}
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        )}
       </div>
+      {!collapsed && verify && (
+        <p className="mb-2 text-[10px] text-text-muted/60">
+          {td("verify.keyboardHints", {
+            defaultMessage:
+              "v: ON/OFF | ↑↓: move | Enter: expand | Esc: close",
+          })}
+        </p>
+      )}
 
       {!collapsed && (
         <>
@@ -484,11 +781,11 @@ export default function DetailedSummarySection({
                 draft={draft}
                 saving={saving}
                 onStartEdit={(subsectionName) =>
-                  handleStartEdit(section.heading, subsectionName)
+                  onStartEdit(section.heading, subsectionName)
                 }
-                onCancelEdit={handleCancelEdit}
-                onSaveEdit={handleSaveEdit}
-                onDraftChange={setDraft}
+                onCancelEdit={onCancelEdit}
+                onSaveEdit={onSaveEdit}
+                onDraftChange={onDraftChange}
                 fileId={fileId}
                 drive={drive}
                 videoRef={videoRef}
@@ -500,7 +797,7 @@ export default function DetailedSummarySection({
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button
-              onClick={handleDownload}
+              onClick={onDownload}
               disabled={downloading}
               className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
             >
@@ -511,7 +808,7 @@ export default function DetailedSummarySection({
             </button>
             {canRevert && (
               <button
-                onClick={() => setConfirmRevertOpen(true)}
+                onClick={onOpenRevert}
                 disabled={reverting}
                 className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
               >
@@ -526,7 +823,7 @@ export default function DetailedSummarySection({
               </button>
             )}
             <button
-              onClick={handleGenerate}
+              onClick={onGenerate}
               disabled={working}
               className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
             >
@@ -555,8 +852,8 @@ export default function DetailedSummarySection({
         confirmLabel={td("edit.revertButton", {
           defaultMessage: "Revert to AI version",
         })}
-        onConfirm={handleRevert}
-        onCancel={() => setConfirmRevertOpen(false)}
+        onConfirm={onConfirmRevert}
+        onCancel={onCloseRevert}
       />
       <ConfirmDialog
         open={confirmRegenerateOpen}
@@ -568,11 +865,10 @@ export default function DetailedSummarySection({
         confirmLabel={t("detailedSummaryRegenerate", {
           defaultMessage: "Regenerate",
         })}
-        onConfirm={handleConfirmRegenerate}
-        onCancel={() => setConfirmRegenerateOpen(false)}
+        onConfirm={onConfirmRegenerate}
+        onCancel={onCloseRegenerate}
       />
     </div>
-    </CitationRailProvider>
   );
 }
 
@@ -971,7 +1267,7 @@ function SectionView({
     // Preamble block before the first `##` — render as-is, no edit
     // button (there's nothing to name the section by on the backend).
     return (
-      <div className="text-sm leading-relaxed text-text-muted">
+      <div className="text-base leading-relaxed text-text-muted">
         {renderSegments(section.segments, citationByPath, {
           fileId,
           drive,
@@ -1023,7 +1319,7 @@ function SectionView({
           onCancelEdit={onCancelEdit}
         />
       ) : (
-        <div className="text-sm leading-relaxed text-text-muted">
+        <div className="text-base leading-relaxed text-text-muted">
           {renderSegments(preambleSegments, citationByPath, {
             fileId,
             drive,
@@ -1242,20 +1538,29 @@ function BulletGroup({
           <li
             key={b.section_path}
             data-citation-section-path={b.section_path}
-            // ``relative`` anchors the absolutely-positioned overlay
-            // panel to this <li>. The `[&>div]:inline` selector only
-            // targets <div> children — the panel renders as an
-            // <aside>, so it stays a block-level overlay instead of
-            // being flattened onto the bullet line.
-            className="relative [&>div]:inline [&>div>p]:m-0 [&>div>p]:inline"
-            style={extraPad ? { marginLeft: `${extraPad}px` } : undefined}
+            data-citation-tier={
+              citation
+                ? citation.has_citation
+                  ? citation.top_score >= 0.9
+                    ? "strong"
+                    : "weak"
+                  : "missing"
+                : undefined
+            }
+            tabIndex={citation && citation.has_citation ? 0 : -1}
+            className="[&>div]:inline [&>div>p]:m-0 [&>div>p]:inline focus:outline-none focus:ring-1 focus:ring-accent-teal/40 rounded"
+            style={{
+              scrollMarginTop: "20vh",
+              ...(extraPad ? { marginLeft: `${extraPad}px` } : {}),
+            }}
           >
-            {marker}
-            {marker ? " " : null}
             <SegmentMarkdown source={b.text} />
+            {marker}
             {citation && (
               <CitationInlinePanel
                 sectionPath={b.section_path}
+                citation={citation}
+                segmentType="bullet"
                 videoRef={ctx.videoRef}
               />
             )}
@@ -1279,14 +1584,12 @@ function TableGroup({
     videoRef?: React.RefObject<HTMLVideoElement | null>;
   };
 }) {
-  // Subscribe to the active citation so we only mount the expansion
-  // row for the currently-open panel. An always-mounted empty row —
-  // even one styled to `height: 0` — still let the table-layout
-  // heuristic peek at the panel's intrinsic width and drift column
-  // widths when the excerpt loaded. Rendering the row only while the
-  // panel is live keeps the table geometry stable.
-  const { active } = useCitationRail();
-  const activeSectionPath = active?.citation.section_path ?? null;
+  // Subscribe to expanded set so we only mount the expansion row for
+  // currently-open panels. A dormant expansion row lets table-layout
+  // peek at the panel's intrinsic width and drift column widths when
+  // the excerpt loads; mounting only while expanded keeps table
+  // geometry stable.
+  const { isExpanded } = useCitationRail();
   const header = rows[0]?.tableHeader ?? [];
   const anyMarker = rows.some((r) => citationByPath.has(r.section_path));
   // The citation column sits outside the `.markdown-body` cell grid so
@@ -1344,11 +1647,27 @@ function TableGroup({
             // header fall back to the cell count.
             const totalCols =
               (cells.length || header.length || 1) + (anyMarker ? 1 : 0);
+            const tier = citation
+              ? citation.has_citation
+                ? citation.top_score >= 0.9
+                  ? "strong"
+                  : "weak"
+                : "missing"
+              : undefined;
+            // Weak-tier rows carry an amber left-edge accent per the
+            // DESIGN.md table H3 convention — no dashed outer frame
+            // (that affordance belongs to paragraph/bullet cards).
+            const firstCellAccent: React.CSSProperties | undefined =
+              tier === "weak"
+                ? { borderLeft: "3px solid var(--accent-amber)" }
+                : undefined;
             return (
               <Fragment key={row.section_path}>
                 <tr
                   data-citation-section-path={row.section_path}
-                  style={transparentRowStyle}
+                  data-citation-tier={tier}
+                  tabIndex={citation && citation.has_citation ? 0 : -1}
+                  style={{ ...transparentRowStyle, scrollMarginTop: "20vh" }}
                 >
                   {anyMarker && (
                     <td aria-hidden style={markerCellStyle}>
@@ -1356,34 +1675,31 @@ function TableGroup({
                     </td>
                   )}
                   {cells.map((cell, i) => (
-                    <td key={i} style={stripe ? stripedCellStyle : undefined}>
+                    <td
+                      key={i}
+                      style={{
+                        ...(stripe ? stripedCellStyle : {}),
+                        ...(i === 0 ? firstCellAccent ?? {} : {}),
+                      }}
+                    >
                       {cell}
                     </td>
                   ))}
                 </tr>
-                {citation && activeSectionPath === row.section_path && (
-                  // Zero-height relative host for the absolutely-
-                  // positioned panel. The panel escapes the flow so it
-                  // can't influence column-width autolayout (which
-                  // previously widened/narrowed columns as the excerpt
-                  // loaded) and doesn't add a visible row height — the
-                  // panel itself paints the gap below the cited row.
-                  // Rendering only while the row is active keeps
-                  // inactive rows from contributing a stray ~1px each.
+                {citation && isExpanded(row.section_path) && (
                   <tr style={transparentRowStyle}>
                     <td
                       colSpan={totalCols}
                       style={{
                         border: "none",
                         padding: 0,
-                        height: 0,
-                        lineHeight: 0,
-                        position: "relative",
                         background: "transparent",
                       }}
                     >
                       <CitationInlinePanel
                         sectionPath={row.section_path}
+                        citation={citation}
+                        segmentType="table"
                         videoRef={ctx.videoRef}
                       />
                     </td>
@@ -1425,24 +1741,33 @@ function renderSegmentLine(
   // the MarkdownPreview rhythm. The outer block hosts the text row +
   // the inline citation panel that expands directly beneath it when a
   // citation is active.
+  const tier = citation
+    ? citation.has_citation
+      ? citation.top_score >= 0.9
+        ? "strong"
+        : "weak"
+      : "missing"
+    : undefined;
   return (
-    // ``relative`` anchors the absolutely-positioned overlay panel to
-    // this segment so it drops directly beneath the citing line without
-    // shifting the surrounding layout when it opens.
     <div
       key={segment.section_path}
       data-citation-section-path={segment.section_path}
-      className="relative mb-[1.15em]"
+      data-citation-tier={tier}
+      tabIndex={citation && citation.has_citation ? 0 : -1}
+      className="mb-[1.15em] rounded focus:outline-none focus:ring-1 focus:ring-accent-teal/40 [&>*>div>p]:inline [&>*>div>p]:m-0"
+      style={{ scrollMarginTop: "20vh" }}
     >
       <div className="flex items-start gap-1">
-        {marker}
         <div className="min-w-0 flex-1">
           <SegmentMarkdown source={text} />
+          {marker}
         </div>
       </div>
       {citation && (
         <CitationInlinePanel
           sectionPath={segment.section_path}
+          citation={citation}
+          segmentType="paragraph"
           videoRef={ctx.videoRef}
         />
       )}
@@ -1473,7 +1798,7 @@ function SegmentMarkdown({ source }: { source: string }) {
       chrome={false}
       mermaid={false}
       showFrontmatter={false}
-      className="markdown-segment text-sm leading-relaxed text-text-primary"
+      className="markdown-segment text-base leading-relaxed text-text-primary"
     />
   );
 }

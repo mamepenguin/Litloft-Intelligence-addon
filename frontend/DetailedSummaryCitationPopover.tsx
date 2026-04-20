@@ -1,40 +1,36 @@
 "use client";
 
 /**
- * Inline citation marker for a detailed-summary segment.
+ * Citation marker for a detailed-summary segment.
  *
- * Despite the file name (kept for import stability), this is no longer
- * a self-contained popover: excerpt display lives in
- * `CitationInlinePanel`, which now opens as an absolutely-positioned
- * overlay directly beneath the citing segment (so the surrounding
- * layout doesn't shift when the panel opens or closes).
+ * The filename still says "Popover" for backwards import stability,
+ * but the UI is now a tiny SVG dot that flips a per-section accordion
+ * in `CitationRailContext`. No hover, no pin, no overlay —
+ * click (or Enter on the containing segment) opens the in-flow
+ * excerpt panel beneath the citing line.
  *
- * Interaction model:
- *   - Hover on the marker opens the overlay; moving the cursor into
- *     the panel body keeps it open (the panel handles mouseenter too).
- *     mouseleave schedules a 160 ms grace close that can be cancelled
- *     by re-entering either the marker or the panel.
- *   - Click pins the overlay: `scheduleClose` becomes a no-op until
- *     the user re-clicks the marker, clicks outside, or hits Escape.
- *     Pinning is the mechanism that lets the reader actually reach
- *     the "Jump" button without a cursor-race.
- *   - Focus via keyboard mirrors hover (onFocus opens, onBlur
- *     schedules close), so tab-navigating the summary still surfaces
- *     the excerpt.
+ * Visual vocabulary:
+ *   - strong (top_score >= 0.90): solid teal circle.
+ *   - weak   (top_score <  0.90): half-filled amber circle with a
+ *     dashed ring — communicates "verify me" without being alarming.
+ *   - missing (has_citation = false): no marker rendered at all (it's
+ *     a retrieval outcome, not a hallucination warning — see hako
+ *     commit 8d38f88 rationale).
+ *
+ * Verify OFF hides the dot with ``visibility: hidden`` — never
+ * ``display: none`` — because the 14px slot anchors the end-cap of
+ * the preceding text. Collapsing the slot would reflow the sentence
+ * and double-punctuate (the mockup wraps markers alongside the
+ * period/comma by design). The slot also renders for has_citation=false
+ * only when Verify is ON is an intentional non-goal: we hide missing
+ * markers completely in both states.
  */
 
 import { useCallback } from "react";
 import { useTranslations } from "next-intl";
-import { Link2 } from "lucide-react";
 
-import { useCitationRail } from "./CitationRailContext";
+import { useCitationRail, CITATION_STRONG_THRESHOLD } from "./CitationRailContext";
 import type { DetailedSummaryCitation } from "./api";
-
-// Confidence tier derived from top_score. Calibrated against citation
-// eval baseline (ruri-v3-30m, N=69, 2026-04-19): top_score ≥ 0.90 hits
-// location offset 0 at 86% vs ~68% for [0.80, 0.90). See
-// docs/CITATION-PIPELINE.md Stage 5 and hako Uxs06_pOPfbkGtvwIK_Vq.
-const CITATION_STRONG_THRESHOLD = 0.9;
 
 type CitationTier = "strong" | "weak";
 
@@ -50,79 +46,78 @@ export function DetailedSummaryCitationPopover({
   citation,
 }: DetailedSummaryCitationPopoverProps) {
   const t = useTranslations("detailedSummary");
-  const { setActive, clearActive, scheduleClose, cancelClose, active } =
-    useCitationRail();
+  const { verify, toggle, isExpanded } = useCitationRail();
 
-  const isActive =
-    active?.citation.section_path === citation.section_path;
-  const isPinned = isActive && active?.pinned === true;
-
-  const handlePointerEnter = useCallback(() => {
-    cancelClose();
-    if (isActive) return;
-    setActive(citation);
-  }, [isActive, cancelClose, setActive, citation]);
-
-  const handlePointerLeave = useCallback(() => {
-    scheduleClose();
-  }, [scheduleClose]);
+  const isActive = isExpanded(citation.section_path);
 
   const handleClick = useCallback(() => {
-    if (isPinned) {
-      clearActive();
-      return;
-    }
-    setActive(citation, { pin: true });
-  }, [isPinned, setActive, clearActive, citation]);
+    toggle(citation);
+  }, [toggle, citation]);
 
-  // When the backend couldn't pin a single source (low cosine,
-  // ambiguous tie, paragraph synthesis gate, …), render nothing.
-  // The alert-triangle we used here was over-signalling: it didn't
-  // correlate with actual hallucination risk — real fabrications
-  // (digit swaps, nuance shifts) stay at high cosine similarity and
-  // sit inside the has_citation=true branch. Drawing attention to
-  // "couldn't map to one chunk" was noise, not a warning users
-  // could act on. Early-return happens after the hooks above so hook
-  // call order stays stable across renders.
+  // Missing-citation segments render nothing. This keeps the marker
+  // set honest with the mockup (no empty slots for no-citation prose)
+  // and the old `citation.has_citation === false` path stays silent.
   if (!citation.has_citation) return null;
 
   const tier = deriveTier(citation);
 
+  // When Verify is OFF we still render the `<button>` so the focus /
+  // toggle API stays stable, but the SVG inside is hidden via
+  // visibility so the layout slot anchors the end-cap of the
+  // preceding text without the dot glyph drawing.
+  const visibilityStyle: React.CSSProperties = verify
+    ? {}
+    : { visibility: "hidden" };
+
+  const ariaLabel =
+    tier === "strong"
+      ? t("citations.markerStrong", { defaultMessage: "Strong source citation" })
+      : t("citations.markerWeak", {
+          defaultMessage: "Weak source citation — verify",
+        });
+
   return (
     <button
       type="button"
-      onMouseEnter={handlePointerEnter}
-      onMouseLeave={handlePointerLeave}
-      onFocus={handlePointerEnter}
-      onBlur={handlePointerLeave}
       onClick={handleClick}
       aria-pressed={isActive}
-      className={`mx-1 inline-flex h-4 w-4 items-center justify-center rounded align-middle transition-colors ${
-        isActive
-          ? "text-accent-teal"
-          : "text-accent-teal/60 hover:text-accent-teal"
-      }`}
-      aria-label={
-        tier === "strong"
-          ? t("citations.linkLabel", { defaultMessage: "Show citation" })
-          : t("citations.weakLinkLabel", {
-              defaultMessage: "Weak source match — verify",
-            })
-      }
-      title={
-        tier === "strong"
-          ? undefined
-          : t("citations.weakLinkLabel", {
-              defaultMessage: "Weak source match — verify",
-            })
-      }
+      aria-label={ariaLabel}
+      title={tier === "weak" ? ariaLabel : undefined}
+      className="ml-1.5 inline-flex h-[14px] w-[14px] items-center justify-center align-middle"
+      style={{ verticalAlign: "-2px", ...visibilityStyle }}
       data-citation-marker={`linked-${tier}`}
+      data-citation-tier={tier}
     >
-      <Link2
-        size={11}
-        aria-hidden
-        className={tier === "weak" ? "[stroke-dasharray:2_1.5]" : undefined}
-      />
+      {tier === "strong" ? (
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 14 14"
+          aria-hidden
+          focusable="false"
+        >
+          <circle cx="7" cy="7" r="4.5" fill="var(--accent-teal)" />
+        </svg>
+      ) : (
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 14 14"
+          aria-hidden
+          focusable="false"
+        >
+          <circle
+            cx="7"
+            cy="7"
+            r="4.5"
+            fill="var(--accent-amber)"
+            fillOpacity="0.5"
+            stroke="var(--accent-amber)"
+            strokeWidth="1.25"
+            strokeDasharray="2 1.5"
+          />
+        </svg>
+      )}
     </button>
   );
 }
