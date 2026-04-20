@@ -33,6 +33,53 @@ import { useCitationRail } from "./CitationRailContext";
 import type { CitationFetchState } from "./CitationRailContext";
 import type { CitationChunkExcerpt } from "./api";
 
+// Parse "transcript:42" / "document:3" to 42 / 3. Returns null for
+// malformed ids.
+function parseChunkIdx(chunkId: string): number | null {
+  const colon = chunkId.indexOf(":");
+  if (colon < 0) return null;
+  const n = Number.parseInt(chunkId.slice(colon + 1), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Adjacent-chunk highlight extension: when top-2 or top-3 is the
+// immediate forward / backward neighbour of top-1 (idx_gap == 1),
+// extend the highlight to cover the matching prefix/suffix portion of
+// the excerpt. Only idx_gap==1 qualifies — idx_gap==2 has too low a
+// precision against curated GT (~25%) to be worth the false positives.
+//
+// At most one direction extends, even when both top-2 and top-3 are
+// adjacent on opposite sides. Simultaneous bilateral extension
+// produces a fully-highlighted excerpt that reads as noise — and in
+// the observed cases where both sides fire, the score_gap tends to be
+// large (both are low-confidence adjacencies). Preferring the
+// earlier-ranked chunk (top-2 wins over top-3) uses the retrieval
+// rank as a proxy for the smaller score_gap.
+//
+// Data: hako k0XoWYoUBAhtylHc94KTI, CITATION-PIPELINE.md Stage 6.
+function computeExtension(
+  chunkIds: readonly string[],
+): { extendForward: boolean; extendBackward: boolean } {
+  if (chunkIds.length < 2) {
+    return { extendForward: false, extendBackward: false };
+  }
+  const top1 = parseChunkIdx(chunkIds[0]);
+  if (top1 === null) {
+    return { extendForward: false, extendBackward: false };
+  }
+  for (const id of chunkIds.slice(1, 3)) {
+    const idx = parseChunkIdx(id);
+    if (idx === null) continue;
+    if (idx === top1 + 1) {
+      return { extendForward: true, extendBackward: false };
+    }
+    if (idx === top1 - 1) {
+      return { extendForward: false, extendBackward: true };
+    }
+  }
+  return { extendForward: false, extendBackward: false };
+}
+
 interface CitationInlinePanelProps {
   sectionPath: string;
   videoRef?: React.RefObject<HTMLVideoElement | null> | null;
@@ -86,6 +133,9 @@ export function CitationInlinePanel({
   if (!isThisActive) return null;
 
   const hasCitation = active.citation.has_citation;
+  const { extendForward, extendBackward } = computeExtension(
+    active.citation.chunk_ids,
+  );
 
   // Overlay mode puts the panel above subsequent content with
   // box-shadow, solid background and a z-index so the content beneath
@@ -121,6 +171,8 @@ export function CitationInlinePanel({
           videoRef={videoRef}
           onJump={onJump}
           onAfterJump={clearActive}
+          extendForward={extendForward}
+          extendBackward={extendBackward}
         />
       ) : (
         <p className="text-accent-amber/90">
@@ -139,11 +191,20 @@ function InlineExcerptBody({
   videoRef,
   onJump,
   onAfterJump,
+  extendForward = false,
+  extendBackward = false,
 }: {
   state: CitationFetchState;
   videoRef?: React.RefObject<HTMLVideoElement | null> | null;
   onJump?: (excerpt: CitationChunkExcerpt) => boolean | void;
   onAfterJump?: () => void;
+  // When the citation has an adjacent top-2/3 chunk at idx±1, mark the
+  // corresponding prefix/suffix portion of the excerpt as target-like
+  // so the user sees one contiguous highlight across the ASR chunk
+  // boundary. See computeExtension() above and CITATION-PIPELINE.md
+  // Stage 6.
+  extendForward?: boolean;
+  extendBackward?: boolean;
 }) {
   const t = useTranslations("detailedSummary");
 
@@ -201,7 +262,24 @@ function InlineExcerptBody({
     <div className="space-y-2">
       <p className="whitespace-pre-wrap leading-relaxed">
         {excerpt.prefix && (
-          <span className="text-text-muted/80">{excerpt.prefix}</span>
+          extendBackward ? (
+            <mark
+              data-testid="citation-extended-prefix"
+              // Extended highlight: text stays at full primary colour,
+              // background is a faded mix of the target highlight so
+              // the reader sees "adjacent chunk also cited" without
+              // mistaking it for the primary target.
+              className="rounded px-0.5 text-text-primary"
+              style={{
+                backgroundColor:
+                  "color-mix(in srgb, var(--highlight-bg) 45%, transparent)",
+              }}
+            >
+              {excerpt.prefix}
+            </mark>
+          ) : (
+            <span className="text-text-muted/80">{excerpt.prefix}</span>
+          )
         )}
         <mark
           data-testid="citation-target"
@@ -216,7 +294,20 @@ function InlineExcerptBody({
           {excerpt.target}
         </mark>
         {excerpt.suffix && (
-          <span className="text-text-muted/80">{excerpt.suffix}</span>
+          extendForward ? (
+            <mark
+              data-testid="citation-extended-suffix"
+              className="rounded px-0.5 text-text-primary"
+              style={{
+                backgroundColor:
+                  "color-mix(in srgb, var(--highlight-bg) 45%, transparent)",
+              }}
+            >
+              {excerpt.suffix}
+            </mark>
+          ) : (
+            <span className="text-text-muted/80">{excerpt.suffix}</span>
+          )
         )}
       </p>
       <div className="flex items-center justify-between gap-2 text-[11px] text-text-muted">

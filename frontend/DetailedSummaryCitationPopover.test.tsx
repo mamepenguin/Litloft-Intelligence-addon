@@ -60,8 +60,63 @@ const unlinkedCitation = {
   has_citation: false,
 };
 
+// Fixtures for adjacent-chunk highlight extension. top-1 is at
+// transcript:10 throughout; top-2/3 idx choice exercises each path.
+const citationForwardAdjacent = {
+  section_path: "全体像/forward",
+  segment_type: "paragraph" as const,
+  segment_text: "前方に隣接 chunk が続く段落。",
+  chunk_ids: ["transcript:10", "transcript:11"],
+  top_score: 0.92,
+  has_citation: true,
+};
+
+const citationBackwardAdjacent = {
+  section_path: "全体像/backward",
+  segment_type: "paragraph" as const,
+  segment_text: "後方に隣接 chunk が先行する段落。",
+  chunk_ids: ["transcript:10", "transcript:9"],
+  top_score: 0.92,
+  has_citation: true,
+};
+
+const citationBothAdjacent = {
+  section_path: "全体像/both",
+  segment_type: "paragraph" as const,
+  segment_text: "前後に隣接 chunk がある段落。",
+  chunk_ids: ["transcript:10", "transcript:11", "transcript:9"],
+  top_score: 0.93,
+  has_citation: true,
+};
+
+const citationGap2 = {
+  section_path: "全体像/gap2",
+  segment_type: "paragraph" as const,
+  segment_text: "top-2 が 2 chunks 離れている段落 (拡張しない)。",
+  chunk_ids: ["transcript:10", "transcript:12"],
+  top_score: 0.90,
+  has_citation: true,
+};
+
+const citationTop3Adjacent = {
+  section_path: "全体像/top3adj",
+  segment_type: "paragraph" as const,
+  segment_text: "top-2 は離れているが top-3 が前方隣接。",
+  chunk_ids: ["transcript:10", "transcript:20", "transcript:11"],
+  top_score: 0.90,
+  has_citation: true,
+};
+
 function renderMarkerWithPanel(props: {
-  citation: typeof linkedCitation | typeof unlinkedCitation;
+  citation:
+    | typeof linkedCitation
+    | typeof weakLinkedCitation
+    | typeof unlinkedCitation
+    | typeof citationForwardAdjacent
+    | typeof citationBackwardAdjacent
+    | typeof citationBothAdjacent
+    | typeof citationGap2
+    | typeof citationTop3Adjacent;
   videoRef?: React.RefObject<HTMLVideoElement | null>;
 }) {
   return render(
@@ -449,5 +504,101 @@ describe("DetailedSummaryCitationPopover + CitationInlinePanel", () => {
     await waitFor(() => {
       expect(screen.queryByText(/抜粋テキスト/)).toBeNull();
     });
+  });
+
+  // --- Adjacent-chunk highlight extension (idx_gap == 1 only) -----------
+  //
+  // When top-2 or top-3 chunks are immediately adjacent to top-1 (gap=1),
+  // the UI extends the highlight into the neighbour excerpt so ASR
+  // chunk-boundary splits show up as one contiguous cited region. See
+  // hako k0XoWYoUBAhtylHc94KTI and CITATION-PIPELINE.md Stage 6.
+
+  async function openPanelWithExcerpt(citation: Parameters<typeof renderMarkerWithPanel>[0]["citation"]) {
+    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        chunk_id: citation.chunk_ids[0],
+        file_id: "f1",
+        prefix: "前の文。 ",
+        target: "ターゲット chunk。",
+        suffix: " 次の文。",
+        start_time: 10,
+        end_time: 15,
+        page: null,
+      });
+    renderMarkerWithPanel({ citation });
+    const marker = screen.getByRole("button");
+    fireEvent.mouseEnter(marker);
+    await screen.findByTestId("citation-target");
+  }
+
+  it("does not extend when only top-1 chunk is present", async () => {
+    await openPanelWithExcerpt(linkedCitation);
+    expect(screen.queryByTestId("citation-extended-prefix")).toBeNull();
+    expect(screen.queryByTestId("citation-extended-suffix")).toBeNull();
+  });
+
+  it("marks suffix as extended when top-2 is the forward neighbour", async () => {
+    await openPanelWithExcerpt(citationForwardAdjacent);
+    const suffixMark = screen.getByTestId("citation-extended-suffix");
+    expect(suffixMark.tagName).toBe("MARK");
+    expect(suffixMark.textContent).toContain("次の文");
+    expect(screen.queryByTestId("citation-extended-prefix")).toBeNull();
+  });
+
+  it("marks prefix as extended when top-2 is the backward neighbour", async () => {
+    await openPanelWithExcerpt(citationBackwardAdjacent);
+    const prefixMark = screen.getByTestId("citation-extended-prefix");
+    expect(prefixMark.tagName).toBe("MARK");
+    expect(prefixMark.textContent).toContain("前の文");
+    expect(screen.queryByTestId("citation-extended-suffix")).toBeNull();
+  });
+
+  it("extends only one side when both top-2 and top-3 are adjacent on opposite sides", async () => {
+    // citationBothAdjacent: chunk_ids = [t:10, t:11 (forward), t:9 (backward)]
+    // Rule: top-2 wins over top-3, so forward extends and backward is
+    // dropped. Prevents the full-excerpt highlight case that reads as
+    // noise.
+    await openPanelWithExcerpt(citationBothAdjacent);
+    expect(screen.getByTestId("citation-extended-suffix").tagName).toBe("MARK");
+    expect(screen.queryByTestId("citation-extended-prefix")).toBeNull();
+  });
+
+  it("prefers top-2's side when top-2 is backward and top-3 is forward", async () => {
+    const citation = {
+      section_path: "全体像/top2-backward",
+      segment_type: "paragraph" as const,
+      segment_text: "top-2 が後方隣接、top-3 が前方隣接。",
+      chunk_ids: ["transcript:10", "transcript:9", "transcript:11"],
+      top_score: 0.92,
+      has_citation: true,
+    };
+    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        chunk_id: "transcript:10",
+        file_id: "f1",
+        prefix: "前の文。 ",
+        target: "ターゲット。",
+        suffix: " 次の文。",
+        start_time: 10,
+        end_time: 15,
+        page: null,
+      });
+    renderMarkerWithPanel({ citation });
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    await screen.findByTestId("citation-target");
+    expect(screen.getByTestId("citation-extended-prefix").tagName).toBe("MARK");
+    expect(screen.queryByTestId("citation-extended-suffix")).toBeNull();
+  });
+
+  it("does not extend when top-2 is 2 chunks away (idx_gap == 2)", async () => {
+    await openPanelWithExcerpt(citationGap2);
+    expect(screen.queryByTestId("citation-extended-prefix")).toBeNull();
+    expect(screen.queryByTestId("citation-extended-suffix")).toBeNull();
+  });
+
+  it("extends when top-3 (not top-2) is the adjacent neighbour", async () => {
+    await openPanelWithExcerpt(citationTop3Adjacent);
+    expect(screen.getByTestId("citation-extended-suffix").tagName).toBe("MARK");
+    expect(screen.queryByTestId("citation-extended-prefix")).toBeNull();
   });
 });
