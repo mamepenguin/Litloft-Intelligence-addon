@@ -64,6 +64,7 @@ import type {
 } from "./api";
 import { DetailedSummaryCitationPopover } from "./DetailedSummaryCitationPopover";
 import { CitationInlinePanel } from "./CitationInlinePanel";
+import { InlineMarkdown } from "./InlineMarkdown";
 import {
   CitationRailProvider,
   useCitationRail,
@@ -660,7 +661,7 @@ function DetailedSummaryBody({
   ]);
 
   return (
-    <div ref={containerRef}>
+    <div ref={containerRef} data-citation-host={verify ? "on" : "off"}>
       <div className={`flex flex-wrap items-center gap-2 ${collapsed ? "" : "mb-2"}`}>
         <button
           onClick={onToggleCollapsed}
@@ -699,72 +700,87 @@ function DetailedSummaryBody({
             {td("edit.badge", { defaultMessage: "Edited" })}
           </span>
         )}
-        {!collapsed && hasCitations && (
-          <div className="ml-auto flex items-center gap-2">
+      </div>
+      {!collapsed && hasCitations && (
+        // Dedicated control bar (docs/citation-ui-mockup.html §2
+        // `.controls`). Kept on its own row below the title so the
+        // Verify toggle and the bulk actions get the breathing room
+        // the mockup shows; the title row would otherwise crowd the
+        // Verify pill against "AI 詳細要約" on narrow viewports.
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-bg-border bg-bg-card px-3.5 py-2.5">
+          <div className="inline-flex items-center gap-2.5">
             <button
               type="button"
               onClick={() => setVerify(!verify)}
               aria-pressed={verify}
-              className={`inline-flex items-center gap-1.5 rounded px-2 py-1 text-[11px] transition-colors ${
+              className={`inline-flex items-center gap-2 rounded-2xl border px-3.5 py-1.5 text-[13px] font-[650] transition-colors ${
                 verify
-                  ? "bg-accent-teal text-white"
-                  : "text-text-muted hover:bg-bg-elevated hover:text-text-primary"
+                  ? "border-accent-teal bg-accent-teal text-white"
+                  : "border-bg-border bg-bg-elevated text-text-muted hover:text-text-primary"
               }`}
               data-testid="verify-toggle"
             >
-              {verify
-                ? td("verify.toggle.on", { defaultMessage: "Verify ON" })
-                : td("verify.toggle.off", { defaultMessage: "Verify OFF" })}
+              <span
+                aria-hidden
+                className={`relative inline-block h-[14px] w-[26px] rounded-full transition-colors after:absolute after:top-[2px] after:left-[2px] after:h-[10px] after:w-[10px] after:rounded-full after:bg-white after:transition-transform ${
+                  verify
+                    ? "bg-white/35 after:translate-x-[12px]"
+                    : "bg-warm-silver after:translate-x-0"
+                }`}
+              />
+              {td("verify.toggle.label", { defaultMessage: "Verify" })}
             </button>
-            {verify && (
-              <>
+          </div>
+          {verify && (
+            <div className="inline-flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleExpandAllToggle}
+                className="inline-flex items-center gap-1.5 rounded-2xl border border-bg-border bg-transparent px-3.5 py-1.5 text-xs font-[650] text-text-muted transition-colors hover:border-accent hover:text-text-primary"
+                data-testid="verify-expand-all"
+              >
+                {allExpanded
+                  ? td("verify.collapseAll", {
+                      defaultMessage: "Collapse all",
+                    })
+                  : td("verify.expandAll", {
+                      defaultMessage: "All expanded",
+                    })}
+              </button>
+              {weakCitations.length > 0 && (
                 <button
                   type="button"
-                  onClick={handleExpandAllToggle}
-                  className="rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
-                  data-testid="verify-expand-all"
+                  onClick={handleExpandWeak}
+                  className="inline-flex items-center gap-1.5 rounded-2xl border border-dashed px-3.5 py-1.5 text-xs font-bold transition-colors"
+                  style={{
+                    backgroundColor:
+                      "color-mix(in srgb, var(--accent-amber) 12%, transparent)",
+                    color: "var(--accent-amber)",
+                    borderColor:
+                      "color-mix(in srgb, var(--accent-amber) 55%, transparent)",
+                  }}
+                  data-testid="verify-weak-only"
                 >
-                  {allExpanded
-                    ? td("verify.collapseAll", {
-                        defaultMessage: "Collapse all",
-                      })
-                    : td("verify.expandAll", {
-                        defaultMessage: "All expanded",
-                      })}
-                </button>
-                {weakCitations.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={handleExpandWeak}
-                    className="inline-flex items-center gap-1 rounded border border-dashed px-2 py-1 text-[11px]"
-                    style={{
-                      backgroundColor:
-                        "color-mix(in srgb, var(--accent-amber) 12%, transparent)",
-                      color: "var(--accent-amber)",
-                      borderColor:
-                        "color-mix(in srgb, var(--accent-amber) 55%, transparent)",
-                    }}
-                    data-testid="verify-weak-only"
+                  {td("verify.weakOnly.label", {
+                    defaultMessage: "Needs check",
+                  })}
+                  <span
+                    className="inline-flex min-w-[18px] items-center justify-center rounded-full px-1.5 text-[11px] font-bold leading-[16px] tabular-nums text-white"
+                    style={{ backgroundColor: "var(--accent-amber)" }}
                   >
-                    {td("verify.weakOnly", {
-                      defaultMessage: "Needs check {n}",
-                      n: weakCitations.length,
-                    })}
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-        )}
-      </div>
-      {!collapsed && verify && (
-        <p className="mb-2 text-[10px] text-text-muted/60">
-          {td("verify.keyboardHints", {
-            defaultMessage:
-              "v: ON/OFF | ↑↓: move | Enter: expand | Esc: close",
-          })}
-        </p>
+                    {weakCitations.length}
+                  </span>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       )}
+      {/* Keyboard hint footer — rendered at the bottom of the
+          expanded summary body. Placed after the section map below so
+          it sits below the content rather than between the header and
+          the first segment (where it otherwise competed with the
+          keyboard shortcut affordance for attention). */}
 
       {!collapsed && (
         <>
@@ -837,6 +853,14 @@ function DetailedSummaryBody({
                   })}
             </button>
           </div>
+          {verify && (
+            <KeyboardHintFooter
+              text={td("verify.keyboardHints", {
+                defaultMessage:
+                  "v: ON/OFF | ↑↓: move | Enter: expand | Esc: close",
+              })}
+            />
+          )}
         </>
       )}
 
@@ -1520,39 +1544,39 @@ function BulletGroup({
   // the segment list is flat (backend doesn't preserve bullet depth)
   // and a single-level ``<ul>`` with visual indent matches what the
   // MarkdownPreview output looks like for simple nested lists.
+  const { isExpanded } = useCitationRail();
   const minIndent = Math.min(...bullets.map((b) => b.indent));
   return (
-    // ``mb-[1.15em]`` mirrors ``.markdown-body ul``'s bottom margin so
-    // the bullet block has the same rhythm as MarkdownPreview output.
-    // The Tailwind arbitrary variants on each ``<li>`` below collapse
-    // the inner SegmentMarkdown ``<p>`` into the li line so the marker
-    // and text flow next to the disc instead of wrapping to a new row.
-    <ul className="markdown-body markdown-segment mb-[1.15em] list-disc pl-[1.75em]">
+    // Bullet block inherits ``.markdown-body ul`` rhythm via the class
+    // below. Each ``<li>`` collapses its inner MarkdownPreview ``<p>``
+    // to inline so the marker dot sits alongside the text rather than
+    // on a new row. Indented bullets receive proportional margin-left
+    // so nested hierarchy still reads as hierarchy — even though the
+    // backend segment list is flat.
+    <ul className="markdown-body markdown-segment list-disc pl-[1.75em]">
       {bullets.map((b) => {
         const citation = citationByPath.get(b.section_path);
         const marker = citation ? (
           <DetailedSummaryCitationPopover citation={citation} />
         ) : null;
+        const tier = citation
+          ? citation.has_citation
+            ? citation.top_score >= 0.9
+              ? "strong"
+              : "weak"
+            : "missing"
+          : undefined;
+        const canExpand = Boolean(citation && citation.has_citation);
         const extraPad = (b.indent - minIndent) * 8;
         return (
           <li
             key={b.section_path}
             data-citation-section-path={b.section_path}
-            data-citation-tier={
-              citation
-                ? citation.has_citation
-                  ? citation.top_score >= 0.9
-                    ? "strong"
-                    : "weak"
-                  : "missing"
-                : undefined
-            }
-            tabIndex={citation && citation.has_citation ? 0 : -1}
-            className="[&>div]:inline [&>div>p]:m-0 [&>div>p]:inline focus:outline-none focus:ring-1 focus:ring-accent-teal/40 rounded"
-            style={{
-              scrollMarginTop: "20vh",
-              ...(extraPad ? { marginLeft: `${extraPad}px` } : {}),
-            }}
+            data-citation-tier={tier}
+            aria-expanded={canExpand ? isExpanded(b.section_path) : undefined}
+            tabIndex={canExpand ? 0 : -1}
+            className="[&>div]:inline [&>div>p]:m-0 [&>div>p]:inline"
+            style={extraPad ? { marginLeft: `${extraPad}px` } : undefined}
           >
             <SegmentMarkdown source={b.text} />
             {marker}
@@ -1584,69 +1608,42 @@ function TableGroup({
     videoRef?: React.RefObject<HTMLVideoElement | null>;
   };
 }) {
-  // Subscribe to expanded set so we only mount the expansion row for
-  // currently-open panels. A dormant expansion row lets table-layout
-  // peek at the panel's intrinsic width and drift column widths when
-  // the excerpt loads; mounting only while expanded keeps table
-  // geometry stable.
+  // Subscribe to expanded set so the accordion row only mounts when
+  // the excerpt is actually open — a dormant row lets table-layout
+  // peek at the panel's intrinsic width and drift column widths.
   const { isExpanded } = useCitationRail();
   const header = rows[0]?.tableHeader ?? [];
-  const anyMarker = rows.some((r) => citationByPath.has(r.section_path));
-  // The citation column sits outside the `.markdown-body` cell grid so
-  // the popover trigger doesn't inherit the cell border / padding /
-  // zebra striping. A zero-width column keeps the header alignment
-  // honest when only some rows have citations.
-  const markerCellStyle: React.CSSProperties = {
-    border: "none",
-    padding: "0 0.4em 0 0",
-    width: 0,
-    whiteSpace: "nowrap",
-    background: "transparent",
-    verticalAlign: "top",
-  };
-  // Override `.markdown-body tr:nth-child(even) { background: bg-elevated }`
-  // inline. The tr-level stripe paints the full row width — including
-  // the transparent citation ``<td>`` — so the citation column reads as
-  // part of the table. We disable the tr stripe and re-apply it per
-  // data cell below, preserving zebra striping while letting the
-  // citation column stay visually outside the frame.
-  const transparentRowStyle: React.CSSProperties = { background: "transparent" };
-  const stripedCellStyle: React.CSSProperties = {
-    background: "var(--bg-elevated)",
-  };
-  // We deliberately do NOT wrap the table in `overflow-x-auto` — that
-  // caused the citation popover (which extends beyond the table's right
-  // edge on hover) to trigger a horizontal scrollbar on the table alone.
-  // Wide tables flow into the section's natural overflow instead.
+  // Per mockup H3 the dot sits inline at the end of the trailing data
+  // cell, not in a separate marker column. The table reads as a quiet
+  // editorial grid (thead un-coloured via globals, no zebra, no side
+  // borders) and the weak rows carry their tier via a 3px amber
+  // left-edge accent on the first data cell.
   return (
-    <div className="markdown-body markdown-segment my-2">
+    <div className="markdown-body markdown-segment">
       <table>
         {header.length > 0 && (
           <thead>
-            <tr style={transparentRowStyle}>
-              {anyMarker && <th aria-hidden style={markerCellStyle} />}
+            <tr>
               {header.map((cell, i) => (
-                <th key={i}>{cell}</th>
+                <th key={i}>
+                  <InlineMarkdown source={cell} />
+                </th>
               ))}
             </tr>
           </thead>
         )}
         <tbody>
-          {rows.map((row, idx) => {
+          {rows.map((row) => {
             const citation = citationByPath.get(row.section_path);
             const marker = citation ? (
               <DetailedSummaryCitationPopover citation={citation} />
             ) : null;
             const cells = row.tableCells ?? [];
-            // Replicate `.markdown-body tr:nth-child(even)` striping on
-            // the data cells only. idx is 0-based; the matching
-            // 1-based even rows (2nd, 4th, …) are idx=1, 3, …
-            const stripe = idx % 2 === 1;
-            // Total column count for the inline-panel colSpan — header
-            // + data cells + optional marker column. Tables without a
-            // header fall back to the cell count.
-            const totalCols =
-              (cells.length || header.length || 1) + (anyMarker ? 1 : 0);
+            // colSpan of the accordion row matches whatever width the
+            // data cells occupy. Header count is the authoritative
+            // answer when cells were trimmed; otherwise fall back to
+            // the cell count, then a minimum of 1 for safety.
+            const totalCols = header.length || cells.length || 1;
             const tier = citation
               ? citation.has_citation
                 ? citation.top_score >= 0.9
@@ -1654,40 +1651,32 @@ function TableGroup({
                   : "weak"
                 : "missing"
               : undefined;
-            // Weak-tier rows carry an amber left-edge accent per the
-            // DESIGN.md table H3 convention — no dashed outer frame
-            // (that affordance belongs to paragraph/bullet cards).
-            const firstCellAccent: React.CSSProperties | undefined =
-              tier === "weak"
-                ? { borderLeft: "3px solid var(--accent-amber)" }
-                : undefined;
+            const canExpand = Boolean(citation && citation.has_citation);
+            const expanded = canExpand && isExpanded(row.section_path);
+            const lastIdx = cells.length - 1;
             return (
               <Fragment key={row.section_path}>
                 <tr
                   data-citation-section-path={row.section_path}
                   data-citation-tier={tier}
-                  tabIndex={citation && citation.has_citation ? 0 : -1}
-                  style={{ ...transparentRowStyle, scrollMarginTop: "20vh" }}
+                  aria-expanded={canExpand ? expanded : undefined}
+                  tabIndex={canExpand ? 0 : -1}
                 >
-                  {anyMarker && (
-                    <td aria-hidden style={markerCellStyle}>
-                      {marker}
-                    </td>
-                  )}
                   {cells.map((cell, i) => (
-                    <td
-                      key={i}
-                      style={{
-                        ...(stripe ? stripedCellStyle : {}),
-                        ...(i === 0 ? firstCellAccent ?? {} : {}),
-                      }}
-                    >
-                      {cell}
+                    <td key={i}>
+                      <InlineMarkdown source={cell} />
+                      {i === lastIdx && marker && (
+                        // Non-breaking wrapper keeps the trailing
+                        // punctuation / text visually paired with the
+                        // dot at line-end — matches the mockup's
+                        // ``<span class="segment-endcap">`` idiom.
+                        <span style={{ whiteSpace: "nowrap" }}>{marker}</span>
+                      )}
                     </td>
                   ))}
                 </tr>
-                {citation && isExpanded(row.section_path) && (
-                  <tr style={transparentRowStyle}>
+                {citation && expanded && (
+                  <tr data-citation-acc-row>
                     <td
                       colSpan={totalCols}
                       style={{
@@ -1723,24 +1712,40 @@ function renderSegmentLine(
     videoRef?: React.RefObject<HTMLVideoElement | null>;
   },
 ): ReactNode {
-  const marker = citation ? (
-    <DetailedSummaryCitationPopover citation={citation} />
-  ) : null;
-
-  const text = segment.text;
-
   // ``bullet`` and ``table-row`` never reach this function — they are
   // folded into ``BulletGroup`` / ``TableGroup`` by ``renderSegments``
   // so ``.markdown-body`` ul/table typography applies. Any other
   // segment type (paragraph, code-block, future additions) renders
-  // through SegmentMarkdown below; MarkdownPreview knows how to turn
-  // fenced text into ``<pre><code>`` and prose into ``<p>``, so we do
-  // not need to branch on ``code-block`` here.
-  // ``mb-[1.15em]`` matches ``.markdown-body p``'s bottom margin so the
-  // spacing between consecutive paragraphs / code blocks lines up with
-  // the MarkdownPreview rhythm. The outer block hosts the text row +
-  // the inline citation panel that expands directly beneath it when a
-  // citation is active.
+  // through SegmentMarkdown below; MarkdownPreview turns fenced text
+  // into ``<pre><code>`` and prose into ``<p>``, so we do not need to
+  // branch on ``code-block`` here.
+  return (
+    <ParagraphSegment
+      key={segment.section_path}
+      segment={segment}
+      citation={citation}
+      ctx={ctx}
+    />
+  );
+}
+
+function ParagraphSegment({
+  segment,
+  citation,
+  ctx,
+}: {
+  segment: ParsedSegment;
+  citation: DetailedSummaryCitation | undefined;
+  ctx: {
+    fileId: string;
+    drive: string;
+    videoRef?: React.RefObject<HTMLVideoElement | null>;
+  };
+}) {
+  const { isExpanded } = useCitationRail();
+  const marker = citation ? (
+    <DetailedSummaryCitationPopover citation={citation} />
+  ) : null;
   const tier = citation
     ? citation.has_citation
       ? citation.top_score >= 0.9
@@ -1748,21 +1753,17 @@ function renderSegmentLine(
         : "weak"
       : "missing"
     : undefined;
+  const canExpand = Boolean(citation && citation.has_citation);
   return (
     <div
-      key={segment.section_path}
       data-citation-section-path={segment.section_path}
       data-citation-tier={tier}
-      tabIndex={citation && citation.has_citation ? 0 : -1}
-      className="mb-[1.15em] rounded focus:outline-none focus:ring-1 focus:ring-accent-teal/40 [&>*>div>p]:inline [&>*>div>p]:m-0"
-      style={{ scrollMarginTop: "20vh" }}
+      aria-expanded={canExpand ? isExpanded(segment.section_path) : undefined}
+      tabIndex={canExpand ? 0 : -1}
+      className="[&>*>div>p]:inline [&>*>div>p]:m-0"
     >
-      <div className="flex items-start gap-1">
-        <div className="min-w-0 flex-1">
-          <SegmentMarkdown source={text} />
-          {marker}
-        </div>
-      </div>
+      <SegmentMarkdown source={segment.text} />
+      {marker}
       {citation && (
         <CitationInlinePanel
           sectionPath={segment.section_path}
@@ -1800,6 +1801,53 @@ function SegmentMarkdown({ source }: { source: string }) {
       showFrontmatter={false}
       className="markdown-segment text-base leading-relaxed text-text-primary"
     />
+  );
+}
+
+// Sticky keyboard hint footer for Verify mode. Renders each shortcut
+// token (pipe-separated input) as a `<kbd>` + label pair so the
+// shortcut keys stand out without competing with the summary body.
+// The sticky positioning keeps the legend visible as the reader
+// scrolls through long summaries.
+function KeyboardHintFooter({ text }: { text: string }) {
+  // Split the i18n string "v: ON/OFF | ↑↓: move | Enter: ..." into
+  // (key, label) tuples. Falls back to the plain string when parsing
+  // fails so the feature can't break the layout.
+  const tokens = text
+    .split("|")
+    .map((chunk) => chunk.trim())
+    .filter(Boolean)
+    .map((chunk) => {
+      const idx = chunk.indexOf(":");
+      if (idx < 0) return { key: chunk, label: "" };
+      return {
+        key: chunk.slice(0, idx).trim(),
+        label: chunk.slice(idx + 1).trim(),
+      };
+    });
+
+  return (
+    <div
+      aria-label="Keyboard shortcuts"
+      className="sticky bottom-3 z-10 mx-auto mt-8 flex w-fit flex-wrap items-center justify-center gap-3 rounded-2xl border border-bg-border px-4 py-2 text-xs text-text-muted backdrop-blur"
+      style={{
+        backgroundColor: "color-mix(in srgb, var(--bg-card) 92%, transparent)",
+      }}
+    >
+      {tokens.map((tok, i) => (
+        <span key={i} className="inline-flex items-center gap-1.5">
+          <kbd
+            className="inline-block rounded-md border border-bg-border bg-bg-elevated px-1.5 py-[1px] font-mono text-[11px] text-text-primary"
+            style={{
+              boxShadow: "inset 0 -1px 0 rgba(0,0,0,0.08)",
+            }}
+          >
+            {tok.key}
+          </kbd>
+          {tok.label && <span>{tok.label}</span>}
+        </span>
+      ))}
+    </div>
   );
 }
 

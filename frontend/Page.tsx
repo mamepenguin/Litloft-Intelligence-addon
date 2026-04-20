@@ -631,7 +631,7 @@ function IntelligenceAskPageInner() {
             // decoupled from the visual / i18n choice.
             <ThinkingIndicator label={t("thinking")} />
           ) : (
-            <div className="text-sm leading-relaxed text-text-primary">
+            <div className="text-base leading-relaxed text-text-primary">
               <MarkdownPreview
                 source={
                   state.kind === "streaming" ? state.answerBuffer : state.answer

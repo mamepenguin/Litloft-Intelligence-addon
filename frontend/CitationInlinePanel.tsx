@@ -23,7 +23,7 @@
  */
 
 import { useTranslations } from "next-intl";
-import { PlayCircle, ExternalLink, Copy } from "lucide-react";
+import { PlayCircle, Copy } from "lucide-react";
 
 import { useCitationRail, CITATION_STRONG_THRESHOLD } from "./CitationRailContext";
 import type { CitationFetchState } from "./CitationRailContext";
@@ -64,22 +64,57 @@ export function CitationInlinePanel({
   const tier: "strong" | "weak" =
     citation.top_score >= CITATION_STRONG_THRESHOLD ? "strong" : "weak";
 
-  const containerClass =
-    segmentType === "table"
-      ? "mt-2"
-      : tier === "strong"
-        ? "mt-2 rounded-md border border-bg-border bg-bg-card p-3 text-[13px]"
-        : "mt-2 rounded-md border border-dashed bg-bg-card p-3 text-[13px]";
+  // DESIGN.md §5 / mockup rev2: cards use rounded-xl (12px).
+  //
+  //   paragraph / bullet (default accordion):
+  //     - strong: 1px solid bg-border, no left-edge accent
+  //     - weak:   1px dashed amber (all four sides) per mockup rule
+  //               ``.segment[data-tier="weak"] > .accordion``
+  //
+  //   table (H3 variant, chosen per user confirm):
+  //     - strong: 1px solid bg-border (no amber accent)
+  //     - weak:   1px solid bg-border + border-left 3px solid amber
+  //               mirroring the cited row's own first-cell accent so
+  //               the expansion row reads as part of the table frame
+  //
+  // Both layouts sit on var(--bg-elevated) with 14px/16px padding so
+  // they match the mockup's ``.accordion`` / ``.accordion-h3`` specs.
+  // Vertical margins sit OUTSIDE the elevated surface. mt-3 (12px)
+  // on top gives comfortable separation between the segment text and
+  // the accordion; mb-1 (4px) on bottom pairs with the segment's own
+  // 4px padding-bottom for a total 8px gap under the accordion, so
+  // the next li / paragraph isn't crushed against the elevated
+  // surface. Inner padding p-5 (20px) gives the meta row + excerpt
+  // card breathing room inside the coloured surface itself.
+  const paragraphBulletClass =
+    tier === "strong"
+      ? "mt-3 mb-1 rounded-xl border border-bg-border bg-bg-elevated p-5 text-[13px] animate-fade-in"
+      : "mt-3 mb-1 rounded-xl border border-dashed bg-bg-elevated p-5 text-[13px] animate-fade-in";
 
-  const containerStyle: React.CSSProperties =
-    segmentType === "table"
-      ? {}
-      : tier === "weak"
-        ? {
-            borderColor:
-              "color-mix(in srgb, var(--accent-amber) 55%, var(--bg-border))",
-          }
+  // Table rows drop the outer margin — a <td colspan> containing the
+  // accordion already sits on its own table-row so neighbouring content
+  // is positioned by the table-layout, not margin.
+  const tableAccordionClass =
+    "my-2 rounded-xl border border-bg-border bg-bg-elevated p-5 text-[13px] animate-fade-in";
+
+  const containerClass =
+    segmentType === "table" ? tableAccordionClass : paragraphBulletClass;
+
+  const containerStyle: React.CSSProperties = (() => {
+    if (segmentType === "table") {
+      return tier === "weak"
+        ? { borderLeft: "3px solid var(--accent-amber)" }
         : {};
+    }
+    // paragraph / bullet
+    if (tier === "weak") {
+      return {
+        borderColor:
+          "color-mix(in srgb, var(--accent-amber) 55%, var(--bg-border))",
+      };
+    }
+    return {};
+  })();
 
   return (
     <aside
@@ -128,31 +163,31 @@ function PanelMeta({
     return t("citations.sourceExcerpt", { defaultMessage: "excerpt" });
   })();
 
+  // Chip — rounded-2xl pill per mockup `.chip` (no bg fill; colour +
+  // border carries the tier). font-weight 600 is the spec.
   const chipClass =
     tier === "strong"
-      ? "inline-flex items-center rounded border px-1.5 py-0.5 text-[11px]"
-      : "inline-flex items-center rounded border border-dashed px-1.5 py-0.5 text-[11px]";
+      ? "inline-flex items-center gap-1 rounded-2xl border bg-bg-card px-2.5 py-0.5 text-[11px] font-semibold"
+      : "inline-flex items-center gap-1 rounded-2xl border border-dashed bg-bg-card px-2.5 py-0.5 text-[11px] font-semibold";
   const chipStyle: React.CSSProperties =
     tier === "strong"
       ? {
-          backgroundColor:
-            "color-mix(in srgb, var(--accent-teal) 18%, transparent)",
           color: "var(--accent-teal)",
           borderColor:
-            "color-mix(in srgb, var(--accent-teal) 40%, transparent)",
+            "color-mix(in srgb, var(--accent-teal) 30%, transparent)",
         }
       : {
-          backgroundColor:
-            "color-mix(in srgb, var(--accent-amber) 12%, transparent)",
           color: "var(--accent-amber)",
           borderColor:
             "color-mix(in srgb, var(--accent-amber) 55%, transparent)",
         };
 
   return (
-    <div className="mb-2 flex items-center gap-2 text-[11px] text-text-muted">
-      <span className={chipClass} style={chipStyle}>
-        {tierLabel}
+    <div className="mb-2 flex items-center justify-between gap-2.5 text-xs text-text-muted">
+      <span className="inline-flex items-center gap-2">
+        <span className={chipClass} style={chipStyle}>
+          {tierLabel}
+        </span>
       </span>
       <span>{sourceType}</span>
     </div>
@@ -187,7 +222,20 @@ function InlineExcerptBody({
   if (state.kind === "idle") return null;
 
   const excerpt = state.excerpt;
-  if (!excerpt) {
+  // An all-empty excerpt payload is functionally "no excerpt" even
+  // though the server returned a row. This happens when a weak-tier
+  // citation points at a chunk whose prefix/target/suffix are all
+  // blank (e.g. an intro-applause snap fallback) — without this guard
+  // the panel would paint a blank excerpt card when the user hits
+  // "Needs check" and every weak citation landed on such a row.
+  const hasContent =
+    !!excerpt &&
+    Boolean(
+      (excerpt.prefix && excerpt.prefix.trim()) ||
+        (excerpt.target && excerpt.target.trim()) ||
+        (excerpt.suffix && excerpt.suffix.trim()),
+    );
+  if (!excerpt || !hasContent) {
     return (
       <p className="text-text-muted">
         {t("citations.noExcerpt", { defaultMessage: "No excerpt available" })}
@@ -236,58 +284,60 @@ function InlineExcerptBody({
     return "";
   })();
 
+  // Mockup `.acc-excerpt`: the whole excerpt card is the jump target.
+  // Head row carries locator (tabular-nums, weight 600) on the left and
+  // a "ジャンプ ▶" affordance on the right (accent colour, weight 650).
+  // Body is 14px / line-height 1.7, prefix+suffix muted, target on
+  // highlight-bg. `.acc-actions` below hosts Copy / Open-file as
+  // `rounded-2xl` ghost buttons — Jump is NOT duplicated here, the
+  // whole card already handles that.
   return (
-    <div className="space-y-2">
-      <p
-        className="whitespace-pre-wrap leading-relaxed cursor-pointer"
+    <div>
+      <button
+        type="button"
         onClick={jumpDisabled ? undefined : handleJump}
+        disabled={jumpDisabled}
+        className="block w-full cursor-pointer rounded-xl border border-bg-border bg-bg-card px-3.5 py-3 text-left transition-colors hover:border-accent disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {excerpt.prefix && (
-          <span className="text-text-muted/80">{excerpt.prefix}</span>
-        )}
-        <mark
-          data-testid="citation-target"
-          className="rounded px-0.5 text-text-primary"
-          style={{ backgroundColor: "var(--highlight-bg)" }}
-        >
-          {excerpt.target}
-        </mark>
-        {excerpt.suffix && (
-          <span className="text-text-muted/80">{excerpt.suffix}</span>
-        )}
-      </p>
-      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-text-muted">
-        <span>{locator}</span>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted hover:bg-bg-elevated hover:text-text-primary"
-          >
-            <Copy size={11} />
-            {t("citations.copyExcerpt", { defaultMessage: "Copy excerpt" })}
-          </button>
-          <button
-            type="button"
-            onClick={handleJump}
-            disabled={jumpDisabled}
-            className="inline-flex items-center gap-1 rounded bg-accent-teal px-2 py-1 text-[11px] text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <PlayCircle size={11} />
-            {t("citations.jump", { defaultMessage: "Jump" })}
-          </button>
-          {excerpt.file_id && (
-            <a
-              href={`/files/${excerpt.file_id}`}
-              className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted hover:bg-bg-elevated hover:text-text-primary"
-              target="_blank"
-              rel="noopener noreferrer"
+        <div className="mb-1.5 flex items-center justify-between gap-2 text-xs text-text-muted">
+          <span className="font-semibold tabular-nums text-text-primary">
+            {locator}
+          </span>
+          {!jumpDisabled && (
+            <span
+              className="inline-flex items-center gap-1 font-[650]"
+              style={{ color: "var(--accent)" }}
             >
-              <ExternalLink size={11} />
-              {t("citations.openFile", { defaultMessage: "Open file" })}
-            </a>
+              {t("citations.jump", { defaultMessage: "Jump" })}
+              <PlayCircle size={12} />
+            </span>
           )}
         </div>
+        <p className="whitespace-pre-wrap text-[14px] leading-[1.7] text-text-primary">
+          {excerpt.prefix && (
+            <span className="text-text-muted">{excerpt.prefix}</span>
+          )}
+          <mark
+            data-testid="citation-target"
+            className="rounded-[3px] px-0.5 font-medium text-text-primary"
+            style={{ backgroundColor: "var(--highlight-bg)" }}
+          >
+            {excerpt.target}
+          </mark>
+          {excerpt.suffix && (
+            <span className="text-text-muted">{excerpt.suffix}</span>
+          )}
+        </p>
+      </button>
+      <div className="mt-2 flex items-center gap-2.5">
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="inline-flex items-center gap-1 rounded-2xl border border-bg-border bg-transparent px-3 py-1 text-xs text-text-muted transition-colors hover:border-accent hover:text-text-primary"
+        >
+          <Copy size={11} />
+          {t("citations.copyExcerpt", { defaultMessage: "Copy excerpt" })}
+        </button>
       </div>
     </div>
   );

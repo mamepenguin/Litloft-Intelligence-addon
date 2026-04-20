@@ -26,7 +26,7 @@
  * markers completely in both states.
  */
 
-import { useCallback } from "react";
+import { useCallback, useId } from "react";
 import { useTranslations } from "next-intl";
 
 import { useCitationRail, CITATION_STRONG_THRESHOLD } from "./CitationRailContext";
@@ -47,6 +47,13 @@ export function DetailedSummaryCitationPopover({
 }: DetailedSummaryCitationPopoverProps) {
   const t = useTranslations("detailedSummary");
   const { verify, toggle, isExpanded } = useCitationRail();
+  // Unique id for the weak tier's half-moon clipPath. Required because
+  // ``clip-path: url(#hc-…)`` refs are global to the document; two
+  // weak markers sharing the same id would both clip to whichever was
+  // defined last (typically a no-op on the second). useId returns a
+  // stable, unique value per component instance.
+  const reactId = useId();
+  const clipId = `hv-half-${reactId.replace(/:/g, "")}`;
 
   const isActive = isExpanded(citation.section_path);
 
@@ -76,6 +83,10 @@ export function DetailedSummaryCitationPopover({
           defaultMessage: "Weak source citation — verify",
         });
 
+  // The 14×14 slot is reserved via fixed width/height on the wrapper
+  // so Verify ON/OFF and missing/strong/weak all occupy the same
+  // horizontal space — preventing table column widths and paragraph
+  // text-wrap from shifting when Verify is toggled.
   return (
     <button
       type="button"
@@ -83,7 +94,7 @@ export function DetailedSummaryCitationPopover({
       aria-pressed={isActive}
       aria-label={ariaLabel}
       title={tier === "weak" ? ariaLabel : undefined}
-      className="ml-1.5 inline-flex h-[14px] w-[14px] items-center justify-center align-middle"
+      className="ml-1.5 inline-flex h-[14px] w-[14px] items-center justify-center align-middle transition-[filter] hover:brightness-110"
       style={{ verticalAlign: "-2px", ...visibilityStyle }}
       data-citation-marker={`linked-${tier}`}
       data-citation-tier={tier}
@@ -92,29 +103,45 @@ export function DetailedSummaryCitationPopover({
         <svg
           width="14"
           height="14"
-          viewBox="0 0 14 14"
+          viewBox="0 0 24 24"
           aria-hidden
           focusable="false"
         >
-          <circle cx="7" cy="7" r="4.5" fill="var(--accent-teal)" />
+          <circle cx="12" cy="12" r="5" fill="var(--accent-teal)" />
         </svg>
       ) : (
+        // Weak = amber half-moon per docs/citation-ui-mockup.html §1.
+        // A dashed ring around the outside + a solid left-half fill,
+        // delivered via SVG clipPath on the inner circle. Shape itself
+        // (● vs ◐) carries the tier so the UI still discriminates for
+        // viewers with reduced colour sensitivity.
         <svg
           width="14"
           height="14"
-          viewBox="0 0 14 14"
+          viewBox="0 0 24 24"
           aria-hidden
           focusable="false"
         >
+          <defs>
+            <clipPath id={clipId}>
+              <rect x="0" y="0" width="12" height="24" />
+            </clipPath>
+          </defs>
           <circle
-            cx="7"
-            cy="7"
-            r="4.5"
-            fill="var(--accent-amber)"
-            fillOpacity="0.5"
+            cx="12"
+            cy="12"
+            r="5"
+            fill="none"
             stroke="var(--accent-amber)"
-            strokeWidth="1.25"
-            strokeDasharray="2 1.5"
+            strokeWidth="1.2"
+            strokeDasharray="2 1.2"
+          />
+          <circle
+            cx="12"
+            cy="12"
+            r="5"
+            fill="var(--accent-amber)"
+            clipPath={`url(#${clipId})`}
           />
         </svg>
       )}

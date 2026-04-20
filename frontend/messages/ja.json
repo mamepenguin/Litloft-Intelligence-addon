@@ -111,18 +111,19 @@
       "noExcerpt": "抜粋はありません",
       "pageLabel": "p.{page}",
       "jump": "ジャンプ",
-      "copyExcerpt": "抜粋をコピー",
-      "openFile": "元ファイルを開く"
+      "copyExcerpt": "抜粋をコピー"
     },
     "verify": {
       "toggle": {
-        "label": "照合",
-        "on": "照合中",
-        "off": "照合オフ"
+        "label": "Verify",
+        "on": "Verify ON",
+        "off": "Verify OFF"
       },
       "expandAll": "全て展開",
       "collapseAll": "折りたたむ",
-      "weakOnly": "要確認 {n}",
+      "weakOnly": {
+        "label": "要確認"
+      },
       "keyboardHints": "v: ON/OFF | ↑↓: 行移動 | Enter: 展開 | Esc: 閉じる"
     },
     "inline": {
