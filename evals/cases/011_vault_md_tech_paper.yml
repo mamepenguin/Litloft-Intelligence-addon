@@ -1,0 +1,31 @@
+id: 011_vault_md_tech_paper
+query: "Vision Transformer ってどういう仕組み？"
+
+# Pure-text retrieval case. The only source that should surface is the
+# markdown tech note — no video / audio / image covers ViT. This exists
+# as a regression guard for Phase 3 (detailed-summary → knowledge
+# promotion) where a successful promotion plants a Vault .md in the
+# addon DB; retrieval should treat the file like any other
+# text_content source, with no special downweighting just because
+# it originated as a machine summary.
+#
+# If this case degrades, the first suspects are:
+#   * TEXT_MIMES excluding text/markdown (would remove .md entirely)
+#   * text_content embeddings not being populated for .md files
+#   * Stage 1 over-aggressively dropping English tech terms
+expected_keywords:
+  must_include:
+    - "Vision Transformer"
+  must_exclude:
+    - "仕組み"
+
+ground_truth_files:
+  - path: "docs/tech_paper.md"
+
+must_mention:
+  - "Vision Transformer"
+
+notes: |
+  Single-file, single-modality ground truth. No segment_hint because
+  tech_paper.md is short enough that file-level recall is the right
+  resolution. A healthy pipeline should rank the .md at top-1.

@@ -1,0 +1,31 @@
+id: 012_vault_md_cat_diary_primary
+query: "うちのミケってどんな性格？"
+
+# Complements 005_cross_modal_image_text, which expects both
+# blackcat.jpg and cat_diary.md in top-k. Here the proper noun ミケ
+# and the personality angle are only discussed in the diary — the
+# image has no caption covering temperament. A healthy pipeline
+# should still place the .md at top-1 even when CLIP happens to
+# surface the image at a similar score.
+#
+# Acts as a Phase 3 Vault-.md regression guard: after a summary has
+# been promoted into a Vault, questions about the note's subject
+# must find the .md, not be drowned by visually adjacent media.
+expected_keywords:
+  must_include:
+    - "ミケ"
+  must_exclude:
+    - "性格"
+
+ground_truth_files:
+  - path: "docs/cat_diary.md"
+
+must_mention:
+  - "ミケ"
+
+notes: |
+  "性格" is a generic nominal that should survive as a retrieval
+  keyword inside the .md body but not be treated as a search anchor.
+  Proper-noun preservation matters: if Stage 1 strips ミケ the .md
+  retrieval signal collapses and the image (which has no textual
+  personality info) cannot stand in.
