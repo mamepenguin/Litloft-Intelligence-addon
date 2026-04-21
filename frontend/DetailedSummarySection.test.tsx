@@ -31,6 +31,43 @@ vi.mock("@/hooks/useWebSocket", () => ({
   },
 }));
 
+// Self-hide hook: default to "no active summary" so the existing
+// tests render the detailed summary. Tests that verify self-hide
+// override this via `mockActiveSummary.current`.
+const mockActiveSummary = {
+  current: { data: null, loading: false } as {
+    data: { has_active_summary: boolean; summary_note?: unknown } | null;
+    loading: boolean;
+  },
+};
+vi.mock("@/hooks/useActiveSummary", () => ({
+  useActiveSummary: () => mockActiveSummary.current,
+}));
+
+// Knowledge addon absence by default — keeps the Save button hidden
+// unless a test opts in.
+const mockAddons = {
+  current: {} as Record<string, unknown>,
+};
+vi.mock("@/components/AddonSlotsProvider", () => ({
+  useAddonSlots: () => ({
+    addons: mockAddons.current,
+    slots: {},
+    loading: false,
+    getSlotEntries: () => [],
+    hasSlot: () => false,
+    addonStatuses: {},
+  }),
+}));
+
+vi.mock("@/lib/api", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("@/lib/api");
+  return {
+    ...actual,
+    getFile: vi.fn().mockResolvedValue({ id: "f1", filename: "test.mkv" }),
+  };
+});
+
 vi.mock("@/addons/intelligence/api", () => ({
   getDetailedSummary: vi.fn(),
   startDetailedSummary: vi.fn(),
@@ -461,6 +498,44 @@ describe("DetailedSummarySection — edit flow", () => {
     expect(
       await screen.findByText(/編集内容は失われます/),
     ).toBeInTheDocument();
+  });
+
+  it("dormant state: hides body + edit UI, surfaces only the regenerate entry", async () => {
+    (getDetailedSummary as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue(editedResponse);
+    mockActiveSummary.current = {
+      data: {
+        has_active_summary: true,
+        summary_note: { file_id: "n1" },
+      },
+      loading: false,
+    };
+
+    try {
+      renderSection();
+
+      // Dormant marker is in the DOM.
+      await screen.findByTestId("detailed-summary-dormant");
+
+      // Body (heading '全体像') must not render.
+      expect(screen.queryByText(/全体像/)).not.toBeInTheDocument();
+      // Edit / Save-to-knowledge / Revert buttons must all be absent.
+      expect(screen.queryByText(/AI生成版に戻す/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/knowledge に保存/)).not.toBeInTheDocument();
+
+      // Regenerate is the only interactive action.
+      const regenButton = screen.getByRole("button", { name: /再生成/ });
+      fireEvent.click(regenButton);
+
+      // The confirm dialog uses the with-note variant.
+      expect(
+        await screen.findByText(
+          /AI 版を再生成します。現在 knowledge に保存されているノートは残りますが/,
+        ),
+      ).toBeInTheDocument();
+    } finally {
+      mockActiveSummary.current = { data: null, loading: false };
+    }
   });
 
   it("regenerate on an un-edited summary skips the dialog and fires regenerate", async () => {

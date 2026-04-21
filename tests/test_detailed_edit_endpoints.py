@@ -203,6 +203,15 @@ def mock_llm_enabled(monkeypatch):
     monkeypatch.setattr(
         "app.routers.summaries.get_llm_client", lambda: client
     )
+    # Stub the active-summary clear call so the test suite does not
+    # fire real HTTP at a non-existent core. Tests that care about
+    # the call log re-monkeypatch with a list-capturing stub.
+    async def _noop(_file_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "app.routers.summaries._clear_core_active_summary", _noop
+    )
     return client
 
 
@@ -613,6 +622,37 @@ class TestRegenerateConflict:
             "abc123", bg, None, "drive1"
         )
         assert result.status == "accepted"
+
+    @pytest.mark.asyncio
+    async def test_clears_core_active_summary_on_success(
+        self, monkeypatch, search_db, feature_enabled, mock_llm_enabled,
+    ):
+        """Phase 3 Step B: regenerating invalidates the core's active
+        summary pointer so the file detail page flips back to showing
+        the AI version. The knowledge ``.md`` itself must not be
+        touched — only the pointer is cleared."""
+        engine, _ = search_db
+        _insert_detailed_row(engine, "abc123")
+
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_transcript",
+            lambda fid: "a" * 500,
+        )
+
+        cleared: list[str] = []
+
+        async def fake_clear(file_id: str) -> None:
+            cleared.append(file_id)
+
+        monkeypatch.setattr(
+            "app.routers.summaries._clear_core_active_summary", fake_clear
+        )
+
+        result = await regenerate_detailed_summary(
+            "abc123", BackgroundTasks(), None, "drive1",
+        )
+        assert result.status == "accepted"
+        assert cleared == ["abc123"]
 
     @pytest.mark.asyncio
     async def test_400_when_content_insufficient(

@@ -34,6 +34,7 @@ import {
 import { useTranslations } from "next-intl";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import {
+  BookmarkPlus,
   ChevronDown,
   ChevronRight,
   Download,
@@ -46,6 +47,10 @@ import {
 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import { useActiveSummary } from "@/hooks/useActiveSummary";
+import { useAddonSlots } from "@/components/AddonSlotsProvider";
+import { getFile } from "@/lib/api";
+import { KnowledgeSaveDialog } from "./KnowledgeSaveDialog";
 
 import {
   deleteDetailedSummary,
@@ -125,6 +130,21 @@ export default function DetailedSummarySection({
   const [reverting, setReverting] = useState(false);
   const [confirmRevertOpen, setConfirmRevertOpen] = useState(false);
   const [confirmRegenerateOpen, setConfirmRegenerateOpen] = useState(false);
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [sourceFilename, setSourceFilename] = useState<string>("");
+
+  // Self-hide when a knowledge note is the active summary for this
+  // file. `ActiveSummaryHost` renders the knowledge-provided section
+  // instead; showing both would stack a user-approved note above the
+  // AI draft that no longer represents the file.
+  const { data: activeSummary } = useActiveSummary(fileId);
+  const hasActiveSummary = activeSummary?.has_active_summary === true;
+
+  // Knowledge availability gate for the "save" button. The addon
+  // catalogue is per-drive, so this flips when the user switches
+  // drives mid-session.
+  const { addons } = useAddonSlots();
+  const knowledgeAvailable = Boolean(addons["knowledge"]);
 
   const pollTokenRef = useRef(0);
 
@@ -231,13 +251,17 @@ export default function DetailedSummarySection({
   const handleGenerate = useCallback(() => {
     // Entering regenerate from the edited state surfaces a confirm
     // dialog first; once accepted the confirm handler calls
-    // doRegenerate(true). Untouched summaries skip the dialog.
-    if (data?.edited_at) {
+    // doRegenerate(true). Also confirm when a knowledge note is
+    // currently the active summary — regenerating flips the file
+    // detail page back to the AI view, which the user deserves to
+    // opt into. Untouched summaries with no active note skip the
+    // dialog.
+    if (data?.edited_at || hasActiveSummary) {
       setConfirmRegenerateOpen(true);
       return;
     }
     void doRegenerate(false);
-  }, [data?.edited_at, doRegenerate]);
+  }, [data?.edited_at, hasActiveSummary, doRegenerate]);
 
   const handleConfirmRegenerate = useCallback(() => {
     setConfirmRegenerateOpen(false);
@@ -326,6 +350,31 @@ export default function DetailedSummarySection({
       setSaving(false);
     }
   }, [editingTarget, draft, fileId, drive, fetchCitations]);
+
+  const handleOpenSaveDialog = useCallback(async () => {
+    // Grab the filename lazily — the component doesn't otherwise need
+    // it, and fetching on dialog open keeps the list page cheap.
+    if (!sourceFilename) {
+      try {
+        const file = await getFile(fileId);
+        setSourceFilename(file.filename);
+      } catch {
+        setSourceFilename(fileId);
+      }
+    }
+    setSaveDialogOpen(true);
+  }, [fileId, sourceFilename]);
+
+  const handleCloseSaveDialog = useCallback(() => {
+    setSaveDialogOpen(false);
+  }, []);
+
+  const handleSaveSuccess = useCallback(() => {
+    // The WS event `core.file_active_summary.changed` refreshes
+    // `useActiveSummary`, which triggers self-hide above. No explicit
+    // state mutation needed here.
+    setSaveDialogOpen(false);
+  }, []);
 
   const handleRevert = useCallback(async () => {
     setConfirmRevertOpen(false);
@@ -431,6 +480,8 @@ export default function DetailedSummarySection({
   const edited = Boolean(data.edited_at);
   const canRevert = edited && (data.has_original !== false);
 
+  const canSaveToKnowledge = edited && knowledgeAvailable;
+
   return (
     <CitationRailProvider fileId={fileId} drive={drive}>
       <DetailedSummaryBody
@@ -448,6 +499,8 @@ export default function DetailedSummarySection({
         reverting={reverting}
         working={working}
         downloading={downloading}
+        canSaveToKnowledge={canSaveToKnowledge}
+        hasActiveSummary={hasActiveSummary}
         fileId={fileId}
         drive={drive}
         videoRef={videoRef}
@@ -464,6 +517,16 @@ export default function DetailedSummarySection({
         onGenerate={handleGenerate}
         onCloseRegenerate={() => setConfirmRegenerateOpen(false)}
         onConfirmRegenerate={handleConfirmRegenerate}
+        onOpenSave={handleOpenSaveDialog}
+      />
+      <KnowledgeSaveDialog
+        open={saveDialogOpen}
+        fileId={fileId}
+        drive={drive}
+        content={data.detailed_summary ?? ""}
+        sourceFilename={sourceFilename || fileId}
+        onClose={handleCloseSaveDialog}
+        onSaved={handleSaveSuccess}
       />
     </CitationRailProvider>
   );
@@ -487,6 +550,8 @@ interface DetailedSummaryBodyProps {
   reverting: boolean;
   working: boolean;
   downloading: boolean;
+  canSaveToKnowledge: boolean;
+  hasActiveSummary: boolean;
   fileId: string;
   drive: string;
   videoRef?: React.RefObject<HTMLVideoElement | null>;
@@ -503,6 +568,7 @@ interface DetailedSummaryBodyProps {
   onGenerate: () => void;
   onCloseRegenerate: () => void;
   onConfirmRegenerate: () => void;
+  onOpenSave: () => void;
 }
 
 function DetailedSummaryBody({
@@ -520,6 +586,8 @@ function DetailedSummaryBody({
   reverting,
   working,
   downloading,
+  canSaveToKnowledge,
+  hasActiveSummary,
   fileId,
   drive,
   videoRef,
@@ -536,6 +604,7 @@ function DetailedSummaryBody({
   onGenerate,
   onCloseRegenerate,
   onConfirmRegenerate,
+  onOpenSave,
 }: DetailedSummaryBodyProps) {
   const t = useTranslations("file");
   const td = useTranslations("detailedSummary");
@@ -659,6 +728,59 @@ function DetailedSummaryBody({
     collapseAll,
     citationByPath,
   ]);
+
+  // Dormant state: a knowledge note is the active summary. The user-
+  // approved `.md` (rendered by the active-summary-view slot) is the
+  // single source of truth, so exposing the raw AI body here would
+  // either show identical content (just after promotion) or stale
+  // content (after the user edited the `.md`). Either way there is
+  // nothing useful to display. We keep the regenerate entry point so
+  // the user can deliberately switch back to the AI view; everything
+  // else (body, edit, revert, download, save) is hidden.
+  if (hasActiveSummary) {
+    return (
+      <div data-testid="detailed-summary-dormant" className="flex flex-wrap items-center gap-2">
+        <FileText size={14} className="text-text-muted/60" />
+        <h2 className="text-sm font-semibold text-text-muted">
+          {t("detailedSummaryTitle", { defaultMessage: "AI Detailed Summary" })}
+        </h2>
+        <span
+          className="rounded bg-bg-elevated px-1.5 py-0.5 text-[10px] text-text-muted/70"
+          title={td("dormant.hint", {
+            defaultMessage:
+              "Knowledge note is the active summary; the AI draft is dormant",
+          })}
+        >
+          {td("dormant.badge", { defaultMessage: "Dormant" })}
+        </span>
+        <button
+          onClick={onGenerate}
+          disabled={working}
+          className="ml-auto flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+        >
+          <RefreshCw size={11} className={working ? "animate-spin" : ""} />
+          {working
+            ? t("detailedSummaryGenerating", {
+                defaultMessage: "Generating detailed summary…",
+              })
+            : t("detailedSummaryRegenerate", { defaultMessage: "Regenerate" })}
+        </button>
+        <ConfirmDialog
+          open={confirmRegenerateOpen}
+          title={t("detailedSummaryRegenerate", { defaultMessage: "Regenerate" })}
+          message={td("edit.regenerateConfirmWithNote", {
+            defaultMessage:
+              "Regenerating the AI version. Your saved knowledge note will remain, but the file detail page will switch back to the AI summary. Continue?",
+          })}
+          confirmLabel={t("detailedSummaryRegenerate", {
+            defaultMessage: "Regenerate",
+          })}
+          onConfirm={onConfirmRegenerate}
+          onCancel={onCloseRegenerate}
+        />
+      </div>
+    );
+  }
 
   return (
     <div ref={containerRef} data-citation-host={verify ? "on" : "off"}>
@@ -835,6 +957,17 @@ function DetailedSummaryBody({
                 )}
                 {td("edit.revertButton", {
                   defaultMessage: "Revert to AI version",
+                })}
+              </button>
+            )}
+            {canSaveToKnowledge && (
+              <button
+                onClick={onOpenSave}
+                className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-accent-teal transition-colors hover:bg-bg-elevated hover:text-text-primary"
+              >
+                <BookmarkPlus size={11} />
+                {td("edit.saveToKnowledge", {
+                  defaultMessage: "Save to knowledge",
                 })}
               </button>
             )}

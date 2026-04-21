@@ -22,10 +22,12 @@ for the file_ids it receives.
 """
 
 import logging
+import os
 import re
 from datetime import UTC, datetime
 from urllib.parse import quote as urlquote
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy import text as sql_text
@@ -60,6 +62,34 @@ from app.workers.summaries import (
     classify_missing_reason,
     generate_detailed_summary,
 )
+
+
+async def _clear_core_active_summary(file_id: str) -> None:
+    """Best-effort DELETE of the core ``file_active_summaries`` row.
+
+    Called on detailed-summary regenerate so the file detail page flips
+    back to the intelligence summary view. The 404 branch is expected
+    whenever the user never promoted the summary to knowledge, and the
+    network branch is swallowed because the host's active-summary
+    pointer is a UI convenience — a stale pointer is harmless (the
+    ``active-summary-view`` slot falls back to the AI summary once the
+    `.md` is also gone, and will recover on the next page load if the
+    network recovers).
+    """
+    base = os.environ.get(
+        "HOMEVAULT_INTERNAL_API_URL", "http://backend:8000/api/internal"
+    )
+    url = f"{base}/file_active_summary/{urlquote(file_id, safe='')}"
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.delete(url)
+            if resp.status_code not in (204, 404):
+                logger.warning(
+                    "clear_core_active_summary unexpected %s for %s: %s",
+                    resp.status_code, file_id, resp.text,
+                )
+    except httpx.HTTPError as exc:  # noqa: BLE001
+        logger.warning("clear_core_active_summary network error: %s", exc)
 
 
 def _require_file_in_drive(file_id: str, drive: str) -> None:
@@ -982,6 +1012,13 @@ async def regenerate_detailed_summary(
                 ),
                 {"fid": file_id},
             )
+
+    # Promotion to knowledge (Phase 3) records the current note as the
+    # file's active summary in core. Regenerating the AI draft
+    # semantically invalidates that pointer: the file detail page must
+    # flip back to showing the freshly-generated AI summary. The knowledge
+    # `.md` itself is preserved — only the pointer is cleared.
+    await _clear_core_active_summary(file_id)
 
     background_tasks.add_task(
         generate_detailed_summary, file_id, get_llm_client()
