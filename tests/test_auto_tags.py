@@ -10,8 +10,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.config import LLMConfig, Settings
+from app.workers import auto_tags as at_module
 from app.workers.auto_tags import (
     TagCandidates,
+    _build_context,
     _build_system_prompt,
     _build_user_prompt,
     _classify_file_type,
@@ -710,3 +712,138 @@ class TestProcessFileBranches:
         await worker._process_file("file-1")
 
         assert saved == {}
+
+
+# ---------------------------------------------------------------------------
+# _build_context — vision_description integration (spec 2026-04-23)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildContextVisionDescription:
+    """Image files should get BLIP captions AND vision_description.
+
+    Phase 1.5 follow-up to the vision_describe spec: feeding the richer
+    vision LLM output alongside the terse BLIP caption gives auto_tags
+    a much stronger context signal for image files. Verifies the
+    wiring without touching the real DB.
+    """
+
+    def test_image_includes_vision_description_when_present(self, monkeypatch):
+        monkeypatch.setattr(
+            at_module, "_get_blip_captions", lambda fid: "a cat on a mat"
+        )
+        monkeypatch.setattr(
+            at_module,
+            "_get_visual_description",
+            lambda fid: "An orange tabby cat resting on a red patterned mat.",
+        )
+        ctx = _build_context({"file_id": "img-1"}, "image")
+        assert "Image captions:\na cat on a mat" in ctx
+        assert "Visual description:\nAn orange tabby cat" in ctx
+
+    def test_image_omits_vision_section_when_absent(self, monkeypatch):
+        monkeypatch.setattr(
+            at_module, "_get_blip_captions", lambda fid: "a cat on a mat"
+        )
+        monkeypatch.setattr(
+            at_module, "_get_visual_description", lambda fid: ""
+        )
+        ctx = _build_context({"file_id": "img-1"}, "image")
+        assert "Image captions:\na cat on a mat" in ctx
+        assert "Visual description:" not in ctx
+
+    def test_image_with_only_vision_description(self, monkeypatch):
+        """BLIP missing but vision_description present — still usable."""
+        monkeypatch.setattr(at_module, "_get_blip_captions", lambda fid: "")
+        monkeypatch.setattr(
+            at_module,
+            "_get_visual_description",
+            lambda fid: "A bowl of yellow rice with grilled meat.",
+        )
+        ctx = _build_context({"file_id": "img-1"}, "image")
+        assert "Image captions:" not in ctx
+        assert "Visual description:\nA bowl of yellow rice" in ctx
+
+    def test_video_does_not_pull_vision_description(self, monkeypatch):
+        """Non-image types must not touch the vision helpers (Phase 1 scope)."""
+        monkeypatch.setattr(
+            at_module, "_get_transcript_text", lambda fid: "some narration"
+        )
+        # If the wiring is wrong these would raise; stub them to fail loudly.
+        monkeypatch.setattr(
+            at_module,
+            "_get_visual_description",
+            lambda fid: pytest.fail(
+                "vision_description should not be fetched for video"
+            ),
+        )
+        ctx = _build_context({"file_id": "vid-1"}, "video")
+        assert "Transcript:\nsome narration" in ctx
+        assert "Visual description:" not in ctx
+
+
+class TestGetVisualDescription:
+    """Unit tests for the `_get_visual_description` DB helper.
+
+    Uses monkeypatched SQLAlchemy session rather than a real sqlite
+    file — the logic under test is just a SELECT + truncate.
+    """
+
+    def _patch_session(self, monkeypatch, row):
+        """Install a stub `get_search_db` that yields a fake session."""
+        fake_result = MagicMock()
+        fake_result.fetchone.return_value = row
+        fake_session = MagicMock()
+        fake_session.execute.return_value = fake_result
+
+        class _Ctx:
+            def __enter__(self_inner):
+                return fake_session
+
+            def __exit__(self_inner, *a):
+                return False
+
+        monkeypatch.setattr(at_module, "get_search_db", lambda: _Ctx())
+        return fake_session
+
+    def test_returns_text_for_success_row(self, monkeypatch):
+        from app.workers.auto_tags import _get_visual_description
+
+        self._patch_session(monkeypatch, ("A beautiful mountain landscape.",))
+        assert _get_visual_description("img-1") == "A beautiful mountain landscape."
+
+    def test_returns_empty_when_no_row(self, monkeypatch):
+        from app.workers.auto_tags import _get_visual_description
+
+        self._patch_session(monkeypatch, None)
+        assert _get_visual_description("img-1") == ""
+
+    def test_returns_empty_when_text_is_null(self, monkeypatch):
+        from app.workers.auto_tags import _get_visual_description
+
+        self._patch_session(monkeypatch, (None,))
+        assert _get_visual_description("img-1") == ""
+
+    def test_truncates_to_max_context_chars(self, monkeypatch):
+        from app.workers.auto_tags import _MAX_CONTEXT_CHARS, _get_visual_description
+
+        long_text = "x" * (_MAX_CONTEXT_CHARS + 500)
+        self._patch_session(monkeypatch, (long_text,))
+        result = _get_visual_description("img-1")
+        assert len(result) == _MAX_CONTEXT_CHARS
+
+    def test_filters_on_success_status(self, monkeypatch):
+        """The SELECT must only match `visual_description_status = 'success'`.
+
+        Failed / pending / unsupported rows contain no useful text
+        (or stale text from an earlier run); auto_tags should treat them
+        as "no context" rather than injecting noise into the prompt.
+        """
+        from app.workers.auto_tags import _get_visual_description
+
+        fake_session = self._patch_session(monkeypatch, ("ok",))
+        _get_visual_description("img-1")
+        call_args = fake_session.execute.call_args
+        sql_arg = call_args[0][0]
+        # sqlalchemy.text() wraps the string; stringify to match.
+        assert "visual_description_status = 'success'" in str(sql_arg)

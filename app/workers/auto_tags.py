@@ -521,6 +521,14 @@ def _build_context(indexed_file: dict, context_type: str) -> str:
         captions = _get_blip_captions(file_id)
         if captions:
             parts = [*parts, f"Image captions:\n{captions}"]
+        # Vision LLM description is a richer, structured account of the
+        # image than BLIP's short caption — feed it alongside so the
+        # tag-generation LLM sees both the terse label and the detailed
+        # scene. Spec: 2026-04-23-intelligence-vision-describe.md §非目標
+        # ("auto_tags は既存経路を維持、vision 記述を入力として間接的に恩恵を受ける").
+        vision_desc = _get_visual_description(file_id)
+        if vision_desc:
+            parts = [*parts, f"Visual description:\n{vision_desc}"]
     elif context_type == "document":
         text_content = _get_text_content(file_id)
         if text_content:
@@ -558,6 +566,30 @@ def _get_blip_captions(file_id: str) -> str:
         if not embeddings:
             return ""
         return " ".join(e.content_preview for e in embeddings if e.content_preview)
+
+
+def _get_visual_description(file_id: str) -> str:
+    """Return the stored vision LLM description for an image file.
+
+    Only ``visual_description_status = 'success'`` rows contribute
+    context — failed / pending / unsupported rows would inject noise or
+    empty strings, so they're filtered out here rather than in the
+    caller. Truncated at ``_MAX_CONTEXT_CHARS`` to match the transcript
+    / text_content paths and avoid blowing the LLM prompt budget on
+    verbose descriptions.
+    """
+    with get_search_db() as session:
+        row = session.execute(
+            sql_text(
+                "SELECT visual_description FROM file_summaries "
+                "WHERE file_id = :fid AND visual_description_status = 'success'"
+            ),
+            {"fid": file_id},
+        ).fetchone()
+    if row is None or not row[0]:
+        return ""
+    text = str(row[0])
+    return text[:_MAX_CONTEXT_CHARS]
 
 
 def _get_text_content(file_id: str) -> str:
