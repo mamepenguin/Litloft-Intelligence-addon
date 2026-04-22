@@ -37,7 +37,7 @@ function ProgressBar({
     <div className="space-y-1">
       <div className="flex items-center justify-between text-xs">
         <span className="text-text-muted">{label}</span>
-        <span className="text-text-primary">{Math.round(percent)}%</span>
+        <span className="text-text-primary">{Math.floor(percent)}%</span>
       </div>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg-elevated">
         <div
