@@ -1491,6 +1491,7 @@ function SectionView({
             fileId,
             drive,
             videoRef,
+            mediaController,
           })}
           {section.subsections.map((sub) => {
             const subEditing =
