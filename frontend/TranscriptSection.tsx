@@ -13,11 +13,16 @@ import { formatDuration } from "@/lib/format";
 import { getSubtitleUrl } from "@/lib/api";
 import type { SubtitleInfo } from "@/types";
 import { useAddonStatus } from "@/components/AddonSlotsProvider";
+import type { MediaController } from "@/lib/mediaController";
 
 interface TranscriptSectionProps {
   fileId: string;
   drive: string;
-  videoRef: React.RefObject<HTMLVideoElement | null>;
+  // Legacy native-video reference. Used for the timeupdate listener
+  // (highlighting the active cue) and as the seek fallback.
+  videoRef?: React.RefObject<HTMLVideoElement | null>;
+  // Preferred jump target — works for HvLink (YouTube) too.
+  mediaController?: MediaController | null;
   subtitles?: SubtitleInfo[];
 }
 
@@ -72,7 +77,7 @@ function parseVttCues(vtt: string): TranscriptChunkItem[] {
 
 const EMPTY_SUBTITLES: SubtitleInfo[] = [];
 
-export default function TranscriptSection({ fileId, drive, videoRef, subtitles = EMPTY_SUBTITLES }: TranscriptSectionProps) {
+export default function TranscriptSection({ fileId, drive, videoRef, mediaController, subtitles = EMPTY_SUBTITLES }: TranscriptSectionProps) {
   const t = useTranslations("searchIndex");
   const addonStatus = useAddonStatus("intelligence");
   const refineFeature = addonStatus.features?.transcript_refine;
@@ -146,7 +151,7 @@ export default function TranscriptSection({ fileId, drive, videoRef, subtitles =
   }, [source, externalCues, externalLanguage, whisperWordCues, whisperChunks, whisperLanguage]);
 
   const handleTimeUpdate = useCallback(() => {
-    const video = videoRef.current;
+    const video = videoRef?.current;
     if (!video || cues.length === 0) return;
     const currentTime = video.currentTime;
     const idx = cues.findIndex(
@@ -156,7 +161,11 @@ export default function TranscriptSection({ fileId, drive, videoRef, subtitles =
   }, [cues, videoRef]);
 
   useEffect(() => {
-    const video = videoRef.current;
+    // The active-cue highlight relies on `timeupdate` events from the
+    // underlying media element. YouTube IFrame Player doesn't dispatch
+    // those into the parent document, so the highlight remains a
+    // native-video-only nicety. Skip when no native ref is supplied.
+    const video = videoRef?.current;
     if (!video) return;
     video.addEventListener("timeupdate", handleTimeUpdate);
     return () => video.removeEventListener("timeupdate", handleTimeUpdate);
@@ -170,12 +179,18 @@ export default function TranscriptSection({ fileId, drive, videoRef, subtitles =
 
   const seekTo = useCallback(
     (time: number) => {
-      const video = videoRef.current;
+      // Prefer the unified controller (HvLink / native both supported).
+      if (mediaController) {
+        mediaController.seek(time);
+        mediaController.play();
+        return;
+      }
+      const video = videoRef?.current;
       if (video) {
         video.currentTime = time;
       }
     },
-    [videoRef]
+    [videoRef, mediaController]
   );
 
   const handleRefine = useCallback(async () => {

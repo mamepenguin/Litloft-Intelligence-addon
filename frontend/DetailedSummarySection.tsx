@@ -50,6 +50,7 @@ import { useWebSocket } from "@/hooks/useWebSocket";
 import { useActiveSummary } from "@/hooks/useActiveSummary";
 import { useAddonSlots } from "@/components/AddonSlotsProvider";
 import { getFile } from "@/lib/api";
+import type { MediaController } from "@/lib/mediaController";
 import { KnowledgeSaveDialog } from "./KnowledgeSaveDialog";
 
 import {
@@ -83,6 +84,7 @@ interface DetailedSummarySectionProps {
   // the main frontend in /files/[id]/page.tsx). Used for citation jump
   // on video / audio content. May be absent for non-media file types.
   videoRef?: React.RefObject<HTMLVideoElement | null>;
+  mediaController?: MediaController | null;
 }
 
 // Detailed summary generation is expensive: tens of seconds to a few
@@ -101,6 +103,7 @@ export default function DetailedSummarySection({
   fileId,
   drive,
   videoRef,
+  mediaController,
 }: DetailedSummarySectionProps) {
   const t = useTranslations("file");
   const td = useTranslations("detailedSummary");
@@ -504,6 +507,7 @@ export default function DetailedSummarySection({
         fileId={fileId}
         drive={drive}
         videoRef={videoRef}
+        mediaController={mediaController}
         confirmRevertOpen={confirmRevertOpen}
         confirmRegenerateOpen={confirmRegenerateOpen}
         onStartEdit={handleStartEdit}
@@ -555,6 +559,7 @@ interface DetailedSummaryBodyProps {
   fileId: string;
   drive: string;
   videoRef?: React.RefObject<HTMLVideoElement | null>;
+  mediaController?: MediaController | null;
   confirmRevertOpen: boolean;
   confirmRegenerateOpen: boolean;
   onStartEdit: (sectionName: string, subsectionName: string | null) => void;
@@ -591,6 +596,7 @@ function DetailedSummaryBody({
   fileId,
   drive,
   videoRef,
+  mediaController,
   confirmRevertOpen,
   confirmRegenerateOpen,
   onStartEdit,
@@ -927,6 +933,7 @@ function DetailedSummaryBody({
                 fileId={fileId}
                 drive={drive}
                 videoRef={videoRef}
+        mediaController={mediaController}
                 citationByPath={citationByPath}
                 edited={edited}
               />
@@ -1397,6 +1404,7 @@ interface SectionViewProps {
   fileId: string;
   drive: string;
   videoRef?: React.RefObject<HTMLVideoElement | null>;
+  mediaController?: MediaController | null;
   citationByPath: Map<string, DetailedSummaryCitation>;
   onStartEdit: (subsectionHeading: string | null) => void;
   onCancelEdit: () => void;
@@ -1412,6 +1420,7 @@ function SectionView({
   fileId,
   drive,
   videoRef,
+  mediaController,
   citationByPath,
   onStartEdit,
   onCancelEdit,
@@ -1429,6 +1438,7 @@ function SectionView({
           fileId,
           drive,
           videoRef,
+          mediaController,
         })}
       </div>
     );
@@ -1518,6 +1528,7 @@ function SectionView({
                     fileId,
                     drive,
                     videoRef,
+                    mediaController,
                   })
                 )}
               </div>
@@ -1606,6 +1617,7 @@ function renderSegments(
     fileId: string;
     drive: string;
     videoRef?: React.RefObject<HTMLVideoElement | null>;
+  mediaController?: MediaController | null;
   },
 ): ReactNode[] {
   const nodes: ReactNode[] = [];
@@ -1669,6 +1681,7 @@ function BulletGroup({
     fileId: string;
     drive: string;
     videoRef?: React.RefObject<HTMLVideoElement | null>;
+  mediaController?: MediaController | null;
   };
 }) {
   // The first bullet's indent anchors the group — anything deeper gets
@@ -1719,6 +1732,7 @@ function BulletGroup({
                 citation={citation}
                 segmentType="bullet"
                 videoRef={ctx.videoRef}
+          mediaController={ctx.mediaController}
               />
             )}
           </li>
@@ -1739,6 +1753,7 @@ function TableGroup({
     fileId: string;
     drive: string;
     videoRef?: React.RefObject<HTMLVideoElement | null>;
+  mediaController?: MediaController | null;
   };
 }) {
   // Subscribe to expanded set so the accordion row only mounts when
@@ -1823,6 +1838,7 @@ function TableGroup({
                         citation={citation}
                         segmentType="table"
                         videoRef={ctx.videoRef}
+          mediaController={ctx.mediaController}
                       />
                     </td>
                   </tr>
@@ -1843,6 +1859,7 @@ function renderSegmentLine(
     fileId: string;
     drive: string;
     videoRef?: React.RefObject<HTMLVideoElement | null>;
+  mediaController?: MediaController | null;
   },
 ): ReactNode {
   // ``bullet`` and ``table-row`` never reach this function — they are
@@ -1873,6 +1890,7 @@ function ParagraphSegment({
     fileId: string;
     drive: string;
     videoRef?: React.RefObject<HTMLVideoElement | null>;
+  mediaController?: MediaController | null;
   };
 }) {
   const { isExpanded } = useCitationRail();
@@ -1903,6 +1921,7 @@ function ParagraphSegment({
           citation={citation}
           segmentType="paragraph"
           videoRef={ctx.videoRef}
+          mediaController={ctx.mediaController}
         />
       )}
     </div>

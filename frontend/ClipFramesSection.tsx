@@ -7,16 +7,20 @@ import { useTranslations } from "next-intl";
 import { getClipTimestamps, getFrameUrl } from "./api";
 import type { ClipTimestampItem } from "./api";
 import { formatDuration } from "@/lib/format";
+import type { MediaController } from "@/lib/mediaController";
 
 interface ClipFramesSectionProps {
   fileId: string;
   drive: string;
-  videoRef: React.RefObject<HTMLVideoElement | null>;
+  // Legacy: still accepted for callers that pass a native video ref.
+  videoRef?: React.RefObject<HTMLVideoElement | null>;
+  // Preferred: works for native video AND HvLink (YouTube) embeds.
+  mediaController?: MediaController | null;
 }
 
 const INITIAL_SHOW = 20;
 
-export default function ClipFramesSection({ fileId, drive, videoRef }: ClipFramesSectionProps) {
+export default function ClipFramesSection({ fileId, drive, videoRef, mediaController }: ClipFramesSectionProps) {
   const t = useTranslations("searchIndex");
   const [timestamps, setTimestamps] = useState<ClipTimestampItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,12 +42,20 @@ export default function ClipFramesSection({ fileId, drive, videoRef }: ClipFrame
 
   const seekTo = useCallback(
     (time: number) => {
-      const video = videoRef.current;
+      // Prefer the unified controller (covers HvLink/YouTube) and fall
+      // back to the legacy native video ref for callers that haven't
+      // migrated yet.
+      if (mediaController) {
+        mediaController.seek(time);
+        mediaController.play();
+        return;
+      }
+      const video = videoRef?.current;
       if (video) {
         video.currentTime = time;
       }
     },
-    [videoRef]
+    [videoRef, mediaController]
   );
 
   if (loading || !available) return null;

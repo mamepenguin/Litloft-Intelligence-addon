@@ -28,6 +28,7 @@ import { PlayCircle, Copy } from "lucide-react";
 import { useCitationRail, CITATION_STRONG_THRESHOLD } from "./CitationRailContext";
 import type { CitationFetchState } from "./CitationRailContext";
 import type { CitationChunkExcerpt, DetailedSummaryCitation } from "./api";
+import type { MediaController } from "@/lib/mediaController";
 
 interface CitationInlinePanelProps {
   sectionPath: string;
@@ -44,6 +45,13 @@ interface CitationInlinePanelProps {
    *     border-left accent per DESIGN.md table H3 convention.
    */
   segmentType: "paragraph" | "bullet" | "table";
+  /**
+   * Preferred jump target. Works for both native HTMLVideoElement and
+   * YouTube IFrame Player (HvLink). When present, takes priority over
+   * `videoRef`. Kept optional so callers that haven't migrated yet
+   * still work via the legacy `videoRef` fallback below.
+   */
+  mediaController?: MediaController | null;
   videoRef?: React.RefObject<HTMLVideoElement | null> | null;
   onJump?: (excerpt: CitationChunkExcerpt) => boolean | void;
 }
@@ -52,6 +60,7 @@ export function CitationInlinePanel({
   sectionPath,
   citation,
   segmentType,
+  mediaController,
   videoRef,
   onJump,
 }: CitationInlinePanelProps) {
@@ -127,6 +136,7 @@ export function CitationInlinePanel({
       <PanelMeta tier={tier} citation={citation} />
       <InlineExcerptBody
         state={state}
+        mediaController={mediaController}
         videoRef={videoRef}
         onJump={onJump}
       />
@@ -196,10 +206,12 @@ function PanelMeta({
 
 function InlineExcerptBody({
   state,
+  mediaController,
   videoRef,
   onJump,
 }: {
   state: CitationFetchState;
+  mediaController?: MediaController | null;
   videoRef?: React.RefObject<HTMLVideoElement | null> | null;
   onJump?: (excerpt: CitationChunkExcerpt) => boolean | void;
 }) {
@@ -244,6 +256,7 @@ function InlineExcerptBody({
   }
 
   const jumpDisabled = (() => {
+    if (excerpt.start_time != null && mediaController) return false;
     if (excerpt.start_time != null && videoRef?.current) return false;
     if (onJump && excerpt) return false;
     return true;
@@ -254,10 +267,20 @@ function InlineExcerptBody({
       const handled = onJump(excerpt);
       if (handled) return;
     }
-    const video = videoRef?.current;
-    if (video && excerpt.start_time != null) {
-      video.currentTime = excerpt.start_time;
-      void video.play?.().catch(() => {});
+    if (excerpt.start_time != null) {
+      // Prefer the unified controller when available — works for both
+      // native video and HvLink (YouTube) embeds. Fall back to the
+      // legacy videoRef for any caller that hasn't migrated yet.
+      if (mediaController) {
+        mediaController.seek(excerpt.start_time);
+        mediaController.play();
+        return;
+      }
+      const video = videoRef?.current;
+      if (video) {
+        video.currentTime = excerpt.start_time;
+        void video.play?.().catch(() => {});
+      }
     }
   };
 
