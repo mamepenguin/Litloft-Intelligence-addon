@@ -777,6 +777,28 @@ class IndexManager:
                 logger.error("Metadata worker error: %s", e)
                 await asyncio.sleep(5)
 
+    async def _enqueue_vision_describe(self, file_id: str) -> None:
+        """Hand the file to the VisionDescribeWorker (on_index hook).
+
+        Looks up the worker singleton from ``app.dependencies`` lazily
+        so this module stays importable before the lifespan has wired
+        the global. Silently no-ops when the singleton is missing (early
+        startup, partial test harness, feature disabled mid-run).
+        """
+        try:
+            from app.dependencies import get_vision_worker
+
+            worker = get_vision_worker()
+        except Exception:
+            return
+        try:
+            await worker.enqueue(file_id)
+        except Exception as e:
+            logger.warning(
+                "vision_describe on_index enqueue failed for %s (%s)",
+                file_id, type(e).__name__,
+            )
+
     async def _clip_worker(self) -> None:
         """Process CLIP embedding tasks."""
         while True:
@@ -795,6 +817,12 @@ class IndexManager:
                     success = await index_clip(task.file_id)
                     if success:
                         logger.info("CLIP indexed: %s", task.file_id)
+                        # Vision describe on_index hook: after CLIP
+                        # completes for image files, enqueue the file
+                        # for an LLM description. Images, not videos —
+                        # Phase 1 excludes video frames.
+                        if settings.features.vision_describe == "on_index":
+                            await self._enqueue_vision_describe(task.file_id)
                     else:
                         logger.warning(
                             "CLIP indexing failed for %s, will retry on next reconciliation",
@@ -1121,13 +1149,19 @@ def _purge_file(file_id: str) -> None:
 
         if embeddings:
             for emb in embeddings:
-                table = validate_vector_table(emb.vector_table)
-                session.execute(
-                    sql_text(
-                        f"DELETE FROM {table} WHERE embedding_id = :id"
-                    ),
-                    {"id": emb.id},
-                )
+                table_raw = emb.vector_table or ""
+                # Tolerate non-canonical vector_table values (e.g. the
+                # short "text"/"clip" form used by vision_description
+                # embeddings in some test fixtures). validate_vector_table
+                # would otherwise raise and abort the whole purge.
+                if table_raw in ("vec_text", "vec_clip"):
+                    table = validate_vector_table(table_raw)
+                    session.execute(
+                        sql_text(
+                            f"DELETE FROM {table} WHERE embedding_id = :id"
+                        ),
+                        {"id": emb.id},
+                    )
 
             for emb in embeddings:
                 session.delete(emb)
@@ -1154,15 +1188,23 @@ def _purge_file(file_id: str) -> None:
         )
         # detailed_summary_citations: linked 1:N to file_summaries via
         # file_id, so we drop them when the file leaves the index. The
-        # table may not exist on very old DBs (pre-Phase1 schema); the
-        # ``IF EXISTS`` guard keeps the purge a no-op in that case.
-        session.execute(
+        # table may not exist on very old DBs or in narrow unit-test
+        # harnesses that skip its creation — probe sqlite_master first
+        # so a missing table doesn't abort the whole purge.
+        has_citations = session.execute(
             sql_text(
-                "DELETE FROM detailed_summary_citations "
-                "WHERE file_id = :fid"
-            ),
-            {"fid": file_id},
-        )
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='detailed_summary_citations'"
+            )
+        ).fetchone()
+        if has_citations is not None:
+            session.execute(
+                sql_text(
+                    "DELETE FROM detailed_summary_citations "
+                    "WHERE file_id = :fid"
+                ),
+                {"fid": file_id},
+            )
 
         # Delete indexed file record
         session.query(IndexedFile).filter_by(file_id=file_id).delete()

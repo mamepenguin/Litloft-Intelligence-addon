@@ -16,6 +16,7 @@ Use ``create_llm_client(config)`` to instantiate the correct backend.
 """
 
 import asyncio
+import base64
 import json
 import logging
 import re
@@ -102,6 +103,50 @@ def _parse_json_response(raw: str) -> list | dict | None:
         len(raw), preview,
     )
     return None
+
+
+# Sentinel return value from ``generate_vision`` when the upstream model
+# signals it cannot handle image content (HTTP 400 / 404 after a vision
+# payload, "images not supported" errors). Callers use it to persist
+# ``visual_description_status = "unsupported"`` and avoid wasteful retries
+# against the same model. A distinct object (not ``None``) so the "empty
+# response" and "not vision-capable" cases don't collide.
+VISION_UNSUPPORTED: object = object()
+
+
+# Vision status codes that mean "this provider/model can't do vision".
+# Both are sticky: caller marks status=unsupported and won't retry with
+# the same model. 5xx stays in the transient/retry path.
+_VISION_UNSUPPORTED_STATUS_CODES = frozenset({400, 404})
+
+
+def _build_vision_system_prompt(output_language: str) -> str:
+    """Construct the English system prompt for vision description.
+
+    The prompt is English for stability across multi-language models
+    (matches the auto_tags / summaries convention). Only the output
+    language is parameterised via ``{output_language}`` substitution.
+
+    Spec: docs/superpowers/specs/2026-04-23-intelligence-vision-describe.md
+    """
+    lang = (output_language or "auto").strip() or "auto"
+    if lang == "auto":
+        lang_directive = (
+            "the same language as the filename and existing tags, "
+            "defaulting to English"
+        )
+    else:
+        lang_directive = lang
+    return (
+        "You are an assistant that describes images in detail. "
+        "Report what is visible as fact: objects, people, text, colors, "
+        "composition, spatial relationships, and notable details. "
+        "Do not speculate about things that are not clearly visible. "
+        "Do not invent quantities — if exact counts are uncertain, use "
+        "hedged language (\"several\", \"a few\") instead of specific "
+        "numbers. If unsure about a detail, omit it rather than guess. "
+        f"Output your description in {lang_directive}."
+    )
 
 
 class LLMClient:
@@ -388,6 +433,129 @@ class LLMClient:
                 type(e).__name__,
             )
             return
+
+    async def generate_vision(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        prompt: str,
+        output_language: str = "auto",
+    ) -> str | object | None:
+        """Generate a description for an image via a vision-capable LLM.
+
+        Uses the OpenAI Chat Completions "image_url" content block with
+        a data-URL embedding. Returns:
+
+        * the description text on success,
+        * :data:`VISION_UNSUPPORTED` when the provider answers 400/404
+          (model is not vision-capable),
+        * ``None`` on disabled state, empty response, or transient
+          failures (timeouts, 5xx).
+
+        The call uses ``self._config.vision_model`` (NOT ``model``) and
+        the vision-specific ``vision_max_tokens`` / ``vision_temperature``
+        so the operator can run a text model alongside a vision model.
+
+        Args:
+            image_bytes: Raw image bytes. Should be pre-processed
+                (resized, re-encoded) by the caller.
+            mime_type: MIME type for the data URL (e.g. ``image/jpeg``).
+            prompt: User-side instruction. Kept generic so the caller
+                decides phrasing.
+            output_language: Language tag threaded into the system
+                prompt. ``"auto"`` resolves to a filename-derived hint.
+        """
+        if not self._enabled or not self._config.vision_model:
+            return None
+
+        # Encode once — the same base64 payload is used on every retry
+        # so we don't pay O(bytes) per attempt.
+        b64 = base64.b64encode(image_bytes).decode("ascii")
+        data_url = f"data:{mime_type};base64,{b64}"
+
+        system_prompt = _build_vision_system_prompt(output_language)
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": data_url},
+                    },
+                ],
+            },
+        ]
+
+        extra_kwargs: dict = {}
+        if _uses_max_completion_tokens(self._config.vision_model):
+            extra_kwargs["max_completion_tokens"] = self._config.vision_max_tokens
+        else:
+            extra_kwargs["max_tokens"] = self._config.vision_max_tokens
+
+        max_attempts = max(1, self._config.retry_attempts + 1)
+        for attempt in range(max_attempts):
+            await self._wait_for_rate_limit()
+
+            try:
+                response = await self._client.chat.completions.create(
+                    model=self._config.vision_model,
+                    messages=messages,
+                    temperature=self._config.vision_temperature,
+                    **extra_kwargs,
+                )
+            except _RETRY_EXCEPTIONS as e:
+                if attempt + 1 >= max_attempts:
+                    logger.error(
+                        "Vision generation failed after %d attempts: %s",
+                        max_attempts, type(e).__name__,
+                    )
+                    return None
+                delay = self._backoff_delay(attempt)
+                logger.warning(
+                    "Vision generation attempt %d/%d failed (%s), "
+                    "retrying in %.1fs",
+                    attempt + 1, max_attempts, type(e).__name__, delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+            except APIStatusError as e:
+                if e.status_code in _VISION_UNSUPPORTED_STATUS_CODES:
+                    logger.info(
+                        "Vision generation rejected by provider (status %d); "
+                        "marking unsupported",
+                        e.status_code,
+                    )
+                    return VISION_UNSUPPORTED
+                if e.status_code in _PERMANENT_STATUS_CODES:
+                    logger.warning(
+                        "Vision generation failed with permanent error %d",
+                        e.status_code,
+                    )
+                    return None
+                if attempt + 1 >= max_attempts:
+                    return None
+                delay = self._backoff_delay(attempt)
+                await asyncio.sleep(delay)
+                continue
+            except Exception as e:
+                logger.warning("Vision generation failed: %s", type(e).__name__)
+                return None
+
+            try:
+                content = response.choices[0].message.content
+            except (AttributeError, IndexError):
+                return None
+            if not isinstance(content, str):
+                return None
+            text_out = content.strip()
+            if not text_out:
+                return None
+            return text_out
+
+        return None
 
     def _backoff_delay(self, attempt: int) -> float:
         """Compute exponential backoff delay for a given attempt.
@@ -779,6 +947,105 @@ class OllamaLLMClient:
                 type(e).__name__,
             )
             return
+
+    async def generate_vision(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        prompt: str,
+        output_language: str = "auto",
+    ) -> str | object | None:
+        """Generate an image description via ollama's native ``/api/chat``.
+
+        Ollama's native protocol embeds images as a list of base64
+        strings on the message (no data-URL prefix), distinct from the
+        OpenAI-compatible ``image_url`` block. Response contract matches
+        :meth:`LLMClient.generate_vision`: text on success,
+        :data:`VISION_UNSUPPORTED` on 400/404, ``None`` otherwise.
+
+        ``mime_type`` is accepted for API parity; ollama ignores it and
+        sniffs from the bytes.
+        """
+        if not self._enabled or not self._config.vision_model:
+            return None
+
+        b64 = base64.b64encode(image_bytes).decode("ascii")
+        system_prompt = _build_vision_system_prompt(output_language)
+
+        body: dict = {
+            "model": self._config.vision_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": prompt,
+                    "images": [b64],
+                },
+            ],
+            "stream": False,
+            "think": False,
+            "options": {
+                "temperature": self._config.vision_temperature,
+                "num_predict": self._config.vision_max_tokens,
+            },
+        }
+
+        max_attempts = max(1, self._config.retry_attempts + 1)
+        for attempt in range(max_attempts):
+            await self._wait_for_rate_limit()
+
+            try:
+                resp = await self._http.post(
+                    f"{self._base_url}/api/chat",
+                    json=body,
+                )
+            except httpx.TimeoutException:
+                if attempt + 1 >= max_attempts:
+                    return None
+                await asyncio.sleep(self._backoff_delay(attempt))
+                continue
+            except httpx.HTTPError as e:
+                if attempt + 1 >= max_attempts:
+                    logger.warning(
+                        "Ollama vision generation failed: %s", type(e).__name__,
+                    )
+                    return None
+                await asyncio.sleep(self._backoff_delay(attempt))
+                continue
+
+            if resp.status_code in _VISION_UNSUPPORTED_STATUS_CODES:
+                # Ollama returns 404 for an uninstalled model and 400 for
+                # a model that exists but doesn't handle images. Both
+                # are sticky failures for this (model, provider) pair —
+                # caller records status="unsupported" to suppress retry.
+                return VISION_UNSUPPORTED
+
+            if resp.status_code in _OLLAMA_RETRY_STATUSES:
+                if attempt + 1 >= max_attempts:
+                    return None
+                await asyncio.sleep(self._backoff_delay(attempt))
+                continue
+
+            if resp.status_code != 200:
+                logger.warning(
+                    "Ollama vision unexpected status %d", resp.status_code,
+                )
+                return None
+
+            try:
+                data = resp.json()
+            except Exception:
+                return None
+
+            content = data.get("message", {}).get("content", "")
+            if not isinstance(content, str):
+                return None
+            text_out = content.strip()
+            if not text_out:
+                return None
+            return text_out
+
+        return None
 
     async def generate_json(
         self,

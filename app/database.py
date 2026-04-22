@@ -408,7 +408,11 @@ def _create_file_summaries_table(conn: object) -> None:
         "  detailed_was_truncated INTEGER,"
         "  detailed_error TEXT,"
         "  detailed_original TEXT,"
-        "  detailed_edited_at TEXT"
+        "  detailed_edited_at TEXT,"
+        "  visual_description TEXT,"
+        "  visual_description_generated_at TEXT,"
+        "  visual_description_model TEXT,"
+        "  visual_description_status TEXT"
         ")"
     ))
 
@@ -492,6 +496,36 @@ def _migrate_file_summaries_if_needed(conn: object) -> None:
         conn.execute(
             text(
                 "ALTER TABLE file_summaries ADD COLUMN detailed_edited_at TEXT"
+            )
+        )
+    # Vision-describe columns. Nullable — the row may pre-exist purely
+    # for short/long/detailed summary data. ``visual_description_status``
+    # uses plain TEXT (no CHECK constraint) so the app layer owns value
+    # validation; spec values are NULL / "pending" / "success" / "failed"
+    # / "unsupported".
+    if "visual_description" not in cols:
+        conn.execute(
+            text("ALTER TABLE file_summaries ADD COLUMN visual_description TEXT")
+        )
+    if "visual_description_generated_at" not in cols:
+        conn.execute(
+            text(
+                "ALTER TABLE file_summaries "
+                "ADD COLUMN visual_description_generated_at TEXT"
+            )
+        )
+    if "visual_description_model" not in cols:
+        conn.execute(
+            text(
+                "ALTER TABLE file_summaries "
+                "ADD COLUMN visual_description_model TEXT"
+            )
+        )
+    if "visual_description_status" not in cols:
+        conn.execute(
+            text(
+                "ALTER TABLE file_summaries "
+                "ADD COLUMN visual_description_status TEXT"
             )
         )
 

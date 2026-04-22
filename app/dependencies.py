@@ -8,11 +8,13 @@ from app.indexer import IndexManager
 from app.llm import LLMClient
 from app.workers.auto_tags import AutoTagsWorker
 from app.workers.summaries import SummariesWorker
+from app.workers.vision import VisionDescribeWorker
 
 # Module-level state (initialized during lifespan in main.py)
 _index_manager: IndexManager | None = None
 _auto_tags_worker: AutoTagsWorker | None = None
 _summaries_worker: SummariesWorker | None = None
+_vision_worker: VisionDescribeWorker | None = None
 _llm_client: LLMClient | None = None
 
 _WEBHOOK_SECRET = os.environ.get("SEARCH_WEBHOOK_SECRET", "")
@@ -49,6 +51,17 @@ def get_summaries_worker() -> SummariesWorker:
     if _summaries_worker is None:
         raise RuntimeError("Summaries worker not initialized")
     return _summaries_worker
+
+
+def get_vision_worker() -> VisionDescribeWorker:
+    """Get the vision_describe worker instance.
+
+    Raises:
+        RuntimeError: If the worker is not initialized.
+    """
+    if _vision_worker is None:
+        raise RuntimeError("Vision describe worker not initialized")
+    return _vision_worker
 
 
 def get_llm_client() -> LLMClient:

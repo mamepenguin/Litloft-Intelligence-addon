@@ -17,10 +17,21 @@ from app.config import settings
 from app.database import init_homevault_db, init_search_db
 from app.indexer import IndexManager
 from app.llm import create_llm_client
-from app.routers import files, queue, rag, refine, search, similar, summaries, webhooks
+from app.routers import (
+    files,
+    queue,
+    rag,
+    refine,
+    search,
+    similar,
+    summaries,
+    vision,
+    webhooks,
+)
 from app.schemas import FeaturesStatus, LLMStatus, StatusResponse
 from app.workers.auto_tags import AutoTagsWorker
 from app.workers.summaries import SummariesWorker
+from app.workers.vision import VisionDescribeWorker
 
 
 async def _warm_up_auto_tag_candidates() -> None:
@@ -102,6 +113,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:
         logger.exception("Per-drive policy purge failed; continuing startup")
 
+    # Per-feature policy: drop vision_describe artefacts on drives whose
+    # vision_describe policy flipped off (umbrella stays on).
+    try:
+        from app.purge import purge_disabled_vision_drives
+        vision_purged = await purge_disabled_vision_drives()
+        if vision_purged:
+            for drive, count in vision_purged.items():
+                logger.info(
+                    "Purged vision_describe data for %d files on drive '%s' "
+                    "(vision_describe disabled in drives.json)",
+                    count, drive,
+                )
+    except Exception:
+        logger.exception("vision_describe purge failed; continuing startup")
+
     # Initialize LLM client and auto-tags worker
     llm_client = create_llm_client(settings.llm)
     dependencies._llm_client = llm_client
@@ -163,6 +189,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     "Summaries: queued %d previously indexed files", pending
                 )
 
+    # Initialize vision_describe worker. Starts only when the feature is
+    # live (mode != false) AND a vision model is configured AND the LLM
+    # client itself is enabled. Any of those missing → worker stays idle
+    # (the routers already 404 in that state, so no requests reach it).
+    vision_worker = VisionDescribeWorker()
+    dependencies._vision_worker = vision_worker
+    vision_task: asyncio.Task | None = None
+
+    from app.config import is_vision_describe_available
+
+    if is_vision_describe_available(settings) and llm_client.enabled:
+        vision_task = asyncio.create_task(
+            vision_worker.run(), name="vision_describe_worker"
+        )
+        logger.info(
+            "Vision describe worker started (mode=%s, model=%s)",
+            settings.features.vision_describe,
+            settings.llm.vision_model,
+        )
+
     # Start index manager (pass workers for post-metadata hooks)
     index_manager = IndexManager(
         auto_tags_worker=auto_tags_worker,
@@ -205,6 +251,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await summaries_task
         except asyncio.CancelledError:
             pass
+    if vision_task is not None:
+        vision_task.cancel()
+        try:
+            await vision_task
+        except asyncio.CancelledError:
+            pass
     if dependencies._index_manager is not None:
         await dependencies._index_manager.stop()
     logger.info("Semantic search service stopped")
@@ -225,6 +277,7 @@ app.include_router(files.router)
 app.include_router(summaries.router)
 app.include_router(rag.router)
 app.include_router(refine.router)
+app.include_router(vision.router)
 
 
 @app.get("/status", response_model=StatusResponse, tags=["status"])

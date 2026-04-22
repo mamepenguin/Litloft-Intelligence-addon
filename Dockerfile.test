@@ -24,6 +24,12 @@ RUN pip install --no-cache-dir \
     sqlalchemy pyyaml numpy openai httpx \
     fastapi pydantic \
     pytest pytest-asyncio pytest-cov
+# Install Pillow so the vision GPS-strip regression test can use a real
+# JPEG fixture. Existing vision tests keep working because conftest
+# still patches ``sys.modules["PIL"]`` to MagicMock before importing
+# the worker — individual tests opt into real PIL via ``pillow_real``
+# fixture in test_vision_worker.py.
+RUN pip install --no-cache-dir pillow
 
 COPY app/ ./app/
 COPY tests/ ./tests/

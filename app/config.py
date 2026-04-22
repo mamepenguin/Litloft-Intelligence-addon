@@ -138,6 +138,11 @@ class FeaturesConfig:
     # Transcript AI refine ("false" | "manual" | "on_index"). Default off
     # since file contents are sent to the LLM API during refine.
     transcript_refine: str = "false"
+    # Vision-LLM image description ("false" | "manual" | "on_index").
+    # Default off — enabling sends image bytes to the LLM API. Requires
+    # ``llm.vision_model`` to be set or the feature is unavailable even
+    # when this flag is "manual"/"on_index" (graceful degradation).
+    vision_describe: str = "false"
 
 
 @dataclass(frozen=True)
@@ -370,6 +375,13 @@ class LLMConfig:
     # mid-range hardware but forces clean failure on remote-API stalls.
     request_timeout_seconds: float = 90.0
     request_connect_timeout_seconds: float = 10.0
+    # Vision-LLM settings (separate from text-mode so operators can mix
+    # providers — e.g. gemma2 for text + llava for images). Empty
+    # ``vision_model`` disables the vision feature regardless of
+    # ``features.vision_describe``.
+    vision_model: str = ""
+    vision_max_tokens: int = 1024
+    vision_temperature: float = 0.1
 
 
 @dataclass(frozen=True)
@@ -482,6 +494,11 @@ def load_settings() -> Settings:
             retry_base_delay=llm_config.retry_base_delay,
             retry_max_delay=llm_config.retry_max_delay,
             min_request_interval_ms=llm_config.min_request_interval_ms,
+            request_timeout_seconds=llm_config.request_timeout_seconds,
+            request_connect_timeout_seconds=llm_config.request_connect_timeout_seconds,
+            vision_model=llm_config.vision_model,
+            vision_max_tokens=llm_config.vision_max_tokens,
+            vision_temperature=llm_config.vision_temperature,
         )
 
     return Settings(
@@ -523,6 +540,23 @@ def validate_file_path(file_path: str) -> bool:
 
     real_path = os.path.realpath(file_path)
     return any(real_path.startswith(base) for base in settings.allowed_base_dirs)
+
+
+def is_vision_describe_available(settings_obj: "Settings | None" = None) -> bool:
+    """Return True iff the vision_describe feature is usable right now.
+
+    Two independent gates: ``features.vision_describe`` must be set to a
+    non-``"false"`` mode, AND ``llm.vision_model`` must be a non-empty,
+    non-whitespace string (graceful degradation — an operator who set
+    ``vision_describe: manual`` but forgot ``vision_model`` sees the
+    feature silently disabled instead of producing confusing errors).
+    """
+    source = settings_obj if settings_obj is not None else settings
+    mode = getattr(source.features, "vision_describe", "false")
+    if mode == "false":
+        return False
+    model = getattr(source.llm, "vision_model", "") or ""
+    return bool(model.strip())
 
 
 # Module-level singleton, loaded once at import time

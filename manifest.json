@@ -12,6 +12,7 @@
             {"id": "suggested-tags", "label": "Suggested Tags", "priority": 5},
             {"id": "summary", "label": "AI Summary", "priority": 6},
             {"id": "detailed-summary", "label": "AI Detailed Summary", "priority": 7},
+            {"id": "visual-description", "label": "AI Visual Description", "priority": 8},
             {"id": "transcript", "label": "Transcript", "priority": 10},
             {"id": "clip-frames", "label": "CLIP Frames", "priority": 20},
             {"id": "index-details", "label": "Index Details", "priority": 30},
@@ -22,7 +23,8 @@
         ],
         "folder-actions": [
             {"id": "folder-auto-tags", "label": "Generate AI Tags", "priority": 10},
-            {"id": "folder-summaries", "label": "Generate AI Summaries", "priority": 20}
+            {"id": "folder-summaries", "label": "Generate AI Summaries", "priority": 20},
+            {"id": "folder-visual-description", "label": "Generate AI Image Descriptions", "priority": 30}
         ]
     },
     "proxy": {
@@ -299,6 +301,46 @@
                         "sources": "drive"
                     }
                 }
+            },
+            {
+                "path": "/files/{file_id}/visual_description",
+                "methods": ["GET"],
+                "pre_check": {
+                    "type": "file_access",
+                    "param": "file_id"
+                },
+                "addon_feature": "vision_describe",
+                "require_drive": true,
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/visual_description",
+                "methods": ["DELETE"],
+                "pre_check": {
+                    "type": "file_access",
+                    "param": "file_id"
+                },
+                "addon_feature": "vision_describe",
+                "require_drive": true,
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/visual_description/generate",
+                "methods": ["POST"],
+                "pre_check": {
+                    "type": "file_access",
+                    "param": "file_id"
+                },
+                "addon_feature": "vision_describe",
+                "require_drive": true,
+                "response_filter": null
+            },
+            {
+                "path": "/folders/visual_description/generate",
+                "methods": ["POST"],
+                "pre_check": {"type": "addon_feature", "feature": "vision_describe"},
+                "require_drive": true,
+                "response_filter": null
             },
             {
                 "path": "/refine/files/{file_id}",

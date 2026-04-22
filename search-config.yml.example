@@ -28,6 +28,17 @@ features:
                       # "false" | "manual" | "on_index" — LLM-based ASR transcript
                       # correction. Originals kept in text_original for revert.
                       # Requires llm.provider != "disabled".
+  vision_describe: false
+                      # "false" | "manual" | "on_index" — vision-LLM image
+                      # description for image files (image/*, HEIC via pillow-heif).
+                      # SECURITY: image bytes are sent to the LLM API on each
+                      # generation. Prefer a local vision model (ollama llava,
+                      # llama-vision) when the drive contains private content.
+                      # Requires llm.vision_model to be set; without it the
+                      # feature is unavailable regardless of this flag
+                      # (graceful degradation). "on_index" scales cost linearly
+                      # with new image count — enable with care on large
+                      # photo libraries.
 
 # LLM provider configuration (required for auto_tags and future LLM features)
 # Supported providers:
@@ -64,6 +75,14 @@ llm:
   # lower. The host addon proxy times the browser side out at 15s anyway.
   request_timeout_seconds: 90.0
   request_connect_timeout_seconds: 10.0
+  # Vision-LLM configuration (used when features.vision_describe != "false").
+  # vision_model is a separate knob from "model" so operators can pair a
+  # text model (e.g. gemma2) with a vision model (e.g. llava). When left
+  # empty the vision_describe feature is treated as unavailable even if
+  # the feature flag above is set to "manual" / "on_index".
+  vision_model: ""                    # e.g. "llava:13b", "gpt-4o-mini"
+  vision_max_tokens: 1024             # cap on description length
+  vision_temperature: 0.1             # low temp — descriptions are near-deterministic
   # Example: ollama (preferred — supports think: false for reasoning models)
   # provider: "ollama"
   # base_url: "http://host.docker.internal:11434"
