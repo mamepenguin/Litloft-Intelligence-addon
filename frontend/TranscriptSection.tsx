@@ -96,6 +96,7 @@ export default function TranscriptSection({ fileId, drive, videoRef, mediaContro
   const [source, setSource] = useState<Source>("chunks");
   const [activeIndex, setActiveIndex] = useState(-1);
   const activeRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const chunksAvailable = whisperChunks.length > 0;
   const wordsAvailable = whisperWordCues.length > 0;
@@ -172,9 +173,19 @@ export default function TranscriptSection({ fileId, drive, videoRef, mediaContro
   }, [videoRef, handleTimeUpdate]);
 
   useEffect(() => {
-    if (activeRef.current) {
-      activeRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    }
+    const list = listRef.current;
+    const target = activeRef.current;
+    if (!list || !target) return;
+    // Scroll only the transcript container — avoid scrollIntoView, which
+    // bubbles up and moves the page away from the video.
+    const listRect = list.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const above = targetRect.top < listRect.top;
+    const below = targetRect.bottom > listRect.bottom;
+    if (!above && !below) return;
+    const targetOffset = targetRect.top - listRect.top + list.scrollTop;
+    const nextTop = targetOffset - (list.clientHeight - target.clientHeight) / 2;
+    list.scrollTo({ top: nextTop, behavior: "smooth" });
   }, [activeIndex]);
 
   const seekTo = useCallback(
@@ -259,7 +270,10 @@ export default function TranscriptSection({ fileId, drive, videoRef, mediaContro
           </div>
         )}
       </div>
-      <div className="max-h-80 space-y-0.5 overflow-y-auto rounded-lg bg-bg-card p-2">
+      <div
+        ref={listRef}
+        className="max-h-80 space-y-0.5 overflow-y-auto rounded-lg bg-bg-card p-2"
+      >
         {cues.map((cue) => {
           const isRefined = Boolean(cue.refinedAt);
           return (
