@@ -131,6 +131,11 @@ function CitationCard({
   const parsed = parseSegmentLocation(
     (citation as Citation & { segment_location?: string | null }).segment_location ?? null,
   );
+  // Image citations MUST render a thumbnail — this is the tier 3
+  // exception prerequisite from the vision_describe spec (RAG trusts
+  // image citations only because the user can verify them visually).
+  // See `Wewd0UyArEW49kE3UCUY6` for the design rationale.
+  const isImage = citation.file_type === "image";
   return (
     <a
       id={`ask-citation-${index}`}
@@ -140,6 +145,15 @@ function CitationCard({
       <span className="mt-0.5 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded px-1 text-[11px] font-semibold text-accent bg-accent/10">
         {index}
       </span>
+      {isImage && (
+        <img
+          data-testid={`ask-citation-thumbnail-${index}`}
+          src={`/api/files/${citation.file_id}/thumbnail`}
+          alt={citation.filename}
+          loading="lazy"
+          className="h-16 w-16 flex-shrink-0 rounded object-cover"
+        />
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="truncate text-sm font-medium text-text-primary">

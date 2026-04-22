@@ -830,6 +830,133 @@ function extractFilenameFromDisposition(
   return asciiMatch ? asciiMatch[1] : null;
 }
 
+// --- Vision description (image LLM description) ---
+
+export type VisualDescriptionStatus =
+  | "pending"
+  | "success"
+  | "failed"
+  | "unsupported"
+  | null;
+
+export interface VisualDescriptionResponse {
+  file_id: string;
+  visual_description: string | null;
+  status: VisualDescriptionStatus | string;
+  model: string | null;
+  generated_at: string | null;
+}
+
+/**
+ * Fetch the current vision description state for a file.
+ *
+ * Returns `null` when the backend responds with 404 (feature off
+ * globally, per-drive policy OFF, or file not found). UI treats null as
+ * "feature unavailable — hide the section".
+ */
+export async function getVisualDescription(
+  fileId: string,
+  drive: string,
+): Promise<VisualDescriptionResponse | null> {
+  try {
+    return await fetchJSON<VisualDescriptionResponse>(
+      `${API_BASE}/addons/intelligence/files/${fileId}/visual_description`,
+      { headers: driveHeaders(drive) },
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Kick off vision description generation for one file.
+ *
+ * Returns `{ status: "accepted" }` on success. The UI should poll
+ * `getVisualDescription` to observe `pending → success|failed`.
+ */
+export async function generateVisualDescription(
+  fileId: string,
+  drive: string,
+): Promise<{ status: string; file_id: string }> {
+  return fetchJSON<{ status: string; file_id: string }>(
+    `${API_BASE}/addons/intelligence/files/${fileId}/visual_description/generate`,
+    { method: "POST", headers: driveHeaders(drive) },
+  );
+}
+
+/**
+ * Clear the stored description + vision_description embeddings for a
+ * file. Backend returns 404 when nothing to clear — callers that use
+ * this as part of a regenerate flow should treat 404 as a success.
+ */
+export async function deleteVisualDescription(
+  fileId: string,
+  drive: string,
+): Promise<void> {
+  await fetchJSON(
+    `${API_BASE}/addons/intelligence/files/${fileId}/visual_description`,
+    { method: "DELETE", headers: driveHeaders(drive) },
+  );
+}
+
+export interface FolderVisualDescriptionResponse {
+  queued: number;
+  file_ids: string[];
+}
+
+export interface FolderVisualDescriptionTooManyError {
+  kind: "too_many_files";
+  max: number;
+  requested: number;
+}
+
+/**
+ * Fan-out: enqueue every image file under ``drive/path`` for vision
+ * description. Rejects with a `FolderVisualDescriptionTooManyError`
+ * when the folder exceeds the backend's `MAX_BULK_ENQUEUE` cap (413).
+ * Other failures surface as plain `Error`s with the server message.
+ */
+export async function generateFolderVisualDescription(
+  drive: string,
+  path: string,
+): Promise<FolderVisualDescriptionResponse> {
+  const res = await fetch(
+    `${API_BASE}/addons/intelligence/folders/visual_description/generate`,
+    {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...driveHeaders(drive) },
+      body: JSON.stringify({ drive, path }),
+    },
+  );
+  if (res.status === 413) {
+    let detail: unknown = null;
+    try {
+      const body = (await res.json()) as { detail?: unknown };
+      detail = body?.detail;
+    } catch {
+      // ignore — fall through to generic shape
+    }
+    const parsed =
+      detail && typeof detail === "object" && !Array.isArray(detail)
+        ? (detail as Record<string, unknown>)
+        : {};
+    const err = new Error("too_many_files") as Error & {
+      info: FolderVisualDescriptionTooManyError;
+    };
+    err.info = {
+      kind: "too_many_files",
+      max: typeof parsed.max === "number" ? parsed.max : 500,
+      requested: typeof parsed.requested === "number" ? parsed.requested : 0,
+    };
+    throw err;
+  }
+  if (!res.ok) {
+    throw new Error(`Folder visual description failed: ${res.status}`);
+  }
+  return (await res.json()) as FolderVisualDescriptionResponse;
+}
+
 // --- RAG (question answering) ---
 
 export interface Citation {

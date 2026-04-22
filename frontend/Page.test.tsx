@@ -298,6 +298,68 @@ describe("IntelligenceAskPage — progressive citations + thinking indicator", (
     });
   });
 
+  it("renders a thumbnail for image citations (tier 3 exception prerequisite)", async () => {
+    // The vision_describe spec (`Wewd0UyArEW49kE3UCUY6`) makes RAG trust
+    // image citations on the basis that the user can verify them
+    // visually. That trust is only valid when the UI actually shows the
+    // thumbnail — this regression test pins the contract.
+    await mountAndStart();
+    await act(async () => {
+      streamState.current.push({ kind: "keywords", keywords: "x" });
+      streamState.current.push({ kind: "sources", sources: [] });
+      streamState.current.push({
+        kind: "answer_chunk",
+        delta: "See the photo [1].",
+      });
+      const imageCitation: Citation = {
+        file_id: "img-1",
+        drive: "family",
+        filename: "sunset.jpg",
+        file_type: "image",
+        quote: "A sunset over the ocean",
+        relevance: 0.9,
+        segment_location: null,
+      };
+      streamState.current.push({
+        kind: "citation",
+        citation: imageCitation,
+        index: 1,
+      });
+    });
+    const thumb = await screen.findByTestId("ask-citation-thumbnail-1");
+    expect(thumb).toBeInTheDocument();
+    expect(thumb.getAttribute("src")).toBe("/api/files/img-1/thumbnail");
+    await act(async () => {
+      streamState.current.push({ kind: "done" });
+      streamState.current.end();
+    });
+  });
+
+  it("does not render a thumbnail for non-image citations", async () => {
+    await mountAndStart();
+    await act(async () => {
+      streamState.current.push({ kind: "keywords", keywords: "x" });
+      streamState.current.push({ kind: "sources", sources: [] });
+      streamState.current.push({
+        kind: "answer_chunk",
+        delta: "See page 4 [1].",
+      });
+      streamState.current.push({
+        kind: "citation",
+        citation: sampleCitation(1),
+        index: 1,
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByText("doc-1.md")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("ask-citation-thumbnail-1")).toBeNull();
+    await act(async () => {
+      streamState.current.push({ kind: "done" });
+      streamState.current.end();
+    });
+  });
+
   it("replaces progressive citations with the terminal `citations` list", async () => {
     await mountAndStart();
     await act(async () => {
