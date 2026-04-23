@@ -48,6 +48,7 @@ from app.config import FeaturesConfig, LLMConfig  # noqa: E402
 from app.database import (  # noqa: E402
     Base,
     _create_detailed_summary_citations_table,
+    _create_file_insights_table,
     _create_file_summaries_table,
 )
 from app.routers.summaries import (  # noqa: E402
@@ -80,6 +81,10 @@ def search_db(tmp_path, monkeypatch):
         # wipes citation rows, so the table must exist even when the
         # test doesn't write any citations of its own.
         _create_detailed_summary_citations_table(conn)
+        # Step 2a: _get_detailed_summary reads content from
+        # file_insights, so the table must exist for the router tests
+        # that seed data via ``_insert_detailed_row``.
+        _create_file_insights_table(conn)
 
     from app.models import IndexedFile
 
@@ -124,7 +129,15 @@ def search_db(tmp_path, monkeypatch):
 
 
 def _insert_detailed_row(engine, file_id: str, **overrides) -> None:
-    """Insert a file_summaries row with detailed_* columns set for tests."""
+    """Insert paired ``file_summaries`` + ``file_insights`` rows for tests.
+
+    Step 2a made the reader consume ``file_insights`` for the body /
+    versioning metadata. Tests that pre-seed must populate both tables
+    or the reader will return None.
+    """
+    import json as _json
+    import secrets as _secrets
+
     now = datetime.now(UTC).isoformat()
     defaults = {
         "fid": file_id,
@@ -161,6 +174,34 @@ def _insert_detailed_row(engine, file_id: str, **overrides) -> None:
             ),
             params,
         )
+        # Mirror into file_insights so the reader finds the body.
+        # Only seed when we actually wrote a body + generated status.
+        if (
+            params["detailed_summary"] is not None
+            and params["detailed_status"] == "generated"
+        ):
+            conn.execute(
+                text(
+                    "INSERT INTO file_insights "
+                    "(id, file_id, kind, content, metadata_json, "
+                    " status, created_by, created_at) "
+                    "VALUES (:id, :fid, 'detailed_summary', :c, :m, "
+                    " 'active', 'intelligence', :ca)"
+                ),
+                {
+                    "id": _secrets.token_urlsafe(9)[:12],
+                    "fid": file_id,
+                    "c": params["detailed_summary"],
+                    "m": _json.dumps({
+                        "model": params["detailed_model"],
+                        "context_chars": params["detailed_context_chars"],
+                        "was_truncated": bool(params["detailed_was_truncated"])
+                        if params["detailed_was_truncated"] is not None
+                        else None,
+                    }),
+                    "ca": params["detailed_generated_at"],
+                },
+            )
 
 
 @pytest.fixture()

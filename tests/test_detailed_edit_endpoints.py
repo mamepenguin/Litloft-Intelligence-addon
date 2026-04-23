@@ -46,6 +46,7 @@ from app.config import FeaturesConfig, LLMConfig  # noqa: E402
 from app.database import (  # noqa: E402
     Base,
     _create_detailed_summary_citations_table,
+    _create_file_insights_table,
     _create_file_summaries_table,
 )
 from app.routers.summaries import (  # noqa: E402
@@ -81,6 +82,7 @@ def search_db(tmp_path, monkeypatch):
     with engine.begin() as conn:
         _create_file_summaries_table(conn)
         _create_detailed_summary_citations_table(conn)
+        _create_file_insights_table(conn)
 
     from app.models import IndexedFile
 
@@ -129,6 +131,23 @@ def _insert_detailed_row(
     detailed_edited_at: str | None = None,
     detailed_original: str | None = None,
 ) -> None:
+    """Insert paired ``file_summaries`` + ``file_insights`` rows for tests.
+
+    Step 2a made the edit / revert / regenerate paths read the current
+    body from ``file_insights``. When ``detailed_edited_at`` is set,
+    two insight rows are seeded:
+
+    - ``superseded`` / ``intelligence`` with the pre-edit AI body
+      (``detailed_original``) — reverts consume this row.
+    - ``active`` / ``manual`` with the post-edit body
+      (``detailed_summary``) + ``metadata.edited_at``.
+
+    Without an edit timestamp, a single ``active`` / ``intelligence``
+    row is seeded with ``detailed_summary`` as its content.
+    """
+    import json as _json
+    import secrets as _secrets
+
     now = datetime.now(UTC).isoformat()
     with engine.begin() as conn:
         conn.execute(
@@ -152,6 +171,67 @@ def _insert_detailed_row(
                 "edited": detailed_edited_at,
             },
         )
+        meta = _json.dumps({
+            "model": "test-model",
+            "context_chars": 500,
+            "was_truncated": False,
+        })
+        if detailed_edited_at is None:
+            conn.execute(
+                text(
+                    "INSERT INTO file_insights "
+                    "(id, file_id, kind, content, metadata_json, "
+                    " status, created_by, created_at) "
+                    "VALUES (:id, :fid, 'detailed_summary', :c, :m, "
+                    " 'active', 'intelligence', :ca)"
+                ),
+                {
+                    "id": _secrets.token_urlsafe(9)[:12],
+                    "fid": file_id,
+                    "c": detailed_summary,
+                    "m": meta,
+                    "ca": now,
+                },
+            )
+        else:
+            if detailed_original is not None:
+                conn.execute(
+                    text(
+                        "INSERT INTO file_insights "
+                        "(id, file_id, kind, content, metadata_json, "
+                        " status, created_by, created_at) "
+                        "VALUES (:id, :fid, 'detailed_summary', :c, :m, "
+                        " 'superseded', 'intelligence', :ca)"
+                    ),
+                    {
+                        "id": _secrets.token_urlsafe(9)[:12],
+                        "fid": file_id,
+                        "c": detailed_original,
+                        "m": meta,
+                        "ca": now,
+                    },
+                )
+            conn.execute(
+                text(
+                    "INSERT INTO file_insights "
+                    "(id, file_id, kind, content, metadata_json, "
+                    " status, created_by, created_at) "
+                    "VALUES (:id, :fid, 'detailed_summary', :c, :m, "
+                    " 'active', 'manual', :ca)"
+                ),
+                {
+                    "id": _secrets.token_urlsafe(9)[:12],
+                    "fid": file_id,
+                    "c": detailed_summary,
+                    "m": _json.dumps({
+                        "model": "test-model",
+                        "context_chars": 500,
+                        "was_truncated": False,
+                        "edited_at": detailed_edited_at,
+                    }),
+                    "ca": detailed_edited_at,
+                },
+            )
 
 
 @pytest.fixture()

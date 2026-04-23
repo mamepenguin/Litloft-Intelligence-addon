@@ -720,20 +720,48 @@ def _fetch_detailed_edit_state(
 ) -> tuple[str | None, str | None, str | None] | None:
     """Return ``(detailed_summary, detailed_original, detailed_edited_at)``.
 
-    Used by edit / revert / regenerate-check. Returns ``None`` when
-    no file_summaries row exists for ``file_id``; the callers shape
-    their own 404 from that.
+    Used by edit / revert / regenerate-check. Reads from
+    ``file_insights`` (Step 2a) — the active row is the current body
+    and, when it's a manual edit, the latest superseded intelligence
+    row supplies ``original`` for revert.
+
+    Returns ``None`` when there is no active insight row. Callers
+    distinguish "no detailed work yet" (None) from "generated but no
+    user edit" (``original`` / ``edited_at`` are None).
     """
-    row = session.execute(
+    active = session.execute(
         sql_text(
-            "SELECT detailed_summary, detailed_original, detailed_edited_at "
-            "FROM file_summaries WHERE file_id = :fid"
+            "SELECT content, metadata_json, created_by "
+            "FROM file_insights "
+            "WHERE file_id = :fid AND kind = 'detailed_summary' "
+            "AND status = 'active'"
         ),
         {"fid": file_id},
     ).fetchone()
-    if row is None:
+    if active is None:
         return None
-    return (row[0], row[1], row[2])
+
+    content = active[0]
+    meta = json.loads(active[1]) if active[1] else {}
+    created_by = active[2]
+
+    if created_by != "manual":
+        return (content, None, None)
+
+    # Manual active: pull pre-edit AI body from the latest superseded
+    # intelligence row so revert can splice it back.
+    ai_row = session.execute(
+        sql_text(
+            "SELECT content FROM file_insights "
+            "WHERE file_id = :fid AND kind = 'detailed_summary' "
+            "AND created_by = 'intelligence' "
+            "ORDER BY created_at DESC LIMIT 1"
+        ),
+        {"fid": file_id},
+    ).fetchone()
+    original = ai_row[0] if ai_row is not None else None
+    edited_at = meta.get("edited_at")
+    return (content, original, edited_at)
 
 
 def _append_detailed_summary_insight(

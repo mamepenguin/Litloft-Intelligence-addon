@@ -890,34 +890,133 @@ def _supersede_and_insert_insight(
 def _get_detailed_summary(file_id: str) -> dict | None:
     """Fetch the detailed-summary record for a file.
 
-    Returns a dict with the user-facing fields, or None if no detailed
-    work has been started yet (status column NULL).
+    Step 2a: content and versioning metadata come from ``file_insights``
+    (the AI-output history log — see hako ``vdPrMz0_adP-3C6Ogkjds``).
+    Workflow state (``generating`` / ``failed`` + ``detailed_error``)
+    still lives in ``file_summaries`` because those transient states
+    don't produce insight rows.
+
+    Field mapping:
+    - ``detailed_summary``     = active insight ``content``
+    - ``detailed_status``      = ``"generated"`` when active insight
+                                 exists, else ``file_summaries.detailed_status``
+    - ``detailed_model``       = canonical AI row's ``metadata.model``
+    - ``detailed_generated_at``= canonical AI row's ``created_at``
+    - ``detailed_context_chars``/``detailed_was_truncated``
+                                 = canonical AI row's metadata
+    - ``detailed_error``       = ``file_summaries.detailed_error``
+    - ``detailed_original``    = AI row's content when current active
+                                 is a manual edit, else ``None``
+    - ``detailed_edited_at``   = active insight's ``metadata.edited_at``
+                                 when ``created_by='manual'``, else ``None``
+
+    "Canonical AI row" = the active row itself when intelligence-generated,
+    otherwise the most recent superseded intelligence row. This keeps
+    ``detailed_generated_at`` anchored to the AI generation timestamp
+    regardless of later user edits, matching pre-migration semantics.
+
+    Returns ``None`` when there is neither an active insight nor any
+    workflow-state marker in ``file_summaries``.
     """
     with get_search_db() as session:
-        row = session.execute(
+        active = session.execute(
             sql_text(
-                "SELECT detailed_summary, detailed_status, detailed_model, "
-                "detailed_generated_at, detailed_context_chars, "
-                "detailed_was_truncated, detailed_error, "
-                "detailed_original, detailed_edited_at "
+                "SELECT content, metadata_json, created_at, created_by "
+                "FROM file_insights "
+                "WHERE file_id = :fid AND kind = 'detailed_summary' "
+                "AND status = 'active'"
+            ),
+            {"fid": file_id},
+        ).fetchone()
+
+        status_row = session.execute(
+            sql_text(
+                "SELECT detailed_status, detailed_error "
                 "FROM file_summaries WHERE file_id = :fid"
             ),
             {"fid": file_id},
         ).fetchone()
-        if row is None or row[1] is None:
-            return None
+
+        if active is None:
+            if status_row is None or status_row[0] is None:
+                return None
+            # Workflow state without a body (generating / failed).
+            return {
+                "detailed_summary": None,
+                "detailed_status": status_row[0],
+                "detailed_model": None,
+                "detailed_generated_at": None,
+                "detailed_context_chars": None,
+                "detailed_was_truncated": None,
+                "detailed_error": status_row[1],
+                "detailed_original": None,
+                "detailed_edited_at": None,
+            }
+
+        active_content = active[0]
+        active_meta = json.loads(active[1]) if active[1] else {}
+        active_created_at = active[2]
+        active_created_by = active[3]
+
+        if active_created_by == "intelligence":
+            ai_content = active_content
+            ai_meta = active_meta
+            ai_created_at = active_created_at
+        else:
+            ai_row = session.execute(
+                sql_text(
+                    "SELECT content, metadata_json, created_at "
+                    "FROM file_insights "
+                    "WHERE file_id = :fid AND kind = 'detailed_summary' "
+                    "AND created_by = 'intelligence' "
+                    "ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"fid": file_id},
+            ).fetchone()
+            if ai_row is not None:
+                ai_content = ai_row[0]
+                ai_meta = json.loads(ai_row[1]) if ai_row[1] else {}
+                ai_created_at = ai_row[2]
+            else:
+                # Edge: manual active without any intelligence ancestor.
+                # Shouldn't happen via the normal flow (manual rows are
+                # only produced after edit-of-AI-content) but we don't
+                # crash if it does.
+                ai_content = None
+                ai_meta = {}
+                ai_created_at = active_created_at
+
+        detailed_original = (
+            ai_content if active_created_by == "manual" else None
+        )
+        detailed_edited_at = (
+            active_meta.get("edited_at")
+            if active_created_by == "manual"
+            else None
+        )
+
+        workflow_status = (
+            status_row[0] if status_row and status_row[0] else None
+        )
+        # Prefer the workflow label when it's in a terminal pre-body
+        # state (shouldn't happen when active exists, but preserve).
+        if workflow_status in (
+            DETAILED_STATUS_GENERATING, DETAILED_STATUS_FAILED,
+        ):
+            resolved_status = workflow_status
+        else:
+            resolved_status = DETAILED_STATUS_GENERATED
+
         return {
-            "detailed_summary": row[0],
-            "detailed_status": row[1],
-            "detailed_model": row[2],
-            "detailed_generated_at": row[3],
-            "detailed_context_chars": row[4],
-            "detailed_was_truncated": (
-                bool(row[5]) if row[5] is not None else None
-            ),
-            "detailed_error": row[6],
-            "detailed_original": row[7],
-            "detailed_edited_at": row[8],
+            "detailed_summary": active_content,
+            "detailed_status": resolved_status,
+            "detailed_model": ai_meta.get("model"),
+            "detailed_generated_at": ai_created_at,
+            "detailed_context_chars": ai_meta.get("context_chars"),
+            "detailed_was_truncated": ai_meta.get("was_truncated"),
+            "detailed_error": status_row[1] if status_row else None,
+            "detailed_original": detailed_original,
+            "detailed_edited_at": detailed_edited_at,
         }
 
 
