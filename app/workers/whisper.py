@@ -450,7 +450,7 @@ def _merge_segments(
 ) -> list[dict]:
     """Merge cue-shaped segments into larger chunks.
 
-    Used for the HvLink path where raw inputs are WebVTT cues (no word
+    Used for the LoftRef path where raw inputs are WebVTT cues (no word
     timestamps). For the main Whisper path use ``_build_chunks_from_words``
     instead — it respects sentence boundaries and enforces max_duration
     strictly.

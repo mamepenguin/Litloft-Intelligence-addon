@@ -156,7 +156,7 @@ class TranscriptWord(Base):
     10–30 s granularity). Word rows are the fine-grained source of truth
     used to build subtitles (1–5 s cues) and to seek inside a segment hit.
 
-    Populated only when Whisper runs against the file. HvLink files (which
+    Populated only when Whisper runs against the file. LoftRef files (which
     derive chunks from adjacent .vtt) do not produce word rows because
     WebVTT cues rarely carry word-level timing.
     """

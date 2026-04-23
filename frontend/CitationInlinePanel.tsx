@@ -47,7 +47,7 @@ interface CitationInlinePanelProps {
   segmentType: "paragraph" | "bullet" | "table";
   /**
    * Preferred jump target. Works for both native HTMLVideoElement and
-   * YouTube IFrame Player (HvLink). When present, takes priority over
+   * YouTube IFrame Player (LoftRef). When present, takes priority over
    * `videoRef`. Kept optional so callers that haven't migrated yet
    * still work via the legacy `videoRef` fallback below.
    */
@@ -269,7 +269,7 @@ function InlineExcerptBody({
     }
     if (excerpt.start_time != null) {
       // Prefer the unified controller when available — works for both
-      // native video and HvLink (YouTube) embeds. Fall back to the
+      // native video and LoftRef (YouTube) embeds. Fall back to the
       // legacy videoRef for any caller that hasn't migrated yet.
       if (mediaController) {
         mediaController.seek(excerpt.start_time);

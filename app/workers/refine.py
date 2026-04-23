@@ -222,13 +222,13 @@ def realign_words_for_chunk(
     timestamps stay as-is rather than being replaced by a degraded
     time-proportional fallback (decision: hako iG6Uotc_uQ8cpXufZQf6v).
 
-    HvLink-origin chunks have no ``TranscriptWord`` rows and no audio
+    LoftRef-origin chunks have no ``TranscriptWord`` rows and no audio
     we can realign against; they're short-circuited here so the
     aligner is never invoked for them.
     """
     existing = _load_words_in_range(session, file_id, chunk_start, chunk_end)
     if not existing:
-        # HvLink path or never-indexed chunk — nothing to align against.
+        # LoftRef path or never-indexed chunk — nothing to align against.
         return 0
 
     if waveform is None:

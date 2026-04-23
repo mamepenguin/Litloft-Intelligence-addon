@@ -213,7 +213,7 @@ class TestBuildFileContextVideo:
         assert any(s.source == "transcript" for s in ctx.snippets)
 
     def test_hvlink_file_uses_transcript_path(self, monkeypatch):
-        # HvLink files have file_type="other" from host MIME heuristics
+        # LoftRef files have file_type="other" from host MIME heuristics
         # but carry VTT-derived TranscriptChunks — Ask must feed those
         # to the LLM instead of falling back to metadata only.
         monkeypatch.setattr(
