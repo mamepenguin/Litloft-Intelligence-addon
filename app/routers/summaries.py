@@ -1083,11 +1083,14 @@ async def regenerate_detailed_summary(
             short_val = row[0] or ""
             long_val = row[1] or ""
             if short_val or long_val:
+                # Keep the file_summaries row (short/long are live
+                # data) but clear every detailed_* column. Status is
+                # re-seeded below so the frontend's slot never flashes
+                # "hidden" during the regenerate→worker handoff.
                 session.execute(
                     sql_text(
                         "UPDATE file_summaries SET "
                         "detailed_summary = NULL, "
-                        "detailed_status = NULL, "
                         "detailed_model = NULL, "
                         "detailed_generated_at = NULL, "
                         "detailed_context_chars = NULL, "
@@ -1102,29 +1105,47 @@ async def regenerate_detailed_summary(
             else:
                 # Placeholder row with no short/long content — drop it
                 # so repeat generation starts from the pristine state.
+                # _set_detailed_status below will INSERT OR IGNORE a
+                # fresh placeholder carrying the 'generating' marker.
                 session.execute(
                     sql_text(
                         "DELETE FROM file_summaries WHERE file_id = :fid"
                     ),
                     {"fid": file_id},
                 )
-            session.execute(
-                sql_text(
-                    "DELETE FROM detailed_summary_citations "
-                    "WHERE file_id = :fid"
-                ),
-                {"fid": file_id},
-            )
-            # Drop FileInsight history in the same transaction —
-            # regenerate is a clean-slate action (see
-            # ``_delete_detailed_summary`` for the matching rationale).
-            session.execute(
-                sql_text(
-                    "DELETE FROM file_insights "
-                    "WHERE file_id = :fid AND kind = 'detailed_summary'"
-                ),
-                {"fid": file_id},
-            )
+
+        # Citations + FileInsight history cleanup runs unconditionally
+        # — even if file_summaries has no row, stray rows in these
+        # tables (from a partial earlier state) must be purged to
+        # honour the regenerate "clean slate" contract.
+        session.execute(
+            sql_text(
+                "DELETE FROM detailed_summary_citations "
+                "WHERE file_id = :fid"
+            ),
+            {"fid": file_id},
+        )
+        session.execute(
+            sql_text(
+                "DELETE FROM file_insights "
+                "WHERE file_id = :fid AND kind = 'detailed_summary'"
+            ),
+            {"fid": file_id},
+        )
+
+    # Mark the file as ``generating`` synchronously before yielding
+    # control to the background worker. Without this, the reader
+    # would see "no active insight + no workflow status" in the
+    # window between this endpoint returning and the worker's first
+    # ``_set_detailed_status('generating')`` call, causing the
+    # frontend to hide the slot entirely. With the marker in place,
+    # subsequent polls render the "generating" spinner instead.
+    from app.workers.summaries import (
+        DETAILED_STATUS_GENERATING, _set_detailed_status,
+    )
+    _set_detailed_status(
+        file_id, DETAILED_STATUS_GENERATING, model=settings.llm.model,
+    )
 
     # Promotion to knowledge (Phase 3) records the current note as the
     # file's active summary in core. Regenerating the AI draft

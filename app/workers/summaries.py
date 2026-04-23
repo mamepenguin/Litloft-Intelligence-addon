@@ -1040,62 +1040,69 @@ def _delete_detailed_summary(file_id: str) -> bool:
             ),
             {"fid": file_id},
         ).fetchone()
-        if row is None:
-            return False
 
-        short_val = row[0] or ""
-        long_val = row[1] or ""
-        if short_val or long_val:
-            session.execute(
-                sql_text(
-                    "UPDATE file_summaries SET "
-                    "detailed_summary = NULL, "
-                    "detailed_status = NULL, "
-                    "detailed_model = NULL, "
-                    "detailed_generated_at = NULL, "
-                    "detailed_context_chars = NULL, "
-                    "detailed_was_truncated = NULL, "
-                    "detailed_error = NULL, "
-                    "detailed_original = NULL, "
-                    "detailed_edited_at = NULL "
-                    "WHERE file_id = :fid"
-                ),
-                {"fid": file_id},
-            )
-        else:
-            # Placeholder row created by _set_detailed_status on a file
-            # that never had short/long — drop it to return to the
-            # pristine "no summary" state.
-            session.execute(
-                sql_text(
-                    "DELETE FROM file_summaries WHERE file_id = :fid"
-                ),
-                {"fid": file_id},
-            )
+        matched_file_summary = row is not None
 
-        # Always drop citations: their lifetime is pegged to the
-        # summary body.
-        session.execute(
+        if matched_file_summary:
+            short_val = row[0] or ""
+            long_val = row[1] or ""
+            if short_val or long_val:
+                session.execute(
+                    sql_text(
+                        "UPDATE file_summaries SET "
+                        "detailed_summary = NULL, "
+                        "detailed_status = NULL, "
+                        "detailed_model = NULL, "
+                        "detailed_generated_at = NULL, "
+                        "detailed_context_chars = NULL, "
+                        "detailed_was_truncated = NULL, "
+                        "detailed_error = NULL, "
+                        "detailed_original = NULL, "
+                        "detailed_edited_at = NULL "
+                        "WHERE file_id = :fid"
+                    ),
+                    {"fid": file_id},
+                )
+            else:
+                # Placeholder row created by _set_detailed_status on a
+                # file that never had short/long — drop it to return
+                # to the pristine "no summary" state.
+                session.execute(
+                    sql_text(
+                        "DELETE FROM file_summaries WHERE file_id = :fid"
+                    ),
+                    {"fid": file_id},
+                )
+
+        # Citations + insight history cleanup runs unconditionally so
+        # orphan rows (created before the tables were paired, or left
+        # behind by a partial prior transaction) cannot survive a
+        # user-initiated delete.
+        citations_result = session.execute(
             sql_text(
                 "DELETE FROM detailed_summary_citations "
                 "WHERE file_id = :fid"
             ),
             {"fid": file_id},
         )
-
         # Drop the full ``file_insights`` history for this file+kind:
-        # regenerate is an explicit "clean slate" action (user
-        # confirmed via the UI flow — see hako ``Mt4TJ9joamta7G0mt-Ifo``),
-        # so retaining prior superseded rows is not desired. The next
-        # ``_save_detailed_summary`` will insert a fresh active row.
-        session.execute(
+        # regenerate/delete is an explicit "clean slate" action (user
+        # confirmed via the UI flow — see hako
+        # ``Mt4TJ9joamta7G0mt-Ifo``), so retaining prior superseded
+        # rows is not desired. The next ``_save_detailed_summary`` will
+        # insert a fresh active row.
+        insights_result = session.execute(
             sql_text(
                 "DELETE FROM file_insights "
                 "WHERE file_id = :fid AND kind = 'detailed_summary'"
             ),
             {"fid": file_id},
         )
-        return True
+        return (
+            matched_file_summary
+            or (citations_result.rowcount or 0) > 0
+            or (insights_result.rowcount or 0) > 0
+        )
 
 
 def classify_detailed_missing_reason(file_id: str) -> str:
