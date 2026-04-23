@@ -1206,5 +1206,22 @@ def _purge_file(file_id: str) -> None:
                 {"fid": file_id},
             )
 
+        # file_insights: cross-DB reference to core File.id with no FK,
+        # same pattern as file_summaries. Probe the table first — older
+        # DBs / narrow test harnesses may not have it.
+        has_insights = session.execute(
+            sql_text(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='file_insights'"
+            )
+        ).fetchone()
+        if has_insights is not None:
+            session.execute(
+                sql_text(
+                    "DELETE FROM file_insights WHERE file_id = :fid"
+                ),
+                {"fid": file_id},
+            )
+
         # Delete indexed file record
         session.query(IndexedFile).filter_by(file_id=file_id).delete()

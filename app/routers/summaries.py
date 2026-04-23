@@ -21,6 +21,7 @@ via pre_check rules; this router assumes the caller has permission
 for the file_ids it receives.
 """
 
+import json
 import logging
 import os
 import re
@@ -36,7 +37,7 @@ from app.config import settings
 from app.database import get_search_db
 from app.dependencies import get_llm_client, get_summaries_worker
 from app.drive_context import assert_file_in_drive, require_drive
-from app.models import IndexedFile
+from app.models import IndexedFile, generate_insight_id
 from app.schemas import (
     BatchSummariesRequest,
     BatchSummariesResponse,
@@ -735,6 +736,52 @@ def _fetch_detailed_edit_state(
     return (row[0], row[1], row[2])
 
 
+def _append_detailed_summary_insight(
+    session: object,
+    *,
+    file_id: str,
+    content: str,
+    created_by: str,
+    metadata: dict,
+    created_at: str,
+) -> None:
+    """Append a ``kind='detailed_summary'`` event to ``file_insights``.
+
+    Marks the existing active row superseded (if any) and inserts a
+    new active row. Mirrors ``app.workers.summaries._supersede_and_insert_insight``
+    but lives here to avoid pulling the worker module into the router
+    (the worker imports heavy dependencies that the router does not
+    need during cold start).
+
+    The caller is responsible for committing the session.
+    """
+    session.execute(
+        sql_text(
+            "UPDATE file_insights SET status = 'superseded' "
+            "WHERE file_id = :fid AND kind = 'detailed_summary' "
+            "AND status = 'active'"
+        ),
+        {"fid": file_id},
+    )
+    session.execute(
+        sql_text(
+            "INSERT INTO file_insights "
+            "(id, file_id, kind, content, metadata_json, "
+            " status, created_by, created_at) "
+            "VALUES (:id, :fid, 'detailed_summary', :c, :m, "
+            " 'active', :cb, :ca)"
+        ),
+        {
+            "id": generate_insight_id(),
+            "fid": file_id,
+            "c": content,
+            "m": json.dumps(metadata) if metadata else None,
+            "cb": created_by,
+            "ca": created_at,
+        },
+    )
+
+
 @router.put(
     "/files/{file_id}/summary/detailed/section",
     response_model=DetailedSummaryResponse,
@@ -822,6 +869,19 @@ async def edit_detailed_summary_section(
                 "edited_at": now,
             },
         )
+        # Append a manual insight for history. The previous active
+        # insight (intelligence-generated or an earlier manual edit)
+        # is marked superseded so exactly one active row per
+        # (file_id, kind) is maintained. metadata.edited_at mirrors
+        # the ``file_summaries.detailed_edited_at`` column for audit.
+        _append_detailed_summary_insight(
+            session,
+            file_id=file_id,
+            content=new_summary,
+            created_by="manual",
+            metadata={"edited_at": now},
+            created_at=now,
+        )
 
     # Cheap WS notification — emit synchronously so the frontend knows
     # the summary body changed before the (slow) citation recompute
@@ -891,6 +951,21 @@ async def revert_detailed_summary(
                 "WHERE file_id = :fid"
             ),
             {"fid": file_id, "summary": original},
+        )
+        # Append a revert event as a fresh active insight so history
+        # stays linear (status only flows draft → active → superseded).
+        # ``reverted_from_manual`` in metadata preserves the narrative
+        # that this active row came from a user-initiated restore.
+        _append_detailed_summary_insight(
+            session,
+            file_id=file_id,
+            content=original,
+            created_by="intelligence",
+            metadata={
+                "reverted_from_manual": True,
+                "reverted_at": datetime.now(UTC).isoformat(),
+            },
+            created_at=datetime.now(UTC).isoformat(),
         )
 
     await _emit_ws_event(
@@ -1009,6 +1084,16 @@ async def regenerate_detailed_summary(
                 sql_text(
                     "DELETE FROM detailed_summary_citations "
                     "WHERE file_id = :fid"
+                ),
+                {"fid": file_id},
+            )
+            # Drop FileInsight history in the same transaction —
+            # regenerate is a clean-slate action (see
+            # ``_delete_detailed_summary`` for the matching rationale).
+            session.execute(
+                sql_text(
+                    "DELETE FROM file_insights "
+                    "WHERE file_id = :fid AND kind = 'detailed_summary'"
                 ),
                 {"fid": file_id},
             )

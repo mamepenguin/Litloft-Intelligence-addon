@@ -12,6 +12,7 @@ Tables emptied per drive:
 - ``transcript_chunks`` and ``transcript_words`` (file_id)
 - ``suggested_tags`` (file_id)
 - ``file_summaries`` (file_id)
+- ``file_insights`` (file_id, via ``_purge_file`` cascade)
 - FTS5 mirrors (``fts_files``, ``fts_transcripts``, ``fts_text_content``)
 - ``similar_cache`` (invalidated wholesale; cache is cheap to rebuild)
 

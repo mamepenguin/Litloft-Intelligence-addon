@@ -16,6 +16,7 @@ without requiring expensive map-reduce over many LLM calls.
 """
 
 import asyncio
+import json
 import logging
 from datetime import UTC, datetime
 
@@ -24,7 +25,7 @@ from sqlalchemy import text as sql_text
 from app.config import settings
 from app.database import get_search_db
 from app.llm import LLMClient
-from app.models import IndexedFile, TranscriptChunk
+from app.models import IndexedFile, TranscriptChunk, generate_insight_id
 from app.workers.whisper import HVLINK_MIME
 from app.text_utils import trim_to_sentence_boundary
 
@@ -796,7 +797,15 @@ def _save_detailed_summary(
     context_chars: int,
     was_truncated: bool,
 ) -> None:
-    """Write the generated Markdown summary and transition to 'generated'."""
+    """Write the generated Markdown summary and transition to 'generated'.
+
+    Also logs the event in ``file_insights``:
+    - Any existing active insight for this file is marked ``superseded``
+    - A new row is inserted with ``status='active'``,
+      ``created_by='intelligence'``, and generation metadata.
+    Both writes happen in the same session so the history log and the
+    summary body can never drift out of sync.
+    """
     now = datetime.now(UTC).isoformat()
     with get_search_db() as session:
         session.execute(
@@ -821,6 +830,61 @@ def _save_detailed_summary(
                 "was_truncated": 1 if was_truncated else 0,
             },
         )
+        _supersede_and_insert_insight(
+            session,
+            file_id=file_id,
+            kind="detailed_summary",
+            content=detailed_summary,
+            created_by="intelligence",
+            metadata={
+                "model": model,
+                "context_chars": context_chars,
+                "was_truncated": was_truncated,
+            },
+            created_at=now,
+        )
+
+
+def _supersede_and_insert_insight(
+    session,
+    *,
+    file_id: str,
+    kind: str,
+    content: str,
+    created_by: str,
+    metadata: dict,
+    created_at: str,
+) -> None:
+    """Append an insight event: mark existing active row superseded, insert new.
+
+    Helper shared by the worker (new generation) and the router
+    (manual edit, revert). Caller is responsible for committing the
+    session — this function only queues statements.
+    """
+    session.execute(
+        sql_text(
+            "UPDATE file_insights SET status = 'superseded' "
+            "WHERE file_id = :fid AND kind = :kind AND status = 'active'"
+        ),
+        {"fid": file_id, "kind": kind},
+    )
+    session.execute(
+        sql_text(
+            "INSERT INTO file_insights "
+            "(id, file_id, kind, content, metadata_json, "
+            " status, created_by, created_at) "
+            "VALUES (:id, :fid, :kind, :c, :m, 'active', :cb, :ca)"
+        ),
+        {
+            "id": generate_insight_id(),
+            "fid": file_id,
+            "kind": kind,
+            "c": content,
+            "m": json.dumps(metadata) if metadata else None,
+            "cb": created_by,
+            "ca": created_at,
+        },
+    )
 
 
 def _get_detailed_summary(file_id: str) -> dict | None:
@@ -916,6 +980,19 @@ def _delete_detailed_summary(file_id: str) -> bool:
             sql_text(
                 "DELETE FROM detailed_summary_citations "
                 "WHERE file_id = :fid"
+            ),
+            {"fid": file_id},
+        )
+
+        # Drop the full ``file_insights`` history for this file+kind:
+        # regenerate is an explicit "clean slate" action (user
+        # confirmed via the UI flow — see hako ``Mt4TJ9joamta7G0mt-Ifo``),
+        # so retaining prior superseded rows is not desired. The next
+        # ``_save_detailed_summary`` will insert a fresh active row.
+        session.execute(
+            sql_text(
+                "DELETE FROM file_insights "
+                "WHERE file_id = :fid AND kind = 'detailed_summary'"
             ),
             {"fid": file_id},
         )

@@ -5,10 +5,14 @@ Manages two SQLite connections:
 2. Litloft DB (read-only): reads file metadata for indexing
 """
 
+import json
+import logging
+import secrets
 import sqlite3
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 
 from sqlalchemy import event, create_engine, text
 from sqlalchemy.engine import Engine
@@ -121,6 +125,14 @@ def init_search_db() -> None:
     with _search_engine.connect() as conn:
         _create_detailed_summary_citations_table(conn)
         conn.commit()
+
+    # Create file_insights table (AI-output history, Step 1).
+    with _search_engine.connect() as conn:
+        _create_file_insights_table(conn)
+        conn.commit()
+
+    # Backfill file_insights from existing detailed_summary rows.
+    _backfill_file_insights_from_detailed_summary()
 
     # Backfill fts_transcripts from existing transcript_chunks
     _backfill_fts_transcripts()
@@ -562,6 +574,194 @@ def _create_detailed_summary_citations_table(conn: object) -> None:
         "CREATE INDEX IF NOT EXISTS idx_detailed_citations_file "
         "ON detailed_summary_citations(file_id)"
     ))
+
+
+def _create_file_insights_table(conn: object) -> None:
+    """Create ``file_insights`` (AI-output history) if it doesn't exist.
+
+    Step 1 of the FileInsight rollout (see hako ``vdPrMz0_adP-3C6Ogkjds``).
+    Initially populated only for ``kind='detailed_summary'``; other kinds
+    (``auto_tags``, ``key_questions``) will follow in later steps.
+
+    Columns:
+    - ``id``             PK (12-char URL-safe, generated app-side)
+    - ``file_id``        cross-DB reference to core File.id (no FK)
+    - ``kind``           free-form ``"detailed_summary"`` / ``"auto_tags"`` / ...
+    - ``content``        raw LLM output (Markdown for summaries, JSON for tags)
+    - ``metadata_json``  per-kind generation metadata (model, tokens, etc.)
+    - ``status``         ``"active"`` | ``"superseded"`` | ``"invalidated"``
+    - ``created_by``     ``"intelligence"`` | ``"manual"`` | ``"knowledge"``
+    - ``created_at``     UTC timestamp (ISO string, SQLite TEXT)
+    - ``invalidated_at`` UTC timestamp or NULL (reserved for chain invalidation)
+    """
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS file_insights ("
+        "  id TEXT PRIMARY KEY,"
+        "  file_id TEXT NOT NULL,"
+        "  kind TEXT NOT NULL,"
+        "  content TEXT NOT NULL,"
+        "  metadata_json TEXT,"
+        "  status TEXT NOT NULL DEFAULT 'active',"
+        "  created_by TEXT NOT NULL,"
+        "  created_at TIMESTAMP NOT NULL,"
+        "  invalidated_at TIMESTAMP"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_file_insights_file_kind_status "
+        "ON file_insights(file_id, kind, status)"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_file_insights_kind_status "
+        "ON file_insights(kind, status)"
+    ))
+
+
+def _generate_insight_id_local() -> str:
+    """Mirror of ``app.models.generate_insight_id`` for the backfill path.
+
+    Duplicated here so the backfill can run before the models module is
+    fully imported (``Base.metadata.create_all`` runs inside
+    ``init_search_db`` before the backfill helper).
+    """
+    return secrets.token_urlsafe(9)[:12]
+
+
+def _backfill_file_insights_from_detailed_summary() -> None:
+    """Populate ``file_insights`` from existing ``file_summaries`` rows.
+
+    One-shot, idempotent: skipped entirely when any
+    ``kind='detailed_summary'`` row already exists. Safe to run on
+    every startup.
+
+    Mapping:
+
+    - Row with ``detailed_edited_at IS NULL``:
+        1 insight row — status=active, created_by=intelligence,
+        content=detailed_summary.
+
+    - Row with ``detailed_edited_at IS NOT NULL``:
+        2 insight rows:
+          * status=superseded, created_by=intelligence,
+            content=detailed_original (the pre-edit AI snapshot)
+          * status=active, created_by=manual,
+            content=detailed_summary (the edited body),
+            metadata.edited_at populated.
+
+    Rows whose ``detailed_summary`` is NULL or whose ``detailed_status``
+    is not 'generated' are skipped — they have no body to log.
+    """
+    logger = logging.getLogger(__name__)
+    if _search_engine is None:
+        return
+
+    with _search_engine.begin() as conn:
+        # Safety: table exists on fresh installs via the CREATE call
+        # above, but an older DB that somehow missed the create (test
+        # harness shortcut) would raise. Probe first to avoid aborting
+        # startup — the create call ran two steps earlier and the
+        # probe is cheap.
+        has_table = conn.execute(text(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='table' AND name='file_insights'"
+        )).fetchone()
+        if has_table is None:
+            return
+
+        existing = conn.execute(text(
+            "SELECT 1 FROM file_insights "
+            "WHERE kind = 'detailed_summary' LIMIT 1"
+        )).fetchone()
+        if existing is not None:
+            return
+
+        # ``file_summaries`` table may not exist in narrow test harnesses
+        # that construct the search DB from scratch without summaries.
+        has_source = conn.execute(text(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='table' AND name='file_summaries'"
+        )).fetchone()
+        if has_source is None:
+            return
+
+        rows = conn.execute(text(
+            "SELECT file_id, detailed_summary, detailed_model, "
+            "detailed_generated_at, detailed_context_chars, "
+            "detailed_was_truncated, detailed_original, detailed_edited_at "
+            "FROM file_summaries "
+            "WHERE detailed_summary IS NOT NULL "
+            "  AND detailed_status = 'generated'"
+        )).fetchall()
+
+        if not rows:
+            return
+
+        inserted = 0
+        for r in rows:
+            (file_id, content, model, gen_at, ctx_chars,
+             was_trunc, original, edited_at) = r
+
+            base_meta = {
+                "model": model,
+                "context_chars": ctx_chars,
+                "was_truncated": (
+                    bool(was_trunc) if was_trunc is not None else None
+                ),
+            }
+
+            if edited_at:
+                # Edited row: preserve the original AI body as a
+                # superseded entry so the edit history is traceable.
+                if original:
+                    conn.execute(text(
+                        "INSERT INTO file_insights "
+                        "(id, file_id, kind, content, metadata_json, "
+                        " status, created_by, created_at) "
+                        "VALUES (:id, :fid, 'detailed_summary', :c, :m, "
+                        " 'superseded', 'intelligence', :ca)"
+                    ), {
+                        "id": _generate_insight_id_local(),
+                        "fid": file_id,
+                        "c": original,
+                        "m": json.dumps(base_meta),
+                        "ca": gen_at or datetime.now(UTC).isoformat(),
+                    })
+                    inserted += 1
+                conn.execute(text(
+                    "INSERT INTO file_insights "
+                    "(id, file_id, kind, content, metadata_json, "
+                    " status, created_by, created_at) "
+                    "VALUES (:id, :fid, 'detailed_summary', :c, :m, "
+                    " 'active', 'manual', :ca)"
+                ), {
+                    "id": _generate_insight_id_local(),
+                    "fid": file_id,
+                    "c": content,
+                    "m": json.dumps({**base_meta, "edited_at": edited_at}),
+                    "ca": edited_at,
+                })
+                inserted += 1
+            else:
+                conn.execute(text(
+                    "INSERT INTO file_insights "
+                    "(id, file_id, kind, content, metadata_json, "
+                    " status, created_by, created_at) "
+                    "VALUES (:id, :fid, 'detailed_summary', :c, :m, "
+                    " 'active', 'intelligence', :ca)"
+                ), {
+                    "id": _generate_insight_id_local(),
+                    "fid": file_id,
+                    "c": content,
+                    "m": json.dumps(base_meta),
+                    "ca": gen_at or datetime.now(UTC).isoformat(),
+                })
+                inserted += 1
+
+        if inserted:
+            logger.info(
+                "Backfilled %d detailed_summary rows into file_insights",
+                inserted,
+            )
 
 
 def init_litloft_db() -> None:
