@@ -26,7 +26,7 @@ from app.config import settings
 from app.database import get_search_db
 from app.llm import LLMClient
 from app.models import IndexedFile, TranscriptChunk, generate_insight_id
-from app.workers.whisper import HVLINK_MIME
+from app.workers.whisper import LOFT_MIME
 from app.text_utils import trim_to_sentence_boundary
 
 logger = logging.getLogger(__name__)
@@ -507,11 +507,11 @@ def _prepare_context(
 def _classify_file_type(file_type: str, mime_type: str | None = None) -> str | None:
     """Map a raw file_type to a summaries context type, or None if unsupported.
 
-    HVLink files (external video references like YouTube) are classified as
+    LoftRef files (external video references like YouTube) are classified as
     "video" so their VTT-derived transcripts feed the same summary path as
     local videos — their host-side file_type is "other" by MIME heuristics.
     """
-    if mime_type == HVLINK_MIME:
+    if mime_type == LOFT_MIME:
         return "video"
     if file_type == "video":
         return "video"

@@ -212,7 +212,7 @@ class TestBuildFileContextVideo:
         assert ctx.file_id == "a1"
         assert any(s.source == "transcript" for s in ctx.snippets)
 
-    def test_hvlink_file_uses_transcript_path(self, monkeypatch):
+    def test_loft_file_uses_transcript_path(self, monkeypatch):
         # LoftRef files have file_type="other" from host MIME heuristics
         # but carry VTT-derived TranscriptChunks — Ask must feed those
         # to the LLM instead of falling back to metadata only.
@@ -224,7 +224,7 @@ class TestBuildFileContextVideo:
         candidate = RetrievedFile(
             file_id="h1",
             drive="YouTube",
-            filename="video.hvlink",
+            filename="video.loft",
             file_type="other",
             title="External video",
             description="",
@@ -244,7 +244,7 @@ class TestBuildFileContextVideo:
                     ),
                 ),
             ),
-            mime_type="application/vnd.litloft.link+json",
+            mime_type="application/vnd.litloft.loft+json",
         )
 
         ctx = build_file_context(candidate, RagConfig())

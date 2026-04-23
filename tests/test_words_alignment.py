@@ -102,7 +102,7 @@ class TestRealignWordsForChunk:
         session.execute.assert_not_called()
         session.add.assert_not_called()
 
-    def test_hvlink_chunk_with_no_existing_words_is_skipped(self, monkeypatch):
+    def test_loft_chunk_with_no_existing_words_is_skipped(self, monkeypatch):
         """LoftRef-origin chunks have no transcript_words rows. Must
         short-circuit before the aligner is even invoked.
         """

@@ -32,7 +32,7 @@ from app.workers.whisper import (
     check_idle_unload as check_whisper_idle_unload,
     index_whisper,
     TRANSCRIBABLE_TYPES,
-    HVLINK_MIME,
+    LOFT_MIME,
 )
 
 logger = logging.getLogger(__name__)
@@ -194,7 +194,7 @@ class IndexManager:
                 IndexedFile.mime_type.in_(clip_types),
             ).count()
 
-            whisper_types = list(TRANSCRIBABLE_TYPES) + [HVLINK_MIME]
+            whisper_types = list(TRANSCRIBABLE_TYPES) + [LOFT_MIME]
             whisper = active_files.filter(
                 IndexedFile.whisper_indexed.is_(True),
                 IndexedFile.mime_type.in_(whisper_types),
@@ -294,9 +294,9 @@ class IndexManager:
                 _purge_file(file_id)
                 purged += 1
 
-            # Reset hvlinks that were marked complete but have no transcript
+            # Reset loft refs that were marked complete but have no transcript
             # (caption download may have failed initially and succeeded later)
-            self._reset_hvlinks_with_new_vtt()
+            self._reset_loft_refs_with_new_vtt()
 
             # Resume incomplete: re-queue files that were interrupted mid-indexing
             resumed = await self._resume_incomplete()
@@ -401,27 +401,27 @@ class IndexManager:
 
         return added
 
-    def _reset_hvlinks_with_new_vtt(self) -> None:
-        """Reset whisper_indexed for hvlink files that gained VTT since last index.
+    def _reset_loft_refs_with_new_vtt(self) -> None:
+        """Reset whisper_indexed for loft refs that gained VTT since last index.
 
-        When caption download fails initially, the hvlink is marked
+        When caption download fails initially, the loft ref is marked
         whisper_indexed=True with no TranscriptChunks. If captions are
         later downloaded (via retry or refresh), this resets the flag
         so _resume_incomplete will re-queue them.
         """
         with get_search_db() as session:
-            hvlinks = (
+            loft_refs = (
                 session.query(IndexedFile)
                 .filter(
                     IndexedFile.active.is_(True),
-                    IndexedFile.mime_type == HVLINK_MIME,
+                    IndexedFile.mime_type == LOFT_MIME,
                     IndexedFile.whisper_indexed.is_(True),
                 )
                 .all()
             )
 
             reset_count = 0
-            for f in hvlinks:
+            for f in loft_refs:
                 has_chunks = (
                     session.query(TranscriptChunk)
                     .filter_by(file_id=f.file_id)
@@ -433,16 +433,16 @@ class IndexManager:
 
                 # Check if VTT file now exists on disk
                 from pathlib import Path
-                hvlink_path = Path(f.file_path)
-                stem = hvlink_path.stem
-                parent = hvlink_path.parent
+                loft_path = Path(f.file_path)
+                stem = loft_path.stem
+                parent = loft_path.parent
                 if any(parent.glob(f"{stem}*.vtt")):
                     f.whisper_indexed = False
                     reset_count += 1
 
             if reset_count:
                 logger.info(
-                    "Reset %d hvlink(s) with new VTT for re-indexing",
+                    "Reset %d loft ref(s) with new VTT for re-indexing",
                     reset_count,
                 )
 
@@ -483,7 +483,7 @@ class IndexManager:
             for f in incomplete:
                 if not f.clip_indexed and f.mime_type not in clip_mimes:
                     f.clip_indexed = True
-                if not f.whisper_indexed and f.mime_type not in TRANSCRIBABLE_TYPES and f.mime_type != HVLINK_MIME:
+                if not f.whisper_indexed and f.mime_type not in TRANSCRIBABLE_TYPES and f.mime_type != LOFT_MIME:
                     f.whisper_indexed = True
                 if not f.text_indexed and f.mime_type not in TEXT_MIMES:
                     f.text_indexed = True
@@ -553,8 +553,8 @@ class IndexManager:
                 file_id=file_id, task_type=TaskType.CLIP
             ))
 
-        # Queue Whisper for audio/video (or VTT indexing for .hvlink)
-        if mime_type in TRANSCRIBABLE_TYPES or mime_type == HVLINK_MIME:
+        # Queue Whisper for audio/video (or VTT indexing for .loft)
+        if mime_type in TRANSCRIBABLE_TYPES or mime_type == LOFT_MIME:
             await self._enqueue(IndexTask(
                 file_id=file_id, task_type=TaskType.WHISPER
             ))
@@ -604,7 +604,7 @@ class IndexManager:
                 await self._enqueue(IndexTask(
                     file_id=file_id, task_type=TaskType.CLIP, priority=100
                 ))
-            if not file.whisper_indexed and (file.mime_type in TRANSCRIBABLE_TYPES or file.mime_type == HVLINK_MIME):
+            if not file.whisper_indexed and (file.mime_type in TRANSCRIBABLE_TYPES or file.mime_type == LOFT_MIME):
                 await self._enqueue(IndexTask(
                     file_id=file_id, task_type=TaskType.WHISPER, priority=100
                 ))

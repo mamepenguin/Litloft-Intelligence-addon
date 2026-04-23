@@ -35,8 +35,8 @@ TRANSCRIBABLE_TYPES = {
     "audio/aac", "audio/m4a", "audio/x-m4a",
 }
 
-# External source files that use adjacent .vtt instead of Whisper
-HVLINK_MIME = "application/vnd.litloft.link+json"
+# External source files (.loft) that use adjacent .vtt instead of Whisper
+LOFT_MIME = "application/vnd.litloft.loft+json"
 
 
 def _ensure_loaded() -> tuple[object, object | None]:
@@ -551,15 +551,15 @@ def _index_whisper_sync(file_id: str) -> bool:
         mime_type = file.mime_type
         file_path = file.file_path
 
-        if mime_type not in TRANSCRIBABLE_TYPES and mime_type != HVLINK_MIME:
+        if mime_type not in TRANSCRIBABLE_TYPES and mime_type != LOFT_MIME:
             file.whisper_indexed = True
             return True
 
     # External source: use adjacent .vtt instead of Whisper.
     # Called outside get_search_db() to avoid self-deadlock on _write_lock
-    # (_index_hvlink_vtt internally acquires get_search_db()).
-    if mime_type == HVLINK_MIME:
-        return _index_hvlink_vtt(file_id, file_path)
+    # (_index_loft_vtt internally acquires get_search_db()).
+    if mime_type == LOFT_MIME:
+        return _index_loft_vtt(file_id, file_path)
 
     if not validate_file_path(file_path):
         logger.error("File path validation failed for %s: %s", file_id, file_path)
@@ -853,22 +853,22 @@ def _dedup_rolling_cues(cues: list[dict]) -> list[dict]:
     return deduped
 
 
-def _index_hvlink_vtt(file_id: str, file_path: str) -> bool:
-    """Index an .hvlink file using adjacent .vtt subtitles instead of Whisper.
+def _index_loft_vtt(file_id: str, file_path: str) -> bool:
+    """Index a .loft file using adjacent .vtt subtitles instead of Whisper.
 
-    Reads .vtt file(s) next to the .hvlink, parses cues into segments,
+    Reads .vtt file(s) next to the .loft, parses cues into segments,
     merges them, creates TranscriptChunks and embeddings — same output
     as the Whisper path.
     """
     from pathlib import Path
 
-    hvlink_path = Path(file_path)
-    stem = hvlink_path.stem
-    parent = hvlink_path.parent
+    loft_path = Path(file_path)
+    stem = loft_path.stem
+    parent = loft_path.parent
 
     vtt_candidates = sorted(parent.glob(f"{stem}*.vtt"))
     if not vtt_candidates:
-        logger.info("No adjacent VTT for hvlink %s, marking as indexed", file_id)
+        logger.info("No adjacent VTT for loft ref %s, marking as indexed", file_id)
         with get_search_db() as session:
             file = session.query(IndexedFile).filter_by(file_id=file_id).first()
             if file is not None:
@@ -883,7 +883,7 @@ def _index_hvlink_vtt(file_id: str, file_path: str) -> bool:
 
     raw_segments = _dedup_rolling_cues(_parse_vtt_cues(str(best_vtt)))
     if not raw_segments:
-        logger.info("VTT empty for hvlink %s, marking as indexed", file_id)
+        logger.info("VTT empty for loft ref %s, marking as indexed", file_id)
         with get_search_db() as session:
             file = session.query(IndexedFile).filter_by(file_id=file_id).first()
             if file is not None:
@@ -971,5 +971,5 @@ def _index_hvlink_vtt(file_id: str, file_path: str) -> bool:
         if file is not None:
             file.whisper_indexed = True
 
-    logger.info("Indexed hvlink VTT transcript for %s (%d chunks)", file_id, len(chunks))
+    logger.info("Indexed loft ref VTT transcript for %s (%d chunks)", file_id, len(chunks))
     return True

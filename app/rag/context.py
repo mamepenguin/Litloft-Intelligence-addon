@@ -30,7 +30,7 @@ from app.rag.retriever import RetrievedFile
 from app.search import MatchInfo, SegmentGroup
 from app.text_utils import trim_to_sentence_boundary
 from app.workers.embedder import embed_query
-from app.workers.whisper import HVLINK_MIME
+from app.workers.whisper import LOFT_MIME
 
 logger = logging.getLogger(__name__)
 
@@ -913,9 +913,9 @@ def build_file_context(
     # LoftRef files carry host file_type="other" from MIME heuristics but
     # have VTT-derived TranscriptChunks — route them through the transcript
     # path so the LLM sees the subtitles (mirrors summaries._classify_file_type).
-    is_hvlink = candidate.mime_type == HVLINK_MIME
+    is_loft = candidate.mime_type == LOFT_MIME
 
-    if file_type in ("video", "audio") or is_hvlink:
+    if file_type in ("video", "audio") or is_loft:
         snippets = _collect_transcript_snippets(
             candidate,
             rag_config,
@@ -943,7 +943,7 @@ def build_file_context(
     # this video/document" queries where chunk-level excerpts cannot
     # cover the full content under the per-file budget. Listed first
     # so it always survives _cap_snippets trimming.
-    if file_type in ("video", "audio", "document", "text") or is_hvlink:
+    if file_type in ("video", "audio", "document", "text") or is_loft:
         summary = _fetch_long_summary(candidate.file_id)
         if summary:
             snippets = [
@@ -1009,7 +1009,7 @@ def assemble_contexts(
     ) or (
         rag_config.transcript_vector_top_n > 0
         and any(
-            c.file_type in ("video", "audio") or c.mime_type == HVLINK_MIME
+            c.file_type in ("video", "audio") or c.mime_type == LOFT_MIME
             for c in candidates
         )
     )
