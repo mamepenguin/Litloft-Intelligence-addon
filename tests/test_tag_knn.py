@@ -12,7 +12,7 @@ class TestRecommendTagsBySimilarity:
     """Tests cover ranking, min_support, and cold-start behavior.
 
     Neighbor lookup and tag fetch are stubbed so the tests don't need
-    a real vec_clip index or HomeVault DB connection.
+    a real vec_clip index or Litloft DB connection.
     """
 
     def _setup(

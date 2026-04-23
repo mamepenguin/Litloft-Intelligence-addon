@@ -13,7 +13,7 @@ query: "畳み込みを使わずに画像処理を実現した新しいアーキ
 #
 # Real-world trigger: a user asked about "Knowledge / Round A /
 # 3 エージェント合意" when the target file's title was
-# "HomeVault × Karpathy Second Brain / WriteBack-RAG — 取り込み提案書".
+# "Litloft × Karpathy Second Brain / WriteBack-RAG — 取り込み提案書".
 # Query language and title language had zero overlap; 5 AND-joined
 # keywords hit nothing; the target (hako id 19rWVBEF11TL) never surfaced.
 # This case is the test-drive analogue of that failure.

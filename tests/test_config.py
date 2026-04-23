@@ -152,7 +152,7 @@ class TestLoadSettings:
         result = load_settings()
 
         assert result.intelligence_data_dir == Path(str(tmp_path / "data"))
-        assert result.homevault_db_path == Path(str(tmp_path / "hv.db"))
+        assert result.litloft_db_path == Path(str(tmp_path / "hv.db"))
         assert result.models.whisper == "openai/whisper-large"
         assert result.allowed_base_dirs == ("/drives/", "/mnt/")
         assert result.drive_mounts == {
@@ -233,7 +233,7 @@ class TestLoadSettings:
         result = load_settings()
 
         assert result.intelligence_data_dir == Path("/intelligence-data")
-        assert result.homevault_db_path == Path("/data/homevault.db")
+        assert result.litloft_db_path == Path("/data/litloft.db")
         assert result.allowed_base_dirs == ("/drives/",)
 
 

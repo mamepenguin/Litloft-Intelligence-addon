@@ -1,6 +1,6 @@
-"""Webhook endpoint handlers for HomeVault integration.
+"""Webhook endpoint handlers for Litloft integration.
 
-Processes incoming webhooks from HomeVault's backend for scan completion,
+Processes incoming webhooks from Litloft's backend for scan completion,
 file deletion, restoration, and purging events.
 """
 
@@ -19,7 +19,7 @@ class ScanCompletePayload:
 
     drive: str
     added: int = 0
-    # ``removed`` kept for backwards compatibility with older HomeVault
+    # ``removed`` kept for backwards compatibility with older Litloft
     # builds. New builds emit ``missing`` / ``recovered`` instead.
     removed: int = 0
     missing: int = 0
@@ -73,7 +73,7 @@ async def handle_scan_complete(
     payload: ScanCompletePayload,
     index_manager: IndexManager,
 ) -> dict[str, str]:
-    """Handle scan-complete webhook from HomeVault.
+    """Handle scan-complete webhook from Litloft.
 
     Triggers reconciliation to detect new and removed files.
 
@@ -99,7 +99,7 @@ async def handle_files_missing(
     payload: FilesMissingPayload,
     index_manager: IndexManager,
 ) -> dict[str, str]:
-    """Handle files-missing webhook from HomeVault.
+    """Handle files-missing webhook from Litloft.
 
     Marks files as inactive in the index. Embeddings and transcripts are
     preserved so the file can be fully restored if it reappears on disk.
@@ -120,7 +120,7 @@ async def handle_files_recovered(
     payload: FilesRecoveredPayload,
     index_manager: IndexManager,
 ) -> dict[str, str]:
-    """Handle files-recovered webhook from HomeVault.
+    """Handle files-recovered webhook from Litloft.
 
     Reactivates previously missing files in the index.
     """
@@ -140,7 +140,7 @@ async def handle_files_deleted(
     payload: FilesDeletedPayload,
     index_manager: IndexManager,
 ) -> dict[str, str]:
-    """Handle files-deleted webhook from HomeVault.
+    """Handle files-deleted webhook from Litloft.
 
     Marks files as inactive (soft delete) or removes them entirely.
 
@@ -171,7 +171,7 @@ async def handle_files_restored(
     payload: FilesRestoredPayload,
     index_manager: IndexManager,
 ) -> dict[str, str]:
-    """Handle files-restored webhook from HomeVault.
+    """Handle files-restored webhook from Litloft.
 
     Reactivates previously soft-deleted files in the index.
 
@@ -200,7 +200,7 @@ async def handle_files_purged(
     payload: FilesPurgedPayload,
     index_manager: IndexManager,
 ) -> dict[str, str]:
-    """Handle files-purged webhook from HomeVault.
+    """Handle files-purged webhook from Litloft.
 
     Permanently removes files and all associated data from the index.
 

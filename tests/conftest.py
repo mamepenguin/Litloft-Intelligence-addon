@@ -78,7 +78,7 @@ def make_settings(tmp_path):
     def _create(**overrides) -> Settings:
         defaults = {
             "intelligence_data_dir": tmp_path / "intelligence-data",
-            "homevault_db_path": tmp_path / "homevault.db",
+            "litloft_db_path": tmp_path / "litloft.db",
             "model_cache_dir": tmp_path / "models",
             "search_db_path": tmp_path / "search.db",
             "allowed_base_dirs": ("/drives/",),
@@ -109,12 +109,12 @@ def mock_search_db():
 
 
 @pytest.fixture()
-def mock_homevault_db():
-    """Create a mock get_homevault_db context manager yielding a MagicMock session."""
+def mock_litloft_db():
+    """Create a mock get_litloft_db context manager yielding a MagicMock session."""
     session = MagicMock()
 
     @contextmanager
-    def _get_homevault_db():
+    def _get_litloft_db():
         yield session
 
-    return _get_homevault_db, session
+    return _get_litloft_db, session

@@ -1,6 +1,6 @@
 """Index manager: diff detection, queue management, and priority control.
 
-Compares HomeVault DB with the search index to detect new, updated,
+Compares Litloft DB with the search index to detect new, updated,
 and removed files. Manages an asyncio-based task queue for processing
 files through the indexing pipeline.
 """
@@ -19,7 +19,7 @@ from app.database import (
     delete_fts_file,
     delete_fts_text_content,
     delete_fts_transcripts,
-    get_homevault_db,
+    get_litloft_db,
     get_search_db,
     upsert_fts_file,
     validate_vector_table,
@@ -94,7 +94,7 @@ class IndexManager:
     """Manages the indexing pipeline and task queue.
 
     Provides methods for:
-    - Detecting file differences between HomeVault DB and search index
+    - Detecting file differences between Litloft DB and search index
     - Queuing files for processing through the pipeline
     - Priority control and pause/resume
     - Periodic reconciliation
@@ -238,58 +238,58 @@ class IndexManager:
             )
 
     async def reconcile(self) -> dict[str, int]:
-        """Reconcile search index with HomeVault DB.
+        """Reconcile search index with Litloft DB.
 
         Detects new files, removed files, and soft-deleted files.
 
         Returns:
             Dict with counts of added, deactivated, and purged files.
         """
-        logger.info("Starting reconciliation with HomeVault DB")
+        logger.info("Starting reconciliation with Litloft DB")
         added = 0
         deactivated = 0
         purged = 0
 
         try:
-            homevault_files = _get_homevault_files()
+            litloft_files = _get_litloft_files()
             indexed_files = _get_indexed_file_ids()
 
-            homevault_ids = {f["id"] for f in homevault_files}
+            litloft_ids = {f["id"] for f in litloft_files}
             # A file is "active" for indexing purposes only if it is neither
             # trashed (deleted_at) nor missing (missing_since). Missing files
             # keep their embeddings but are marked inactive so they don't
             # appear in search results — matching the soft-delete behaviour.
-            homevault_active = {
+            litloft_active = {
                 f["id"]
-                for f in homevault_files
+                for f in litloft_files
                 if f["deleted_at"] is None and f.get("missing_since") is None
             }
-            homevault_inactive = {
+            litloft_inactive = {
                 f["id"]
-                for f in homevault_files
+                for f in litloft_files
                 if f["deleted_at"] is not None or f.get("missing_since") is not None
             }
 
-            # New files: in HomeVault (active) but not indexed
-            new_ids = homevault_active - indexed_files
+            # New files: in Litloft (active) but not indexed
+            new_ids = litloft_active - indexed_files
             if new_ids:
                 added = await self._add_new_files(
-                    [f for f in homevault_files if f["id"] in new_ids]
+                    [f for f in litloft_files if f["id"] in new_ids]
                 )
 
             # Inactive (trashed or missing): deactivate in the index
-            for file_id in homevault_inactive & indexed_files:
+            for file_id in litloft_inactive & indexed_files:
                 _set_file_active(file_id, active=False)
                 deactivated += 1
 
             # Active: reactivate (covers "missing → recovered" and
             # "trash → restored" since both flow through this branch)
-            for file_id in homevault_active & indexed_files:
+            for file_id in litloft_active & indexed_files:
                 _set_file_active(file_id, active=True)
 
-            # Purged: in index but not in HomeVault DB at all
+            # Purged: in index but not in Litloft DB at all
             # (user explicitly called DELETE /purge)
-            orphaned = indexed_files - homevault_ids
+            orphaned = indexed_files - litloft_ids
             for file_id in orphaned:
                 _purge_file(file_id)
                 purged += 1
@@ -315,7 +315,7 @@ class IndexManager:
         """Add new files to the index and queue them for processing.
 
         Args:
-            files: List of file dicts from HomeVault DB.
+            files: List of file dicts from Litloft DB.
 
         Returns:
             Number of files added.
@@ -349,7 +349,7 @@ class IndexManager:
         with get_search_db() as session:
             for file_data in files:
                 try:
-                    # Build tags text from HomeVault DB
+                    # Build tags text from Litloft DB
                     tags_text = _get_file_tags(file_data["id"])
 
                     # Resolve relative file_path to absolute using drive mounts
@@ -537,7 +537,7 @@ class IndexManager:
         """Queue appropriate indexing tasks for a file.
 
         Args:
-            file_data: File data dict from HomeVault DB.
+            file_data: File data dict from Litloft DB.
         """
         file_id = file_data["id"]
         mime_type = file_data.get("mime_type", "")
@@ -638,7 +638,7 @@ class IndexManager:
         await self.reconcile()
 
     async def handle_scan_complete(self, drive: str) -> None:
-        """Handle scan-complete webhook from HomeVault.
+        """Handle scan-complete webhook from Litloft.
 
         Args:
             drive: The drive that was scanned.
@@ -695,7 +695,7 @@ class IndexManager:
         CLIP vectors are preserved for fast reactivation on recovery.
 
         Args:
-            file_ids: IDs of files that vanished from the HomeVault filesystem.
+            file_ids: IDs of files that vanished from the Litloft filesystem.
         """
         for file_id in file_ids:
             _set_file_active(file_id, active=False)
@@ -706,7 +706,7 @@ class IndexManager:
         Reactivates files that were previously marked missing.
 
         Args:
-            file_ids: IDs of files that reappeared on the HomeVault filesystem.
+            file_ids: IDs of files that reappeared on the Litloft filesystem.
         """
         for file_id in file_ids:
             _set_file_active(file_id, active=True)
@@ -876,7 +876,7 @@ class IndexManager:
                 await asyncio.sleep(10)
 
     async def _reconciliation_worker(self) -> None:
-        """Periodically reconcile index with HomeVault DB."""
+        """Periodically reconcile index with Litloft DB."""
         interval = settings.indexing.reconciliation_interval
 
         while True:
@@ -1032,18 +1032,18 @@ def cleanup_orphaned_embeddings() -> int:
     return cleaned
 
 
-# --- Helper functions for HomeVault DB interaction ---
+# --- Helper functions for Litloft DB interaction ---
 
 
-def _get_homevault_files() -> list[dict]:
-    """Get all files from HomeVault DB.
+def _get_litloft_files() -> list[dict]:
+    """Get all files from Litloft DB.
 
     Returns a list of file dicts including the ``missing_since`` column
     so reconcile can distinguish active / missing / trashed states. The
-    column is read via PRAGMA check so older HomeVault DBs without it
+    column is read via PRAGMA check so older Litloft DBs without it
     still work.
     """
-    with get_homevault_db() as session:
+    with get_litloft_db() as session:
         has_missing_since = any(
             row[1] == "missing_since"
             for row in session.execute(sql_text("PRAGMA table_info(files)")).fetchall()
@@ -1085,7 +1085,7 @@ def _get_homevault_files() -> list[dict]:
 
 
 def _get_file_tags(file_id: str) -> str:
-    """Get tags for a file from HomeVault DB.
+    """Get tags for a file from Litloft DB.
 
     Args:
         file_id: The file ID.
@@ -1094,7 +1094,7 @@ def _get_file_tags(file_id: str) -> str:
         Space-separated tag names.
     """
     try:
-        with get_homevault_db() as session:
+        with get_litloft_db() as session:
             rows = session.execute(
                 sql_text(
                     "SELECT t.name FROM tags t "

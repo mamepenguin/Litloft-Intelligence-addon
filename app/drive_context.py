@@ -1,8 +1,8 @@
 """Drive context helpers for drive-scoped routes.
 
-Every public route in this addon operates within a single HomeVault
+Every public route in this addon operates within a single Litloft
 drive, identified by the ``X-HV-Drive`` request header. The header is
-set by HomeVault's Generic Addon Proxy when the request arrives via
+set by Litloft's Generic Addon Proxy when the request arrives via
 ``/drive/{drive}/addons/intelligence/...`` and validated against the
 caller's accessible drive set there.
 

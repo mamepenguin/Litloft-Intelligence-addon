@@ -244,7 +244,7 @@ class TestBuildFileContextVideo:
                     ),
                 ),
             ),
-            mime_type="application/vnd.homevault.link+json",
+            mime_type="application/vnd.litloft.link+json",
         )
 
         ctx = build_file_context(candidate, RagConfig())

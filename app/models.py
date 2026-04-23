@@ -1,7 +1,7 @@
 """SQLAlchemy models for the semantic search index database.
 
 These models track indexed files, their embeddings, and transcript chunks.
-The search DB is separate from HomeVault's main SQLite database.
+The search DB is separate from Litloft's main SQLite database.
 """
 
 from datetime import UTC, datetime
@@ -24,7 +24,7 @@ from app.database import Base
 class IndexedFile(Base):
     """Tracks files that have been indexed for semantic search.
 
-    Maps 1:1 with HomeVault's File table via file_id.
+    Maps 1:1 with Litloft's File table via file_id.
     The active flag supports soft-delete synchronization.
     """
 

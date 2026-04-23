@@ -36,7 +36,7 @@ TRANSCRIBABLE_TYPES = {
 }
 
 # External source files that use adjacent .vtt instead of Whisper
-HVLINK_MIME = "application/vnd.homevault.link+json"
+HVLINK_MIME = "application/vnd.litloft.link+json"
 
 
 def _ensure_loaded() -> tuple[object, object | None]:

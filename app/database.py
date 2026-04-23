@@ -2,7 +2,7 @@
 
 Manages two SQLite connections:
 1. Search DB (read-write): sqlite-vec enabled, stores embeddings and index state
-2. HomeVault DB (read-only): reads file metadata for indexing
+2. Litloft DB (read-only): reads file metadata for indexing
 """
 
 import sqlite3
@@ -28,8 +28,8 @@ _write_lock = threading.Lock()
 _search_engine: Engine | None = None
 _SearchSession: sessionmaker | None = None
 
-# HomeVault DB engine (read-only)
-_homevault_engine: Engine | None = None
+# Litloft DB engine (read-only)
+_litloft_engine: Engine | None = None
 _HomevaultSession: sessionmaker | None = None
 
 
@@ -564,23 +564,23 @@ def _create_detailed_summary_citations_table(conn: object) -> None:
     ))
 
 
-def init_homevault_db() -> None:
-    """Initialize read-only connection to HomeVault's SQLite database."""
-    global _homevault_engine, _HomevaultSession
+def init_litloft_db() -> None:
+    """Initialize read-only connection to Litloft's SQLite database."""
+    global _litloft_engine, _HomevaultSession
 
-    if not settings.homevault_db_path.exists():
+    if not settings.litloft_db_path.exists():
         raise FileNotFoundError(
-            f"HomeVault database not found: {settings.homevault_db_path}"
+            f"Litloft database not found: {settings.litloft_db_path}"
         )
 
-    _homevault_engine = create_engine(
-        f"sqlite:///file:{settings.homevault_db_path}?mode=ro&uri=true",
+    _litloft_engine = create_engine(
+        f"sqlite:///file:{settings.litloft_db_path}?mode=ro&uri=true",
         echo=False,
         connect_args={"check_same_thread": False},
     )
 
     _HomevaultSession = sessionmaker(
-        bind=_homevault_engine, expire_on_commit=False
+        bind=_litloft_engine, expire_on_commit=False
     )
 
 
@@ -607,10 +607,10 @@ def get_search_db() -> Generator[Session, None, None]:
 
 
 @contextmanager
-def get_homevault_db() -> Generator[Session, None, None]:
-    """Get a read-only HomeVault database session."""
+def get_litloft_db() -> Generator[Session, None, None]:
+    """Get a read-only Litloft database session."""
     if _HomevaultSession is None:
-        raise RuntimeError("HomeVault database not initialized")
+        raise RuntimeError("Litloft database not initialized")
     session = _HomevaultSession()
     try:
         yield session

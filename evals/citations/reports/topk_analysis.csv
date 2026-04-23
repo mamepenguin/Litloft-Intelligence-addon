@@ -1,0 +1,654 @@
+case_id,file_id,section_path,segment_type,has_citation,n_candidates,chunk_1,idx_1,score_1,chunk_2,idx_2,score_2,chunk_3,idx_3,score_3,idx_gap_12,idx_gap_13,score_gap_12,score_gap_13
+001_recipe_three_segment_types,yFpvytc5zGpM,/0,paragraph,True,3,transcript:20,20,0.8596,transcript:121,121,0.8608,transcript:0,0,0.8954,101,20,-0.0012,-0.0359
+001_recipe_three_segment_types,yFpvytc5zGpM,導入/0,paragraph,True,3,transcript:2,2,0.9425,transcript:0,0,0.9414,transcript:3,3,0.894,2,1,0.0011,0.0485
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/0,bullet,True,3,transcript:2,2,0.9198,transcript:3,3,0.8873,transcript:0,0,0.8872,1,2,0.0325,0.0326
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/1,bullet,True,3,transcript:3,3,0.9277,transcript:2,2,0.8806,transcript:4,4,0.8579,1,1,0.0471,0.0697
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/2,bullet,True,3,transcript:4,4,0.9381,transcript:2,2,0.8858,transcript:3,3,0.8824,2,1,0.0523,0.0557
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/3,bullet,True,3,transcript:7,7,0.9057,transcript:5,5,0.8861,transcript:9,9,0.8833,2,2,0.0196,0.0224
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/4,bullet,True,3,transcript:9,9,0.9345,transcript:12,12,0.9341,transcript:14,14,0.9278,3,5,0.0004,0.0067
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/5,bullet,True,3,transcript:27,27,0.9443,transcript:23,23,0.9318,transcript:26,26,0.9243,4,1,0.0125,0.02
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/6,bullet,True,3,transcript:26,26,0.9503,transcript:25,25,0.9305,transcript:23,23,0.9264,1,3,0.0198,0.0238
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/7,bullet,True,3,transcript:27,27,0.8976,transcript:29,29,0.8962,transcript:30,30,0.8948,2,3,0.0013,0.0027
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/8,bullet,True,3,transcript:35,35,0.8878,transcript:16,16,0.8778,transcript:19,19,0.8628,19,16,0.01,0.025
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/9,bullet,True,3,transcript:19,19,0.9156,transcript:41,41,0.8917,transcript:33,33,0.8741,22,14,0.0239,0.0415
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/10,bullet,True,3,transcript:42,42,0.9311,transcript:18,18,0.9247,transcript:12,12,0.9238,24,30,0.0064,0.0073
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/11,bullet,True,3,transcript:61,61,0.8898,transcript:79,79,0.8808,transcript:59,59,0.8763,18,2,0.009,0.0135
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/12,bullet,True,3,transcript:45,45,0.8948,transcript:78,78,0.8821,transcript:43,43,0.8783,33,2,0.0127,0.0164
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/13,bullet,True,3,transcript:47,47,0.9185,transcript:54,54,0.8971,transcript:78,78,0.8957,7,31,0.0215,0.0229
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/14,bullet,True,3,transcript:52,52,0.9367,transcript:47,47,0.9164,transcript:51,51,0.9029,5,1,0.0203,0.0338
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/15,bullet,True,3,transcript:56,56,0.9244,transcript:52,52,0.8945,transcript:76,76,0.8876,4,20,0.0299,0.0368
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/16,bullet,True,3,transcript:65,65,0.9244,transcript:58,58,0.9205,transcript:59,59,0.9103,7,6,0.0039,0.0141
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/17,bullet,True,3,transcript:70,70,0.9103,transcript:64,64,0.8904,transcript:66,66,0.8767,6,4,0.0199,0.0336
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/18,bullet,True,3,transcript:72,72,0.8692,transcript:79,79,0.8675,transcript:53,53,0.849,7,19,0.0016,0.0202
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/19,bullet,True,3,transcript:71,71,0.9181,transcript:72,72,0.8803,transcript:43,43,0.855,1,28,0.0378,0.0631
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/20,bullet,True,3,transcript:75,75,0.9474,transcript:73,73,0.9269,transcript:76,76,0.9048,2,1,0.0205,0.0426
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/21,paragraph,True,3,transcript:65,65,0.8177,transcript:43,43,0.8151,transcript:64,64,0.815,22,1,0.0025,0.0027
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/22,bullet,True,3,transcript:77,77,0.8936,transcript:75,75,0.8701,transcript:73,73,0.8695,2,4,0.0235,0.0241
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/23,bullet,True,3,transcript:79,79,0.9157,transcript:92,92,0.8766,transcript:85,85,0.86,13,6,0.0391,0.0558
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/24,bullet,True,3,transcript:80,80,0.952,transcript:87,87,0.9423,transcript:81,81,0.9081,7,1,0.0097,0.0439
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/25,bullet,True,3,transcript:82,82,0.9156,transcript:83,83,0.8521,transcript:87,87,0.8319,1,5,0.0635,0.0837
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/26,bullet,True,3,transcript:86,86,0.9242,transcript:84,84,0.8968,transcript:92,92,0.893,2,6,0.0274,0.0313
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/27,bullet,True,3,transcript:88,88,0.9303,transcript:87,87,0.9197,transcript:91,91,0.9066,1,3,0.0107,0.0237
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/28,bullet,True,3,transcript:92,92,0.9202,transcript:79,79,0.8895,transcript:91,91,0.8796,13,1,0.0307,0.0406
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/29,bullet,True,3,transcript:93,93,0.9348,transcript:92,92,0.9118,transcript:95,95,0.8988,1,2,0.0229,0.036
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/30,bullet,True,3,transcript:95,95,0.8857,transcript:96,96,0.8547,transcript:109,109,0.854,1,14,0.031,0.0316
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/31,bullet,True,3,transcript:97,97,0.9393,transcript:100,100,0.8961,transcript:96,96,0.8835,3,1,0.0432,0.0558
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/32,bullet,True,3,transcript:101,101,0.9453,transcript:104,104,0.9128,transcript:102,102,0.8861,3,1,0.0325,0.0591
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/33,bullet,True,3,transcript:106,106,0.9121,transcript:107,107,0.9045,transcript:104,104,0.8859,1,2,0.0076,0.0262
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/34,bullet,True,3,transcript:107,107,0.8892,transcript:101,101,0.8811,transcript:106,106,0.8791,6,1,0.0081,0.0101
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/35,bullet,True,3,transcript:109,109,0.927,transcript:104,104,0.8545,transcript:101,101,0.8541,5,8,0.0726,0.0729
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/36,bullet,True,3,transcript:107,107,0.8843,transcript:108,108,0.8824,transcript:95,95,0.8531,1,12,0.0019,0.0311
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/37,bullet,True,3,transcript:110,110,0.9192,transcript:121,121,0.8788,transcript:120,120,0.872,11,10,0.0405,0.0472
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/38,bullet,True,3,transcript:110,110,0.9451,transcript:113,113,0.9017,transcript:112,112,0.8896,3,2,0.0434,0.0555
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/39,bullet,True,3,transcript:113,113,0.9253,transcript:116,116,0.9209,transcript:117,117,0.9104,3,4,0.0043,0.0149
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/40,bullet,True,3,transcript:117,117,0.9158,transcript:116,116,0.9063,transcript:112,112,0.8943,1,5,0.0095,0.0215
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/41,bullet,True,3,transcript:109,109,0.9186,transcript:119,119,0.9056,transcript:113,113,0.8692,10,4,0.0129,0.0494
+001_recipe_three_segment_types,yFpvytc5zGpM,詳細内容/42,bullet,True,3,transcript:115,115,0.8841,transcript:118,118,0.8786,transcript:114,114,0.8736,3,1,0.0055,0.0105
+001_recipe_three_segment_types,yFpvytc5zGpM,重要ポイントまとめ/row/0,bullet,True,3,transcript:26,26,0.844,transcript:23,23,0.8442,transcript:24,24,0.8292,3,2,-0.0001,0.0148
+001_recipe_three_segment_types,yFpvytc5zGpM,重要ポイントまとめ/row/1,bullet,True,3,transcript:43,43,0.8038,transcript:92,92,0.8229,transcript:72,72,0.7999,49,29,-0.0191,0.0039
+001_recipe_three_segment_types,yFpvytc5zGpM,重要ポイントまとめ/row/2,bullet,True,3,transcript:93,93,0.8346,transcript:43,43,0.8252,transcript:26,26,0.8182,50,67,0.0094,0.0163
+001_recipe_three_segment_types,yFpvytc5zGpM,重要ポイントまとめ/row/3,bullet,True,3,transcript:109,109,0.8073,transcript:78,78,0.8139,transcript:84,84,0.8118,31,25,-0.0066,-0.0045
+001_recipe_three_segment_types,yFpvytc5zGpM,重要ポイントまとめ/row/4,bullet,True,3,transcript:113,113,0.8298,transcript:109,109,0.8257,transcript:110,110,0.8319,4,3,0.0041,-0.0021
+001_recipe_three_segment_types,yFpvytc5zGpM,結論/0,paragraph,True,3,transcript:2,2,0.9211,transcript:79,79,0.9005,transcript:3,3,0.8813,77,1,0.0206,0.0399
+002_dq_section1_dp_anchor,KtVKUiry6S_d,/0,paragraph,True,3,transcript:40,40,0.9015,transcript:45,45,0.8752,transcript:3,3,0.9249,5,37,0.0263,-0.0234
+002_dq_section1_dp_anchor,KtVKUiry6S_d,導入/0,paragraph,True,3,transcript:4,4,0.9576,transcript:3,3,0.9515,transcript:0,0,0.8966,1,4,0.0061,0.061
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/0,paragraph,True,3,transcript:0,0,0.8965,transcript:1,1,0.8811,transcript:3,3,0.8719,1,3,0.0154,0.0246
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/1,bullet,True,3,transcript:0,0,0.9208,transcript:1,1,0.8897,transcript:3,3,0.882,1,3,0.0311,0.0388
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/2,bullet,True,3,transcript:0,0,0.9255,transcript:1,1,0.8864,transcript:3,3,0.871,1,3,0.0391,0.0545
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/3,bullet,True,3,transcript:1,1,0.8855,transcript:0,0,0.8762,transcript:3,3,0.8618,1,2,0.0092,0.0237
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/4,paragraph,True,3,transcript:2,2,0.8889,transcript:1,1,0.8766,transcript:3,3,0.8575,1,1,0.0122,0.0313
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/5,paragraph,True,3,transcript:3,3,0.939,transcript:0,0,0.912,transcript:1,1,0.887,3,2,0.0269,0.052
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/6,paragraph,True,3,transcript:5,5,0.9279,transcript:4,4,0.9198,transcript:3,3,0.9052,1,2,0.0081,0.0227
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/7,bullet,True,3,transcript:5,5,0.9365,transcript:8,8,0.9034,transcript:0,0,0.8934,3,5,0.0331,0.0432
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/8,bullet,True,3,transcript:5,5,0.9579,transcript:7,7,0.9092,transcript:8,8,0.9088,2,3,0.0488,0.0491
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/9,bullet,True,3,transcript:8,8,0.96,transcript:0,0,0.8987,transcript:5,5,0.8981,8,3,0.0613,0.0619
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/10,paragraph,True,3,transcript:6,6,0.9373,transcript:1,1,0.8922,transcript:8,8,0.8879,5,2,0.0451,0.0494
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/11,paragraph,True,3,transcript:10,10,0.9078,transcript:12,12,0.9051,transcript:11,11,0.8886,2,1,0.0027,0.0192
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/12,paragraph,True,3,transcript:11,11,0.9174,transcript:12,12,0.9139,transcript:14,14,0.8686,1,3,0.0035,0.0488
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/13,paragraph,True,3,transcript:13,13,0.9502,transcript:14,14,0.8992,transcript:17,17,0.8756,1,4,0.051,0.0746
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/14,bullet,True,3,transcript:15,15,0.9007,transcript:18,18,0.9003,transcript:16,16,0.8822,3,1,0.0003,0.0185
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/15,bullet,True,3,transcript:18,18,0.8786,transcript:15,15,0.8674,transcript:12,12,0.8656,3,6,0.0112,0.013
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/16,bullet,True,3,transcript:16,16,0.9034,transcript:15,15,0.8835,transcript:18,18,0.8588,1,2,0.02,0.0446
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/17,bullet,True,3,transcript:16,16,0.9072,transcript:15,15,0.8914,transcript:18,18,0.8708,1,2,0.0158,0.0363
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/18,bullet,True,3,transcript:11,11,0.8629,transcript:18,18,0.8366,transcript:16,16,0.8194,7,5,0.0264,0.0435
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/19,bullet,True,3,transcript:14,14,0.8188,transcript:18,18,0.8092,transcript:15,15,0.8063,4,1,0.0097,0.0126
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/20,paragraph,True,3,transcript:18,18,0.9357,transcript:13,13,0.906,transcript:14,14,0.8812,5,4,0.0298,0.0545
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/21,paragraph,True,3,transcript:18,18,0.9502,transcript:19,19,0.914,transcript:13,13,0.906,1,5,0.0362,0.0442
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/22,paragraph,True,3,transcript:19,19,0.9414,transcript:42,42,0.9221,transcript:29,29,0.9137,23,10,0.0194,0.0278
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/23,paragraph,True,3,transcript:40,40,0.8724,transcript:25,25,0.8674,transcript:20,20,0.8659,15,20,0.005,0.0065
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/24,bullet,True,3,transcript:27,27,0.9301,transcript:37,37,0.9237,transcript:18,18,0.9225,10,9,0.0064,0.0076
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/25,bullet,True,3,transcript:24,24,0.9278,transcript:43,43,0.8875,transcript:23,23,0.8803,19,1,0.0403,0.0475
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/26,paragraph,True,3,transcript:25,25,0.8773,transcript:40,40,0.8713,transcript:24,24,0.8596,15,1,0.006,0.0177
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/27,bullet,True,3,transcript:24,24,0.8908,transcript:37,37,0.88,transcript:43,43,0.8713,13,19,0.0109,0.0195
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/28,bullet,True,3,transcript:25,25,0.882,transcript:26,26,0.8694,transcript:37,37,0.834,1,12,0.0126,0.048
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/29,bullet,True,3,transcript:26,26,0.9239,transcript:24,24,0.9018,transcript:25,25,0.8969,2,1,0.0221,0.027
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/30,paragraph,True,3,transcript:25,25,0.8656,transcript:40,40,0.8607,transcript:36,36,0.8511,15,11,0.0049,0.0145
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/31,bullet,True,3,transcript:21,21,0.9137,transcript:33,33,0.9005,transcript:37,37,0.8991,12,16,0.0132,0.0146
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/32,bullet,True,3,transcript:24,24,0.8785,transcript:37,37,0.8751,transcript:43,43,0.8711,13,19,0.0034,0.0074
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/33,bullet,True,3,transcript:38,38,0.9348,transcript:34,34,0.9298,transcript:18,18,0.9141,4,20,0.005,0.0207
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/34,bullet,True,3,transcript:39,39,0.912,transcript:34,34,0.8956,transcript:41,41,0.8854,5,2,0.0165,0.0266
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/35,paragraph,True,3,transcript:42,42,0.9264,transcript:40,40,0.8642,transcript:41,41,0.8466,2,1,0.0622,0.0797
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/36,paragraph,True,3,transcript:42,42,0.9221,transcript:40,40,0.8654,transcript:44,44,0.8504,2,2,0.0567,0.0717
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/37,paragraph,True,3,transcript:42,42,0.9522,transcript:45,45,0.9053,transcript:44,44,0.8879,3,2,0.0469,0.0643
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/38,paragraph,True,3,transcript:44,44,0.9025,transcript:43,43,0.8954,transcript:42,42,0.8855,1,2,0.007,0.0169
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/39,paragraph,True,3,transcript:47,47,0.9434,transcript:49,49,0.8799,transcript:45,45,0.8738,2,2,0.0635,0.0697
+002_dq_section1_dp_anchor,KtVKUiry6S_d,詳細内容/40,paragraph,True,3,transcript:48,48,0.9251,transcript:49,49,0.8964,transcript:46,46,0.8907,1,2,0.0288,0.0344
+002_dq_section1_dp_anchor,KtVKUiry6S_d,重要ポイントまとめ/row/0,bullet,True,3,transcript:18,18,0.8786,transcript:15,15,0.8482,transcript:51,51,0.8452,3,33,0.0304,0.0333
+002_dq_section1_dp_anchor,KtVKUiry6S_d,重要ポイントまとめ/row/1,bullet,True,3,transcript:43,43,0.8346,transcript:18,18,0.838,transcript:51,51,0.823,25,8,-0.0035,0.0116
+002_dq_section1_dp_anchor,KtVKUiry6S_d,重要ポイントまとめ/row/2,bullet,True,3,transcript:19,19,0.8572,transcript:15,15,0.8462,transcript:22,22,0.8296,4,3,0.011,0.0276
+002_dq_section1_dp_anchor,KtVKUiry6S_d,重要ポイントまとめ/row/3,bullet,True,3,transcript:27,27,0.8903,transcript:40,40,0.8839,transcript:18,18,0.8746,13,9,0.0065,0.0157
+002_dq_section1_dp_anchor,KtVKUiry6S_d,重要ポイントまとめ/row/4,bullet,True,3,transcript:24,24,0.8532,transcript:40,40,0.838,transcript:37,37,0.8466,16,13,0.0152,0.0066
+002_dq_section1_dp_anchor,KtVKUiry6S_d,重要ポイントまとめ/row/5,bullet,True,3,transcript:40,40,0.8801,transcript:27,27,0.8769,transcript:18,18,0.8794,13,22,0.0033,0.0008
+002_dq_section1_dp_anchor,KtVKUiry6S_d,重要ポイントまとめ/row/6,bullet,True,3,transcript:42,42,0.8858,transcript:45,45,0.8523,transcript:3,3,0.8401,3,39,0.0335,0.0456
+002_dq_section1_dp_anchor,KtVKUiry6S_d,結論/0,paragraph,True,3,transcript:22,22,0.9216,transcript:40,40,0.9128,transcript:42,42,0.9475,18,20,0.0088,-0.0259
+003_recipe_all_table_rows,yFpvytc5zGpM,/0,paragraph,True,3,transcript:20,20,0.8596,transcript:121,121,0.8608,transcript:0,0,0.8954,101,20,-0.0012,-0.0359
+003_recipe_all_table_rows,yFpvytc5zGpM,導入/0,paragraph,True,3,transcript:2,2,0.9425,transcript:0,0,0.9414,transcript:3,3,0.894,2,1,0.0011,0.0485
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/0,bullet,True,3,transcript:2,2,0.9198,transcript:3,3,0.8873,transcript:0,0,0.8872,1,2,0.0325,0.0326
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/1,bullet,True,3,transcript:3,3,0.9277,transcript:2,2,0.8806,transcript:4,4,0.8579,1,1,0.0471,0.0697
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/2,bullet,True,3,transcript:4,4,0.9381,transcript:2,2,0.8858,transcript:3,3,0.8824,2,1,0.0523,0.0557
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/3,bullet,True,3,transcript:7,7,0.9057,transcript:5,5,0.8861,transcript:9,9,0.8833,2,2,0.0196,0.0224
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/4,bullet,True,3,transcript:9,9,0.9345,transcript:12,12,0.9341,transcript:14,14,0.9278,3,5,0.0004,0.0067
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/5,bullet,True,3,transcript:27,27,0.9443,transcript:23,23,0.9318,transcript:26,26,0.9243,4,1,0.0125,0.02
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/6,bullet,True,3,transcript:26,26,0.9503,transcript:25,25,0.9305,transcript:23,23,0.9264,1,3,0.0198,0.0238
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/7,bullet,True,3,transcript:27,27,0.8976,transcript:29,29,0.8962,transcript:30,30,0.8948,2,3,0.0013,0.0027
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/8,bullet,True,3,transcript:35,35,0.8878,transcript:16,16,0.8778,transcript:19,19,0.8628,19,16,0.01,0.025
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/9,bullet,True,3,transcript:19,19,0.9156,transcript:41,41,0.8917,transcript:33,33,0.8741,22,14,0.0239,0.0415
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/10,bullet,True,3,transcript:42,42,0.9311,transcript:18,18,0.9247,transcript:12,12,0.9238,24,30,0.0064,0.0073
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/11,bullet,True,3,transcript:61,61,0.8898,transcript:79,79,0.8808,transcript:59,59,0.8763,18,2,0.009,0.0135
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/12,bullet,True,3,transcript:45,45,0.8948,transcript:78,78,0.8821,transcript:43,43,0.8783,33,2,0.0127,0.0164
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/13,bullet,True,3,transcript:47,47,0.9185,transcript:54,54,0.8971,transcript:78,78,0.8957,7,31,0.0215,0.0229
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/14,bullet,True,3,transcript:52,52,0.9367,transcript:47,47,0.9164,transcript:51,51,0.9029,5,1,0.0203,0.0338
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/15,bullet,True,3,transcript:56,56,0.9244,transcript:52,52,0.8945,transcript:76,76,0.8876,4,20,0.0299,0.0368
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/16,bullet,True,3,transcript:65,65,0.9244,transcript:58,58,0.9205,transcript:59,59,0.9103,7,6,0.0039,0.0141
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/17,bullet,True,3,transcript:70,70,0.9103,transcript:64,64,0.8904,transcript:66,66,0.8767,6,4,0.0199,0.0336
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/18,bullet,True,3,transcript:72,72,0.8692,transcript:79,79,0.8675,transcript:53,53,0.849,7,19,0.0016,0.0202
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/19,bullet,True,3,transcript:71,71,0.9181,transcript:72,72,0.8803,transcript:43,43,0.855,1,28,0.0378,0.0631
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/20,bullet,True,3,transcript:75,75,0.9474,transcript:73,73,0.9269,transcript:76,76,0.9048,2,1,0.0205,0.0426
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/21,paragraph,True,3,transcript:65,65,0.8177,transcript:43,43,0.8151,transcript:64,64,0.815,22,1,0.0025,0.0027
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/22,bullet,True,3,transcript:77,77,0.8936,transcript:75,75,0.8701,transcript:73,73,0.8695,2,4,0.0235,0.0241
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/23,bullet,True,3,transcript:79,79,0.9157,transcript:92,92,0.8766,transcript:85,85,0.86,13,6,0.0391,0.0558
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/24,bullet,True,3,transcript:80,80,0.952,transcript:87,87,0.9423,transcript:81,81,0.9081,7,1,0.0097,0.0439
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/25,bullet,True,3,transcript:82,82,0.9156,transcript:83,83,0.8521,transcript:87,87,0.8319,1,5,0.0635,0.0837
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/26,bullet,True,3,transcript:86,86,0.9242,transcript:84,84,0.8968,transcript:92,92,0.893,2,6,0.0274,0.0313
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/27,bullet,True,3,transcript:88,88,0.9303,transcript:87,87,0.9197,transcript:91,91,0.9066,1,3,0.0107,0.0237
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/28,bullet,True,3,transcript:92,92,0.9202,transcript:79,79,0.8895,transcript:91,91,0.8796,13,1,0.0307,0.0406
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/29,bullet,True,3,transcript:93,93,0.9348,transcript:92,92,0.9118,transcript:95,95,0.8988,1,2,0.0229,0.036
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/30,bullet,True,3,transcript:95,95,0.8857,transcript:96,96,0.8547,transcript:109,109,0.854,1,14,0.031,0.0316
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/31,bullet,True,3,transcript:97,97,0.9393,transcript:100,100,0.8961,transcript:96,96,0.8835,3,1,0.0432,0.0558
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/32,bullet,True,3,transcript:101,101,0.9453,transcript:104,104,0.9128,transcript:102,102,0.8861,3,1,0.0325,0.0591
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/33,bullet,True,3,transcript:106,106,0.9121,transcript:107,107,0.9045,transcript:104,104,0.8859,1,2,0.0076,0.0262
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/34,bullet,True,3,transcript:107,107,0.8892,transcript:101,101,0.8811,transcript:106,106,0.8791,6,1,0.0081,0.0101
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/35,bullet,True,3,transcript:109,109,0.927,transcript:104,104,0.8545,transcript:101,101,0.8541,5,8,0.0726,0.0729
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/36,bullet,True,3,transcript:107,107,0.8843,transcript:108,108,0.8824,transcript:95,95,0.8531,1,12,0.0019,0.0311
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/37,bullet,True,3,transcript:110,110,0.9192,transcript:121,121,0.8788,transcript:120,120,0.872,11,10,0.0405,0.0472
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/38,bullet,True,3,transcript:110,110,0.9451,transcript:113,113,0.9017,transcript:112,112,0.8896,3,2,0.0434,0.0555
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/39,bullet,True,3,transcript:113,113,0.9253,transcript:116,116,0.9209,transcript:117,117,0.9104,3,4,0.0043,0.0149
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/40,bullet,True,3,transcript:117,117,0.9158,transcript:116,116,0.9063,transcript:112,112,0.8943,1,5,0.0095,0.0215
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/41,bullet,True,3,transcript:109,109,0.9186,transcript:119,119,0.9056,transcript:113,113,0.8692,10,4,0.0129,0.0494
+003_recipe_all_table_rows,yFpvytc5zGpM,詳細内容/42,bullet,True,3,transcript:115,115,0.8841,transcript:118,118,0.8786,transcript:114,114,0.8736,3,1,0.0055,0.0105
+003_recipe_all_table_rows,yFpvytc5zGpM,重要ポイントまとめ/row/0,bullet,True,3,transcript:26,26,0.844,transcript:23,23,0.8442,transcript:24,24,0.8292,3,2,-0.0001,0.0148
+003_recipe_all_table_rows,yFpvytc5zGpM,重要ポイントまとめ/row/1,bullet,True,3,transcript:43,43,0.8038,transcript:92,92,0.8229,transcript:72,72,0.7999,49,29,-0.0191,0.0039
+003_recipe_all_table_rows,yFpvytc5zGpM,重要ポイントまとめ/row/2,bullet,True,3,transcript:93,93,0.8346,transcript:43,43,0.8252,transcript:26,26,0.8182,50,67,0.0094,0.0163
+003_recipe_all_table_rows,yFpvytc5zGpM,重要ポイントまとめ/row/3,bullet,True,3,transcript:109,109,0.8073,transcript:78,78,0.8139,transcript:84,84,0.8118,31,25,-0.0066,-0.0045
+003_recipe_all_table_rows,yFpvytc5zGpM,重要ポイントまとめ/row/4,bullet,True,3,transcript:113,113,0.8298,transcript:109,109,0.8257,transcript:110,110,0.8319,4,3,0.0041,-0.0021
+003_recipe_all_table_rows,yFpvytc5zGpM,結論/0,paragraph,True,3,transcript:2,2,0.9211,transcript:79,79,0.9005,transcript:3,3,0.8813,77,1,0.0206,0.0399
+004_dq_section_boundary,KtVKUiry6S_d,/0,paragraph,True,3,transcript:40,40,0.9015,transcript:45,45,0.8752,transcript:3,3,0.9249,5,37,0.0263,-0.0234
+004_dq_section_boundary,KtVKUiry6S_d,導入/0,paragraph,True,3,transcript:4,4,0.9576,transcript:3,3,0.9515,transcript:0,0,0.8966,1,4,0.0061,0.061
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/0,paragraph,True,3,transcript:0,0,0.8965,transcript:1,1,0.8811,transcript:3,3,0.8719,1,3,0.0154,0.0246
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/1,bullet,True,3,transcript:0,0,0.9208,transcript:1,1,0.8897,transcript:3,3,0.882,1,3,0.0311,0.0388
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/2,bullet,True,3,transcript:0,0,0.9255,transcript:1,1,0.8864,transcript:3,3,0.871,1,3,0.0391,0.0545
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/3,bullet,True,3,transcript:1,1,0.8855,transcript:0,0,0.8762,transcript:3,3,0.8618,1,2,0.0092,0.0237
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/4,paragraph,True,3,transcript:2,2,0.8889,transcript:1,1,0.8766,transcript:3,3,0.8575,1,1,0.0122,0.0313
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/5,paragraph,True,3,transcript:3,3,0.939,transcript:0,0,0.912,transcript:1,1,0.887,3,2,0.0269,0.052
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/6,paragraph,True,3,transcript:5,5,0.9279,transcript:4,4,0.9198,transcript:3,3,0.9052,1,2,0.0081,0.0227
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/7,bullet,True,3,transcript:5,5,0.9365,transcript:8,8,0.9034,transcript:0,0,0.8934,3,5,0.0331,0.0432
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/8,bullet,True,3,transcript:5,5,0.9579,transcript:7,7,0.9092,transcript:8,8,0.9088,2,3,0.0488,0.0491
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/9,bullet,True,3,transcript:8,8,0.96,transcript:0,0,0.8987,transcript:5,5,0.8981,8,3,0.0613,0.0619
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/10,paragraph,True,3,transcript:6,6,0.9373,transcript:1,1,0.8922,transcript:8,8,0.8879,5,2,0.0451,0.0494
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/11,paragraph,True,3,transcript:10,10,0.9078,transcript:12,12,0.9051,transcript:11,11,0.8886,2,1,0.0027,0.0192
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/12,paragraph,True,3,transcript:11,11,0.9174,transcript:12,12,0.9139,transcript:14,14,0.8686,1,3,0.0035,0.0488
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/13,paragraph,True,3,transcript:13,13,0.9502,transcript:14,14,0.8992,transcript:17,17,0.8756,1,4,0.051,0.0746
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/14,bullet,True,3,transcript:15,15,0.9007,transcript:18,18,0.9003,transcript:16,16,0.8822,3,1,0.0003,0.0185
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/15,bullet,True,3,transcript:18,18,0.8786,transcript:15,15,0.8674,transcript:12,12,0.8656,3,6,0.0112,0.013
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/16,bullet,True,3,transcript:16,16,0.9034,transcript:15,15,0.8835,transcript:18,18,0.8588,1,2,0.02,0.0446
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/17,bullet,True,3,transcript:16,16,0.9072,transcript:15,15,0.8914,transcript:18,18,0.8708,1,2,0.0158,0.0363
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/18,bullet,True,3,transcript:11,11,0.8629,transcript:18,18,0.8366,transcript:16,16,0.8194,7,5,0.0264,0.0435
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/19,bullet,True,3,transcript:14,14,0.8188,transcript:18,18,0.8092,transcript:15,15,0.8063,4,1,0.0097,0.0126
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/20,paragraph,True,3,transcript:18,18,0.9357,transcript:13,13,0.906,transcript:14,14,0.8812,5,4,0.0298,0.0545
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/21,paragraph,True,3,transcript:18,18,0.9502,transcript:19,19,0.914,transcript:13,13,0.906,1,5,0.0362,0.0442
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/22,paragraph,True,3,transcript:19,19,0.9414,transcript:42,42,0.9221,transcript:29,29,0.9137,23,10,0.0194,0.0278
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/23,paragraph,True,3,transcript:40,40,0.8724,transcript:25,25,0.8674,transcript:20,20,0.8659,15,20,0.005,0.0065
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/24,bullet,True,3,transcript:27,27,0.9301,transcript:37,37,0.9237,transcript:18,18,0.9225,10,9,0.0064,0.0076
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/25,bullet,True,3,transcript:24,24,0.9278,transcript:43,43,0.8875,transcript:23,23,0.8803,19,1,0.0403,0.0475
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/26,paragraph,True,3,transcript:25,25,0.8773,transcript:40,40,0.8713,transcript:24,24,0.8596,15,1,0.006,0.0177
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/27,bullet,True,3,transcript:24,24,0.8908,transcript:37,37,0.88,transcript:43,43,0.8713,13,19,0.0109,0.0195
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/28,bullet,True,3,transcript:25,25,0.882,transcript:26,26,0.8694,transcript:37,37,0.834,1,12,0.0126,0.048
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/29,bullet,True,3,transcript:26,26,0.9239,transcript:24,24,0.9018,transcript:25,25,0.8969,2,1,0.0221,0.027
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/30,paragraph,True,3,transcript:25,25,0.8656,transcript:40,40,0.8607,transcript:36,36,0.8511,15,11,0.0049,0.0145
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/31,bullet,True,3,transcript:21,21,0.9137,transcript:33,33,0.9005,transcript:37,37,0.8991,12,16,0.0132,0.0146
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/32,bullet,True,3,transcript:24,24,0.8785,transcript:37,37,0.8751,transcript:43,43,0.8711,13,19,0.0034,0.0074
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/33,bullet,True,3,transcript:38,38,0.9348,transcript:34,34,0.9298,transcript:18,18,0.9141,4,20,0.005,0.0207
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/34,bullet,True,3,transcript:39,39,0.912,transcript:34,34,0.8956,transcript:41,41,0.8854,5,2,0.0165,0.0266
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/35,paragraph,True,3,transcript:42,42,0.9264,transcript:40,40,0.8642,transcript:41,41,0.8466,2,1,0.0622,0.0797
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/36,paragraph,True,3,transcript:42,42,0.9221,transcript:40,40,0.8654,transcript:44,44,0.8504,2,2,0.0567,0.0717
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/37,paragraph,True,3,transcript:42,42,0.9522,transcript:45,45,0.9053,transcript:44,44,0.8879,3,2,0.0469,0.0643
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/38,paragraph,True,3,transcript:44,44,0.9025,transcript:43,43,0.8954,transcript:42,42,0.8855,1,2,0.007,0.0169
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/39,paragraph,True,3,transcript:47,47,0.9434,transcript:49,49,0.8799,transcript:45,45,0.8738,2,2,0.0635,0.0697
+004_dq_section_boundary,KtVKUiry6S_d,詳細内容/40,paragraph,True,3,transcript:48,48,0.9251,transcript:49,49,0.8964,transcript:46,46,0.8907,1,2,0.0288,0.0344
+004_dq_section_boundary,KtVKUiry6S_d,重要ポイントまとめ/row/0,bullet,True,3,transcript:18,18,0.8786,transcript:15,15,0.8482,transcript:51,51,0.8452,3,33,0.0304,0.0333
+004_dq_section_boundary,KtVKUiry6S_d,重要ポイントまとめ/row/1,bullet,True,3,transcript:43,43,0.8346,transcript:18,18,0.838,transcript:51,51,0.823,25,8,-0.0035,0.0116
+004_dq_section_boundary,KtVKUiry6S_d,重要ポイントまとめ/row/2,bullet,True,3,transcript:19,19,0.8572,transcript:15,15,0.8462,transcript:22,22,0.8296,4,3,0.011,0.0276
+004_dq_section_boundary,KtVKUiry6S_d,重要ポイントまとめ/row/3,bullet,True,3,transcript:27,27,0.8903,transcript:40,40,0.8839,transcript:18,18,0.8746,13,9,0.0065,0.0157
+004_dq_section_boundary,KtVKUiry6S_d,重要ポイントまとめ/row/4,bullet,True,3,transcript:24,24,0.8532,transcript:40,40,0.838,transcript:37,37,0.8466,16,13,0.0152,0.0066
+004_dq_section_boundary,KtVKUiry6S_d,重要ポイントまとめ/row/5,bullet,True,3,transcript:40,40,0.8801,transcript:27,27,0.8769,transcript:18,18,0.8794,13,22,0.0033,0.0008
+004_dq_section_boundary,KtVKUiry6S_d,重要ポイントまとめ/row/6,bullet,True,3,transcript:42,42,0.8858,transcript:45,45,0.8523,transcript:3,3,0.8401,3,39,0.0335,0.0456
+004_dq_section_boundary,KtVKUiry6S_d,結論/0,paragraph,True,3,transcript:22,22,0.9216,transcript:40,40,0.9128,transcript:42,42,0.9475,18,20,0.0088,-0.0259
+005_recipe_section_transitions,yFpvytc5zGpM,/0,paragraph,True,3,transcript:20,20,0.8596,transcript:121,121,0.8608,transcript:0,0,0.8954,101,20,-0.0012,-0.0359
+005_recipe_section_transitions,yFpvytc5zGpM,導入/0,paragraph,True,3,transcript:2,2,0.9425,transcript:0,0,0.9414,transcript:3,3,0.894,2,1,0.0011,0.0485
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/0,bullet,True,3,transcript:2,2,0.9198,transcript:3,3,0.8873,transcript:0,0,0.8872,1,2,0.0325,0.0326
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/1,bullet,True,3,transcript:3,3,0.9277,transcript:2,2,0.8806,transcript:4,4,0.8579,1,1,0.0471,0.0697
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/2,bullet,True,3,transcript:4,4,0.9381,transcript:2,2,0.8858,transcript:3,3,0.8824,2,1,0.0523,0.0557
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/3,bullet,True,3,transcript:7,7,0.9057,transcript:5,5,0.8861,transcript:9,9,0.8833,2,2,0.0196,0.0224
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/4,bullet,True,3,transcript:9,9,0.9345,transcript:12,12,0.9341,transcript:14,14,0.9278,3,5,0.0004,0.0067
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/5,bullet,True,3,transcript:27,27,0.9443,transcript:23,23,0.9318,transcript:26,26,0.9243,4,1,0.0125,0.02
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/6,bullet,True,3,transcript:26,26,0.9503,transcript:25,25,0.9305,transcript:23,23,0.9264,1,3,0.0198,0.0238
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/7,bullet,True,3,transcript:27,27,0.8976,transcript:29,29,0.8962,transcript:30,30,0.8948,2,3,0.0013,0.0027
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/8,bullet,True,3,transcript:35,35,0.8878,transcript:16,16,0.8778,transcript:19,19,0.8628,19,16,0.01,0.025
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/9,bullet,True,3,transcript:19,19,0.9156,transcript:41,41,0.8917,transcript:33,33,0.8741,22,14,0.0239,0.0415
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/10,bullet,True,3,transcript:42,42,0.9311,transcript:18,18,0.9247,transcript:12,12,0.9238,24,30,0.0064,0.0073
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/11,bullet,True,3,transcript:61,61,0.8898,transcript:79,79,0.8808,transcript:59,59,0.8763,18,2,0.009,0.0135
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/12,bullet,True,3,transcript:45,45,0.8948,transcript:78,78,0.8821,transcript:43,43,0.8783,33,2,0.0127,0.0164
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/13,bullet,True,3,transcript:47,47,0.9185,transcript:54,54,0.8971,transcript:78,78,0.8957,7,31,0.0215,0.0229
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/14,bullet,True,3,transcript:52,52,0.9367,transcript:47,47,0.9164,transcript:51,51,0.9029,5,1,0.0203,0.0338
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/15,bullet,True,3,transcript:56,56,0.9244,transcript:52,52,0.8945,transcript:76,76,0.8876,4,20,0.0299,0.0368
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/16,bullet,True,3,transcript:65,65,0.9244,transcript:58,58,0.9205,transcript:59,59,0.9103,7,6,0.0039,0.0141
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/17,bullet,True,3,transcript:70,70,0.9103,transcript:64,64,0.8904,transcript:66,66,0.8767,6,4,0.0199,0.0336
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/18,bullet,True,3,transcript:72,72,0.8692,transcript:79,79,0.8675,transcript:53,53,0.849,7,19,0.0016,0.0202
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/19,bullet,True,3,transcript:71,71,0.9181,transcript:72,72,0.8803,transcript:43,43,0.855,1,28,0.0378,0.0631
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/20,bullet,True,3,transcript:75,75,0.9474,transcript:73,73,0.9269,transcript:76,76,0.9048,2,1,0.0205,0.0426
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/21,paragraph,True,3,transcript:65,65,0.8177,transcript:43,43,0.8151,transcript:64,64,0.815,22,1,0.0025,0.0027
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/22,bullet,True,3,transcript:77,77,0.8936,transcript:75,75,0.8701,transcript:73,73,0.8695,2,4,0.0235,0.0241
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/23,bullet,True,3,transcript:79,79,0.9157,transcript:92,92,0.8766,transcript:85,85,0.86,13,6,0.0391,0.0558
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/24,bullet,True,3,transcript:80,80,0.952,transcript:87,87,0.9423,transcript:81,81,0.9081,7,1,0.0097,0.0439
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/25,bullet,True,3,transcript:82,82,0.9156,transcript:83,83,0.8521,transcript:87,87,0.8319,1,5,0.0635,0.0837
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/26,bullet,True,3,transcript:86,86,0.9242,transcript:84,84,0.8968,transcript:92,92,0.893,2,6,0.0274,0.0313
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/27,bullet,True,3,transcript:88,88,0.9303,transcript:87,87,0.9197,transcript:91,91,0.9066,1,3,0.0107,0.0237
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/28,bullet,True,3,transcript:92,92,0.9202,transcript:79,79,0.8895,transcript:91,91,0.8796,13,1,0.0307,0.0406
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/29,bullet,True,3,transcript:93,93,0.9348,transcript:92,92,0.9118,transcript:95,95,0.8988,1,2,0.0229,0.036
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/30,bullet,True,3,transcript:95,95,0.8857,transcript:96,96,0.8547,transcript:109,109,0.854,1,14,0.031,0.0316
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/31,bullet,True,3,transcript:97,97,0.9393,transcript:100,100,0.8961,transcript:96,96,0.8835,3,1,0.0432,0.0558
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/32,bullet,True,3,transcript:101,101,0.9453,transcript:104,104,0.9128,transcript:102,102,0.8861,3,1,0.0325,0.0591
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/33,bullet,True,3,transcript:106,106,0.9121,transcript:107,107,0.9045,transcript:104,104,0.8859,1,2,0.0076,0.0262
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/34,bullet,True,3,transcript:107,107,0.8892,transcript:101,101,0.8811,transcript:106,106,0.8791,6,1,0.0081,0.0101
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/35,bullet,True,3,transcript:109,109,0.927,transcript:104,104,0.8545,transcript:101,101,0.8541,5,8,0.0726,0.0729
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/36,bullet,True,3,transcript:107,107,0.8843,transcript:108,108,0.8824,transcript:95,95,0.8531,1,12,0.0019,0.0311
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/37,bullet,True,3,transcript:110,110,0.9192,transcript:121,121,0.8788,transcript:120,120,0.872,11,10,0.0405,0.0472
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/38,bullet,True,3,transcript:110,110,0.9451,transcript:113,113,0.9017,transcript:112,112,0.8896,3,2,0.0434,0.0555
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/39,bullet,True,3,transcript:113,113,0.9253,transcript:116,116,0.9209,transcript:117,117,0.9104,3,4,0.0043,0.0149
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/40,bullet,True,3,transcript:117,117,0.9158,transcript:116,116,0.9063,transcript:112,112,0.8943,1,5,0.0095,0.0215
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/41,bullet,True,3,transcript:109,109,0.9186,transcript:119,119,0.9056,transcript:113,113,0.8692,10,4,0.0129,0.0494
+005_recipe_section_transitions,yFpvytc5zGpM,詳細内容/42,bullet,True,3,transcript:115,115,0.8841,transcript:118,118,0.8786,transcript:114,114,0.8736,3,1,0.0055,0.0105
+005_recipe_section_transitions,yFpvytc5zGpM,重要ポイントまとめ/row/0,bullet,True,3,transcript:26,26,0.844,transcript:23,23,0.8442,transcript:24,24,0.8292,3,2,-0.0001,0.0148
+005_recipe_section_transitions,yFpvytc5zGpM,重要ポイントまとめ/row/1,bullet,True,3,transcript:43,43,0.8038,transcript:92,92,0.8229,transcript:72,72,0.7999,49,29,-0.0191,0.0039
+005_recipe_section_transitions,yFpvytc5zGpM,重要ポイントまとめ/row/2,bullet,True,3,transcript:93,93,0.8346,transcript:43,43,0.8252,transcript:26,26,0.8182,50,67,0.0094,0.0163
+005_recipe_section_transitions,yFpvytc5zGpM,重要ポイントまとめ/row/3,bullet,True,3,transcript:109,109,0.8073,transcript:78,78,0.8139,transcript:84,84,0.8118,31,25,-0.0066,-0.0045
+005_recipe_section_transitions,yFpvytc5zGpM,重要ポイントまとめ/row/4,bullet,True,3,transcript:113,113,0.8298,transcript:109,109,0.8257,transcript:110,110,0.8319,4,3,0.0041,-0.0021
+005_recipe_section_transitions,yFpvytc5zGpM,結論/0,paragraph,True,3,transcript:2,2,0.9211,transcript:79,79,0.9005,transcript:3,3,0.8813,77,1,0.0206,0.0399
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,/0,paragraph,True,3,transcript:5,5,0.8541,transcript:64,64,0.8529,transcript:69,69,0.8399,59,64,0.0012,0.0142
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,/1,paragraph,True,3,transcript:0,0,0.8839,transcript:1,1,0.8586,transcript:5,5,0.8585,1,5,0.0253,0.0254
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,導入/0,paragraph,True,3,transcript:1,1,0.8366,transcript:0,0,0.8151,transcript:2,2,0.8112,1,1,0.0215,0.0254
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/0,bullet,True,3,transcript:8,8,0.9335,transcript:7,7,0.8984,transcript:9,9,0.8977,1,1,0.0351,0.0358
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/1,paragraph,True,3,transcript:14,14,0.9394,transcript:9,9,0.9292,transcript:12,12,0.9288,5,2,0.0101,0.0106
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/2,bullet,True,3,transcript:15,15,0.9086,transcript:14,14,0.8883,transcript:11,11,0.8831,1,4,0.0203,0.0255
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/3,paragraph,True,3,transcript:48,48,0.8565,transcript:17,17,0.856,transcript:21,21,0.8501,31,27,0.0005,0.0064
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/4,bullet,True,3,transcript:27,27,0.8857,transcript:53,53,0.8797,transcript:39,39,0.8704,26,12,0.0061,0.0153
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/5,bullet,True,3,transcript:18,18,0.9054,transcript:20,20,0.8871,transcript:17,17,0.8834,2,1,0.0183,0.0219
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/6,bullet,True,3,transcript:22,22,0.9079,transcript:26,26,0.8964,transcript:23,23,0.8867,4,1,0.0115,0.0212
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/7,bullet,True,3,transcript:26,26,0.9338,transcript:27,27,0.9322,transcript:25,25,0.9275,1,1,0.0017,0.0064
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/8,bullet,True,3,transcript:39,39,0.9036,transcript:53,53,0.8851,transcript:29,29,0.8839,14,10,0.0185,0.0197
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/9,bullet,True,3,transcript:28,28,0.9378,transcript:37,37,0.9103,transcript:43,43,0.909,9,15,0.0275,0.0288
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/10,bullet,True,3,transcript:33,33,0.9542,transcript:31,31,0.9407,transcript:32,32,0.9129,2,1,0.0135,0.0414
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/11,bullet,True,3,transcript:37,37,0.9231,transcript:29,29,0.9166,transcript:43,43,0.9114,8,6,0.0066,0.0117
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/12,bullet,True,3,transcript:20,20,0.8549,transcript:53,53,0.8499,transcript:39,39,0.8465,33,19,0.005,0.0084
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/13,bullet,True,3,transcript:37,37,0.9148,transcript:39,39,0.9065,transcript:30,30,0.9059,2,7,0.0084,0.0089
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/14,bullet,True,3,transcript:53,53,0.9123,transcript:39,39,0.8977,transcript:29,29,0.8954,14,24,0.0147,0.0169
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/15,bullet,True,3,transcript:55,55,0.9402,transcript:56,56,0.8908,transcript:29,29,0.8732,1,26,0.0494,0.067
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/16,bullet,True,3,transcript:57,57,0.8779,transcript:61,61,0.8666,transcript:39,39,0.8655,4,18,0.0114,0.0125
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/17,bullet,True,3,transcript:59,59,0.9033,transcript:61,61,0.8937,transcript:58,58,0.8882,2,1,0.0096,0.0151
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/18,bullet,True,3,transcript:62,62,0.9139,transcript:61,61,0.8947,transcript:68,68,0.8675,1,6,0.0192,0.0463
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/19,bullet,True,3,transcript:68,68,0.8643,transcript:63,63,0.861,transcript:66,66,0.8531,5,2,0.0033,0.0112
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/20,bullet,True,3,transcript:64,64,0.897,transcript:66,66,0.8675,transcript:65,65,0.8497,2,1,0.0295,0.0473
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,詳細内容/21,bullet,True,3,transcript:66,66,0.9603,transcript:67,67,0.9005,transcript:64,64,0.8533,1,2,0.0598,0.107
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,重要ポイントまとめ/row/0,bullet,True,3,transcript:9,9,0.8376,transcript:10,10,0.8336,transcript:66,66,0.8304,1,57,0.0041,0.0072
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,重要ポイントまとめ/row/1,bullet,True,3,transcript:11,11,0.8301,transcript:10,10,0.8286,transcript:12,12,0.8248,1,1,0.0015,0.0053
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,重要ポイントまとめ/row/2,bullet,True,3,transcript:13,13,0.8386,transcript:12,12,0.8307,transcript:66,66,0.8271,1,53,0.0079,0.0115
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,重要ポイントまとめ/row/3,bullet,True,3,transcript:14,14,0.8442,transcript:66,66,0.8236,transcript:13,13,0.8146,52,1,0.0206,0.0296
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,重要ポイントまとめ/row/4,bullet,True,3,transcript:61,61,0.8254,transcript:60,60,0.7988,transcript:57,57,0.8149,1,4,0.0266,0.0105
+006_lecture_yamanaka_bracket_anchor,mQb3-7ABpBzo,結論/0,paragraph,True,3,transcript:1,1,0.8385,transcript:68,68,0.8737,transcript:5,5,0.8383,67,4,-0.0352,0.0002
+007_lecture_matayoshi_triple_bracket,4hdPYDUjlEw2,/0,paragraph,True,3,transcript:80,80,0.8781,transcript:67,67,0.8499,transcript:7,7,0.8553,13,73,0.0282,0.0228
+007_lecture_matayoshi_triple_bracket,4hdPYDUjlEw2,導入/0,paragraph,True,3,transcript:0,0,0.8325,transcript:1,1,0.7733,transcript:2,2,0.7381,1,2,0.0593,0.0945
+007_lecture_matayoshi_triple_bracket,4hdPYDUjlEw2,詳細内容/0,bullet,True,3,transcript:13,13,0.958,transcript:23,23,0.9258,transcript:16,16,0.8996,10,3,0.0322,0.0584
+007_lecture_matayoshi_triple_bracket,4hdPYDUjlEw2,詳細内容/1,bullet,True,3,transcript:26,26,0.9023,transcript:27,27,0.8581,transcript:24,24,0.8564,1,2,0.0442,0.0459
+007_lecture_matayoshi_triple_bracket,4hdPYDUjlEw2,詳細内容/2,bullet,True,3,transcript:28,28,0.9193,transcript:35,35,0.883,transcript:39,39,0.8745,7,11,0.0363,0.0448
+007_lecture_matayoshi_triple_bracket,4hdPYDUjlEw2,詳細内容/3,bullet,True,3,transcript:36,36,0.8969,transcript:34,34,0.8904,transcript:38,38,0.8772,2,2,0.0066,0.0198
+007_lecture_matayoshi_triple_bracket,4hdPYDUjlEw2,詳細内容/4,bullet,True,3,transcript:38,38,0.9065,transcript:40,40,0.9035,transcript:36,36,0.8902,2,2,0.003,0.0163
+007_lecture_matayoshi_triple_bracket,4hdPYDUjlEw2,詳細内容/5,bullet,True,3,transcript:40,40,0.9023,transcript:41,41,0.8906,transcript:30,30,0.8665,1,10,0.0118,0.0358
+007_lecture_matayoshi_triple_bracket,4hdPYDUjlEw2,詳細内容/6,bullet,True,3,transcript:47,47,0.9229,transcript:50,50,0.8979,transcript:26,26,0.8944,3,21,0.025,0.0286
+007_lecture_matayoshi_triple_bracket,4hdPYDUjlEw2,詳細内容/7,bullet,True,3,transcript:52,52,0.8905,transcript:51,51,0.8716,transcript:47,47,0.8615,1,5,0.019,0.029
+007_lecture_matayoshi_triple_bracket,4hdPYDUjlEw2,詳細内容/8,bullet,True,3,transcript:55,55,0.9107,transcript:54,54,0.8876,transcript:60,60,0.8817,1,5,0.0231,0.029
+007_lecture_matayoshi_triple_bracket,4hdPYDUjlEw2,詳細内容/9,bullet,True,3,transcript:63,63,0.9869,transcript:75,75,0.9098,transcript:64,64,0.8717,12,1,0.0772,0.1152
+007_lecture_matayoshi_triple_bracket,4hdPYDUjlEw2,詳細内容/10,bullet,True,3,transcript:77,77,0.895,transcript:79,79,0.8916,transcript:76,76,0.8842,2,1,0.0034,0.0107
+007_lecture_matayoshi_triple_bracket,4hdPYDUjlEw2,詳細内容/11,bullet,True,3,transcript:81,81,0.9149,transcript:80,80,0.8924,transcript:79,79,0.8542,1,2,0.0226,0.0607
+007_lecture_matayoshi_triple_bracket,4hdPYDUjlEw2,重要ポイントまとめ/row/0,bullet,True,3,transcript:26,26,0.841,transcript:7,7,0.8262,transcript:76,76,0.8206,19,50,0.0148,0.0204
+007_lecture_matayoshi_triple_bracket,4hdPYDUjlEw2,重要ポイントまとめ/row/1,bullet,True,3,transcript:54,54,0.8056,transcript:26,26,0.8288,transcript:47,47,0.8151,28,7,-0.0232,-0.0095
+007_lecture_matayoshi_triple_bracket,4hdPYDUjlEw2,重要ポイントまとめ/row/2,bullet,True,3,transcript:80,80,0.8273,transcript:76,76,0.8512,transcript:26,26,0.818,4,54,-0.0239,0.0094
+007_lecture_matayoshi_triple_bracket,4hdPYDUjlEw2,結論/0,paragraph,True,3,transcript:83,83,0.8795,transcript:82,82,0.856,transcript:7,7,0.8508,1,76,0.0236,0.0287
+008_lecture_honda_claim_vs_example,LGVpwmWf-2vd,/0,paragraph,True,3,transcript:42,42,0.8785,transcript:21,21,0.8647,transcript:83,83,0.8594,21,41,0.0138,0.019
+008_lecture_honda_claim_vs_example,LGVpwmWf-2vd,/1,paragraph,True,3,transcript:5,5,0.8692,transcript:49,49,0.8437,transcript:42,42,0.8636,44,37,0.0256,0.0057
+008_lecture_honda_claim_vs_example,LGVpwmWf-2vd,導入：スピーチの心構えと現状認識/0,paragraph,True,3,transcript:0,0,0.7963,transcript:2,2,0.7802,transcript:1,1,0.7705,2,1,0.0161,0.0258
+008_lecture_honda_claim_vs_example,LGVpwmWf-2vd,詳細内容：人生を切り開くための二つの指針/0,paragraph,True,3,transcript:20,20,0.8467,transcript:36,36,0.8361,transcript:53,53,0.8281,16,33,0.0106,0.0186
+008_lecture_honda_claim_vs_example,LGVpwmWf-2vd,詳細内容：人生を切り開くための二つの指針/1,bullet,True,3,transcript:28,28,0.8879,transcript:21,21,0.8875,transcript:22,22,0.8811,7,6,0.0004,0.0068
+008_lecture_honda_claim_vs_example,LGVpwmWf-2vd,詳細内容：人生を切り開くための二つの指針/2,bullet,True,3,transcript:36,36,0.9135,transcript:35,35,0.895,transcript:34,34,0.8766,1,2,0.0185,0.0368
+008_lecture_honda_claim_vs_example,LGVpwmWf-2vd,詳細内容：人生を切り開くための二つの指針/3,bullet,True,3,transcript:37,37,0.887,transcript:19,19,0.8743,transcript:39,39,0.8591,18,2,0.0127,0.0279
+008_lecture_honda_claim_vs_example,LGVpwmWf-2vd,詳細内容：人生を切り開くための二つの指針/4,bullet,True,3,transcript:42,42,0.8899,transcript:40,40,0.8841,transcript:51,51,0.8814,2,9,0.0057,0.0084
+008_lecture_honda_claim_vs_example,LGVpwmWf-2vd,詳細内容：人生を切り開くための二つの指針/5,bullet,True,3,transcript:53,53,0.9355,transcript:42,42,0.9194,transcript:52,52,0.8907,11,1,0.0161,0.0448
+008_lecture_honda_claim_vs_example,LGVpwmWf-2vd,詳細内容：人生を切り開くための二つの指針/6,bullet,True,3,transcript:46,46,0.9387,transcript:45,45,0.9132,transcript:38,38,0.8865,1,8,0.0255,0.0522
+008_lecture_honda_claim_vs_example,LGVpwmWf-2vd,詳細内容：人生を切り開くための二つの指針/7,bullet,True,3,transcript:65,65,0.8997,transcript:42,42,0.8954,transcript:44,44,0.8942,23,21,0.0044,0.0055
+008_lecture_honda_claim_vs_example,LGVpwmWf-2vd,詳細内容：人生を切り開くための二つの指針/8,bullet,True,3,transcript:77,77,0.9028,transcript:65,65,0.8881,transcript:70,70,0.8819,12,7,0.0147,0.0209
+008_lecture_honda_claim_vs_example,LGVpwmWf-2vd,詳細内容：人生を切り開くための二つの指針/9,bullet,True,3,transcript:69,69,0.9028,transcript:74,74,0.8945,transcript:71,71,0.8928,5,2,0.0083,0.01
+008_lecture_honda_claim_vs_example,LGVpwmWf-2vd,重要ポイントまとめ/row/0,bullet,True,3,transcript:21,21,0.8456,transcript:34,34,0.8313,transcript:22,22,0.8137,13,1,0.0143,0.0319
+008_lecture_honda_claim_vs_example,LGVpwmWf-2vd,重要ポイントまとめ/row/1,bullet,True,3,transcript:42,42,0.8322,transcript:69,69,0.8307,transcript:39,39,0.8267,27,3,0.0015,0.0055
+008_lecture_honda_claim_vs_example,LGVpwmWf-2vd,重要ポイントまとめ/row/2,bullet,True,3,transcript:69,69,0.8422,transcript:21,21,0.8143,transcript:74,74,0.8141,48,5,0.0279,0.0281
+008_lecture_honda_claim_vs_example,LGVpwmWf-2vd,結論/0,paragraph,True,3,transcript:69,69,0.8647,transcript:21,21,0.8619,transcript:42,42,0.8483,48,27,0.0028,0.0164
+009_lecture_jobs_crosslang,7yaTstDyaD--,/0,paragraph,True,3,transcript:58,58,0.8677,transcript:25,25,0.8485,transcript:29,29,0.8394,33,29,0.0192,0.0284
+009_lecture_jobs_crosslang,7yaTstDyaD--,/1,paragraph,True,3,transcript:22,22,0.849,transcript:25,25,0.845,transcript:0,0,0.8353,3,22,0.004,0.0137
+009_lecture_jobs_crosslang,7yaTstDyaD--,導入/0,paragraph,True,3,transcript:0,0,0.871,transcript:2,2,0.8268,transcript:1,1,0.8065,2,1,0.0442,0.0645
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/0,paragraph,True,3,transcript:17,17,0.8469,transcript:19,19,0.831,transcript:20,20,0.8273,2,3,0.0159,0.0196
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/1,bullet,True,3,transcript:7,7,0.8776,transcript:1,1,0.8738,transcript:19,19,0.8726,6,12,0.0037,0.005
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/2,bullet,True,3,transcript:4,4,0.8736,transcript:6,6,0.8721,transcript:3,3,0.8696,2,1,0.0015,0.004
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/3,bullet,True,3,transcript:6,6,0.8914,transcript:3,3,0.8567,transcript:4,4,0.8543,3,2,0.0346,0.0371
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/4,bullet,True,3,transcript:7,7,0.8916,transcript:9,9,0.882,transcript:18,18,0.8775,2,11,0.0096,0.0141
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/5,bullet,True,3,transcript:8,8,0.8838,transcript:7,7,0.88,transcript:2,2,0.8773,1,6,0.0038,0.0066
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/6,bullet,True,3,transcript:14,14,0.8653,transcript:7,7,0.8571,transcript:1,1,0.8555,7,13,0.0082,0.0098
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/7,bullet,True,3,transcript:8,8,0.873,transcript:9,9,0.8726,transcript:7,7,0.8714,1,1,0.0003,0.0016
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/8,bullet,True,3,transcript:15,15,0.8822,transcript:14,14,0.8785,transcript:19,19,0.8717,1,4,0.0038,0.0105
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/9,bullet,True,3,transcript:14,14,0.8339,transcript:12,12,0.8334,transcript:2,2,0.8304,2,12,0.0005,0.0035
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/10,bullet,True,3,transcript:17,17,0.9189,transcript:18,18,0.8927,transcript:15,15,0.8915,1,2,0.0262,0.0274
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/11,bullet,True,3,transcript:20,20,0.8792,transcript:21,21,0.8604,transcript:10,10,0.8363,1,10,0.0188,0.0429
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/12,paragraph,True,3,transcript:34,34,0.8523,transcript:22,22,0.8461,transcript:37,37,0.8336,12,3,0.0062,0.0187
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/13,bullet,True,3,transcript:29,29,0.9055,transcript:25,25,0.9015,transcript:33,33,0.8758,4,4,0.004,0.0296
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/14,bullet,True,3,transcript:23,23,0.9388,transcript:25,25,0.8984,transcript:32,32,0.8651,2,9,0.0405,0.0737
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/15,bullet,True,3,transcript:26,26,0.8708,transcript:29,29,0.8658,transcript:33,33,0.8655,3,7,0.005,0.0052
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/16,bullet,True,3,transcript:26,26,0.8652,transcript:33,33,0.86,transcript:37,37,0.8449,7,11,0.0052,0.0203
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/17,bullet,True,3,transcript:20,20,0.8586,transcript:22,22,0.8526,transcript:32,32,0.8504,2,12,0.006,0.0081
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/18,bullet,True,3,transcript:34,34,0.8709,transcript:28,28,0.8458,transcript:30,30,0.8437,6,4,0.0252,0.0272
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/19,bullet,True,3,transcript:30,30,0.9155,transcript:25,25,0.8703,transcript:29,29,0.864,5,1,0.0452,0.0515
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/20,bullet,True,3,transcript:32,32,0.9116,transcript:29,29,0.9097,transcript:25,25,0.8929,3,7,0.0019,0.0187
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/21,bullet,True,3,transcript:33,33,0.8756,transcript:24,24,0.8411,transcript:37,37,0.833,9,4,0.0345,0.0426
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/22,bullet,True,3,transcript:22,22,0.8426,transcript:37,37,0.842,transcript:32,32,0.8259,15,10,0.0006,0.0167
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/23,bullet,True,3,transcript:35,35,0.8853,transcript:21,21,0.8735,transcript:22,22,0.8706,14,13,0.0118,0.0147
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/24,paragraph,True,3,transcript:50,50,0.8581,transcript:41,41,0.8544,transcript:49,49,0.842,9,1,0.0037,0.0161
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/25,bullet,True,3,transcript:41,41,0.8746,transcript:37,37,0.861,transcript:50,50,0.8527,4,9,0.0136,0.0219
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/26,bullet,True,3,transcript:38,38,0.8944,transcript:50,50,0.8671,transcript:39,39,0.861,12,1,0.0273,0.0334
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/27,bullet,True,3,transcript:41,41,0.8826,transcript:40,40,0.8715,transcript:49,49,0.8657,1,8,0.0111,0.0169
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/28,bullet,True,3,transcript:46,46,0.8516,transcript:42,42,0.8457,transcript:56,56,0.8407,4,10,0.0059,0.0109
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/29,bullet,True,3,transcript:43,43,0.8786,transcript:42,42,0.8562,transcript:47,47,0.8502,1,4,0.0224,0.0284
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/30,bullet,True,3,transcript:47,47,0.9023,transcript:42,42,0.8931,transcript:43,43,0.8893,5,4,0.0092,0.013
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/31,bullet,True,3,transcript:50,50,0.8781,transcript:49,49,0.8639,transcript:41,41,0.8478,1,9,0.0142,0.0303
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/32,bullet,True,3,transcript:49,49,0.8634,transcript:50,50,0.8616,transcript:40,40,0.8527,1,9,0.0018,0.0107
+009_lecture_jobs_crosslang,7yaTstDyaD--,詳細内容/33,bullet,True,3,transcript:53,53,0.9006,transcript:52,52,0.8809,transcript:41,41,0.8489,1,12,0.0196,0.0517
+009_lecture_jobs_crosslang,7yaTstDyaD--,重要ポイントまとめ/row/0,bullet,True,3,transcript:49,49,0.8242,transcript:0,0,0.8217,transcript:22,22,0.8146,49,27,0.0025,0.0096
+009_lecture_jobs_crosslang,7yaTstDyaD--,重要ポイントまとめ/row/1,bullet,True,3,transcript:32,32,0.8248,transcript:30,30,0.8218,transcript:25,25,0.8269,2,7,0.003,-0.002
+009_lecture_jobs_crosslang,7yaTstDyaD--,重要ポイントまとめ/row/2,bullet,True,3,transcript:41,41,0.8197,transcript:40,40,0.814,transcript:50,50,0.8099,1,9,0.0057,0.0098
+009_lecture_jobs_crosslang,7yaTstDyaD--,結論/0,paragraph,True,3,transcript:58,58,0.8734,transcript:59,59,0.8444,transcript:57,57,0.8553,1,1,0.029,0.0181
+010_press_weather_agency_numeric,JNgHRLLuc5uN,/0,paragraph,True,3,transcript:0,0,0.941,transcript:3,3,0.9031,transcript:4,4,0.8877,3,4,0.0379,0.0533
+010_press_weather_agency_numeric,JNgHRLLuc5uN,/1,paragraph,True,3,transcript:0,0,0.925,transcript:22,22,0.9248,transcript:3,3,0.884,22,3,0.0002,0.041
+010_press_weather_agency_numeric,JNgHRLLuc5uN,1. 地震の概要と発生状況/0,bullet,True,3,transcript:4,4,0.9199,transcript:3,3,0.9123,transcript:32,32,0.8764,1,28,0.0076,0.0435
+010_press_weather_agency_numeric,JNgHRLLuc5uN,1. 地震の概要と発生状況/1,bullet,True,3,transcript:4,4,0.9213,transcript:30,30,0.8805,transcript:10,10,0.8673,26,6,0.0408,0.054
+010_press_weather_agency_numeric,JNgHRLLuc5uN,1. 地震の概要と発生状況/2,bullet,True,3,transcript:5,5,0.915,transcript:22,22,0.9113,transcript:7,7,0.8968,17,2,0.0037,0.0183
+010_press_weather_agency_numeric,JNgHRLLuc5uN,1. 地震の概要と発生状況/3,bullet,True,3,transcript:6,6,0.9577,transcript:47,47,0.9162,transcript:24,24,0.9122,41,18,0.0415,0.0455
+010_press_weather_agency_numeric,JNgHRLLuc5uN,1. 地震の概要と発生状況/4,bullet,True,3,transcript:7,7,0.9337,transcript:2,2,0.8858,transcript:1,1,0.9141,5,6,0.0479,0.0196
+010_press_weather_agency_numeric,JNgHRLLuc5uN,1. 地震の概要と発生状況/5,bullet,True,3,transcript:7,7,0.9163,transcript:1,1,0.9042,transcript:10,10,0.8941,6,3,0.0122,0.0222
+010_press_weather_agency_numeric,JNgHRLLuc5uN,1. 地震の概要と発生状況/6,bullet,True,3,transcript:71,71,0.9223,transcript:7,7,0.919,transcript:8,8,0.9124,64,63,0.0033,0.0099
+010_press_weather_agency_numeric,JNgHRLLuc5uN,1. 地震の概要と発生状況/7,bullet,True,3,transcript:10,10,0.8916,transcript:36,36,0.8812,transcript:2,2,0.8763,26,8,0.0104,0.0153
+010_press_weather_agency_numeric,JNgHRLLuc5uN,1. 地震の概要と発生状況/8,bullet,True,3,transcript:17,17,0.9393,transcript:18,18,0.9132,transcript:7,7,0.8947,1,10,0.0261,0.0447
+010_press_weather_agency_numeric,JNgHRLLuc5uN,1. 地震の概要と発生状況/9,bullet,True,3,transcript:5,5,0.9109,transcript:21,21,0.902,transcript:7,7,0.9012,16,2,0.0089,0.0097
+010_press_weather_agency_numeric,JNgHRLLuc5uN,2. 防災上の留意事項と今後の見通し/0,bullet,True,3,transcript:2,2,0.8793,transcript:1,1,0.8755,transcript:0,0,0.8371,1,2,0.0038,0.0422
+010_press_weather_agency_numeric,JNgHRLLuc5uN,2. 防災上の留意事項と今後の見通し/1,bullet,True,3,transcript:1,1,0.8742,transcript:2,2,0.846,transcript:0,0,0.8424,1,1,0.0282,0.0318
+010_press_weather_agency_numeric,JNgHRLLuc5uN,2. 防災上の留意事項と今後の見通し/2,bullet,True,3,transcript:2,2,0.9,transcript:1,1,0.8769,transcript:3,3,0.8728,1,1,0.023,0.0272
+010_press_weather_agency_numeric,JNgHRLLuc5uN,2. 防災上の留意事項と今後の見通し/3,bullet,True,3,transcript:2,2,0.9038,transcript:1,1,0.8836,transcript:3,3,0.8804,1,1,0.0202,0.0234
+010_press_weather_agency_numeric,JNgHRLLuc5uN,2. 防災上の留意事項と今後の見通し/4,bullet,True,3,transcript:16,16,0.9301,transcript:26,26,0.9277,transcript:15,15,0.914,10,1,0.0024,0.0161
+010_press_weather_agency_numeric,JNgHRLLuc5uN,2. 防災上の留意事項と今後の見通し/5,bullet,True,3,transcript:31,31,0.9146,transcript:74,74,0.9037,transcript:61,61,0.8952,43,30,0.0108,0.0194
+010_press_weather_agency_numeric,JNgHRLLuc5uN,2. 防災上の留意事項と今後の見通し/6,bullet,True,3,transcript:40,40,0.9892,transcript:74,74,0.9435,transcript:13,13,0.9147,34,27,0.0457,0.0745
+010_press_weather_agency_numeric,JNgHRLLuc5uN,2. 防災上の留意事項と今後の見通し/7,bullet,True,3,transcript:37,37,0.9514,transcript:13,13,0.9069,transcript:2,2,0.8989,24,35,0.0444,0.0525
+010_press_weather_agency_numeric,JNgHRLLuc5uN,3. 質疑応答における主な論点/0,paragraph,True,3,transcript:53,53,0.9031,transcript:57,57,0.8985,transcript:67,67,0.8974,4,14,0.0045,0.0057
+010_press_weather_agency_numeric,JNgHRLLuc5uN,3. 質疑応答における主な論点/1,bullet,True,3,transcript:48,48,0.9104,transcript:47,47,0.9061,transcript:66,66,0.9048,1,18,0.0043,0.0056
+010_press_weather_agency_numeric,JNgHRLLuc5uN,3. 質疑応答における主な論点/2,bullet,True,3,transcript:47,47,0.9186,transcript:48,48,0.917,transcript:68,68,0.9051,1,21,0.0016,0.0135
+010_press_weather_agency_numeric,JNgHRLLuc5uN,3. 質疑応答における主な論点/3,bullet,True,3,transcript:53,53,0.9063,transcript:48,48,0.9062,transcript:47,47,0.9061,5,6,0.0001,0.0001
+010_press_weather_agency_numeric,JNgHRLLuc5uN,3. 質疑応答における主な論点/4,bullet,True,3,transcript:50,50,0.8697,transcript:67,67,0.8679,transcript:48,48,0.8607,17,2,0.0018,0.009
+010_press_weather_agency_numeric,JNgHRLLuc5uN,3. 質疑応答における主な論点/5,bullet,True,3,transcript:51,51,0.9111,transcript:67,67,0.8706,transcript:66,66,0.8553,16,15,0.0405,0.0558
+010_press_weather_agency_numeric,JNgHRLLuc5uN,3. 質疑応答における主な論点/6,bullet,True,3,transcript:65,65,0.8837,transcript:67,67,0.8735,transcript:53,53,0.8688,2,12,0.0102,0.0149
+010_press_weather_agency_numeric,JNgHRLLuc5uN,3. 質疑応答における主な論点/7,bullet,True,3,transcript:56,56,0.9153,transcript:53,53,0.8822,transcript:70,70,0.8726,3,14,0.0331,0.0427
+010_press_weather_agency_numeric,JNgHRLLuc5uN,3. 質疑応答における主な論点/8,bullet,True,3,transcript:53,53,0.9059,transcript:56,56,0.8984,transcript:70,70,0.8951,3,17,0.0075,0.0108
+010_press_weather_agency_numeric,JNgHRLLuc5uN,4. 結論/0,paragraph,True,3,transcript:12,12,0.9066,transcript:11,11,0.8985,transcript:14,14,0.8871,1,2,0.0081,0.0195
+011_press_onoda_nested_bracket,BGvpgKtSfILh,/0,paragraph,True,3,transcript:76,76,0.8894,transcript:9,9,0.8808,transcript:50,50,0.871,67,26,0.0086,0.0184
+011_press_onoda_nested_bracket,BGvpgKtSfILh,/1,paragraph,True,3,transcript:5,5,0.8764,transcript:0,0,0.8775,transcript:47,47,0.8533,5,42,-0.0011,0.0231
+011_press_onoda_nested_bracket,BGvpgKtSfILh,1. 人工知能戦略に関する報告（人工知能戦略担当大臣）/0,bullet,True,3,transcript:4,4,0.8978,transcript:1,1,0.8753,transcript:3,3,0.8457,3,1,0.0225,0.0521
+011_press_onoda_nested_bracket,BGvpgKtSfILh,1. 人工知能戦略に関する報告（人工知能戦略担当大臣）/1,bullet,True,3,transcript:1,1,0.9668,transcript:2,2,0.9099,transcript:3,3,0.8848,1,2,0.0569,0.0819
+011_press_onoda_nested_bracket,BGvpgKtSfILh,1. 人工知能戦略に関する報告（人工知能戦略担当大臣）/2,bullet,True,3,transcript:3,3,0.9015,transcript:2,2,0.879,transcript:4,4,0.8734,1,1,0.0225,0.0282
+011_press_onoda_nested_bracket,BGvpgKtSfILh,1. 人工知能戦略に関する報告（人工知能戦略担当大臣）/3,bullet,True,3,transcript:4,4,0.9306,transcript:3,3,0.8893,transcript:1,1,0.8842,1,3,0.0413,0.0464
+011_press_onoda_nested_bracket,BGvpgKtSfILh,2. 科学技術・経済安全保障に関する報告（科学技術政策担当大臣および経済安全保障担当大臣）/0,bullet,True,3,transcript:5,5,0.8934,transcript:6,6,0.8702,transcript:7,7,0.823,1,2,0.0232,0.0704
+011_press_onoda_nested_bracket,BGvpgKtSfILh,2. 科学技術・経済安全保障に関する報告（科学技術政策担当大臣および経済安全保障担当大臣）/1,bullet,True,3,transcript:5,5,0.9591,transcript:6,6,0.895,transcript:7,7,0.8871,1,2,0.0642,0.072
+011_press_onoda_nested_bracket,BGvpgKtSfILh,2. 科学技術・経済安全保障に関する報告（科学技術政策担当大臣および経済安全保障担当大臣）/2,bullet,True,3,transcript:6,6,0.9636,transcript:5,5,0.8868,transcript:7,7,0.8846,1,1,0.0767,0.079
+011_press_onoda_nested_bracket,BGvpgKtSfILh,2. 科学技術・経済安全保障に関する報告（科学技術政策担当大臣および経済安全保障担当大臣）/3,bullet,True,3,transcript:8,8,0.8727,transcript:7,7,0.8431,transcript:5,5,0.8329,1,3,0.0296,0.0398
+011_press_onoda_nested_bracket,BGvpgKtSfILh,2. 科学技術・経済安全保障に関する報告（科学技術政策担当大臣および経済安全保障担当大臣）/4,bullet,True,3,transcript:7,7,0.925,transcript:5,5,0.893,transcript:8,8,0.8701,2,1,0.032,0.0549
+011_press_onoda_nested_bracket,BGvpgKtSfILh,2. 科学技術・経済安全保障に関する報告（科学技術政策担当大臣および経済安全保障担当大臣）/5,bullet,True,3,transcript:4,4,0.8515,transcript:3,3,0.8498,transcript:9,9,0.8443,1,5,0.0016,0.0072
+011_press_onoda_nested_bracket,BGvpgKtSfILh,2. 科学技術・経済安全保障に関する報告（科学技術政策担当大臣および経済安全保障担当大臣）/6,bullet,True,3,transcript:9,9,0.9265,transcript:5,5,0.8879,transcript:8,8,0.8659,4,1,0.0386,0.0606
+011_press_onoda_nested_bracket,BGvpgKtSfILh,3. 健康・医療に関する質疑応答（東北大学関連）/0,bullet,True,3,transcript:14,14,0.8717,transcript:10,10,0.8646,transcript:11,11,0.8588,4,3,0.0071,0.0129
+011_press_onoda_nested_bracket,BGvpgKtSfILh,3. 健康・医療に関する質疑応答（東北大学関連）/1,bullet,True,3,transcript:12,12,0.9111,transcript:11,11,0.9014,transcript:13,13,0.9007,1,1,0.0097,0.0105
+011_press_onoda_nested_bracket,BGvpgKtSfILh,3. 健康・医療に関する質疑応答（東北大学関連）/2,bullet,True,3,transcript:9,9,0.8641,transcript:16,16,0.8379,transcript:8,8,0.8246,7,1,0.0261,0.0394
+011_press_onoda_nested_bracket,BGvpgKtSfILh,3. 健康・医療に関する質疑応答（東北大学関連）/3,bullet,True,3,transcript:13,13,0.9793,transcript:16,16,0.9445,transcript:12,12,0.9119,3,1,0.0348,0.0674
+011_press_onoda_nested_bracket,BGvpgKtSfILh,3. 健康・医療に関する質疑応答（東北大学関連）/4,bullet,True,3,transcript:14,14,0.9113,transcript:11,11,0.8534,transcript:13,13,0.853,3,1,0.0579,0.0583
+011_press_onoda_nested_bracket,BGvpgKtSfILh,3. 健康・医療に関する質疑応答（東北大学関連）/5,bullet,True,3,transcript:16,16,0.9696,transcript:13,13,0.9608,transcript:9,9,0.8784,3,7,0.0088,0.0913
+011_press_onoda_nested_bracket,BGvpgKtSfILh,4. 宇宙開発・国際協力に関する質疑応答（経済安全保障担当大臣）/0,bullet,True,3,transcript:18,18,0.8724,transcript:17,17,0.8613,transcript:22,22,0.8394,1,4,0.0111,0.033
+011_press_onoda_nested_bracket,BGvpgKtSfILh,4. 宇宙開発・国際協力に関する質疑応答（経済安全保障担当大臣）/1,bullet,True,3,transcript:22,22,0.9356,transcript:21,21,0.9099,transcript:18,18,0.8903,1,4,0.0257,0.0452
+011_press_onoda_nested_bracket,BGvpgKtSfILh,4. 宇宙開発・国際協力に関する質疑応答（経済安全保障担当大臣）/2,bullet,True,3,transcript:23,23,0.887,transcript:24,24,0.8709,transcript:27,27,0.8507,1,4,0.0161,0.0363
+011_press_onoda_nested_bracket,BGvpgKtSfILh,4. 宇宙開発・国際協力に関する質疑応答（経済安全保障担当大臣）/3,bullet,True,3,transcript:28,28,0.8665,transcript:25,25,0.8611,transcript:23,23,0.8607,3,5,0.0054,0.0058
+011_press_onoda_nested_bracket,BGvpgKtSfILh,4. 宇宙開発・国際協力に関する質疑応答（経済安全保障担当大臣）/4,bullet,True,3,transcript:25,25,0.9169,transcript:26,26,0.9006,transcript:24,24,0.8938,1,1,0.0163,0.0231
+011_press_onoda_nested_bracket,BGvpgKtSfILh,4. 宇宙開発・国際協力に関する質疑応答（経済安全保障担当大臣）/5,bullet,True,3,transcript:28,28,0.8727,transcript:26,26,0.8597,transcript:24,24,0.8574,2,4,0.013,0.0153
+011_press_onoda_nested_bracket,BGvpgKtSfILh,4. 宇宙開発・国際協力に関する質疑応答（経済安全保障担当大臣）/6,bullet,True,3,transcript:23,23,0.9148,transcript:24,24,0.9056,transcript:17,17,0.9014,1,6,0.0092,0.0134
+011_press_onoda_nested_bracket,BGvpgKtSfILh,4. 宇宙開発・国際協力に関する質疑応答（経済安全保障担当大臣）/7,bullet,True,3,transcript:28,28,0.9241,transcript:26,26,0.9073,transcript:24,24,0.9056,2,4,0.0168,0.0185
+011_press_onoda_nested_bracket,BGvpgKtSfILh,4. 宇宙開発・国際協力に関する質疑応答（経済安全保障担当大臣）/8,bullet,True,3,transcript:20,20,0.9146,transcript:29,29,0.9087,transcript:28,28,0.8921,9,8,0.0059,0.0225
+011_press_onoda_nested_bracket,BGvpgKtSfILh,5. 海賊版対策に関する質疑応答（文化庁担当者）/0,bullet,True,3,transcript:31,31,0.9154,transcript:33,33,0.8726,transcript:40,40,0.8615,2,9,0.0428,0.0539
+011_press_onoda_nested_bracket,BGvpgKtSfILh,5. 海賊版対策に関する質疑応答（文化庁担当者）/1,bullet,True,3,transcript:33,33,0.9366,transcript:35,35,0.8967,transcript:30,30,0.8952,2,3,0.0399,0.0414
+011_press_onoda_nested_bracket,BGvpgKtSfILh,5. 海賊版対策に関する質疑応答（文化庁担当者）/2,bullet,True,3,transcript:37,37,0.8889,transcript:38,38,0.8716,transcript:33,33,0.8698,1,4,0.0172,0.0191
+011_press_onoda_nested_bracket,BGvpgKtSfILh,5. 海賊版対策に関する質疑応答（文化庁担当者）/3,paragraph,True,3,transcript:36,36,0.9371,transcript:37,37,0.9266,transcript:35,35,0.921,1,1,0.0105,0.0161
+011_press_onoda_nested_bracket,BGvpgKtSfILh,5. 海賊版対策に関する質疑応答（文化庁担当者）/4,bullet,True,3,transcript:42,42,0.862,transcript:28,28,0.843,transcript:38,38,0.8378,14,4,0.0189,0.0241
+011_press_onoda_nested_bracket,BGvpgKtSfILh,5. 海賊版対策に関する質疑応答（文化庁担当者）/5,bullet,True,3,transcript:39,39,0.9678,transcript:35,35,0.8748,transcript:34,34,0.8597,4,5,0.093,0.1081
+011_press_onoda_nested_bracket,BGvpgKtSfILh,5. 海賊版対策に関する質疑応答（文化庁担当者）/6,bullet,True,3,transcript:32,32,0.9181,transcript:40,40,0.8886,transcript:42,42,0.8862,8,10,0.0295,0.0318
+011_press_onoda_nested_bracket,BGvpgKtSfILh,6. 重要物資の安定確保に関する質疑応答（経済産業大臣）/0,bullet,True,3,transcript:45,45,0.8709,transcript:48,48,0.8639,transcript:49,49,0.8599,3,4,0.007,0.011
+011_press_onoda_nested_bracket,BGvpgKtSfILh,6. 重要物資の安定確保に関する質疑応答（経済産業大臣）/1,bullet,True,3,transcript:43,43,0.9364,transcript:49,49,0.9011,transcript:46,46,0.8928,6,3,0.0353,0.0436
+011_press_onoda_nested_bracket,BGvpgKtSfILh,6. 重要物資の安定確保に関する質疑応答（経済産業大臣）/2,bullet,True,3,transcript:45,45,0.8639,transcript:48,48,0.8613,transcript:50,50,0.8478,3,5,0.0026,0.0161
+011_press_onoda_nested_bracket,BGvpgKtSfILh,6. 重要物資の安定確保に関する質疑応答（経済産業大臣）/3,bullet,True,3,transcript:46,46,0.9342,transcript:47,47,0.9045,transcript:49,49,0.9034,1,3,0.0297,0.0308
+011_press_onoda_nested_bracket,BGvpgKtSfILh,6. 重要物資の安定確保に関する質疑応答（経済産業大臣）/4,bullet,True,3,transcript:49,49,0.9195,transcript:44,44,0.8979,transcript:47,47,0.8966,5,2,0.0216,0.0229
+011_press_onoda_nested_bracket,BGvpgKtSfILh,6. 重要物資の安定確保に関する質疑応答（経済産業大臣）/5,bullet,True,3,transcript:49,49,0.9326,transcript:47,47,0.9057,transcript:50,50,0.9047,2,1,0.0269,0.0279
+011_press_onoda_nested_bracket,BGvpgKtSfILh,7. AI利用に関する質疑応答（AI担当大臣）/0,bullet,True,3,transcript:58,58,0.8845,transcript:59,59,0.8343,transcript:53,53,0.8326,1,5,0.0501,0.0519
+011_press_onoda_nested_bracket,BGvpgKtSfILh,7. AI利用に関する質疑応答（AI担当大臣）/1,bullet,True,3,transcript:58,58,0.9353,transcript:59,59,0.9214,transcript:61,61,0.871,1,3,0.0139,0.0643
+011_press_onoda_nested_bracket,BGvpgKtSfILh,7. AI利用に関する質疑応答（AI担当大臣）/2,bullet,True,3,transcript:64,64,0.8274,transcript:57,57,0.8145,transcript:60,60,0.8124,7,4,0.0129,0.015
+011_press_onoda_nested_bracket,BGvpgKtSfILh,7. AI利用に関する質疑応答（AI担当大臣）/3,bullet,True,3,transcript:60,60,0.9563,transcript:61,61,0.8996,transcript:58,58,0.8779,1,2,0.0567,0.0783
+011_press_onoda_nested_bracket,BGvpgKtSfILh,7. AI利用に関する質疑応答（AI担当大臣）/4,bullet,True,3,transcript:61,61,0.9396,transcript:60,60,0.9025,transcript:59,59,0.8857,1,2,0.037,0.0539
+011_press_onoda_nested_bracket,BGvpgKtSfILh,7. AI利用に関する質疑応答（AI担当大臣）/5,bullet,True,3,transcript:62,62,0.8688,transcript:55,55,0.8499,transcript:59,59,0.8495,7,3,0.0188,0.0193
+011_press_onoda_nested_bracket,BGvpgKtSfILh,8. 政治的発言に関する質疑応答（AI担当大臣）/0,bullet,True,3,transcript:64,64,0.8581,transcript:69,69,0.8383,transcript:70,70,0.821,5,6,0.0198,0.0371
+011_press_onoda_nested_bracket,BGvpgKtSfILh,8. 政治的発言に関する質疑応答（AI担当大臣）/1,bullet,True,3,transcript:64,64,0.9206,transcript:69,69,0.9008,transcript:65,65,0.8809,5,1,0.0197,0.0397
+011_press_onoda_nested_bracket,BGvpgKtSfILh,8. 政治的発言に関する質疑応答（AI担当大臣）/2,bullet,True,3,transcript:66,66,0.8756,transcript:68,68,0.8638,transcript:71,71,0.8622,2,5,0.0117,0.0133
+011_press_onoda_nested_bracket,BGvpgKtSfILh,8. 政治的発言に関する質疑応答（AI担当大臣）/3,bullet,True,3,transcript:72,72,0.8347,transcript:76,76,0.8338,transcript:69,69,0.8246,4,3,0.0009,0.0101
+011_press_onoda_nested_bracket,BGvpgKtSfILh,8. 政治的発言に関する質疑応答（AI担当大臣）/4,bullet,True,3,transcript:71,71,0.9002,transcript:73,73,0.8922,transcript:69,69,0.8898,2,2,0.0079,0.0103
+011_press_onoda_nested_bracket,BGvpgKtSfILh,8. 政治的発言に関する質疑応答（AI担当大臣）/5,bullet,True,3,transcript:73,73,0.8754,transcript:72,72,0.8735,transcript:74,74,0.8534,1,1,0.0019,0.022
+011_press_onoda_nested_bracket,BGvpgKtSfILh,8. 政治的発言に関する質疑応答（AI担当大臣）/6,paragraph,True,3,transcript:76,76,0.8593,transcript:69,69,0.8503,transcript:64,64,0.8448,7,12,0.009,0.0145
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,/0,paragraph,True,3,transcript:1,1,0.8606,transcript:35,35,0.8578,transcript:32,32,0.8563,34,31,0.0028,0.0042
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,/1,paragraph,True,3,transcript:1,1,0.8628,transcript:47,47,0.8396,transcript:2,2,0.8824,46,1,0.0232,-0.0195
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📈 市場の直近の動向（米国株・為替）/0,bullet,True,3,transcript:1,1,0.8624,transcript:2,2,0.8481,transcript:9,9,0.8416,1,8,0.0143,0.0208
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📈 市場の直近の動向（米国株・為替）/1,bullet,True,3,transcript:2,2,0.9332,transcript:4,4,0.9064,transcript:1,1,0.8908,2,1,0.0268,0.0424
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📈 市場の直近の動向（米国株・為替）/2,bullet,True,3,transcript:1,1,0.8647,transcript:9,9,0.8603,transcript:3,3,0.86,8,2,0.0045,0.0048
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📈 市場の直近の動向（米国株・為替）/3,bullet,True,3,transcript:3,3,0.8713,transcript:8,8,0.843,transcript:9,9,0.832,5,6,0.0283,0.0393
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📈 市場の直近の動向（米国株・為替）/4,bullet,True,3,transcript:3,3,0.9472,transcript:4,4,0.8745,transcript:9,9,0.8504,1,6,0.0727,0.0968
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📈 市場の直近の動向（米国株・為替）/5,bullet,True,3,transcript:9,9,0.8235,transcript:6,6,0.8166,transcript:8,8,0.8143,3,1,0.0069,0.0092
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📈 市場の直近の動向（米国株・為替）/6,bullet,True,3,transcript:2,2,0.8882,transcript:7,7,0.8789,transcript:5,5,0.8762,5,3,0.0093,0.012
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📈 市場の直近の動向（米国株・為替）/7,bullet,True,3,transcript:7,7,0.9435,transcript:6,6,0.8729,transcript:5,5,0.8573,1,2,0.0706,0.0862
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📊 主要指標と市場の構造分析/0,bullet,True,3,transcript:8,8,0.9213,transcript:15,15,0.8914,transcript:39,39,0.8829,7,31,0.0298,0.0384
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📊 主要指標と市場の構造分析/1,bullet,True,3,transcript:35,35,0.8333,transcript:32,32,0.8151,transcript:3,3,0.8058,3,32,0.0182,0.0275
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📊 主要指標と市場の構造分析/2,bullet,True,3,transcript:11,11,0.8632,transcript:10,10,0.856,transcript:12,12,0.8395,1,1,0.0072,0.0237
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📊 主要指標と市場の構造分析/3,bullet,True,3,transcript:10,10,0.9656,transcript:12,12,0.9145,transcript:11,11,0.8867,2,1,0.0511,0.0789
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📊 主要指標と市場の構造分析/4,bullet,True,3,transcript:11,11,0.9249,transcript:4,4,0.9045,transcript:12,12,0.8951,7,1,0.0205,0.0298
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📊 主要指標と市場の構造分析/5,bullet,True,3,transcript:10,10,0.9235,transcript:12,12,0.9076,transcript:13,13,0.8914,2,3,0.0159,0.0321
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📊 主要指標と市場の構造分析/6,bullet,True,3,transcript:13,13,0.8686,transcript:15,15,0.8381,transcript:14,14,0.8311,2,1,0.0304,0.0375
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📊 主要指標と市場の構造分析/7,bullet,True,3,transcript:15,15,0.9435,transcript:14,14,0.9128,transcript:33,33,0.8964,1,18,0.0306,0.047
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📊 主要指標と市場の構造分析/8,bullet,True,3,transcript:13,13,0.8946,transcript:15,15,0.8818,transcript:16,16,0.8691,2,3,0.0128,0.0255
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📊 主要指標と市場の構造分析/9,bullet,True,3,transcript:17,17,0.9212,transcript:11,11,0.8841,transcript:4,4,0.8758,6,13,0.0371,0.0454
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📊 主要指標と市場の構造分析/10,bullet,True,3,transcript:18,18,0.9104,transcript:30,30,0.8773,transcript:6,6,0.8744,12,12,0.033,0.0359
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📊 主要指標と市場の構造分析/11,bullet,True,3,transcript:18,18,0.8338,transcript:28,28,0.8998,transcript:20,20,0.8515,10,2,-0.066,-0.0177
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📊 主要指標と市場の構造分析/12,bullet,True,3,transcript:19,19,0.9353,transcript:20,20,0.9022,transcript:28,28,0.8611,1,9,0.0331,0.0742
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📊 主要指標と市場の構造分析/13,bullet,True,3,transcript:28,28,0.9261,transcript:29,29,0.904,transcript:39,39,0.887,1,11,0.0221,0.0391
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📊 主要指標と市場の構造分析/14,bullet,True,3,transcript:31,31,0.8242,transcript:32,32,0.8278,transcript:28,28,0.8262,1,3,-0.0036,-0.0021
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📊 主要指標と市場の構造分析/15,bullet,True,3,transcript:31,31,0.9099,transcript:30,30,0.9068,transcript:6,6,0.8691,1,25,0.0031,0.0407
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,📊 主要指標と市場の構造分析/16,bullet,True,3,transcript:32,32,0.9177,transcript:31,31,0.8847,transcript:9,9,0.87,1,23,0.033,0.0478
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,💡 投資戦略と市場の評価軸/0,bullet,True,3,transcript:2,2,0.8129,transcript:1,1,0.8077,transcript:0,0,0.793,1,2,0.0051,0.0199
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,💡 投資戦略と市場の評価軸/1,bullet,True,3,transcript:2,2,0.8732,transcript:1,1,0.8463,transcript:0,0,0.8368,1,2,0.0269,0.0364
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,💡 投資戦略と市場の評価軸/2,bullet,True,3,transcript:2,2,0.8535,transcript:1,1,0.8423,transcript:3,3,0.8401,1,1,0.0111,0.0134
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,💡 投資戦略と市場の評価軸/3,bullet,True,3,transcript:44,44,0.9156,transcript:46,46,0.8404,transcript:45,45,0.8272,2,1,0.0753,0.0884
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,💡 投資戦略と市場の評価軸/4,bullet,True,3,transcript:47,47,0.954,transcript:48,48,0.9011,transcript:44,44,0.8798,1,3,0.0529,0.0743
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,💡 投資戦略と市場の評価軸/5,bullet,True,3,transcript:47,47,0.8947,transcript:49,49,0.8879,transcript:6,6,0.8734,2,41,0.0069,0.0213
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,💡 投資戦略と市場の評価軸/6,bullet,True,3,transcript:50,50,0.9076,transcript:47,47,0.8723,transcript:6,6,0.8691,3,44,0.0353,0.0385
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,💡 投資戦略と市場の評価軸/7,bullet,True,3,transcript:51,51,0.9341,transcript:44,44,0.8775,transcript:6,6,0.869,7,45,0.0566,0.0651
+012_commentary_snp_numeric_triple,Y-cjKrgtON1X,結論/0,paragraph,True,3,transcript:47,47,0.847,transcript:7,7,0.8572,transcript:2,2,0.8953,40,45,-0.0102,-0.0483
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,/0,paragraph,True,3,transcript:77,77,0.9248,transcript:0,0,0.9178,transcript:3,3,0.8788,77,74,0.0071,0.0461
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,/1,paragraph,True,3,transcript:0,0,0.937,transcript:77,77,0.9461,transcript:1,1,0.9331,77,1,-0.0092,0.0039
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/0,paragraph,True,3,transcript:3,3,0.9404,transcript:1,1,0.9071,transcript:2,2,0.8903,2,1,0.0334,0.0502
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/1,bullet,True,3,transcript:4,4,0.9446,transcript:3,3,0.9322,transcript:8,8,0.8671,1,4,0.0124,0.0775
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/2,bullet,True,3,transcript:5,5,0.9424,transcript:6,6,0.8714,transcript:3,3,0.8699,1,2,0.0709,0.0725
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/3,bullet,True,3,transcript:6,6,0.9434,transcript:5,5,0.8454,transcript:4,4,0.8447,1,2,0.0981,0.0988
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/4,bullet,True,3,transcript:6,6,0.9035,transcript:14,14,0.8935,transcript:9,9,0.8828,8,3,0.0101,0.0208
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/5,bullet,True,3,transcript:7,7,0.9523,transcript:14,14,0.8712,transcript:73,73,0.8662,7,66,0.0811,0.086
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/6,bullet,True,3,transcript:7,7,0.8929,transcript:73,73,0.8664,transcript:18,18,0.8589,66,11,0.0265,0.0339
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/7,bullet,True,3,transcript:8,8,0.8821,transcript:7,7,0.8459,transcript:78,78,0.8412,1,70,0.0363,0.0409
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/8,bullet,True,3,transcript:7,7,0.8772,transcript:25,25,0.8598,transcript:27,27,0.8586,18,20,0.0174,0.0185
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/9,bullet,True,3,transcript:32,32,0.9373,transcript:8,8,0.91,transcript:11,11,0.8834,24,21,0.0273,0.0539
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/10,bullet,True,3,transcript:8,8,0.8631,transcript:49,49,0.8558,transcript:28,28,0.854,41,20,0.0072,0.0091
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/11,bullet,True,3,transcript:8,8,0.945,transcript:9,9,0.8981,transcript:13,13,0.8858,1,5,0.0469,0.0592
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/12,bullet,True,3,transcript:9,9,0.9732,transcript:19,19,0.8971,transcript:13,13,0.8919,10,4,0.0762,0.0813
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/13,bullet,True,3,transcript:10,10,0.9172,transcript:13,13,0.8848,transcript:49,49,0.8836,3,39,0.0324,0.0336
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/14,bullet,True,3,transcript:10,10,0.9512,transcript:11,11,0.8951,transcript:40,40,0.8766,1,30,0.0561,0.0746
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/15,bullet,True,3,transcript:70,70,0.8553,transcript:27,27,0.8533,transcript:83,83,0.8496,43,13,0.002,0.0057
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/16,bullet,True,3,transcript:12,12,0.9469,transcript:69,69,0.9147,transcript:9,9,0.8989,57,3,0.0322,0.048
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/17,bullet,True,3,transcript:12,12,0.9098,transcript:14,14,0.8949,transcript:10,10,0.885,2,2,0.0149,0.0247
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/18,bullet,True,3,transcript:13,13,0.9408,transcript:10,10,0.9093,transcript:15,15,0.8932,3,2,0.0316,0.0476
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/19,bullet,True,3,transcript:13,13,0.957,transcript:46,46,0.9144,transcript:45,45,0.8978,33,32,0.0426,0.0592
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/20,bullet,True,3,transcript:14,14,0.9572,transcript:9,9,0.8788,transcript:15,15,0.8722,5,1,0.0784,0.085
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/21,bullet,True,3,transcript:14,14,0.9542,transcript:75,75,0.9093,transcript:10,10,0.8822,61,4,0.0448,0.072
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/22,bullet,True,3,transcript:15,15,0.9632,transcript:9,9,0.8725,transcript:8,8,0.8714,6,7,0.0907,0.0918
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/23,bullet,True,3,transcript:16,16,0.8634,transcript:70,70,0.8611,transcript:25,25,0.861,54,9,0.0022,0.0024
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/24,bullet,True,3,transcript:15,15,0.8781,transcript:17,17,0.8644,transcript:40,40,0.8598,2,25,0.0137,0.0183
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/25,bullet,True,3,transcript:16,16,0.9181,transcript:17,17,0.904,transcript:40,40,0.8872,1,24,0.0141,0.0309
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/26,bullet,True,3,transcript:16,16,0.9682,transcript:15,15,0.89,transcript:40,40,0.8761,1,24,0.0782,0.0922
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/27,bullet,True,3,transcript:17,17,0.9418,transcript:40,40,0.9062,transcript:15,15,0.8893,23,2,0.0356,0.0525
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,1. パッチ7.5の全体概要と主要コンテンツ/28,bullet,True,3,transcript:17,17,0.925,transcript:65,65,0.8731,transcript:40,40,0.8687,48,23,0.0519,0.0563
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/0,bullet,True,3,transcript:20,20,0.9294,transcript:31,31,0.8467,transcript:30,30,0.8441,11,10,0.0827,0.0853
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/1,bullet,True,3,transcript:21,21,0.9063,transcript:20,20,0.8665,transcript:31,31,0.8627,1,10,0.0398,0.0436
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/2,bullet,True,3,transcript:21,21,0.9015,transcript:27,27,0.8506,transcript:33,33,0.8465,6,12,0.0509,0.055
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/3,bullet,True,3,transcript:21,21,0.9162,transcript:27,27,0.8832,transcript:28,28,0.8571,6,7,0.0329,0.0591
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/4,bullet,True,3,transcript:22,22,0.975,transcript:27,27,0.8514,transcript:26,26,0.8417,5,4,0.1236,0.1333
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/5,bullet,True,3,transcript:23,23,0.9521,transcript:27,27,0.8926,transcript:28,28,0.8825,4,5,0.0595,0.0696
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/6,bullet,True,3,transcript:23,23,0.9181,transcript:24,24,0.8991,transcript:28,28,0.8382,1,5,0.019,0.0799
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/7,bullet,True,3,transcript:24,24,0.9757,transcript:25,25,0.9328,transcript:23,23,0.8731,1,1,0.0429,0.1026
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/8,bullet,True,3,transcript:26,26,0.9614,transcript:27,27,0.8905,transcript:23,23,0.8775,1,3,0.071,0.0839
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/9,bullet,True,3,transcript:28,28,0.9524,transcript:27,27,0.9174,transcript:23,23,0.882,1,5,0.035,0.0704
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/10,bullet,True,3,transcript:29,29,0.9447,transcript:31,31,0.9243,transcript:30,30,0.9142,2,1,0.0204,0.0305
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/11,paragraph,True,3,transcript:33,33,0.9666,transcript:35,35,0.8996,transcript:34,34,0.8709,2,1,0.0669,0.0957
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/12,bullet,True,3,transcript:38,38,0.9739,transcript:37,37,0.9491,transcript:42,42,0.8826,1,4,0.0248,0.0913
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/13,bullet,True,3,transcript:40,40,0.9608,transcript:41,41,0.9431,transcript:39,39,0.8891,1,1,0.0177,0.0717
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/14,bullet,True,3,transcript:43,43,0.9801,transcript:44,44,0.8985,transcript:72,72,0.8798,1,29,0.0816,0.1003
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/15,bullet,True,3,transcript:45,45,0.8898,transcript:46,46,0.8774,transcript:66,66,0.8657,1,21,0.0124,0.0241
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/16,bullet,True,3,transcript:46,46,0.9571,transcript:49,49,0.8805,transcript:66,66,0.877,3,20,0.0766,0.0801
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/17,bullet,True,3,transcript:47,47,0.892,transcript:49,49,0.8826,transcript:45,45,0.8615,2,2,0.0094,0.0305
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/18,paragraph,True,3,transcript:48,48,0.9494,transcript:54,54,0.9272,transcript:49,49,0.9216,6,1,0.0222,0.0277
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/19,bullet,True,3,transcript:49,49,0.8683,transcript:72,72,0.8617,transcript:71,71,0.8588,23,22,0.0066,0.0094
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/20,bullet,True,3,transcript:51,51,0.9285,transcript:47,47,0.9126,transcript:52,52,0.9042,4,1,0.0159,0.0243
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/21,bullet,True,3,transcript:54,54,0.9694,transcript:57,57,0.9431,transcript:55,55,0.9249,3,1,0.0263,0.0445
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/22,bullet,True,3,transcript:65,65,0.8631,transcript:66,66,0.8623,transcript:49,49,0.8581,1,16,0.0008,0.0051
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/23,bullet,True,3,transcript:66,66,0.9273,transcript:46,46,0.9199,transcript:64,64,0.9171,20,2,0.0073,0.0102
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/24,bullet,True,3,transcript:49,49,0.9123,transcript:55,55,0.908,transcript:61,61,0.8995,6,12,0.0043,0.0128
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/25,bullet,True,3,transcript:63,63,0.9698,transcript:64,64,0.9239,transcript:67,67,0.9189,1,4,0.0459,0.0509
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/26,bullet,True,3,transcript:65,65,0.9444,transcript:68,68,0.8634,transcript:66,66,0.8527,3,1,0.081,0.0917
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/27,bullet,True,3,transcript:83,83,0.8242,transcript:81,81,0.784,transcript:82,82,0.753,2,1,0.0401,0.0712
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/28,bullet,True,3,transcript:83,83,0.8228,transcript:82,82,0.8081,transcript:81,81,0.7695,1,2,0.0146,0.0533
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,2. 主要コンテンツの詳細解説/29,bullet,True,3,transcript:83,83,0.8338,transcript:82,82,0.7983,transcript:81,81,0.7637,1,2,0.0355,0.0701
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,3. 重要ポイントまとめ/row/0,bullet,True,3,transcript:4,4,0.8469,transcript:3,3,0.8332,transcript:78,78,0.8104,1,74,0.0137,0.0365
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,3. 重要ポイントまとめ/row/1,bullet,True,3,transcript:46,46,0.8418,transcript:61,61,0.8348,transcript:13,13,0.8155,15,33,0.0069,0.0262
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,3. 重要ポイントまとめ/row/2,bullet,True,3,transcript:21,21,0.8291,transcript:71,71,0.8421,transcript:72,72,0.8364,50,51,-0.013,-0.0073
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,3. 重要ポイントまとめ/row/3,bullet,True,3,transcript:35,35,0.8408,transcript:27,27,0.8412,transcript:72,72,0.84,8,37,-0.0004,0.0008
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,3. 重要ポイントまとめ/row/4,bullet,True,3,transcript:16,16,0.863,transcript:17,17,0.837,transcript:40,40,0.8316,1,24,0.026,0.0314
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,3. 重要ポイントまとめ/row/5,bullet,True,3,transcript:12,12,0.8374,transcript:69,69,0.823,transcript:9,9,0.8372,57,3,0.0144,0.0002
+013_commentary_ff14_propernoun,avSk8Nj4jrnV,4. 結論/0,paragraph,True,3,transcript:3,3,0.9119,transcript:1,1,0.8983,transcript:13,13,0.8888,2,10,0.0135,0.023
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,/0,paragraph,True,3,transcript:2,2,0.9062,transcript:46,46,0.8645,transcript:8,8,0.8369,44,6,0.0417,0.0693
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,/1,paragraph,True,3,transcript:2,2,0.872,transcript:6,6,0.8836,transcript:7,7,0.8623,4,5,-0.0116,0.0096
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,導入/0,paragraph,True,3,transcript:2,2,0.8941,transcript:1,1,0.8449,transcript:0,0,0.8272,1,2,0.0492,0.0668
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/0,bullet,True,3,transcript:6,6,0.9142,transcript:2,2,0.9126,transcript:7,7,0.9103,4,1,0.0017,0.0039
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/1,bullet,True,3,transcript:9,9,0.8328,transcript:7,7,0.8257,transcript:1,1,0.8222,2,8,0.0071,0.0106
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/2,bullet,True,3,transcript:10,10,0.9004,transcript:15,15,0.8825,transcript:9,9,0.875,5,1,0.0178,0.0254
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/3,bullet,True,3,transcript:10,10,0.9203,transcript:12,12,0.8946,transcript:11,11,0.8895,2,1,0.0257,0.0308
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/4,bullet,True,3,transcript:15,15,0.9126,transcript:13,13,0.9109,transcript:1,1,0.8817,2,14,0.0017,0.031
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/5,bullet,True,3,transcript:17,17,0.8986,transcript:16,16,0.8826,transcript:20,20,0.8784,1,3,0.016,0.0202
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/6,bullet,True,3,transcript:20,20,0.8862,transcript:21,21,0.8861,transcript:18,18,0.8633,1,2,0.0002,0.0229
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/7,bullet,True,3,transcript:38,38,0.9014,transcript:24,24,0.8604,transcript:18,18,0.8511,14,20,0.041,0.0503
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/8,bullet,True,3,transcript:26,26,0.8978,transcript:33,33,0.8885,transcript:25,25,0.8859,7,1,0.0093,0.0119
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/9,bullet,True,3,transcript:31,31,0.9272,transcript:18,18,0.8707,transcript:21,21,0.8672,13,10,0.0565,0.06
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/10,bullet,True,3,transcript:33,33,0.9453,transcript:25,25,0.8749,transcript:32,32,0.8716,8,1,0.0705,0.0737
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/11,bullet,True,3,transcript:36,36,0.8611,transcript:29,29,0.8578,transcript:32,32,0.8542,7,4,0.0033,0.0069
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/12,bullet,True,3,transcript:39,39,0.8377,transcript:38,38,0.8307,transcript:58,58,0.8192,1,19,0.007,0.0186
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/13,bullet,True,3,transcript:43,43,0.9283,transcript:45,45,0.9156,transcript:42,42,0.9153,2,1,0.0127,0.013
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/14,bullet,True,3,transcript:45,45,0.929,transcript:43,43,0.8822,transcript:40,40,0.869,2,5,0.0468,0.06
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/15,bullet,True,3,transcript:46,46,0.9226,transcript:43,43,0.8721,transcript:47,47,0.8665,3,1,0.0505,0.0561
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/16,bullet,True,3,transcript:48,48,0.86,transcript:56,56,0.8499,transcript:41,41,0.8284,8,7,0.01,0.0315
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/17,bullet,True,3,transcript:47,47,0.9085,transcript:39,39,0.8601,transcript:40,40,0.8587,8,7,0.0485,0.0498
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/18,bullet,True,3,transcript:56,56,0.9035,transcript:48,48,0.9016,transcript:49,49,0.8777,8,7,0.0019,0.0258
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/19,bullet,True,3,transcript:48,48,0.8772,transcript:54,54,0.8624,transcript:56,56,0.8594,6,8,0.0147,0.0178
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/20,bullet,True,3,transcript:62,62,0.9104,transcript:63,63,0.9061,transcript:61,61,0.8998,1,1,0.0043,0.0106
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/21,bullet,True,3,transcript:67,67,0.8906,transcript:68,68,0.8875,transcript:85,85,0.8432,1,18,0.003,0.0474
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/22,bullet,True,3,transcript:67,67,0.9212,transcript:68,68,0.9171,transcript:65,65,0.8707,1,2,0.0041,0.0505
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/23,bullet,True,3,transcript:69,69,0.911,transcript:66,66,0.8557,transcript:65,65,0.8528,3,4,0.0554,0.0582
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/24,bullet,True,3,transcript:73,73,0.9212,transcript:71,71,0.8532,transcript:65,65,0.8495,2,8,0.0679,0.0717
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/25,bullet,True,3,transcript:85,85,0.8588,transcript:88,88,0.8333,transcript:66,66,0.8271,3,19,0.0255,0.0317
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/26,bullet,True,3,transcript:79,79,0.9388,transcript:80,80,0.8729,transcript:78,78,0.8466,1,1,0.0659,0.0922
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/27,bullet,True,3,transcript:82,82,0.9375,transcript:83,83,0.8745,transcript:86,86,0.869,1,4,0.0629,0.0685
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/28,bullet,True,3,transcript:84,84,0.9167,transcript:83,83,0.8898,transcript:61,61,0.8477,1,23,0.0268,0.0689
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/29,bullet,True,3,transcript:88,88,0.8499,transcript:60,60,0.8237,transcript:89,89,0.8224,28,1,0.0262,0.0275
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/30,bullet,True,3,transcript:87,87,0.9275,transcript:86,86,0.8855,transcript:66,66,0.8732,1,21,0.042,0.0543
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,詳細内容/31,bullet,True,3,transcript:87,87,0.8513,transcript:88,88,0.8503,transcript:58,58,0.8353,1,29,0.001,0.016
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,重要ポイントまとめ/row/0,bullet,True,3,transcript:9,9,0.8213,transcript:12,12,0.8178,transcript:10,10,0.8084,3,1,0.0034,0.0129
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,重要ポイントまとめ/row/1,bullet,True,3,transcript:31,31,0.8486,transcript:18,18,0.8132,transcript:32,32,0.7958,13,1,0.0355,0.0528
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,重要ポイントまとめ/row/2,bullet,True,3,transcript:86,86,0.8135,transcript:66,66,0.8153,transcript:68,68,0.8278,20,18,-0.0018,-0.0142
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,重要ポイントまとめ/row/3,bullet,True,3,transcript:61,61,0.8197,transcript:65,65,0.8019,transcript:63,63,0.835,4,2,0.0179,-0.0153
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,重要ポイントまとめ/row/4,bullet,True,3,transcript:87,87,0.8243,transcript:86,86,0.8128,transcript:66,66,0.8114,1,21,0.0115,0.0129
+014_interview_mihashi_quote_heavy,u9zw0zYoZTOB,結論/0,paragraph,True,3,transcript:2,2,0.8975,transcript:36,36,0.8508,transcript:65,65,0.8614,34,63,0.0467,0.0361
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,/0,paragraph,True,3,document:11,11,0.8622,document:7,7,0.8627,document:12,12,0.8718,4,1,-0.0005,-0.0096
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,/1,paragraph,True,3,document:9,9,0.9297,document:0,0,0.9218,document:7,7,0.9006,9,2,0.0079,0.0291
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,導入/0,paragraph,True,3,document:0,0,0.9109,document:1,1,0.8952,document:2,2,0.8848,1,2,0.0157,0.0261
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/0,bullet,True,3,document:0,0,0.9054,document:1,1,0.8593,document:2,2,0.8527,1,2,0.0462,0.0527
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/1,bullet,True,3,document:0,0,0.9221,document:2,2,0.901,document:1,1,0.8754,2,1,0.0211,0.0467
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/2,bullet,True,3,document:1,1,0.8906,document:0,0,0.8786,document:2,2,0.8584,1,1,0.012,0.0322
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/3,bullet,True,3,document:2,2,0.8223,document:1,1,0.8102,document:0,0,0.8076,1,2,0.0121,0.0147
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/4,bullet,True,3,document:0,0,0.8593,document:2,2,0.8519,document:1,1,0.8314,2,1,0.0074,0.0279
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/5,bullet,True,3,document:2,2,0.8709,document:0,0,0.8543,document:1,1,0.8375,2,1,0.0166,0.0334
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/6,paragraph,True,3,document:1,1,0.9159,document:2,2,0.89,document:3,3,0.8841,1,2,0.0259,0.0318
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/7,paragraph,True,3,document:4,4,0.9041,document:2,2,0.8964,document:1,1,0.8756,2,3,0.0077,0.0285
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/8,bullet,True,3,document:2,2,0.8873,document:3,3,0.8664,document:1,1,0.8474,1,1,0.0208,0.0398
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/9,bullet,True,3,document:1,1,0.9008,document:4,4,0.8955,document:2,2,0.8888,3,1,0.0053,0.012
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/10,bullet,True,3,document:3,3,0.8341,document:4,4,0.8244,document:1,1,0.8239,1,2,0.0098,0.0102
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/11,bullet,True,3,document:4,4,0.8627,document:2,2,0.8624,document:3,3,0.8571,2,1,0.0003,0.0056
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/12,paragraph,True,3,document:12,12,0.8647,document:5,5,0.8601,document:3,3,0.8571,7,9,0.0046,0.0076
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/13,bullet,True,3,document:4,4,0.8306,document:10,10,0.8345,document:12,12,0.8253,6,8,-0.004,0.0052
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/14,bullet,True,3,document:4,4,0.9155,document:8,8,0.9127,document:7,7,0.9117,4,3,0.0028,0.0038
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/15,bullet,True,3,document:4,4,0.8899,document:5,5,0.8722,document:1,1,0.8702,1,3,0.0177,0.0197
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/16,bullet,True,3,document:8,8,0.9261,document:7,7,0.9219,document:9,9,0.9107,1,1,0.0042,0.0154
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/17,bullet,True,3,document:7,7,0.9267,document:8,8,0.9131,document:9,9,0.9106,1,2,0.0136,0.0161
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/18,bullet,True,3,document:8,8,0.8995,document:10,10,0.8992,document:7,7,0.8931,2,1,0.0003,0.0065
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/19,bullet,True,3,document:12,12,0.9247,document:10,10,0.9062,document:11,11,0.9041,2,1,0.0184,0.0206
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,詳細内容/20,bullet,True,3,document:12,12,0.8422,document:10,10,0.842,document:11,11,0.8241,2,1,0.0002,0.0181
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,重要ポイントまとめ/row/0,bullet,True,3,document:3,3,0.8222,document:4,4,0.8248,document:7,7,0.8131,1,4,-0.0026,0.0091
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,重要ポイントまとめ/row/1,bullet,True,3,document:8,8,0.8038,document:7,7,0.8046,document:4,4,0.8056,1,4,-0.0008,-0.0018
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,重要ポイントまとめ/row/2,bullet,True,3,document:10,10,0.8286,document:5,5,0.7994,document:1,1,0.8124,5,9,0.0292,0.0162
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,重要ポイントまとめ/row/3,bullet,True,3,document:10,10,0.8458,document:8,8,0.8391,document:7,7,0.8413,2,3,0.0067,0.0045
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,重要ポイントまとめ/row/4,bullet,True,3,document:7,7,0.8002,document:12,12,0.7952,document:1,1,0.785,5,6,0.005,0.0152
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,重要ポイントまとめ/row/5,bullet,True,3,document:11,11,0.8306,document:12,12,0.8303,document:9,9,0.8236,1,2,0.0002,0.0069
+015_doc_workspace_chunk_granularity,tK9ag6CUVeWL,結論/0,paragraph,True,3,document:9,9,0.9536,document:8,8,0.9347,document:7,7,0.928,1,2,0.0189,0.0256
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,/0,paragraph,True,3,document:0,0,0.9397,document:28,28,0.9279,document:35,35,0.9213,28,35,0.0119,0.0184
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,/1,paragraph,True,3,document:0,0,0.9621,document:35,35,0.9356,document:1,1,0.9237,35,1,0.0265,0.0384
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/0,bullet,True,3,document:1,1,0.9515,document:0,0,0.9286,document:2,2,0.9265,1,1,0.023,0.025
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/1,bullet,True,3,document:2,2,0.9034,document:1,1,0.8842,document:3,3,0.8793,1,1,0.0192,0.0241
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/2,bullet,True,3,document:2,2,0.8389,document:1,1,0.8358,document:5,5,0.8192,1,3,0.0031,0.0198
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/3,bullet,True,3,document:2,2,0.8429,document:4,4,0.8412,document:1,1,0.832,2,1,0.0017,0.0109
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/4,paragraph,True,3,document:27,27,0.8966,document:2,2,0.8994,document:4,4,0.8923,25,23,-0.0027,0.0044
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/5,bullet,True,3,document:7,7,0.9207,document:6,6,0.879,document:4,4,0.8762,1,3,0.0416,0.0444
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/6,bullet,True,3,document:7,7,0.8956,document:18,18,0.8871,document:8,8,0.8793,11,1,0.0086,0.0163
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/7,bullet,True,3,document:8,8,0.8454,document:9,9,0.8454,document:21,21,0.8442,1,13,0.0,0.0013
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/8,bullet,True,3,document:5,5,0.8937,document:6,6,0.8786,document:11,11,0.8724,1,6,0.0151,0.0213
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/9,bullet,True,3,document:4,4,0.8619,document:23,23,0.8994,document:21,21,0.8932,19,17,-0.0376,-0.0313
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/10,bullet,True,3,document:8,8,0.8882,document:24,24,0.8875,document:9,9,0.8829,16,1,0.0007,0.0053
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/11,bullet,True,3,document:9,9,0.8546,document:8,8,0.838,document:15,15,0.8422,1,6,0.0166,0.0123
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/12,bullet,True,3,document:9,9,0.8847,document:22,22,0.8666,document:25,25,0.8692,13,16,0.018,0.0154
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/13,bullet,True,3,document:24,24,0.8707,document:16,16,0.858,document:15,15,0.8532,8,9,0.0127,0.0174
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/14,bullet,True,3,document:25,25,0.8778,document:24,24,0.8502,document:11,11,0.8578,1,14,0.0276,0.0201
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/15,bullet,True,3,document:9,9,0.8907,document:13,13,0.8807,document:15,15,0.8842,4,6,0.0099,0.0065
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/16,bullet,True,3,document:17,17,0.8632,document:16,16,0.8615,document:25,25,0.853,1,8,0.0017,0.0102
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/17,bullet,True,3,document:17,17,0.8684,document:16,16,0.86,document:18,18,0.8218,1,1,0.0083,0.0466
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/18,bullet,True,3,document:17,17,0.9008,document:16,16,0.8793,document:18,18,0.8482,1,1,0.0215,0.0527
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/19,paragraph,True,3,document:28,28,0.9642,document:27,27,0.9304,document:33,33,0.9456,1,5,0.0339,0.0186
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/20,bullet,True,3,document:29,29,0.9145,document:27,27,0.9063,document:28,28,0.8829,2,1,0.0082,0.0316
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/21,bullet,True,3,document:35,35,0.8684,document:32,32,0.8637,document:34,34,0.8594,3,1,0.0047,0.0089
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/22,bullet,True,3,document:34,34,0.8868,document:35,35,0.8827,document:33,33,0.8578,1,1,0.0041,0.029
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,詳細内容/23,paragraph,True,3,document:35,35,0.8359,document:32,32,0.8368,document:33,33,0.8393,3,2,-0.0009,-0.0035
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,重要ポイントまとめ/row/0,bullet,True,3,document:1,1,0.8452,document:4,4,0.8243,document:2,2,0.821,3,1,0.0209,0.0242
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,重要ポイントまとめ/row/1,bullet,True,3,document:7,7,0.8352,document:21,21,0.8156,document:8,8,0.8354,14,1,0.0196,-0.0003
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,重要ポイントまとめ/row/2,bullet,True,3,document:28,28,0.8681,document:33,33,0.8757,document:35,35,0.8651,5,7,-0.0076,0.003
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,重要ポイントまとめ/row/3,bullet,True,3,document:17,17,0.8471,document:16,16,0.8261,document:18,18,0.7995,1,1,0.0209,0.0476
+016_doc_claude_skills_code_anchor,d8jk2Z5nxNYV,結論/0,paragraph,True,3,document:0,0,0.9431,document:35,35,0.9093,document:1,1,0.9135,35,1,0.0338,0.0296

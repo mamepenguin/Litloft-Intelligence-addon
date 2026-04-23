@@ -25,7 +25,7 @@ from collections import defaultdict
 import numpy as np
 from sqlalchemy import text as sql_text
 
-from app.database import get_homevault_db, get_search_db, get_search_engine
+from app.database import get_litloft_db, get_search_db, get_search_engine
 from app.models import Embedding
 
 logger = logging.getLogger(__name__)
@@ -134,12 +134,12 @@ def _query_nearest_file_ids(
 
 
 def _load_tags_for_files(file_ids: list[str]) -> dict[str, list[str]]:
-    """Fetch the HomeVault tags applied to each given file ID."""
+    """Fetch the Litloft tags applied to each given file ID."""
     if not file_ids:
         return {}
 
     try:
-        with get_homevault_db() as session:
+        with get_litloft_db() as session:
             # Parameterize every id explicitly so SQLite receives
             # literals it can cache (no IN-list reuse headaches).
             placeholders = ",".join(f":id{i}" for i in range(len(file_ids)))

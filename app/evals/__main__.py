@@ -70,8 +70,8 @@ def _setup_snapshot(snapshot: Path) -> None:
 def _init_dbs() -> None:
     """Initialise the search DB engine pointed at the snapshot.
 
-    HomeVault DB is only needed for live indexing, not for retrieval —
-    we skip ``init_homevault_db`` so the runner works against a snapshot
+    Litloft DB is only needed for live indexing, not for retrieval —
+    we skip ``init_litloft_db`` so the runner works against a snapshot
     even when the host DB file is absent or stale.
     """
     from app.database import init_search_db

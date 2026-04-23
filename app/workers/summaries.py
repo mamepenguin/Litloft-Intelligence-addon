@@ -6,7 +6,7 @@ processing one file at a time.
 
 Unlike auto_tags, summaries do not have an approve/dismiss workflow:
 the generated summary is stored in the intelligence DB and displayed
-directly. The host HomeVault DB is never touched. Users can "hide" a
+directly. The host Litloft DB is never touched. Users can "hide" a
 summary (status='hidden') or "regenerate" it (delete + re-enqueue).
 
 Long content (transcripts, document text) that exceeds the configured

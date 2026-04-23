@@ -387,7 +387,7 @@ class LLMConfig:
 @dataclass(frozen=True)
 class Settings:
     intelligence_data_dir: Path
-    homevault_db_path: Path
+    litloft_db_path: Path
     model_cache_dir: Path
     search_db_path: Path
     allowed_base_dirs: tuple[str, ...] = ("/drives/",)
@@ -453,8 +453,8 @@ def load_settings() -> Settings:
     import os
 
     intelligence_data_dir = Path(os.environ.get("INTELLIGENCE_DATA_DIR", "/intelligence-data"))
-    homevault_db_path = Path(
-        os.environ.get("HOMEVAULT_DB_PATH", "/data/homevault.db")
+    litloft_db_path = Path(
+        os.environ.get("HOMEVAULT_DB_PATH", "/data/litloft.db")
     )
 
     config_path = Path(
@@ -503,7 +503,7 @@ def load_settings() -> Settings:
 
     return Settings(
         intelligence_data_dir=intelligence_data_dir,
-        homevault_db_path=homevault_db_path,
+        litloft_db_path=litloft_db_path,
         model_cache_dir=model_cache_dir,
         search_db_path=search_db_path,
         allowed_base_dirs=allowed_base_dirs,
