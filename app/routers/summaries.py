@@ -1079,10 +1079,10 @@ async def regenerate_detailed_summary(
                     {"fid": file_id},
                 )
 
-        # Citations + FileInsight history cleanup runs unconditionally
-        # — even if file_summaries has no row, stray rows in these
-        # tables (from a partial earlier state) must be purged to
-        # honour the regenerate "clean slate" contract.
+        # Citations are tied to the active body's section anchors so
+        # they become meaningless the moment we swap the body out.
+        # Drop them unconditionally; the next save will recompute
+        # against the new summary.
         session.execute(
             sql_text(
                 "DELETE FROM detailed_summary_citations "
@@ -1090,10 +1090,18 @@ async def regenerate_detailed_summary(
             ),
             {"fid": file_id},
         )
+        # FileInsight: supersede the current active row instead of
+        # deleting history. Regenerating no longer loses the
+        # pre-regenerate lineage — the old body, model metadata and
+        # edit trail remain queryable as ``status='superseded'`` rows
+        # so a future history UI can surface or restore them. The
+        # ``_save_detailed_summary`` call that follows will insert
+        # a fresh ``active`` row for the new generation.
         session.execute(
             sql_text(
-                "DELETE FROM file_insights "
-                "WHERE file_id = :fid AND kind = 'detailed_summary'"
+                "UPDATE file_insights SET status = 'superseded' "
+                "WHERE file_id = :fid AND kind = 'detailed_summary' "
+                "AND status = 'active'"
             ),
             {"fid": file_id},
         )

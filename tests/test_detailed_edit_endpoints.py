@@ -646,20 +646,28 @@ class TestRegenerateConflict:
         )
         assert result.status == "accepted"
         assert len(bg.tasks) == 1
-        # Step 2b: the edit markers live on file_insights now.
-        # Forced regeneration must wipe every non-superseded row
-        # (the helper sets detailed_status='generating' afterwards
-        # to seed the next generation, but no 'active' / edited rows
-        # survive the clear).
+        # The manual edit row is demoted to ``superseded`` — regenerate
+        # preserves the lineage now so a future history UI can show
+        # or restore the pre-regenerate state. The next save will
+        # insert a fresh ``active`` row on top.
         with engine.connect() as conn:
             insight_rows = conn.execute(
                 text(
                     "SELECT status, created_by FROM file_insights "
-                    "WHERE file_id = 'abc123' AND kind = 'detailed_summary'"
+                    "WHERE file_id = 'abc123' AND kind = 'detailed_summary' "
+                    "ORDER BY created_at"
                 )
             ).fetchall()
-        # All history for this file+kind is dropped by regenerate.
-        assert insight_rows == []
+        # Every surviving row is superseded (no active yet — the next
+        # save will insert one). Both the original intelligence row
+        # (seeded by _insert_detailed_row with detailed_original set)
+        # and the manual edit are preserved.
+        assert len(insight_rows) >= 1
+        assert all(status == "superseded" for status, _ in insight_rows)
+        created_by_values = {created_by for _, created_by in insight_rows}
+        # Manual edit must survive so the history UI can distinguish
+        # user edits from prior AI versions.
+        assert "manual" in created_by_values
 
     @pytest.mark.asyncio
     async def test_proceeds_without_body_on_unedited_row(

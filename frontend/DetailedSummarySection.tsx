@@ -54,14 +54,12 @@ import type { MediaController } from "@/lib/mediaController";
 import { KnowledgeSaveDialog } from "./KnowledgeSaveDialog";
 
 import {
-  deleteDetailedSummary,
   downloadDetailedSummary,
   editDetailedSummarySection,
   getDetailedSummary,
   getDetailedSummaryCitations,
   regenerateDetailedSummary,
   revertDetailedSummary,
-  startDetailedSummary,
 } from "./api";
 import type {
   CitationChunkExcerpt,
@@ -231,18 +229,11 @@ export default function DetailedSummarySection({
     setWorking(true);
     setCollapsed(false);
     try {
-      if (force) {
-        await regenerateDetailedSummary(fileId, drive, { force: true });
-      } else {
-        // Legacy path: delete+POST keeps the previous behaviour for
-        // un-edited summaries where there's nothing to preserve.
-        try {
-          await deleteDetailedSummary(fileId, drive);
-        } catch {
-          // No row to delete — proceed with generation.
-        }
-        await startDetailedSummary(fileId, drive);
-      }
+      // Single endpoint for every regenerate case (edited / un-edited /
+      // first-time generation). The backend superseded-not-deleted
+      // history changes mean the prior DELETE+POST fallback would
+      // have dropped the history we now want to keep.
+      await regenerateDetailedSummary(fileId, drive, { force });
       await pollUntilDone();
     } catch {
       await fetchData();

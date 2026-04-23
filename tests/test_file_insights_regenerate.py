@@ -162,13 +162,17 @@ async def test_regenerate_then_save_yields_readable_summary(
     )
     assert result.status == "accepted"
 
-    # Post-clear state: both tables wiped for the detailed kind.
+    # Post-clear state: the prior active row is now superseded, not
+    # deleted — history is preserved across regenerate so a future
+    # UI can surface or restore it.
     with engine.connect() as conn:
-        insights = conn.execute(text(
-            "SELECT COUNT(*) FROM file_insights "
+        rows = conn.execute(text(
+            "SELECT content, status FROM file_insights "
             "WHERE file_id = 'abc123' AND kind = 'detailed_summary'"
-        )).scalar()
-    assert insights == 0
+        )).fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "# Old AI body"
+    assert rows[0][1] == "superseded"
 
     # Simulate the background worker: the pending/generating marker.
     _set_detailed_status("abc123", DETAILED_STATUS_GENERATING, model="m2")
@@ -273,14 +277,14 @@ async def test_regenerate_endpoint_keeps_slot_visible_during_background_window(
     assert between["detailed_summary"] is None
 
 
-def test_regenerate_cleans_file_insights_even_without_file_summaries_row(
+def test_regenerate_supersedes_active_even_without_file_summaries_row(
     search_db, monkeypatch,
 ):
-    """Defensive invariant: regenerate must drop every stale
-    file_insights row for (file_id, detailed_summary) regardless of
-    whether file_summaries has a matching row. Otherwise a partial
-    prior state (e.g. an orphaned insight from a bug) would survive
-    the user's "clean slate" action.
+    """Defensive invariant: regenerate must demote the active row
+    regardless of whether file_summaries has a matching row.
+    Otherwise a partial prior state (e.g. an orphaned insight from a
+    bug) would remain as the active row when the new generation row
+    is inserted, violating the one-active-per-(file, kind) rule.
     """
     engine, _ = search_db
 
@@ -327,11 +331,86 @@ def test_regenerate_cleans_file_insights_even_without_file_summaries_row(
     )
 
     with engine.connect() as conn:
-        remaining = conn.execute(text(
-            "SELECT COUNT(*) FROM file_insights "
+        rows = conn.execute(text(
+            "SELECT id, status FROM file_insights "
             "WHERE file_id = 'abc123' AND kind = 'detailed_summary'"
-        )).scalar()
-    assert remaining == 0, (
-        "regenerate left stale file_insights rows behind; the orphan "
-        "fallback path must not depend on file_summaries row existence"
+        )).fetchall()
+    # The row survives for history, but its status was demoted so a
+    # subsequent _save_detailed_summary INSERT can claim the active
+    # slot without violating the one-active invariant.
+    assert len(rows) == 1
+    assert rows[0][0] == "orphan-id-0"
+    assert rows[0][1] == "superseded"
+
+
+@pytest.mark.asyncio
+async def test_regenerate_preserves_history_across_multiple_runs(
+    search_db, monkeypatch,
+):
+    """End-to-end: every regenerate appends a new active row while
+    demoting the previous one. After N regenerates the lineage
+    contains one active and N-1 superseded rows keyed by descending
+    created_at."""
+    engine, _ = search_db
+
+    from app.routers import summaries as router_mod
+    from app.workers.summaries import (
+        _save_detailed_summary,
+        _set_detailed_status,
+        DETAILED_STATUS_GENERATING,
     )
+
+    monkeypatch.setattr(router_mod, "_require_detailed_enabled", lambda: None)
+    monkeypatch.setattr(
+        router_mod, "_require_file_in_drive", lambda file_id, drive: None
+    )
+    monkeypatch.setattr(
+        router_mod, "classify_detailed_missing_reason",
+        lambda file_id: "not_generated",
+    )
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(router_mod, "_clear_core_active_summary", _noop)
+    monkeypatch.setattr(
+        router_mod, "generate_detailed_summary",
+        lambda file_id, client: None,
+    )
+    monkeypatch.setattr(router_mod, "get_llm_client", lambda: MagicMock())
+
+    # First generation.
+    _set_detailed_status("abc123", DETAILED_STATUS_GENERATING, model="m1")
+    _save_detailed_summary(
+        file_id="abc123",
+        detailed_summary="body v1",
+        model="m1",
+        context_chars=100,
+        was_truncated=False,
+    )
+
+    from fastapi import BackgroundTasks
+
+    # Regenerate twice more; each time feed a distinct body.
+    for label, model in (("v2", "m2"), ("v3", "m3")):
+        await router_mod.regenerate_detailed_summary(
+            "abc123", BackgroundTasks(), None, "drive1",
+        )
+        _save_detailed_summary(
+            file_id="abc123",
+            detailed_summary=f"body {label}",
+            model=model,
+            context_chars=100,
+            was_truncated=False,
+        )
+
+    with engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT content, status FROM file_insights "
+            "WHERE file_id = 'abc123' AND kind = 'detailed_summary' "
+            "ORDER BY created_at"
+        )).fetchall()
+
+    # Three rows total, only the newest active.
+    assert [r[0] for r in rows] == ["body v1", "body v2", "body v3"]
+    assert [r[1] for r in rows] == ["superseded", "superseded", "active"]

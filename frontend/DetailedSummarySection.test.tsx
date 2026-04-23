@@ -70,8 +70,6 @@ vi.mock("@/lib/api", async () => {
 
 vi.mock("@/addons/intelligence/api", () => ({
   getDetailedSummary: vi.fn(),
-  startDetailedSummary: vi.fn(),
-  deleteDetailedSummary: vi.fn(),
   downloadDetailedSummary: vi.fn(),
   getDetailedSummaryCitations: vi.fn().mockResolvedValue({
     available: true,
@@ -558,9 +556,13 @@ describe("DetailedSummarySection — edit flow", () => {
     expect(
       screen.queryByText(/編集内容は失われます/),
     ).not.toBeInTheDocument();
-    // regenerateDetailedSummary (with force) is not called in the
-    // un-edited path — the legacy delete+start path runs instead.
-    expect(regenerateDetailedSummary).not.toHaveBeenCalled();
+    // The un-edited regenerate path now calls regenerateDetailedSummary
+    // with force=false — single endpoint for every regenerate case so
+    // the backend can preserve history instead of wiping it.
+    expect(regenerateDetailedSummary).toHaveBeenCalledTimes(1);
+    expect(regenerateDetailedSummary).toHaveBeenCalledWith("f1", "drive1", {
+      force: false,
+    });
   });
 });
 
