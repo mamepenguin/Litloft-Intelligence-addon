@@ -367,7 +367,7 @@ async def generate_folder_visual_description(
     if body_drive is not None and body_drive != drive:
         raise HTTPException(
             status_code=400,
-            detail="body.drive must match X-HV-Drive header",
+            detail="body.drive must match X-Lit-Drive header",
         )
     path_value = body.get("path", "") if isinstance(body, dict) else ""
     path = _validate_folder_path(path_value)

@@ -225,7 +225,7 @@ async def run_stage3_once(
     start = time.monotonic()
     response = await answer_question(
         query=case.query,
-        hv_token=None,
+        lit_token=None,
         top_k=top_k,
         drive=drive,
         temperature=EVAL_TEMPERATURE,

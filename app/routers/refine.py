@@ -86,7 +86,7 @@ def _fetch_indexed_file(session: Any, file_id: str, drive: str) -> Any | None:
 
     Filtering on ``drive`` here — not just ``file_id`` — prevents a
     caller authorised for drive A from refining a file that happens
-    to exist in drive B by submitting B's file_id with A's X-HV-Drive.
+    to exist in drive B by submitting B's file_id with A's X-Lit-Drive.
     The host proxy's ``file_access`` pre_check already blocks the
     obvious case, but we defence-in-depth at the addon layer too.
     """
@@ -151,7 +151,7 @@ async def refine_folder(
 ) -> dict:
     """Enqueue refine jobs for every transcript-bearing file in a folder.
 
-    The body ``drive`` (if present) must match the ``X-HV-Drive``
+    The body ``drive`` (if present) must match the ``X-Lit-Drive``
     header; mismatches are a signal of either a confused client or a
     deliberate cross-drive probe, so we 400 instead of silently using
     the header. The path is validated to reject traversal / absolute
@@ -161,7 +161,7 @@ async def refine_folder(
     if body_drive is not None and body_drive != drive:
         raise HTTPException(
             status_code=400,
-            detail="body.drive must match X-HV-Drive header",
+            detail="body.drive must match X-Lit-Drive header",
         )
     path = body.get("path", "")
     path = _validate_folder_path(path)

@@ -148,7 +148,7 @@ class TestAnswerQuestionHappyPath:
 
         result = await answer_question(
             query="What topic is covered?",
-            hv_token="token",
+            lit_token="token",
         )
 
         assert isinstance(result, AnswerResponse)
@@ -189,7 +189,7 @@ class TestAnswerQuestionNoCandidates:
 
         result = await answer_question(
             query="anything",
-            hv_token=None,
+            lit_token=None,
         )
 
         assert result.answer is None
@@ -226,7 +226,7 @@ class TestAnswerQuestionLLMFailure:
         monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
 
         result = await answer_question(
-            query="q", hv_token="t"
+            query="q", lit_token="t"
         )
 
         assert result.answer is None
@@ -253,7 +253,7 @@ class TestAnswerQuestionLLMFailure:
         llm = _make_llm_mock([{"wrong": "shape"}])
         monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
 
-        result = await answer_question(query="q", hv_token="t")
+        result = await answer_question(query="q", lit_token="t")
 
         assert result.answer is None
         assert result.citations == []
@@ -292,7 +292,7 @@ class TestAnswerQuestionCitationFiltering:
         })
         monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
 
-        result = await answer_question(query="q", hv_token="t")
+        result = await answer_question(query="q", lit_token="t")
 
         assert result.answer == "Covered across multiple files."
         # Only the two real file_ids should appear in citations.
@@ -321,7 +321,7 @@ class TestAnswerQuestionCitationFiltering:
         })
         monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
 
-        result = await answer_question(query="q", hv_token="t")
+        result = await answer_question(query="q", lit_token="t")
 
         assert result.answer == "Some answer"
         assert result.citations == []
@@ -362,7 +362,7 @@ class TestAnswerQuestionTopK:
             lambda: _make_llm_mock({"answer": "x", "citations": []}),
         )
 
-        await answer_question(query="q", hv_token=None)
+        await answer_question(query="q", lit_token=None)
 
         assert retrieve_spy.await_count == 1
         kwargs = retrieve_spy.call_args.kwargs
@@ -381,7 +381,7 @@ class TestAnswerQuestionTopK:
             lambda: _make_llm_mock({"answer": "x", "citations": []}),
         )
 
-        await answer_question(query="q", hv_token=None, top_k=3)
+        await answer_question(query="q", lit_token=None, top_k=3)
 
         kwargs = retrieve_spy.call_args.kwargs
         assert kwargs.get("top_k") == 3
@@ -408,7 +408,7 @@ class TestAnswerQuestionTookMs:
             lambda: _make_llm_mock({"answer": "x", "citations": []}),
         )
 
-        result = await answer_question(query="q", hv_token=None)
+        result = await answer_question(query="q", lit_token=None)
 
         assert isinstance(result.took_ms, int)
         assert result.took_ms >= 0
@@ -438,7 +438,7 @@ class TestAnswerQuestionTookMs:
             ),
         )
 
-        result = await answer_question(query="q", hv_token="t")
+        result = await answer_question(query="q", lit_token="t")
 
         assert isinstance(result.took_ms, int)
         assert result.took_ms >= 0
@@ -467,7 +467,7 @@ class TestAnswerQuestionFilterForwarding:
 
         await answer_question(
             query="q",
-            hv_token=None,
+            lit_token=None,
             file_type="document",
             drive="Docs",
         )
@@ -538,7 +538,7 @@ class TestStreamAnswerHappyPath:
 
         events = await _collect(stream_answer(
             query="京都の紅葉について",
-            hv_token="tok",
+            lit_token="tok",
         ))
 
         kinds = [e.kind for e in events]
@@ -601,7 +601,7 @@ class TestStreamAnswerEmptyRetrieval:
         llm = _make_stream_llm_mock(["should", "not", "stream"])
         monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
 
-        events = await _collect(stream_answer(query="anything", hv_token=None))
+        events = await _collect(stream_answer(query="anything", lit_token=None))
 
         kinds = [e.kind for e in events]
         # Keywords -> empty sources -> empty citations -> done.
@@ -646,7 +646,7 @@ class TestStreamAnswerHallucinationFilter:
         llm = _make_stream_llm_mock([full_json])
         monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
 
-        events = await _collect(stream_answer(query="q", hv_token="t"))
+        events = await _collect(stream_answer(query="q", lit_token="t"))
 
         citations_event = next(e for e in events if e.kind == "citations")
         kept = citations_event.data["citations"]
@@ -694,7 +694,7 @@ class TestStreamAnswerProgressiveCitations:
         llm = _make_stream_llm_mock(deltas)
         monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
 
-        events = await _collect(stream_answer(query="q", hv_token="t"))
+        events = await _collect(stream_answer(query="q", lit_token="t"))
 
         kinds = [e.kind for e in events]
         # Two progressive citation events, one per cited file, between
@@ -763,7 +763,7 @@ class TestStreamAnswerProgressiveCitations:
         llm = _make_stream_llm_mock([full_json])
         monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
 
-        events = await _collect(stream_answer(query="q", hv_token="t"))
+        events = await _collect(stream_answer(query="q", lit_token="t"))
 
         # Progressive path: only real-1 comes through.
         progressive_ids = [
@@ -809,7 +809,7 @@ class TestStreamAnswerProgressiveCitations:
         llm = _make_stream_llm_mock([full_json])
         monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
 
-        events = await _collect(stream_answer(query="q", hv_token="t"))
+        events = await _collect(stream_answer(query="q", lit_token="t"))
 
         terminal = next(e for e in events if e.kind == "citations")
         terminal_ids = [c["file_id"] for c in terminal.data["citations"]]
@@ -836,7 +836,7 @@ class TestStreamAnswerProgressiveCitations:
         llm = _make_stream_llm_mock(["sorry I cannot answer"])
         monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
 
-        events = await _collect(stream_answer(query="q", hv_token="t"))
+        events = await _collect(stream_answer(query="q", lit_token="t"))
 
         assert [e for e in events if e.kind == "citation"] == []
         # Terminal event still fires with an empty list.
@@ -866,7 +866,7 @@ class TestStreamAnswerUnparseableJSON:
         llm = _make_stream_llm_mock(["this is not json at all"])
         monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
 
-        events = await _collect(stream_answer(query="q", hv_token="t"))
+        events = await _collect(stream_answer(query="q", lit_token="t"))
 
         citations_event = next(e for e in events if e.kind == "citations")
         assert citations_event.data["citations"] == []

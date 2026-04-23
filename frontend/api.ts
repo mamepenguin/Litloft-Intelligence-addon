@@ -7,12 +7,12 @@ const API_BASE = "/api";
  * Drive context header for every intelligence API call.
  *
  * Manifest scope is "drive" so the host's Generic Addon Proxy demands
- * X-HV-Drive on every route. The header value must be ISO-8859-1 only,
+ * X-Lit-Drive on every route. The header value must be ISO-8859-1 only,
  * so non-ASCII drive names (e.g. Japanese) are percent-encoded; the
  * intelligence backend decodes once via drive_context.require_drive.
  */
 function driveHeaders(drive: string): HeadersInit {
-  return { "X-HV-Drive": encodeURIComponent(drive) };
+  return { "X-Lit-Drive": encodeURIComponent(drive) };
 }
 
 // Semantic search types
@@ -348,7 +348,7 @@ export async function getClipTimestamps(
 export function getFrameUrl(fileId: string, timestamp: number): string {
   // <img src> can't carry headers. The host proxy's file_access pre_check
   // already verifies the caller's session can read this file regardless
-  // of the missing X-HV-Drive — and the URL itself is unguessable enough
+  // of the missing X-Lit-Drive — and the URL itself is unguessable enough
   // (UUIDs) that this is no worse than a thumbnail URL. If we ever need
   // strict drive context here we'll need a different approach (signed
   // URL or a hidden iframe with fetch+blob).
@@ -755,7 +755,7 @@ export async function deleteDetailedSummary(
  *
  * Returned as a string so the UI can use it directly in an ``<a
  * download>`` tag or ``window.location`` navigation. The host proxy
- * requires ``X-HV-Drive`` for every intelligence route, so the caller
+ * requires ``X-Lit-Drive`` for every intelligence route, so the caller
  * cannot use a plain anchor — instead, fetch the blob and create an
  * object URL:
  *

@@ -1,7 +1,7 @@
 """Drive context helpers for drive-scoped routes.
 
 Every public route in this addon operates within a single Litloft
-drive, identified by the ``X-HV-Drive`` request header. The header is
+drive, identified by the ``X-Lit-Drive`` request header. The header is
 set by Litloft's Generic Addon Proxy when the request arrives via
 ``/drive/{drive}/addons/intelligence/...`` and validated against the
 caller's accessible drive set there.
@@ -17,9 +17,9 @@ from fastapi import Header, HTTPException
 
 
 def require_drive(
-    x_hv_drive: Annotated[str | None, Header(alias="X-HV-Drive")] = None,
+    x_hv_drive: Annotated[str | None, Header(alias="X-Lit-Drive")] = None,
 ) -> str:
-    """Return the canonical drive name from the X-HV-Drive header.
+    """Return the canonical drive name from the X-Lit-Drive header.
 
     Raises 400 if the header is absent. Header values are restricted to
     ISO-8859-1, so the frontend percent-encodes drive names; we decode

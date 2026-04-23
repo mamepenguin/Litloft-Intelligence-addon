@@ -84,7 +84,7 @@ async def search_endpoint(
 ) -> SearchResponseModel:
     """Execute a semantic search query within the request's drive.
 
-    Drive scope is set by the ``X-HV-Drive`` header (forwarded by the
+    Drive scope is set by the ``X-Lit-Drive`` header (forwarded by the
     Litloft Generic Addon Proxy from ``/drive/{drive}/...``). Results
     are constrained to that drive — cross-drive search is not exposed
     at all to keep drive-as-privacy-boundary intact.

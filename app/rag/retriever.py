@@ -86,24 +86,24 @@ def _internal_api_base_url() -> str:
 
 async def _filter_file_ids_via_internal_api(
     file_ids: list[str],
-    hv_token: str | None,
+    lit_token: str | None,
 ) -> set[str]:
     """Call the host's Internal API to filter file_ids by access.
 
     The token is transmitted as the ``access_token`` cookie — that's the
     name the host's ``get_unlocked_groups`` dependency reads from
     ``request.cookies`` (see ``backend/app/auth.py``). The parameter is
-    still called ``hv_token`` for historical reasons; callers pass the
+    still called ``lit_token`` for historical reasons; callers pass the
     raw JWT string extracted from the incoming request's cookie.
 
-    When ``hv_token`` is None the caller is unauthenticated — the host
+    When ``lit_token`` is None the caller is unauthenticated — the host
     returns the union of fully-public drives, which is the intended
     behaviour for "全公開モード" (all drives public). We still call the
     API so unauthenticated users cannot see protected drives.
 
     Args:
         file_ids: The candidate file_ids from the search pipeline.
-        hv_token: Optional ``access_token`` cookie value to forward.
+        lit_token: Optional ``access_token`` cookie value to forward.
 
     Returns:
         The subset of ``file_ids`` the caller is allowed to see. On
@@ -115,8 +115,8 @@ async def _filter_file_ids_via_internal_api(
 
     url = f"{_internal_api_base_url()}/filter-file-ids"
     cookies: dict[str, str] = {}
-    if hv_token:
-        cookies["access_token"] = hv_token
+    if lit_token:
+        cookies["access_token"] = lit_token
 
     try:
         async with httpx.AsyncClient(
@@ -221,7 +221,7 @@ def _to_retrieved_file(
 async def retrieve_with_keywords(
     keywords: str,
     top_k: int,
-    hv_token: str | None,
+    lit_token: str | None,
     file_type: str | None = None,
     drive: str | None = None,
     *,
@@ -246,7 +246,7 @@ async def retrieve_with_keywords(
             from the natural-language question). Passed straight into
             the hybrid search index.
         top_k: Max number of files to pull from the search pipeline.
-        hv_token: Optional ``access_token`` cookie to forward for
+        lit_token: Optional ``access_token`` cookie to forward for
             access control (None = unauthenticated caller).
         file_type: Optional file type filter (video / audio / ...).
         drive: Optional drive name filter.
@@ -276,7 +276,7 @@ async def retrieve_with_keywords(
     # None — the host decides what a token-less caller can see.
     allowed_ids = await _filter_file_ids_via_internal_api(
         file_ids=file_ids,
-        hv_token=hv_token,
+        lit_token=lit_token,
     )
 
     allowed_results = [r for r in results if r.file_id in allowed_ids]
@@ -296,7 +296,7 @@ async def retrieve_with_keywords(
 async def retrieve_candidates(
     query: str,
     top_k: int,
-    hv_token: str | None,
+    lit_token: str | None,
     file_type: str | None = None,
     drive: str | None = None,
     *,
@@ -317,7 +317,7 @@ async def retrieve_candidates(
     Args:
         query: The user's natural-language question.
         top_k: Max number of files to pull from the search pipeline.
-        hv_token: Optional ``access_token`` cookie to forward for
+        lit_token: Optional ``access_token`` cookie to forward for
             access control.
         file_type: Optional file type filter (video / audio / ...).
         drive: Optional drive name filter.
@@ -329,7 +329,7 @@ async def retrieve_candidates(
     return await retrieve_with_keywords(
         keywords=keywords,
         top_k=top_k,
-        hv_token=hv_token,
+        lit_token=lit_token,
         original_query=query,
         file_type=file_type,
         drive=drive,
