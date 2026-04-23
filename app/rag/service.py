@@ -332,7 +332,7 @@ def _to_source_dict(candidate: RetrievedFile) -> dict[str, Any]:
 
 async def answer_question(
     query: str,
-    hv_token: str | None,
+    lit_token: str | None,
     top_k: int | None = None,
     file_type: str | None = None,
     drive: str | None = None,
@@ -354,7 +354,7 @@ async def answer_question(
     candidates = await retrieve_candidates(
         query=query,
         top_k=effective_top_k,
-        hv_token=hv_token,
+        lit_token=lit_token,
         file_type=file_type,
         drive=drive,
         transform_temperature=temperature,
@@ -482,7 +482,7 @@ def _empty_done_event(
 
 async def stream_answer(
     query: str,
-    hv_token: str | None,
+    lit_token: str | None,
     top_k: int | None = None,
     file_type: str | None = None,
     drive: str | None = None,
@@ -532,7 +532,7 @@ async def stream_answer(
     candidates = await retrieve_with_keywords(
         keywords=keywords,
         top_k=effective_top_k,
-        hv_token=hv_token,
+        lit_token=lit_token,
         file_type=file_type,
         drive=drive,
         original_query=query,

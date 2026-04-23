@@ -29,7 +29,7 @@ RUN mkdir -p /intelligence-data/models
 
 ENV PYTHONUNBUFFERED=1
 ENV INTELLIGENCE_DATA_DIR=/intelligence-data
-ENV HOMEVAULT_DB_PATH=/data/homevault.db
+ENV HOMEVAULT_DB_PATH=/data/litloft.db
 
 EXPOSE 8100
 

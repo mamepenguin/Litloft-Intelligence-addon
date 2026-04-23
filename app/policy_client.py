@@ -1,6 +1,6 @@
-"""Per-drive intelligence policy lookup against HomeVault's Internal API.
+"""Per-drive intelligence policy lookup against Litloft's Internal API.
 
-HomeVault stores per-drive feature toggles in ``drives.json`` (see the
+Litloft stores per-drive feature toggles in ``drives.json`` (see the
 core ``backend/app/config.py::is_addon_feature_enabled``). This module
 queries them through ``GET /api/internal/drive-policy?drive=&addon=``
 and caches the result for a short TTL so worker hot paths aren't
@@ -13,7 +13,7 @@ should always succeed. When they don't (network blip, host restart),
 we **fail open** — return ``True`` so legitimate work keeps flowing.
 This matches the host-side ``event_hooks`` filter, which also forwards
 events when drive resolution fails. The actual data-protection gate is
-the request-time ``X-HV-Drive`` enforcement at the router layer; this
+the request-time ``X-Lit-Drive`` enforcement at the router layer; this
 client is an optimisation that lets background workers skip wasted
 work for off-policy drives, not a security boundary.
 """

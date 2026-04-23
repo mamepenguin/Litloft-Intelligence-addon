@@ -1,4 +1,4 @@
-"""Webhook endpoints for HomeVault event notifications."""
+"""Webhook endpoints for Litloft event notifications."""
 
 from fastapi import APIRouter, Depends
 
@@ -35,7 +35,7 @@ async def webhook_scan_complete(
     body: WebhookScanComplete,
     _: None = Depends(verify_webhook_secret),
 ) -> MessageResponse:
-    """Handle scan-complete webhook from HomeVault."""
+    """Handle scan-complete webhook from Litloft."""
     manager = get_index_manager()
     payload = ScanCompletePayload(
         drive=body.drive,
@@ -53,7 +53,7 @@ async def webhook_files_deleted(
     body: WebhookFilesDeleted,
     _: None = Depends(verify_webhook_secret),
 ) -> MessageResponse:
-    """Handle files-deleted webhook from HomeVault."""
+    """Handle files-deleted webhook from Litloft."""
     manager = get_index_manager()
     payload = FilesDeletedPayload(
         file_ids=tuple(body.file_ids), type=body.type
@@ -67,7 +67,7 @@ async def webhook_files_restored(
     body: WebhookFilesRestored,
     _: None = Depends(verify_webhook_secret),
 ) -> MessageResponse:
-    """Handle files-restored webhook from HomeVault."""
+    """Handle files-restored webhook from Litloft."""
     manager = get_index_manager()
     payload = FilesRestoredPayload(file_ids=tuple(body.file_ids))
     result = await handle_files_restored(payload, manager)
@@ -79,7 +79,7 @@ async def webhook_files_purged(
     body: WebhookFilesPurged,
     _: None = Depends(verify_webhook_secret),
 ) -> MessageResponse:
-    """Handle files-purged webhook from HomeVault."""
+    """Handle files-purged webhook from Litloft."""
     manager = get_index_manager()
     payload = FilesPurgedPayload(file_ids=tuple(body.file_ids))
     result = await handle_files_purged(payload, manager)
@@ -91,7 +91,7 @@ async def webhook_files_missing(
     body: WebhookFilesMissing,
     _: None = Depends(verify_webhook_secret),
 ) -> MessageResponse:
-    """Handle files-missing webhook from HomeVault."""
+    """Handle files-missing webhook from Litloft."""
     manager = get_index_manager()
     payload = FilesMissingPayload(file_ids=tuple(body.file_ids))
     result = await handle_files_missing(payload, manager)
@@ -103,7 +103,7 @@ async def webhook_files_recovered(
     body: WebhookFilesRecovered,
     _: None = Depends(verify_webhook_secret),
 ) -> MessageResponse:
-    """Handle files-recovered webhook from HomeVault."""
+    """Handle files-recovered webhook from Litloft."""
     manager = get_index_manager()
     payload = FilesRecoveredPayload(file_ids=tuple(body.file_ids))
     result = await handle_files_recovered(payload, manager)

@@ -148,7 +148,7 @@ class TestRetrieveCandidates:
         # All files accessible -> identity filter.
         monkeypatch.setattr(
             "app.rag.retriever._filter_file_ids_via_internal_api",
-            AsyncMock(side_effect=lambda file_ids, hv_token: set(file_ids)),
+            AsyncMock(side_effect=lambda file_ids, lit_token: set(file_ids)),
         )
         monkeypatch.setattr(
             "app.rag.retriever._get_indexed_files_meta",
@@ -158,7 +158,7 @@ class TestRetrieveCandidates:
         retrieved = await retrieve_candidates(
             query="test",
             top_k=5,
-            hv_token="token-abc",
+            lit_token="token-abc",
         )
 
         assert len(retrieved) == 5
@@ -180,7 +180,7 @@ class TestRetrieveCandidates:
         )
 
         await retrieve_candidates(
-            query="q", top_k=3, hv_token=None
+            query="q", top_k=3, lit_token=None
         )
 
         # search() was called with limit=top_k. Accept either kwarg or
@@ -211,7 +211,7 @@ class TestRetrieveCandidates:
         )
 
         await retrieve_candidates(
-            query="a natural question", top_k=5, hv_token=None
+            query="a natural question", top_k=5, lit_token=None
         )
 
         kwargs = search_spy.call_args.kwargs
@@ -240,7 +240,7 @@ class TestRetrieveCandidates:
         await retrieve_candidates(
             query="why does the 共通点 matter?",
             top_k=5,
-            hv_token=None,
+            lit_token=None,
         )
 
         # First positional arg to search() is the query string — we
@@ -275,7 +275,7 @@ class TestRetrieveCandidates:
         await retrieve_with_keywords(
             keywords="verbatim keywords",
             top_k=5,
-            hv_token=None,
+            lit_token=None,
         )
 
         # Transform never invoked.
@@ -301,7 +301,7 @@ class TestRetrieveCandidates:
         await retrieve_candidates(
             query="q",
             top_k=5,
-            hv_token=None,
+            lit_token=None,
             file_type="document",
             drive="Docs",
         )
@@ -336,7 +336,7 @@ class TestRetrieveCandidates:
         retrieved = await retrieve_candidates(
             query="test",
             top_k=10,
-            hv_token="valid-token",
+            lit_token="valid-token",
         )
 
         file_ids = [r.file_id for r in retrieved]
@@ -368,18 +368,18 @@ class TestRetrieveCandidates:
         await retrieve_candidates(
             query="test",
             top_k=5,
-            hv_token="my-secret-token",
+            lit_token="my-secret-token",
         )
 
-        # The hv_token kwarg (or positional) should match.
+        # The lit_token kwarg (or positional) should match.
         call_kwargs = filter_spy.call_args.kwargs
-        assert call_kwargs.get("hv_token") == "my-secret-token" or (
+        assert call_kwargs.get("lit_token") == "my-secret-token" or (
             "my-secret-token" in filter_spy.call_args.args
         )
 
     @pytest.mark.asyncio
-    async def test_handles_none_hv_token(self, monkeypatch):
-        """T3: hv_token=None must not crash; access filter still runs."""
+    async def test_handles_none_lit_token(self, monkeypatch):
+        """T3: lit_token=None must not crash; access filter still runs."""
         filter_spy = AsyncMock(return_value={"f1"})
         monkeypatch.setattr(
             "app.rag.retriever.search",
@@ -398,7 +398,7 @@ class TestRetrieveCandidates:
         retrieved = await retrieve_candidates(
             query="test",
             top_k=5,
-            hv_token=None,
+            lit_token=None,
         )
 
         # The filter function should be invoked exactly once even when
@@ -425,7 +425,7 @@ class TestRetrieveCandidates:
         )
 
         retrieved = await retrieve_candidates(
-            query="q", top_k=5, hv_token="token"
+            query="q", top_k=5, lit_token="token"
         )
 
         assert retrieved == []
@@ -455,7 +455,7 @@ class TestRetrieveCandidates:
         )
 
         retrieved = await retrieve_candidates(
-            query="test", top_k=5, hv_token="token"
+            query="test", top_k=5, lit_token="token"
         )
 
         assert len(retrieved) == 1
@@ -491,7 +491,7 @@ class TestRetrieveCandidates:
         )
 
         retrieved = await retrieve_candidates(
-            query="test", top_k=5, hv_token="token"
+            query="test", top_k=5, lit_token="token"
         )
 
         assert len(retrieved) == 1
@@ -603,7 +603,7 @@ class TestFilterFileIdsContract:
 
         result = await _filter_file_ids_via_internal_api(
             file_ids=["f1", "f2", "f3"],
-            hv_token="jwt-value",
+            lit_token="jwt-value",
         )
 
         assert result == {"f1", "f2"}
@@ -649,14 +649,14 @@ class TestFilterFileIdsContract:
 
         await _filter_file_ids_via_internal_api(
             file_ids=["f1"],
-            hv_token="my-jwt",
+            lit_token="my-jwt",
         )
 
         assert captured["cookies"] == {"access_token": "my-jwt"}
 
     @pytest.mark.asyncio
     async def test_no_cookie_when_token_none(self, monkeypatch):
-        """When ``hv_token`` is None, the cookie dict must be empty.
+        """When ``lit_token`` is None, the cookie dict must be empty.
 
         An empty cookies dict causes the host's ``get_unlocked_groups``
         dependency to return ``[]`` — i.e., the caller is treated as
@@ -688,7 +688,7 @@ class TestFilterFileIdsContract:
 
         result = await _filter_file_ids_via_internal_api(
             file_ids=["f1"],
-            hv_token=None,
+            lit_token=None,
         )
 
         assert captured["cookies"] == {}
@@ -733,7 +733,7 @@ class TestFilterFileIdsContract:
         with caplog.at_level(_logging.WARNING, logger="app.rag.retriever"):
             result = await _filter_file_ids_via_internal_api(
                 file_ids=["f1"],
-                hv_token="t",
+                lit_token="t",
             )
 
         assert result == {"f1"}
@@ -769,7 +769,7 @@ class TestFilterFileIdsContract:
 
         result = await _filter_file_ids_via_internal_api(
             file_ids=["f1"],
-            hv_token="t",
+            lit_token="t",
         )
 
         assert result == set()

@@ -94,7 +94,7 @@ llm:
 
 # AI Summaries configuration (used when features.summaries != "false")
 # Generates 1-sentence short summary + paragraph long summary for videos,
-# audio files, and documents. Display-only: never writes to HomeVault DB.
+# audio files, and documents. Display-only: never writes to Litloft DB.
 summaries:
   min_context_chars: 50      # skip files with less usable content than this
                              # (prevents hallucinated summaries from near-empty transcripts)
@@ -288,7 +288,7 @@ search:
 
 # Indexing parameters
 indexing:
-  # Reconciliation interval with HomeVault DB (seconds)
+  # Reconciliation interval with Litloft DB (seconds)
   reconciliation_interval: 3600
 
   # Frame extraction settings for video CLIP analysis

@@ -112,7 +112,7 @@ async def get_transcript(
 @router.get("/files/{file_id}/subtitles.vtt")
 async def get_subtitles_vtt(
     file_id: str,
-    x_hv_drive: Annotated[str | None, Header(alias="X-HV-Drive")] = None,
+    x_hv_drive: Annotated[str | None, Header(alias="X-Lit-Drive")] = None,
 ) -> Response:
     """Return Whisper-derived subtitles as a WebVTT document.
 
@@ -500,7 +500,7 @@ async def get_chunk_excerpt(
 async def get_frame(
     file_id: str,
     t: float = Query(..., ge=0, description="Timestamp in seconds"),
-    x_hv_drive: Annotated[str | None, Header(alias="X-HV-Drive")] = None,
+    x_hv_drive: Annotated[str | None, Header(alias="X-Lit-Drive")] = None,
 ) -> Response:
     """Extract a single video frame at the given timestamp using ffmpeg.
 

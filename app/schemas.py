@@ -89,7 +89,7 @@ class StatusResponse(BaseModel):
 class WebhookScanComplete(BaseModel):
     drive: str
     added: int = 0
-    # ``removed`` kept for HomeVault builds that predate the missing-files
+    # ``removed`` kept for Litloft builds that predate the missing-files
     # feature. New builds send ``missing`` / ``recovered`` instead.
     removed: int = 0
     missing: int = 0

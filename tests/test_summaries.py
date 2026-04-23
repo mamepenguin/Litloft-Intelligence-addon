@@ -72,7 +72,7 @@ class TestClassifyFileType:
         # from the host's MIME heuristics but carry VTT-derived transcripts,
         # so they should feed the video summary path.
         assert (
-            _classify_file_type("other", "application/vnd.homevault.link+json")
+            _classify_file_type("other", "application/vnd.litloft.link+json")
             == "video"
         )
 

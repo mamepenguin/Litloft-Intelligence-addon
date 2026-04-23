@@ -291,7 +291,7 @@ class TestFolderPathValidation:
     async def test_body_drive_mismatch_rejected(
         self, feature_manual, monkeypatch
     ):
-        """body.drive must match X-HV-Drive when both present."""
+        """body.drive must match X-Lit-Drive when both present."""
         monkeypatch.setattr(
             "app.routers.refine.is_feature_enabled",
             AsyncMock(return_value=True),

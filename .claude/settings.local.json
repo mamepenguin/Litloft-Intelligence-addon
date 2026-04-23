@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -v \"^\\\\.git$\")",
+      "Bash(npx tsc:*)",
+      "Bash(python3:*)",
+      "Bash(grep -E \"\\\\.\\(tsx|ts\\)$\")",
+      "Bash(curl -s \"http://localhost:3000/api/search/debug/similar/67J5hS5_if8b\")",
+      "Bash(curl -s \"http://localhost:3000/api/search/debug/similar/T6dGMvMl5t9p\")",
+      "Bash(curl -s \"http://localhost:3000/api/search/similar/67J5hS5_if8b\")",
+      "Bash(curl -s \"http://localhost:3000/api/search/similar/MW3LoXNHDrUq\")",
+      "Bash(curl -s \"http://localhost:3000/api/search/similar/e26-T_Abi491\")",
+      "Bash(curl -s \"http://localhost:3000/api/search/similar/MW_iRYz4mIcZ\")",
+      "Read(//Users/libre/Sources/video_share/**)",
+      "Bash(docker compose:*)",
+      "Bash(curl -s 'http://localhost:3000/api/search/status')",
+      "Bash(curl -s 'http://localhost:8100/files?file_type=video&limit=20')",
+      "Bash(curl -s 'http://localhost:8100/search?q=ポケモン&limit=5')",
+      "Bash(curl -sv 'http://localhost:8100/search?q=test&limit=1')",
+      "Bash(curl -s 'http://localhost:3000/api/search?q=ポケモン&limit=3')",
+      "Bash(curl -sv 'http://localhost:3000/api/search?q=test')",
+      "Bash(curl -s \"http://localhost:3000/api/search/similar/EzG1JWf4Dofk?limit=3\")",
+      "Bash(curl -s \"http://localhost:3000/api/search/similar/LBKKSzC7FFQp?limit=6\")",
+      "Bash(wc:*)",
+      "Bash(python -m pytest tests/test_search.py -v)",
+      "Bash(ls:*)",
+      "Bash(pip list:*)",
+      "Bash(docker build:*)",
+      "Bash(docker run:*)",
+      "Bash(pnpm tsc:*)",
+      "Bash(curl -s http://localhost:3000/api/addons/intelligence/status)",
+      "Bash(pnpm exec:*)",
+      "Read(//Users/libre/Sources/video_share/frontend/**)",
+      "Bash(pnpm lint:*)",
+      "Bash(pnpm test:*)",
+      "Bash(docker exec video_share-frontend-1:*)",
+      "Bash(grep:*)"
+    ]
+  }
+}

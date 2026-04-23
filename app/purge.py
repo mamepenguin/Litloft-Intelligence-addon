@@ -1,6 +1,6 @@
 """Bulk purge of an entire drive from the intelligence index.
 
-Used when a HomeVault operator flips ``addons.intelligence`` (or its
+Used when a Litloft operator flips ``addons.intelligence`` (or its
 ``index`` sub-key) to ``false`` for a drive in ``drives.json`` and
 restarts the addon container. The user explicitly opted to purge
 existing artefacts (see plan ``kind-sparking-shore``) so the drive

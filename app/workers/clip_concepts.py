@@ -1,7 +1,7 @@
 """CLIP zero-shot concept scoring for auto-tag candidate generation.
 
 Loads a curated concept vocabulary (clip_concepts.json) plus any
-user-defined tags fetched from the HomeVault DB, encodes each concept
+user-defined tags fetched from the Litloft DB, encodes each concept
 into a CLIP text embedding once (cached at module level), and scores
 file CLIP embeddings against the concept set via cosine similarity.
 
@@ -25,7 +25,7 @@ import numpy as np
 from sqlalchemy import text as sql_text
 
 from app.config import settings
-from app.database import get_homevault_db, get_search_db
+from app.database import get_litloft_db, get_search_db
 from app.models import Embedding
 from app.workers.clip import embed_text_clip
 
@@ -81,7 +81,7 @@ def load_preset_concepts(path: Path | None = None) -> list[str]:
 
 
 def load_user_tags() -> list[str]:
-    """Fetch distinct tag names from the HomeVault DB.
+    """Fetch distinct tag names from the Litloft DB.
 
     Best-effort: returns an empty list if the DB is unavailable (e.g.
     under tests) rather than propagating the error. User tags enrich
@@ -92,7 +92,7 @@ def load_user_tags() -> list[str]:
         List of tag name strings, deduplicated by the DB query.
     """
     try:
-        with get_homevault_db() as session:
+        with get_litloft_db() as session:
             rows = session.execute(
                 sql_text("SELECT DISTINCT name FROM tags ORDER BY name")
             ).fetchall()
@@ -111,7 +111,7 @@ def build_concept_pool(
 
     Args:
         preset_path: Optional override for the preset JSON path.
-        include_user_tags: When True, fetches tags from HomeVault DB.
+        include_user_tags: When True, fetches tags from Litloft DB.
 
     Returns:
         Merged, deduplicated list of concept strings.
@@ -162,7 +162,7 @@ def get_concept_embeddings(
 
     Args:
         preset_path: Optional override (mostly for tests).
-        include_user_tags: Include HomeVault user tags in the pool.
+        include_user_tags: Include Litloft user tags in the pool.
         force_reload: Discard cache and rebuild from scratch.
 
     Returns:

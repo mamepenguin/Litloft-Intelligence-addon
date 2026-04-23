@@ -41,7 +41,7 @@ def _patch_memory(
     monkeypatch.setattr(
         blip, "settings", app_config.Settings(
             intelligence_data_dir=app_config.settings.intelligence_data_dir,
-            homevault_db_path=app_config.settings.homevault_db_path,
+            litloft_db_path=app_config.settings.litloft_db_path,
             model_cache_dir=app_config.settings.model_cache_dir,
             search_db_path=app_config.settings.search_db_path,
             memory=app_config.MemoryConfig(

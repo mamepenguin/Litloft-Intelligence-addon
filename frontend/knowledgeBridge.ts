@@ -5,14 +5,14 @@
  * Proxy so we reuse the same ``/api/addons/knowledge/...`` paths that
  * the knowledge frontend uses.
  *
- * Drive scope is enforced by the proxy via the ``X-HV-Drive`` header.
+ * Drive scope is enforced by the proxy via the ``X-Lit-Drive`` header.
  * Drive names may contain non-ASCII characters, so we percent-encode
  * the header value — the knowledge backend decodes once.
  */
 const KNOWLEDGE_BASE = "/api/addons/knowledge";
 
 function driveHeaders(drive: string): Record<string, string> {
-  return { "X-HV-Drive": encodeURIComponent(drive) };
+  return { "X-Lit-Drive": encodeURIComponent(drive) };
 }
 
 export interface KnowledgeVault {

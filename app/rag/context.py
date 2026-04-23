@@ -910,7 +910,7 @@ def build_file_context(
     a sentence boundary so the last snippet still ends cleanly.
     """
     file_type = candidate.file_type
-    # HvLink files carry host file_type="other" from MIME heuristics but
+    # LoftRef files carry host file_type="other" from MIME heuristics but
     # have VTT-derived TranscriptChunks — route them through the transcript
     # path so the LLM sees the subtitles (mirrors summaries._classify_file_type).
     is_hvlink = candidate.mime_type == HVLINK_MIME

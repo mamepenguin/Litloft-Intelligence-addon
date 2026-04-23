@@ -336,7 +336,7 @@ class TestAskEndpointStreaming:
         # Drain the body so the generator actually runs.
         await _collect_sse_body(result)
 
-        assert captured.get("hv_token") == "my-secret-token"
+        assert captured.get("lit_token") == "my-secret-token"
 
     @pytest.mark.asyncio
     async def test_forwards_optional_params(
@@ -356,7 +356,7 @@ class TestAskEndpointStreaming:
             file_type="video",
             drive="Videos",
         )
-        # X-HV-Drive is the source of truth; body.drive must agree. The
+        # X-Lit-Drive is the source of truth; body.drive must agree. The
         # router resolves the header via Depends, so when calling the
         # handler directly we pass ``drive`` explicitly.
         result = await ask_endpoint(
@@ -367,7 +367,7 @@ class TestAskEndpointStreaming:
         assert captured.get("top_k") == 7
         assert captured.get("file_type") == "video"
         assert captured.get("drive") == "Videos"
-        assert captured.get("hv_token") is None
+        assert captured.get("lit_token") is None
 
 
 # ---------------------------------------------------------------------------

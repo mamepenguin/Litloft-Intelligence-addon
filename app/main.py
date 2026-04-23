@@ -14,7 +14,7 @@ from fastapi import FastAPI
 
 from app import dependencies
 from app.config import settings
-from app.database import init_homevault_db, init_search_db
+from app.database import init_litloft_db, init_search_db
 from app.indexer import IndexManager
 from app.llm import create_llm_client
 from app.routers import (
@@ -75,13 +75,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Search database initialized")
 
     try:
-        init_homevault_db()
-        logger.info("HomeVault database connected (read-only)")
+        init_litloft_db()
+        logger.info("Litloft database connected (read-only)")
     except FileNotFoundError:
         logger.warning(
-            "HomeVault database not found at %s. "
+            "Litloft database not found at %s. "
             "Service will start but indexing will be unavailable until DB is accessible.",
-            settings.homevault_db_path,
+            settings.litloft_db_path,
         )
 
     # Clean up orphaned data from potential crash during previous run
@@ -263,7 +263,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 app = FastAPI(
-    title="HomeVault Semantic Search",
+    title="Litloft Semantic Search",
     version=settings.service_version,
     lifespan=lifespan,
 )

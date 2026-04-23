@@ -21,7 +21,7 @@ interface TranscriptSectionProps {
   // Legacy native-video reference. Used for the timeupdate listener
   // (highlighting the active cue) and as the seek fallback.
   videoRef?: React.RefObject<HTMLVideoElement | null>;
-  // Preferred jump target — works for HvLink (YouTube) too.
+  // Preferred jump target — works for LoftRef (YouTube) too.
   mediaController?: MediaController | null;
   subtitles?: SubtitleInfo[];
 }
@@ -190,7 +190,7 @@ export default function TranscriptSection({ fileId, drive, videoRef, mediaContro
 
   const seekTo = useCallback(
     (time: number) => {
-      // Prefer the unified controller (HvLink / native both supported).
+      // Prefer the unified controller (LoftRef / native both supported).
       if (mediaController) {
         mediaController.seek(time);
         mediaController.play();

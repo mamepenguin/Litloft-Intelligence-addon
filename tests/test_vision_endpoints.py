@@ -435,7 +435,7 @@ class TestFolderBulkGenerate:
     async def test_body_drive_mismatch_rejected(
         self, feature_manual,
     ):
-        """body.drive must match the X-HV-Drive header."""
+        """body.drive must match the X-Lit-Drive header."""
         with pytest.raises(HTTPException) as exc:
             await generate_folder_visual_description(
                 body={"drive": "other", "path": "photos"},

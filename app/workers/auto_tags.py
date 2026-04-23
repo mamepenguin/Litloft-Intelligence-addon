@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from sqlalchemy import text as sql_text
 
 from app.config import settings
-from app.database import get_homevault_db, get_search_db
+from app.database import get_litloft_db, get_search_db
 from app.llm import LLMClient
 from app.models import Embedding, IndexedFile, TranscriptChunk
 from app.tfidf import get_tfidf_keywords_for_file
@@ -479,9 +479,9 @@ def _get_indexed_file(file_id: str) -> dict | None:
 
 
 def _get_existing_tags(file_id: str) -> list[str]:
-    """Get existing tags from HomeVault DB for a file."""
+    """Get existing tags from Litloft DB for a file."""
     try:
-        with get_homevault_db() as session:
+        with get_litloft_db() as session:
             rows = session.execute(
                 sql_text(
                     "SELECT t.name FROM tags t "

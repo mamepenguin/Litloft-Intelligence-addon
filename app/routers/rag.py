@@ -170,7 +170,7 @@ async def _sse_stream(
     try:
         async for event in stream_answer(
             query=query,
-            hv_token=access_token,
+            lit_token=access_token,
             top_k=top_k,
             file_type=file_type,
             drive=drive,
@@ -239,7 +239,7 @@ async def ask_endpoint(
         raise HTTPException(status_code=400, detail="Query too short")
 
     # If the body redundantly specifies a drive, it must agree with the
-    # X-HV-Drive header. The header is the source of truth (set by the
+    # X-Lit-Drive header. The header is the source of truth (set by the
     # host's Generic Addon Proxy from the URL); a mismatch indicates a
     # spoofed body and is rejected outright.
     if body.drive and body.drive != drive:

@@ -14,7 +14,7 @@ interface ClipFramesSectionProps {
   drive: string;
   // Legacy: still accepted for callers that pass a native video ref.
   videoRef?: React.RefObject<HTMLVideoElement | null>;
-  // Preferred: works for native video AND HvLink (YouTube) embeds.
+  // Preferred: works for native video AND LoftRef (YouTube) embeds.
   mediaController?: MediaController | null;
 }
 
@@ -42,7 +42,7 @@ export default function ClipFramesSection({ fileId, drive, videoRef, mediaContro
 
   const seekTo = useCallback(
     (time: number) => {
-      // Prefer the unified controller (covers HvLink/YouTube) and fall
+      // Prefer the unified controller (covers LoftRef/YouTube) and fall
       // back to the legacy native video ref for callers that haven't
       // migrated yet.
       if (mediaController) {
