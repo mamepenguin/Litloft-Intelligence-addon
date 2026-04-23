@@ -137,15 +137,6 @@ def init_search_db() -> None:
     # Backfill fts_transcripts from existing transcript_chunks
     _backfill_fts_transcripts()
 
-    # One-shot data fix: rows indexed before the HvLink → LoftRef MIME
-    # rename (commit ffdc0f7) still carry the legacy MIME. The rename
-    # updated every code-side reference to LOFT_MIME but left the
-    # intelligence DB cache stale, so _classify_file_type no longer
-    # recognises those files as videos and regenerate / RAG paths
-    # reject them. Idempotent: runs in every startup, no-op when all
-    # rows are already on the new MIME.
-    _migrate_loft_mime_legacy_to_current()
-
 
 def _backfill_fts_transcripts() -> None:
     """Backfill fts_transcripts from existing transcript_chunks.
@@ -770,44 +761,6 @@ def _backfill_file_insights_from_detailed_summary() -> None:
             logger.info(
                 "Backfilled %d detailed_summary rows into file_insights",
                 inserted,
-            )
-
-
-_LEGACY_LOFT_MIME = "application/vnd.homevault.link+json"
-_CURRENT_LOFT_MIME = "application/vnd.litloft.loft+json"
-
-
-def _migrate_loft_mime_legacy_to_current() -> None:
-    """Rewrite stale ``indexed_files.mime_type`` entries to the current value.
-
-    The HvLink → LoftRef rename (commit ffdc0f7) only updated code-side
-    constants; rows already cached in the intelligence DB kept their
-    old ``application/vnd.homevault.link+json`` MIME and therefore
-    failed every downstream ``mime_type == LOFT_MIME`` check
-    (regenerate, classify, RAG retriever). Running this migration on
-    startup aligns the cache with the backend DB without requiring a
-    full reindex.
-
-    Idempotent — the UPDATE no-ops once every row uses the new MIME.
-    """
-    logger = logging.getLogger(__name__)
-    if _search_engine is None:
-        return
-
-    with _search_engine.begin() as conn:
-        result = conn.execute(
-            text(
-                "UPDATE indexed_files SET mime_type = :new "
-                "WHERE mime_type = :old"
-            ),
-            {"new": _CURRENT_LOFT_MIME, "old": _LEGACY_LOFT_MIME},
-        )
-        touched = result.rowcount or 0
-        if touched > 0:
-            logger.info(
-                "Migrated %d indexed_files rows from legacy LOFT MIME "
-                "(%s) to current (%s)",
-                touched, _LEGACY_LOFT_MIME, _CURRENT_LOFT_MIME,
             )
 
 
