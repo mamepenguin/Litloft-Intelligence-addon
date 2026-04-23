@@ -35,17 +35,45 @@ from sqlalchemy import create_engine, text  # noqa: E402
 
 @pytest.fixture()
 def engine_with_summaries(tmp_path):
-    """Build a search DB with both tables + sample file_summaries rows."""
-    from app.database import (
-        _create_file_insights_table,
-        _create_file_summaries_table,
-    )
+    """Build a search DB with the pre-Step-2b file_summaries schema.
+
+    The backfill function is the bridge between the old detailed_*
+    columns and the new file_insights table. To exercise it we need a
+    DB that still has those columns — ``_create_file_summaries_table``
+    now produces the Step 2b schema (workflow columns only), so the
+    fixture assembles the legacy schema by hand.
+    """
+    from app.database import _create_file_insights_table
 
     db_path = tmp_path / "search.db"
     engine = create_engine(f"sqlite:///{db_path}")
 
     with engine.begin() as conn:
-        _create_file_summaries_table(conn)
+        conn.execute(text(
+            "CREATE TABLE file_summaries ("
+            "  file_id TEXT PRIMARY KEY,"
+            "  short_summary TEXT NOT NULL,"
+            "  long_summary TEXT NOT NULL,"
+            "  model TEXT NOT NULL,"
+            "  context_type TEXT NOT NULL,"
+            "  context_chars INTEGER NOT NULL,"
+            "  was_truncated INTEGER NOT NULL DEFAULT 0,"
+            "  status TEXT NOT NULL DEFAULT 'generated',"
+            "  created_at TEXT NOT NULL,"
+            "  edited_at TEXT,"
+            "  short_original TEXT,"
+            "  long_original TEXT,"
+            "  detailed_summary TEXT,"
+            "  detailed_status TEXT,"
+            "  detailed_model TEXT,"
+            "  detailed_generated_at TEXT,"
+            "  detailed_context_chars INTEGER,"
+            "  detailed_was_truncated INTEGER,"
+            "  detailed_error TEXT,"
+            "  detailed_original TEXT,"
+            "  detailed_edited_at TEXT"
+            ")"
+        ))
         _create_file_insights_table(conn)
 
     return engine

@@ -132,7 +132,15 @@ def init_search_db() -> None:
         conn.commit()
 
     # Backfill file_insights from existing detailed_summary rows.
+    # Runs BEFORE the Step 2b column drop so the legacy data is
+    # captured in file_insights before the source columns vanish.
     _backfill_file_insights_from_detailed_summary()
+
+    # Step 2b: drop the detailed_* columns that moved to file_insights.
+    # Separate from _migrate_file_summaries_if_needed so it can run
+    # strictly after the backfill above.
+    with _search_engine.begin() as conn:
+        _migrate_file_summaries_drop_legacy_detailed_columns(conn)
 
     # Backfill fts_transcripts from existing transcript_chunks
     _backfill_fts_transcripts()
@@ -397,6 +405,11 @@ def _create_file_summaries_table(conn: object) -> None:
     ``short_original`` / ``long_original`` hold the AI output snapshot taken
     on first edit so the user can revert. ``edited_at`` flags a user-edited
     row (NULL = AI-generated, timestamp = last edit time).
+
+    ``detailed_status`` / ``detailed_error`` carry the transient workflow
+    state for the Markdown long-form summary (generating / generated /
+    failed + error message). The full body, metadata, and edit history
+    live on ``file_insights`` (Step 2b removed the redundant columns).
     """
     conn.execute(text(
         "CREATE TABLE IF NOT EXISTS file_summaries ("
@@ -412,15 +425,8 @@ def _create_file_summaries_table(conn: object) -> None:
         "  edited_at TEXT,"
         "  short_original TEXT,"
         "  long_original TEXT,"
-        "  detailed_summary TEXT,"
         "  detailed_status TEXT,"
-        "  detailed_model TEXT,"
-        "  detailed_generated_at TEXT,"
-        "  detailed_context_chars INTEGER,"
-        "  detailed_was_truncated INTEGER,"
         "  detailed_error TEXT,"
-        "  detailed_original TEXT,"
-        "  detailed_edited_at TEXT,"
         "  visual_description TEXT,"
         "  visual_description_generated_at TEXT,"
         "  visual_description_model TEXT,"
@@ -458,57 +464,20 @@ def _migrate_file_summaries_if_needed(conn: object) -> None:
         conn.execute(
             text("ALTER TABLE file_summaries ADD COLUMN long_original TEXT")
         )
-    # Detailed (long-form Markdown) summary columns. Nullable so the row
-    # can exist with only short/long generated and detailed added later.
-    if "detailed_summary" not in cols:
-        conn.execute(
-            text("ALTER TABLE file_summaries ADD COLUMN detailed_summary TEXT")
-        )
+    # Detailed-summary workflow columns. Step 2b removed the body /
+    # metadata / edit-history columns — that data now lives on
+    # ``file_insights``. ``detailed_status`` + ``detailed_error``
+    # remain as the transient generating / generated / failed marker.
+    # The actual drop of the removed columns happens in
+    # ``_migrate_file_summaries_drop_legacy_detailed_columns`` AFTER
+    # the FileInsight backfill has had a chance to read them.
     if "detailed_status" not in cols:
         conn.execute(
             text("ALTER TABLE file_summaries ADD COLUMN detailed_status TEXT")
         )
-    if "detailed_model" not in cols:
-        conn.execute(
-            text("ALTER TABLE file_summaries ADD COLUMN detailed_model TEXT")
-        )
-    if "detailed_generated_at" not in cols:
-        conn.execute(
-            text(
-                "ALTER TABLE file_summaries "
-                "ADD COLUMN detailed_generated_at TEXT"
-            )
-        )
-    if "detailed_context_chars" not in cols:
-        conn.execute(
-            text(
-                "ALTER TABLE file_summaries "
-                "ADD COLUMN detailed_context_chars INTEGER"
-            )
-        )
-    if "detailed_was_truncated" not in cols:
-        conn.execute(
-            text(
-                "ALTER TABLE file_summaries "
-                "ADD COLUMN detailed_was_truncated INTEGER"
-            )
-        )
     if "detailed_error" not in cols:
         conn.execute(
             text("ALTER TABLE file_summaries ADD COLUMN detailed_error TEXT")
-        )
-    # User-edit support for detailed_summary. Mirrors the short/long
-    # pair: ``detailed_original`` holds the pre-edit AI snapshot,
-    # ``detailed_edited_at`` flags the row as user-edited.
-    if "detailed_original" not in cols:
-        conn.execute(
-            text("ALTER TABLE file_summaries ADD COLUMN detailed_original TEXT")
-        )
-    if "detailed_edited_at" not in cols:
-        conn.execute(
-            text(
-                "ALTER TABLE file_summaries ADD COLUMN detailed_edited_at TEXT"
-            )
         )
     # Vision-describe columns. Nullable — the row may pre-exist purely
     # for short/long/detailed summary data. ``visual_description_status``
@@ -574,6 +543,44 @@ def _create_detailed_summary_citations_table(conn: object) -> None:
         "CREATE INDEX IF NOT EXISTS idx_detailed_citations_file "
         "ON detailed_summary_citations(file_id)"
     ))
+
+
+_STEP_2B_DROPPED_COLUMNS = (
+    "detailed_summary",
+    "detailed_model",
+    "detailed_generated_at",
+    "detailed_context_chars",
+    "detailed_was_truncated",
+    "detailed_original",
+    "detailed_edited_at",
+)
+
+
+def _migrate_file_summaries_drop_legacy_detailed_columns(conn: object) -> None:
+    """Drop the ``detailed_*`` columns superseded by ``file_insights``.
+
+    Step 2b removed seven columns from ``file_summaries`` after Step 2a
+    made ``file_insights`` the source of truth for detailed-summary
+    content, metadata, and edit history. This runs **after**
+    ``_backfill_file_insights_from_detailed_summary`` so any legacy
+    rows have already been mirrored into ``file_insights`` before the
+    columns vanish.
+
+    SQLite ≥ 3.35 supports ``ALTER TABLE ... DROP COLUMN``; the addon's
+    runtime (3.46) and the test harness (3.40+) both clear that bar.
+    Idempotent: the drop short-circuits once the column is gone.
+    """
+    cols = {
+        row[1]
+        for row in conn.execute(
+            text("PRAGMA table_info(file_summaries)")
+        ).fetchall()
+    }
+    for col in _STEP_2B_DROPPED_COLUMNS:
+        if col in cols:
+            conn.execute(
+                text(f"ALTER TABLE file_summaries DROP COLUMN {col}")
+            )
 
 
 def _create_file_insights_table(conn: object) -> None:
@@ -682,6 +689,19 @@ def _backfill_file_insights_from_detailed_summary() -> None:
             "WHERE type='table' AND name='file_summaries'"
         )).fetchone()
         if has_source is None:
+            return
+
+        # Fresh installs on the Step 2b schema no longer carry the
+        # legacy detailed_* columns. Skip the backfill query in that
+        # case — the SELECT would raise "no such column" and, by
+        # definition, there is nothing to migrate from this table.
+        source_cols = {
+            row[1]
+            for row in conn.execute(
+                text("PRAGMA table_info(file_summaries)")
+            ).fetchall()
+        }
+        if "detailed_summary" not in source_cols:
             return
 
         rows = conn.execute(text(

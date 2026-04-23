@@ -120,7 +120,10 @@ def test_coexists_with_file_summaries(fresh_engine):
 
     fs_cols = _columns(fresh_engine, "file_summaries")
     fi_cols = _columns(fresh_engine, "file_insights")
-    assert "detailed_summary" in fs_cols
+    # Step 2b: body/model/etc. no longer exist on file_summaries; only
+    # the workflow markers survive on the summaries side.
+    assert "detailed_status" in fs_cols
+    assert "detailed_error" in fs_cols
     assert "kind" in fi_cols
 
 

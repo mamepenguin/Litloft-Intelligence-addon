@@ -132,8 +132,9 @@ def _insert_detailed_row(engine, file_id: str, **overrides) -> None:
     """Insert paired ``file_summaries`` + ``file_insights`` rows for tests.
 
     Step 2a made the reader consume ``file_insights`` for the body /
-    versioning metadata. Tests that pre-seed must populate both tables
-    or the reader will return None.
+    versioning metadata. Step 2b then removed the legacy body columns
+    from ``file_summaries``; only ``detailed_status`` / ``detailed_error``
+    remain on the workflow row.
     """
     import json as _json
     import secrets as _secrets
@@ -164,13 +165,9 @@ def _insert_detailed_row(engine, file_id: str, **overrides) -> None:
                 "INSERT INTO file_summaries "
                 "(file_id, short_summary, long_summary, model, context_type, "
                 "context_chars, was_truncated, status, created_at, "
-                "detailed_summary, detailed_status, detailed_model, "
-                "detailed_generated_at, detailed_context_chars, "
-                "detailed_was_truncated, detailed_error) "
+                "detailed_status, detailed_error) "
                 "VALUES (:fid, :s, :l, :m, :ct, :cc, :wt, :st, :ca, "
-                ":detailed_summary, :detailed_status, :detailed_model, "
-                ":detailed_generated_at, :detailed_context_chars, "
-                ":detailed_was_truncated, :detailed_error)"
+                ":detailed_status, :detailed_error)"
             ),
             params,
         )
@@ -419,21 +416,11 @@ class TestDeleteDetailedSummary:
         self, search_db, feature_enabled,
     ):
         engine, _ = search_db
-        now = datetime.now(UTC).isoformat()
-        # Insert a row with short/long AND detailed — delete should
-        # leave short/long intact and only NULL out detailed_*.
-        with engine.begin() as conn:
-            conn.execute(
-                text(
-                    "INSERT INTO file_summaries "
-                    "(file_id, short_summary, long_summary, model, "
-                    "context_type, context_chars, was_truncated, status, "
-                    "created_at, detailed_summary, detailed_status) "
-                    "VALUES (:fid, 's', 'l', 'm', 'video', 1, 0, "
-                    "'generated', :now, 'detailed body', 'generated')"
-                ),
-                {"fid": "abc123", "now": now},
-            )
+        # Seed paired file_summaries + file_insights rows so the
+        # delete endpoint touches both tables — Step 2b removed the
+        # legacy body columns so the summary body lives on
+        # file_insights now.
+        _insert_detailed_row(engine, "abc123", s="s", l="l")
 
         result = await delete_detailed_summary_route("abc123", "drive1")
         assert result.status == "ok"
@@ -441,36 +428,35 @@ class TestDeleteDetailedSummary:
         with engine.connect() as conn:
             row = conn.execute(
                 text(
-                    "SELECT short_summary, detailed_summary, detailed_status "
+                    "SELECT short_summary, detailed_status "
                     "FROM file_summaries WHERE file_id = :fid"
                 ),
                 {"fid": "abc123"},
             ).fetchone()
         assert row is not None
-        assert row[0] == "s"
-        assert row[1] is None
-        assert row[2] is None
+        assert row[0] == "s"  # short_summary preserved.
+        assert row[1] is None  # Workflow marker cleared.
+
+        # The body now lives in file_insights — delete must wipe it.
+        with engine.connect() as conn:
+            insights = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM file_insights "
+                    "WHERE file_id = :fid AND kind = 'detailed_summary'"
+                ),
+                {"fid": "abc123"},
+            ).scalar()
+        assert insights == 0
 
     @pytest.mark.asyncio
     async def test_removes_row_when_detailed_only(
         self, search_db, feature_enabled,
     ):
         engine, _ = search_db
-        now = datetime.now(UTC).isoformat()
         # Placeholder row with empty short/long (as written by
-        # _set_detailed_status for a file that only ever had detailed).
-        with engine.begin() as conn:
-            conn.execute(
-                text(
-                    "INSERT INTO file_summaries "
-                    "(file_id, short_summary, long_summary, model, "
-                    "context_type, context_chars, was_truncated, status, "
-                    "created_at, detailed_summary, detailed_status) "
-                    "VALUES (:fid, '', '', '', '', 0, 0, 'hidden', "
-                    ":now, 'body', 'generated')"
-                ),
-                {"fid": "abc123", "now": now},
-            )
+        # _set_detailed_status for a file that only ever had detailed)
+        # plus the paired file_insights row that carries the body.
+        _insert_detailed_row(engine, "abc123")  # short/long default to ''
 
         await delete_detailed_summary_route("abc123", "drive1")
 

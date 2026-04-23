@@ -155,21 +155,11 @@ def _insert_detailed_row(
                 "INSERT INTO file_summaries "
                 "(file_id, short_summary, long_summary, model, context_type, "
                 "context_chars, was_truncated, status, created_at, "
-                "detailed_summary, detailed_status, detailed_model, "
-                "detailed_generated_at, detailed_context_chars, "
-                "detailed_was_truncated, detailed_original, "
-                "detailed_edited_at) "
+                "detailed_status) "
                 "VALUES (:fid, '', '', '', '', 0, 0, 'hidden', :now, "
-                ":summary, 'generated', 'test-model', :now, 500, 0, "
-                ":original, :edited)"
+                "'generated')"
             ),
-            {
-                "fid": file_id,
-                "now": now,
-                "summary": detailed_summary,
-                "original": detailed_original,
-                "edited": detailed_edited_at,
-            },
+            {"fid": file_id, "now": now},
         )
         meta = _json.dumps({
             "model": "test-model",
@@ -311,20 +301,18 @@ class TestEditDetailedSummarySection:
             "abc123", body, BackgroundTasks(), "drive1"
         )
 
-        with engine.connect() as conn:
-            row = conn.execute(
-                text(
-                    "SELECT detailed_summary, detailed_original, "
-                    "detailed_edited_at FROM file_summaries "
-                    "WHERE file_id = 'abc123'"
-                )
-            ).fetchone()
-        assert "ユーザーが書き直した全体像" in row[0]
-        # Original AI body stays snapshot.
-        assert row[1] == _SAMPLE_SUMMARY
-        assert row[2] is not None
+        # Step 2b: the body / original / edited_at live in
+        # ``file_insights`` now, so drive the verification through the
+        # public reader rather than direct SQL against the (stripped)
+        # ``file_summaries`` table.
+        from app.workers.summaries import _get_detailed_summary
+        data = _get_detailed_summary("abc123")
+        assert data is not None
+        assert "ユーザーが書き直した全体像" in data["detailed_summary"]
+        assert data["detailed_original"] == _SAMPLE_SUMMARY
+        assert data["detailed_edited_at"] is not None
         # The other section must be untouched.
-        assert "AI 版の章1" in row[0]
+        assert "AI 版の章1" in data["detailed_summary"]
 
         assert result.edited_at is not None
         assert result.has_original is True
@@ -354,16 +342,14 @@ class TestEditDetailedSummarySection:
             BackgroundTasks(),
             "drive1",
         )
-        with engine.connect() as conn:
-            row = conn.execute(
-                text(
-                    "SELECT detailed_summary, detailed_original "
-                    "FROM file_summaries WHERE file_id = 'abc123'"
-                )
-            ).fetchone()
-        assert "v2 body" in row[0]
-        # Snapshot still points at the AI version, not v1.
-        assert row[1] == _SAMPLE_SUMMARY
+        from app.workers.summaries import _get_detailed_summary
+        data = _get_detailed_summary("abc123")
+        assert data is not None
+        assert "v2 body" in data["detailed_summary"]
+        # Snapshot still points at the AI version, not v1 — the reader
+        # surfaces the latest superseded ``intelligence`` insight as
+        # the revert target.
+        assert data["detailed_original"] == _SAMPLE_SUMMARY
 
     @pytest.mark.asyncio
     async def test_404_when_no_detailed_summary(
@@ -468,13 +454,8 @@ class TestEditDetailedSummarySection:
             BackgroundTasks(),
             "drive1",
         )
-        with engine.connect() as conn:
-            stored = conn.execute(
-                text(
-                    "SELECT detailed_summary FROM file_summaries "
-                    "WHERE file_id = 'abc123'"
-                )
-            ).fetchone()[0]
+        from app.workers.summaries import _get_detailed_summary
+        stored = _get_detailed_summary("abc123")["detailed_summary"]
         assert "edited alpha body" in stored
         # Original alpha body wiped (substring check: "edited alpha body"
         # also contains "alpha body", so assert the sentence-standalone
@@ -506,13 +487,8 @@ class TestEditDetailedSummarySection:
             BackgroundTasks(),
             "drive1",
         )
-        with engine.connect() as conn:
-            stored = conn.execute(
-                text(
-                    "SELECT detailed_summary FROM file_summaries "
-                    "WHERE file_id = 'abc123'"
-                )
-            ).fetchone()[0]
+        from app.workers.summaries import _get_detailed_summary
+        stored = _get_detailed_summary("abc123")["detailed_summary"]
         assert "## 全体像（改題）" in stored
         assert "新しい本文" in stored
 
@@ -573,17 +549,16 @@ class TestRevertDetailedSummary:
         bg = BackgroundTasks()
         result = await revert_detailed_summary("abc123", bg, "drive1")
 
-        with engine.connect() as conn:
-            row = conn.execute(
-                text(
-                    "SELECT detailed_summary, detailed_original, "
-                    "detailed_edited_at FROM file_summaries "
-                    "WHERE file_id = 'abc123'"
-                )
-            ).fetchone()
-        assert row[0] == _SAMPLE_SUMMARY
-        assert row[1] is None
-        assert row[2] is None
+        # Step 2b: verify via the public reader since the body moved
+        # to ``file_insights``.
+        from app.workers.summaries import _get_detailed_summary
+        data = _get_detailed_summary("abc123")
+        assert data is not None
+        assert data["detailed_summary"] == _SAMPLE_SUMMARY
+        # Revert produced a fresh intelligence row, so no snapshot /
+        # edit marker remains at the active layer.
+        assert data["detailed_original"] is None
+        assert data["detailed_edited_at"] is None
         assert result.edited_at is None
         assert result.has_original is False
 
@@ -671,18 +646,20 @@ class TestRegenerateConflict:
         )
         assert result.status == "accepted"
         assert len(bg.tasks) == 1
-        # Forced regeneration must also wipe the edit columns.
+        # Step 2b: the edit markers live on file_insights now.
+        # Forced regeneration must wipe every non-superseded row
+        # (the helper sets detailed_status='generating' afterwards
+        # to seed the next generation, but no 'active' / edited rows
+        # survive the clear).
         with engine.connect() as conn:
-            row = conn.execute(
+            insight_rows = conn.execute(
                 text(
-                    "SELECT detailed_edited_at, detailed_original "
-                    "FROM file_summaries WHERE file_id = 'abc123'"
+                    "SELECT status, created_by FROM file_insights "
+                    "WHERE file_id = 'abc123' AND kind = 'detailed_summary'"
                 )
-            ).fetchone()
-        # Row either gone (placeholder) or columns cleared.
-        if row is not None:
-            assert row[0] is None
-            assert row[1] is None
+            ).fetchall()
+        # All history for this file+kind is dropped by regenerate.
+        assert insight_rows == []
 
     @pytest.mark.asyncio
     async def test_proceeds_without_body_on_unedited_row(

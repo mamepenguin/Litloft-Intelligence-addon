@@ -860,7 +860,7 @@ async def edit_detailed_summary_section(
             raise HTTPException(
                 status_code=404, detail="No detailed summary to edit"
             )
-        current, original, _edited_at = state
+        current = state[0]
 
         # Lazy-import so the parser is only paid for on the edit path.
         from app.summary_parser import splice_section
@@ -877,31 +877,11 @@ async def edit_detailed_summary_section(
             # a malformed request. Frontend prompts a reload.
             raise HTTPException(status_code=409, detail=str(e)) from e
 
-        # Snapshot the AI output on the first edit only. On re-edit we
-        # keep the snapshot pinned to the *original* AI version so
-        # revert always reaches the generation's starting point.
-        snapshot = original if original is not None else current
-
-        session.execute(
-            sql_text(
-                "UPDATE file_summaries SET "
-                "detailed_summary = :summary, "
-                "detailed_original = :original, "
-                "detailed_edited_at = :edited_at "
-                "WHERE file_id = :fid"
-            ),
-            {
-                "fid": file_id,
-                "summary": new_summary,
-                "original": snapshot,
-                "edited_at": now,
-            },
-        )
-        # Append a manual insight for history. The previous active
-        # insight (intelligence-generated or an earlier manual edit)
-        # is marked superseded so exactly one active row per
-        # (file_id, kind) is maintained. metadata.edited_at mirrors
-        # the ``file_summaries.detailed_edited_at`` column for audit.
+        # Step 2b: the body + original + edited_at no longer live on
+        # ``file_summaries``. Appending the manual FileInsight row is
+        # the sole write — the previous active insight is marked
+        # superseded (so revert can surface the pre-edit AI body) and
+        # the new manual row carries ``metadata.edited_at`` for audit.
         _append_detailed_summary_insight(
             session,
             file_id=file_id,
@@ -970,20 +950,10 @@ async def revert_detailed_summary(
                 status_code=400, detail="No AI version to revert to"
             )
 
-        session.execute(
-            sql_text(
-                "UPDATE file_summaries SET "
-                "detailed_summary = :summary, "
-                "detailed_original = NULL, "
-                "detailed_edited_at = NULL "
-                "WHERE file_id = :fid"
-            ),
-            {"fid": file_id, "summary": original},
-        )
-        # Append a revert event as a fresh active insight so history
-        # stays linear (status only flows draft → active → superseded).
-        # ``reverted_from_manual`` in metadata preserves the narrative
-        # that this active row came from a user-initiated restore.
+        # Step 2b: body + snapshot + edited_at are no longer stored
+        # on ``file_summaries``; the FileInsight append alone restores
+        # the AI version. ``reverted_from_manual`` metadata marks the
+        # new active row as a user-initiated restore.
         _append_detailed_summary_insight(
             session,
             file_id=file_id,
@@ -1084,20 +1054,15 @@ async def regenerate_detailed_summary(
             long_val = row[1] or ""
             if short_val or long_val:
                 # Keep the file_summaries row (short/long are live
-                # data) but clear every detailed_* column. Status is
-                # re-seeded below so the frontend's slot never flashes
-                # "hidden" during the regenerate→worker handoff.
+                # data) but clear the remaining two detailed_* workflow
+                # columns. Status is re-seeded below so the frontend's
+                # slot never flashes "hidden" during the
+                # regenerate→worker handoff.
                 session.execute(
                     sql_text(
                         "UPDATE file_summaries SET "
-                        "detailed_summary = NULL, "
-                        "detailed_model = NULL, "
-                        "detailed_generated_at = NULL, "
-                        "detailed_context_chars = NULL, "
-                        "detailed_was_truncated = NULL, "
-                        "detailed_error = NULL, "
-                        "detailed_original = NULL, "
-                        "detailed_edited_at = NULL "
+                        "detailed_status = NULL, "
+                        "detailed_error = NULL "
                         "WHERE file_id = :fid"
                     ),
                     {"fid": file_id},

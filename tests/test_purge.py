@@ -241,17 +241,16 @@ def test_purge_file_also_wipes_detailed_summary_columns(tmp_path, monkeypatch):
 
     now = datetime.now(UTC).isoformat()
     with engine.begin() as conn:
+        # Step 2b: detailed body / model / metadata no longer live on
+        # file_summaries; only detailed_status / detailed_error remain.
         conn.execute(
             text(
                 "INSERT INTO file_summaries "
                 "(file_id, short_summary, long_summary, model, "
                 "context_type, context_chars, was_truncated, status, "
-                "created_at, detailed_summary, detailed_status, "
-                "detailed_model, detailed_generated_at, "
-                "detailed_context_chars, detailed_was_truncated) "
+                "created_at, detailed_status) "
                 "VALUES (:fid, 's', 'l', 'm', 'video', 100, 0, "
-                "'generated', :now, 'detailed body', 'generated', "
-                "'m', :now, 100, 0)"
+                "'generated', :now, 'generated')"
             ),
             {"fid": "abc123", "now": now},
         )

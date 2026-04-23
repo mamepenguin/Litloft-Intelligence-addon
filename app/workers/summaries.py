@@ -756,11 +756,13 @@ def _set_detailed_status(
     On first write we may land on a file that has no file_summaries row
     at all (short/long never generated). INSERT OR IGNORE establishes
     the row with empty short/long placeholders, then UPDATE writes the
-    detailed-related columns. Using placeholders keeps the NOT NULL
-    constraints on short_summary/long_summary happy without lying about
-    their presence — the status column is the source of truth for
-    "does detailed exist".
+    status marker. Step 2b removed ``detailed_model`` — that metadata
+    now lives on ``file_insights.metadata_json`` when the body lands
+    via ``_save_detailed_summary``, so the ``model`` argument is a
+    no-op for the transient workflow state (kept in the signature for
+    call-site stability).
     """
+    del model  # Step 2b: no longer persisted on file_summaries.
     now = datetime.now(UTC).isoformat()
     with get_search_db() as session:
         session.execute(
@@ -776,16 +778,10 @@ def _set_detailed_status(
             sql_text(
                 "UPDATE file_summaries SET "
                 "detailed_status = :status, "
-                "detailed_error = :error, "
-                "detailed_model = COALESCE(:model, detailed_model) "
+                "detailed_error = :error "
                 "WHERE file_id = :fid"
             ),
-            {
-                "fid": file_id,
-                "status": status,
-                "error": error,
-                "model": model,
-            },
+            {"fid": file_id, "status": status, "error": error},
         )
 
 
@@ -808,27 +804,17 @@ def _save_detailed_summary(
     """
     now = datetime.now(UTC).isoformat()
     with get_search_db() as session:
+        # Only the workflow-status columns survive on ``file_summaries``;
+        # content / model / generated_at / context_chars / was_truncated
+        # live in the FileInsight metadata blob (Step 2b).
         session.execute(
             sql_text(
                 "UPDATE file_summaries SET "
-                "detailed_summary = :detailed_summary, "
                 "detailed_status = :status, "
-                "detailed_model = :model, "
-                "detailed_generated_at = :generated_at, "
-                "detailed_context_chars = :context_chars, "
-                "detailed_was_truncated = :was_truncated, "
                 "detailed_error = NULL "
                 "WHERE file_id = :fid"
             ),
-            {
-                "fid": file_id,
-                "detailed_summary": detailed_summary,
-                "status": DETAILED_STATUS_GENERATED,
-                "model": model,
-                "generated_at": now,
-                "context_chars": context_chars,
-                "was_truncated": 1 if was_truncated else 0,
-            },
+            {"fid": file_id, "status": DETAILED_STATUS_GENERATED},
         )
         _supersede_and_insert_insight(
             session,
@@ -1047,18 +1033,13 @@ def _delete_detailed_summary(file_id: str) -> bool:
             short_val = row[0] or ""
             long_val = row[1] or ""
             if short_val or long_val:
+                # Only the two remaining detailed_* workflow columns
+                # need clearing now (Step 2b removed the rest).
                 session.execute(
                     sql_text(
                         "UPDATE file_summaries SET "
-                        "detailed_summary = NULL, "
                         "detailed_status = NULL, "
-                        "detailed_model = NULL, "
-                        "detailed_generated_at = NULL, "
-                        "detailed_context_chars = NULL, "
-                        "detailed_was_truncated = NULL, "
-                        "detailed_error = NULL, "
-                        "detailed_original = NULL, "
-                        "detailed_edited_at = NULL "
+                        "detailed_error = NULL "
                         "WHERE file_id = :fid"
                     ),
                     {"fid": file_id},

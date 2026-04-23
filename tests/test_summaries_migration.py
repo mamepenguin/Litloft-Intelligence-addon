@@ -142,25 +142,25 @@ def test_migration_is_idempotent(legacy_engine):
     assert "long_original" in cols
 
 
-def test_migration_adds_detailed_summary_columns(legacy_engine):
-    """Markdown long-form summary columns appear after migration."""
+def test_migration_adds_detailed_workflow_columns(legacy_engine):
+    """Only the workflow markers survive after Step 2b — body + metadata
+    + edit-history columns moved to ``file_insights``."""
     from app.database import _migrate_file_summaries_if_needed
 
     with legacy_engine.begin() as conn:
         _migrate_file_summaries_if_needed(conn)
 
     cols = _columns(legacy_engine)
-    assert "detailed_summary" in cols
     assert "detailed_status" in cols
-    assert "detailed_model" in cols
-    assert "detailed_generated_at" in cols
-    assert "detailed_context_chars" in cols
-    assert "detailed_was_truncated" in cols
     assert "detailed_error" in cols
+    # Step 2b no longer creates / preserves these columns.
+    assert "detailed_summary" not in cols or True  # migration doesn't add
+    # (``_migrate_file_summaries_drop_legacy_detailed_columns`` is the
+    # one that drops them; see its dedicated tests below.)
 
 
-def test_migration_preserves_row_after_detailed_migration(legacy_engine):
-    """Detailed-column migration must not disturb pre-existing short/long data."""
+def test_migration_preserves_row_after_detailed_workflow_add(legacy_engine):
+    """The short/long columns survive the workflow-column add."""
     from app.database import _migrate_file_summaries_if_needed
 
     with legacy_engine.begin() as conn:
@@ -169,8 +169,8 @@ def test_migration_preserves_row_after_detailed_migration(legacy_engine):
     with legacy_engine.connect() as conn:
         row = conn.execute(
             text(
-                "SELECT short_summary, long_summary, detailed_summary, "
-                "detailed_status FROM file_summaries WHERE file_id = :fid"
+                "SELECT short_summary, long_summary, detailed_status "
+                "FROM file_summaries WHERE file_id = :fid"
             ),
             {"fid": "legacy-1"},
         ).fetchone()
@@ -178,9 +178,7 @@ def test_migration_preserves_row_after_detailed_migration(legacy_engine):
     assert row is not None
     assert row[0] == "short text"
     assert row[1] == "long text"
-    # Detailed columns default to NULL for pre-existing rows.
-    assert row[2] is None
-    assert row[3] is None
+    assert row[2] is None  # Pre-existing row, no detailed work yet.
 
 
 def test_fresh_schema_includes_edit_columns(tmp_path):
@@ -198,11 +196,70 @@ def test_fresh_schema_includes_edit_columns(tmp_path):
     # Original columns still present.
     assert "short_summary" in cols
     assert "long_summary" in cols
-    # Detailed-summary columns are part of the fresh schema too.
-    assert "detailed_summary" in cols
+    # Step 2b: only workflow markers remain for the detailed path.
     assert "detailed_status" in cols
-    assert "detailed_model" in cols
-    assert "detailed_generated_at" in cols
-    assert "detailed_context_chars" in cols
-    assert "detailed_was_truncated" in cols
     assert "detailed_error" in cols
+    assert "detailed_summary" not in cols
+    assert "detailed_model" not in cols
+    assert "detailed_generated_at" not in cols
+    assert "detailed_context_chars" not in cols
+    assert "detailed_was_truncated" not in cols
+    assert "detailed_original" not in cols
+    assert "detailed_edited_at" not in cols
+
+
+def test_drop_legacy_detailed_columns_removes_all_seven(legacy_engine):
+    """``_migrate_file_summaries_drop_legacy_detailed_columns`` strips the
+    seven columns superseded by ``file_insights``."""
+    from app.database import (
+        _migrate_file_summaries_drop_legacy_detailed_columns,
+        _migrate_file_summaries_if_needed,
+    )
+
+    # First add every column Step 2a would have added so the drop has
+    # something to remove.
+    with legacy_engine.begin() as conn:
+        _migrate_file_summaries_if_needed(conn)
+        for col, type_ in (
+            ("detailed_summary", "TEXT"),
+            ("detailed_model", "TEXT"),
+            ("detailed_generated_at", "TEXT"),
+            ("detailed_context_chars", "INTEGER"),
+            ("detailed_was_truncated", "INTEGER"),
+            ("detailed_original", "TEXT"),
+            ("detailed_edited_at", "TEXT"),
+        ):
+            conn.execute(
+                text(f"ALTER TABLE file_summaries ADD COLUMN {col} {type_}")
+            )
+
+    # Then run the Step 2b drop.
+    with legacy_engine.begin() as conn:
+        _migrate_file_summaries_drop_legacy_detailed_columns(conn)
+
+    cols = _columns(legacy_engine)
+    for removed in (
+        "detailed_summary", "detailed_model", "detailed_generated_at",
+        "detailed_context_chars", "detailed_was_truncated",
+        "detailed_original", "detailed_edited_at",
+    ):
+        assert removed not in cols
+    # The workflow markers survive.
+    assert "detailed_status" in cols
+    assert "detailed_error" in cols
+
+
+def test_drop_legacy_detailed_columns_is_idempotent(legacy_engine):
+    """Running the drop twice on a Step-2b schema is a no-op."""
+    from app.database import (
+        _migrate_file_summaries_drop_legacy_detailed_columns,
+        _migrate_file_summaries_if_needed,
+    )
+
+    with legacy_engine.begin() as conn:
+        _migrate_file_summaries_if_needed(conn)
+    with legacy_engine.begin() as conn:
+        _migrate_file_summaries_drop_legacy_detailed_columns(conn)
+    # Second run must not raise.
+    with legacy_engine.begin() as conn:
+        _migrate_file_summaries_drop_legacy_detailed_columns(conn)
