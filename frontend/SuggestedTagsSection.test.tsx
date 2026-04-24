@@ -14,11 +14,20 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 const savedCalls: Array<{ file: { id: string; mime_type: string }; tags: string[] }> = [];
 
-vi.mock("@/lib/tags", () => ({
-  saveFileTags: vi.fn(async (file: { id: string; mime_type: string }, tags: string[]) => {
-    savedCalls.push({ file, tags });
-  }),
-}));
+vi.mock("@/lib/tags", () => {
+  class MockConflictError extends Error {
+    constructor() {
+      super("ETag mismatch");
+      this.name = "ConflictError";
+    }
+  }
+  return {
+    saveFileTags: vi.fn(async (file: { id: string; mime_type: string }, tags: string[]) => {
+      savedCalls.push({ file, tags });
+    }),
+    ConflictError: MockConflictError,
+  };
+});
 
 vi.mock("@/lib/api", () => ({
   fetchJSON: vi.fn(),
@@ -107,6 +116,52 @@ describe("SuggestedTagsSection accept dispatch", () => {
     expect(last.tags.sort()).toEqual(
       ["existing", "new-one", "new-two"].sort(),
     );
+  });
+
+  it("retries once after ConflictError, re-merging against fresh file", async () => {
+    const { ConflictError } = await import("@/lib/tags");
+    const staleFile = { ...mdFile, tags: ["existing"] };
+    const freshFile = { ...mdFile, tags: ["existing", "later-edit"] };
+    vi.mocked(fetchJSON)
+      .mockResolvedValueOnce(staleFile)
+      .mockResolvedValueOnce(freshFile);
+    vi.mocked(saveFileTags)
+      .mockImplementationOnce(async () => {
+        throw new ConflictError();
+      })
+      .mockImplementationOnce(async (file: any, tags: string[]) => {
+        savedCalls.push({ file, tags });
+      });
+
+    render(<SuggestedTagsSection fileId="fMd000000001" drive="media" />);
+    await waitFor(() => {
+      expect(screen.getByText("new-one")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByLabelText(/new-one.*追加/));
+
+    await waitFor(() => {
+      expect(saveFileTags).toHaveBeenCalledTimes(2);
+    });
+    // Second call uses the fresh merge, preserving the out-of-band edit
+    expect(savedCalls[savedCalls.length - 1].tags.sort()).toEqual(
+      ["existing", "later-edit", "new-one"].sort(),
+    );
+  });
+
+  it("logs other errors to console so silent failure is debuggable", async () => {
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(saveFileTags).mockRejectedValue(new Error("500 boom"));
+
+    render(<SuggestedTagsSection fileId="fMd000000001" drive="media" />);
+    await waitFor(() => {
+      expect(screen.getByText("new-one")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByLabelText(/new-one.*追加/));
+
+    await waitFor(() => {
+      expect(consoleSpy).toHaveBeenCalled();
+    });
+    expect(consoleSpy.mock.calls[0][0]).toContain("accept-tag failed");
   });
 
   it("never calls the old PUT /files/{id}/tags endpoint directly", async () => {

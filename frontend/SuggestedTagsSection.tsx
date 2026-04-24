@@ -6,7 +6,7 @@ import { Check, CheckCheck, RefreshCw, Sparkles, X } from "lucide-react";
 import { getSuggestedTags, dismissSuggestedTags, regenerateSuggestedTags } from "./api";
 import type { SuggestedTagsResponse } from "./api";
 import { fetchJSON } from "@/lib/api";
-import { saveFileTags } from "@/lib/tags";
+import { ConflictError, saveFileTags } from "@/lib/tags";
 import type { FileItem } from "@/types";
 
 interface SuggestedTagsSectionProps {
@@ -21,13 +21,26 @@ interface SuggestedTagsSectionProps {
  * §D3/D9). Without this dispatch, approving a suggested tag on a ``.md``
  * would write ``File.tags`` directly and get overwritten on the next
  * scanner pass.
+ *
+ * On ``ConflictError`` the file is refetched and the save retried once
+ * — frontmatter may have changed under us between the fetch and the
+ * write (scanner re-index, another client editing). A single retry
+ * covers the common case; persistent conflicts propagate to the caller.
  */
 async function mergeAndSaveTags(
   file: FileItem,
   newTags: string[],
 ): Promise<void> {
   const merged = [...new Set([...file.tags, ...newTags])];
-  await saveFileTags(file, merged);
+  try {
+    await saveFileTags(file, merged);
+    return;
+  } catch (err) {
+    if (!(err instanceof ConflictError)) throw err;
+  }
+  const fresh = await getFileData(file.id);
+  const remerged = [...new Set([...fresh.tags, ...newTags])];
+  await saveFileTags(fresh, remerged);
 }
 
 async function getFileData(fileId: string): Promise<FileItem> {
@@ -67,8 +80,12 @@ export default function SuggestedTagsSection({ fileId, drive }: SuggestedTagsSec
       const file = await getFileData(fileId);
       await mergeAndSaveTags(file, [tag]);
       setAcceptedTags((prev) => new Set([...prev, tag]));
-    } catch {
-      // silently fail
+    } catch (err) {
+      // Log so silent failures are at least visible in the browser
+      // console. The tag stays in the "pending" chip state so the user
+      // can re-click to retry — clearing ``accepting`` via finally
+      // re-enables the button.
+      console.error("accept-tag failed:", err);
     } finally {
       setAccepting((prev) => {
         const next = new Set(prev);
@@ -88,8 +105,8 @@ export default function SuggestedTagsSection({ fileId, drive }: SuggestedTagsSec
       const file = await getFileData(fileId);
       await mergeAndSaveTags(file, pendingTags);
       setAcceptedTags((prev) => new Set([...prev, ...pendingTags]));
-    } catch {
-      // silently fail
+    } catch (err) {
+      console.error("accept-all-tags failed:", err);
     } finally {
       setAcceptingAll(false);
     }
