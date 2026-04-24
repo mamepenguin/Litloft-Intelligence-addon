@@ -6,6 +6,7 @@ import { Check, CheckCheck, RefreshCw, Sparkles, X } from "lucide-react";
 import { getSuggestedTags, dismissSuggestedTags, regenerateSuggestedTags } from "./api";
 import type { SuggestedTagsResponse } from "./api";
 import { fetchJSON } from "@/lib/api";
+import { saveFileTags } from "@/lib/tags";
 import type { FileItem } from "@/types";
 
 interface SuggestedTagsSectionProps {
@@ -13,13 +14,20 @@ interface SuggestedTagsSectionProps {
   drive: string;
 }
 
-async function addTagsToFile(fileId: string, existingTags: string[], newTags: string[]): Promise<FileItem> {
-  const merged = [...new Set([...existingTags, ...newTags])];
-  return fetchJSON<FileItem>(`/api/files/${fileId}/tags`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tags: merged }),
-  });
+/**
+ * Append ``newTags`` to the file's current tags and persist. Routes
+ * through ``saveFileTags`` so ``.md`` files write their frontmatter
+ * (spec ``docs/superpowers/specs/2026-04-24-knowledge-tag-unification.md``
+ * §D3/D9). Without this dispatch, approving a suggested tag on a ``.md``
+ * would write ``File.tags`` directly and get overwritten on the next
+ * scanner pass.
+ */
+async function mergeAndSaveTags(
+  file: FileItem,
+  newTags: string[],
+): Promise<void> {
+  const merged = [...new Set([...file.tags, ...newTags])];
+  await saveFileTags(file, merged);
 }
 
 async function getFileData(fileId: string): Promise<FileItem> {
@@ -57,7 +65,7 @@ export default function SuggestedTagsSection({ fileId, drive }: SuggestedTagsSec
     setAccepting((prev) => new Set([...prev, tag]));
     try {
       const file = await getFileData(fileId);
-      await addTagsToFile(fileId, file.tags, [tag]);
+      await mergeAndSaveTags(file, [tag]);
       setAcceptedTags((prev) => new Set([...prev, tag]));
     } catch {
       // silently fail
@@ -78,7 +86,7 @@ export default function SuggestedTagsSection({ fileId, drive }: SuggestedTagsSec
     setAcceptingAll(true);
     try {
       const file = await getFileData(fileId);
-      await addTagsToFile(fileId, file.tags, pendingTags);
+      await mergeAndSaveTags(file, pendingTags);
       setAcceptedTags((prev) => new Set([...prev, ...pendingTags]));
     } catch {
       // silently fail
