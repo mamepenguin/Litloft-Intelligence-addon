@@ -56,7 +56,6 @@ vi.mock("@/components/AddonSlotsProvider", () => ({
     loading: false,
     getSlotEntries: () => [],
     hasSlot: () => false,
-    addonStatuses: {},
   }),
 }));
 
