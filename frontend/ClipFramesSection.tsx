@@ -42,6 +42,20 @@ export default function ClipFramesSection({ fileId, drive, videoRef, mediaContro
   const stripRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
+  // Detect a fine pointer (mouse) at runtime. Tailwind's arbitrary
+  // ``[@media(hover:hover)]:`` variant is finicky to combine with
+  // ``hidden`` reliably across the project's Tailwind v4 setup, and the
+  // arrows are decorative anyway — touch users keep native scroll.
+  const [hasFinePointer, setHasFinePointer] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(pointer: fine)");
+    setHasFinePointer(mq.matches);
+    const onChange = (e: MediaQueryListEvent) => setHasFinePointer(e.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
   // Reset visible count when the file changes so a previous file's
   // scroll position doesn't pre-load frames for a new video.
   useEffect(() => {
@@ -177,8 +191,7 @@ export default function ClipFramesSection({ fileId, drive, videoRef, mediaContro
             <>
               <div
                 ref={stripRef}
-                className="flex gap-2 overflow-x-auto pb-1"
-                style={{ scrollbarGutter: "stable" }}
+                className="scrollbar-hover flex gap-2 overflow-x-auto"
               >
                 {visible.map((ts) => (
                   <button
@@ -206,31 +219,37 @@ export default function ClipFramesSection({ fileId, drive, videoRef, mediaContro
                 )}
               </div>
 
-              {/* Press-and-hold arrow overlays. Hidden on touch devices
-                  via @media (hover: hover) — touch users have native
-                  scroll; mouse users may not have a horizontal axis. */}
-              <button
-                type="button"
-                aria-label="Scroll left"
-                onPointerDown={(e) => startArrowScroll(-1, e)}
-                onPointerUp={stopArrowScroll}
-                onPointerCancel={stopArrowScroll}
-                onPointerLeave={stopArrowScroll}
-                className="absolute left-0 top-0 hidden h-[calc(100%-1.75rem)] w-8 items-center justify-center bg-gradient-to-r from-bg-base/90 to-transparent text-text-muted transition-colors hover:text-text-primary [@media(hover:hover)]:flex"
-              >
-                <ChevronLeft size={20} />
-              </button>
-              <button
-                type="button"
-                aria-label="Scroll right"
-                onPointerDown={(e) => startArrowScroll(1, e)}
-                onPointerUp={stopArrowScroll}
-                onPointerCancel={stopArrowScroll}
-                onPointerLeave={stopArrowScroll}
-                className="absolute right-0 top-0 hidden h-[calc(100%-1.75rem)] w-8 items-center justify-center bg-gradient-to-l from-bg-base/90 to-transparent text-text-muted transition-colors hover:text-text-primary [@media(hover:hover)]:flex"
-              >
-                <ChevronRight size={20} />
-              </button>
+              {/* Press-and-hold arrow overlays for mouse users. Hidden
+                  on touch devices because the native horizontal swipe
+                  is the better gesture there. Pointer-fine detection is
+                  done in JS (matchMedia) for reliability across the
+                  project's Tailwind v4 setup. */}
+              {hasFinePointer && (
+                <>
+                  <button
+                    type="button"
+                    aria-label="Scroll left"
+                    onPointerDown={(e) => startArrowScroll(-1, e)}
+                    onPointerUp={stopArrowScroll}
+                    onPointerCancel={stopArrowScroll}
+                    onPointerLeave={stopArrowScroll}
+                    className="absolute left-2 top-[calc(3.375rem-1.25rem)] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-bg-primary/90 text-text-primary shadow-md ring-1 ring-bg-border backdrop-blur-sm transition-colors hover:bg-bg-primary"
+                  >
+                    <ChevronLeft size={22} />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Scroll right"
+                    onPointerDown={(e) => startArrowScroll(1, e)}
+                    onPointerUp={stopArrowScroll}
+                    onPointerCancel={stopArrowScroll}
+                    onPointerLeave={stopArrowScroll}
+                    className="absolute right-2 top-[calc(3.375rem-1.25rem)] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-bg-primary/90 text-text-primary shadow-md ring-1 ring-bg-border backdrop-blur-sm transition-colors hover:bg-bg-primary"
+                  >
+                    <ChevronRight size={22} />
+                  </button>
+                </>
+              )}
             </>
           )}
         </div>
