@@ -191,7 +191,12 @@ export default function ClipFramesSection({ fileId, drive, videoRef, mediaContro
             <>
               <div
                 ref={stripRef}
-                className="scrollbar-hover flex gap-2 overflow-x-auto"
+                // ``p-1`` reserves 4px on every side so each card's
+                // ``hover:ring-2`` outline isn't clipped by the
+                // ``overflow-x-auto`` viewport (overflow-x:auto also
+                // clips overflow-y, so an outer ring with no padding
+                // gets cut off on the top / bottom edges).
+                className="scrollbar-hover flex gap-2 overflow-x-auto p-1"
               >
                 {visible.map((ts) => (
                   <button
@@ -233,7 +238,7 @@ export default function ClipFramesSection({ fileId, drive, videoRef, mediaContro
                     onPointerUp={stopArrowScroll}
                     onPointerCancel={stopArrowScroll}
                     onPointerLeave={stopArrowScroll}
-                    className="absolute left-2 top-[calc(3.375rem-1.25rem)] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-bg-primary/90 text-text-primary shadow-md ring-1 ring-bg-border backdrop-blur-sm transition-colors hover:bg-bg-primary"
+                    className="absolute left-2 top-[2.375rem] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-bg-primary/90 text-text-primary shadow-md ring-1 ring-bg-border backdrop-blur-sm transition-colors hover:bg-bg-primary"
                   >
                     <ChevronLeft size={22} />
                   </button>
@@ -244,7 +249,7 @@ export default function ClipFramesSection({ fileId, drive, videoRef, mediaContro
                     onPointerUp={stopArrowScroll}
                     onPointerCancel={stopArrowScroll}
                     onPointerLeave={stopArrowScroll}
-                    className="absolute right-2 top-[calc(3.375rem-1.25rem)] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-bg-primary/90 text-text-primary shadow-md ring-1 ring-bg-border backdrop-blur-sm transition-colors hover:bg-bg-primary"
+                    className="absolute right-2 top-[2.375rem] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-bg-primary/90 text-text-primary shadow-md ring-1 ring-bg-border backdrop-blur-sm transition-colors hover:bg-bg-primary"
                   >
                     <ChevronRight size={22} />
                   </button>
