@@ -1,12 +1,15 @@
 """File inspection and suggested tags endpoints."""
 
 import logging
+import os
+import shutil
 import subprocess
+from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import text as sql_text
 
 from app.config import settings
@@ -496,13 +499,129 @@ async def get_chunk_excerpt(
     )
 
 
+# --- CLIP frame extraction with persistent disk cache ---
+#
+# Frames are extracted on demand via ffmpeg and cached as WebP
+# (320px wide, q70). Cache layout mirrors the host's HEIC / preview
+# pattern: per-file directory, immutable filename derived from the
+# timestamp in milliseconds. The cache is purged when the source file
+# is removed from the index (see ``_purge_file`` in app.indexer and
+# ``purge_drive`` in app.purge).
+#
+# Why WebP 320px q70:
+#   - The CLIP frames grid renders at most ~260px-wide cells
+#     (md:grid-cols-5 inside the file detail page); 320px gives a
+#     small Retina headroom without paying for a full 480px frame.
+#   - WebP libwebp at q70 is roughly 1/3-1/4 the size of the previous
+#     mjpeg q3 output (~30-50KB → ~8-15KB) with no perceptible
+#     quality loss at this scale, and is supported by every browser
+#     the host targets.
+
+_FRAME_CACHE_SUBDIR = "frames"
+_FRAME_FFMPEG_TIMEOUT = 15
+
+
+def _frame_cache_dir(file_id: str) -> Path:
+    """Return the on-disk directory for a file's cached frame thumbnails.
+
+    Lives under ``intelligence_data_dir / frames / {file_id}``. Resolved
+    fresh on every call so tests can swap ``intelligence_data_dir`` via
+    the ``settings`` dataclass without monkeypatching this helper.
+    """
+    from app.config import settings
+
+    return Path(settings.intelligence_data_dir) / _FRAME_CACHE_SUBDIR / file_id
+
+
+def _frame_cache_path(file_id: str, timestamp_seconds: float) -> Path:
+    """Resolve the WebP cache path for ``(file_id, timestamp)``.
+
+    Timestamps are quantised to milliseconds in the filename so the
+    ``<img src>`` URL is byte-stable across requests (frontend always
+    passes the same float, but rounding here defends against future
+    callers and lets a long Cache-Control / immutable header be
+    correct).
+    """
+    ms = int(round(timestamp_seconds * 1000))
+    return _frame_cache_dir(file_id) / f"{ms}.webp"
+
+
+def _extract_frame_to_cache(
+    abs_path: str,
+    cache_path: Path,
+    timestamp_seconds: float,
+) -> None:
+    """Run ffmpeg to extract one frame and atomically write it to ``cache_path``.
+
+    Writes to a sibling ``.tmp`` file first then ``os.replace`` so a
+    concurrent reader never sees a half-written WebP. Raises
+    ``HTTPException`` on timeout / non-zero ffmpeg exit so the caller
+    can surface a sensible status code.
+    """
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-ss", str(timestamp_seconds),
+                "-i", abs_path,
+                "-frames:v", "1",
+                "-vf", "scale=320:-1",
+                "-c:v", "libwebp",
+                "-q:v", "70",
+                # ``-f webp`` is required because the temp filename ends
+                # in ``.webp.tmp`` — ffmpeg can't infer the muxer from
+                # the dotted extension and otherwise errors out with
+                # "Unable to choose an output format".
+                "-f", "webp",
+                str(tmp_path),
+            ],
+            capture_output=True,
+            timeout=_FRAME_FFMPEG_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=504, detail="Frame extraction timed out")
+
+    if result.returncode != 0 or not tmp_path.exists() or tmp_path.stat().st_size == 0:
+        logger.warning(
+            "Frame extraction failed for %s at %.3fs (returncode=%s)",
+            cache_path.parent.name, timestamp_seconds, result.returncode,
+        )
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail="Frame extraction failed")
+
+    os.replace(tmp_path, cache_path)
+
+
+def purge_frame_cache(file_id: str) -> None:
+    """Remove every cached frame thumbnail for ``file_id``.
+
+    Best-effort: a missing directory is treated as already-purged. Errors
+    are swallowed to avoid blocking the caller's purge transaction —
+    leaving stale thumbnails behind is harmless (they get re-keyed when
+    the file is re-indexed and the directory is unique per file_id).
+    """
+    cache_dir = _frame_cache_dir(file_id)
+    if not cache_dir.exists():
+        return
+    try:
+        shutil.rmtree(cache_dir)
+    except OSError as exc:
+        logger.warning("purge_frame_cache: failed for %s (%s)", file_id, exc)
+
+
 @router.get("/files/{file_id}/frame")
 async def get_frame(
     file_id: str,
     t: float = Query(..., ge=0, description="Timestamp in seconds"),
     x_hv_drive: Annotated[str | None, Header(alias="X-Lit-Drive")] = None,
 ) -> Response:
-    """Extract a single video frame at the given timestamp using ffmpeg.
+    """Serve a single cached video frame, extracting via ffmpeg on miss.
 
     Drive context is optional here because the route is loaded via
     ``<img src>`` which can't carry custom headers. The host's
@@ -510,6 +629,10 @@ async def get_frame(
     file's drive; when the header *is* present we additionally enforce
     the strict current-drive match (defence in depth for non-image
     consumers).
+
+    Cache lives under ``intelligence_data_dir/frames/{file_id}/{ms}.webp``
+    and is reused across requests / users / browser sessions. Cache
+    misses spawn ffmpeg; hits short-circuit to a static FileResponse.
     """
     from app.config import resolve_file_path, validate_file_path
 
@@ -543,37 +666,26 @@ async def get_frame(
     if indexed["file_type"] != "video":
         raise HTTPException(status_code=400, detail="Not a video file")
 
+    cache_path = _frame_cache_path(file_id, t)
+    cache_headers = {"Cache-Control": "public, max-age=86400, immutable"}
+
+    if cache_path.exists() and cache_path.stat().st_size > 0:
+        return FileResponse(
+            path=str(cache_path),
+            media_type="image/webp",
+            headers=cache_headers,
+        )
+
     abs_path = resolve_file_path(indexed["drive"], indexed["file_path"])
     if not abs_path or not validate_file_path(abs_path):
         raise HTTPException(status_code=404, detail="Video file not accessible")
 
-    try:
-        result = subprocess.run(
-            [
-                "ffmpeg",
-                "-ss", str(t),
-                "-i", abs_path,
-                "-frames:v", "1",
-                "-vf", "scale=480:-1",
-                "-f", "image2pipe",
-                "-vcodec", "mjpeg",
-                "-q:v", "3",
-                "-",
-            ],
-            capture_output=True,
-            timeout=15,
-        )
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="Frame extraction timed out")
+    _extract_frame_to_cache(abs_path, cache_path, t)
 
-    if result.returncode != 0 or not result.stdout:
-        logger.warning("Frame extraction failed for %s at %.1fs", file_id, t)
-        raise HTTPException(status_code=500, detail="Frame extraction failed")
-
-    return Response(
-        content=result.stdout,
-        media_type="image/jpeg",
-        headers={"Cache-Control": "public, max-age=3600"},
+    return FileResponse(
+        path=str(cache_path),
+        media_type="image/webp",
+        headers=cache_headers,
     )
 
 

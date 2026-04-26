@@ -1,7 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { Film } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Film } from "lucide-react";
 import { useTranslations } from "next-intl";
 
 import { getClipTimestamps, getFrameUrl } from "./api";
@@ -18,27 +24,47 @@ interface ClipFramesSectionProps {
   mediaController?: MediaController | null;
 }
 
-const INITIAL_SHOW = 20;
+const PAGE_SIZE = 20;
+const ARROW_SCROLL_PX_PER_FRAME = 8;
+const NEAR_END_ROOT_MARGIN_PX = 400;
 
 export default function ClipFramesSection({ fileId, drive, videoRef, mediaController }: ClipFramesSectionProps) {
   const t = useTranslations("searchIndex");
-  const [timestamps, setTimestamps] = useState<ClipTimestampItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [available, setAvailable] = useState(false);
-  const [showCount, setShowCount] = useState(INITIAL_SHOW);
 
+  // Tri-state. `null` means "we haven't fetched timestamps yet" — used to
+  // hide the section entirely when the file has no CLIP index, without
+  // ever firing a network request on mount.
+  const [timestamps, setTimestamps] = useState<ClipTimestampItem[] | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [showCount, setShowCount] = useState(PAGE_SIZE);
+
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  // Reset visible count when the file changes so a previous file's
+  // scroll position doesn't pre-load frames for a new video.
   useEffect(() => {
+    setTimestamps(null);
+    setExpanded(false);
+    setShowCount(PAGE_SIZE);
+  }, [fileId]);
+
+  const handleToggle = useCallback(async () => {
+    if (expanded) {
+      setExpanded(false);
+      return;
+    }
+    setExpanded(true);
+    if (timestamps !== null || loading) return;
     setLoading(true);
-    getClipTimestamps(fileId, drive).then((res) => {
-      if (res.available && res.timestamps && res.timestamps.length > 0) {
-        setTimestamps(res.timestamps);
-        setAvailable(true);
-      } else {
-        setAvailable(false);
-      }
+    try {
+      const res = await getClipTimestamps(fileId, drive);
+      setTimestamps(res.available && res.timestamps ? res.timestamps : []);
+    } finally {
       setLoading(false);
-    });
-  }, [fileId, drive]);
+    }
+  }, [expanded, fileId, drive, timestamps, loading]);
 
   const seekTo = useCallback(
     (time: number) => {
@@ -58,44 +84,156 @@ export default function ClipFramesSection({ fileId, drive, videoRef, mediaContro
     [videoRef, mediaController]
   );
 
-  if (loading || !available) return null;
+  // IntersectionObserver-driven infinite scroll. Only attach once the
+  // strip is mounted (i.e. expanded with timestamps) so we don't hold a
+  // dangling observer.
+  useEffect(() => {
+    if (!expanded || !timestamps || timestamps.length === 0) return;
+    if (showCount >= timestamps.length) return;
+    const node = sentinelRef.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setShowCount((c) => Math.min(c + PAGE_SIZE, timestamps.length));
+        }
+      },
+      { root: stripRef.current, rootMargin: `0px ${NEAR_END_ROOT_MARGIN_PX}px 0px 0px` }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [expanded, timestamps, showCount]);
 
-  const visible = timestamps.slice(0, showCount);
-  const hasMore = timestamps.length > showCount;
+  // Press-and-hold arrow scroll. requestAnimationFrame increments
+  // scrollLeft until pointerup / pointercancel / pointerleave, with
+  // pointer capture so the gesture survives a small drift off the
+  // button.
+  const scrollDirRef = useRef(0);
+  const rafRef = useRef<number | null>(null);
+  const stopArrowScroll = useCallback(() => {
+    scrollDirRef.current = 0;
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+  }, []);
+  const startArrowScroll = useCallback(
+    (direction: -1 | 1, evt: ReactPointerEvent<HTMLButtonElement>) => {
+      evt.preventDefault();
+      try {
+        evt.currentTarget.setPointerCapture(evt.pointerId);
+      } catch {
+        // ignore — browsers without pointer capture still get tick scroll
+      }
+      scrollDirRef.current = direction;
+      const tick = () => {
+        const strip = stripRef.current;
+        if (!strip || scrollDirRef.current === 0) {
+          rafRef.current = null;
+          return;
+        }
+        strip.scrollLeft += direction * ARROW_SCROLL_PX_PER_FRAME;
+        rafRef.current = requestAnimationFrame(tick);
+      };
+      rafRef.current = requestAnimationFrame(tick);
+    },
+    []
+  );
+  useEffect(() => () => stopArrowScroll(), [stopArrowScroll]);
+
+  const totalLabel = timestamps ? ` (${timestamps.length})` : "";
+  const visible = timestamps ? timestamps.slice(0, showCount) : [];
+
+  // Hide the whole section once we've confirmed the file has no CLIP
+  // frames. Until then (closed default) the header is always visible
+  // because we don't yet know whether frames exist — the API call only
+  // fires on first expand, which is the whole point of this redesign.
+  if (timestamps !== null && timestamps.length === 0) {
+    return null;
+  }
 
   return (
     <div>
-      <div className="mb-2 flex items-center gap-2 text-sm text-text-muted">
+      <button
+        type="button"
+        onClick={handleToggle}
+        aria-expanded={expanded}
+        aria-controls={`clip-frames-${fileId}`}
+        className="flex w-full cursor-pointer items-center gap-2 text-sm text-text-muted transition-colors hover:text-text-primary"
+      >
         <Film size={14} />
-        <span>{t("clipTitle")}</span>
-        <span className="text-xs">({timestamps.length})</span>
-      </div>
-      <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5">
-        {visible.map((ts) => (
-          <button
-            key={ts.start}
-            onClick={() => seekTo(ts.start)}
-            className="group cursor-pointer overflow-hidden rounded-lg bg-bg-card transition-colors hover:ring-2 hover:ring-accent"
-          >
-            <img
-              src={getFrameUrl(fileId, ts.start)}
-              alt={ts.content_preview}
-              loading="lazy"
-              className="aspect-video w-full object-cover"
-            />
-            <div className="px-1.5 py-1 text-center text-xs text-text-muted group-hover:text-accent">
-              {formatDuration(ts.start)}
-            </div>
-          </button>
-        ))}
-      </div>
-      {hasMore && (
-        <button
-          onClick={() => setShowCount((c) => c + INITIAL_SHOW)}
-          className="mt-2 w-full cursor-pointer rounded-lg bg-bg-card py-1.5 text-center text-sm text-text-muted transition-colors hover:text-text-primary"
-        >
-          {t("showMore")} (+{Math.min(INITIAL_SHOW, timestamps.length - showCount)})
-        </button>
+        <span>{t("clipTitle")}{totalLabel}</span>
+        <span className="ml-auto" aria-hidden>
+          {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </span>
+      </button>
+
+      {expanded && (
+        <div id={`clip-frames-${fileId}`} className="relative mt-2">
+          {loading && (
+            <div className="text-xs text-text-muted">…</div>
+          )}
+          {timestamps && timestamps.length > 0 && (
+            <>
+              <div
+                ref={stripRef}
+                className="flex gap-2 overflow-x-auto pb-1"
+                style={{ scrollbarGutter: "stable" }}
+              >
+                {visible.map((ts) => (
+                  <button
+                    key={ts.start}
+                    onClick={() => seekTo(ts.start)}
+                    className="group w-48 shrink-0 cursor-pointer overflow-hidden rounded-lg bg-bg-card transition-colors hover:ring-2 hover:ring-accent"
+                  >
+                    <img
+                      src={getFrameUrl(fileId, ts.start)}
+                      alt={ts.content_preview}
+                      loading="lazy"
+                      className="aspect-video w-full object-cover"
+                    />
+                    <div className="px-1.5 py-1 text-center text-xs text-text-muted group-hover:text-accent">
+                      {formatDuration(ts.start)}
+                    </div>
+                  </button>
+                ))}
+                {showCount < timestamps.length && (
+                  <div
+                    ref={sentinelRef}
+                    aria-hidden
+                    className="w-1 shrink-0"
+                  />
+                )}
+              </div>
+
+              {/* Press-and-hold arrow overlays. Hidden on touch devices
+                  via @media (hover: hover) — touch users have native
+                  scroll; mouse users may not have a horizontal axis. */}
+              <button
+                type="button"
+                aria-label="Scroll left"
+                onPointerDown={(e) => startArrowScroll(-1, e)}
+                onPointerUp={stopArrowScroll}
+                onPointerCancel={stopArrowScroll}
+                onPointerLeave={stopArrowScroll}
+                className="absolute left-0 top-0 hidden h-[calc(100%-1.75rem)] w-8 items-center justify-center bg-gradient-to-r from-bg-base/90 to-transparent text-text-muted transition-colors hover:text-text-primary [@media(hover:hover)]:flex"
+              >
+                <ChevronLeft size={20} />
+              </button>
+              <button
+                type="button"
+                aria-label="Scroll right"
+                onPointerDown={(e) => startArrowScroll(1, e)}
+                onPointerUp={stopArrowScroll}
+                onPointerCancel={stopArrowScroll}
+                onPointerLeave={stopArrowScroll}
+                className="absolute right-0 top-0 hidden h-[calc(100%-1.75rem)] w-8 items-center justify-center bg-gradient-to-l from-bg-base/90 to-transparent text-text-muted transition-colors hover:text-text-primary [@media(hover:hover)]:flex"
+              >
+                <ChevronRight size={20} />
+              </button>
+            </>
+          )}
+        </div>
       )}
     </div>
   );

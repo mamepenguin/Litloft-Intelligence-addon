@@ -1225,3 +1225,15 @@ def _purge_file(file_id: str) -> None:
 
         # Delete indexed file record
         session.query(IndexedFile).filter_by(file_id=file_id).delete()
+
+    # Drop the on-disk CLIP frame thumbnail cache. Done outside the DB
+    # session so a filesystem hiccup doesn't roll back the index purge.
+    try:
+        from app.routers.files import purge_frame_cache
+
+        purge_frame_cache(file_id)
+    except Exception as exc:  # noqa: BLE001 — best-effort cache cleanup
+        logger.warning(
+            "purge_file: frame cache cleanup failed for %s (%s)",
+            file_id, exc,
+        )
