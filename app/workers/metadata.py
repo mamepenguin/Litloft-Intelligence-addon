@@ -8,6 +8,7 @@ step and runs in batch mode.
 import logging
 import re
 import uuid
+from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -16,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_search_db, upsert_fts_text_content, validate_vector_table
-from app.extractors.base import TextChunk
+from app.extractors.base import ExtractionResult
 from app.extractors.pdf import PdfExtractor
 from app.extractors.text import TextExtractor
 from app.models import Embedding, IndexedFile
@@ -26,6 +27,11 @@ logger = logging.getLogger(__name__)
 
 # Content extractors (instantiated once)
 _extractors = [TextExtractor(), PdfExtractor()]
+
+# Cap for the persisted PDF Markdown body. Anything larger is dropped
+# from the ``pdf_markdown`` table (chunks/embeddings are still stored).
+# See spec ``2026-04-27-intelligence-pdf-markdown-indexing.md``.
+MAX_PDF_MARKDOWN_BYTES = 5 * 1024 * 1024
 
 
 def _clean_filename(filename: str) -> str:
@@ -68,14 +74,19 @@ def _build_metadata_text(file: IndexedFile) -> str:
     return " ".join(parts)
 
 
-def _extract_file_content(file: IndexedFile) -> list[TextChunk]:
+def _extract_file_content(file: IndexedFile) -> ExtractionResult:
     """Extract text content from a file using available extractors.
+
+    Returns the full ``ExtractionResult`` so the indexing pipeline can
+    persist the optional Markdown rendering (PDF) alongside the chunk
+    embeddings. Files with no matching extractor — or that raise during
+    extraction — yield an empty result.
 
     Args:
         file: The indexed file record.
 
     Returns:
-        List of extracted text chunks.
+        ExtractionResult with chunks plus any Markdown rendering.
     """
     for extractor in _extractors:
         if extractor.can_handle(file.file_path):
@@ -86,7 +97,8 @@ def _extract_file_content(file: IndexedFile) -> list[TextChunk]:
                     "Content extraction failed for %s: %s",
                     file.file_id, e,
                 )
-    return []
+                return ExtractionResult()
+    return ExtractionResult()
 
 
 def _store_embedding(
@@ -241,8 +253,14 @@ def index_text_content(file_id: str) -> bool:
         if file is None:
             return False
 
-        chunks = _extract_file_content(file)
+        result = _extract_file_content(file)
+        chunks = list(result.chunks)
         if not chunks:
+            # No chunks: still call _upsert_pdf_markdown so an empty
+            # PyMuPDF4LLM extraction (markdown="") clears any stale
+            # row from a prior re-index. markdown=None (fitz fallback /
+            # non-PDF) is a no-op inside the helper.
+            _upsert_pdf_markdown(session, file_id, result)
             file.text_indexed = True
             return True
 
@@ -291,12 +309,73 @@ def index_text_content(file_id: str) -> bool:
         ]
         upsert_fts_text_content(session, file_id, fts_chunks)
 
+        _upsert_pdf_markdown(session, file_id, result)
+
         file_record = session.query(IndexedFile).filter_by(
             file_id=file_id
         ).first()
         if file_record is not None:
             file_record.text_indexed = True
         return True
+
+
+def _upsert_pdf_markdown(
+    session: Session, file_id: str, result: ExtractionResult
+) -> None:
+    """Persist (or skip / clear) the PDF Markdown body for ``file_id``.
+
+    - ``markdown is None``: extractor produced no Markdown (non-PDF
+      files, or PDFs that fell back to fitz raw text). Skip silently.
+    - ``markdown == ""``: PyMuPDF4LLM ran successfully but the document
+      has no extractable pages (e.g. scan-only PDF). Drop any prior
+      row so the DB reflects the latest extraction state instead of
+      keeping stale Markdown.
+    - body exceeds ``MAX_PDF_MARKDOWN_BYTES``: log a warning and skip
+      the UPSERT so chunks/embeddings still land but the table stays
+      bounded.
+
+    Uses SQLite UPSERT so re-indexing preserves the original
+    ``generated_at`` while bumping ``updated_at``.
+    """
+    markdown = result.markdown
+    if markdown is None:
+        return
+
+    if not markdown:
+        # Empty extraction: clear stale Markdown if any.
+        session.execute(
+            sql_text("DELETE FROM pdf_markdown WHERE file_id = :fid"),
+            {"fid": file_id},
+        )
+        return
+
+    if len(markdown.encode("utf-8")) > MAX_PDF_MARKDOWN_BYTES:
+        logger.warning(
+            "PDF Markdown for %s exceeds %d bytes; skipping pdf_markdown UPSERT",
+            file_id, MAX_PDF_MARKDOWN_BYTES,
+        )
+        return
+
+    now = datetime.now(UTC).isoformat()
+    session.execute(
+        sql_text(
+            "INSERT INTO pdf_markdown "
+            "(file_id, markdown, page_count, extractor, generated_at, updated_at) "
+            "VALUES (:fid, :md, :pc, :ex, :now, :now) "
+            "ON CONFLICT(file_id) DO UPDATE SET "
+            "  markdown = excluded.markdown, "
+            "  page_count = excluded.page_count, "
+            "  extractor = excluded.extractor, "
+            "  updated_at = excluded.updated_at"
+        ),
+        {
+            "fid": file_id,
+            "md": markdown,
+            "pc": result.page_count if result.page_count is not None else 0,
+            "ex": result.extractor,
+            "now": now,
+        },
+    )
 
 
 def _remove_embeddings(

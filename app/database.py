@@ -131,6 +131,14 @@ def init_search_db() -> None:
         _create_file_insights_table(conn)
         conn.commit()
 
+    # Create pdf_markdown table and force re-index of existing PDFs so
+    # the new Markdown-based extractor populates it (idempotent: the
+    # reset only flips active PDFs that are still flagged text_indexed).
+    with _search_engine.connect() as conn:
+        _create_pdf_markdown_table(conn)
+        _reset_text_indexed_for_pdfs(conn)
+        conn.commit()
+
     # Backfill file_insights from existing detailed_summary rows.
     # Runs BEFORE the Step 2b column drop so the legacy data is
     # captured in file_insights before the source columns vanish.
@@ -621,6 +629,63 @@ def _create_file_insights_table(conn: object) -> None:
     conn.execute(text(
         "CREATE INDEX IF NOT EXISTS idx_file_insights_kind_status "
         "ON file_insights(kind, status)"
+    ))
+
+
+def _create_pdf_markdown_table(conn: object) -> None:
+    """Create ``pdf_markdown`` (one Markdown body per PDF) if missing.
+
+    Holds the PyMuPDF4LLM-generated Markdown rendering of each indexed
+    PDF (see spec ``2026-04-27-intelligence-pdf-markdown-indexing.md``).
+    The body is regenerated whenever a PDF is (re-)indexed; the row is
+    removed automatically when the parent ``indexed_files`` row is
+    deleted (FK CASCADE — requires ``PRAGMA foreign_keys=ON``, which the
+    addon's connect listener already sets).
+
+    Columns:
+    - ``file_id``       PK + FK ``indexed_files.file_id`` ON DELETE CASCADE
+    - ``markdown``      Markdown body (TEXT NOT NULL)
+    - ``page_count``    page count of the source PDF (INTEGER NOT NULL)
+    - ``extractor``     ``"pymupdf4llm"`` or ``"fitz_fallback"`` (TEXT NOT NULL)
+    - ``generated_at``  first creation time (TIMESTAMP NOT NULL)
+    - ``updated_at``    last write time, advanced by UPSERT (TIMESTAMP NOT NULL)
+    """
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS pdf_markdown ("
+        "  file_id TEXT PRIMARY KEY,"
+        "  markdown TEXT NOT NULL,"
+        "  page_count INTEGER NOT NULL,"
+        "  extractor TEXT NOT NULL,"
+        "  generated_at TIMESTAMP NOT NULL,"
+        "  updated_at TIMESTAMP NOT NULL,"
+        "  FOREIGN KEY (file_id) REFERENCES indexed_files(file_id)"
+        "    ON DELETE CASCADE"
+        ")"
+    ))
+
+
+def _reset_text_indexed_for_pdfs(conn: object) -> None:
+    """Force re-indexing of active PDFs so they pick up the new path.
+
+    The PDF extractor is being switched from fitz raw-text to
+    PyMuPDF4LLM Markdown (spec ``2026-04-27-intelligence-pdf-markdown-indexing``).
+    Because ``index_text_content`` is invoked from the metadata worker
+    loop (no standalone TEXT_CONTENT worker exists), we reset both
+    ``text_indexed`` and ``metadata_indexed`` so the metadata worker
+    picks up the file and triggers ``index_text_content`` for it.
+    Re-running metadata embedding for a PDF is a no-op in content terms
+    (filename / title / description don't change), only the embedding
+    is recomputed.
+
+    Scoped to ``mime_type = 'application/pdf' AND active = 1`` to avoid
+    touching transcript-driven indexes or already soft-deleted rows.
+    Idempotent: a no-op once every PDF has been re-indexed.
+    """
+    conn.execute(text(
+        "UPDATE indexed_files "
+        "SET text_indexed = 0, metadata_indexed = 0 "
+        "WHERE mime_type = 'application/pdf' "
+        "  AND active = 1"
     ))
 
 

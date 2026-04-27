@@ -107,7 +107,12 @@
     "visionFolderConfirm": "Generate AI descriptions for every image in this folder? This may incur LLM costs.",
     "visionFolderQueued": "{queued} images queued",
     "visionFolderTooMany": "Too many files ({requested}). Max per batch: {max}.",
-    "visionFolderError": "Failed to queue folder — please retry."
+    "visionFolderError": "Failed to queue folder — please retry.",
+    "pdfMarkdownTitle": "Markdown view",
+    "pdfMarkdownPageCount": "{count} pages",
+    "pdfMarkdownLoading": "Loading Markdown…",
+    "pdfMarkdownUnavailable": "Markdown view is not available for this PDF (likely indexed via the fitz fallback path).",
+    "pdfMarkdownError": "Failed to load Markdown. Please reload and try again."
   },
   "detailedSummary": {
     "citations": {

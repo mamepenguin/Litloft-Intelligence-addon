@@ -25,6 +25,7 @@ from app.schemas import (
     IndexDetailType,
     IndexDetailsResponse,
     MessageResponse,
+    PdfMarkdownResponse,
     SuggestedTagsResponse,
     TranscriptChunkResponse,
     TranscriptResponse,
@@ -497,6 +498,56 @@ async def get_chunk_excerpt(
         end_time=None,
         page=page,
     )
+
+
+@router.get(
+    "/files/{file_id}/pdf-markdown",
+    response_model=PdfMarkdownResponse,
+)
+async def get_pdf_markdown(
+    file_id: str,
+    drive: str = Depends(require_drive),
+) -> PdfMarkdownResponse:
+    """Return the persisted Markdown body for an indexed PDF.
+
+    Markdown is produced by PyMuPDF4LLM during text-content indexing
+    and stored 1:1 with the indexed file. Callers must already be
+    authorised for the file's drive — ``_get_indexed_file_or_404``
+    surfaces both unknown ``file_id`` and cross-drive access as 404 to
+    avoid leaking which file_ids exist outside the current drive
+    (matches the project-wide ``drive_boundary`` rule).
+
+    Returns 404 when:
+
+    * the file is not indexed (or lives in another drive),
+    * the file is not a PDF (no ``pdf_markdown`` row will exist),
+    * the PDF was extracted via the fitz fallback path (no row written
+      because Markdown is not available for that path).
+
+    The host's ``file_access`` pre_check provides the first layer of
+    drive enforcement; the handler-side ``_get_indexed_file_or_404``
+    is the second layer of defence in depth.
+    """
+    from app.database import get_search_db
+    from app.models import PdfMarkdown
+
+    _get_indexed_file_or_404(file_id, drive)
+
+    with get_search_db() as db:
+        row = (
+            db.query(PdfMarkdown)
+            .filter(PdfMarkdown.file_id == file_id)
+            .first()
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="PDF Markdown not available")
+        return PdfMarkdownResponse(
+            file_id=row.file_id,
+            markdown=row.markdown,
+            page_count=row.page_count,
+            extractor=row.extractor,
+            generated_at=row.generated_at,
+        )
 
 
 # --- CLIP frame extraction with persistent disk cache ---

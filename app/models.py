@@ -12,6 +12,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Float,
+    ForeignKey,
     Index,
     Integer,
     String,
@@ -274,4 +275,44 @@ class FileInsight(Base):
             "file_id", "kind", "status",
         ),
         Index("idx_file_insights_kind_status", "kind", "status"),
+    )
+
+
+class PdfMarkdown(Base):
+    """Markdown rendering of a PDF file produced by PyMuPDF4LLM.
+
+    One row per indexed PDF. Generated during the text-content indexing
+    step alongside chunk embeddings; exposed through a read-only API so
+    the frontend can show a structured Markdown view of the document.
+
+    ``extractor`` records which path produced the body:
+    - ``"pymupdf4llm"``  Markdown-rich primary path.
+    - ``"fitz_fallback"``  fitz raw-text fallback after PyMuPDF4LLM
+      raised. The fallback is plain text rather than Markdown, so the
+      indexing pipeline writes ``markdown=None`` (no row inserted) in
+      that case. The literal is reserved here for forward compatibility
+      and external readers that may persist plain-text bodies.
+
+    The row is removed automatically when the corresponding
+    ``indexed_files`` row goes away (FK ON DELETE CASCADE).
+    """
+
+    __tablename__ = "pdf_markdown"
+
+    file_id: Mapped[str] = mapped_column(
+        String(12),
+        ForeignKey("indexed_files.file_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    page_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    extractor: Mapped[str] = mapped_column(String(32), nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )

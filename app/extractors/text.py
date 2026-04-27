@@ -8,10 +8,12 @@ import re
 from pathlib import Path
 
 from app.config import settings
-from app.extractors.base import ContentExtractor, TextChunk
+from app.extractors.base import ContentExtractor, ExtractionResult, TextChunk
 
 # Maximum file size to process (10MB)
 MAX_FILE_SIZE = 10 * 1024 * 1024
+
+EXTRACTOR_NAME = "text"
 
 
 class TextExtractor(ContentExtractor):
@@ -21,39 +23,44 @@ class TextExtractor(ContentExtractor):
         ".txt", ".md", ".csv", ".json", ".srt", ".vtt",
     ]
 
-    def extract(self, file_path: str) -> list[TextChunk]:
+    def extract(self, file_path: str) -> ExtractionResult:
         """Extract text chunks from a text-based file.
+
+        Plain text formats are not converted to Markdown; the resulting
+        ``ExtractionResult.markdown`` is always ``None``.
 
         Args:
             file_path: Absolute path to the file.
 
         Returns:
-            List of TextChunk objects.
+            ExtractionResult with chunks suitable for embedding.
         """
         from app.config import validate_file_path
 
+        empty = ExtractionResult(chunks=[], markdown=None, extractor=EXTRACTOR_NAME)
+
         if not validate_file_path(file_path):
-            return []
+            return empty
         path = Path(file_path)
         if not path.exists():
-            return []
+            return empty
 
         if path.stat().st_size > MAX_FILE_SIZE:
-            return []
+            return empty
 
         try:
             raw_text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
-            return []
+            return empty
 
         if not raw_text.strip():
-            return []
+            return empty
 
         suffix = path.suffix.lower()
         cleaned = _clean_by_type(raw_text, suffix)
 
         if not cleaned.strip():
-            return []
+            return empty
 
         chunk_config = settings.indexing.text_chunking
         text_chunks = self.chunk_text(
@@ -62,10 +69,13 @@ class TextExtractor(ContentExtractor):
             overlap=chunk_config.overlap,
         )
 
-        return [
+        chunks = [
             TextChunk(text=chunk, page=None, metadata=suffix)
             for chunk in text_chunks
         ]
+        return ExtractionResult(
+            chunks=chunks, markdown=None, extractor=EXTRACTOR_NAME
+        )
 
 
 def _clean_by_type(text: str, suffix: str) -> str:

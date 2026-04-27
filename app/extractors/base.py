@@ -4,7 +4,7 @@ Extractors convert file contents into text chunks suitable for embedding.
 Each extractor declares which file extensions it supports.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -23,6 +23,33 @@ class TextChunk:
     metadata: str = ""
 
 
+@dataclass(frozen=True)
+class ExtractionResult:
+    """The full output of a content extraction call.
+
+    Carries embedding-ready chunks plus an optional reading-friendly
+    Markdown rendering (currently produced only by the PDF extractor
+    via PyMuPDF4LLM). Phase 3 of the PDF Markdown work persists the
+    Markdown into the ``pdf_markdown`` table.
+
+    Attributes:
+        chunks: Embedding-ready text chunks.
+        markdown: Full reading-friendly Markdown if available, else None.
+        extractor: Identifier of the concrete pipeline that produced
+            this result. Examples: ``"text"``, ``"pymupdf4llm"``,
+            ``"fitz_fallback"``.
+        page_count: Source page count for paginated formats (PDF). None
+            for formats with no native pagination (plain text, Markdown,
+            etc.). Used by the indexing pipeline when persisting the
+            ``pdf_markdown`` row.
+    """
+
+    chunks: list[TextChunk] = field(default_factory=list)
+    markdown: str | None = None
+    extractor: str = ""
+    page_count: int | None = None
+
+
 class ContentExtractor:
     """Base class for file content extractors.
 
@@ -36,14 +63,15 @@ class ContentExtractor:
         suffix = Path(file_path).suffix.lower()
         return suffix in self.supported_extensions
 
-    def extract(self, file_path: str) -> list[TextChunk]:
-        """Extract text chunks from a file.
+    def extract(self, file_path: str) -> ExtractionResult:
+        """Extract content from a file.
 
         Args:
             file_path: Absolute path to the file.
 
         Returns:
-            List of TextChunk objects extracted from the file.
+            ExtractionResult containing embedding-ready chunks plus an
+            optional Markdown rendering and an extractor identifier.
 
         Raises:
             NotImplementedError: If not overridden by subclass.
