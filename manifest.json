@@ -14,7 +14,6 @@
             {"id": "detailed-summary", "label": "AI Detailed Summary", "priority": 7},
             {"id": "visual-description", "label": "AI Visual Description", "priority": 8},
             {"id": "transcript", "label": "Transcript", "priority": 10},
-            {"id": "pdf-markdown", "label": "PDF Markdown", "priority": 15},
             {"id": "clip-frames", "label": "CLIP Frames", "priority": 20},
             {"id": "index-details", "label": "Index Details", "priority": 30},
             {"id": "similar-files", "label": "Similar Files", "priority": 40}

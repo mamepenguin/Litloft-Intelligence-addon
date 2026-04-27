@@ -345,52 +345,6 @@ export async function getClipTimestamps(
   }
 }
 
-// --- PDF Markdown (PyMuPDF4LLM-generated body) ---
-
-/**
- * Persisted Markdown body for an indexed PDF.
- *
- * Backend persists this 1:1 with `indexed_files` whenever PyMuPDF4LLM
- * succeeds during text-content indexing. PDFs that fell back to fitz
- * surface as 404 (no row written). `extractor` is informational —
- * always `"pymupdf4llm"` today, but reserved so a future migration can
- * publish fallback bodies under the same endpoint.
- */
-export interface PdfMarkdownPayload {
-  file_id: string;
-  markdown: string;
-  page_count: number;
-  extractor: string;
-  generated_at: string;
-}
-
-/**
- * Fetch the Markdown body for a PDF.
- *
- * Returns `null` when the backend responds 404 — that covers all the
- * "no Markdown available" cases (non-PDF, fitz fallback, file not yet
- * indexed, drive access denied). Other failures rethrow so the caller
- * can distinguish a transient network issue from a real "unavailable"
- * state. The pattern matches `getCitationChunkExcerpt` which also
- * unwraps 404 to null but lets non-404 errors bubble.
- */
-export async function getPdfMarkdown(
-  fileId: string,
-  drive: string,
-): Promise<PdfMarkdownPayload | null> {
-  const res = await fetch(
-    `${API_BASE}/addons/intelligence/files/${fileId}/pdf-markdown`,
-    { credentials: "include", headers: driveHeaders(drive) },
-  );
-  if (res.status === 404) return null;
-  if (!res.ok) {
-    throw new Error(
-      `getPdfMarkdown failed: ${res.status} ${res.statusText}`,
-    );
-  }
-  return (await res.json()) as PdfMarkdownPayload;
-}
-
 export function getFrameUrl(fileId: string, timestamp: number): string {
   // <img src> can't carry headers. The host proxy's file_access pre_check
   // already verifies the caller's session can read this file regardless
