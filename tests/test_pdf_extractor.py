@@ -161,6 +161,36 @@ def test_pymupdf4llm_import_error_falls_back_to_fitz(
     assert any("fitz extracted" in c.text for c in result.chunks)
 
 
+def test_pymupdf4llm_index_error_retries_without_pages_arg(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pdf: Path,
+) -> None:
+    """PDFs shorter than MAX_PAGES make to_markdown raise IndexError;
+    the extractor must retry without ``pages=`` and stay on the
+    primary path (no fitz fallback).
+    """
+    fake_chunks = [{"text": "Short PDF body."}]
+
+    call_log: list[dict] = []
+
+    def _to_markdown(_path, **kwargs):
+        call_log.append(kwargs)
+        if "pages" in kwargs:
+            raise IndexError("page 116 not in document")
+        return fake_chunks
+
+    _install_pymupdf4llm(monkeypatch, _to_markdown)
+
+    result = PdfExtractor().extract(str(fake_pdf))
+
+    assert result.extractor == EXTRACTOR_PRIMARY
+    assert result.markdown is not None
+    assert "Short PDF body." in result.markdown
+    assert len(call_log) == 2
+    assert "pages" in call_log[0]
+    assert "pages" not in call_log[1]
+
+
 def test_pymupdf4llm_runtime_error_falls_back_to_fitz(
     monkeypatch: pytest.MonkeyPatch,
     fake_pdf: Path,

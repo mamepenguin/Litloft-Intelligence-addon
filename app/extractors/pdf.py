@@ -13,8 +13,11 @@ from app.extractors.base import ContentExtractor, ExtractionResult, TextChunk
 
 logger = logging.getLogger(__name__)
 
-# Maximum file size to process (50MB)
-MAX_PDF_SIZE = 50 * 1024 * 1024
+# Maximum file size to process (200MB).
+# OCR-scanner PDFs commonly exceed 50MB because of embedded image
+# layers; 200MB covers typical scanned books/manuals while still
+# rejecting pathologically huge files.
+MAX_PDF_SIZE = 200 * 1024 * 1024
 
 # Maximum pages to process
 MAX_PAGES = 500
@@ -83,9 +86,12 @@ def _empty_fallback() -> ExtractionResult:
 def _extract_with_pymupdf4llm(path: Path) -> ExtractionResult | None:
     """Try the PyMuPDF4LLM Markdown path; return None to signal fallback.
 
-    Passes ``pages=range(MAX_PAGES)`` so the page cap is enforced inside
-    the library before each page's Markdown is materialised, bounding
-    peak memory for hostile / pathological PDFs.
+    First tries with ``pages=range(MAX_PAGES)`` so the page cap is
+    enforced inside the library, bounding peak memory for hostile /
+    pathological PDFs. PyMuPDF4LLM raises ``IndexError`` when the PDF
+    has fewer pages than the requested range (most real PDFs), so we
+    retry without ``pages=`` to let the library walk every page —
+    output is truncated to ``MAX_PAGES`` afterwards anyway.
     """
     try:
         import pymupdf4llm
@@ -106,6 +112,20 @@ def _extract_with_pymupdf4llm(path: Path) -> ExtractionResult | None:
             pages=list(range(MAX_PAGES)),
             page_chunks=True,
         )
+    except IndexError:
+        # PDF has fewer than MAX_PAGES pages — common case. Retry
+        # without an explicit page list so the library extracts all.
+        try:
+            page_chunks = pymupdf4llm.to_markdown(
+                str(path), page_chunks=True
+            )
+        except Exception as exc:
+            logger.warning(
+                "pymupdf4llm.to_markdown retry raised on %s, "
+                "falling back to fitz: %s",
+                path.name, exc,
+            )
+            return None
     except Exception as exc:
         logger.warning(
             "pymupdf4llm.to_markdown raised on %s, falling back to fitz: %s",
