@@ -615,6 +615,26 @@ def _get_full_document_text(file_id: str) -> str:
         return "\n\n".join(row[0] for row in rows if row[0])
 
 
+def _get_pdf_markdown(file_id: str) -> str | None:
+    """Load the PyMuPDF4LLM Markdown rendering for a PDF, or None.
+
+    Returns None when no row exists (fitz_fallback PDFs leave the table
+    empty by design — see ``PdfMarkdown.extractor`` docstring) so the
+    caller can fall back to the chunk-concatenated raw text path.
+    """
+    with get_search_db() as session:
+        row = session.execute(
+            sql_text("SELECT markdown FROM pdf_markdown WHERE file_id = :fid"),
+            {"fid": file_id},
+        ).fetchone()
+    if row is None:
+        return None
+    markdown = row[0]
+    if not markdown:
+        return None
+    return markdown
+
+
 def _build_context(indexed_file: dict, context_type: str) -> str | None:
     """Build raw context text for a file, or None if no content is available.
 
@@ -624,6 +644,12 @@ def _build_context(indexed_file: dict, context_type: str) -> str | None:
     LLM hallucinating a summary from only the filename when Whisper
     produces a trivial transcript (e.g., "you" on a silent piano video)
     or a document extractor yields a near-empty text layer.
+
+    For PDFs the structured Markdown produced by PyMuPDF4LLM is preferred
+    over the chunk-concatenated raw text: headings, lists, and tables
+    survive the round-trip and give the LLM a richer summarisation
+    surface. fitz_fallback PDFs (no Markdown row) transparently fall back
+    to the chunks path.
 
     Args:
         indexed_file: File info dict from _get_indexed_file.
@@ -639,7 +665,10 @@ def _build_context(indexed_file: dict, context_type: str) -> str | None:
     if context_type in ("video", "audio"):
         raw = _get_full_transcript(file_id)
     elif context_type == "document":
-        raw = _get_full_document_text(file_id)
+        if (indexed_file.get("mime_type") or "") == "application/pdf":
+            raw = _get_pdf_markdown(file_id) or _get_full_document_text(file_id)
+        else:
+            raw = _get_full_document_text(file_id)
 
     if not raw:
         return None

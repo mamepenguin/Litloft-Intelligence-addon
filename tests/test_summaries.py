@@ -23,8 +23,10 @@ from app.workers.summaries import (
     _build_detailed_user_prompt,
     _build_system_prompt,
     _build_user_prompt,
+    _build_context,
     _classify_file_type,
     _get_full_document_text,
+    _get_pdf_markdown,
     _prepare_context,
     _sample_windows,
     _trim_to_sentence_boundary,
@@ -528,6 +530,184 @@ class TestGetFullDocumentText:
         result = _get_full_document_text("abc")
         assert "real content" in result
         assert "more content" in result
+
+
+# ---------------------------------------------------------------------------
+# _get_pdf_markdown
+# ---------------------------------------------------------------------------
+
+
+class TestGetPdfMarkdown:
+    """PDF Markdown loading reads the pdf_markdown row produced by indexing.
+
+    Only PyMuPDF4LLM-extracted PDFs have a row; fitz_fallback PDFs leave
+    the table empty, so the helper must return None in that case so the
+    caller can fall back to chunk-concatenated text.
+    """
+
+    def test_returns_markdown_when_row_exists(self, monkeypatch, mock_search_db):
+        get_db, session = mock_search_db
+        monkeypatch.setattr("app.workers.summaries.get_search_db", get_db)
+
+        session.execute.return_value.fetchone.return_value = ("# Heading\n\nBody",)
+
+        result = _get_pdf_markdown("abc")
+        assert result == "# Heading\n\nBody"
+
+    def test_returns_none_when_row_missing(self, monkeypatch, mock_search_db):
+        get_db, session = mock_search_db
+        monkeypatch.setattr("app.workers.summaries.get_search_db", get_db)
+
+        session.execute.return_value.fetchone.return_value = None
+
+        assert _get_pdf_markdown("abc") is None
+
+    def test_returns_none_when_markdown_empty(self, monkeypatch, mock_search_db):
+        get_db, session = mock_search_db
+        monkeypatch.setattr("app.workers.summaries.get_search_db", get_db)
+
+        session.execute.return_value.fetchone.return_value = ("",)
+
+        assert _get_pdf_markdown("abc") is None
+
+
+# ---------------------------------------------------------------------------
+# _build_context
+# ---------------------------------------------------------------------------
+
+
+class TestBuildContext:
+    """Branch selection across video / audio / document, with PDF Markdown."""
+
+    def _indexed(self, *, file_id="abc", file_type="document", mime_type=None):
+        return {
+            "file_id": file_id,
+            "filename": "doc.pdf",
+            "file_type": file_type,
+            "mime_type": mime_type,
+            "title": "",
+            "description": "",
+        }
+
+    def test_video_uses_transcript(self, monkeypatch, make_settings):
+        monkeypatch.setattr("app.workers.summaries.settings", make_settings())
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_transcript",
+            lambda fid: "spoken words " * 200,
+        )
+        result = _build_context(
+            self._indexed(file_type="video"), "video"
+        )
+        assert result is not None
+        assert "spoken words" in result
+
+    def test_pdf_prefers_markdown_when_available(
+        self, monkeypatch, make_settings
+    ):
+        """PDF documents must read from pdf_markdown, not the chunks table.
+
+        The Markdown is structurally richer than the concatenated chunks,
+        so it is the preferred LLM input for detailed_summary on PDFs.
+        """
+        monkeypatch.setattr("app.workers.summaries.settings", make_settings())
+        called = {"pdf": False, "chunks": False}
+
+        def fake_pdf(_fid):
+            called["pdf"] = True
+            return "# Markdown body\n\n" + ("- item\n" * 200)
+
+        def fake_chunks(_fid):
+            called["chunks"] = True
+            return "chunk text"
+
+        monkeypatch.setattr("app.workers.summaries._get_pdf_markdown", fake_pdf)
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_document_text", fake_chunks
+        )
+
+        result = _build_context(
+            self._indexed(mime_type="application/pdf"), "document"
+        )
+        assert result is not None
+        assert "# Markdown body" in result
+        assert called["pdf"] is True
+        assert called["chunks"] is False
+
+    def test_pdf_falls_back_to_chunks_when_markdown_missing(
+        self, monkeypatch, make_settings
+    ):
+        """fitz_fallback PDFs have no pdf_markdown row — must use chunks."""
+        monkeypatch.setattr("app.workers.summaries.settings", make_settings())
+        monkeypatch.setattr(
+            "app.workers.summaries._get_pdf_markdown", lambda fid: None
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_document_text",
+            lambda fid: "chunk text " * 200,
+        )
+
+        result = _build_context(
+            self._indexed(mime_type="application/pdf"), "document"
+        )
+        assert result is not None
+        assert "chunk text" in result
+
+    def test_non_pdf_document_uses_chunks_directly(
+        self, monkeypatch, make_settings
+    ):
+        """Non-PDF documents (.md, .txt, etc.) must not touch pdf_markdown."""
+        monkeypatch.setattr("app.workers.summaries.settings", make_settings())
+
+        def fail_pdf(_fid):
+            raise AssertionError("_get_pdf_markdown must not be called for non-PDF")
+
+        monkeypatch.setattr("app.workers.summaries._get_pdf_markdown", fail_pdf)
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_document_text",
+            lambda fid: "plain doc text " * 200,
+        )
+
+        result = _build_context(
+            self._indexed(mime_type="text/markdown"), "document"
+        )
+        assert result is not None
+        assert "plain doc text" in result
+
+    def test_returns_none_when_pdf_has_no_content(
+        self, monkeypatch, make_settings
+    ):
+        """Both Markdown and chunks empty — nothing to summarize."""
+        monkeypatch.setattr("app.workers.summaries.settings", make_settings())
+        monkeypatch.setattr(
+            "app.workers.summaries._get_pdf_markdown", lambda fid: None
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_document_text", lambda fid: ""
+        )
+
+        assert (
+            _build_context(
+                self._indexed(mime_type="application/pdf"), "document"
+            )
+            is None
+        )
+
+    def test_below_min_chars_returns_none(self, monkeypatch, make_settings):
+        """min_context_chars guard still applies to PDF Markdown path."""
+        monkeypatch.setattr("app.workers.summaries.settings", make_settings())
+        monkeypatch.setattr(
+            "app.workers.summaries._get_pdf_markdown", lambda fid: "# tiny"
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_document_text", lambda fid: ""
+        )
+
+        assert (
+            _build_context(
+                self._indexed(mime_type="application/pdf"), "document"
+            )
+            is None
+        )
 
 
 # ---------------------------------------------------------------------------
