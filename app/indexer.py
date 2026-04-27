@@ -129,6 +129,9 @@ class IndexManager:
         clip_count = settings.workers.clip_parallel
         self._background_tasks = [
             asyncio.create_task(self._metadata_worker(), name="metadata_worker"),
+            asyncio.create_task(
+                self._text_content_worker(), name="text_content_worker"
+            ),
             *[
                 asyncio.create_task(
                     self._clip_worker(), name=f"clip_worker_{i}"
@@ -735,9 +738,13 @@ class IndexManager:
                     )
                     logger.info("Metadata batch indexed: %d/%d", count, len(batch))
 
-                    # Also process text content for applicable files
-                    for file_id in file_ids:
-                        await asyncio.to_thread(index_text_content, file_id)
+                    # text_content is processed by `_text_content_worker`
+                    # off the dedicated TEXT_CONTENT queue. The metadata
+                    # worker no longer runs `index_text_content` inline so
+                    # files whose metadata is already indexed (e.g. after
+                    # an extractor change) still get re-extracted when the
+                    # reconciliation worker requeues just the TEXT_CONTENT
+                    # task.
 
                     # Queue auto-tagging for successfully indexed files (on_index mode only)
                     if (
@@ -775,6 +782,47 @@ class IndexManager:
                 return
             except Exception as e:
                 logger.error("Metadata worker error: %s", e)
+                await asyncio.sleep(5)
+
+    async def _text_content_worker(self) -> None:
+        """Process TEXT_CONTENT extraction tasks one file at a time.
+
+        Independent of the metadata worker so files whose metadata is
+        already indexed can still be re-extracted (e.g. after switching
+        the PDF extractor to PyMuPDF4LLM, the migration only resets
+        ``text_indexed`` and the TEXT_CONTENT queue is the path through
+        which the new extraction runs).
+
+        ``index_text_content`` is idempotent and skips files whose
+        ``text_indexed`` flag is already True, so concurrent enqueues
+        are safe.
+        """
+        while True:
+            try:
+                await self._pause_event.wait()
+                batch = await self._collect_batch(TaskType.TEXT_CONTENT, 1)
+
+                if not batch:
+                    await asyncio.sleep(2)
+                    continue
+
+                task = batch[0]
+                self._processing_count += 1
+
+                try:
+                    await asyncio.to_thread(index_text_content, task.file_id)
+                except Exception as e:
+                    logger.error(
+                        "Text content indexing failed for %s: %s",
+                        task.file_id, e,
+                    )
+                finally:
+                    self._processing_count -= 1
+
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.error("Text content worker error: %s", e)
                 await asyncio.sleep(5)
 
     async def _enqueue_vision_describe(self, file_id: str) -> None:

@@ -250,13 +250,12 @@ def test_cascade_delete_when_indexed_file_removed(engine):
 
 
 def test_reset_text_indexed_targets_active_pdfs_only(engine):
-    """The migration flips ``text_indexed`` and ``metadata_indexed``
-    only for active PDFs.
+    """The migration flips ``text_indexed`` only for active PDFs.
 
-    Resetting ``metadata_indexed`` is required because the addon has
-    no standalone TEXT_CONTENT worker — ``index_text_content`` is
-    invoked from the metadata worker loop, so a file must re-enter
-    that loop to trigger PDF re-extraction.
+    The standalone ``_text_content_worker`` consumes TEXT_CONTENT tasks
+    independently of the metadata worker, so flipping just
+    ``text_indexed`` is enough — ``metadata_indexed`` stays as is to
+    avoid redundant metadata embedding work.
     """
     from app.database import _reset_text_indexed_for_pdfs
 
@@ -282,9 +281,10 @@ def test_reset_text_indexed_targets_active_pdfs_only(engine):
             )).fetchall()
         }
 
-    # Active PDF: both flags reset so the metadata worker picks the
-    # file up and re-runs index_text_content.
-    assert rows["pdf-active"] == (0, 0)
+    # Active PDF: only text_indexed flipped; the standalone
+    # _text_content_worker handles re-extraction without needing
+    # metadata to re-flow.
+    assert rows["pdf-active"] == (0, 1)
     # Soft-deleted PDFs are out of scope (no point re-indexing missing data).
     assert rows["pdf-inactive"] == (1, 1)
     # Non-PDF text content is unaffected — its extractor pipeline did

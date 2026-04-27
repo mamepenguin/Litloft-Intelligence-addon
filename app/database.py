@@ -669,13 +669,9 @@ def _reset_text_indexed_for_pdfs(conn: object) -> None:
 
     The PDF extractor is being switched from fitz raw-text to
     PyMuPDF4LLM Markdown (spec ``2026-04-27-intelligence-pdf-markdown-indexing``).
-    Because ``index_text_content`` is invoked from the metadata worker
-    loop (no standalone TEXT_CONTENT worker exists), we reset both
-    ``text_indexed`` and ``metadata_indexed`` so the metadata worker
-    picks up the file and triggers ``index_text_content`` for it.
-    Re-running metadata embedding for a PDF is a no-op in content terms
-    (filename / title / description don't change), only the embedding
-    is recomputed.
+    Setting ``text_indexed = 0`` makes the reconciliation worker
+    requeue a TEXT_CONTENT task for each affected PDF, which the
+    standalone ``_text_content_worker`` then consumes.
 
     Scoped to ``mime_type = 'application/pdf' AND active = 1`` to avoid
     touching transcript-driven indexes or already soft-deleted rows.
@@ -683,7 +679,7 @@ def _reset_text_indexed_for_pdfs(conn: object) -> None:
     """
     conn.execute(text(
         "UPDATE indexed_files "
-        "SET text_indexed = 0, metadata_indexed = 0 "
+        "SET text_indexed = 0 "
         "WHERE mime_type = 'application/pdf' "
         "  AND active = 1"
     ))
