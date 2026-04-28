@@ -82,18 +82,30 @@ async def coarse_retrieve(
 
     engine = get_search_engine()
     with engine.connect() as conn:
+        # sqlite-vec rejects ``ORDER BY ... LIMIT`` on the outer SELECT
+        # when JOINs sit between the MATCH and the LIMIT — the LIMIT
+        # cannot be pushed into the vec0 KNN scan, and vec0 fails with
+        # "A LIMIT or 'k = ?' constraint is required on vec0 knn
+        # queries". Isolate the KNN scan in a CTE so the limit binds
+        # directly to vec_text, then JOIN the post-filter on the
+        # over-fetched id set.
         rows = conn.execute(
             sql_text(
-                "SELECT i.file_id, v.distance "
-                "FROM vec_text v "
-                "JOIN embeddings e ON e.id = v.embedding_id "
+                "WITH knn AS ("
+                "  SELECT embedding_id, distance "
+                "  FROM vec_text "
+                "  WHERE vector MATCH :vec "
+                "  ORDER BY distance "
+                "  LIMIT :over_fetch"
+                ") "
+                "SELECT i.file_id, knn.distance "
+                "FROM knn "
+                "JOIN embeddings e ON e.id = knn.embedding_id "
                 "JOIN indexed_files i ON i.file_id = e.file_id "
-                "WHERE v.vector MATCH :vec "
-                "  AND e.embedding_type = 'metadata' "
+                "WHERE e.embedding_type = 'metadata' "
                 "  AND i.drive = :drive "
                 "  AND i.active = 1 "
-                "ORDER BY v.distance "
-                "LIMIT :over_fetch"
+                "ORDER BY knn.distance"
             ),
             {"vec": vec_bytes, "drive": drive, "over_fetch": over_fetch},
         ).fetchall()

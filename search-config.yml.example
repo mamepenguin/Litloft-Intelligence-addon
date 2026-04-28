@@ -254,7 +254,9 @@ rag:
     fallback_full_search: true           # also run unscoped retrieval when
                                          # the scoped pass returns very few
                                          # candidates (pinpoint queries)
-    clue_count: 3                        # reserved for Phase 3 (multi-query)
+    clue_count: 3                        # Stage 2 multi-query expansion target
+                                         # (1 = legacy single-keyword path;
+                                         # 2-4 expands via shortlist summaries)
 
 models:
   # Whisper model for audio transcription (multilingual)
