@@ -1046,8 +1046,49 @@ export async function getIntelligenceStatus(
  * Using a discriminated union keeps the consumer's switch exhaustive;
  * adding a new kind on the backend surfaces as a TS error in the UI.
  */
+/**
+ * Resolved time window from the personal-history Stage A decomposition.
+ * Both ends are naive ISO-8601 strings (the host's WatchHistory column
+ * is naive UTC) and either end may be null for "unbounded".
+ */
+export interface DecomposedTimeRange {
+  label: string; // "today" | "yesterday" | "this_week" | ... | "none"
+  after: string | null;
+  before: string | null;
+}
+
+export interface DecomposedQueryPayload {
+  time_range: DecomposedTimeRange;
+  personal_scope: "viewed" | "not_viewed" | "none";
+  file_type_hint: "video" | "audio" | "image" | "text" | "none";
+  semantic_query: string;
+}
+
 export type AskStreamEvent =
   | { kind: "keywords"; keywords: string }
+  // Stage A output (personal-history feature only). Surfaces the
+  // structured form the LLM extracted from the user's natural-language
+  // question — emitted before ``keywords`` so the UI can show "we
+  // think you mean ..." while retrieval is still warming up.
+  | { kind: "query_decomposed"; decomposed: DecomposedQueryPayload }
+  // Stage B result. Emitted only when Stage B actually ran (i.e. the
+  // decomposed query had a personal signal). ``matched_file_count``
+  // is the size of the file_id_scope that the retriever will use.
+  | {
+      kind: "history_filter";
+      drive: string | null;
+      kind_label: "viewed" | "not_viewed";
+      matched_file_count: number;
+    }
+  // Stage C semantic category expansion (e.g. "SF" → ["SF", "science
+  // fiction", "宇宙船", ...]). Emitted only when category_expansion
+  // is enabled, has a semantic_query to expand, and the LLM produced
+  // more than one surface form.
+  | {
+      kind: "category_expanded";
+      semantic_query: string;
+      expanded: string[];
+    }
   // Hierarchical RAG Stage 2 multi-query expansion — emitted only when
   // the hierarchical pipeline runs (config on, drive set, shortlist
   // confident, ≥1 shortlist file accessible). Bypassed paths skip it.
@@ -1106,6 +1147,70 @@ export function parseSseFrame(frame: string): AskStreamEvent | null {
   switch (eventName) {
     case "keywords":
       return { kind: "keywords", keywords: String(data.keywords ?? "") };
+    case "query_decomposed": {
+      // Stage A payload — defensive coercion because the backend's
+      // schema is enforced server-side but a misconfigured proxy /
+      // older addon could still emit something off-spec. Bail out
+      // entirely on a missing shape so the UI ignores the event
+      // rather than rendering empty fields.
+      const tr = data.time_range;
+      if (!tr || typeof tr !== "object" || Array.isArray(tr)) return null;
+      const trObj = tr as Record<string, unknown>;
+      const label = typeof trObj.label === "string" ? trObj.label : "none";
+      const after = typeof trObj.after === "string" ? trObj.after : null;
+      const before = typeof trObj.before === "string" ? trObj.before : null;
+      const personal = data.personal_scope;
+      const fileType = data.file_type_hint;
+      return {
+        kind: "query_decomposed",
+        decomposed: {
+          time_range: { label, after, before },
+          personal_scope:
+            personal === "viewed" || personal === "not_viewed"
+              ? personal
+              : "none",
+          file_type_hint:
+            fileType === "video" ||
+            fileType === "audio" ||
+            fileType === "image" ||
+            fileType === "text"
+              ? fileType
+              : "none",
+          semantic_query:
+            typeof data.semantic_query === "string"
+              ? data.semantic_query
+              : "",
+        },
+      };
+    }
+    case "history_filter": {
+      const k = data.kind;
+      const matched = data.matched_file_count;
+      if (typeof matched !== "number") return null;
+      return {
+        kind: "history_filter",
+        drive: typeof data.drive === "string" ? data.drive : null,
+        kind_label: k === "not_viewed" ? "not_viewed" : "viewed",
+        matched_file_count: matched,
+      };
+    }
+    case "category_expanded": {
+      const raw = data.expanded;
+      if (!Array.isArray(raw)) return null;
+      const expanded = raw
+        .filter((t): t is string => typeof t === "string")
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0);
+      if (expanded.length === 0) return null;
+      return {
+        kind: "category_expanded",
+        semantic_query:
+          typeof data.semantic_query === "string"
+            ? data.semantic_query
+            : "",
+        expanded,
+      };
+    }
     case "clues": {
       // ``clues`` is always an array of strings. Defensive validation
       // because an empty/garbled payload should fall through to the

@@ -49,6 +49,7 @@ import {
   getIntelligenceStatus,
   type AskStreamEvent,
   type Citation,
+  type DecomposedQueryPayload,
   type IntelligenceStatus,
   type Source,
 } from "./api";
@@ -59,6 +60,23 @@ const MIN_QUERY_LENGTH = 3;
 
 // Non-terminal states describe the live request; terminal states
 // describe what the user should see once the stream has ended.
+// Snapshot of the personal-history scope after Stages A + B run. Held
+// alongside the streaming/answered states so the "12 件から検索" pill
+// stays visible even after the answer text has finished streaming.
+interface PersonalHistorySnapshot {
+  // Stage A. Always present once query_decomposed fired, regardless of
+  // whether Stage B engaged.
+  decomposed: DecomposedQueryPayload;
+  // Stage B file count. ``null`` when only Stage A ran (no personal
+  // signal in the query) or when the graceful fallback dropped the
+  // filter — the UI then surfaces the decomposition without the count.
+  matchedFileCount: number | null;
+  scopeKind: "viewed" | "not_viewed" | null;
+  // Stage C surface forms. Empty list means category expansion was
+  // not used (feature off, no semantic_query, or LLM collapsed).
+  expanded: string[];
+}
+
 type AskState =
   | { kind: "idle" }
   | {
@@ -70,6 +88,10 @@ type AskState =
       // hierarchical pipeline is bypassed (small drive, low coarse
       // confidence, etc.) — in that case the keywords pill stays.
       clues: string[] | null;
+      // Personal-history pre-scope state. Null until the
+      // ``query_decomposed`` event arrives; null forever when the
+      // feature is disabled (legacy viewer-agnostic Ask).
+      personalHistory: PersonalHistorySnapshot | null;
       sources: Source[];
       answerBuffer: string;
       // Progressive citations — populated by per-citation events as
@@ -81,6 +103,7 @@ type AskState =
       kind: "answered";
       keywords: string | null;
       clues: string[] | null;
+      personalHistory: PersonalHistorySnapshot | null;
       sources: Source[];
       answer: string;
       citations: Citation[];
@@ -299,6 +322,7 @@ function IntelligenceAskPageInner() {
         kind: "streaming",
         keywords: null,
         clues: null,
+        personalHistory: null,
         sources: [],
         answerBuffer: "",
         citations: [],
@@ -324,6 +348,7 @@ function IntelligenceAskPageInner() {
         // functional form to merge into whatever the latest render saw.
         let liveKeywords: string | null = null;
         let liveClues: string[] | null = null;
+        let livePersonalHistory: PersonalHistorySnapshot | null = null;
         let liveSources: Source[] = [];
         let liveAnswer = "";
         // Progressive citations accumulated from per-event updates.
@@ -344,11 +369,92 @@ function IntelligenceAskPageInner() {
                 kind: "streaming",
                 keywords: liveKeywords,
                 clues: liveClues,
+                personalHistory: livePersonalHistory,
                 sources: liveSources,
                 answerBuffer: liveAnswer,
                 citations: liveCitations,
               });
               break;
+            case "query_decomposed": {
+              // Stage A landed. Initialise the personal-history
+              // snapshot with the decomposition; ``matchedFileCount``
+              // and ``scopeKind`` are filled in by a later
+              // ``history_filter`` event when (and only when) Stage B
+              // actually engaged. Carrying ``expanded`` over from a
+              // prior snapshot is defensive — query_decomposed always
+              // arrives first in practice, so any pre-existing
+              // ``expanded`` would be a backend ordering bug.
+              const prevExpanded: string[] =
+                livePersonalHistory !== null
+                  ? livePersonalHistory.expanded
+                  : [];
+              livePersonalHistory = {
+                decomposed: event.decomposed,
+                matchedFileCount: null,
+                scopeKind: null,
+                expanded: prevExpanded,
+              };
+              setState({
+                kind: "streaming",
+                keywords: liveKeywords,
+                clues: liveClues,
+                personalHistory: livePersonalHistory,
+                sources: liveSources,
+                answerBuffer: liveAnswer,
+                citations: liveCitations,
+              });
+              break;
+            }
+            case "history_filter": {
+              // Stage B size + scope. The ``query_decomposed`` event
+              // always fires first, so the snapshot already exists —
+              // but defend against an out-of-order stream by leaving
+              // ``livePersonalHistory`` null when the snapshot is
+              // missing rather than synthesising a degenerate one
+              // (the UI then ignores the event).
+              if (livePersonalHistory !== null) {
+                const prev: PersonalHistorySnapshot = livePersonalHistory;
+                livePersonalHistory = {
+                  decomposed: prev.decomposed,
+                  expanded: prev.expanded,
+                  matchedFileCount: event.matched_file_count,
+                  scopeKind: event.kind_label,
+                };
+              }
+              setState({
+                kind: "streaming",
+                keywords: liveKeywords,
+                clues: liveClues,
+                personalHistory: livePersonalHistory,
+                sources: liveSources,
+                answerBuffer: liveAnswer,
+                citations: liveCitations,
+              });
+              break;
+            }
+            case "category_expanded": {
+              // Stage C surface forms. The decomposer's
+              // ``semantic_query`` is what we just expanded around.
+              if (livePersonalHistory !== null) {
+                const prev: PersonalHistorySnapshot = livePersonalHistory;
+                livePersonalHistory = {
+                  decomposed: prev.decomposed,
+                  matchedFileCount: prev.matchedFileCount,
+                  scopeKind: prev.scopeKind,
+                  expanded: event.expanded,
+                };
+              }
+              setState({
+                kind: "streaming",
+                keywords: liveKeywords,
+                clues: liveClues,
+                personalHistory: livePersonalHistory,
+                sources: liveSources,
+                answerBuffer: liveAnswer,
+                citations: liveCitations,
+              });
+              break;
+            }
             case "clues":
               // Stage 2 multi-query expansion arrived. Replace the
               // keywords pill with the clues view (~1.5–3s after the
@@ -361,6 +467,7 @@ function IntelligenceAskPageInner() {
                 kind: "streaming",
                 keywords: liveKeywords,
                 clues: liveClues,
+                personalHistory: livePersonalHistory,
                 sources: liveSources,
                 answerBuffer: liveAnswer,
                 citations: liveCitations,
@@ -372,6 +479,7 @@ function IntelligenceAskPageInner() {
                 kind: "streaming",
                 keywords: liveKeywords,
                 clues: liveClues,
+                personalHistory: livePersonalHistory,
                 sources: liveSources,
                 answerBuffer: liveAnswer,
                 citations: liveCitations,
@@ -397,6 +505,7 @@ function IntelligenceAskPageInner() {
                   kind: "streaming",
                   keywords: liveKeywords,
                   clues: liveClues,
+                  personalHistory: livePersonalHistory,
                   sources: liveSources,
                   answerBuffer: liveAnswer,
                   citations: liveCitations,
@@ -417,6 +526,7 @@ function IntelligenceAskPageInner() {
                   kind: "streaming",
                   keywords: liveKeywords,
                   clues: liveClues,
+                  personalHistory: livePersonalHistory,
                   sources: liveSources,
                   answerBuffer: liveAnswer,
                   citations: liveCitations,
@@ -435,6 +545,7 @@ function IntelligenceAskPageInner() {
                 kind: "streaming",
                 keywords: liveKeywords,
                 clues: liveClues,
+                personalHistory: livePersonalHistory,
                 sources: liveSources,
                 answerBuffer: liveAnswer,
                 citations: liveCitations,
@@ -482,6 +593,7 @@ function IntelligenceAskPageInner() {
           kind: "answered",
           keywords: liveKeywords,
           clues: liveClues,
+          personalHistory: livePersonalHistory,
           sources: liveSources,
           answer: liveAnswer,
           citations: finalCitations,
@@ -622,6 +734,65 @@ function IntelligenceAskPageInner() {
           )}
         </div>
       </form>
+
+      {(state.kind === "streaming" || state.kind === "answered") &&
+        state.personalHistory != null &&
+        (() => {
+          // Personal-history pill. Three sub-states:
+          // * Stage A only (no personal signal in the query) → show
+          //   the decomposition's symbolic time/file-type hints if
+          //   any. Helps the user see *why* their query did not
+          //   trigger the personal narrowing.
+          // * Stage B engaged with N>0 → "先週観た 12 件から検索しています"
+          // * Stage B engaged with N=0 (graceful) → "該当なし、全件検索"
+          const ph = state.personalHistory;
+          const tr = ph.decomposed.time_range.label;
+          const scope = ph.decomposed.personal_scope;
+          // Skip the pill entirely when Stage A produced no signals
+          // at all — the pill would be empty noise.
+          if (
+            tr === "none"
+            && scope === "none"
+            && ph.decomposed.file_type_hint === "none"
+            && ph.expanded.length === 0
+          ) {
+            return null;
+          }
+          const chips: string[] = [];
+          if (ph.matchedFileCount != null) {
+            const verb = ph.scopeKind === "not_viewed"
+              ? t("personalHistoryNotViewed", { count: ph.matchedFileCount })
+              : t("personalHistoryViewed", { count: ph.matchedFileCount });
+            chips.push(verb);
+          } else if (scope !== "none") {
+            // Stage A said personal but Stage B was either skipped
+            // (no viewer) or fell back gracefully on empty.
+            chips.push(t("personalHistoryFallback"));
+          }
+          if (tr !== "none") {
+            chips.push(t(`timeRange.${tr}` as const));
+          }
+          if (ph.decomposed.file_type_hint !== "none") {
+            chips.push(t(`fileTypeHint.${ph.decomposed.file_type_hint}` as const));
+          }
+          if (ph.expanded.length > 0) {
+            chips.push(
+              t("categoryExpanded", { terms: ph.expanded.join(" / ") }),
+            );
+          }
+          return (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-accent/30 bg-accent/5 px-3 py-2 text-xs text-text-muted">
+              {chips.map((chip, i) => (
+                <span
+                  key={`${i}-${chip}`}
+                  className="rounded bg-bg-card px-2 py-0.5"
+                >
+                  {chip}
+                </span>
+              ))}
+            </div>
+          );
+        })()}
 
       {(state.kind === "streaming" || state.kind === "answered") &&
         (() => {

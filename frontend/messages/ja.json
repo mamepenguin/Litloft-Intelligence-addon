@@ -47,7 +47,28 @@
     "retryHint": "再試行",
     "queryTooShort": "クエリが短すぎます (3文字以上)",
     "takenMs": "{ms}ms で生成",
-    "poweredByLlm": "AI"
+    "poweredByLlm": "AI",
+    "personalHistoryViewed": "視聴履歴 {count} 件を対象に検索",
+    "personalHistoryNotViewed": "未視聴 {count} 件を対象に検索",
+    "personalHistoryFallback": "視聴履歴が見つからないため全件検索",
+    "categoryExpanded": "意味展開: {terms}",
+    "timeRange": {
+      "today": "今日",
+      "yesterday": "昨日",
+      "this_week": "今週",
+      "last_week": "先週",
+      "this_month": "今月",
+      "last_month": "先月",
+      "this_year": "今年",
+      "last_year": "去年",
+      "recent": "最近"
+    },
+    "fileTypeHint": {
+      "video": "動画",
+      "audio": "音声",
+      "image": "画像",
+      "text": "文書"
+    }
   },
   "search": {
     "matchTranscript": "音声一致",

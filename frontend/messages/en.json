@@ -47,7 +47,28 @@
     "retryHint": "Retry",
     "queryTooShort": "Query too short (3 characters minimum)",
     "takenMs": "Generated in {ms}ms",
-    "poweredByLlm": "AI"
+    "poweredByLlm": "AI",
+    "personalHistoryViewed": "Searching {count} files you viewed",
+    "personalHistoryNotViewed": "Searching {count} unwatched files",
+    "personalHistoryFallback": "No matching history; searching all files",
+    "categoryExpanded": "Expanded: {terms}",
+    "timeRange": {
+      "today": "today",
+      "yesterday": "yesterday",
+      "this_week": "this week",
+      "last_week": "last week",
+      "this_month": "this month",
+      "last_month": "last month",
+      "this_year": "this year",
+      "last_year": "last year",
+      "recent": "recent"
+    },
+    "fileTypeHint": {
+      "video": "video",
+      "audio": "audio",
+      "image": "image",
+      "text": "text"
+    }
   },
   "search": {
     "matchTranscript": "Transcript",

@@ -8,9 +8,11 @@ parsing integration with load_settings().
 import pytest
 
 from app.config import (
+    CategoryExpansionConfig,
     FeaturesConfig,
     HierarchicalRagConfig,
     LLMConfig,
+    PersonalHistoryConfig,
     RagConfig,
     Settings,
     _parse_nested,
@@ -272,6 +274,106 @@ class TestLoadSettingsRag:
         # Defaults preserved when the nested block is absent.
         assert result.rag.hierarchical == HierarchicalRagConfig()
         assert result.rag.hierarchical.enabled is False
+
+    def test_parses_personal_history_section_from_yaml(
+        self, tmp_path, monkeypatch
+    ):
+        config_file = tmp_path / "search-config.yml"
+        config_file.write_text(
+            "rag:\n"
+            "  personal_history:\n"
+            "    enabled: true\n"
+            "    max_lookback_days: 90\n"
+            "    fallback_when_empty: strict\n"
+        )
+
+        monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("HOMEVAULT_DB_PATH", str(tmp_path / "hv.db"))
+        monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
+
+        result = load_settings()
+
+        ph = result.rag.personal_history
+        assert ph.enabled is True
+        assert ph.max_lookback_days == 90
+        assert ph.fallback_when_empty == "strict"
+
+    def test_missing_personal_history_section_keeps_defaults(
+        self, tmp_path, monkeypatch
+    ):
+        config_file = tmp_path / "search-config.yml"
+        config_file.write_text("rag:\n  top_k: 3\n")
+
+        monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("HOMEVAULT_DB_PATH", str(tmp_path / "hv.db"))
+        monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
+
+        result = load_settings()
+
+        assert result.rag.personal_history == PersonalHistoryConfig()
+        assert result.rag.personal_history.enabled is False
+        assert result.rag.personal_history.max_lookback_days == 365
+        assert result.rag.personal_history.fallback_when_empty == "graceful"
+
+    def test_parses_category_expansion_section_from_yaml(
+        self, tmp_path, monkeypatch
+    ):
+        config_file = tmp_path / "search-config.yml"
+        config_file.write_text(
+            "rag:\n"
+            "  category_expansion:\n"
+            "    enabled: true\n"
+            "    max_terms: 12\n"
+        )
+
+        monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("HOMEVAULT_DB_PATH", str(tmp_path / "hv.db"))
+        monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
+
+        result = load_settings()
+
+        ce = result.rag.category_expansion
+        assert ce.enabled is True
+        assert ce.max_terms == 12
+
+    def test_missing_category_expansion_section_keeps_defaults(
+        self, tmp_path, monkeypatch
+    ):
+        config_file = tmp_path / "search-config.yml"
+        config_file.write_text("rag:\n  top_k: 3\n")
+
+        monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("HOMEVAULT_DB_PATH", str(tmp_path / "hv.db"))
+        monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
+
+        result = load_settings()
+
+        assert result.rag.category_expansion == CategoryExpansionConfig()
+        assert result.rag.category_expansion.enabled is False
+        assert result.rag.category_expansion.max_terms == 8
+
+    def test_unknown_keys_in_personal_history_are_ignored(
+        self, tmp_path, monkeypatch
+    ):
+        # _parse_nested filters by __dataclass_fields__ so a typo
+        # ("max_look_back_days") must not blow up dataclass construction.
+        config_file = tmp_path / "search-config.yml"
+        config_file.write_text(
+            "rag:\n"
+            "  personal_history:\n"
+            "    enabled: true\n"
+            "    max_look_back_days: 30\n"
+        )
+
+        monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("HOMEVAULT_DB_PATH", str(tmp_path / "hv.db"))
+        monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
+
+        result = load_settings()
+
+        # Recognised key took effect, typo silently dropped.
+        assert result.rag.personal_history.enabled is True
+        assert result.rag.personal_history.max_lookback_days == 365
 
     def test_yaml_rag_enabled_without_llm_still_parses(
         self, tmp_path, monkeypatch

@@ -257,6 +257,22 @@ rag:
     clue_count: 3                        # Stage 2 multi-query expansion target
                                          # (1 = legacy single-keyword path;
                                          # 2-4 expands via shortlist summaries)
+  # Personal-history scoping (Stage A/B/D). Off by default; opt-in to
+  # answer "先週観た〜" / "今月観てない〜" style queries by narrowing
+  # retrieval to file_ids the caller has actually opened. Requires the
+  # caller to have a ``lit_viewer`` cookie (profile nickname) — without
+  # one Ask falls back to the legacy viewer-agnostic path. Spec:
+  # ``2026-04-26-intelligence-ask-personal-history-query.md``.
+  personal_history:
+    enabled: false                       # master switch
+    max_lookback_days: 365               # ceiling on resolved time range
+    fallback_when_empty: "graceful"      # "graceful" | "strict"
+  # Semantic category expansion (Stage C). Off by default; opt-in to
+  # let the LLM rewrite "SF っぽい" / "ホラー系" into a small bag of
+  # surface forms (bilingual) for multi-query retrieval.
+  category_expansion:
+    enabled: false                       # master switch
+    max_terms: 8                         # cap on LLM-emitted expansion list
 
 models:
   # Whisper model for audio transcription (multilingual)

@@ -27,7 +27,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.config import settings
@@ -151,6 +151,7 @@ async def _sse_stream(
     top_k: int | None,
     file_type: str | None,
     drive: str | None,
+    viewer_id: str | None,
     semaphore: "asyncio.Semaphore",
 ) -> AsyncIterator[str]:
     """Adapt ``stream_answer`` to the text/event-stream wire format.
@@ -174,6 +175,7 @@ async def _sse_stream(
             top_k=top_k,
             file_type=file_type,
             drive=drive,
+            viewer_id=viewer_id,
         ):
             yield _format_sse_event(event)
     except asyncio.CancelledError:
@@ -203,6 +205,9 @@ async def ask_endpoint(
     body: AskRequest,
     access_token: Annotated[str | None, Cookie()] = None,
     drive: str = Depends(require_drive),
+    viewer_id: Annotated[
+        str | None, Header(alias="X-Lit-Viewer-Id")
+    ] = None,
 ) -> StreamingResponse:
     """Answer a natural-language question using retrieval-augmented generation.
 
@@ -228,6 +233,13 @@ async def ask_endpoint(
       not in the retrieved set (anti-hallucination).
     * Query length is clamped to 1000 characters and >= 3 non-whitespace
       characters to deter DoS-by-giant-prompt.
+
+    Personal-history scope (spec
+    ``2026-04-26-intelligence-ask-personal-history-query.md``): the
+    addon proxy injects ``X-Lit-Viewer-Id`` from the ``lit_viewer``
+    cookie. Clients cannot spoof another viewer because the proxy
+    *replaces* whatever the client sent. ``None`` here means "no
+    profile" — the service runs the legacy viewer-agnostic path.
     """
     _require_rag_enabled()
 
@@ -270,6 +282,7 @@ async def ask_endpoint(
             top_k=body.top_k,
             file_type=body.file_type,
             drive=drive,
+            viewer_id=viewer_id,
             semaphore=semaphore,
         )
         return StreamingResponse(

@@ -33,11 +33,14 @@ from typing import Any, Literal
 from app.config import settings
 from app.dependencies import get_llm_client
 from app.rag.answer_stream import AnswerStreamExtractor, CitationStreamExtractor
+from app.rag.category_expander import expand_category
 from app.rag.clue_generator import fetch_long_summaries, generate_clues
 from app.rag.coarse_retriever import ShortlistResult, coarse_retrieve
 from app.rag.context import assemble_contexts
+from app.rag.history_client import fetch_viewer_history
 from app.rag.parser import Citation, _parse_citation, parse_answer
 from app.rag.prompt import build_system_prompt, build_user_prompt
+from app.rag.query_decomposer import DecomposedQuery, decompose_query
 from app.rag.query_transform import transform_query
 from app.rag.retriever import (
     RetrievedFile,
@@ -389,6 +392,124 @@ def _rrf_merge_candidates(
     return ordered[:top_k]
 
 
+# ---------------------------------------------------------------------------
+# Personal-history pre-scope (spec §4.2 Stages A + B)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _PersonalHistoryResolution:
+    """Resolved Stage A + B output for one Ask request.
+
+    Three observable shapes:
+
+    * ``decomposed is None`` — feature off, no viewer, or empty query.
+      The caller should run the legacy retrieval path verbatim.
+    * ``file_ids is None`` — Stage A produced a structured query but
+      Stage B was bypassed (no personal signal, or scope=none).
+      The caller may still surface ``decomposed`` over SSE for UI
+      transparency but should not narrow retrieval.
+    * ``file_ids is not None`` — Stage B ran. The empty-list case is
+      governed by ``fallback_when_empty``: ``"strict"`` short-circuits
+      to "該当なし"; ``"graceful"`` drops the filter and runs legacy
+      retrieval. The caller decides which branch to take.
+    """
+
+    decomposed: DecomposedQuery | None
+    file_ids: list[str] | None
+    short_circuit: bool = False  # strict mode + empty file_ids
+
+
+async def _resolve_category_expansion(
+    decomposed: DecomposedQuery | None,
+) -> list[str]:
+    """Expand the decomposed semantic_query when Stage C is enabled.
+
+    Returns a list of surface forms suitable for multi-query
+    retrieval. Empty list means "Stage C did not contribute" — caller
+    should fall back to the single-keyword path.
+
+    Skipped (returns ``[]``) when:
+    * the feature is disabled in config,
+    * Stage A produced no decomposition (None),
+    * the decomposed semantic_query is empty (the user asked something
+      like "今月観てない動画" with no concept), or
+    * the LLM expansion collapsed to ``[semantic_query]`` — in that
+      case multi-query gives no benefit over the single-keyword path
+      that the caller will already run.
+    """
+    cfg = settings.rag.category_expansion
+    if not cfg.enabled or decomposed is None:
+        return []
+    if not decomposed.semantic_query.strip():
+        return []
+    terms = await expand_category(
+        decomposed.semantic_query, max_terms=cfg.max_terms
+    )
+    # Single-element fallback (e.g. LLM disabled) is the same as the
+    # legacy keyword path; emitting a ``category_expanded`` event for
+    # it would lie about Stage C having added value.
+    if len(terms) <= 1:
+        return []
+    return terms
+
+
+async def _resolve_personal_history(
+    *,
+    query: str,
+    viewer_id: str | None,
+    drive: str | None,
+) -> _PersonalHistoryResolution:
+    """Run Stages A + B and return the file_id_scope for the retriever.
+
+    Returns ``_PersonalHistoryResolution`` describing what the streaming
+    /non-streaming caller should do with the result. The ``file_ids``
+    field is what eventually gets passed to ``retrieve_with_keywords``
+    as ``file_id_scope`` — when present and non-empty.
+    """
+    cfg = settings.rag.personal_history
+    if not cfg.enabled or not viewer_id or not drive:
+        return _PersonalHistoryResolution(decomposed=None, file_ids=None)
+
+    decomposed = await decompose_query(
+        query, max_lookback_days=cfg.max_lookback_days
+    )
+    if not decomposed.has_personal_signal:
+        # Stage A succeeded but the user did not ask anything personal.
+        # Surface the decomposition (callers may want the file_type_hint
+        # / time_range echoed in SSE) but skip the history fetch.
+        return _PersonalHistoryResolution(
+            decomposed=decomposed, file_ids=None
+        )
+
+    file_ids = await fetch_viewer_history(
+        viewer_id=viewer_id,
+        drive=drive,
+        after=decomposed.time_range.after,
+        before=decomposed.time_range.before,
+        kind=decomposed.personal_scope,  # type: ignore[arg-type]
+    )
+
+    if not file_ids:
+        if cfg.fallback_when_empty == "strict":
+            return _PersonalHistoryResolution(
+                decomposed=decomposed,
+                file_ids=[],
+                short_circuit=True,
+            )
+        # Graceful: drop the filter so the user still gets *some*
+        # answer rather than a brittle "該当なし". The decomposition
+        # is still surfaced over SSE so the UI can hint that the
+        # personal narrowing was attempted but yielded nothing.
+        return _PersonalHistoryResolution(
+            decomposed=decomposed, file_ids=None
+        )
+
+    return _PersonalHistoryResolution(
+        decomposed=decomposed, file_ids=file_ids
+    )
+
+
 async def _run_hierarchical_retrieval(
     *,
     query: str,
@@ -627,6 +748,7 @@ async def answer_question(
     file_type: str | None = None,
     drive: str | None = None,
     *,
+    viewer_id: str | None = None,
     temperature: float | None = None,
 ) -> AnswerResponse:
     """Run the full RAG pipeline and return an ``AnswerResponse``.
@@ -640,12 +762,63 @@ async def answer_question(
 
     start = time.monotonic()
 
-    # Stage 1: retrieve + access filter. When hierarchical is enabled
-    # AND a drive is given, route through the helper so the same Stage 1
-    # coarse pass + Stage 3 scoping that the streaming path uses also
-    # applies here. Otherwise fall back to the legacy single-stage
-    # retrieval (transforms + searches in one shot).
-    if settings.rag.hierarchical.enabled and drive:
+    # Stages A + B: optional personal-history pre-scope. The legacy
+    # callers that did not pass ``viewer_id`` get a no-op resolution
+    # and the rest of this function behaves exactly as before.
+    history = await _resolve_personal_history(
+        query=query, viewer_id=viewer_id, drive=drive
+    )
+    if history.short_circuit:
+        return AnswerResponse(
+            query=query,
+            answer=None,
+            citations=[],
+            sources=[],
+            retrieved_count=0,
+            took_ms=int((time.monotonic() - start) * 1000),
+        )
+
+    # Stage 1: retrieve + access filter.
+    #
+    # Routing matrix:
+    # * personal-history file_ids set → bypass hierarchical and pass
+    #   them straight in as ``file_id_scope``. The history scope is
+    #   already drive-bounded by the host's join, so the security
+    #   invariant holds even though we skip the hierarchical helper.
+    # * hierarchical enabled + drive given → hierarchical helper.
+    # * fallback → legacy single-stage retrieval.
+    if history.file_ids:
+        keywords = await transform_query(query, temperature=temperature)
+        category_terms = await _resolve_category_expansion(history.decomposed)
+        if category_terms:
+            per_term_results = await asyncio.gather(
+                *[
+                    retrieve_with_keywords(
+                        keywords=term,
+                        top_k=effective_top_k,
+                        lit_token=lit_token,
+                        file_type=file_type,
+                        drive=drive,
+                        original_query=query,
+                        file_id_scope=history.file_ids,
+                    )
+                    for term in category_terms
+                ]
+            )
+            candidates = _rrf_merge_candidates(
+                list(per_term_results), top_k=effective_top_k
+            )
+        else:
+            candidates = await retrieve_with_keywords(
+                keywords=keywords,
+                top_k=effective_top_k,
+                lit_token=lit_token,
+                file_type=file_type,
+                drive=drive,
+                original_query=query,
+                file_id_scope=history.file_ids,
+            )
+    elif settings.rag.hierarchical.enabled and drive:
         keywords = await transform_query(query, temperature=temperature)
         candidates, _shortlist, _clues = await _run_hierarchical_retrieval(
             query=query,
@@ -733,6 +906,9 @@ async def answer_question(
 # typos sneaking past review.
 AnswerEventKind = Literal[
     "keywords",
+    "query_decomposed",
+    "history_filter",
+    "category_expanded",
     "shortlist",
     "clues",
     "answer_chunk",
@@ -788,12 +964,33 @@ def _empty_done_event(
     return AnswerEvent(kind="done", data=payload)
 
 
+def _decomposed_to_event_payload(decomposed: DecomposedQuery) -> dict[str, Any]:
+    """Serialise a ``DecomposedQuery`` for the ``query_decomposed`` SSE event.
+
+    Naive ISO is used to mirror the host's Internal API contract — see
+    ``history_client._format_naive_iso``.
+    """
+    tr = decomposed.time_range
+    return {
+        "time_range": {
+            "label": tr.label,
+            "after": tr.after.isoformat() if tr.after else None,
+            "before": tr.before.isoformat() if tr.before else None,
+        },
+        "personal_scope": decomposed.personal_scope,
+        "file_type_hint": decomposed.file_type_hint,
+        "semantic_query": decomposed.semantic_query,
+    }
+
+
 async def stream_answer(
     query: str,
     lit_token: str | None,
     top_k: int | None = None,
     file_type: str | None = None,
     drive: str | None = None,
+    *,
+    viewer_id: str | None = None,
 ) -> AsyncIterator[AnswerEvent]:
     """Run the RAG pipeline and yield SSE-ready events.
 
@@ -832,6 +1029,45 @@ async def stream_answer(
 
     start = time.monotonic()
 
+    # Stages A + B: personal-history pre-scope. Resolved before the
+    # keyword transform so the SSE event ordering is
+    # ``query_decomposed`` → ``history_filter`` → ``keywords`` → ...
+    # This matches the conceptual flow ("we noticed you said '先週観た',
+    # we found N files, now we'll search them").
+    history = await _resolve_personal_history(
+        query=query, viewer_id=viewer_id, drive=drive
+    )
+    if history.decomposed is not None:
+        yield AnswerEvent(
+            kind="query_decomposed",
+            data=_decomposed_to_event_payload(history.decomposed),
+        )
+    if history.file_ids is not None:
+        yield AnswerEvent(
+            kind="history_filter",
+            data={
+                "drive": drive,
+                "kind": (
+                    history.decomposed.personal_scope
+                    if history.decomposed is not None
+                    else "viewed"
+                ),
+                "matched_file_count": len(history.file_ids),
+            },
+        )
+    if history.short_circuit:
+        # ``fallback_when_empty="strict"`` + empty Stage B result.
+        # No keywords / sources to emit — collapse straight to a
+        # citation-less ``done`` so the UI surfaces "該当なし".
+        yield AnswerEvent(kind="citations", data={"citations": []})
+        yield _empty_done_event(
+            extra={
+                "retrieved_count": 0,
+                "took_ms": int((time.monotonic() - start) * 1000),
+            }
+        )
+        return
+
     # Stage 0: LLM keyword transform.
     # This is the earliest point we can give the user visible feedback
     # ("searching for: ...") which matters a lot when the downstream
@@ -839,21 +1075,68 @@ async def stream_answer(
     keywords = await transform_query(query)
     yield AnswerEvent(kind="keywords", data={"keywords": keywords})
 
-    # Stage 1+3: hierarchical retrieve + access filter using the
-    # transformed keywords. ``original_query`` carries the raw
+    # Stage 1+3: retrieval. Personal-history scope wins over the
+    # hierarchical helper — once Stage B has produced a deterministic
+    # file_id list there is nothing the summary-embedding shortlist
+    # can usefully add. ``original_query`` carries the raw
     # natural-language question through so vector channels get full
-    # semantic context while FTS only sees the noise-free keywords —
-    # restores text_content recall that narrowing the keyword string
-    # alone was dropping (eval case 001, 005).
-    candidates, shortlist, clues = await _run_hierarchical_retrieval(
-        query=query,
-        keywords=keywords,
-        drive=drive,
-        lit_token=lit_token,
-        file_type=file_type,
-        top_k=effective_top_k,
-        original_query=query,
-    )
+    # semantic context while FTS only sees the noise-free keywords.
+    if history.file_ids:
+        # Stage C: bilingual surface-form expansion of the decomposed
+        # semantic_query (e.g. "SF" → ["SF", "science fiction",
+        # "宇宙船", ...]). Empty list ⇒ skip multi-query.
+        category_terms = await _resolve_category_expansion(history.decomposed)
+        if category_terms:
+            yield AnswerEvent(
+                kind="category_expanded",
+                data={
+                    "semantic_query": (
+                        history.decomposed.semantic_query
+                        if history.decomposed
+                        else ""
+                    ),
+                    "expanded": list(category_terms),
+                },
+            )
+            per_term_results = await asyncio.gather(
+                *[
+                    retrieve_with_keywords(
+                        keywords=term,
+                        top_k=effective_top_k,
+                        lit_token=lit_token,
+                        file_type=file_type,
+                        drive=drive,
+                        original_query=query,
+                        file_id_scope=history.file_ids,
+                    )
+                    for term in category_terms
+                ]
+            )
+            candidates = _rrf_merge_candidates(
+                list(per_term_results), top_k=effective_top_k
+            )
+        else:
+            candidates = await retrieve_with_keywords(
+                keywords=keywords,
+                top_k=effective_top_k,
+                lit_token=lit_token,
+                file_type=file_type,
+                drive=drive,
+                original_query=query,
+                file_id_scope=history.file_ids,
+            )
+        shortlist = None
+        clues = None
+    else:
+        candidates, shortlist, clues = await _run_hierarchical_retrieval(
+            query=query,
+            keywords=keywords,
+            drive=drive,
+            lit_token=lit_token,
+            file_type=file_type,
+            top_k=effective_top_k,
+            original_query=query,
+        )
 
     # Emit the shortlist + clues events ONLY when the hierarchical path
     # actually ran (non-None) — bypassed paths must not lie about what

@@ -178,6 +178,68 @@ class HierarchicalRagConfig:
 
 
 @dataclass(frozen=True)
+class PersonalHistoryConfig:
+    """Personal-history scoping for Ask (Stage A/B/D).
+
+    Spec: ``2026-04-26-intelligence-ask-personal-history-query.md``.
+    When enabled, Ask decomposes the natural query into a structured
+    form (time range + viewer scope), then narrows retrieval to the
+    file_ids the caller has actually opened in the requested window.
+
+    Defaults are conservative: the feature is OFF until an operator
+    opts in, and the lookback ceiling defends against pathologically
+    wide ``last_year`` resolutions on long-running deployments.
+    """
+
+    # Master switch. False keeps Ask viewer-agnostic (legacy behaviour).
+    enabled: bool = False
+    # Hard ceiling on Stage A's resolved time range. "ずっと前に観たやつ"
+    # otherwise expands to a multi-year scan that defeats the point of
+    # narrowing. 365 days matches a typical "this year" intuition.
+    max_lookback_days: int = 365
+    # When the history filter resolves to zero file_ids:
+    #   "graceful" — drop the filter and run a normal Ask
+    #   "strict"   — return "該当なし" without further retrieval
+    fallback_when_empty: str = "graceful"
+
+    def __post_init__(self) -> None:
+        # Validate enums at construction so a typo'd YAML value
+        # (``"graeful"``) fails loudly at startup rather than silently
+        # taking the unknown branch later. ``object.__setattr__`` is
+        # not needed because we're only asserting, not mutating.
+        if self.fallback_when_empty not in {"graceful", "strict"}:
+            raise ValueError(
+                "personal_history.fallback_when_empty must be "
+                "'graceful' or 'strict', got "
+                f"{self.fallback_when_empty!r}"
+            )
+        if self.max_lookback_days < 1:
+            raise ValueError(
+                "personal_history.max_lookback_days must be >= 1, "
+                f"got {self.max_lookback_days}"
+            )
+
+
+@dataclass(frozen=True)
+class CategoryExpansionConfig:
+    """Semantic category expansion for Ask (Stage C).
+
+    Spec: ``2026-04-26-intelligence-ask-personal-history-query.md``.
+    "SF っぽい" is rewritten into a small bag of bilingual surface
+    forms (science fiction / 宇宙船 / ロボット / ...) so multi-query
+    retrieval has something concrete to embed against.
+    """
+
+    # Master switch. False keeps the Stage A semantic_query verbatim.
+    enabled: bool = False
+    # Hard cap on the LLM-emitted expansion list. 8 is the sweet spot
+    # observed in the original draft: enough breadth for "SF" /
+    # "ホラー" style genre prompts, narrow enough that noise terms do
+    # not dominate the multi-query fan-out budget.
+    max_terms: int = 8
+
+
+@dataclass(frozen=True)
 class RagConfig:
     """RAG (question answering) configuration.
 
@@ -220,6 +282,16 @@ class RagConfig:
     # ``search-config.yml``.
     hierarchical: HierarchicalRagConfig = field(
         default_factory=HierarchicalRagConfig
+    )
+    # Personal-history scoping (Stage A/B/D). Default disabled — opt-in
+    # via ``rag.personal_history.enabled: true`` in ``search-config.yml``.
+    personal_history: PersonalHistoryConfig = field(
+        default_factory=PersonalHistoryConfig
+    )
+    # Semantic category expansion (Stage C). Default disabled — opt-in
+    # via ``rag.category_expansion.enabled: true`` in ``search-config.yml``.
+    category_expansion: CategoryExpansionConfig = field(
+        default_factory=CategoryExpansionConfig
     )
 
 
@@ -451,12 +523,16 @@ def _parse_nested(data: dict[str, Any], key: str, cls: type) -> Any:
     return cls(**{k: v for k, v in section.items() if k in cls.__dataclass_fields__})
 
 
+_RAG_NESTED_KEYS = ("hierarchical", "personal_history", "category_expansion")
+
+
 def _parse_rag(data: dict[str, Any]) -> RagConfig:
-    """Parse the rag config section with the nested hierarchical block.
+    """Parse the rag config section with the nested sub-sections.
 
     Mirrors ``_parse_indexing`` so unknown top-level keys are dropped
     rather than blowing up dataclass construction, and the nested
-    ``hierarchical`` sub-section hydrates via ``_parse_nested``.
+    sub-sections (``hierarchical``, ``personal_history``,
+    ``category_expansion``) hydrate via ``_parse_nested``.
     """
     section = data.get("rag", {})
     if not isinstance(section, dict):
@@ -465,11 +541,17 @@ def _parse_rag(data: dict[str, Any]) -> RagConfig:
     flat_kwargs = {
         k: v
         for k, v in section.items()
-        if k in RagConfig.__dataclass_fields__ and k != "hierarchical"
+        if k in RagConfig.__dataclass_fields__ and k not in _RAG_NESTED_KEYS
     }
     return RagConfig(
         **flat_kwargs,
         hierarchical=_parse_nested(section, "hierarchical", HierarchicalRagConfig),
+        personal_history=_parse_nested(
+            section, "personal_history", PersonalHistoryConfig
+        ),
+        category_expansion=_parse_nested(
+            section, "category_expansion", CategoryExpansionConfig
+        ),
     )
 
 
