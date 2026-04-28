@@ -64,6 +64,12 @@ type AskState =
   | {
       kind: "streaming";
       keywords: string | null;
+      // Hierarchical RAG Stage 2 multi-query expansion. ``null`` until
+      // the ``clues`` event arrives; once set, the UI swaps the
+      // keywords pill for a clue list. Stays ``null`` when the
+      // hierarchical pipeline is bypassed (small drive, low coarse
+      // confidence, etc.) — in that case the keywords pill stays.
+      clues: string[] | null;
       sources: Source[];
       answerBuffer: string;
       // Progressive citations — populated by per-citation events as
@@ -74,6 +80,7 @@ type AskState =
   | {
       kind: "answered";
       keywords: string | null;
+      clues: string[] | null;
       sources: Source[];
       answer: string;
       citations: Citation[];
@@ -291,6 +298,7 @@ function IntelligenceAskPageInner() {
       setState({
         kind: "streaming",
         keywords: null,
+        clues: null,
         sources: [],
         answerBuffer: "",
         citations: [],
@@ -315,6 +323,7 @@ function IntelligenceAskPageInner() {
         // setState call at the bottom of each loop iteration uses the
         // functional form to merge into whatever the latest render saw.
         let liveKeywords: string | null = null;
+        let liveClues: string[] | null = null;
         let liveSources: Source[] = [];
         let liveAnswer = "";
         // Progressive citations accumulated from per-event updates.
@@ -334,6 +343,24 @@ function IntelligenceAskPageInner() {
               setState({
                 kind: "streaming",
                 keywords: liveKeywords,
+                clues: liveClues,
+                sources: liveSources,
+                answerBuffer: liveAnswer,
+                citations: liveCitations,
+              });
+              break;
+            case "clues":
+              // Stage 2 multi-query expansion arrived. Replace the
+              // keywords pill with the clues view (~1.5–3s after the
+              // keywords event, gated on coarse_retrieve + LLM clue
+              // generation). When the hierarchical pipeline is
+              // bypassed this branch never fires and the keywords
+              // pill stays — that's the contract.
+              liveClues = event.clues;
+              setState({
+                kind: "streaming",
+                keywords: liveKeywords,
+                clues: liveClues,
                 sources: liveSources,
                 answerBuffer: liveAnswer,
                 citations: liveCitations,
@@ -344,6 +371,7 @@ function IntelligenceAskPageInner() {
               setState({
                 kind: "streaming",
                 keywords: liveKeywords,
+                clues: liveClues,
                 sources: liveSources,
                 answerBuffer: liveAnswer,
                 citations: liveCitations,
@@ -368,6 +396,7 @@ function IntelligenceAskPageInner() {
                 setState({
                   kind: "streaming",
                   keywords: liveKeywords,
+                  clues: liveClues,
                   sources: liveSources,
                   answerBuffer: liveAnswer,
                   citations: liveCitations,
@@ -387,6 +416,7 @@ function IntelligenceAskPageInner() {
                 setState({
                   kind: "streaming",
                   keywords: liveKeywords,
+                  clues: liveClues,
                   sources: liveSources,
                   answerBuffer: liveAnswer,
                   citations: liveCitations,
@@ -404,6 +434,7 @@ function IntelligenceAskPageInner() {
               setState({
                 kind: "streaming",
                 keywords: liveKeywords,
+                clues: liveClues,
                 sources: liveSources,
                 answerBuffer: liveAnswer,
                 citations: liveCitations,
@@ -450,6 +481,7 @@ function IntelligenceAskPageInner() {
         setState({
           kind: "answered",
           keywords: liveKeywords,
+          clues: liveClues,
           sources: liveSources,
           answer: liveAnswer,
           citations: finalCitations,
@@ -592,12 +624,29 @@ function IntelligenceAskPageInner() {
       </form>
 
       {(state.kind === "streaming" || state.kind === "answered") &&
-        state.keywords && (
+        (state.clues && state.clues.length > 0 ? (
+          // Hierarchical RAG Stage 2 has produced multi-query clues —
+          // these supersede the raw keywords pill because they are
+          // the actual queries we ran against the index.
           <div className="flex flex-wrap items-center gap-2 rounded-md border border-bg-border bg-bg-elevated px-3 py-2 text-xs text-text-muted">
-            <span>🔎</span>
-            <span className="truncate">{state.keywords}</span>
+            <span>💡</span>
+            {state.clues.map((clue, i) => (
+              <span
+                key={`${i}-${clue}`}
+                className="rounded bg-bg-card px-2 py-0.5"
+              >
+                {clue}
+              </span>
+            ))}
           </div>
-        )}
+        ) : (
+          state.keywords && (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-bg-border bg-bg-elevated px-3 py-2 text-xs text-text-muted">
+              <span>🔎</span>
+              <span className="truncate">{state.keywords}</span>
+            </div>
+          )
+        ))}
 
       {state.kind === "error" && (
         <div

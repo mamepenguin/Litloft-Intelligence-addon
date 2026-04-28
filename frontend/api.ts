@@ -1048,6 +1048,12 @@ export async function getIntelligenceStatus(
  */
 export type AskStreamEvent =
   | { kind: "keywords"; keywords: string }
+  // Hierarchical RAG Stage 2 multi-query expansion — emitted only when
+  // the hierarchical pipeline runs (config on, drive set, shortlist
+  // confident, ≥1 shortlist file accessible). Bypassed paths skip it.
+  // ``clues`` is the list of independent search queries the LLM
+  // expanded from the user's question + shortlist summaries.
+  | { kind: "clues"; clues: string[] }
   | { kind: "sources"; sources: Source[] }
   | { kind: "answer_chunk"; delta: string }
   // Single-citation event — emitted 0..N times between the first
@@ -1100,6 +1106,19 @@ export function parseSseFrame(frame: string): AskStreamEvent | null {
   switch (eventName) {
     case "keywords":
       return { kind: "keywords", keywords: String(data.keywords ?? "") };
+    case "clues": {
+      // ``clues`` is always an array of strings. Defensive validation
+      // because an empty/garbled payload should fall through to the
+      // null branch instead of rendering ``[undefined, undefined]``.
+      const raw = data.clues;
+      if (!Array.isArray(raw)) return null;
+      const clues = raw
+        .filter((c): c is string => typeof c === "string")
+        .map((c) => c.trim())
+        .filter((c) => c.length > 0);
+      if (clues.length === 0) return null;
+      return { kind: "clues", clues };
+    }
     case "sources":
       return {
         kind: "sources",
