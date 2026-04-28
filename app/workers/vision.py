@@ -675,6 +675,23 @@ class VisionDescribeWorker:
                 file_id, type(e).__name__,
             )
 
+        # Approach B parity: refresh the file's metadata embedding so
+        # the new visual_description contributes to hierarchical RAG
+        # Stage 1 ranking the same way ``long_summary`` does for
+        # transcribable / textual files (see
+        # ``app.workers.summaries._save_summary``). Failure here MUST
+        # NOT roll back the durable description write — log and move
+        # on; the next ``index_metadata_batch`` pass picks the new
+        # text up.
+        try:
+            from app.workers.metadata import index_metadata_batch
+            await asyncio.to_thread(index_metadata_batch, [file_id])
+        except Exception as e:  # noqa: BLE001 — never fail vision describe
+            logger.warning(
+                "vision: metadata re-embed after describe failed for %s (%s)",
+                file_id, type(e).__name__,
+            )
+
         await _emit_ws_event(
             "intelligence.vision_describe.succeeded",
             {

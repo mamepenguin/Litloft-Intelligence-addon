@@ -330,12 +330,29 @@ def _patch_db(monkeypatch, *, rows):
 
 class TestFetchLongSummaries:
     def test_returns_mapping_for_present_files(self, monkeypatch):
-        rows = [("a", "summary A"), ("b", "summary B")]
+        # Three-column row shape: (file_id, long_summary, visual_description).
+        # File ``a`` has a text summary; ``b`` has a visual description;
+        # both should land in the unified output map.
+        rows = [
+            ("a", "summary A", None),
+            ("b", None, "visual desc B"),
+        ]
         _patch_db(monkeypatch, rows=rows)
 
         result = fetch_long_summaries(["a", "b", "c"])
 
-        assert result == {"a": "summary A", "b": "summary B"}
+        assert result == {"a": "summary A", "b": "visual desc B"}
+
+    def test_prefers_long_summary_when_both_present(self, monkeypatch):
+        # If both columns are populated for the same file (a future
+        # schema drift could allow this), the text summary wins because
+        # it's richer source material for clue-generation prompting.
+        rows = [("a", "long text summary", "fallback visual")]
+        _patch_db(monkeypatch, rows=rows)
+
+        result = fetch_long_summaries(["a"])
+
+        assert result == {"a": "long text summary"}
 
     def test_empty_input_returns_empty_dict(self, monkeypatch):
         # No DB call — fast path.
@@ -351,7 +368,7 @@ class TestFetchLongSummaries:
         assert result == {}
 
     def test_drops_blank_summary_rows(self, monkeypatch):
-        rows = [("a", "  "), ("b", "real")]
+        rows = [("a", "  ", None), ("b", "real", None)]
         _patch_db(monkeypatch, rows=rows)
 
         result = fetch_long_summaries(["a", "b"])
@@ -362,7 +379,7 @@ class TestFetchLongSummaries:
         assert result["b"] == "real"
 
     def test_uses_named_placeholders_for_in_clause(self, monkeypatch):
-        rows = [("a", "s1")]
+        rows = [("a", "s1", None)]
         session = _patch_db(monkeypatch, rows=rows)
 
         fetch_long_summaries(["a", "b", "c"])

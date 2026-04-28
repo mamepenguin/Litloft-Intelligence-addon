@@ -62,16 +62,26 @@ _SYSTEM_PROMPT_TEMPLATE = (
 
 
 def fetch_long_summaries(file_ids: list[str]) -> dict[str, str]:
-    """Look up ``long_summary`` rows for ``file_ids`` (status='generated').
+    """Look up summary text rows for ``file_ids`` (text or visual).
 
-    Hidden / pending / failed rows are excluded so the LLM only ever
-    sees text that the user has implicitly endorsed by leaving it
-    visible. Returns a mapping ``file_id -> long_summary`` so callers
-    can preserve their own ordering when building the prompt.
+    For transcribable / textual files (video / audio / document) this
+    returns the AI ``long_summary`` (status='generated' only — hidden
+    rows respect the user's opt-out). For images this returns the
+    AI ``visual_description`` (status='success' only). The two fields
+    are mutually exclusive in practice (the summaries worker and the
+    vision worker target disjoint context_types) so this function
+    folds them into a single ``file_id -> text`` map without preferring
+    one over the other.
 
-    Files without a row in ``file_summaries`` are simply absent from
-    the result — callers handle the missing-key case (an empty summary
-    list triggers the fallback keyword path in ``generate_clues``).
+    The function name retains the legacy ``long_summaries`` wording
+    because callers (``_run_hierarchical_retrieval``) treat both
+    text-summary and visual-description as the same Phase 3 input
+    signal; renaming it would just mean threading the rename through
+    every call site for no semantic change.
+
+    Files without a usable row in ``file_summaries`` are simply absent
+    from the result — callers handle the missing-key case (an empty
+    map triggers the fallback keyword path in ``generate_clues``).
     """
     if not file_ids:
         return {}
@@ -85,17 +95,28 @@ def fetch_long_summaries(file_ids: list[str]) -> dict[str, str]:
     with get_search_db() as session:
         rows = session.execute(
             sql_text(
-                "SELECT file_id, long_summary FROM file_summaries "
-                f"WHERE file_id IN ({placeholders}) "
-                "AND status = 'generated'"
+                "SELECT file_id, "
+                "  CASE WHEN status = 'generated' THEN long_summary END, "
+                "  CASE WHEN visual_description_status = 'success' "
+                "    THEN visual_description END "
+                "FROM file_summaries "
+                f"WHERE file_id IN ({placeholders})"
             ),
             params,
         ).fetchall()
 
     # Whitespace-only summaries propagated downstream would only feed
     # the LLM noise and trigger the fallback path anyway, so prune
-    # them at the fetch layer for a single source of truth.
-    return {row[0]: row[1] for row in rows if row[1] and row[1].strip()}
+    # them at the fetch layer for a single source of truth. Prefer the
+    # text summary (``long_summary``) over the visual description when
+    # — by some future schema drift — both happen to be populated;
+    # text summaries are richer for clue-generation prompting.
+    out: dict[str, str] = {}
+    for fid, long_s, vis_s in rows:
+        text = (long_s or "").strip() or (vis_s or "").strip()
+        if text:
+            out[fid] = text
+    return out
 
 
 async def generate_clues(

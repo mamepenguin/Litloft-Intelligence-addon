@@ -54,24 +54,35 @@ def _clean_filename(filename: str) -> str:
 def _build_metadata_text(
     file: IndexedFile,
     long_summary: str | None = None,
+    visual_description: str | None = None,
 ) -> str:
     """Build a single text string from file metadata for embedding.
 
     The embedding text is the file's "topic surface" — what the
     hierarchical RAG Stage 1 coarse retrieval matches against. We
-    deliberately include the AI-generated long summary (when available
-    AND ``status='generated'``) here too so summary-derived domain
-    vocabulary can steer chunk retrieval, while the final-generation
-    LLM context still pulls only original chunks (citation source
-    invariant unchanged). See spec
+    deliberately include AI-generated descriptive text (long summary
+    for video / audio / document, visual description for image) here
+    too so the summary-derived domain vocabulary can steer chunk
+    retrieval, while the final-generation LLM context still pulls only
+    original chunks (citation source invariant unchanged). See spec
     ``2026-04-26-intelligence-ask-hierarchical-retrieval.md`` (Approach B).
+
+    ``long_summary`` and ``visual_description`` are mutually exclusive
+    in practice — the summaries worker only fires for context_types
+    video/audio/document, the vision worker only for images — but we
+    accept both as independent ``Optional`` params so the caller does
+    not have to know which is which.
 
     Args:
         file: The indexed file record.
-        long_summary: Optional 3-5 sentence AI summary text. Pass
-            ``None`` (default) when no summary exists OR the row has
-            ``status='hidden'`` — both must omit the summary so the
-            user's opt-out is respected.
+        long_summary: Optional 3-5 sentence AI summary text for
+            transcribable / textual files. Pass ``None`` when no
+            summary exists OR the row has ``status='hidden'`` — both
+            must omit the summary so the user's opt-out is respected.
+        visual_description: Optional structured AI description of an
+            image's visual content. Pass ``None`` for non-image files
+            or when the description has not been generated / is in
+            non-success status.
 
     Returns:
         Combined metadata text.
@@ -88,6 +99,8 @@ def _build_metadata_text(
         parts = [*parts, file.tags_text]
     if long_summary:
         parts = [*parts, long_summary]
+    if visual_description:
+        parts = [*parts, visual_description]
 
     return " ".join(parts)
 
@@ -193,26 +206,36 @@ def index_metadata_batch(file_ids: list[str]) -> int:
         if not files:
             return 0
 
-        # Bulk-fetch generated summaries so the per-file builder doesn't
-        # incur an extra round trip. ``status='hidden'`` rows are filtered
-        # out at SQL level — the user opted out, so the summary must
-        # not bleed into the embedding text.
+        # Bulk-fetch generated summaries + visual descriptions so the
+        # per-file builder doesn't incur an extra round trip. The two
+        # fields live on the same row in ``file_summaries`` but are
+        # gated by independent statuses:
+        #   - ``status='hidden'`` (user opted out) → omit long_summary
+        #   - ``visual_description_status != 'success'`` → omit visual
+        # Both filters live in the SQL so the per-file builder never
+        # sees opted-out / pending / failed text.
         active_ids = [f.file_id for f in files]
         summary_map: dict[str, str] = {}
+        vision_map: dict[str, str] = {}
         if active_ids:
             placeholders = ",".join(f":id{i}" for i in range(len(active_ids)))
             params = {f"id{i}": fid for i, fid in enumerate(active_ids)}
-            summary_rows = session.execute(
+            rows = session.execute(
                 sql_text(
-                    "SELECT file_id, long_summary FROM file_summaries "
-                    f"WHERE file_id IN ({placeholders}) "
-                    "AND status = 'generated'"
+                    "SELECT file_id, "
+                    "  CASE WHEN status = 'generated' THEN long_summary END, "
+                    "  CASE WHEN visual_description_status = 'success' "
+                    "    THEN visual_description END "
+                    "FROM file_summaries "
+                    f"WHERE file_id IN ({placeholders})"
                 ),
                 params,
             ).fetchall()
-            summary_map = {
-                row[0]: row[1] for row in summary_rows if row[1]
-            }
+            for fid, long_s, vis_s in rows:
+                if long_s:
+                    summary_map[fid] = long_s
+                if vis_s:
+                    vision_map[fid] = vis_s
 
         # Build metadata texts for batch embedding
         metadata_texts: list[str] = []
@@ -220,7 +243,9 @@ def index_metadata_batch(file_ids: list[str]) -> int:
 
         for file in files:
             meta_text = _build_metadata_text(
-                file, long_summary=summary_map.get(file.file_id)
+                file,
+                long_summary=summary_map.get(file.file_id),
+                visual_description=vision_map.get(file.file_id),
             )
             if meta_text.strip():
                 metadata_texts = [*metadata_texts, meta_text]

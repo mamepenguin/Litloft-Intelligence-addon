@@ -112,7 +112,10 @@ class TestIndexMetadataBatchSummaryFetch:
         self._patch_session(
             monkeypatch,
             files=files,
-            summary_rows=[("f1", "Generated summary text")],
+            # Three-column SQL: (file_id, long_summary, visual_description).
+            # Image files would populate the third column; this is a
+            # video so visual_description is None.
+            summary_rows=[("f1", "Generated summary text", None)],
         )
 
         captured: dict = {}
@@ -147,3 +150,25 @@ class TestIndexMetadataBatchSummaryFetch:
         md.index_metadata_batch(["f2"])
 
         assert "Generated summary text" not in captured["texts"][0]
+
+    def test_image_visual_description_makes_it_through(self, monkeypatch):
+        # Symmetric to the long_summary path: image files contribute
+        # their AI ``visual_description`` to the metadata embedding so
+        # hierarchical RAG Stage 1 can pick them up the same way.
+        files = [_file(file_id="img1", filename="cat.jpg")]
+        self._patch_session(
+            monkeypatch,
+            files=files,
+            summary_rows=[("img1", None, "A black cat sleeping on a sofa")],
+        )
+
+        captured: dict = {}
+
+        def _fake_embed(texts):
+            captured["texts"] = list(texts)
+            raise RuntimeError("stop")
+
+        monkeypatch.setattr(md, "embed_passages", _fake_embed)
+        md.index_metadata_batch(["img1"])
+
+        assert "A black cat sleeping on a sofa" in captured["texts"][0]
