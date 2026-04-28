@@ -518,6 +518,46 @@ class VisionDescribeWorker:
         await self._queue.put(file_id)
         return True
 
+    async def enqueue_unprocessed(self) -> int:
+        """Sweep already-indexed images that have no description yet.
+
+        Mirrors :meth:`AutoTagsWorker.enqueue_unprocessed` so an operator
+        flipping ``features.vision_describe`` to ``on_index`` after files
+        are already CLIP-indexed gets coverage on startup. The on-the-fly
+        on_index hook in ``IndexManager._clip_worker`` only fires for
+        newly-indexed files; without this sweep, prior images would
+        never auto-describe.
+
+        Selects active image rows whose ``visual_description_status``
+        is NULL (never attempted). Files with ``success`` /
+        ``pending`` / ``unsupported`` / ``failed`` are skipped here —
+        ``failed`` is left as a manual-retry case (matches the UI
+        semantics in ``VisualDescriptionSection``) and ``pending`` /
+        ``unsupported`` are owned by the worker's stickiness rules.
+
+        Per-drive policy is enforced by ``enqueue`` via
+        ``_should_accept`` so a drive whose ``vision_describe`` policy
+        is OFF won't see files queued.
+
+        Returns the number of files actually accepted onto the queue.
+        """
+        with get_search_db() as session:
+            rows = session.execute(
+                sql_text(
+                    "SELECT f.file_id FROM indexed_files f "
+                    "LEFT JOIN file_summaries s ON s.file_id = f.file_id "
+                    "WHERE f.active = 1 "
+                    "AND f.mime_type LIKE 'image/%' "
+                    "AND s.visual_description_status IS NULL"
+                )
+            ).fetchall()
+
+        queued = 0
+        for (file_id,) in rows:
+            if await self.enqueue(file_id):
+                queued += 1
+        return queued
+
     # -- Processing -----------------------------------------------------
 
     async def run(self) -> None:

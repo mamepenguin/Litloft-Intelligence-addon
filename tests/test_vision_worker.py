@@ -439,6 +439,119 @@ class TestProcessFileStatusTransitions:
 
 
 # ---------------------------------------------------------------------------
+# enqueue_unprocessed() — startup sweep for already-indexed images
+# ---------------------------------------------------------------------------
+
+
+def _seed_summary_row(engine, file_id: str, status: str, model: str) -> None:
+    """Insert a minimal file_summaries placeholder + vision columns."""
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO file_summaries "
+                "(file_id, short_summary, long_summary, model, context_type, "
+                "context_chars, was_truncated, status, created_at, "
+                "visual_description, visual_description_status, "
+                "visual_description_model, visual_description_generated_at) "
+                "VALUES (:fid, '', '', '', 'image', 0, 0, 'hidden', :now, "
+                "NULL, :status, :model, NULL)"
+            ),
+            {
+                "fid": file_id,
+                "now": datetime.now(UTC).isoformat(),
+                "status": status,
+                "model": model,
+            },
+        )
+
+
+class TestEnqueueUnprocessed:
+    """Startup sweep should pick up already-indexed images with no
+    description yet, and skip any row already in a terminal/sticky state.
+    """
+
+    @pytest.mark.asyncio
+    async def test_picks_up_image_with_null_status(
+        self, search_db, feature_manual, policy_allow_family,
+    ):
+        worker = VisionDescribeWorker()
+        queued = await worker.enqueue_unprocessed()
+        # ``img-ok`` has no file_summaries row → NULL status → enqueue.
+        # ``vid-skip`` is video → mime filter excludes.
+        # ``img-off-drive`` is policy OFF → enqueue() rejects via _should_accept.
+        assert queued == 1
+
+    @pytest.mark.asyncio
+    async def test_skips_when_status_already_success(
+        self, search_db, feature_manual, policy_allow_family,
+    ):
+        engine, _ = search_db
+        _seed_summary_row(engine, "img-ok", "success", "llava:13b")
+
+        worker = VisionDescribeWorker()
+        queued = await worker.enqueue_unprocessed()
+        assert queued == 0
+
+    @pytest.mark.asyncio
+    async def test_skips_when_status_pending(
+        self, search_db, feature_manual, policy_allow_family,
+    ):
+        """Pending rows are owned by an in-flight worker — don't double up."""
+        engine, _ = search_db
+        _seed_summary_row(engine, "img-ok", "pending", "llava:13b")
+
+        worker = VisionDescribeWorker()
+        queued = await worker.enqueue_unprocessed()
+        assert queued == 0
+
+    @pytest.mark.asyncio
+    async def test_skips_when_status_failed(
+        self, search_db, feature_manual, policy_allow_family,
+    ):
+        """Failed status is left as a manual-retry case (matches UI semantics)."""
+        engine, _ = search_db
+        _seed_summary_row(engine, "img-ok", "failed", "llava:13b")
+
+        worker = VisionDescribeWorker()
+        queued = await worker.enqueue_unprocessed()
+        assert queued == 0
+
+    @pytest.mark.asyncio
+    async def test_skips_unsupported_with_same_model(
+        self, search_db, feature_manual, policy_allow_family,
+    ):
+        engine, _ = search_db
+        _seed_summary_row(engine, "img-ok", "unsupported", "llava:13b")
+
+        worker = VisionDescribeWorker()
+        queued = await worker.enqueue_unprocessed()
+        # Either skipped at the SQL filter (status non-NULL) or at
+        # _should_accept's sticky-unsupported guard. Either way, 0.
+        assert queued == 0
+
+    @pytest.mark.asyncio
+    async def test_skips_non_image_files(
+        self, search_db, feature_manual, policy_allow_family,
+    ):
+        """Videos / audio rows must never get enqueued for vision."""
+        worker = VisionDescribeWorker()
+        queued = await worker.enqueue_unprocessed()
+        # ``vid-skip`` is the only video; we already verified the count
+        # is 1 (just ``img-ok``) in the NULL-status case.
+        assert queued == 1
+
+    @pytest.mark.asyncio
+    async def test_respects_per_drive_policy(
+        self, search_db, feature_manual, policy_allow_family,
+    ):
+        """``img-off-drive`` is an image but its drive opts out of vision."""
+        worker = VisionDescribeWorker()
+        queued = await worker.enqueue_unprocessed()
+        # img-off-drive must not contribute to the queue count.
+        assert queued == 1
+
+
+# ---------------------------------------------------------------------------
 # Embedding write-through after success
 # ---------------------------------------------------------------------------
 

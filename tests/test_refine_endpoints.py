@@ -173,13 +173,12 @@ class TestRefineFolder:
     async def test_folder_processes_transcript_bearing_files(
         self, feature_manual, monkeypatch
     ):
-        # Two files in the folder have transcript_chunks; one does not.
+        # Endpoint takes ``file_ids`` from the body and re-filters via
+        # ``filter_transcript_file_ids`` — only files actually in this
+        # drive AND carrying transcript_chunks are returned for enqueue.
         session = MagicMock()
-        # query returns file_ids; shape is lightly checked — the impl
-        # may switch between raw SQL and ORM. We patch the executor
-        # directly so whatever shape wins, this test notices.
         monkeypatch.setattr(
-            "app.routers.refine.find_transcript_files_in_folder",
+            "app.routers.refine.filter_transcript_file_ids",
             MagicMock(return_value=["f1", "f2"]),
         )
         start_mock = AsyncMock(side_effect=["job-a", "job-b"])
@@ -198,7 +197,10 @@ class TestRefineFolder:
         )
 
         resp = await refine_folder(
-            body={"drive": "family", "path": "videos/2024"},
+            body={
+                "drive": "family",
+                "file_ids": ["f1", "f2", "f3-no-transcript"],
+            },
             drive="family",
         )
 
@@ -265,26 +267,27 @@ class TestCrossDriveIsolation:
         assert exc.value.status_code == 404
 
 
-class TestFolderPathValidation:
-    """Folder endpoint must reject traversal / absolute / empty paths."""
+class TestFolderBodyValidation:
+    """Folder endpoint must reject malformed file_ids payloads."""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "bad_path",
-        ["", "/etc", "../escape", "foo/../bar", "a/b/../../c"],
+        "bad_body",
+        [
+            {"drive": "family"},  # missing file_ids
+            {"drive": "family", "file_ids": "f1"},  # not a list
+            {"drive": "family", "file_ids": [1, 2]},  # not strings
+        ],
     )
-    async def test_rejects_invalid_paths(
-        self, feature_manual, monkeypatch, bad_path
+    async def test_rejects_invalid_file_ids(
+        self, feature_manual, monkeypatch, bad_body
     ):
         monkeypatch.setattr(
             "app.routers.refine.is_feature_enabled",
             AsyncMock(return_value=True),
         )
         with pytest.raises(HTTPException) as exc:
-            await refine_folder(
-                body={"drive": "family", "path": bad_path},
-                drive="family",
-            )
+            await refine_folder(body=bad_body, drive="family")
         assert exc.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -298,7 +301,7 @@ class TestFolderPathValidation:
         )
         with pytest.raises(HTTPException) as exc:
             await refine_folder(
-                body={"drive": "other", "path": "videos"},
+                body={"drive": "other", "file_ids": ["f1"]},
                 drive="family",
             )
         assert exc.value.status_code == 400
@@ -307,12 +310,12 @@ class TestFolderPathValidation:
 class TestFolderFileCap:
     @pytest.mark.asyncio
     async def test_rejects_over_cap(self, feature_manual, monkeypatch):
-        """Folder with >MAX_FOLDER_FILES returns 413."""
+        """File list exceeding MAX_FOLDER_FILES returns 413."""
         from app.routers.refine import MAX_FOLDER_FILES
 
         huge = [f"f{i}" for i in range(MAX_FOLDER_FILES + 5)]
         monkeypatch.setattr(
-            "app.routers.refine.find_transcript_files_in_folder",
+            "app.routers.refine.filter_transcript_file_ids",
             MagicMock(return_value=huge),
         )
         monkeypatch.setattr(
@@ -332,7 +335,7 @@ class TestFolderFileCap:
 
         with pytest.raises(HTTPException) as exc:
             await refine_folder(
-                body={"drive": "family", "path": "videos"},
+                body={"drive": "family", "file_ids": huge},
                 drive="family",
             )
         assert exc.value.status_code == 413

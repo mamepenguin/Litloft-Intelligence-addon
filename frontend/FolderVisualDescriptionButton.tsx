@@ -8,13 +8,15 @@ import type { FolderVisualDescriptionTooManyError } from "./api";
 
 interface FolderVisualDescriptionButtonProps {
   drive: string;
-  path: string;
+  // ``path`` is still passed by the slot host (FolderToolbar) for
+  // legacy reasons but is no longer used — the backend now selects
+  // files by id, not path-prefix.
+  path?: string;
   fileIds: string[];
 }
 
 export default function FolderVisualDescriptionButton({
   drive,
-  path,
   fileIds,
 }: FolderVisualDescriptionButtonProps) {
   const t = useTranslations("file");
@@ -33,7 +35,7 @@ export default function FolderVisualDescriptionButton({
     setLoading(true);
     setResultMessage(null);
     try {
-      const result = await generateFolderVisualDescription(drive, path);
+      const result = await generateFolderVisualDescription(drive, fileIds);
       setResultMessage(
         t("visionFolderQueued", {
           queued: result.queued,
@@ -65,7 +67,7 @@ export default function FolderVisualDescriptionButton({
     } finally {
       setLoading(false);
     }
-  }, [drive, path, fileIds.length, loading, t]);
+  }, [drive, fileIds, loading, t]);
 
   // Hide the button when the folder is empty — matches the FolderSummariesButton
   // pattern. A drive-level policy gate happens server-side (404), so showing

@@ -193,29 +193,36 @@ async def enqueue_visual_description(file_id: str) -> bool:
     return await worker.enqueue(file_id)
 
 
-def find_image_files_in_folder(drive: str, path: str) -> list[str]:
-    """Return image file_ids under ``drive/path`` (prefix match).
+def filter_image_file_ids(drive: str, file_ids: list[str]) -> list[str]:
+    """Narrow ``file_ids`` to active image files in ``drive``.
 
-    Mirrors :func:`app.workers.refine.find_transcript_files_in_folder`
-    but narrows to ``image/*`` mimes since vision_describe is only
-    defined for images in Phase 1.
+    Mirrors the ``/batch/summaries`` pattern: the frontend already has
+    the file_ids (it just rendered them), so we ask it for the list
+    instead of replaying a path-prefix scan against ``file_path``. The
+    DB stores ``file_path`` as an absolute filesystem path
+    (``/drives/<slug>/...``) which the relative folder path the
+    frontend has cannot match — file_ids dodge that translation
+    altogether.
+
+    Cross-drive ids and non-images are silently dropped (so probing
+    other drives via this endpoint yields no signal).
     """
-    prefix = path.rstrip("/")
+    if not file_ids:
+        return []
     with get_search_db() as session:
-        rows = session.execute(
-            sql_text(
-                "SELECT f.file_id FROM indexed_files f "
-                "WHERE f.drive = :drive AND f.active = 1 "
-                "AND f.mime_type LIKE 'image/%' "
-                "AND (f.file_path = :path OR f.file_path LIKE :like)"
-            ),
-            {
-                "drive": drive,
-                "path": prefix,
-                "like": f"{prefix}/%",
-            },
-        ).fetchall()
-    return [row[0] for row in rows]
+        rows = (
+            session.query(IndexedFile.file_id)
+            .filter(
+                IndexedFile.file_id.in_(file_ids),
+                IndexedFile.drive == drive,
+                IndexedFile.active.is_(True),
+                IndexedFile.mime_type.like("image/%"),
+            )
+            .all()
+        )
+    accepted = {row[0] for row in rows}
+    # Preserve caller order so the response's queued list is predictable.
+    return [fid for fid in file_ids if fid in accepted]
 
 
 # ---------------------------------------------------------------------------
@@ -239,18 +246,6 @@ async def _require_drive_policy(drive: str) -> None:
     enabled = await is_feature_enabled(drive, "vision_describe")
     if not enabled:
         raise HTTPException(status_code=404, detail="Feature disabled for drive")
-
-
-def _validate_folder_path(path: str) -> str:
-    """Reject absolute / traversal / empty paths — same shape as refine."""
-    if not isinstance(path, str) or path.strip() == "":
-        raise HTTPException(status_code=400, detail="path is required")
-    if path.startswith("/"):
-        raise HTTPException(status_code=400, detail="path must be relative")
-    parts = path.replace("\\", "/").split("/")
-    if any(p == ".." for p in parts):
-        raise HTTPException(status_code=400, detail="path must not contain '..'")
-    return path
 
 
 # ---------------------------------------------------------------------------
@@ -362,24 +357,36 @@ async def generate_folder_visual_description(
     body: dict = Body(...),
     drive: str = Depends(require_drive),
 ) -> dict:
-    """Fan-out: enqueue every image file under a folder prefix."""
+    """Fan-out: enqueue every image file in ``body.file_ids`` for vision.
+
+    The frontend sends the file_ids it just rendered — same shape as
+    ``/batch/summaries``. This avoids the relative-folder-path vs
+    absolute-``file_path`` mismatch the prior implementation had
+    (``indexed_files.file_path`` is the full filesystem path, not a
+    drive-relative one).
+    """
     body_drive = body.get("drive") if isinstance(body, dict) else None
     if body_drive is not None and body_drive != drive:
         raise HTTPException(
             status_code=400,
             detail="body.drive must match X-Lit-Drive header",
         )
-    path_value = body.get("path", "") if isinstance(body, dict) else ""
-    path = _validate_folder_path(path_value)
+    raw_ids = body.get("file_ids") if isinstance(body, dict) else None
+    if not isinstance(raw_ids, list) or not all(
+        isinstance(x, str) for x in raw_ids
+    ):
+        raise HTTPException(
+            status_code=400, detail="file_ids must be a list of strings"
+        )
 
     _require_feature_available()
     await _require_drive_policy(drive)
 
-    file_ids = find_image_files_in_folder(drive, path)
+    file_ids = filter_image_file_ids(drive, raw_ids)
 
     # Cap counts files that pass every acceptance gate (policy, mime,
-    # stickiness) — not the raw folder scan. A folder with 10 000
-    # images where 9 500 are already "success" still enqueues the
+    # stickiness) — not the raw input list. A request listing 10 000
+    # files where 9 500 are already "success" still enqueues the
     # remaining 500 cleanly. Only genuine new work above the cap trips
     # 413. We stop calling ``enqueue`` the moment the cap would be
     # exceeded so we never put a 501st file onto the worker queue.
@@ -406,7 +413,7 @@ async def generate_folder_visual_description(
 __all__ = [
     "delete_visual_description",
     "enqueue_visual_description",
-    "find_image_files_in_folder",
+    "filter_image_file_ids",
     "generate_folder_visual_description",
     "generate_visual_description",
     "get_llm_client",

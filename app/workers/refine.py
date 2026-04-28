@@ -15,7 +15,7 @@ Public surface (called by ``app.routers.refine`` and tested directly):
   refined_text) -> int``
 * ``recompute_chunk_embeddings(session, chunk_ids)``
 * ``start_refine_job(session, file_id) -> str``
-* ``find_transcript_files_in_folder(session, drive, path) -> list[str]``
+* ``filter_transcript_file_ids(session, drive, file_ids) -> list[str]``
 * ``is_feature_enabled(drive) -> bool``
 """
 
@@ -455,34 +455,44 @@ async def recompute_chunk_embeddings(
 # --- Folder scan + policy ---------------------------------------------------
 
 
-def find_transcript_files_in_folder(
-    session: Any, drive: str, path: str
+def filter_transcript_file_ids(
+    session: Any, drive: str, file_ids: list[str]
 ) -> list[str]:
-    """Return file_ids in ``drive/path`` that have at least one chunk.
+    """Narrow ``file_ids`` to active transcript-bearing files in ``drive``.
 
-    Uses raw SQL so the path prefix match works uniformly over the
-    ``indexed_files`` file_path column regardless of ORM quoting.
+    Mirrors the ``/batch/summaries`` shape: the frontend already has
+    the file_ids it wants to refine (it just rendered them), so we
+    let it pass them in and re-filter here. The previous path-prefix
+    scan over ``indexed_files.file_path`` was broken because the
+    column stores absolute filesystem paths (``/drives/<slug>/...``)
+    while the frontend sends drive-relative folder paths — they never
+    matched.
+
+    Cross-drive ids and files without transcript_chunks are silently
+    dropped so a caller authorised for drive A can't probe drive B's
+    transcript inventory through this endpoint.
     """
-    prefix = path.rstrip("/")
+    if not file_ids:
+        return []
     try:
+        placeholders = ",".join(f":id{i}" for i in range(len(file_ids)))
+        params: dict[str, Any] = {f"id{i}": fid for i, fid in enumerate(file_ids)}
+        params["drive"] = drive
         rows = session.execute(
             sql_text(
                 "SELECT DISTINCT f.file_id FROM indexed_files f "
                 "INNER JOIN transcript_chunks c ON c.file_id = f.file_id "
-                "WHERE f.drive = :drive "
-                "AND f.active = 1 "
-                "AND (f.file_path = :path OR f.file_path LIKE :like)"
+                "WHERE f.drive = :drive AND f.active = 1 "
+                f"AND f.file_id IN ({placeholders})"
             ),
-            {
-                "drive": drive,
-                "path": prefix,
-                "like": f"{prefix}/%",
-            },
+            params,
         ).fetchall()
     except Exception as e:
-        logger.warning("refine: folder scan failed: %s", e)
+        logger.warning("refine: file_ids filter failed: %s", e)
         return []
-    return [row[0] for row in rows]
+    accepted = {row[0] for row in rows}
+    # Preserve caller order so the queued list response is predictable.
+    return [fid for fid in file_ids if fid in accepted]
 
 
 async def is_feature_enabled(drive: str) -> bool:

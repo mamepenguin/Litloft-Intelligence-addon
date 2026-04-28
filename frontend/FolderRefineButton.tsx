@@ -7,13 +7,14 @@ import { refineFolderTranscripts } from "./api";
 
 interface FolderRefineButtonProps {
   drive: string;
-  path: string;
+  // Still received from the slot host (FolderToolbar) but unused —
+  // the backend selects files by id now, not path-prefix.
+  path?: string;
   fileIds: string[];
 }
 
 export default function FolderRefineButton({
   drive,
-  path,
   fileIds,
 }: FolderRefineButtonProps) {
   const t = useTranslations("file");
@@ -25,7 +26,7 @@ export default function FolderRefineButton({
     setLoading(true);
     setResultMessage(null);
     try {
-      const result = await refineFolderTranscripts(drive, path);
+      const result = await refineFolderTranscripts(drive, fileIds);
       const queued = (result as { queued?: number } | null)?.queued ?? 0;
       setResultMessage(
         t("refineBatchQueued", { queued }),
@@ -36,7 +37,7 @@ export default function FolderRefineButton({
     } finally {
       setLoading(false);
     }
-  }, [drive, path, fileIds.length, loading, t]);
+  }, [drive, fileIds, loading, t]);
 
   if (fileIds.length === 0) return null;
 

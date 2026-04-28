@@ -383,18 +383,20 @@ class TestFolderBulkGenerate:
     async def test_feature_off_returns_404(self, feature_off):
         with pytest.raises(HTTPException) as exc:
             await generate_folder_visual_description(
-                body={"drive": "family", "path": "photos/2024"},
+                body={"drive": "family", "file_ids": ["img-1"]},
                 drive="family",
             )
         assert exc.value.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_enqueues_image_files_in_folder(
+    async def test_enqueues_filtered_file_ids(
         self, feature_manual, monkeypatch,
     ):
-        # Only image files in the folder are returned by the finder.
+        # The router narrows the supplied ids to active image rows in
+        # the request drive; cross-drive / non-image / inactive ids are
+        # silently dropped before enqueue.
         monkeypatch.setattr(
-            "app.routers.vision.find_image_files_in_folder",
+            "app.routers.vision.filter_image_file_ids",
             MagicMock(return_value=["img-1", "img-2"]),
             raising=False,
         )
@@ -406,7 +408,10 @@ class TestFolderBulkGenerate:
         )
 
         result = await generate_folder_visual_description(
-            body={"drive": "family", "path": "photos/2024"},
+            body={
+                "drive": "family",
+                "file_ids": ["img-1", "img-2", "video-3"],
+            },
             drive="family",
         )
 
@@ -426,7 +431,7 @@ class TestFolderBulkGenerate:
         )
         with pytest.raises(HTTPException) as exc:
             await generate_folder_visual_description(
-                body={"drive": "private", "path": "photos"},
+                body={"drive": "private", "file_ids": ["img-1"]},
                 drive="private",
             )
         assert exc.value.status_code == 404
@@ -438,20 +443,54 @@ class TestFolderBulkGenerate:
         """body.drive must match the X-Lit-Drive header."""
         with pytest.raises(HTTPException) as exc:
             await generate_folder_visual_description(
-                body={"drive": "other", "path": "photos"},
+                body={"drive": "other", "file_ids": ["img-1"]},
                 drive="family",
             )
         assert exc.value.status_code == 400
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "bad_path",
-        ["", "/etc", "../escape", "foo/../bar"],
+        "bad_body",
+        [
+            {"drive": "family"},  # missing file_ids
+            {"drive": "family", "file_ids": "img-1"},  # not a list
+            {"drive": "family", "file_ids": [1, 2]},  # not strings
+        ],
     )
-    async def test_rejects_invalid_paths(self, feature_manual, bad_path):
+    async def test_rejects_invalid_file_ids(self, feature_manual, bad_body):
         with pytest.raises(HTTPException) as exc:
             await generate_folder_visual_description(
-                body={"drive": "family", "path": bad_path},
+                body=bad_body,
                 drive="family",
             )
         assert exc.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_empty_file_ids_returns_zero_queued(
+        self, feature_manual, monkeypatch,
+    ):
+        """Empty list is well-formed; we just enqueue nothing."""
+        monkeypatch.setattr(
+            "app.routers.vision.filter_image_file_ids",
+            MagicMock(return_value=[]),
+            raising=False,
+        )
+        enqueue_mock = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            "app.routers.vision.enqueue_visual_description",
+            enqueue_mock,
+            raising=False,
+        )
+
+        result = await generate_folder_visual_description(
+            body={"drive": "family", "file_ids": []},
+            drive="family",
+        )
+
+        assert enqueue_mock.await_count == 0
+        queued = (
+            getattr(result, "queued", None)
+            if not isinstance(result, dict)
+            else result.get("queued")
+        )
+        assert queued == 0

@@ -209,6 +209,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             settings.llm.vision_model,
         )
 
+        # on_index: queue already-indexed images that don't have a
+        # description yet. Without this, switching the feature on for
+        # an existing library would only describe newly-indexed files
+        # (the CLIP-completion hook in indexer.py only fires once per
+        # file). Mirrors the auto_tags / summaries on_index sweep.
+        if settings.features.vision_describe == "on_index":
+            pending = await vision_worker.enqueue_unprocessed()
+            if pending > 0:
+                logger.info(
+                    "Vision: queued %d previously indexed files", pending
+                )
+
     # Start index manager (pass workers for post-metadata hooks)
     index_manager = IndexManager(
         auto_tags_worker=auto_tags_worker,

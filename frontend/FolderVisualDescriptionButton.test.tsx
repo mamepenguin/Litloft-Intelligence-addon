@@ -44,10 +44,10 @@ describe("FolderVisualDescriptionButton", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("confirms then posts with drive and path", async () => {
+  it("confirms then posts with drive and fileIds", async () => {
     (generateFolderVisualDescription as unknown as ReturnType<typeof vi.fn>)
       .mockResolvedValue({ queued: 7, file_ids: ["f1", "f2"] });
-    renderButton();
+    renderButton(["f1", "f2"]);
     const btn = screen.getByRole("button");
     await act(async () => {
       fireEvent.click(btn);
@@ -56,7 +56,7 @@ describe("FolderVisualDescriptionButton", () => {
     await waitFor(() => {
       expect(generateFolderVisualDescription).toHaveBeenCalledWith(
         "family",
-        "photos/2024",
+        ["f1", "f2"],
       );
     });
     // Success feedback

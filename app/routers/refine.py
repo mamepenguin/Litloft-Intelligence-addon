@@ -2,7 +2,7 @@
 
 * ``POST /refine/files/{file_id}`` — enqueue refine for one file
 * ``POST /refine/folders`` — refine every transcript-bearing file
-  under a given drive+path
+  in the supplied ``file_ids`` list
 
 Revert is deliberately not exposed: the refine pipeline now re-chunks
 the transcript on LLM-inserted punctuation boundaries, which makes
@@ -30,7 +30,7 @@ from app.drive_context import require_drive
 from app.models import IndexedFile, TranscriptChunk
 from app.workers.refine import (
     WINDOW_SIZE,
-    find_transcript_files_in_folder,
+    filter_transcript_file_ids,
     is_feature_enabled,
     realign_words_for_chunk,
     recompute_chunk_embeddings,
@@ -101,25 +101,6 @@ def _fetch_indexed_file(session: Any, file_id: str, drive: str) -> Any | None:
     )
 
 
-def _validate_folder_path(path: str) -> str:
-    """Reject absolute / traversal / empty paths; return the stripped form.
-
-    The path is joined into a SQL LIKE pattern against ``file_path``
-    prefixes. Anything starting with ``/`` escapes the drive root,
-    ``..`` segments would let a caller match unrelated prefixes, and
-    an empty string is meaningless (tests + UI always pass a folder).
-    """
-    if not isinstance(path, str) or path.strip() == "":
-        raise HTTPException(status_code=400, detail="path is required")
-    if path.startswith("/"):
-        raise HTTPException(status_code=400, detail="path must be relative")
-    # Segment-wise check so "foo..bar" (legitimate substring) doesn't trip.
-    parts = path.replace("\\", "/").split("/")
-    if any(p == ".." for p in parts):
-        raise HTTPException(status_code=400, detail="path must not contain '..'")
-    return path
-
-
 @router.post("/refine/files/{file_id}")
 async def refine_file(
     file_id: str,
@@ -149,13 +130,16 @@ async def refine_folder(
     body: dict = Body(...),
     drive: str = Depends(require_drive),
 ) -> dict:
-    """Enqueue refine jobs for every transcript-bearing file in a folder.
+    """Enqueue refine jobs for every transcript-bearing file in ``file_ids``.
+
+    Same shape as ``/batch/summaries``: the frontend sends the file_ids
+    it just rendered. We re-filter to (drive, active, has-transcript)
+    here so a caller can't reach across drives or feed nonexistent ids
+    to burn LLM credits.
 
     The body ``drive`` (if present) must match the ``X-Lit-Drive``
-    header; mismatches are a signal of either a confused client or a
-    deliberate cross-drive probe, so we 400 instead of silently using
-    the header. The path is validated to reject traversal / absolute
-    forms before it reaches the SQL LIKE match.
+    header; mismatches signal a confused client or a deliberate
+    cross-drive probe, so we 400 instead of silently using the header.
     """
     body_drive = body.get("drive")
     if body_drive is not None and body_drive != drive:
@@ -163,14 +147,19 @@ async def refine_folder(
             status_code=400,
             detail="body.drive must match X-Lit-Drive header",
         )
-    path = body.get("path", "")
-    path = _validate_folder_path(path)
+    raw_ids = body.get("file_ids")
+    if not isinstance(raw_ids, list) or not all(
+        isinstance(x, str) for x in raw_ids
+    ):
+        raise HTTPException(
+            status_code=400, detail="file_ids must be a list of strings"
+        )
 
     _require_feature_on()
     await _require_drive_policy(drive)
 
     with get_search_db() as session:
-        file_ids = find_transcript_files_in_folder(session, drive, path)
+        file_ids = filter_transcript_file_ids(session, drive, raw_ids)
 
     if len(file_ids) > MAX_FOLDER_FILES:
         raise HTTPException(
@@ -204,7 +193,7 @@ __all__ = [
     "FOLDER_CONCURRENCY",
     "MAX_FOLDER_FILES",
     "WINDOW_SIZE",
-    "find_transcript_files_in_folder",
+    "filter_transcript_file_ids",
     "get_llm_client",
     "get_search_db",
     "is_feature_enabled",

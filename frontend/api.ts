@@ -305,14 +305,14 @@ export interface RefineFolderResponse {
 
 export async function refineFolderTranscripts(
   drive: string,
-  path: string,
+  fileIds: string[],
 ): Promise<RefineFolderResponse> {
   return fetchJSON<RefineFolderResponse>(
     `${API_BASE}/addons/intelligence/refine/folders`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json", ...driveHeaders(drive) },
-      body: JSON.stringify({ drive, path }),
+      body: JSON.stringify({ drive, file_ids: fileIds }),
     },
   );
 }
@@ -918,7 +918,7 @@ export interface FolderVisualDescriptionTooManyError {
  */
 export async function generateFolderVisualDescription(
   drive: string,
-  path: string,
+  fileIds: string[],
 ): Promise<FolderVisualDescriptionResponse> {
   const res = await fetch(
     `${API_BASE}/addons/intelligence/folders/visual_description/generate`,
@@ -926,7 +926,7 @@ export async function generateFolderVisualDescription(
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json", ...driveHeaders(drive) },
-      body: JSON.stringify({ drive, path }),
+      body: JSON.stringify({ drive, file_ids: fileIds }),
     },
   );
   if (res.status === 413) {

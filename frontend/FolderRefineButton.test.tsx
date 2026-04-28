@@ -42,7 +42,7 @@ describe("FolderRefineButton", () => {
     ).toBeInTheDocument();
   });
 
-  it("calls refineFolderTranscripts with drive and path on click", async () => {
+  it("calls refineFolderTranscripts with drive and fileIds on click", async () => {
     render(
       <FolderRefineButton
         drive="family"
@@ -55,7 +55,7 @@ describe("FolderRefineButton", () => {
     await waitFor(() => {
       expect(refineFolderTranscripts).toHaveBeenCalledWith(
         "family",
-        "videos/2024"
+        ["f1", "f2"],
       );
     });
   });
