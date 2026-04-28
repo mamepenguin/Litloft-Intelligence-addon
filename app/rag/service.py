@@ -519,6 +519,7 @@ async def _run_hierarchical_retrieval(
     file_type: str | None,
     top_k: int,
     original_query: str | None = None,
+    pre_scope_file_ids: list[str] | None = None,
 ) -> tuple[
     list[RetrievedFile],
     "ShortlistResult | None",
@@ -560,9 +561,40 @@ async def _run_hierarchical_retrieval(
     also run an unscoped pass and union the results, preserving the
     scoped order first. This protects pinpoint factual queries whose
     answer chunk lives in a file the AI summary did not foreground.
+
+    Composition with personal_history (spec
+    `2026-04-29-intelligence-ask-hierarchical-personal-history-composition.md`):
+    when ``pre_scope_file_ids`` is set, the coarse shortlist is
+    intersected with the personal-history file_ids (preserving the
+    coarse rank order — coarse carries the score signal, pre_scope is
+    just a set membership filter). The small-drive guard is skipped
+    because pre_scope is already much smaller than the drive corpus.
+    The ``coarse_score_threshold`` check is re-evaluated against the
+    *post-intersection* top score: a drive whose strongest summary
+    matches were never viewed by the user is still allowed to bypass
+    on low confidence (the rationale is "無関係なファイルしか先週観て
+    ないなら narrow しない方が良い" — better to widen than narrow on
+    a weak intersected match). On bypass (empty intersection / low
+    confidence / access-filter empty), the fallback retrieve is scoped
+    to ``pre_scope_file_ids`` rather than unscoped — losing the user's
+    personal scope just because the summary-narrowing didn't help
+    would defeat the point of the composition. Note the bypass path
+    runs only the single-keyword pass; Stage C ``category_expansion``
+    would have run on the personal-history-only branch but is skipped
+    here for now (see follow-up M2 in the spec).
+
+    ``pre_scope_file_ids`` is trusted to be drive-bounded by the
+    caller (in production, the host's ``viewer-history`` Internal API
+    enforces this; ``retrieve_with_keywords`` re-applies the access
+    filter unconditionally as defense-in-depth).
     """
     cfg = settings.rag.hierarchical
     semantic = original_query if original_query is not None else query
+
+    # Fallback scope used by every bypass branch. Composed callers
+    # carry their personal-history scope through; legacy callers fall
+    # back to drive-wide retrieval as before.
+    bypass_scope: list[str] | None = pre_scope_file_ids
 
     if not cfg.enabled or not drive:
         # Hierarchical disabled or drive missing — strict legacy path.
@@ -573,7 +605,7 @@ async def _run_hierarchical_retrieval(
             file_type=file_type,
             drive=drive,
             original_query=semantic,
-            file_id_scope=None,
+            file_id_scope=bypass_scope,
         )
         return candidates, None, None
 
@@ -583,23 +615,55 @@ async def _run_hierarchical_retrieval(
         top_k=cfg.coarse_top_k,
     )
 
+    # Project the coarse shortlist onto the personal-history scope when
+    # composing. The intersection preserves coarse rank order — coarse
+    # carries the score signal, pre_scope is just set membership.
+    if pre_scope_file_ids is not None:
+        scope_set = set(pre_scope_file_ids)
+        intersected_pairs = [
+            (fid, score)
+            for fid, score in zip(shortlist.file_ids, shortlist.scores)
+            if fid in scope_set
+        ]
+        intersected_ids = tuple(fid for fid, _ in intersected_pairs)
+        intersected_scores = tuple(score for _, score in intersected_pairs)
+        shortlist = ShortlistResult(
+            file_ids=intersected_ids,
+            scores=intersected_scores,
+            top_score=intersected_scores[0] if intersected_scores else 0.0,
+            drive_file_count=shortlist.drive_file_count,
+        )
+
     # Bypass conditions — small drive, low confidence, empty shortlist.
     # Each is logged at DEBUG so an operator running with verbose
     # logging can see exactly why scoping was skipped.
     bypass_reason: str | None = None
-    if shortlist.drive_file_count < cfg.min_drive_files_for_shortlist:
+    # ``min_drive_files_for_shortlist`` protects against meaningless
+    # shortlists on tiny corpora. When pre_scope is set, the corpus IS
+    # the pre_scope (already much smaller than the drive) — the guard
+    # would always fire and defeat composition, so skip it.
+    if (
+        pre_scope_file_ids is None
+        and shortlist.drive_file_count < cfg.min_drive_files_for_shortlist
+    ):
         bypass_reason = "small_drive"
+    elif not shortlist.file_ids:
+        bypass_reason = (
+            "empty_intersection"
+            if pre_scope_file_ids is not None
+            else "empty_shortlist"
+        )
     elif shortlist.top_score < cfg.coarse_score_threshold:
         bypass_reason = "low_confidence"
-    elif not shortlist.file_ids:
-        bypass_reason = "empty_shortlist"
 
     if bypass_reason is not None:
         logger.debug(
             "hierarchical retrieval bypass: reason=%s drive=%s "
-            "drive_file_count=%d top_score=%.4f shortlist_size=%d",
+            "drive_file_count=%d top_score=%.4f shortlist_size=%d "
+            "pre_scope_size=%s",
             bypass_reason, drive, shortlist.drive_file_count,
             shortlist.top_score, len(shortlist.file_ids),
+            "n/a" if pre_scope_file_ids is None else len(pre_scope_file_ids),
         )
         candidates = await retrieve_with_keywords(
             keywords=keywords,
@@ -608,7 +672,7 @@ async def _run_hierarchical_retrieval(
             file_type=file_type,
             drive=drive,
             original_query=semantic,
-            file_id_scope=None,
+            file_id_scope=bypass_scope,
         )
         return candidates, None, None
 
@@ -626,9 +690,10 @@ async def _run_hierarchical_retrieval(
     if not accessible:
         # Whole shortlist is inaccessible (locked protected drive,
         # transient internal-API failure that fails closed, etc.).
-        # Treat as a bypass: run the unscoped path and emit no
-        # ``shortlist`` event — the streaming caller is responsible
-        # for honouring ``shortlist is None`` to skip the SSE leak.
+        # Treat as a bypass: run the legacy path scoped to
+        # ``bypass_scope`` (the pre_scope on composed callers, drive-
+        # wide otherwise) and emit no ``shortlist`` event so the
+        # streaming caller doesn't leak any file_ids.
         logger.debug(
             "hierarchical retrieval bypass: reason=access_filter_empty "
             "drive=%s shortlist_size=%d",
@@ -641,7 +706,7 @@ async def _run_hierarchical_retrieval(
             file_type=file_type,
             drive=drive,
             original_query=semantic,
-            file_id_scope=None,
+            file_id_scope=bypass_scope,
         )
         return candidates, None, None
 
@@ -717,9 +782,13 @@ async def _run_hierarchical_retrieval(
 
     if cfg.fallback_full_search and len(scoped) < 2:
         # Pinpoint-fact fallback: scoped pass (across all clues)
-        # produced almost nothing. Run unscoped against the legacy
+        # produced almost nothing. Run a wider pass against the legacy
         # single-keyword query — the merged scoped path's steer still
-        # wins ties because it's prepended.
+        # wins ties because it's prepended. Composed callers keep the
+        # personal-history scope (``pre_scope_file_ids``) so the
+        # fallback widens *within* the user's "先週観た" set rather
+        # than escaping it; non-composed callers run drive-wide as
+        # before.
         unscoped = await retrieve_with_keywords(
             keywords=keywords,
             top_k=top_k,
@@ -727,7 +796,7 @@ async def _run_hierarchical_retrieval(
             file_type=file_type,
             drive=drive,
             original_query=semantic,
-            file_id_scope=None,
+            file_id_scope=pre_scope_file_ids,
         )
         seen: set[str] = set()
         merged: list[RetrievedFile] = []
@@ -781,13 +850,32 @@ async def answer_question(
     # Stage 1: retrieve + access filter.
     #
     # Routing matrix:
-    # * personal-history file_ids set → bypass hierarchical and pass
-    #   them straight in as ``file_id_scope``. The history scope is
-    #   already drive-bounded by the host's join, so the security
-    #   invariant holds even though we skip the hierarchical helper.
+    # * personal-history file_ids set + hierarchical enabled + drive →
+    #   composed pipeline: ``Stage B file_ids ∩ shortlist``. Coarse
+    #   retrieval narrows the personal scope by summary topicality,
+    #   then Stage 2 clue generation supersedes Stage C category
+    #   expansion (clues are stronger because they're generated from
+    #   the actual shortlist summaries). Spec
+    #   ``2026-04-29-intelligence-ask-hierarchical-personal-history-composition.md``.
+    # * personal-history file_ids set (hierarchical off) → pass them
+    #   straight in as ``file_id_scope`` plus optional Stage C
+    #   category expansion. The history scope is already drive-bounded
+    #   by the host's join, so the security invariant holds.
     # * hierarchical enabled + drive given → hierarchical helper.
     # * fallback → legacy single-stage retrieval.
-    if history.file_ids:
+    if history.file_ids and settings.rag.hierarchical.enabled and drive:
+        keywords = await transform_query(query, temperature=temperature)
+        candidates, _shortlist, _clues = await _run_hierarchical_retrieval(
+            query=query,
+            keywords=keywords,
+            drive=drive,
+            lit_token=lit_token,
+            file_type=file_type,
+            top_k=effective_top_k,
+            original_query=query,
+            pre_scope_file_ids=history.file_ids,
+        )
+    elif history.file_ids:
         keywords = await transform_query(query, temperature=temperature)
         category_terms = await _resolve_category_expansion(history.decomposed)
         if category_terms:
@@ -1075,13 +1163,29 @@ async def stream_answer(
     keywords = await transform_query(query)
     yield AnswerEvent(kind="keywords", data={"keywords": keywords})
 
-    # Stage 1+3: retrieval. Personal-history scope wins over the
-    # hierarchical helper — once Stage B has produced a deterministic
-    # file_id list there is nothing the summary-embedding shortlist
-    # can usefully add. ``original_query`` carries the raw
-    # natural-language question through so vector channels get full
-    # semantic context while FTS only sees the noise-free keywords.
-    if history.file_ids:
+    # Stage 1+3: retrieval. Routing mirrors ``answer_question``:
+    # * history.file_ids + hierarchical + drive → composed (Stage B
+    #   ∩ shortlist). clue generation supersedes Stage C category
+    #   expansion. Spec
+    #   ``2026-04-29-intelligence-ask-hierarchical-personal-history-composition.md``.
+    # * history.file_ids only → personal-history scope + optional Stage C.
+    # * hierarchical + drive → hierarchical helper.
+    # * else → legacy.
+    # ``original_query`` carries the raw natural-language question
+    # through so vector channels get full semantic context while FTS
+    # only sees the noise-free keywords.
+    if history.file_ids and settings.rag.hierarchical.enabled and drive:
+        candidates, shortlist, clues = await _run_hierarchical_retrieval(
+            query=query,
+            keywords=keywords,
+            drive=drive,
+            lit_token=lit_token,
+            file_type=file_type,
+            top_k=effective_top_k,
+            original_query=query,
+            pre_scope_file_ids=history.file_ids,
+        )
+    elif history.file_ids:
         # Stage C: bilingual surface-form expansion of the decomposed
         # semantic_query (e.g. "SF" → ["SF", "science fiction",
         # "宇宙船", ...]). Empty list ⇒ skip multi-query.
