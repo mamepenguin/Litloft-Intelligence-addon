@@ -624,29 +624,33 @@ function IntelligenceAskPageInner() {
       </form>
 
       {(state.kind === "streaming" || state.kind === "answered") &&
-        (state.clues && state.clues.length > 0 ? (
-          // Hierarchical RAG Stage 2 has produced multi-query clues —
-          // these supersede the raw keywords pill because they are
-          // the actual queries we ran against the index.
-          <div className="flex flex-wrap items-center gap-2 rounded-md border border-bg-border bg-bg-elevated px-3 py-2 text-xs text-text-muted">
-            <span>💡</span>
-            {state.clues.map((clue, i) => (
-              <span
-                key={`${i}-${clue}`}
-                className="rounded bg-bg-card px-2 py-0.5"
-              >
-                {clue}
-              </span>
-            ))}
-          </div>
-        ) : (
-          state.keywords && (
+        (() => {
+          // Hierarchical RAG Stage 2 clues supersede the raw
+          // keywords once they arrive — they are the actual queries
+          // we ran against the index. Until then we render the
+          // keyword string as chips by splitting on whitespace, so
+          // the layout stays identical across the keywords→clues
+          // transition (no jank, no remount).
+          const chips = state.clues && state.clues.length > 0
+            ? state.clues
+            : state.keywords
+              ? state.keywords.split(/\s+/).filter((c) => c.length > 0)
+              : [];
+          if (chips.length === 0) return null;
+          return (
             <div className="flex flex-wrap items-center gap-2 rounded-md border border-bg-border bg-bg-elevated px-3 py-2 text-xs text-text-muted">
-              <span>🔎</span>
-              <span className="truncate">{state.keywords}</span>
+              <Sparkles size={12} className="flex-shrink-0" />
+              {chips.map((chip, i) => (
+                <span
+                  key={`${i}-${chip}`}
+                  className="rounded bg-bg-card px-2 py-0.5"
+                >
+                  {chip}
+                </span>
+              ))}
             </div>
-          )
-        ))}
+          );
+        })()}
 
       {state.kind === "error" && (
         <div
