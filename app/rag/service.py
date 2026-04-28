@@ -22,6 +22,7 @@ stages. The only differences are that ``stream_answer``:
    payload the LLM returned, not a mid-stream fragment.
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -32,6 +33,7 @@ from typing import Any, Literal
 from app.config import settings
 from app.dependencies import get_llm_client
 from app.rag.answer_stream import AnswerStreamExtractor, CitationStreamExtractor
+from app.rag.clue_generator import fetch_long_summaries, generate_clues
 from app.rag.coarse_retriever import ShortlistResult, coarse_retrieve
 from app.rag.context import assemble_contexts
 from app.rag.parser import Citation, _parse_citation, parse_answer
@@ -336,6 +338,57 @@ def _to_source_dict(candidate: RetrievedFile) -> dict[str, Any]:
     }
 
 
+# Standard IR Reciprocal Rank Fusion constant. 60 is the canonical
+# value across the literature (Cormack/Clarke 2009) and is what the
+# legacy single-mode RRF combiner in ``app.search`` already uses.
+# Promoting this to a module-level constant makes it greppable when
+# tuning multi-query expansion weights against eval baselines.
+_RRF_K_DEFAULT = 60
+
+
+def _rrf_merge_candidates(
+    per_clue: list[list[RetrievedFile]],
+    *,
+    top_k: int,
+    rrf_k: int = _RRF_K_DEFAULT,
+) -> list[RetrievedFile]:
+    """Reciprocal Rank Fusion across per-clue candidate lists.
+
+    Each clue's ranked list contributes ``1 / (rrf_k + rank)`` to a
+    file's combined score. The standard IR constant ``rrf_k=60`` gives
+    a smooth blend without letting top-1 of any single clue dominate.
+
+    File metadata (title, segments, etc.) is taken from the first list
+    that surfaced the file — clues are run with the same scope/filters
+    so the metadata is functionally identical across lists, and picking
+    the first encountered keeps the merge deterministic without paying
+    for a full segment-level merge that the LLM context builder would
+    just down-trim later anyway.
+    """
+    # Local accumulator dicts — the project rule mandates immutability,
+    # but rebuilding either dict per row is O(n²) and the rule's
+    # rationale is shared-state safety, which doesn't apply to a
+    # function-scoped accumulator that never escapes. Keep the
+    # iterative form, but document why so future readers don't
+    # "fix" it into a comprehension that pessimises the merge.
+    scores: dict[str, float] = {}
+    first_seen: dict[str, RetrievedFile] = {}
+    for results in per_clue:
+        for rank, candidate in enumerate(results, start=1):
+            scores[candidate.file_id] = (
+                scores.get(candidate.file_id, 0.0) + 1.0 / (rrf_k + rank)
+            )
+            if candidate.file_id not in first_seen:
+                first_seen[candidate.file_id] = candidate
+
+    ordered = sorted(
+        first_seen.values(),
+        key=lambda c: scores[c.file_id],
+        reverse=True,
+    )
+    return ordered[:top_k]
+
+
 async def _run_hierarchical_retrieval(
     *,
     query: str,
@@ -345,16 +398,20 @@ async def _run_hierarchical_retrieval(
     file_type: str | None,
     top_k: int,
     original_query: str | None = None,
-) -> tuple[list[RetrievedFile], "ShortlistResult | None"]:
-    """Run Stage 1 (coarse) + Stage 3 (fine) retrieval with bypass logic.
+) -> tuple[
+    list[RetrievedFile],
+    "ShortlistResult | None",
+    "tuple[str, ...] | None",
+]:
+    """Run Stage 1 (coarse) + Stage 2 (clue) + Stage 3 (fine) retrieval.
 
-    Returns the candidate list paired with the ShortlistResult, or
-    ``None`` for the shortlist when hierarchical was bypassed (config
-    off, drive missing, small drive, low confidence, empty shortlist,
-    or the entire shortlist is access-blocked for the caller). The
-    streaming path uses the second return value to decide whether to
-    emit a ``shortlist`` SSE event — bypassed paths must NOT emit one
-    because that would lie about how the retrieval ran AND, more
+    Returns ``(candidates, shortlist, clues)``. ``shortlist`` and
+    ``clues`` are ``None`` whenever the hierarchical pipeline was
+    bypassed (config off, drive missing, small drive, low confidence,
+    empty shortlist, or the entire shortlist is access-blocked for the
+    caller). The streaming path uses these to decide whether to emit
+    the corresponding SSE events — bypassed paths must NOT emit them
+    because doing so would lie about how the retrieval ran AND, more
     critically, would leak file_ids the caller is not authorised to see
     (a protected drive that's locked must not appear in any response —
     see ``design-decisions.md`` "保護ドライブが locked の場合は API
@@ -362,9 +419,20 @@ async def _run_hierarchical_retrieval(
 
     The returned ``ShortlistResult`` (when not None) carries the
     **access-filtered** file_ids — the same set that was forwarded to
-    ``retrieve_with_keywords`` as ``file_id_scope``. This guarantees
-    the SSE event the streaming caller emits never contains a file_id
-    that the caller could not also retrieve through the normal API.
+    ``retrieve_with_keywords`` as ``file_id_scope``. ``clues`` contains
+    the actual keyword strings that were run; on clue generation
+    failure this collapses to a single-entry tuple holding the
+    legacy keyword query so downstream callers / observability stay
+    consistent.
+
+    Clue dispatch (spec §4.2 Stage 2 / §7.4): once the shortlist is
+    confirmed and access-filtered, generate up to
+    ``cfg.clue_count`` independent search queries from the user's
+    natural-language question + the shortlist's AI summaries, run each
+    clue concurrently against ``retrieve_with_keywords`` under the
+    same shortlist scope, and merge the per-clue ranked lists with
+    Reciprocal Rank Fusion. ``clue_count <= 1`` collapses gracefully
+    to a single scoped retrieve identical to Phase 2 behaviour.
 
     The merge fallback (spec §7.4): when the scoped retrieval returns
     fewer than two candidates AND ``fallback_full_search`` is set, we
@@ -386,7 +454,7 @@ async def _run_hierarchical_retrieval(
             original_query=semantic,
             file_id_scope=None,
         )
-        return candidates, None
+        return candidates, None, None
 
     shortlist = await coarse_retrieve(
         query=query,
@@ -421,7 +489,7 @@ async def _run_hierarchical_retrieval(
             original_query=semantic,
             file_id_scope=None,
         )
-        return candidates, None
+        return candidates, None, None
 
     # Access-filter the shortlist BEFORE forwarding it anywhere. The
     # coarse retriever is drive-scoped but does not consult the host's
@@ -454,7 +522,7 @@ async def _run_hierarchical_retrieval(
             original_query=semantic,
             file_id_scope=None,
         )
-        return candidates, None
+        return candidates, None, None
 
     # Project the access-filtered ids back onto the original ordering so
     # the score / top_score / cosine ranking the SSE event reports stays
@@ -474,20 +542,63 @@ async def _run_hierarchical_retrieval(
         drive_file_count=shortlist.drive_file_count,
     )
 
-    scoped = await retrieve_with_keywords(
-        keywords=keywords,
-        top_k=top_k,
-        lit_token=lit_token,
-        file_type=file_type,
-        drive=drive,
-        original_query=semantic,
-        file_id_scope=list(filtered_shortlist.file_ids),
+    # Stage 2: clue generation. Pull the AI summaries for the
+    # access-filtered shortlist and ask the LLM to expand the query
+    # into ``cfg.clue_count`` independent search queries that each
+    # match the shortlist's domain vocabulary. ``generate_clues``
+    # always returns at least one entry — on any failure (LLM down,
+    # parse error, empty array, missing summaries) it collapses to
+    # ``[keywords]`` so the downstream loop runs the equivalent of the
+    # legacy single-keyword path without any branching here.
+    clue_count = max(1, cfg.clue_count)
+    summary_map = fetch_long_summaries(list(filtered_shortlist.file_ids))
+    summaries = [
+        summary_map[fid]
+        for fid in filtered_shortlist.file_ids
+        if fid in summary_map
+    ]
+    clues = await generate_clues(
+        query=semantic,
+        summaries=summaries,
+        clue_count=clue_count,
+        fallback_keywords=keywords,
     )
 
+    # Stage 3: run each clue concurrently against the scoped retriever.
+    # The scope is identical across clues (same access-filtered
+    # shortlist) so RRF can merge purely by file_id rank without
+    # worrying about scope-induced ordering bias.
+    per_clue_results = await asyncio.gather(
+        *[
+            retrieve_with_keywords(
+                keywords=clue,
+                top_k=top_k,
+                lit_token=lit_token,
+                file_type=file_type,
+                drive=drive,
+                original_query=semantic,
+                file_id_scope=list(filtered_shortlist.file_ids),
+            )
+            for clue in clues
+        ]
+    )
+
+    if len(clues) == 1:
+        # Fast path: single-clue is identical to legacy Phase 2
+        # behaviour, no merge cost.
+        scoped = per_clue_results[0]
+    else:
+        scoped = _rrf_merge_candidates(
+            list(per_clue_results), top_k=top_k
+        )
+
+    clue_tuple = tuple(clues)
+
     if cfg.fallback_full_search and len(scoped) < 2:
-        # Pinpoint-fact fallback: scoped pass produced almost nothing.
-        # Run unscoped, then merge keeping scoped order first so the
-        # AI summary's steer still wins ties.
+        # Pinpoint-fact fallback: scoped pass (across all clues)
+        # produced almost nothing. Run unscoped against the legacy
+        # single-keyword query — the merged scoped path's steer still
+        # wins ties because it's prepended.
         unscoped = await retrieve_with_keywords(
             keywords=keywords,
             top_k=top_k,
@@ -504,9 +615,9 @@ async def _run_hierarchical_retrieval(
                 continue
             seen.add(cand.file_id)
             merged = [*merged, cand]
-        return merged, filtered_shortlist
+        return merged, filtered_shortlist, clue_tuple
 
-    return scoped, filtered_shortlist
+    return scoped, filtered_shortlist, clue_tuple
 
 
 async def answer_question(
@@ -536,7 +647,7 @@ async def answer_question(
     # retrieval (transforms + searches in one shot).
     if settings.rag.hierarchical.enabled and drive:
         keywords = await transform_query(query, temperature=temperature)
-        candidates, _shortlist = await _run_hierarchical_retrieval(
+        candidates, _shortlist, _clues = await _run_hierarchical_retrieval(
             query=query,
             keywords=keywords,
             drive=drive,
@@ -623,6 +734,7 @@ async def answer_question(
 AnswerEventKind = Literal[
     "keywords",
     "shortlist",
+    "clues",
     "answer_chunk",
     "citation",
     "citations",
@@ -693,8 +805,15 @@ async def stream_answer(
 
     Event ordering (always):
 
-    ``keywords`` → ``sources`` → 0..N ``answer_chunk`` →
-    0..N ``citation`` → terminal ``citations`` → ``done``
+    ``keywords`` → optional ``shortlist`` → optional ``clues`` →
+    ``sources`` → 0..N ``answer_chunk`` → 0..N ``citation`` →
+    terminal ``citations`` → ``done``
+
+    ``shortlist`` and ``clues`` only fire when the hierarchical RAG
+    pipeline actually runs (config on, drive set, shortlist confident,
+    at least one shortlist file accessible to the caller). Bypassed
+    paths skip both — see ``_run_hierarchical_retrieval`` for the full
+    bypass matrix.
 
     The progressive ``citation`` events are emitted as each citation's
     closing ``}`` arrives from the LLM; the terminal ``citations``
@@ -726,7 +845,7 @@ async def stream_answer(
     # semantic context while FTS only sees the noise-free keywords —
     # restores text_content recall that narrowing the keyword string
     # alone was dropping (eval case 001, 005).
-    candidates, shortlist = await _run_hierarchical_retrieval(
+    candidates, shortlist, clues = await _run_hierarchical_retrieval(
         query=query,
         keywords=keywords,
         drive=drive,
@@ -736,10 +855,12 @@ async def stream_answer(
         original_query=query,
     )
 
-    # Emit the shortlist event ONLY when the hierarchical path actually
-    # ran (non-None) — bypassed paths must not lie about what scoping
-    # took place. Sits between ``keywords`` and ``sources`` so the UI
-    # can show "narrowed to N files" before the chunk results land.
+    # Emit the shortlist + clues events ONLY when the hierarchical path
+    # actually ran (non-None) — bypassed paths must not lie about what
+    # scoping took place. Both sit between ``keywords`` and ``sources``
+    # so the UI can show "narrowed to N files, searching for X / Y / Z"
+    # before the chunk results land. Order is shortlist → clues since
+    # clues are generated *from* the shortlist's summaries.
     if shortlist is not None:
         yield AnswerEvent(
             kind="shortlist",
@@ -748,6 +869,11 @@ async def stream_answer(
                 "drive_file_count": shortlist.drive_file_count,
                 "top_score": shortlist.top_score,
             },
+        )
+    if clues is not None:
+        yield AnswerEvent(
+            kind="clues",
+            data={"clues": list(clues)},
         )
 
     sources = [_to_source_dict(c) for c in candidates]
