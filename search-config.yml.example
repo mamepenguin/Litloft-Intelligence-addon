@@ -242,6 +242,19 @@ rag:
   max_total_context_chars: 10000    # hard cap on combined context size
   max_tokens: 1024                  # LLM max_tokens override for answer generation
   transcript_window_seconds: 30.0   # context window around each timestamped match
+  # Hierarchical retrieval (Stage 1 coarse shortlist). Off by default;
+  # set ``enabled: true`` to scope chunk-level retrieval by a per-file
+  # AI-summary embedding shortlist. See spec
+  # ``2026-04-26-intelligence-ask-hierarchical-retrieval.md``.
+  hierarchical:
+    enabled: false                       # master switch
+    coarse_top_k: 20                     # shortlist size (top-K files)
+    coarse_score_threshold: 0.3          # bypass scoping below this top cosine
+    min_drive_files_for_shortlist: 50    # bypass on tiny drives
+    fallback_full_search: true           # also run unscoped retrieval when
+                                         # the scoped pass returns very few
+                                         # candidates (pinpoint queries)
+    clue_count: 3                        # reserved for Phase 3 (multi-query)
 
 models:
   # Whisper model for audio transcription (multilingual)

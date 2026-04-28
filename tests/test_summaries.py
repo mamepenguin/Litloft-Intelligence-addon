@@ -854,7 +854,7 @@ class TestSummariesWorkerProcessFile:
         monkeypatch.setattr("app.config.settings", settings)
         monkeypatch.setattr("app.workers.summaries.settings", settings)
 
-        save_spy = MagicMock()
+        save_spy = AsyncMock()
         monkeypatch.setattr(
             "app.workers.summaries._save_summary", save_spy
         )
@@ -873,7 +873,7 @@ class TestSummariesWorkerProcessFile:
         llm.enabled = False
         llm.generate_json = AsyncMock()
 
-        save_spy = MagicMock()
+        save_spy = AsyncMock()
         monkeypatch.setattr(
             "app.workers.summaries._save_summary", save_spy
         )
@@ -891,7 +891,7 @@ class TestSummariesWorkerProcessFile:
         monkeypatch.setattr(
             "app.workers.summaries._has_summary", lambda fid: True
         )
-        save_spy = MagicMock()
+        save_spy = AsyncMock()
         monkeypatch.setattr(
             "app.workers.summaries._save_summary", save_spy
         )
@@ -912,7 +912,7 @@ class TestSummariesWorkerProcessFile:
         monkeypatch.setattr(
             "app.workers.summaries._get_indexed_file", lambda fid: None
         )
-        save_spy = MagicMock()
+        save_spy = AsyncMock()
         monkeypatch.setattr(
             "app.workers.summaries._save_summary", save_spy
         )
@@ -940,7 +940,7 @@ class TestSummariesWorkerProcessFile:
                 "description": "",
             },
         )
-        save_spy = MagicMock()
+        save_spy = AsyncMock()
         monkeypatch.setattr(
             "app.workers.summaries._save_summary", save_spy
         )
@@ -971,7 +971,7 @@ class TestSummariesWorkerProcessFile:
         monkeypatch.setattr(
             "app.workers.summaries._get_full_transcript", lambda fid: ""
         )
-        save_spy = MagicMock()
+        save_spy = AsyncMock()
         monkeypatch.setattr(
             "app.workers.summaries._save_summary", save_spy
         )
@@ -1010,7 +1010,7 @@ class TestSummariesWorkerProcessFile:
         monkeypatch.setattr(
             "app.workers.summaries._get_full_transcript", lambda fid: "you"
         )
-        save_spy = MagicMock()
+        save_spy = AsyncMock()
         monkeypatch.setattr(
             "app.workers.summaries._save_summary", save_spy
         )
@@ -1044,7 +1044,7 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._get_full_document_text",
             lambda fid: "   hi   ",
         )
-        save_spy = MagicMock()
+        save_spy = AsyncMock()
         monkeypatch.setattr(
             "app.workers.summaries._save_summary", save_spy
         )
@@ -1089,7 +1089,7 @@ class TestSummariesWorkerProcessFile:
             lambda fid: "hello world of twenty",  # 21 chars, above threshold
         )
 
-        save_spy = MagicMock()
+        save_spy = AsyncMock()
         monkeypatch.setattr(
             "app.workers.summaries._save_summary", save_spy
         )
@@ -1127,7 +1127,7 @@ class TestSummariesWorkerProcessFile:
                 "learn patterns from data through repeated training cycles."
             ),
         )
-        save_spy = MagicMock()
+        save_spy = AsyncMock()
         monkeypatch.setattr(
             "app.workers.summaries._save_summary", save_spy
         )
@@ -1174,7 +1174,7 @@ class TestSummariesWorkerProcessFile:
                 "exceed the minimum context threshold for summary generation."
             ),
         )
-        save_spy = MagicMock()
+        save_spy = AsyncMock()
         monkeypatch.setattr(
             "app.workers.summaries._save_summary", save_spy
         )
@@ -1210,7 +1210,7 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._get_full_transcript",
             lambda fid: "transcript",
         )
-        save_spy = MagicMock()
+        save_spy = AsyncMock()
         monkeypatch.setattr(
             "app.workers.summaries._save_summary", save_spy
         )
@@ -1246,7 +1246,7 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._get_full_transcript",
             lambda fid: "transcript",
         )
-        save_spy = MagicMock()
+        save_spy = AsyncMock()
         monkeypatch.setattr(
             "app.workers.summaries._save_summary", save_spy
         )
@@ -1282,7 +1282,7 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._get_full_transcript",
             lambda fid: "transcript",
         )
-        save_spy = MagicMock()
+        save_spy = AsyncMock()
         monkeypatch.setattr(
             "app.workers.summaries._save_summary", save_spy
         )
@@ -1331,7 +1331,7 @@ class TestSummariesWorkerProcessFile:
             lambda fid: "x" * 5000,
         )
 
-        save_spy = MagicMock()
+        save_spy = AsyncMock()
         monkeypatch.setattr(
             "app.workers.summaries._save_summary", save_spy
         )
@@ -1376,7 +1376,7 @@ class TestSummariesWorkerOnIndexDetailedChain:
             lambda fid: transcript,
         )
         monkeypatch.setattr(
-            "app.workers.summaries._save_summary", MagicMock()
+            "app.workers.summaries._save_summary", AsyncMock()
         )
         monkeypatch.setattr(
             "app.workers.summaries._save_detailed_summary", MagicMock()

@@ -721,7 +721,7 @@ def _has_summary(file_id: str) -> bool:
         return row is not None
 
 
-def _save_summary(
+async def _save_summary(
     *,
     file_id: str,
     short_summary: str,
@@ -731,7 +731,18 @@ def _save_summary(
     context_chars: int,
     was_truncated: bool,
 ) -> None:
-    """Insert or replace the summary record for a file."""
+    """Insert or replace the summary record for a file.
+
+    Async because the post-write metadata re-embed must run off-loop
+    (the embedding model load is sync + CPU-bound, ~100-300ms, plus a
+    vec write per call). Blocking the summaries worker on it would
+    serialize file processing behind embedder cold-loads on every
+    save. The wrapper around ``index_metadata_batch`` mirrors the
+    router's ``_reembed_metadata_after_summary_change``: hop to a
+    thread, swallow + log failures so the summary write — which has
+    already committed by the time we reach the re-embed — stays
+    durable.
+    """
     now = datetime.now(UTC).isoformat()
     with get_search_db() as session:
         session.execute(
@@ -753,6 +764,21 @@ def _save_summary(
                 "was_truncated": 1 if was_truncated else 0,
                 "created_at": now,
             },
+        )
+
+    # Approach B: refresh the metadata embedding so the new summary
+    # contributes to hierarchical RAG Stage 1 ranking. Failure here
+    # must NOT roll back the summary write — the user-visible save is
+    # already durable. Existing files without a re-embed will pick the
+    # new text up the next time index_metadata_batch runs (alpha; no
+    # explicit backfill).
+    try:
+        from app.workers.metadata import index_metadata_batch
+        await asyncio.to_thread(index_metadata_batch, [file_id])
+    except Exception as e:  # noqa: BLE001 — never fail the summary save
+        logger.warning(
+            "Metadata re-embed after summary save failed for %s: %s",
+            file_id, e,
         )
 
 
@@ -1475,7 +1501,7 @@ class SummariesWorker:
             )
             return
 
-        _save_summary(
+        await _save_summary(
             file_id=file_id,
             short_summary=short_summary,
             long_summary=long_summary,

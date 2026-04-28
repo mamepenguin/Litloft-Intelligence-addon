@@ -32,11 +32,17 @@ from typing import Any, Literal
 from app.config import settings
 from app.dependencies import get_llm_client
 from app.rag.answer_stream import AnswerStreamExtractor, CitationStreamExtractor
+from app.rag.coarse_retriever import ShortlistResult, coarse_retrieve
 from app.rag.context import assemble_contexts
 from app.rag.parser import Citation, _parse_citation, parse_answer
 from app.rag.prompt import build_system_prompt, build_user_prompt
 from app.rag.query_transform import transform_query
-from app.rag.retriever import RetrievedFile, retrieve_candidates, retrieve_with_keywords
+from app.rag.retriever import (
+    RetrievedFile,
+    _filter_file_ids_via_internal_api,
+    retrieve_candidates,
+    retrieve_with_keywords,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -330,6 +336,179 @@ def _to_source_dict(candidate: RetrievedFile) -> dict[str, Any]:
     }
 
 
+async def _run_hierarchical_retrieval(
+    *,
+    query: str,
+    keywords: str,
+    drive: str | None,
+    lit_token: str | None,
+    file_type: str | None,
+    top_k: int,
+    original_query: str | None = None,
+) -> tuple[list[RetrievedFile], "ShortlistResult | None"]:
+    """Run Stage 1 (coarse) + Stage 3 (fine) retrieval with bypass logic.
+
+    Returns the candidate list paired with the ShortlistResult, or
+    ``None`` for the shortlist when hierarchical was bypassed (config
+    off, drive missing, small drive, low confidence, empty shortlist,
+    or the entire shortlist is access-blocked for the caller). The
+    streaming path uses the second return value to decide whether to
+    emit a ``shortlist`` SSE event — bypassed paths must NOT emit one
+    because that would lie about how the retrieval ran AND, more
+    critically, would leak file_ids the caller is not authorised to see
+    (a protected drive that's locked must not appear in any response —
+    see ``design-decisions.md`` "保護ドライブが locked の場合は API
+    応答から完全除外する").
+
+    The returned ``ShortlistResult`` (when not None) carries the
+    **access-filtered** file_ids — the same set that was forwarded to
+    ``retrieve_with_keywords`` as ``file_id_scope``. This guarantees
+    the SSE event the streaming caller emits never contains a file_id
+    that the caller could not also retrieve through the normal API.
+
+    The merge fallback (spec §7.4): when the scoped retrieval returns
+    fewer than two candidates AND ``fallback_full_search`` is set, we
+    also run an unscoped pass and union the results, preserving the
+    scoped order first. This protects pinpoint factual queries whose
+    answer chunk lives in a file the AI summary did not foreground.
+    """
+    cfg = settings.rag.hierarchical
+    semantic = original_query if original_query is not None else query
+
+    if not cfg.enabled or not drive:
+        # Hierarchical disabled or drive missing — strict legacy path.
+        candidates = await retrieve_with_keywords(
+            keywords=keywords,
+            top_k=top_k,
+            lit_token=lit_token,
+            file_type=file_type,
+            drive=drive,
+            original_query=semantic,
+            file_id_scope=None,
+        )
+        return candidates, None
+
+    shortlist = await coarse_retrieve(
+        query=query,
+        drive=drive,
+        top_k=cfg.coarse_top_k,
+    )
+
+    # Bypass conditions — small drive, low confidence, empty shortlist.
+    # Each is logged at DEBUG so an operator running with verbose
+    # logging can see exactly why scoping was skipped.
+    bypass_reason: str | None = None
+    if shortlist.drive_file_count < cfg.min_drive_files_for_shortlist:
+        bypass_reason = "small_drive"
+    elif shortlist.top_score < cfg.coarse_score_threshold:
+        bypass_reason = "low_confidence"
+    elif not shortlist.file_ids:
+        bypass_reason = "empty_shortlist"
+
+    if bypass_reason is not None:
+        logger.debug(
+            "hierarchical retrieval bypass: reason=%s drive=%s "
+            "drive_file_count=%d top_score=%.4f shortlist_size=%d",
+            bypass_reason, drive, shortlist.drive_file_count,
+            shortlist.top_score, len(shortlist.file_ids),
+        )
+        candidates = await retrieve_with_keywords(
+            keywords=keywords,
+            top_k=top_k,
+            lit_token=lit_token,
+            file_type=file_type,
+            drive=drive,
+            original_query=semantic,
+            file_id_scope=None,
+        )
+        return candidates, None
+
+    # Access-filter the shortlist BEFORE forwarding it anywhere. The
+    # coarse retriever is drive-scoped but does not consult the host's
+    # per-drive locked/unlocked state — a caller without the unlock
+    # cookie for a protected drive must not see the file_ids those
+    # rows belong to, and must not have the scoped retrieval pass them
+    # through (downstream ``retrieve_with_keywords`` already filters,
+    # but the SSE event the streaming path emits is built from the
+    # ShortlistResult and must reflect the same gate).
+    accessible = await _filter_file_ids_via_internal_api(
+        list(shortlist.file_ids), lit_token
+    )
+    if not accessible:
+        # Whole shortlist is inaccessible (locked protected drive,
+        # transient internal-API failure that fails closed, etc.).
+        # Treat as a bypass: run the unscoped path and emit no
+        # ``shortlist`` event — the streaming caller is responsible
+        # for honouring ``shortlist is None`` to skip the SSE leak.
+        logger.debug(
+            "hierarchical retrieval bypass: reason=access_filter_empty "
+            "drive=%s shortlist_size=%d",
+            drive, len(shortlist.file_ids),
+        )
+        candidates = await retrieve_with_keywords(
+            keywords=keywords,
+            top_k=top_k,
+            lit_token=lit_token,
+            file_type=file_type,
+            drive=drive,
+            original_query=semantic,
+            file_id_scope=None,
+        )
+        return candidates, None
+
+    # Project the access-filtered ids back onto the original ordering so
+    # the score / top_score / cosine ranking the SSE event reports stays
+    # consistent with what the coarse retriever ranked. Files dropped by
+    # the access filter are simply skipped — their ranks collapse.
+    filtered_pairs = [
+        (fid, score)
+        for fid, score in zip(shortlist.file_ids, shortlist.scores)
+        if fid in accessible
+    ]
+    filtered_ids = tuple(fid for fid, _ in filtered_pairs)
+    filtered_scores = tuple(score for _, score in filtered_pairs)
+    filtered_shortlist = ShortlistResult(
+        file_ids=filtered_ids,
+        scores=filtered_scores,
+        top_score=filtered_scores[0] if filtered_scores else 0.0,
+        drive_file_count=shortlist.drive_file_count,
+    )
+
+    scoped = await retrieve_with_keywords(
+        keywords=keywords,
+        top_k=top_k,
+        lit_token=lit_token,
+        file_type=file_type,
+        drive=drive,
+        original_query=semantic,
+        file_id_scope=list(filtered_shortlist.file_ids),
+    )
+
+    if cfg.fallback_full_search and len(scoped) < 2:
+        # Pinpoint-fact fallback: scoped pass produced almost nothing.
+        # Run unscoped, then merge keeping scoped order first so the
+        # AI summary's steer still wins ties.
+        unscoped = await retrieve_with_keywords(
+            keywords=keywords,
+            top_k=top_k,
+            lit_token=lit_token,
+            file_type=file_type,
+            drive=drive,
+            original_query=semantic,
+            file_id_scope=None,
+        )
+        seen: set[str] = set()
+        merged: list[RetrievedFile] = []
+        for cand in [*scoped, *unscoped]:
+            if cand.file_id in seen:
+                continue
+            seen.add(cand.file_id)
+            merged = [*merged, cand]
+        return merged, filtered_shortlist
+
+    return scoped, filtered_shortlist
+
+
 async def answer_question(
     query: str,
     lit_token: str | None,
@@ -350,15 +529,31 @@ async def answer_question(
 
     start = time.monotonic()
 
-    # Stage 1: retrieve + access filter.
-    candidates = await retrieve_candidates(
-        query=query,
-        top_k=effective_top_k,
-        lit_token=lit_token,
-        file_type=file_type,
-        drive=drive,
-        transform_temperature=temperature,
-    )
+    # Stage 1: retrieve + access filter. When hierarchical is enabled
+    # AND a drive is given, route through the helper so the same Stage 1
+    # coarse pass + Stage 3 scoping that the streaming path uses also
+    # applies here. Otherwise fall back to the legacy single-stage
+    # retrieval (transforms + searches in one shot).
+    if settings.rag.hierarchical.enabled and drive:
+        keywords = await transform_query(query, temperature=temperature)
+        candidates, _shortlist = await _run_hierarchical_retrieval(
+            query=query,
+            keywords=keywords,
+            drive=drive,
+            lit_token=lit_token,
+            file_type=file_type,
+            top_k=effective_top_k,
+            original_query=query,
+        )
+    else:
+        candidates = await retrieve_candidates(
+            query=query,
+            top_k=effective_top_k,
+            lit_token=lit_token,
+            file_type=file_type,
+            drive=drive,
+            transform_temperature=temperature,
+        )
 
     if not candidates:
         return AnswerResponse(
@@ -427,6 +622,7 @@ async def answer_question(
 # typos sneaking past review.
 AnswerEventKind = Literal[
     "keywords",
+    "shortlist",
     "answer_chunk",
     "citation",
     "citations",
@@ -524,19 +720,35 @@ async def stream_answer(
     keywords = await transform_query(query)
     yield AnswerEvent(kind="keywords", data={"keywords": keywords})
 
-    # Stage 1: retrieve + access filter using the transformed keywords.
-    # ``original_query`` carries the raw natural-language question through
-    # so vector channels get full semantic context while FTS only sees
-    # the noise-free keywords — restores text_content recall that narrowing
-    # the keyword string alone was dropping (eval case 001, 005).
-    candidates = await retrieve_with_keywords(
+    # Stage 1+3: hierarchical retrieve + access filter using the
+    # transformed keywords. ``original_query`` carries the raw
+    # natural-language question through so vector channels get full
+    # semantic context while FTS only sees the noise-free keywords —
+    # restores text_content recall that narrowing the keyword string
+    # alone was dropping (eval case 001, 005).
+    candidates, shortlist = await _run_hierarchical_retrieval(
+        query=query,
         keywords=keywords,
-        top_k=effective_top_k,
+        drive=drive,
         lit_token=lit_token,
         file_type=file_type,
-        drive=drive,
+        top_k=effective_top_k,
         original_query=query,
     )
+
+    # Emit the shortlist event ONLY when the hierarchical path actually
+    # ran (non-None) — bypassed paths must not lie about what scoping
+    # took place. Sits between ``keywords`` and ``sources`` so the UI
+    # can show "narrowed to N files" before the chunk results land.
+    if shortlist is not None:
+        yield AnswerEvent(
+            kind="shortlist",
+            data={
+                "file_ids": list(shortlist.file_ids),
+                "drive_file_count": shortlist.drive_file_count,
+                "top_score": shortlist.top_score,
+            },
+        )
 
     sources = [_to_source_dict(c) for c in candidates]
     yield AnswerEvent(kind="sources", data={"sources": sources})

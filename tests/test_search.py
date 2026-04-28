@@ -1002,3 +1002,114 @@ class TestRecallModeRRF:
         # score is 0 because every channel that could have matched it
         # contributed weight 0.
         assert scores["f_clip"].combined_score == 0.0
+
+
+# ---------------------------------------------------------------------------
+# _build_results scope filter (Phase 2 hierarchical RAG)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildResultsFileIdScope:
+    """``file_id_scope`` keyword arg restricts results to an allow-list.
+
+    The filter must run before the dynamic cutoff so cutoff thresholds
+    reflect the in-scope cohort, and an empty list short-circuits to
+    zero results without triggering a fallback to unscoped behaviour.
+    """
+
+    def _make_file_scores(self, ids):
+        """Build a {file_id: _FileScore} map with descending scores."""
+        from app.search import _FileScore
+
+        return {
+            fid: _FileScore(
+                file_id=fid,
+                combined_score=1.0 - i * 0.1,
+                matches=[],
+                match_types=set(),
+            )
+            for i, fid in enumerate(ids)
+        }
+
+    def _patch_db(self, monkeypatch, ids):
+        """Stub get_search_db so _build_results sees indexed files."""
+        from contextlib import contextmanager
+
+        from app.search import IndexedFile
+
+        files = [
+            IndexedFile(
+                file_id=fid,
+                drive="Videos",
+                filename=f"{fid}.mp4",
+                file_path=f"/drives/{fid}.mp4",
+                file_type="video",
+                mime_type="video/mp4",
+                file_size=0,
+                duration=None,
+                active=True,
+            )
+            for fid in ids
+        ]
+
+        # Stub session that returns the files for any filter.
+        session = MagicMock()
+        query = MagicMock()
+        query.filter.return_value = query
+        query.all.return_value = files
+        session.query.return_value = query
+
+        @contextmanager
+        def _gsd():
+            yield session
+
+        monkeypatch.setattr("app.search.get_search_db", _gsd)
+
+    def test_scope_filters_out_of_set_ids(self, monkeypatch):
+        from app.search import _build_results
+
+        scores = self._make_file_scores(["a", "b", "c", "d"])
+        self._patch_db(monkeypatch, ["a", "b", "c", "d"])
+
+        results = _build_results(
+            file_scores=scores,
+            file_type=None,
+            drive=None,
+            limit=10,
+            file_id_scope=["a", "c"],
+        )
+        ids = [r.file_id for r in results]
+        assert set(ids).issubset({"a", "c"})
+        assert len(ids) == 2
+
+    def test_empty_scope_returns_empty(self, monkeypatch):
+        from app.search import _build_results
+
+        scores = self._make_file_scores(["a", "b"])
+        self._patch_db(monkeypatch, ["a", "b"])
+
+        results = _build_results(
+            file_scores=scores,
+            file_type=None,
+            drive=None,
+            limit=10,
+            file_id_scope=[],
+        )
+        assert results == []
+
+    def test_none_scope_disables_filter(self, monkeypatch):
+        from app.search import _build_results
+
+        scores = self._make_file_scores(["a", "b", "c"])
+        self._patch_db(monkeypatch, ["a", "b", "c"])
+
+        results = _build_results(
+            file_scores=scores,
+            file_type=None,
+            drive=None,
+            limit=10,
+            file_id_scope=None,
+        )
+        ids = {r.file_id for r in results}
+        # Cutoff may drop the lowest, but at least ``a`` survives.
+        assert "a" in ids

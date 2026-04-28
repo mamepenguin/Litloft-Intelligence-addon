@@ -110,6 +110,32 @@ def _require_file_in_drive(file_id: str, drive: str) -> None:
 
 logger = logging.getLogger(__name__)
 
+
+async def _reembed_metadata_after_summary_change(file_id: str) -> None:
+    """Refresh the file's metadata embedding off the request loop.
+
+    Approach B re-embed hook: every short/long summary mutation
+    (delete via regenerate, edit, revert) changes whether — and what —
+    long_summary contributes to the per-file embedding text used by
+    hierarchical Stage 1 retrieval. The embedding model load is
+    sync + CPU-bound (~100-300ms), so we hop to a thread to keep the
+    request loop responsive. Failures are logged and swallowed: the
+    user's summary edit is already committed and must not unwind on
+    a re-embed glitch.
+    """
+    import asyncio
+
+    from app.workers.metadata import index_metadata_batch
+
+    try:
+        await asyncio.to_thread(index_metadata_batch, [file_id])
+    except Exception as e:  # noqa: BLE001 — never fail the user write
+        logger.warning(
+            "Metadata re-embed after summary mutation failed for %s: %s",
+            file_id, e,
+        )
+
+
 router = APIRouter(tags=["summaries"])
 
 
@@ -244,6 +270,12 @@ async def regenerate_summary(
             {"fid": file_id},
         )
 
+    # Approach B: drop the long_summary contribution from the metadata
+    # embedding. The next worker pass will re-embed again with the new
+    # summary, but the interim window must not steer Stage 1 toward
+    # stale text.
+    await _reembed_metadata_after_summary_change(file_id)
+
     await summaries_worker.enqueue(file_id)
     return MessageResponse(
         status="accepted", message="Regeneration queued"
@@ -355,6 +387,12 @@ async def edit_summary(
     # session. Build the response directly so edit works regardless of
     # ``features.summaries`` (GET's feature gate would hide it otherwise).
     assert row is not None
+    # Approach B: refresh metadata embedding so the edited long_summary
+    # steers hierarchical Stage 1 retrieval. Always re-embed on edit
+    # (the request shape always carries both fields) — the bulk SQL
+    # read inside index_metadata_batch will pick up whatever long
+    # value is now durable.
+    await _reembed_metadata_after_summary_change(file_id)
     return _row_to_response(row)
 
 
@@ -405,6 +443,10 @@ async def revert_summary(
         row = _fetch_summary_row(session, file_id)
 
     assert row is not None
+    # Approach B: revert restores the AI long_summary, which differs
+    # from the user-edited text — re-embed so Stage 1 ranking matches
+    # the canonical version users will now see.
+    await _reembed_metadata_after_summary_change(file_id)
     return _row_to_response(row)
 
 

@@ -9,6 +9,7 @@ import pytest
 
 from app.config import (
     FeaturesConfig,
+    HierarchicalRagConfig,
     LLMConfig,
     RagConfig,
     Settings,
@@ -223,6 +224,54 @@ class TestLoadSettingsRag:
         assert result.rag.max_total_context_chars == 10000
         assert result.rag.max_tokens == 1024
         assert result.rag.transcript_window_seconds == 30.0
+
+    def test_parses_hierarchical_section_from_yaml(self, tmp_path, monkeypatch):
+        config_file = tmp_path / "search-config.yml"
+        config_file.write_text(
+            "features:\n"
+            "  rag: true\n"
+            "rag:\n"
+            "  hierarchical:\n"
+            "    enabled: true\n"
+            "    coarse_top_k: 30\n"
+            "    coarse_score_threshold: 0.4\n"
+            "    min_drive_files_for_shortlist: 25\n"
+            "    fallback_full_search: false\n"
+            "    clue_count: 5\n"
+        )
+
+        monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("HOMEVAULT_DB_PATH", str(tmp_path / "hv.db"))
+        monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
+
+        result = load_settings()
+
+        h = result.rag.hierarchical
+        assert h.enabled is True
+        assert h.coarse_top_k == 30
+        assert h.coarse_score_threshold == 0.4
+        assert h.min_drive_files_for_shortlist == 25
+        assert h.fallback_full_search is False
+        assert h.clue_count == 5
+
+    def test_missing_hierarchical_section_keeps_defaults(
+        self, tmp_path, monkeypatch
+    ):
+        config_file = tmp_path / "search-config.yml"
+        config_file.write_text(
+            "rag:\n"
+            "  top_k: 3\n"
+        )
+
+        monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("HOMEVAULT_DB_PATH", str(tmp_path / "hv.db"))
+        monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
+
+        result = load_settings()
+
+        # Defaults preserved when the nested block is absent.
+        assert result.rag.hierarchical == HierarchicalRagConfig()
+        assert result.rag.hierarchical.enabled is False
 
     def test_yaml_rag_enabled_without_llm_still_parses(
         self, tmp_path, monkeypatch

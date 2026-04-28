@@ -146,6 +146,7 @@ def search(
     *,
     mode: SearchMode = "precision",
     semantic_query: str | None = None,
+    file_id_scope: list[str] | None = None,
 ) -> SearchResponse:
     """Execute a hybrid search query.
 
@@ -162,6 +163,12 @@ def search(
             Ask pipeline) uses RRF with loosened thresholds and
             rebalanced channel weights. See SearchMode docstring and
             the RAG redesign spec for rationale.
+        file_id_scope: Optional allow-list of file_ids. When provided,
+            results outside this set are dropped before ranking
+            cutoffs are applied. Used by hierarchical RAG (Stage 2)
+            to scope chunk-level retrieval to the Stage 1 shortlist.
+            ``None`` disables the filter; an empty list short-circuits
+            to zero results.
 
     Returns:
         SearchResponse with ranked results.
@@ -233,6 +240,7 @@ def search(
         drive=drive,
         limit=effective_limit,
         mode=mode,
+        file_id_scope=file_id_scope,
     )
 
     # Get total indexed count
@@ -1046,6 +1054,7 @@ def _build_results(
     *,
     skip_cutoff: bool = False,
     mode: SearchMode = "precision",
+    file_id_scope: list[str] | None = None,
 ) -> list[SearchResult]:
     """Build final search results from aggregated scores.
 
@@ -1061,12 +1070,28 @@ def _build_results(
             recall uses the much more permissive ``_RECALL_PARAMS``
             ratio so borderline RAG candidates are not stripped before
             they reach the LLM.
+        file_id_scope: Optional allow-list. ``None`` disables; ``[]``
+            short-circuits to zero results. Filter runs BEFORE the
+            cutoff so cutoff thresholds reflect the in-scope cohort.
 
     Returns:
         Sorted list of SearchResult objects.
     """
     if not file_scores:
         return []
+
+    # Hierarchical RAG scope filter (Phase 2). Empty list short-circuits
+    # to zero results — the caller asked for "nothing in scope" and we
+    # honour that rather than silently falling back to unscoped search.
+    if file_id_scope is not None:
+        scope_set = set(file_id_scope)
+        if not scope_set:
+            return []
+        file_scores = {
+            fid: fs for fid, fs in file_scores.items() if fid in scope_set
+        }
+        if not file_scores:
+            return []
 
     file_ids = list(file_scores.keys())
 

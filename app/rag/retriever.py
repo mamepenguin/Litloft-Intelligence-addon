@@ -226,6 +226,7 @@ async def retrieve_with_keywords(
     drive: str | None = None,
     *,
     original_query: str | None = None,
+    file_id_scope: list[str] | None = None,
 ) -> list[RetrievedFile]:
     """Retrieve top-k RAG candidates for a **pre-transformed** keyword query.
 
@@ -264,6 +265,7 @@ async def retrieve_with_keywords(
         drive=drive,
         mode="recall",
         semantic_query=original_query,
+        file_id_scope=file_id_scope,
     )
 
     results = list(response.results)
@@ -301,6 +303,7 @@ async def retrieve_candidates(
     drive: str | None = None,
     *,
     transform_temperature: float | None = None,
+    file_id_scope: list[str] | None = None,
 ) -> list[RetrievedFile]:
     """Transform a natural-language question and retrieve RAG candidates.
 
@@ -333,4 +336,5 @@ async def retrieve_candidates(
         original_query=query,
         file_type=file_type,
         drive=drive,
+        file_id_scope=file_id_scope,
     )

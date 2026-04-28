@@ -146,6 +146,38 @@ class FeaturesConfig:
 
 
 @dataclass(frozen=True)
+class HierarchicalRagConfig:
+    """Hierarchical RAG (Stage 1 coarse-retrieval) configuration.
+
+    Phase 1 (shadow mode) only logs the shortlist; Phase 2 actually
+    scopes the chunk-level retrieval to the shortlist. See
+    ``docs/superpowers/specs/2026-04-26-intelligence-ask-hierarchical-retrieval.md``.
+
+    Defaults are conservative: hierarchical is OFF until an operator
+    opts in, the bypass thresholds err on the side of running the
+    legacy full-file retrieval when in doubt.
+    """
+
+    # Master switch. False keeps the legacy single-stage retrieval.
+    enabled: bool = False
+    # Top-K shortlist size: how many files survive Stage 1.
+    coarse_top_k: int = 20
+    # Below this top cosine similarity the Stage 1 result is considered
+    # untrustworthy and we bypass scoping (run the legacy path).
+    coarse_score_threshold: float = 0.3
+    # Drives smaller than this skip Stage 1 entirely — file-level
+    # narrowing has no statistical meaning on a tiny corpus.
+    min_drive_files_for_shortlist: int = 50
+    # When the scoped retrieval returns very few candidates, also run
+    # an unscoped pass and merge so pinpoint factual queries still
+    # have a fallback path. See spec §7.4.
+    fallback_full_search: bool = True
+    # Reserved for Phase 3 (multi-query clue generation). Unused in
+    # Phases 1 / 2.
+    clue_count: int = 3
+
+
+@dataclass(frozen=True)
 class RagConfig:
     """RAG (question answering) configuration.
 
@@ -183,6 +215,12 @@ class RagConfig:
     # (2-3 sentences) so more fit under the per-file budget.
     # 0 disables the additional passes.
     transcript_vector_top_n: int = 4
+    # Hierarchical retrieval (Stage 1 coarse shortlist). Default
+    # disabled — opt-in via ``rag.hierarchical.enabled: true`` in
+    # ``search-config.yml``.
+    hierarchical: HierarchicalRagConfig = field(
+        default_factory=HierarchicalRagConfig
+    )
 
 
 @dataclass(frozen=True)
@@ -413,6 +451,28 @@ def _parse_nested(data: dict[str, Any], key: str, cls: type) -> Any:
     return cls(**{k: v for k, v in section.items() if k in cls.__dataclass_fields__})
 
 
+def _parse_rag(data: dict[str, Any]) -> RagConfig:
+    """Parse the rag config section with the nested hierarchical block.
+
+    Mirrors ``_parse_indexing`` so unknown top-level keys are dropped
+    rather than blowing up dataclass construction, and the nested
+    ``hierarchical`` sub-section hydrates via ``_parse_nested``.
+    """
+    section = data.get("rag", {})
+    if not isinstance(section, dict):
+        return RagConfig()
+
+    flat_kwargs = {
+        k: v
+        for k, v in section.items()
+        if k in RagConfig.__dataclass_fields__ and k != "hierarchical"
+    }
+    return RagConfig(
+        **flat_kwargs,
+        hierarchical=_parse_nested(section, "hierarchical", HierarchicalRagConfig),
+    )
+
+
 def _parse_indexing(data: dict[str, Any]) -> IndexingConfig:
     """Parse the indexing config section with nested sub-configs."""
     section = data.get("indexing", {})
@@ -516,7 +576,7 @@ def load_settings() -> Settings:
         features=_parse_nested(config_data, "features", FeaturesConfig),
         llm=llm_config,
         summaries=_parse_nested(config_data, "summaries", SummariesConfig),
-        rag=_parse_nested(config_data, "rag", RagConfig),
+        rag=_parse_rag(config_data),
     )
 
 

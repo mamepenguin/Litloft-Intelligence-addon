@@ -51,11 +51,27 @@ def _clean_filename(filename: str) -> str:
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
-def _build_metadata_text(file: IndexedFile) -> str:
+def _build_metadata_text(
+    file: IndexedFile,
+    long_summary: str | None = None,
+) -> str:
     """Build a single text string from file metadata for embedding.
+
+    The embedding text is the file's "topic surface" — what the
+    hierarchical RAG Stage 1 coarse retrieval matches against. We
+    deliberately include the AI-generated long summary (when available
+    AND ``status='generated'``) here too so summary-derived domain
+    vocabulary can steer chunk retrieval, while the final-generation
+    LLM context still pulls only original chunks (citation source
+    invariant unchanged). See spec
+    ``2026-04-26-intelligence-ask-hierarchical-retrieval.md`` (Approach B).
 
     Args:
         file: The indexed file record.
+        long_summary: Optional 3-5 sentence AI summary text. Pass
+            ``None`` (default) when no summary exists OR the row has
+            ``status='hidden'`` — both must omit the summary so the
+            user's opt-out is respected.
 
     Returns:
         Combined metadata text.
@@ -70,6 +86,8 @@ def _build_metadata_text(file: IndexedFile) -> str:
         parts = [*parts, file.description]
     if file.tags_text:
         parts = [*parts, file.tags_text]
+    if long_summary:
+        parts = [*parts, long_summary]
 
     return " ".join(parts)
 
@@ -175,12 +193,35 @@ def index_metadata_batch(file_ids: list[str]) -> int:
         if not files:
             return 0
 
+        # Bulk-fetch generated summaries so the per-file builder doesn't
+        # incur an extra round trip. ``status='hidden'`` rows are filtered
+        # out at SQL level — the user opted out, so the summary must
+        # not bleed into the embedding text.
+        active_ids = [f.file_id for f in files]
+        summary_map: dict[str, str] = {}
+        if active_ids:
+            placeholders = ",".join(f":id{i}" for i in range(len(active_ids)))
+            params = {f"id{i}": fid for i, fid in enumerate(active_ids)}
+            summary_rows = session.execute(
+                sql_text(
+                    "SELECT file_id, long_summary FROM file_summaries "
+                    f"WHERE file_id IN ({placeholders}) "
+                    "AND status = 'generated'"
+                ),
+                params,
+            ).fetchall()
+            summary_map = {
+                row[0]: row[1] for row in summary_rows if row[1]
+            }
+
         # Build metadata texts for batch embedding
         metadata_texts: list[str] = []
         valid_file_ids: list[str] = []
 
         for file in files:
-            meta_text = _build_metadata_text(file)
+            meta_text = _build_metadata_text(
+                file, long_summary=summary_map.get(file.file_id)
+            )
             if meta_text.strip():
                 metadata_texts = [*metadata_texts, meta_text]
                 valid_file_ids = [*valid_file_ids, file.file_id]

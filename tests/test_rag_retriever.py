@@ -773,3 +773,84 @@ class TestFilterFileIdsContract:
         )
 
         assert result == set()
+
+
+# ---------------------------------------------------------------------------
+# file_id_scope propagation
+# ---------------------------------------------------------------------------
+
+
+class TestFileIdScopePropagation:
+    """Phase 2: shortlist-scoped retrieval flag must reach app.search.search()."""
+
+    @pytest.mark.asyncio
+    async def test_retrieve_with_keywords_passes_scope(self, monkeypatch):
+        search_spy = MagicMock(return_value=_make_search_response([]))
+        monkeypatch.setattr("app.rag.retriever.search", search_spy)
+        monkeypatch.setattr(
+            "app.rag.retriever._filter_file_ids_via_internal_api",
+            AsyncMock(return_value=set()),
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever._get_indexed_files_meta", lambda fids: {}
+        )
+
+        await retrieve_with_keywords(
+            keywords="kw",
+            top_k=5,
+            lit_token=None,
+            file_id_scope=["a", "b"],
+        )
+
+        kwargs = search_spy.call_args.kwargs
+        assert kwargs.get("file_id_scope") == ["a", "b"]
+
+    @pytest.mark.asyncio
+    async def test_retrieve_with_keywords_default_scope_is_none(
+        self, monkeypatch
+    ):
+        search_spy = MagicMock(return_value=_make_search_response([]))
+        monkeypatch.setattr("app.rag.retriever.search", search_spy)
+        monkeypatch.setattr(
+            "app.rag.retriever._filter_file_ids_via_internal_api",
+            AsyncMock(return_value=set()),
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever._get_indexed_files_meta", lambda fids: {}
+        )
+
+        await retrieve_with_keywords(
+            keywords="kw", top_k=5, lit_token=None,
+        )
+
+        kwargs = search_spy.call_args.kwargs
+        assert kwargs.get("file_id_scope") is None
+
+    @pytest.mark.asyncio
+    async def test_retrieve_candidates_propagates_scope(self, monkeypatch):
+        # Override the autouse stub with a kwarg-tolerant variant. The
+        # autouse stub takes a single positional ``q`` and breaks when
+        # ``retrieve_candidates`` forwards ``temperature=`` — we don't
+        # care about that here, only about scope passthrough.
+        async def _identity(q: str, **_kw) -> str:
+            return q
+
+        monkeypatch.setattr(
+            "app.rag.retriever.transform_query", _identity
+        )
+        search_spy = MagicMock(return_value=_make_search_response([]))
+        monkeypatch.setattr("app.rag.retriever.search", search_spy)
+        monkeypatch.setattr(
+            "app.rag.retriever._filter_file_ids_via_internal_api",
+            AsyncMock(return_value=set()),
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever._get_indexed_files_meta", lambda fids: {}
+        )
+
+        await retrieve_candidates(
+            query="q", top_k=5, lit_token=None, file_id_scope=["x"],
+        )
+
+        kwargs = search_spy.call_args.kwargs
+        assert kwargs.get("file_id_scope") == ["x"]
