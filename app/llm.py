@@ -34,6 +34,7 @@ from openai import (
 )
 
 from app.config import LLMConfig
+from app.prompt_loader import render
 
 logger = logging.getLogger(__name__)
 
@@ -137,15 +138,9 @@ def _build_vision_system_prompt(output_language: str) -> str:
         )
     else:
         lang_directive = lang
-    return (
-        "You are an assistant that describes images in detail. "
-        "Report what is visible as fact: objects, people, text, colors, "
-        "composition, spatial relationships, and notable details. "
-        "Do not speculate about things that are not clearly visible. "
-        "Do not invent quantities — if exact counts are uncertain, use "
-        "hedged language (\"several\", \"a few\") instead of specific "
-        "numbers. If unsure about a detail, omit it rather than guess. "
-        f"Output your description in {lang_directive}."
+    return render(
+        "vision/system.jinja2",
+        lang_directive=lang_directive,
     )
 
 

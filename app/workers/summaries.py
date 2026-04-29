@@ -26,6 +26,7 @@ from app.config import settings
 from app.database import get_search_db
 from app.llm import LLMClient
 from app.models import IndexedFile, TranscriptChunk, generate_insight_id
+from app.prompt_loader import render
 from app.workers.whisper import LOFT_MIME
 from app.text_utils import trim_to_sentence_boundary
 
@@ -125,104 +126,9 @@ _SUPPORTED_CONTEXT_TYPES: frozenset[str] = frozenset({"video", "audio", "documen
 # Separator inserted between sampled windows in truncated contexts.
 _WINDOW_SEPARATOR = "\n\n[...中略...]\n\n"
 
-# Proper-noun handling rules shared by short/long and detailed prompts.
-# The design accepts that plausible-substitution errors (e.g. "堀井雄二" →
-# "堀江雄三") can't be detected from the transcript alone. Instead we:
-#   1. Fix what we CAN verify — names that appear in filename/title/description
-#   2. Leave the rest alone rather than guess (LLM "correction" tends to
-#      invent new errors when no trusted anchor exists)
-#   3. (detailed only) Surface low-confidence names via a dedicated annotation
-#      section so the user knows where to manually verify
+# Proper-noun / topic-boundary / numeric handling rules now live in
+# prompts/summaries/_common_rules.jinja2 (included by both system templates).
 # See hako: "LLM による要約... 固有名詞を間違うこと" (2026-04-17).
-_COMMON_RULES = (
-    "## トピック境界の厳守\n"
-    "\n"
-    "原文が複数の独立したトピック（別レシピ、別製品、別章、別エピソード等）を"
-    "扱っている場合、各トピックのセクションには、原文でそのトピックが扱われている"
-    "範囲内の情報のみを記載すること。\n"
-    "\n"
-    "- あるトピックで述べられた特徴・効能・ポイントを、別のトピックのセクションに"
-    "転記しないこと（隣接トピック間の情報混線を避ける）\n"
-    "- 判断に迷った場合は、該当情報を省略するか、トピック横断的なセクション"
-    "（「全体を通じたポイント」等）を別途設けて記載する\n"
-    "\n"
-    "## 固有名詞の扱い\n"
-    "\n"
-    "このコンテンツはトランスクリプト（音声認識やテキスト抽出）由来のため、"
-    "固有名詞の誤認識が含まれる可能性があります。誤認識はカタカナ化だけでなく、"
-    "漢字の取り違え、もっともらしい別語への置換など多様な形で現れます。\n"
-    "\n"
-    "### 積極的に修正すべきもの\n"
-    "- ファイル名・タイトル・説明文に登場する固有名詞について、"
-    "トランスクリプト中で異なる表記（カタカナ化、区切り違い、漢字違い、音素類似など）"
-    "がされている場合は、ファイル名・説明文側の表記に統一する\n"
-    "- 同一対象と明確に判断できる複数の表記が登場する場合、最も妥当な一つに統一する\n"
-    "- 明らかに日本語として意味不明な表記（例: 「雷にゃく」「鼻字に入れて」等の、"
-    "日本語として成立しない語句）で、文脈から一般名詞・一般的表現として"
-    "妥当な復元候補が明確な場合は、復元した表記を使用する\n"
-    "  - 復元候補が複数あり絞り込めない場合、または一般的な語として定着していない"
-    "可能性がある場合は、原文表記のまま残す\n"
-    "\n"
-    "### 慎重に扱うもの\n"
-    "- ファイル名・タイトル・説明文に登場しない固有名詞は、"
-    "トランスクリプトの表記を原則そのまま使う\n"
-    "- 元の表記が誤っている可能性はあっても、"
-    "推測で別の漢字や読みに置き換えないこと（別の誤りを生むリスクのほうが高い）\n"
-    "- 人名・地名・商品名・ブランド名など、誤った復元が実害につながりうる"
-    "固有名詞は、意味不明であっても安易に復元せず原文表記を保持する\n"
-    "\n"
-    "## 数値情報の扱い\n"
-    "\n"
-    "原文中の数値（分量、時間、温度、保存期間、価格、距離、年数等）は、"
-    "原則として原文の表記をそのまま維持すること。\n"
-    "\n"
-    "- 数値を勝手に変更・修正・丸めてはならない\n"
-    "- 単位の換算や表記統一も行わない（原文が「小さじ2/3」なら「小さじ2/3」のまま）\n"
-    "- ただし、数値そのものは変えずに、不確実性の注記を添えることは許容する\n"
-    "  - トランスクリプト由来で、数値が音声認識エラーの可能性が高いと"
-    "判断される場合（例: 葉物野菜の保存期間が「45日」となっている等、"
-    "一般常識と大きく乖離する場合）、以下の形式で注記を添えてよい:\n"
-    "    「保存期間の目安はおよそ45日程度である（※原文表記。"
-    "音声認識エラーの可能性あり）」\n"
-    "  - 注記を添える基準は保守的に。迷う程度なら注記は不要。"
-    "明確に常識的範囲を逸脱している場合のみに限定する\n"
-    "\n"
-    "## 種別固有の注意点\n"
-    "\n"
-    "### 手順型（レシピ、チュートリアル、攻略）の場合\n"
-    "- 材料名・分量・調理時間・保存期間・温度などの具体値は特に正確に記載する\n"
-    "- 工程の順序を入れ替えない\n"
-    "- あるレシピ・手順のポイントを別のレシピ・手順のセクションに混入させない"
-    "（トピック境界の厳守を特に意識する）\n"
-    "- 料理名・技名・操作名など、音声認識で崩れがちだが一般名詞として"
-    "復元可能な用語は、固有名詞ルールに従い妥当な表記に修正する\n"
-    "\n"
-    "### 物語型（アニメ、ドラマ、小説、映画）の場合\n"
-    "- 登場人物名の表記ゆれに注意し、同一人物は一つの表記に統一する\n"
-    "- 時系列と因果関係を崩さない\n"
-    "- ネタバレの扱いは原文の提示順に従う（結末を冒頭に持ってこない）\n"
-    "\n"
-    "### 対話型（インタビュー、対談、座談会）の場合\n"
-    "- 誰の発言かを必ず明示する\n"
-    "- 発言者間で意見が対立している箇所は、対立構造を残す"
-    "（片方の主張だけを採用して整理しない）\n"
-    "\n"
-    "### 評価型（レビュー、比較、感想）の場合\n"
-    "- 評価は必ず誰による評価かを明示する\n"
-    "- 評価軸（価格、性能、使いやすさ等）を可能な限り明確に区別する\n"
-    "\n"
-    "### 情報伝達型（ニュース、速報、まとめ）の場合\n"
-    "- 情報源が複数ある場合、各情報の出典を区別する\n"
-    "- 確定情報と未確定情報（「〜と報じられている」「〜の可能性がある」等）を区別する\n"
-    "\n"
-    "### 解説型（講義、技術記事、ハウツー）の場合\n"
-    "- 主張と根拠の対応関係を崩さない\n"
-    "- 前提条件や適用範囲（「〜の場合に限る」等）を省略しない\n"
-    "\n"
-    "### 文書型（報告書、論文、契約書）の場合\n"
-    "- 章構成をできる限り原文の構造に合わせる\n"
-    "- 定義された用語は初出時の定義を尊重し、勝手に言い換えない\n"
-)
 
 # Annotation section (modification history) was attempted in two designs
 # (2026-04-17) and both failed. v1 asked the LLM to list "low-confidence
@@ -256,44 +162,9 @@ def _build_system_prompt() -> str:
     """Build the system prompt with language instruction from config."""
     lang = settings.llm.output_language
     lang_line = _LANGUAGE_INSTRUCTIONS.get(lang, "")
-
-    return (
-        "あなたはファイル管理システムの要約アシスタントです。\n"
-        "以下のコンテンツを読んで、短いサマリーと段落要約を生成してください。\n"
-        "\n"
-        "## 出力形式\n"
-        "\n"
-        'JSON形式で返すこと: {"short": "1文サマリー", "long": "段落要約"}\n'
-        "JSONのみ返し、他のテキストは含めないこと\n"
-        "\n"
-        "## short(1文サマリー)の規則\n"
-        "\n"
-        "- 1文（30-80文字）で最も重要な要点を表す\n"
-        "- 原文が複数トピックを扱う場合、最も中心的なテーマを選ぶか、"
-        "「〜など複数の話題」のように明示する\n"
-        "- 断定的な誇張を避ける。原文が推測・予想なら"
-        "「〜の可能性」「〜の見通し」などの表現を保持する\n"
-        "- 原文にない評価語（「画期的」「衝撃の」等）を加えない\n"
-        "\n"
-        "## long(段落要約)の規則\n"
-        "\n"
-        "- 3-5文（200-400文字）で主要内容を説明する\n"
-        "- 原文の流れ（時系列または論理順）に沿って記述する\n"
-        "- 複数トピックがある場合は、重要度順または原文の順序で触れる\n"
-        "- 語り手の温度感は維持するが、視点は観察者（三人称）で書く\n"
-        "  例: 「〜と述べている」「〜と推測している」「〜への期待を示している」\n"
-        "- 事実・発言・推測・評価を区別する\n"
-        "  - 発言を紹介する場合、可能な限り発言者を明示する\n"
-        "  - 推測は「〜と推測している」「〜の可能性を示唆している」と明記する\n"
-        "  - 評価語（「神ゲー」「傑作」「素晴らしい」等）を含める場合は、"
-        "必ず誰による評価かを明示する（「語り手は〜と評している」「投稿者が〜と呼ぶ」等）。"
-        "無帰属の評価語は要約者視点と誤解されるため避ける\n"
-        "- 原文の不確実性マーカー（「かもしれない」「〜ではないか」）を"
-        "字数削減のために省略しないこと\n"
-        "- 原文にないニュアンス・一般化・総括を付け加えないこと\n"
-        "\n"
-        f"{_COMMON_RULES}"
-        f"{lang_line}"
+    return render(
+        "summaries/short_long_system.jinja2",
+        language_instruction=lang_line,
     )
 
 
@@ -307,66 +178,9 @@ def _build_detailed_system_prompt() -> str:
     """
     lang = settings.llm.output_language
     lang_line = _DETAILED_LANGUAGE_INSTRUCTIONS.get(lang, "")
-
-    return (
-        "あなたはファイル管理システムの要約アシスタントです。\n"
-        "以下のコンテンツを読んで、長文の構造化要約を Markdown 形式で生成してください。\n"
-        "\n"
-        "## 手順\n"
-        "\n"
-        "**ステップ1: コンテンツの種別を見極める**\n"
-        "冒頭を読んで、以下のどれに近いかを判断してください（内部処理のみ、出力不要）:\n"
-        "- 情報伝達型（ニュース、速報、まとめ）: 複数の出典が混在、事実と推測の区別が重要\n"
-        "- 解説型（講義、技術記事、ハウツー）: 論理展開と因果関係が重要\n"
-        "- 手順型（レシピ、チュートリアル、攻略）: 順序と具体値が重要\n"
-        "- 評価型（レビュー、比較、感想）: 評価軸と主観の帰属が重要\n"
-        "- 対話型（インタビュー、対談、座談会）: 発言者と立場の区別が重要\n"
-        "- 物語型（アニメ、ドラマ、小説、映画）: 時系列と因果、登場人物の関係が重要\n"
-        "- 文書型（報告書、論文、契約書）: 章構成と論旨が重要\n"
-        "- その他: 原文の構造に従う\n"
-        "\n"
-        "**ステップ2: 種別に応じて構造を調整する**\n"
-        "下記の基本構成をベースに、種別に合わせて見出しや粒度を柔軟に変えてください。\n"
-        "例えば手順型なら「材料/手順」、物語型なら「あらすじ/主要な展開/登場人物」、\n"
-        "対話型なら「論点/各発言者の主張」など、コンテンツに最も適した構成を選びます。\n"
-        "\n"
-        "**ステップ3: 種別固有の注意点を適用する**\n"
-        "「## 種別固有の注意点」セクションに、種別ごとの追加ルールを記載しています。\n"
-        "ステップ1で判定した種別に該当する注意点を、要約作成時に必ず適用してください。\n"
-        "\n"
-        "## 基本構成\n"
-        "\n"
-        "1. **導入**(1-2文): 全体像と主要テーマを簡潔に\n"
-        "2. **詳細内容**: 原文の流れ（時系列が明確ならその順、"
-        "そうでなければ論理・章構成）に沿って整理。\n"
-        "   並列な情報は箇条書き、因果・順序・対比が重要な部分は文章で記述する。\n"
-        "   箇条書きの強制ではなく、内容に応じて使い分けること。\n"
-        "3. **重要ポイントまとめ**: 数値・比較・対応関係が実際に存在する場合のみ "
-        "Markdown 表で整理する。該当する内容がなければこのセクションは省略する"
-        "（無理に表を作らない）\n"
-        "4. **結論**(1-2文): 原文で示されている結論・締めくくり・示唆を要約する。"
-        "原文にない提案や一般化を加えないこと。\n"
-        "\n"
-        "## 共通規則\n"
-        "\n"
-        "- 出力は Markdown のみ。JSON や他のラッパーで包まないこと\n"
-        "- 語り手の温度感・熱量は維持するが、視点は観察者（三人称）で書く\n"
-        "  例: 「〜と述べている」「〜と推測している」「〜と強い期待を示している」\n"
-        "- 事実・発言・推測・評価を区別する\n"
-        "  - 事実: 「〜が発表された」「〜が実施されている」\n"
-        "  - 発言: 「誰それは〜と述べた」（可能なら出典も明示）\n"
-        "  - 推測: 「語り手は〜と推測している」「〜の可能性を示唆している」\n"
-        "  - 評価: 「語り手は〜と評価している」「〜を好意的に捉えている」\n"
-        "  - 評価語（「神ゲー」「傑作」「素晴らしい」等）を本文に含める場合は、"
-        "必ず誰による評価かを明示する（「語り手は〜と評している」「投稿者が〜と呼ぶ」等）。"
-        "無帰属の評価語は要約者視点と誤解されるため避ける\n"
-        "- 原文の不確実性マーカー（「かもしれない」「〜ではないか」「おそらく」）を"
-        "省略せず保持する\n"
-        "- 原文にない事実・一般化・総括・提案を付け加えないこと\n"
-        "- 複数の情報源や発言者が登場する場合、誰の発言・情報かを明示する\n"
-        "\n"
-        f"{_COMMON_RULES}"
-        f"{lang_line}"
+    return render(
+        "summaries/detailed_system.jinja2",
+        language_instruction=lang_line,
     )
 
 
@@ -384,28 +198,18 @@ def _build_detailed_user_prompt(
     Labels stay Japanese regardless of output language — they are model
     instructions, not output, and the model does not mirror them.
     """
-    parts: list[str] = [
-        f"ファイル名: {indexed_file['filename']}",
-        f"タイプ: {context_type}",
-    ]
-
-    title = indexed_file.get("title") or ""
-    if title and title != indexed_file["filename"]:
-        parts = [*parts, f"タイトル: {title}"]
-
+    raw_title = indexed_file.get("title") or ""
+    title = raw_title if raw_title and raw_title != indexed_file["filename"] else ""
     description = indexed_file.get("description") or ""
-    if description:
-        parts = [*parts, f"説明: {description}"]
-
-    if was_truncated:
-        parts = [
-            *parts,
-            "\n注: 以下は長いコンテンツの抜粋です。冒頭・中盤・終盤から取得しています。",
-        ]
-
-    parts = [*parts, "\n--- コンテンツ ---", context]
-
-    return "\n".join(parts)
+    return render(
+        "summaries/detailed_user.jinja2",
+        filename=indexed_file["filename"],
+        context_type=context_type,
+        title=title,
+        description=description,
+        was_truncated=was_truncated,
+        context=context,
+    )
 
 
 def _sample_windows(text: str, window_chars: int, window_count: int) -> str:
@@ -687,28 +491,18 @@ def _build_user_prompt(
     was_truncated: bool,
 ) -> str:
     """Build the user prompt for LLM summary generation."""
-    parts: list[str] = [
-        f"ファイル名: {indexed_file['filename']}",
-        f"タイプ: {context_type}",
-    ]
-
-    title = indexed_file.get("title") or ""
-    if title and title != indexed_file["filename"]:
-        parts = [*parts, f"タイトル: {title}"]
-
+    raw_title = indexed_file.get("title") or ""
+    title = raw_title if raw_title and raw_title != indexed_file["filename"] else ""
     description = indexed_file.get("description") or ""
-    if description:
-        parts = [*parts, f"説明: {description}"]
-
-    if was_truncated:
-        parts = [
-            *parts,
-            "\n注: 以下は長いコンテンツの抜粋です。冒頭・中盤・終盤から取得しています。",
-        ]
-
-    parts = [*parts, "\n--- コンテンツ ---", context]
-
-    return "\n".join(parts)
+    return render(
+        "summaries/short_long_user.jinja2",
+        filename=indexed_file["filename"],
+        context_type=context_type,
+        title=title,
+        description=description,
+        was_truncated=was_truncated,
+        context=context,
+    )
 
 
 def _has_summary(file_id: str) -> bool:

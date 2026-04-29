@@ -5,6 +5,7 @@ from ``service.py`` so unit tests can assert on the exact wording
 without mocking anything.
 """
 
+from app.prompt_loader import render
 from app.rag.context import FileContext
 
 
@@ -32,29 +33,9 @@ def build_system_prompt(output_language: str) -> str:
     # 引用文（quote / text 等）の生成は LLM 出力末尾のレイテンシを
     # 5-10 秒延ばすため厳禁。実際の引用文はバックエンドが
     # コンテキスト snippet から取得して表示するので、LLM は生成不要。
-    return (
-        "あなたはファイル管理システムの質問応答アシスタントです。\n"
-        "与えられたファイル情報を元に、ユーザーの質問に答えてください。\n"
-        "\n"
-        "規則:\n"
-        '- JSON形式で返すこと: {"answer": "...", "citations": '
-        '[{"file_id": "...", "location": "..."}]}\n'
-        "- answer: 回答本文。番号 [1][2] の使用は禁止 — マーカーを書かないこと\n"
-        "- citations: 回答の根拠として実際に参照した箇所をすべて列挙する。\n"
-        "  同じファイルの別の箇所を参照した場合は、それぞれを別 citation として列挙してよい。\n"
-        "  ただし **同じ (file_id, location) の組み合わせは1回だけ** 列挙すること — 重複禁止。\n"
-        "  answer に何らかの情報を書いたなら、その出典を1件以上含めること。\n"
-        "  情報が無くて答えられない場合のみ空配列 [] を返してよい\n"
-        "- 各 citation は **file_id と location の2フィールドのみ** を含める。\n"
-        "  quote / text / snippet / content / relevance など他のフィールドは"
-        "一切出力してはいけない（出力すると処理が遅延する）\n"
-        "- file_id: ファイル情報ブロックの [file_id: ...] 値をそのまま使うこと\n"
-        "- location: 参照した箇所のマーカー（例: 動画は '0:45'、"
-        "ドキュメントは 'page 3'）。[transcript @ 0:45] 等の形で"
-        "コンテキストに書かれているものをそのまま使う。該当がなければ空文字\n"
-        f"{lang_line}"
-        "- 与えられたファイル情報に答えがない場合は、その旨を正直に書くこと\n"
-        "- JSONのみ返し、他のテキストは含めないこと"
+    return render(
+        "rag/answer_system.jinja2",
+        language_instruction=lang_line,
     )
 
 
@@ -116,12 +97,9 @@ def build_user_prompt(
     system instructions tell the model to answer "no information" in
     that case).
     """
-    parts: list[str] = [f"質問: {query}", "", "コンテキスト:"]
-
-    if not contexts:
-        parts = [*parts, "(no context available)"]
-    else:
-        for ctx in contexts:
-            parts = [*parts, _serialize_file_context(ctx)]
-
-    return "\n".join(parts)
+    context_blocks = [_serialize_file_context(ctx) for ctx in contexts]
+    return render(
+        "rag/answer_user.jinja2",
+        query=query,
+        context_blocks=context_blocks,
+    )

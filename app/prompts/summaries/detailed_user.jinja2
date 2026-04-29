@@ -1,0 +1,14 @@
+{#- vars: filename, context_type, title, description, was_truncated, context — see workers/summaries.py:_build_detailed_user_prompt -#}
+ファイル名: {{ filename }}
+タイプ: {{ context_type }}
+{% if title -%}
+タイトル: {{ title }}
+{% endif -%}
+{% if description -%}
+説明: {{ description }}
+{% endif -%}
+{% if was_truncated %}
+注: 以下は長いコンテンツの抜粋です。冒頭・中盤・終盤から取得しています。
+{% endif %}
+--- コンテンツ ---
+{{ context }}

@@ -22,7 +22,7 @@ RUN git clone --depth 1 --branch v0.1.6 https://github.com/asg017/sqlite-vec.git
 COPY requirements.txt .
 RUN pip install --no-cache-dir \
     sqlalchemy pyyaml numpy openai httpx \
-    fastapi pydantic \
+    fastapi pydantic jinja2 \
     pytest pytest-asyncio pytest-cov
 # Install Pillow so the vision GPS-strip regression test can use a real
 # JPEG fixture. Existing vision tests keep working because conftest

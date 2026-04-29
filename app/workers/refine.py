@@ -34,6 +34,7 @@ from sqlalchemy import text as sql_text
 import app.config as config
 from app.database import get_search_db
 from app.models import Embedding, IndexedFile, TranscriptChunk, TranscriptWord
+from app.prompt_loader import render
 from app.workers import aligner
 
 logger = logging.getLogger(__name__)
@@ -53,17 +54,7 @@ class RefineResult:
 
 
 def _build_system_prompt() -> str:
-    return (
-        "あなたは ASR (自動音声認識) の誤認識を修正するアシスタントです。\n"
-        "各セグメントの意味を変えず、時間情報を保つため文字数を大きく変えないこと。\n"
-        "人名・地名・専門用語は文脈から推定して統一すること。\n"
-        "原文と同じ言語で返すこと(翻訳してはいけない)。\n"
-        "句読点が欠落している場合は、その言語の規範に従って自然な位置に補うこと。\n"
-        "日本語なら文末に「。」、節の切れ目に「、」を挿入してよい。ただし\n"
-        "新たに句読点以外の単語を追加しないこと。\n"
-        '出力は {"items": [{"id": <int>, "text_refined": <str>}, ...]} の'
-        "JSON 形式で、他のテキストは含めないこと。"
-    )
+    return render("refine/system.jinja2")
 
 
 def _build_user_prompt(chunks: list[Any]) -> str:
@@ -71,7 +62,10 @@ def _build_user_prompt(chunks: list[Any]) -> str:
         {"id": int(c.id), "text": c.text or ""}
         for c in chunks
     ]
-    return json.dumps(payload, ensure_ascii=False)
+    return render(
+        "refine/user.jinja2",
+        payload_json=json.dumps(payload, ensure_ascii=False),
+    )
 
 
 def _parse_llm_response(

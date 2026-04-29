@@ -1,0 +1,14 @@
+質問: クエリ
+
+コンテキスト:
+[file_id: abc123]
+filename: video.mp4
+type: video
+title: title
+description: description
+---
+[transcript @ 0:45]
+snippet text
+[metadata]
+meta snippet
+[/file_id]

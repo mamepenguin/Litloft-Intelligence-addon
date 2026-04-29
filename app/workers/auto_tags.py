@@ -31,6 +31,7 @@ from app.config import settings
 from app.database import get_litloft_db, get_search_db
 from app.llm import LLMClient
 from app.models import Embedding, IndexedFile, TranscriptChunk
+from app.prompt_loader import render
 from app.tfidf import get_tfidf_keywords_for_file
 from app.workers.clip_concepts import score_file_concepts
 from app.workers.tag_knn import recommend_tags_by_similarity
@@ -105,19 +106,9 @@ def _build_system_prompt() -> str:
     """Build system prompt with language instruction based on config."""
     lang = settings.llm.output_language
     lang_line = _LANGUAGE_INSTRUCTIONS.get(lang, "")
-
-    return (
-        "あなたはファイル管理システムのタグ付けアシスタントです。\n"
-        "ファイルの内容に基づいて、検索に役立つタグを5-10個提案してください。\n"
-        "\n"
-        "規則:\n"
-        '- JSON形式で返すこと: {"tags": ["tag1", "tag2", ...]}\n'
-        "- 既存タグと重複しないこと\n"
-        "- 具体的で検索に有用なタグにすること\n"
-        "- ファイルの内容を要約するタグを含めること\n"
-        "- タグは短く（1-3語）\n"
-        f"{lang_line}"
-        "- JSONのみ返し、他のテキストは含めないこと"
+    return render(
+        "auto_tags/system.jinja2",
+        language_instruction=lang_line,
     )
 
 
@@ -624,21 +615,14 @@ def _build_user_prompt(
     as grounding signals. The instruction deliberately allows the LLM
     to override or ignore them — they're hints, not ground truth.
     """
-    parts: list[str] = [
-        f"ファイル名: {indexed_file['filename']}",
-        f"タイプ: {context_type}",
-    ]
+    title = (
+        indexed_file["title"]
+        if indexed_file["title"]
+        and indexed_file["title"] != indexed_file["filename"]
+        else ""
+    )
 
-    if indexed_file["title"] and indexed_file["title"] != indexed_file["filename"]:
-        parts = [*parts, f"タイトル: {indexed_file['title']}"]
-    if indexed_file["description"]:
-        parts = [*parts, f"説明: {indexed_file['description']}"]
-    if indexed_file["tags_text"]:
-        parts = [*parts, f"メタデータタグ: {indexed_file['tags_text']}"]
-
-    if context:
-        parts = [*parts, context]
-
+    candidate_block = ""
     if candidates is not None and candidates.has_any():
         candidate_lines: list[str] = ["", "【参考候補】"]
         # k-NN first because "similar tagged files" is the strongest
@@ -658,12 +642,20 @@ def _build_user_prompt(
         candidate_lines.append(
             "※ 候補は参考情報です。より適切なタグがあればそちらを優先してください。"
         )
-        parts = [*parts, "\n".join(candidate_lines)]
+        candidate_block = "\n".join(candidate_lines)
 
     tags_display = ", ".join(existing_tags) if existing_tags else "なし"
-    parts = [*parts, f"既存タグ: {tags_display}"]
-
-    return "\n".join(parts)
+    return render(
+        "auto_tags/user.jinja2",
+        filename=indexed_file["filename"],
+        context_type=context_type,
+        title=title,
+        description=indexed_file["description"] or "",
+        tags_text=indexed_file["tags_text"] or "",
+        context=context or "",
+        candidate_block=candidate_block,
+        tags_display=tags_display,
+    )
 
 
 def _save_suggested_tags(
