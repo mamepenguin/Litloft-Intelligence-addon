@@ -243,15 +243,20 @@ class IndexManager:
     async def reconcile(self) -> dict[str, int]:
         """Reconcile search index with Litloft DB.
 
-        Detects new files, removed files, and soft-deleted files.
+        Detects new files, removed files, and soft-deleted files. Also
+        repairs IndexedFile snapshots whose ``(drive, file_path,
+        filename)`` drifted from core (a missed ``files.moved`` webhook
+        leaves the index pointing at the old path).
 
         Returns:
-            Dict with counts of added, deactivated, and purged files.
+            Dict with counts of added, deactivated, purged, and
+            drift_repaired files.
         """
         logger.info("Starting reconciliation with Litloft DB")
         added = 0
         deactivated = 0
         purged = 0
+        drift_repaired = 0
 
         try:
             litloft_files = _get_litloft_files()
@@ -272,6 +277,7 @@ class IndexManager:
                 for f in litloft_files
                 if f["deleted_at"] is not None or f.get("missing_since") is not None
             }
+            litloft_by_id = {f["id"]: f for f in litloft_files}
 
             # New files: in Litloft (active) but not indexed
             new_ids = litloft_active - indexed_files
@@ -287,8 +293,36 @@ class IndexManager:
 
             # Active: reactivate (covers "missing → recovered" and
             # "trash → restored" since both flow through this branch)
+            # and self-heal IndexedFile snapshot drift (webhook fallback).
+            indexed_meta = _get_indexed_metadata()
+            drifted: list[str] = []
             for file_id in litloft_active & indexed_files:
                 _set_file_active(file_id, active=True)
+
+                core = litloft_by_id.get(file_id)
+                snap = indexed_meta.get(file_id)
+                if core is None or snap is None:
+                    continue
+                expected_path = resolve_file_path(
+                    core["drive"], core["file_path"]
+                )
+                if expected_path is None:
+                    continue
+                if (
+                    snap["drive"] != core["drive"]
+                    or snap["file_path"] != expected_path
+                    or snap["filename"] != core["filename"]
+                ):
+                    drifted.append(file_id)
+
+            if drifted:
+                await self.handle_files_moved(drifted)
+                drift_repaired = len(drifted)
+                logger.warning(
+                    "reconcile() repaired drift on %d IndexedFile rows "
+                    "(webhook may be unhealthy): drift_repaired=%d",
+                    drift_repaired, drift_repaired,
+                )
 
             # Purged: in index but not in Litloft DB at all
             # (user explicitly called DELETE /purge)
@@ -305,14 +339,20 @@ class IndexManager:
             resumed = await self._resume_incomplete()
 
             logger.info(
-                "Reconciliation complete: added=%d, deactivated=%d, purged=%d, resumed=%d",
-                added, deactivated, purged, resumed,
+                "Reconciliation complete: added=%d, deactivated=%d, purged=%d, "
+                "drift_repaired=%d, resumed=%d",
+                added, deactivated, purged, drift_repaired, resumed,
             )
 
         except Exception as e:
             logger.error("Reconciliation failed: %s", e)
 
-        return {"added": added, "deactivated": deactivated, "purged": purged}
+        return {
+            "added": added,
+            "deactivated": deactivated,
+            "purged": purged,
+            "drift_repaired": drift_repaired,
+        }
 
     async def _add_new_files(self, files: list[dict]) -> int:
         """Add new files to the index and queue them for processing.
@@ -1264,6 +1304,30 @@ def _get_indexed_file_ids() -> set[str]:
     with get_search_db() as session:
         rows = session.query(IndexedFile.file_id).all()
         return {row[0] for row in rows}
+
+
+def _get_indexed_metadata() -> dict[str, dict]:
+    """Get the (drive, file_path, filename) snapshot for every IndexedFile.
+
+    Used by reconcile() to detect drift against core DB. Returning a
+    dict per id keeps the call shape symmetric with
+    ``_get_litloft_files_by_ids`` so future callers can swap the source.
+    """
+    with get_search_db() as session:
+        rows = session.query(
+            IndexedFile.file_id,
+            IndexedFile.drive,
+            IndexedFile.file_path,
+            IndexedFile.filename,
+        ).all()
+        return {
+            row[0]: {
+                "drive": row[1],
+                "file_path": row[2],
+                "filename": row[3],
+            }
+            for row in rows
+        }
 
 
 def _set_file_active(file_id: str, *, active: bool) -> None:
