@@ -800,10 +800,13 @@ export async function downloadDetailedSummary(
   document.body.appendChild(a);
   a.click();
   a.remove();
-  // Give the browser a tick to start the download before releasing
-  // the blob URL; doing it synchronously has been observed to
-  // cancel the download on Safari.
-  setTimeout(() => URL.revokeObjectURL(url), 0);
+  // Hold the blob URL long enough for the browser's download manager
+  // to finish reading. Revoking too early (even via setTimeout(0))
+  // has been observed to leave Chrome stuck on "downloading" because
+  // the in-flight read sees an invalidated URL; Safari likewise
+  // cancels a synchronous revoke. 40s mirrors FileSaver.js and is
+  // harmless — the blob is GC'd once the anchor and reference go away.
+  setTimeout(() => URL.revokeObjectURL(url), 40_000);
 }
 
 /**
