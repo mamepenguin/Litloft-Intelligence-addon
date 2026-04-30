@@ -146,7 +146,7 @@ async def test_regenerate_then_save_yields_readable_summary(
     async def _noop(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(router_mod, "_clear_core_active_summary", _noop)
+    monkeypatch.setattr(router_mod, "_clear_knowledge_active_summary", _noop)
 
     # Inhibit the actual generation — we drive save manually so the
     # test is deterministic (no LLM stub needed).
@@ -247,7 +247,7 @@ async def test_regenerate_endpoint_keeps_slot_visible_during_background_window(
     async def _noop(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(router_mod, "_clear_core_active_summary", _noop)
+    monkeypatch.setattr(router_mod, "_clear_knowledge_active_summary", _noop)
 
     # Crucially, do NOT let the background task run — we want to see
     # the state the frontend would observe *between* the regenerate
@@ -314,7 +314,7 @@ def test_regenerate_supersedes_active_even_without_file_summaries_row(
     async def _noop(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(router_mod, "_clear_core_active_summary", _noop)
+    monkeypatch.setattr(router_mod, "_clear_knowledge_active_summary", _noop)
     monkeypatch.setattr(
         router_mod, "generate_detailed_summary",
         lambda file_id, client: None,
@@ -372,7 +372,7 @@ async def test_regenerate_preserves_history_across_multiple_runs(
     async def _noop(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(router_mod, "_clear_core_active_summary", _noop)
+    monkeypatch.setattr(router_mod, "_clear_knowledge_active_summary", _noop)
     monkeypatch.setattr(
         router_mod, "generate_detailed_summary",
         lambda file_id, client: None,

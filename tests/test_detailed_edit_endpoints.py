@@ -280,7 +280,7 @@ def mock_llm_enabled(monkeypatch):
         return None
 
     monkeypatch.setattr(
-        "app.routers.summaries._clear_core_active_summary", _noop
+        "app.routers.summaries._clear_knowledge_active_summary", _noop
     )
     return client
 
@@ -692,10 +692,14 @@ class TestRegenerateConflict:
     async def test_clears_core_active_summary_on_success(
         self, monkeypatch, search_db, feature_enabled, mock_llm_enabled,
     ):
-        """Phase 3 Step B: regenerating invalidates the core's active
+        """Phase 3 Step B: regenerating invalidates the knowledge active
         summary pointer so the file detail page flips back to showing
         the AI version. The knowledge ``.md`` itself must not be
-        touched — only the pointer is cleared."""
+        touched — only the pointer is cleared. Spec
+        ``2026-04-30-file-active-summary-to-knowledge`` moved the
+        pointer from core to knowledge; this test still drives the
+        same intelligence-side behaviour, only the downstream target
+        differs."""
         engine, _ = search_db
         _insert_detailed_row(engine, "abc123")
 
@@ -710,7 +714,7 @@ class TestRegenerateConflict:
             cleared.append(file_id)
 
         monkeypatch.setattr(
-            "app.routers.summaries._clear_core_active_summary", fake_clear
+            "app.routers.summaries._clear_knowledge_active_summary", fake_clear
         )
 
         result = await regenerate_detailed_summary(

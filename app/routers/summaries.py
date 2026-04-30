@@ -65,32 +65,40 @@ from app.workers.summaries import (
 )
 
 
-async def _clear_core_active_summary(file_id: str) -> None:
-    """Best-effort DELETE of the core ``file_active_summaries`` row.
+async def _clear_knowledge_active_summary(file_id: str) -> None:
+    """Best-effort DELETE of the knowledge ``file_active_summaries`` row.
 
     Called on detailed-summary regenerate so the file detail page flips
-    back to the intelligence summary view. The 404 branch is expected
-    whenever the user never promoted the summary to knowledge, and the
-    network branch is swallowed because the host's active-summary
-    pointer is a UI convenience — a stale pointer is harmless (the
-    ``active-summary-view`` slot falls back to the AI summary once the
-    `.md` is also gone, and will recover on the next page load if the
-    network recovers).
+    back to the intelligence summary view. Spec
+    ``2026-04-30-file-active-summary-to-knowledge`` moved the pointer
+    out of core into the knowledge addon; intelligence reaches it
+    addon-to-addon (bypasses addon_proxy because there is no user
+    cookie / drive context here) gated by the shared
+    ``KNOWLEDGE_WEBHOOK_SECRET``.
+
+    The 404 / 204-empty branch is expected whenever the user never
+    promoted the summary to knowledge (or knowledge isn't installed).
+    Network and 5xx errors are swallowed because the pointer is a UI
+    convenience — a stale pointer is harmless: the next page load
+    will see a 404-equivalent from knowledge and fall back to the AI
+    summary.
     """
-    base = os.environ.get(
-        "HOMEVAULT_INTERNAL_API_URL", "http://backend:8000/api/internal"
-    )
-    url = f"{base}/file_active_summary/{urlquote(file_id, safe='')}"
+    base = os.environ.get("KNOWLEDGE_SERVICE_URL", "http://knowledge:8200")
+    url = f"{base}/internal/file_active_summary/{urlquote(file_id, safe='')}"
+    secret = os.environ.get("KNOWLEDGE_WEBHOOK_SECRET", "")
+    headers: dict[str, str] = {}
+    if secret:
+        headers["X-Webhook-Secret"] = secret
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.delete(url)
+            resp = await client.delete(url, headers=headers)
             if resp.status_code not in (204, 404):
                 logger.warning(
-                    "clear_core_active_summary unexpected %s for %s: %s",
+                    "clear_knowledge_active_summary unexpected %s for %s: %s",
                     resp.status_code, file_id, resp.text,
                 )
     except httpx.HTTPError as exc:  # noqa: BLE001
-        logger.warning("clear_core_active_summary network error: %s", exc)
+        logger.warning("clear_knowledge_active_summary network error: %s", exc)
 
 
 def _require_file_in_drive(file_id: str, drive: str) -> None:
@@ -1167,7 +1175,7 @@ async def regenerate_detailed_summary(
     # semantically invalidates that pointer: the file detail page must
     # flip back to showing the freshly-generated AI summary. The knowledge
     # `.md` itself is preserved — only the pointer is cleared.
-    await _clear_core_active_summary(file_id)
+    await _clear_knowledge_active_summary(file_id)
 
     background_tasks.add_task(
         generate_detailed_summary, file_id, get_llm_client()

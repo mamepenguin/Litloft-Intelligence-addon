@@ -138,7 +138,7 @@ export default function DetailedSummarySection({
   // file. `ActiveSummaryHost` renders the knowledge-provided section
   // instead; showing both would stack a user-approved note above the
   // AI draft that no longer represents the file.
-  const { data: activeSummary } = useActiveSummary(fileId);
+  const { data: activeSummary } = useActiveSummary(fileId, drive);
   const hasActiveSummary = activeSummary?.has_active_summary === true;
 
   // Knowledge availability gate for the "save" button. The addon
