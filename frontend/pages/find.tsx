@@ -42,6 +42,7 @@ import type {
 } from "../api";
 import FindChip from "../FindChip";
 import type { FindChipSlot } from "../FindChip";
+import ModeTabs from "../ModeTabs";
 
 const FIND_LIMIT = 20;
 
@@ -254,6 +255,8 @@ function IntelligenceFindPageInner() {
           {t("title")}
         </h1>
       </header>
+
+      {drive && <ModeTabs current="find" query={input} drive={drive} />}
 
       <form onSubmit={handleSubmit} className="flex items-center gap-2">
         <input

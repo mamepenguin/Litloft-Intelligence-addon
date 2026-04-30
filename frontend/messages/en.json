@@ -70,6 +70,11 @@
       "text": "text"
     }
   },
+  "modeTabs": {
+    "ariaLabel": "Answer mode",
+    "ask": "Ask",
+    "find": "Find"
+  },
   "find": {
     "button": "Find files for “{query}”",
     "title": "Find files",

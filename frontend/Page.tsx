@@ -44,6 +44,7 @@ import { AlertCircle, Send, Sparkles, Square, X } from "lucide-react";
 
 import { useCurrentDrive } from "@/components/CurrentDriveProvider";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
+import ModeTabs from "./ModeTabs";
 import {
   askQuestionStream,
   getIntelligenceStatus,
@@ -682,6 +683,8 @@ function IntelligenceAskPageInner() {
           {t("answerTitle")}
         </h1>
       </header>
+
+      {drive && <ModeTabs current="ask" query={input} drive={drive} />}
 
       {ragAvailable === false && (
         <div
