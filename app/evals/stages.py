@@ -21,7 +21,11 @@ from app.evals.text_match import (
     global_exclude_terms,
     violation_count as _violation_count,
 )
-from app.rag.query_transform import transform_query
+from app.rag.query_transform import (
+    RequiredTerm,
+    iter_required_fallback_subsets,
+    transform_query_structured,
+)
 from app.rag.service import answer_question
 from app.search import SearchResult, search
 
@@ -90,10 +94,20 @@ class Stage1Result:
     keywords: str
     must_include_coverage: float
     must_exclude_violations: int
+    # Phase 2: structured-transform output is forwarded to Stage 2 so
+    # the hard filter has the same shape the production retriever uses.
+    required: tuple[RequiredTerm, ...] = ()
 
 
 async def run_stage1(case: Case) -> Stage1Result:
-    keywords = await transform_query(case.query, temperature=EVAL_TEMPERATURE)
+    structured = await transform_query_structured(
+        case.query, temperature=EVAL_TEMPERATURE
+    )
+    # The flat keywords string used by the eval text-match metrics is
+    # the structured form's raw projection (canonicals + semantic
+    # joined by spaces). Falls back to the raw query on full
+    # passthrough so coverage / violation counts remain meaningful.
+    keywords = structured.raw_keywords or case.query
     # must_exclude = case-local set ∪ global blocklists (question + file-type)
     exclude_terms = tuple(
         set(case.expected_keywords.must_exclude) | set(global_exclude_terms())
@@ -104,6 +118,7 @@ async def run_stage1(case: Case) -> Stage1Result:
             case.expected_keywords.must_include, keywords
         ),
         must_exclude_violations=_violation_count(exclude_terms, keywords),
+        required=structured.required,
     )
 
 
@@ -166,6 +181,8 @@ async def run_stage2(
     resolved: list[ResolvedGroundTruth],
     drive: str,
     top_k: int = 10,
+    *,
+    required: tuple[RequiredTerm, ...] = (),
 ) -> Stage2Result:
     response = await asyncio.to_thread(
         search,
@@ -174,7 +191,26 @@ async def run_stage2(
         drive=drive,
         mode="recall",
         semantic_query=case.query,
+        required=required or None,
     )
+
+    # Tier 2/3 fallback ladder: mirror the production retriever
+    # (retrieve_with_keywords) so eval numbers reflect what users
+    # actually experience. Each step drops the most-aliased required
+    # term; the terminal step demotes everything to semantic.
+    if required and not response.results:
+        for subset in iter_required_fallback_subsets(required):
+            response = await asyncio.to_thread(
+                search,
+                keywords,
+                limit=top_k,
+                drive=drive,
+                mode="recall",
+                semantic_query=case.query,
+                required=subset or None,
+            )
+            if response.results:
+                break
     results = list(response.results)
     gt_ids = {gt.file_id for gt in resolved if gt.file_id is not None}
     gts_with_hint = [
@@ -372,7 +408,14 @@ async def run_case(
 ) -> CaseReport:
     logger.info("Running case %s", case.id)
     stage1 = await run_stage1(case)
-    stage2 = await run_stage2(case, stage1.keywords, resolved, drive, top_k=10)
+    stage2 = await run_stage2(
+        case,
+        stage1.keywords,
+        resolved,
+        drive,
+        top_k=10,
+        required=stage1.required,
+    )
 
     runs: list[Stage3SingleRun] = []
     for i in range(max(1, runs_stage3)):

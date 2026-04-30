@@ -218,6 +218,23 @@ def test_purge_file_also_wipes_detailed_summary_columns(tmp_path, monkeypatch):
             "USING fts5(file_id, chunk_index, page, text, "
             "tokenize='trigram')"
         ))
+        # Phase 3 dual-index parallel tables — production upsert/delete
+        # helpers write to both tokenizations.
+        conn.execute(text(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS fts_files_word "
+            "USING fts5(file_id, filename, title, description, "
+            "tags_text, tokenize=\"unicode61 remove_diacritics 2\")"
+        ))
+        conn.execute(text(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS fts_transcripts_word "
+            "USING fts5(file_id, chunk_index, text, "
+            "tokenize=\"unicode61 remove_diacritics 2\")"
+        ))
+        conn.execute(text(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS fts_text_content_word "
+            "USING fts5(file_id, chunk_index, page, text, "
+            "tokenize=\"unicode61 remove_diacritics 2\")"
+        ))
 
     Session = sessionmaker(bind=engine, expire_on_commit=False)
 

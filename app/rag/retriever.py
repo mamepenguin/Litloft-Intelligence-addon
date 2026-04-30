@@ -32,15 +32,24 @@ import httpx
 
 from app.database import get_search_db
 from app.models import IndexedFile
-from app.rag.query_transform import transform_query  # re-export
+from app.rag.query_transform import (  # re-export
+    RequiredTerm,
+    StructuredQuery,
+    iter_required_fallback_subsets,
+    transform_query,
+    transform_query_structured,
+)
 from app.search import SearchResult, SegmentGroup, search
 
 # re-export so callers can ``from app.rag.retriever import transform_query``
 __all__ = [
     "RetrievedFile",
+    "RequiredTerm",
+    "StructuredQuery",
     "retrieve_candidates",
     "retrieve_with_keywords",
     "transform_query",
+    "transform_query_structured",
 ]
 
 logger = logging.getLogger(__name__)
@@ -227,6 +236,7 @@ async def retrieve_with_keywords(
     *,
     original_query: str | None = None,
     file_id_scope: list[str] | None = None,
+    required: tuple[RequiredTerm, ...] | None = None,
 ) -> list[RetrievedFile]:
     """Retrieve top-k RAG candidates for a **pre-transformed** keyword query.
 
@@ -238,9 +248,16 @@ async def retrieve_with_keywords(
 
     Pipeline:
 
-    1. Run hybrid search in **recall mode** via ``app.search.search()``.
-    2. Filter file_ids via the Internal API (forwarding access_token).
-    3. Enrich the surviving results with IndexedFile title/description.
+    1. Run hybrid search in **recall mode** via ``app.search.search()``,
+       with the structured-transform ``required`` tuple applied as a
+       hard filter when supplied.
+    2. If the hard filter yielded zero results (Tier 1 fallback),
+       re-run the search with ``required=None`` so the user gets at
+       least the loose-recall ranking. The spec §3.5 calls this
+       "Tier 3 demote required to semantic" — Tier 2 (drop one term
+       at a time) is deferred to Phase 4.
+    3. Filter file_ids via the Internal API (forwarding access_token).
+    4. Enrich the surviving results with IndexedFile title/description.
 
     Args:
         keywords: A search-friendly keyword string (already transformed
@@ -251,6 +268,9 @@ async def retrieve_with_keywords(
             access control (None = unauthenticated caller).
         file_type: Optional file type filter (video / audio / ...).
         drive: Optional drive name filter.
+        required: Optional tuple of ``RequiredTerm`` from the structured
+            transform. Drives the FTS hard filter when present; falls
+            back to ``required=None`` re-search on zero results.
 
     Returns:
         A list of ``RetrievedFile`` preserving the original search order.
@@ -266,9 +286,44 @@ async def retrieve_with_keywords(
         mode="recall",
         semantic_query=original_query,
         file_id_scope=file_id_scope,
+        required=required,
     )
 
     results = list(response.results)
+
+    # Phase 4: Tier 2 → Tier 3 fallback ladder. When the full required
+    # tuple yields zero hits we step through subsets dropping one
+    # term at a time (most-aliased first; ties broken by position so
+    # the user's leading term is preserved). The ladder terminates
+    # at the empty tuple which is equivalent to Tier 3 ("demote all
+    # required to semantic"). Surfacing the fallback step to the
+    # client (SSE event) is left to the streaming layer.
+    if not results and required:
+        for subset in iter_required_fallback_subsets(required):
+            tier_label = (
+                "Tier 3 (no required filter)"
+                if not subset
+                else f"Tier 2 with {len(subset)} required term(s)"
+            )
+            logger.info(
+                "Required-keyword hard filter empty; retrying with %s",
+                tier_label,
+            )
+            response = await asyncio.to_thread(
+                search,
+                keywords,
+                limit=top_k,
+                file_type=file_type,
+                drive=drive,
+                mode="recall",
+                semantic_query=original_query,
+                file_id_scope=file_id_scope,
+                required=subset or None,
+            )
+            results = list(response.results)
+            if results:
+                break
+
     if not results:
         return []
 
@@ -307,15 +362,17 @@ async def retrieve_candidates(
 ) -> list[RetrievedFile]:
     """Transform a natural-language question and retrieve RAG candidates.
 
-    Convenience wrapper that runs the LLM keyword transform *first*,
-    then hands off to ``retrieve_with_keywords``. Used by the non-
-    streaming code paths (service layer, tests) where the keyword
+    Convenience wrapper that runs the LLM structured query transform
+    first, then hands off to ``retrieve_with_keywords``. Used by the
+    non-streaming code paths (service layer, tests) where the keyword
     string does not need to be surfaced to the caller separately.
 
-    On LLM transform failure the helper falls back to the raw query
-    so the pipeline still degrades gracefully — it will perform worse
-    on question-style inputs than with the transform, but will not
-    hard-fail.
+    The structured transform extracts ``required`` proper-noun terms
+    that are forwarded as the FTS hard filter, so retrieval first
+    shrinks to the must-include set and then ranks within it. On any
+    transform failure ``StructuredQuery.passthrough`` is returned and
+    the call degrades to the legacy loose retrieval (no hard filter,
+    raw query as keywords).
 
     Args:
         query: The user's natural-language question.
@@ -328,7 +385,10 @@ async def retrieve_candidates(
     Returns:
         A list of ``RetrievedFile`` preserving the original search order.
     """
-    keywords = await transform_query(query, temperature=transform_temperature)
+    structured = await transform_query_structured(
+        query, temperature=transform_temperature
+    )
+    keywords = structured.raw_keywords or query
     return await retrieve_with_keywords(
         keywords=keywords,
         top_k=top_k,
@@ -337,4 +397,5 @@ async def retrieve_candidates(
         file_type=file_type,
         drive=drive,
         file_id_scope=file_id_scope,
+        required=structured.required or None,
     )

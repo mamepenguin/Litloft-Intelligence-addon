@@ -1,0 +1,38 @@
+id: 015_required_kana_chiikawa
+query: "ちいかわのアイスはどんな味？"
+
+# Phase 0 baseline for required-keyword hard filter (Hiragana script).
+# "ちいかわ" is hiragana — Phase 2's per-script alias expansion must
+# generate the katakana form "チイカワ" so a transcript using the
+# katakana spelling still survives the hard filter.
+expected_keywords:
+  must_include:
+    - "ちいかわ"
+    - "アイス"
+  must_exclude:
+    - "どんな"
+
+ground_truth_files:
+  - path: "videos/【ちいかわ】セブンイレブン限定！！不二家コラボ！ちいかわ一口ミルキーアイスがついに新登場！！オリジナルステッカー付いてくる♪.mp4"
+
+must_mention:
+  - "アイス"
+
+notes: |
+  Required-keyword hard filter case (Hiragana script, kana variant
+  expansion). The video filename uses ちいかわ, but transcripts often
+  spell character names in katakana, so without alias expansion the
+  hard filter will miss transcript-only hits.
+
+  Phase 1 must produce:
+    required=[{canonical:"ちいかわ", script:"hira",
+               aliases:["ちいかわ","チイカワ"]}]
+    semantic=["アイス","味"]
+
+  Python-side mechanical alias expansion (hira→kata) MUST add the
+  katakana variant even if the LLM forgets — this is the "LLM が漏れ
+  ても最低限のゆれは拾える" safety net described in the spec §3.3.
+
+  Baseline measure: today the AND-joined "ちいかわ アイス" trigram
+  query already finds the file via filename; Phase 2 should not
+  regress this even when the transcript uses チイカワ.

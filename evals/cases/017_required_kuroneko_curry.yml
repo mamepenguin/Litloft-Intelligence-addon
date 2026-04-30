@@ -1,0 +1,41 @@
+id: 017_required_kuroneko_curry
+query: "黒猫が出てくるカレーの話を教えて"
+
+# Phase 0 baseline for required-keyword hard filter when both the
+# required term and a strong semantic term are present. "黒猫" must
+# survive as required (not all cat content is relevant); "カレー"
+# is the discriminating semantic term that picks family_notes.md
+# over the generic black_cat_facts.mp4.
+expected_keywords:
+  must_include:
+    - "黒猫"
+  must_exclude:
+    - "教えて"
+
+ground_truth_files:
+  - path: "docs/family_notes.md"
+
+must_mention:
+  - "カレー"
+
+notes: |
+  Required-keyword hard filter case (multi-signal, semantic
+  disambiguation). family_notes.md contains both a curry-cooking
+  episode and a "黒猫のミケ" sentence in the same document — the
+  intended ground truth.
+
+  Phase 1 should produce:
+    required=[{canonical:"黒猫", script:"han",
+               aliases:["黒猫","くろねこ","クロネコ"]}]
+    semantic=["カレー","話"]
+
+  Phase 2 hard filter keeps any file that mentions 黒猫 (or kana
+  variants). family_notes.md and black_cat_facts.mp4 both pass.
+  Vector search on "カレー" then ranks family_notes.md above
+  black_cat_facts.mp4 (the latter never mentions curry).
+
+  Failure mode to watch: today's AND-joined trigram retriever may
+  prefer black_cat_facts.mp4 because both terms hit the filename
+  ("black cat") more strongly than the prose mention in
+  family_notes.md. The required-filter + vector-ranking split is
+  exactly what should fix this.

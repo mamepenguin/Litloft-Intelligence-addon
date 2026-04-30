@@ -152,6 +152,10 @@ def init_search_db() -> None:
 
     # Backfill fts_transcripts from existing transcript_chunks
     _backfill_fts_transcripts()
+    # Phase 3: backfill the word-tokenized parallel tables from the
+    # existing trigram tables so legacy DBs gain the dual-index
+    # benefit without a full reindex.
+    _backfill_fts_word_tables()
 
 
 def _backfill_fts_transcripts() -> None:
@@ -183,6 +187,64 @@ def _backfill_fts_transcripts() -> None:
         inserted = result.rowcount
         if inserted > 0:
             logger.info("Backfilled %d transcript chunks into fts_transcripts", inserted)
+
+
+def _backfill_fts_word_tables() -> None:
+    """Copy existing trigram FTS rows into the word-tokenized parallel tables.
+
+    Phase 3 of the required-keyword hard filter spec: legacy DBs only
+    have the trigram tables. To avoid forcing every operator through
+    a full reindex, the word tables are populated by copying from
+    their trigram siblings on first start. Subsequent re-indexing
+    keeps both in sync via the upsert helpers; the backfill only runs
+    when the word table is empty.
+
+    Each pair is copied independently so a partial migration (e.g.
+    one table backfilled, others not) self-heals on the next startup.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    if _search_engine is None:
+        return
+
+    pairs: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+        (
+            "fts_files",
+            "fts_files_word",
+            ("file_id", "filename", "title", "description", "tags_text"),
+        ),
+        (
+            "fts_transcripts",
+            "fts_transcripts_word",
+            ("file_id", "chunk_index", "text"),
+        ),
+        (
+            "fts_text_content",
+            "fts_text_content_word",
+            ("file_id", "chunk_index", "page", "text"),
+        ),
+    )
+
+    with _search_engine.connect() as conn:
+        for trigram_table, word_table, columns in pairs:
+            count = conn.execute(
+                text(f"SELECT COUNT(*) FROM {word_table}")
+            ).scalar()
+            if count and count > 0:
+                continue
+            cols_csv = ", ".join(columns)
+            result = conn.execute(text(
+                f"INSERT INTO {word_table}({cols_csv}) "
+                f"SELECT {cols_csv} FROM {trigram_table}"
+            ))
+            inserted = result.rowcount
+            if inserted and inserted > 0:
+                logger.info(
+                    "Backfilled %d rows from %s into %s",
+                    inserted, trigram_table, word_table,
+                )
+        conn.commit()
 
 
 def _get_text_embedding_dim() -> int:
@@ -382,6 +444,36 @@ def _create_vec_tables(conn: object) -> None:
     conn.execute(text(
         "CREATE VIRTUAL TABLE IF NOT EXISTS fts_text_content "
         "USING fts5(file_id, chunk_index, page, text, tokenize='trigram')"
+    ))
+
+    # Phase 3 of the required-keyword hard filter spec
+    # (2026-04-30-required-semantic-hybrid-retrieval): word-level FTS
+    # parallel to the trigram tables. Trigram is excellent for CJK
+    # substring matching but shatters Latin/Cyrillic/Hangul tokens
+    # (e.g. "ViT" → "Vi"/"iT") so word-boundary languages return weak
+    # matches. The unicode61 tokenizer with diacritic folding is the
+    # natural complement: each table is queried in addition to its
+    # trigram sibling and results UNION'd, so any single hit in either
+    # tokenization is enough to pass the required-keyword filter.
+    #
+    # ``remove_diacritics 2`` strips combining marks AND Unicode
+    # decomposable diacritics — "Café" matches "Cafe" without the
+    # caller having to do anything special. Lower-case folding is
+    # implicit in unicode61's default behaviour.
+    conn.execute(text(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS fts_files_word "
+        "USING fts5(file_id, filename, title, description, tags_text, "
+        "tokenize=\"unicode61 remove_diacritics 2\")"
+    ))
+    conn.execute(text(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS fts_transcripts_word "
+        "USING fts5(file_id, chunk_index, text, "
+        "tokenize=\"unicode61 remove_diacritics 2\")"
+    ))
+    conn.execute(text(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS fts_text_content_word "
+        "USING fts5(file_id, chunk_index, page, text, "
+        "tokenize=\"unicode61 remove_diacritics 2\")"
     ))
 
 
@@ -907,7 +999,14 @@ def get_search_engine() -> Engine:
 
 
 ALLOWED_VECTOR_TABLES = frozenset({"vec_text", "vec_clip"})
-ALLOWED_FTS_TABLES = frozenset({"fts_files", "fts_transcripts", "fts_text_content"})
+ALLOWED_FTS_TABLES = frozenset({
+    "fts_files",
+    "fts_transcripts",
+    "fts_text_content",
+    "fts_files_word",
+    "fts_transcripts_word",
+    "fts_text_content_word",
+})
 
 
 def validate_vector_table(table_name: str) -> str:
@@ -927,30 +1026,44 @@ def get_write_lock() -> threading.Lock:
 
 def upsert_fts_file(session: Session, file_id: str, filename: str,
                      title: str, description: str, tags_text: str) -> None:
-    """Insert or replace a row in the FTS5 trigram index."""
-    session.execute(text(
-        "INSERT OR REPLACE INTO fts_files(file_id, filename, title, description, tags_text) "
-        "VALUES(:file_id, :filename, :title, :description, :tags_text)"
-    ), {
+    """Insert or replace a row in both FTS5 indices (trigram + word).
+
+    The word-tokenized parallel table is part of the Phase 3 dual-index
+    setup so word-boundary languages (Latin / Cyrillic / Hangul) get a
+    real word match in addition to the trigram substring match.
+    """
+    payload = {
         "file_id": file_id,
         "filename": filename,
         "title": title,
         "description": description,
         "tags_text": tags_text,
-    })
+    }
+    session.execute(text(
+        "INSERT OR REPLACE INTO fts_files(file_id, filename, title, description, tags_text) "
+        "VALUES(:file_id, :filename, :title, :description, :tags_text)"
+    ), payload)
+    session.execute(text(
+        "INSERT OR REPLACE INTO fts_files_word"
+        "(file_id, filename, title, description, tags_text) "
+        "VALUES(:file_id, :filename, :title, :description, :tags_text)"
+    ), payload)
 
 
 def delete_fts_file(session: Session, file_id: str) -> None:
-    """Remove a row from the FTS5 trigram index."""
+    """Remove a row from both FTS5 indices (trigram + word)."""
     session.execute(text(
         "DELETE FROM fts_files WHERE file_id = :file_id"
+    ), {"file_id": file_id})
+    session.execute(text(
+        "DELETE FROM fts_files_word WHERE file_id = :file_id"
     ), {"file_id": file_id})
 
 
 def upsert_fts_transcripts(
     session: Session, file_id: str, chunks: list[dict]
 ) -> None:
-    """Replace all transcript chunks in the FTS5 trigram index for a file.
+    """Replace all transcript chunks in both FTS5 indices for a file.
 
     Args:
         session: Database session.
@@ -959,27 +1072,35 @@ def upsert_fts_transcripts(
     """
     delete_fts_transcripts(session, file_id)
     for chunk in chunks:
-        session.execute(text(
-            "INSERT INTO fts_transcripts(file_id, chunk_index, text) "
-            "VALUES(:file_id, :chunk_index, :text)"
-        ), {
+        payload = {
             "file_id": file_id,
             "chunk_index": str(chunk["chunk_index"]),
             "text": chunk["text"],
-        })
+        }
+        session.execute(text(
+            "INSERT INTO fts_transcripts(file_id, chunk_index, text) "
+            "VALUES(:file_id, :chunk_index, :text)"
+        ), payload)
+        session.execute(text(
+            "INSERT INTO fts_transcripts_word(file_id, chunk_index, text) "
+            "VALUES(:file_id, :chunk_index, :text)"
+        ), payload)
 
 
 def delete_fts_transcripts(session: Session, file_id: str) -> None:
-    """Remove all transcript chunks from the FTS5 trigram index for a file."""
+    """Remove all transcript chunks from both FTS5 indices for a file."""
     session.execute(text(
         "DELETE FROM fts_transcripts WHERE file_id = :file_id"
+    ), {"file_id": file_id})
+    session.execute(text(
+        "DELETE FROM fts_transcripts_word WHERE file_id = :file_id"
     ), {"file_id": file_id})
 
 
 def upsert_fts_text_content(
     session: Session, file_id: str, chunks: list[dict]
 ) -> None:
-    """Replace all text content chunks in the FTS5 trigram index for a file.
+    """Replace all text content chunks in both FTS5 indices for a file.
 
     Args:
         session: Database session.
@@ -988,19 +1109,27 @@ def upsert_fts_text_content(
     """
     delete_fts_text_content(session, file_id)
     for chunk in chunks:
-        session.execute(text(
-            "INSERT INTO fts_text_content(file_id, chunk_index, page, text) "
-            "VALUES(:file_id, :chunk_index, :page, :text)"
-        ), {
+        payload = {
             "file_id": file_id,
             "chunk_index": str(chunk["chunk_index"]),
             "page": str(chunk["page"]) if chunk["page"] is not None else "",
             "text": chunk["text"],
-        })
+        }
+        session.execute(text(
+            "INSERT INTO fts_text_content(file_id, chunk_index, page, text) "
+            "VALUES(:file_id, :chunk_index, :page, :text)"
+        ), payload)
+        session.execute(text(
+            "INSERT INTO fts_text_content_word(file_id, chunk_index, page, text) "
+            "VALUES(:file_id, :chunk_index, :page, :text)"
+        ), payload)
 
 
 def delete_fts_text_content(session: Session, file_id: str) -> None:
-    """Remove all text content chunks from the FTS5 trigram index for a file."""
+    """Remove all text content chunks from both FTS5 indices for a file."""
     session.execute(text(
         "DELETE FROM fts_text_content WHERE file_id = :file_id"
+    ), {"file_id": file_id})
+    session.execute(text(
+        "DELETE FROM fts_text_content_word WHERE file_id = :file_id"
     ), {"file_id": file_id})

@@ -8,7 +8,7 @@ Results are grouped at file level with segment timestamps.
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 from sqlalchemy import text as sql_text
@@ -18,6 +18,9 @@ from app.database import get_search_db, get_search_engine, validate_vector_table
 from app.models import Embedding, IndexedFile, SimilarCache, TranscriptChunk
 from app.workers.clip import embed_text_clip
 from app.workers.embedder import embed_query
+
+if TYPE_CHECKING:
+    from app.rag.query_transform import RequiredTerm
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +150,7 @@ def search(
     mode: SearchMode = "precision",
     semantic_query: str | None = None,
     file_id_scope: list[str] | None = None,
+    required: "tuple[RequiredTerm, ...] | None" = None,
 ) -> SearchResponse:
     """Execute a hybrid search query.
 
@@ -169,6 +173,14 @@ def search(
             to scope chunk-level retrieval to the Stage 1 shortlist.
             ``None`` disables the filter; an empty list short-circuits
             to zero results.
+        required: Optional tuple of ``RequiredTerm`` from the structured
+            query transform. Each term contributes an OR-of-aliases
+            FTS clause; the running intersection across terms narrows
+            the effective ``file_id_scope`` so every retrieval channel
+            ranks only among files that pass the hard filter. ``None``
+            (default) is the legacy behaviour. An empty tuple is also
+            no-op so callers do not have to special-case the
+            "transform succeeded but found no required terms" path.
 
     Returns:
         SearchResponse with ranked results.
@@ -179,6 +191,38 @@ def search(
         search_config.max_limit,
     )
     candidates = search_config.rrf_candidates
+
+    # Required-keyword hard filter (Phase 2 of the structured retriever).
+    # Computed before any retrieval channel runs so the filter narrows
+    # the ranking pool, not just the final ordering. ``None`` from the
+    # filter means "no usable required terms" — leave file_id_scope
+    # alone. An empty set means the hard filter dropped everything;
+    # we feed [] into _build_results which short-circuits to no results
+    # without firing vector / RRF work pointlessly.
+    required_passing_ids: set[str] = set()
+    if required:
+        filtered = _required_keyword_filter(required)
+        if filtered is not None:
+            required_passing_ids = set(filtered)
+            if file_id_scope is None:
+                file_id_scope = list(required_passing_ids)
+            else:
+                file_id_scope = list(set(file_id_scope) & required_passing_ids)
+            if not file_id_scope:
+                # Hard filter dropped everything. Skip retrieval and
+                # return an empty response immediately. The caller
+                # (retriever) is responsible for triggering the Tier 3
+                # fallback (re-search with required=None).
+                with get_search_db() as session:
+                    indexed_count = session.query(IndexedFile).filter(
+                        IndexedFile.active.is_(True)
+                    ).count()
+                return SearchResponse(
+                    results=(),
+                    total=0,
+                    indexed_files=indexed_count,
+                    service_version=settings.service_version,
+                )
 
     # Generate query embeddings. ``semantic_query`` is the natural-language
     # phrasing used for vector channels, which benefit from full context
@@ -232,6 +276,46 @@ def search(
             transcript_keyword_matches=transcript_keyword_matches,
             text_content_keyword_matches=text_content_keyword_matches,
         )
+
+    # Required-pass floor: any file that survived the hard filter but
+    # did not surface in any other channel still needs to appear in
+    # the result list — otherwise the AND-joined keyword path can drop
+    # a Latin proper-noun-only file (e.g. "ViT" mentioned in the doc
+    # but no other query term) even though it is the canonical answer
+    # to the user's question. We synthesize a small floor score so
+    # such files rank below genuine multi-channel hits but still
+    # survive the dynamic cutoff downstream.
+    if required_passing_ids:
+        # The floor must clear the dynamic cutoff in ``_build_results``
+        # (``top_score * cutoff_ratio``) — otherwise the entry is
+        # added here and immediately discarded. A small buffer above
+        # the cutoff guarantees survival without nudging the floor
+        # high enough to outrank low-scoring real hits.
+        if mode == "recall":
+            cutoff_ratio = _RECALL_PARAMS.score_cutoff_ratio
+        else:
+            cutoff_ratio = settings.search.score_cutoff_ratio
+        top_real_score = max(
+            (fs.combined_score for fs in file_scores.values()),
+            default=0.0,
+        )
+        # When no other channel produced anything, top_real_score is
+        # 0; pick a small absolute fallback so the synthetic entries
+        # at least make it into the result list.
+        floor_buffer = 0.01  # 1% of top-or-1.0 buffer
+        synthetic_floor = max(
+            top_real_score * (cutoff_ratio + floor_buffer),
+            0.001,
+        )
+        for fid in required_passing_ids:
+            if fid in file_scores:
+                continue
+            file_scores[fid] = _FileScore(
+                file_id=fid,
+                combined_score=synthetic_floor,
+                matches=[],
+                match_types={"required"},
+            )
 
     # Apply filters and build results
     results = _build_results(
@@ -2008,3 +2092,159 @@ def execute_search_compare(
         cosine_no_cutoff=_make_response(cosine_results_no_cutoff),
         source_counts=source_counts,
     )
+
+
+# --- Required-keyword hard filter (Phase 2 of structured retriever) ------
+#
+# A small layer on top of the existing FTS5 trigram tables that enforces
+# "the user's required proper nouns must appear in this file" before
+# any vector / RRF ranking happens. The structured query transform
+# (``app.rag.query_transform.transform_query_structured``) decides which
+# terms are required and what their kana / case / diacritic variants
+# are; this module just runs the resulting OR-of-aliases clauses across
+# the existing FTS tables and intersects the per-term file_id sets.
+#
+# Spec: docs/superpowers/specs/2026-04-30-required-semantic-hybrid-retrieval.md
+
+
+def _build_required_or_clause(term: "RequiredTerm") -> str:
+    """Build the FTS5 boolean clause for a single required-term group.
+
+    All non-empty aliases are deduplicated, stripped of double-quotes
+    (which cannot appear inside a phrase token), and joined with ``OR``.
+    A single alias returns the bare phrase; multiple aliases are
+    wrapped in parentheses so an outer ``AND`` join (across multiple
+    required groups) keeps the precedence unambiguous.
+
+    Returns the empty string when the term contributes nothing usable
+    after sanitisation. Callers must skip empty clauses rather than
+    issuing them — FTS5 raises on an empty MATCH.
+    """
+    seen: set[str] = set()
+    aliases: list[str] = []
+    for alias in term.aliases:
+        if not isinstance(alias, str):
+            continue
+        sanitized = alias.replace('"', "").strip()
+        if not sanitized or sanitized in seen:
+            continue
+        seen.add(sanitized)
+        aliases.append(sanitized)
+    if not aliases:
+        return ""
+    if len(aliases) == 1:
+        return f'"{aliases[0]}"'
+    return "(" + " OR ".join(f'"{a}"' for a in aliases) + ")"
+
+
+def _fts_lookup_required(or_clause: str) -> set[str]:
+    """Return file_ids matching the OR clause in any required-filter FTS table.
+
+    The hard filter unions hits across the dual FTS5 surface: the
+    legacy trigram tables (strong on CJK substring matching, but
+    shatter Latin/Cyrillic/Hangul tokens) and the word-tokenized
+    parallel tables introduced in Phase 3 (``unicode61 remove_diacritics 2``,
+    strong on word-boundary languages and case/diacritic folding).
+    Any single hit in any of the six tables passes the required term —
+    callers benefit from substring-recall for CJK and word-precision
+    for Latin without having to dispatch by language at the call site.
+
+    Active-only filtering is applied at the end so soft-deleted /
+    missing files do not show up. An empty ``or_clause`` returns the
+    empty set (callers must already skip empties, this is a defence-
+    in-depth check).
+    """
+    if not or_clause:
+        return set()
+
+    engine = get_search_engine()
+    file_ids: set[str] = set()
+    with engine.connect() as conn:
+        for table_name in (
+            "fts_files",
+            "fts_transcripts",
+            "fts_text_content",
+            "fts_files_word",
+            "fts_transcripts_word",
+            "fts_text_content_word",
+        ):
+            sql = (
+                f"SELECT DISTINCT file_id FROM {table_name} "
+                f"WHERE {table_name} MATCH :q"
+            )
+            try:
+                rows = conn.execute(
+                    sql_text(sql), {"q": or_clause}
+                ).fetchall()
+            except Exception as e:  # pragma: no cover - FTS syntax safety net
+                logger.warning(
+                    "Required-filter FTS lookup failed on %s: %s",
+                    table_name, e,
+                )
+                continue
+            file_ids.update(row[0] for row in rows if row[0])
+
+    if not file_ids:
+        return set()
+
+    with get_search_db() as session:
+        active_ids = {
+            row.file_id
+            for row in session.query(IndexedFile.file_id)
+            .filter(
+                IndexedFile.file_id.in_(list(file_ids)),
+                IndexedFile.active.is_(True),
+            )
+            .all()
+        }
+    return active_ids
+
+
+def _required_keyword_filter(
+    required: "tuple[RequiredTerm, ...]",
+) -> set[str] | None:
+    """Compute the AND-intersection of per-required-term FTS lookups.
+
+    Semantics:
+
+    * Empty ``required`` → returns ``None``. Callers should leave the
+      effective ``file_id_scope`` unchanged (no hard filter).
+    * Non-empty ``required`` with all terms degenerating to empty FTS
+      clauses → also returns ``None`` (treated identically to "no
+      hard filter" so an LLM emitting nothing usable does not nuke
+      the entire pipeline).
+    * Non-empty ``required`` with at least one usable term → returns
+      the intersection ``set[str]`` of file_ids matching every usable
+      term. Empty set means the hard filter dropped everything; the
+      caller may then trigger Tier 3 fallback (demote required to
+      semantic) per the spec §3.5.
+
+    Per-term semantics within a group is OR across aliases; per-group
+    semantics across multiple required terms is AND. The function
+    short-circuits as soon as the running intersection is empty so
+    pathological queries do not waste FTS lookups.
+    """
+    if not required:
+        return None
+
+    survivors: set[str] | None = None
+    used_any_clause = False
+
+    for term in required:
+        clause = _build_required_or_clause(term)
+        if not clause:
+            continue
+        used_any_clause = True
+        ids = _fts_lookup_required(clause)
+        if survivors is None:
+            survivors = ids
+        else:
+            survivors = survivors & ids
+        if not survivors:
+            # AND with empty intersection ⇒ empty for the rest of the
+            # chain; bail out before issuing further FTS queries.
+            return set()
+
+    if not used_any_clause:
+        return None
+    return survivors

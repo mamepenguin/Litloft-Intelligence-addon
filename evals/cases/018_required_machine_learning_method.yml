@@ -1,0 +1,43 @@
+id: 018_required_machine_learning_method
+query: "機械学習でよく使う手法には何がありますか？"
+
+# Phase 0 baseline for required-keyword hard filter where the
+# required term is a generic-looking compound noun ("機械学習") that
+# is nonetheless load-bearing — without it, results are not relevant.
+# This is the boundary case where Phase 1's LLM has to decide
+# whether 機械学習 is required (yes — it disambiguates against
+# unrelated method content) or semantic (no — it would lose
+# precision).
+expected_keywords:
+  must_include:
+    - "機械学習"
+  must_exclude:
+    - "何"
+
+ground_truth_files:
+  - path: "videos/ml_intro.mp4"
+  - path: "docs/tech_paper.md"
+
+must_mention:
+  - "機械学習"
+
+notes: |
+  Required-keyword hard filter case (compound noun on the boundary
+  of "required vs semantic"). Both ground-truth files are explicitly
+  about machine learning; nothing else in the corpus is. The
+  required-filter approach should make this trivially precise —
+  every other file drops out.
+
+  Phase 1 must classify 機械学習 as required despite it being a
+  noun phrase rather than a proper noun. The classifier rule of
+  thumb: "if dropping it makes results irrelevant, it is required
+  regardless of word category". The system prompt revision must
+  surface this rule explicitly.
+
+  Aliases within Japanese: 機械学習 / きかいがくしゅう / ML.
+  Cross-script "ML" is borderline — strictly per the spec §2.1, ML
+  is a Latin-script form of a Han-script canonical, which violates
+  "alias expansion within own script only". Phase 1 should NOT
+  emit "ML" as an alias of 機械学習; if a user wants ML matches,
+  they will type "ML" themselves and the LLM will detect it as a
+  separate Latin-script required term.

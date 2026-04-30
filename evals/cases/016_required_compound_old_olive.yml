@@ -1,0 +1,36 @@
+id: 016_required_compound_old_olive
+query: "古木オリーブの値段はいくらだった？"
+
+# Phase 0 baseline for required-keyword hard filter (compound mixed-script).
+# "古木オリーブ" mixes han + katakana. The required term should be kept
+# as a single canonical phrase rather than split into "古木" + "オリーブ"
+# — splitting would weaken the filter (random olive content might pass).
+expected_keywords:
+  must_include:
+    - "古木オリーブ"
+  must_exclude:
+    - "いくら"
+
+ground_truth_files:
+  - path: "videos/【最高額更新】樹齢200年超えの格好良すぎる植物「古木オリーブ」を買ってしまった【TBL86】.mp4"
+
+must_mention:
+  - "値段"
+
+notes: |
+  Required-keyword hard filter case (mixed-script compound proper noun).
+
+  Phase 1 must keep "古木オリーブ" as a single required canonical and
+  not over-decompose it. Aliases within the term's script family
+  ("古木 オリーブ" with a space, "古木おりーぶ", katakana fragments)
+  may be expanded but cross-script translation ("ancient olive",
+  "olive tree") MUST NOT — that goes to semantic vector search.
+
+  The file's title contains both 古木 and オリーブ adjacently, so
+  trigram FTS with the joined phrase already hits today. The case
+  exists to lock in that the LLM does not split compound nouns and
+  the precision improvement persists in Phase 2.
+
+  Failure mode to watch: LLM splits to required=[古木, オリーブ]
+  separately. Then any olive-related content (which is rare in this
+  corpus, but generally unsafe) leaks through.

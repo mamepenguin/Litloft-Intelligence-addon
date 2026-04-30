@@ -59,16 +59,36 @@ def stub_query_transform(monkeypatch):
     module). A pass-through stub keeps the keyword-equals-query
     assumption intact so existing assertions on the keyword string
     keep working without per-test plumbing.
+
+    Both the legacy flat-string transform and the Phase 2 structured
+    transform are stubbed: ``retrieve_candidates`` uses the structured
+    one, ``retrieve_with_keywords`` callers may invoke the flat one
+    via ``transform_query`` directly. The structured stub returns a
+    StructuredQuery with no required terms, so the hard-filter wiring
+    is exercised but does not need a live FTS index.
     """
-    async def _identity(q: str) -> str:
+    from app.rag.query_transform import StructuredQuery
+
+    async def _identity(q: str, **_kw) -> str:
         return q
 
-    # The retriever imports transform_query at module top-level, so we
-    # patch the retriever's binding (not the query_transform module's
-    # original) to intercept the call site.
+    async def _identity_structured(q: str, **_kw) -> StructuredQuery:
+        return StructuredQuery(
+            required=(),
+            semantic=(q,),
+            raw_keywords=q,
+        )
+
+    # The retriever imports both transforms at module top-level, so we
+    # patch the retriever's bindings (not the query_transform module's
+    # originals) to intercept each call site.
     monkeypatch.setattr(
         "app.rag.retriever.transform_query",
         _identity,
+    )
+    monkeypatch.setattr(
+        "app.rag.retriever.transform_query_structured",
+        _identity_structured,
     )
 
 
@@ -219,12 +239,23 @@ class TestRetrieveCandidates:
 
     @pytest.mark.asyncio
     async def test_applies_transform_before_search(self, monkeypatch):
-        """retrieve_candidates must pass the transformed keywords, not the raw query."""
-        async def _transform(q: str) -> str:
-            return "extracted keywords"
+        """retrieve_candidates must pass the transformed keywords, not the raw query.
+
+        Phase 2 switched ``retrieve_candidates`` to the structured
+        transform; the contract is unchanged (retrieved keywords feed
+        into search) but the patch target moved.
+        """
+        from app.rag.query_transform import StructuredQuery
+
+        async def _transform(q: str, **_kw) -> StructuredQuery:
+            return StructuredQuery(
+                required=(),
+                semantic=("extracted keywords",),
+                raw_keywords="extracted keywords",
+            )
 
         monkeypatch.setattr(
-            "app.rag.retriever.transform_query", _transform
+            "app.rag.retriever.transform_query_structured", _transform
         )
         search_spy = MagicMock(return_value=_make_search_response([]))
         monkeypatch.setattr("app.rag.retriever.search", search_spy)
@@ -854,3 +885,115 @@ class TestFileIdScopePropagation:
 
         kwargs = search_spy.call_args.kwargs
         assert kwargs.get("file_id_scope") == ["x"]
+
+
+class TestRequiredKeywordWiring:
+    """Phase 2: structured transform → hard filter → Tier 3 fallback."""
+
+    @pytest.mark.asyncio
+    async def test_required_terms_forwarded_to_search(self, monkeypatch):
+        """retrieve_candidates must pass StructuredQuery.required to search()."""
+        from app.rag.query_transform import RequiredTerm, StructuredQuery
+
+        async def _transform(q: str, **_kw) -> StructuredQuery:
+            return StructuredQuery(
+                required=(
+                    RequiredTerm(
+                        canonical="ViT",
+                        script="latin",
+                        aliases=("ViT", "vit"),
+                    ),
+                ),
+                semantic=("強み",),
+                raw_keywords="ViT 強み",
+            )
+
+        monkeypatch.setattr(
+            "app.rag.retriever.transform_query_structured", _transform
+        )
+        search_spy = MagicMock(return_value=_make_search_response([]))
+        monkeypatch.setattr("app.rag.retriever.search", search_spy)
+        monkeypatch.setattr(
+            "app.rag.retriever._filter_file_ids_via_internal_api",
+            AsyncMock(return_value=set()),
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever._get_indexed_files_meta", lambda fids: {}
+        )
+
+        await retrieve_candidates(query="ViTの強み", top_k=5, lit_token=None)
+
+        # Tier 3 fallback also fires because empty results trigger a
+        # second search() call. We expect the FIRST call to carry
+        # required, the SECOND to carry required=None.
+        assert search_spy.call_count == 2
+        first_call_required = search_spy.call_args_list[0].kwargs.get("required")
+        assert first_call_required is not None
+        assert first_call_required[0].canonical == "ViT"
+        second_call_required = search_spy.call_args_list[1].kwargs.get("required")
+        assert second_call_required is None
+
+    @pytest.mark.asyncio
+    async def test_tier3_fallback_skipped_when_first_search_yields_results(
+        self, monkeypatch
+    ):
+        """If the hard filter retains hits, no fallback retry happens."""
+        from app.rag.query_transform import RequiredTerm
+
+        match = SearchResult(
+            file_id="f1",
+            drive="d",
+            filename="a.mp4",
+            file_type="video",
+            score=0.9,
+            match_types=("keyword",),
+            segments=(SegmentGroup(time_range=None, matches=()),),
+        )
+        # First search() returns results — fallback should NOT fire.
+        search_spy = MagicMock(return_value=_make_search_response([match]))
+        monkeypatch.setattr("app.rag.retriever.search", search_spy)
+        monkeypatch.setattr(
+            "app.rag.retriever._filter_file_ids_via_internal_api",
+            AsyncMock(return_value={"f1"}),
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever._get_indexed_files_meta",
+            lambda fids: {"f1": {"file_id": "f1", "title": None,
+                                 "description": None, "mime_type": None}},
+        )
+
+        await retrieve_with_keywords(
+            keywords="ViT 強み",
+            top_k=5,
+            lit_token=None,
+            required=(
+                RequiredTerm(canonical="ViT", script="latin",
+                             aliases=("ViT", "vit")),
+            ),
+        )
+
+        assert search_spy.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_no_fallback_when_required_is_none(self, monkeypatch):
+        """Without a required filter, an empty result is just empty."""
+        search_spy = MagicMock(return_value=_make_search_response([]))
+        monkeypatch.setattr("app.rag.retriever.search", search_spy)
+        monkeypatch.setattr(
+            "app.rag.retriever._filter_file_ids_via_internal_api",
+            AsyncMock(return_value=set()),
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever._get_indexed_files_meta", lambda fids: {}
+        )
+
+        await retrieve_with_keywords(
+            keywords="anything",
+            top_k=5,
+            lit_token=None,
+            required=None,
+        )
+
+        # Only one search call — no fallback because there is no
+        # required filter to demote.
+        assert search_spy.call_count == 1

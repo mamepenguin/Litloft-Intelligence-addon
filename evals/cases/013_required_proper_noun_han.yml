@@ -1,0 +1,36 @@
+id: 013_required_proper_noun_han
+query: "東福寺の紅葉はどうだった？"
+
+# Phase 0 baseline for the required-keyword hard filter spec
+# (2026-04-30-required-semantic-hybrid-retrieval). "東福寺" is the
+# required proper noun (han script) — losing it should remove all
+# Kyoto-specific results. "紅葉" is a semantic term that can be
+# embedded.
+expected_keywords:
+  must_include:
+    - "東福寺"
+    - "紅葉"
+  must_exclude:
+    - "どう"
+
+ground_truth_files:
+  - path: "videos/kyoto_autumn.mp4"
+  - path: "docs/family_notes.md"
+
+must_mention:
+  - "紅葉"
+
+notes: |
+  Required-keyword hard filter case (Han script, single proper noun).
+
+  Once Phase 2 lands, "東福寺" becomes a hard filter — only files whose
+  trigram or word index contains 東福寺 (or kana variants) survive.
+  Both ground-truth files mention 東福寺 explicitly (family_notes.md in
+  the prose, kyoto_autumn.mp4 in the narration). docs/tech_paper.md
+  contains 紅葉 nowhere and 東福寺 never, so it must NOT appear in the
+  top-5 even if vector search would otherwise rank it for some flat
+  semantic reason — the hard filter is what guarantees that.
+
+  Baseline measure (Phase 0): record current recall@5 / precision@5
+  with the AND-joined trigram retriever. After Phase 2, precision@5
+  should improve without recall@5 dropping.

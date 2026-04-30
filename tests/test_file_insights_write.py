@@ -85,6 +85,20 @@ def search_db(tmp_path, monkeypatch):
             "CREATE VIRTUAL TABLE IF NOT EXISTS fts_text_content "
             "USING fts5(file_id UNINDEXED, chunk_index UNINDEXED, text)"
         ))
+        # Phase 3 dual-index parallel tables — production upsert/delete
+        # helpers write to both tokenizations.
+        conn.execute(text(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS fts_files_word "
+            "USING fts5(file_id UNINDEXED, filename, description, tags)"
+        ))
+        conn.execute(text(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS fts_transcripts_word "
+            "USING fts5(file_id UNINDEXED, chunk_index UNINDEXED, text)"
+        ))
+        conn.execute(text(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS fts_text_content_word "
+            "USING fts5(file_id UNINDEXED, chunk_index UNINDEXED, text)"
+        ))
         # Minimal suggested_tags table (referenced by _purge_file).
         conn.execute(text(
             "CREATE TABLE IF NOT EXISTS suggested_tags ("

@@ -80,6 +80,15 @@ def _create_aux_tables(conn: object) -> None:
         "CREATE VIRTUAL TABLE IF NOT EXISTS fts_text_content "
         "USING fts5(file_id, chunk_index, page, text, tokenize='trigram')"
     ))
+    # Phase 3 dual-index parallel table — production upsert/delete
+    # helpers write to both tokenizations, so any test that exercises
+    # those helpers must create the word table too or DELETE statements
+    # explode on a missing-table error.
+    conn.execute(text(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS fts_text_content_word "
+        "USING fts5(file_id, chunk_index, page, text, "
+        "tokenize=\"unicode61 remove_diacritics 2\")"
+    ))
 
 
 @pytest.fixture()

@@ -1,0 +1,39 @@
+id: 014_required_proper_noun_latin
+query: "ViTの強みは何ですか？"
+
+# Phase 0 baseline for required-keyword hard filter (Latin script).
+# "ViT" is a Latin proper noun in a Japanese-framed query — proves
+# that per-required-term script detection (not whole-query language)
+# is the right granularity. Alias expansion within Latin should add
+# at least: vit, VIT, "Vision Transformer".
+expected_keywords:
+  must_include:
+    - "ViT"
+  must_exclude:
+    - "何ですか"
+
+ground_truth_files:
+  - path: "docs/tech_paper.md"
+
+must_mention:
+  - "ViT"
+
+notes: |
+  Required-keyword hard filter case (Latin script in a Japanese query).
+
+  Only docs/tech_paper.md mentions ViT explicitly. ml_intro.mp4 covers
+  general machine-learning territory but does not name ViT, so it must
+  drop out of the required-pass set. kyoto_autumn.mp4 / family_notes.md
+  must drop too (no overlap).
+
+  Phase 1 must extract `required=[{canonical:"ViT", script:"latin",
+  aliases:["ViT","vit","VIT","Vision Transformer"]}]`. Phase 2's
+  hard filter then leaves tech_paper.md alone in the required-pass
+  set. Vector search on "強み" sorts within that single-element set —
+  the case is essentially a precision test, not a ranking test.
+
+  Failure modes to watch for in Phase 0 baseline:
+  - Trigram FTS shatters "ViT" into 3-grams that match many incidental
+    contexts. Word-level FTS (Phase 3) is the proper fix.
+  - LLM might lower-case "ViT" to "vit" and the case-fold normaliser
+    must catch this in Python.

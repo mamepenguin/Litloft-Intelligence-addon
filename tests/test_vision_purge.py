@@ -76,6 +76,22 @@ def _build_engine(tmp_path):
             "CREATE VIRTUAL TABLE IF NOT EXISTS fts_text_content "
             "USING fts5(file_id, chunk_index, page, text, tokenize='trigram')"
         ))
+        # Phase 3 dual-index parallel tables.
+        conn.execute(text(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS fts_files_word "
+            "USING fts5(file_id, filename, title, description, "
+            "tags_text, tokenize=\"unicode61 remove_diacritics 2\")"
+        ))
+        conn.execute(text(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS fts_transcripts_word "
+            "USING fts5(file_id, chunk_index, text, "
+            "tokenize=\"unicode61 remove_diacritics 2\")"
+        ))
+        conn.execute(text(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS fts_text_content_word "
+            "USING fts5(file_id, chunk_index, page, text, "
+            "tokenize=\"unicode61 remove_diacritics 2\")"
+        ))
         # Seed a minimal real ``vec_text`` table so ``_purge_file``'s
         # unconditional DELETE-from-vec_text path succeeds without
         # needing sqlite-vec loaded. A plain relational table with the
