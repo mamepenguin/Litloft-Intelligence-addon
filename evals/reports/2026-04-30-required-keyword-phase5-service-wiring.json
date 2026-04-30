@@ -1,0 +1,1700 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "label": "",
+    "date": "2026-04-30T12:14:36Z",
+    "git_commit": "unknown",
+    "llm_model": "gemma4:e4b",
+    "llm_base_url": "http://host.docker.internal:11434/v1",
+    "rag_top_k": 5,
+    "rag_max_tokens": 2048,
+    "snapshot_path": "/eval-data/test-drive/snapshot/search.db",
+    "snapshot_sha256": "0eaf2240d392df4807f508a26f549a132b18ede7c0041107abe330bfab98ad27",
+    "indexed_with": {
+      "whisper": "openai/whisper-small",
+      "clip": "llm-jp/llm-jp-clip-vit-base-patch16",
+      "blip": "Salesforce/blip-image-captioning-base"
+    },
+    "runs_stage1": 1,
+    "runs_stage2": 1,
+    "runs_stage3": 3,
+    "epsilon": 0.1,
+    "drive": "eval-drive",
+    "blocklists": {
+      "question_words.txt": "b2aa63dd5c23475e50ebe81eaaf4bc8585165d6fbcb96fae0e56d5d65b12be13",
+      "file_type_words.txt": "1a54cff895ca51f0f9d9845b0d158b6408c34d182bfcf88fc806b64438a66661"
+    }
+  },
+  "cases": [
+    {
+      "id": "001_proper_noun_kyoto",
+      "query": "京都の紅葉について何を言ってた？",
+      "stage1": {
+        "keywords": "京都 紅葉",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 0
+      },
+      "stage2": {
+        "top_file_ids": [
+          "mJLIgl6IaF3d",
+          "xv2nmOPUTJvi",
+          "z6H1Vnkm-4Z7",
+          "E91YCBdvjlOT",
+          "qf--MrL_g_Gt"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 0.0,
+        "segment_recall_at_10": 0.0,
+        "mrr": 0.5,
+        "precision_at_5": 0.4,
+        "retrieved_gt_file_ids": [
+          "xv2nmOPUTJvi",
+          "qf--MrL_g_Gt"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "去年の秋に家族で京都の紅葉を見に行った際、東福寺の通天橋からの眺めが絶景で、橋の下一面に広がる紅葉の海に皆で感動しました。また、永観堂の紅葉も素晴らしく、夜のライトアップでは昼とは異なる表情を見せてくれました。哲学の道を散歩しながら紅葉狩りを楽しんだ時間は、家族にとって良い思い出になったそうです。",
+            "citation_file_ids": [
+              "qf--MrL_g_Gt"
+            ],
+            "retrieved_file_ids": [
+              "mJLIgl6IaF3d",
+              "xv2nmOPUTJvi",
+              "z6H1Vnkm-4Z7",
+              "E91YCBdvjlOT",
+              "qf--MrL_g_Gt"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 7523
+          },
+          {
+            "answer": "去年の秋に家族で京都の紅葉を見に行った際、東福寺の通天橋からの眺めが絶景で、橋の下一面に広がる紅葉の海に皆で感動しました。また、永観堂の紅葉も素晴らしく、夜のライトアップでは昼とは異なる表情を見せてくれました。哲学の道を散歩しながら紅葉狩りを楽しんだ時間は、家族にとって良い思い出になったそうです。",
+            "citation_file_ids": [
+              "qf--MrL_g_Gt"
+            ],
+            "retrieved_file_ids": [
+              "mJLIgl6IaF3d",
+              "xv2nmOPUTJvi",
+              "z6H1Vnkm-4Z7",
+              "E91YCBdvjlOT",
+              "qf--MrL_g_Gt"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 9101
+          },
+          {
+            "answer": "去年の秋に家族で京都の紅葉を見に行った際、東福寺の通天橋からの眺めが絶景で、橋の下一面に広がる紅葉の海に皆で感動しました。また、永観堂の紅葉も素晴らしく、夜のライトアップでは昼とは異なる表情を見せてくれました。哲学の道を散歩しながら紅葉狩りを楽しんだ時間は、家族にとって良い思い出になったそうです。",
+            "citation_file_ids": [
+              "qf--MrL_g_Gt"
+            ],
+            "retrieved_file_ids": [
+              "mJLIgl6IaF3d",
+              "xv2nmOPUTJvi",
+              "z6H1Vnkm-4Z7",
+              "E91YCBdvjlOT",
+              "qf--MrL_g_Gt"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 9763
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 1.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 1.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "002_question_word_noise",
+      "query": "黒猫の共通点は？",
+      "stage1": {
+        "keywords": "黒猫 共通点",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 1
+      },
+      "stage2": {
+        "top_file_ids": [
+          "ZmxTegJvjxAy",
+          "5z3uW83PgOb1",
+          "j_UPRviAs1Mm",
+          "z6H1Vnkm-4Z7"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 0.0,
+        "segment_recall_at_10": 0.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.4,
+        "retrieved_gt_file_ids": [
+          "ZmxTegJvjxAy",
+          "5z3uW83PgOb1"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "黒猫には、遺伝的に病気に強いと言われている点や、日本では古くから幸運の象徴とされてきたという共通点があります。また、性格面では人懐こく賢い個体が多いという傾向が指摘されています。",
+            "citation_file_ids": [
+              "ZmxTegJvjxAy",
+              "5z3uW83PgOb1"
+            ],
+            "retrieved_file_ids": [
+              "ZmxTegJvjxAy",
+              "5z3uW83PgOb1",
+              "j_UPRviAs1Mm",
+              "z6H1Vnkm-4Z7"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 1.0,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 5251
+          },
+          {
+            "answer": "黒猫には、遺伝的に病気に強いと言われている点や、日本では古くから幸運の象徴とされてきたという共通点があります。また、性格面では人懐こく賢い個体が多いという傾向が指摘されています。",
+            "citation_file_ids": [
+              "ZmxTegJvjxAy",
+              "5z3uW83PgOb1"
+            ],
+            "retrieved_file_ids": [
+              "ZmxTegJvjxAy",
+              "5z3uW83PgOb1",
+              "j_UPRviAs1Mm",
+              "z6H1Vnkm-4Z7"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 1.0,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 6938
+          },
+          {
+            "answer": "黒猫には、遺伝的に病気に強いと言われている点や、日本では古くから幸運の象徴とされてきたという共通点があります。また、性格面では人懐こく賢い個体が多いという傾向が指摘されています。",
+            "citation_file_ids": [
+              "ZmxTegJvjxAy",
+              "5z3uW83PgOb1"
+            ],
+            "retrieved_file_ids": [
+              "ZmxTegJvjxAy",
+              "5z3uW83PgOb1",
+              "j_UPRviAs1Mm",
+              "z6H1Vnkm-4Z7"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 1.0,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 8392
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 1.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 1.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 1.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "003_recipe_segment",
+      "query": "カレーの作り方は？",
+      "stage1": {
+        "keywords": "カレー 作り方",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 1
+      },
+      "stage2": {
+        "top_file_ids": [
+          "qf--MrL_g_Gt",
+          "6ZUevJjXSBVz",
+          "z6H1Vnkm-4Z7"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.4,
+        "retrieved_gt_file_ids": [
+          "qf--MrL_g_Gt",
+          "6ZUevJjXSBVz"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "カレーの作り方として、玉ねぎをみじん切りにして飴色になるまで炒めるのがコツです。次に鶏肉を加えて表面を焼き、水とカレールーを入れ、二十分ほど煮込みます。最後にガラムマサラを振ると本格的な味になります。また、ルーを入れる前には一度火を止めるとダマになりにくいという知恵もあります。",
+            "citation_file_ids": [
+              "qf--MrL_g_Gt",
+              "6ZUevJjXSBVz"
+            ],
+            "retrieved_file_ids": [
+              "qf--MrL_g_Gt",
+              "6ZUevJjXSBVz",
+              "z6H1Vnkm-4Z7"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 1.0,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 6339
+          },
+          {
+            "answer": "カレーの作り方として、玉ねぎをみじん切りにして飴色になるまで炒めるのがコツです。次に鶏肉を加えて表面を焼き、水とカレールーを入れ、二十分ほど煮込みます。最後にガラムマサラを振ると本格的な味になります。また、ルーを入れる前には一度火を止めるとダマになりにくいという知恵もあります。",
+            "citation_file_ids": [
+              "qf--MrL_g_Gt",
+              "6ZUevJjXSBVz"
+            ],
+            "retrieved_file_ids": [
+              "qf--MrL_g_Gt",
+              "6ZUevJjXSBVz",
+              "z6H1Vnkm-4Z7"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 1.0,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 6661
+          },
+          {
+            "answer": "カレーの作り方として、玉ねぎをみじん切りにして飴色になるまで炒めるのがコツです。次に鶏肉を加えて表面を焼き、水とカレールーを入れ、二十分ほど煮込みます。最後にガラムマサラを振ると本格的な味になります。また、ルーを入れる前には一度火を止めるとダマになりにくいという知恵もあります。",
+            "citation_file_ids": [
+              "qf--MrL_g_Gt",
+              "6ZUevJjXSBVz"
+            ],
+            "retrieved_file_ids": [
+              "qf--MrL_g_Gt",
+              "6ZUevJjXSBVz",
+              "z6H1Vnkm-4Z7"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 1.0,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 6592
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 1.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 1.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 1.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "004_segment_overlap",
+      "query": "永観堂のライトアップについて何て言ってた？",
+      "stage1": {
+        "keywords": "永観堂 ライトアップ",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 0
+      },
+      "stage2": {
+        "top_file_ids": [
+          "qf--MrL_g_Gt"
+        ],
+        "file_recall_at_5": 0.5,
+        "file_recall_at_10": 0.5,
+        "segment_recall_at_5": 0.0,
+        "segment_recall_at_10": 0.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.2,
+        "retrieved_gt_file_ids": [
+          "qf--MrL_g_Gt"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "永観堂の紅葉は素晴らしく、夜のライトアップでは昼とは全く違う表情を見せてくれるとのことです。この経験は、家族全員にとって良い思い出になったようです。",
+            "citation_file_ids": [
+              "qf--MrL_g_Gt"
+            ],
+            "retrieved_file_ids": [
+              "qf--MrL_g_Gt"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 3997
+          },
+          {
+            "answer": "永観堂の紅葉は素晴らしく、夜のライトアップでは昼とは全く違う表情を見せてくれるとのことです。この経験は、家族全員にとって良い思い出になったようです。",
+            "citation_file_ids": [
+              "qf--MrL_g_Gt"
+            ],
+            "retrieved_file_ids": [
+              "qf--MrL_g_Gt"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 5682
+          },
+          {
+            "answer": "永観堂の紅葉は素晴らしく、夜のライトアップでは昼とは全く違う表情を見せてくれるとのことです。この経験は、家族全員にとって良い思い出になったようです。",
+            "citation_file_ids": [
+              "qf--MrL_g_Gt"
+            ],
+            "retrieved_file_ids": [
+              "qf--MrL_g_Gt"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 7035
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 1.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 1.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "005_cross_modal_image_text",
+      "query": "黒猫の写真と日記を見せて",
+      "stage1": {
+        "keywords": "黒猫 写真 日記",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 2
+      },
+      "stage2": {
+        "top_file_ids": [
+          "ZmxTegJvjxAy",
+          "5z3uW83PgOb1",
+          "qf--MrL_g_Gt",
+          "z6H1Vnkm-4Z7",
+          "mJLIgl6IaF3d"
+        ],
+        "file_recall_at_5": 0.5,
+        "file_recall_at_10": 0.5,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.2,
+        "retrieved_gt_file_ids": [
+          "ZmxTegJvjxAy"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "黒猫に関する情報として、日記には「黒猫ミケ」という名前の黒猫のプロフィールや、最近の様子、小さな事件についての記述があります。また、家族の思い出ノートの「その他の日々」の項目には、「黒猫のミケが押し入れで子猫のように丸まっていた」という記述があります。写真については、提供されたファイル情報の中には黒猫の写真はありませんが、動画ファイルには黒猫に関する情報が含まれているものもあります。",
+            "citation_file_ids": [
+              "ZmxTegJvjxAy",
+              "qf--MrL_g_Gt",
+              "5z3uW83PgOb1"
+            ],
+            "retrieved_file_ids": [
+              "ZmxTegJvjxAy",
+              "5z3uW83PgOb1",
+              "qf--MrL_g_Gt",
+              "z6H1Vnkm-4Z7",
+              "mJLIgl6IaF3d"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.3333333333333333,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 8189
+          },
+          {
+            "answer": "黒猫に関する情報として、日記には「黒猫ミケ」という名前の黒猫のプロフィールや、最近の様子、小さな事件についての記述があります。また、家族の思い出ノートの「その他の日々」の項目には、「黒猫のミケが押し入れで子猫のように丸まっていた」という記述があります。写真については、提供されたファイル情報の中には黒猫の写真はありませんが、動画ファイルには黒猫に関する情報が含まれているものもあります。",
+            "citation_file_ids": [
+              "ZmxTegJvjxAy",
+              "qf--MrL_g_Gt",
+              "5z3uW83PgOb1"
+            ],
+            "retrieved_file_ids": [
+              "ZmxTegJvjxAy",
+              "5z3uW83PgOb1",
+              "qf--MrL_g_Gt",
+              "z6H1Vnkm-4Z7",
+              "mJLIgl6IaF3d"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.3333333333333333,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 7812
+          },
+          {
+            "answer": "黒猫に関する情報として、日記には「黒猫ミケ」という名前の黒猫のプロフィールや、最近の様子、小さな事件についての記述があります。また、家族の思い出ノートの「その他の日々」の項目には、「黒猫のミケが押し入れで子猫のように丸まっていた」という記述があります。写真については、提供されたファイル情報の中には黒猫の写真はありませんが、動画ファイルには黒猫に関する情報が含まれているものもあります。",
+            "citation_file_ids": [
+              "ZmxTegJvjxAy",
+              "qf--MrL_g_Gt",
+              "5z3uW83PgOb1"
+            ],
+            "retrieved_file_ids": [
+              "ZmxTegJvjxAy",
+              "5z3uW83PgOb1",
+              "qf--MrL_g_Gt",
+              "z6H1Vnkm-4Z7",
+              "mJLIgl6IaF3d"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.3333333333333333,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 7649
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 0.3333333333333333,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 1.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "006_no_answer",
+      "query": "宇宙ステーションの食事メニューは何ですか？",
+      "stage1": {
+        "keywords": "宇宙ステーション 食事メニュー",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 0
+      },
+      "stage2": {
+        "top_file_ids": [
+          "z6H1Vnkm-4Z7"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 0.0,
+        "precision_at_5": 0.0,
+        "retrieved_gt_file_ids": []
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "提供されたファイル情報には、宇宙ステーションの食事メニューに関する情報は含まれていません。",
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "z6H1Vnkm-4Z7"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 3623
+          },
+          {
+            "answer": "提供されたファイル情報には、宇宙ステーションの食事メニューに関する情報は含まれていません。",
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "z6H1Vnkm-4Z7"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 5160
+          },
+          {
+            "answer": "提供されたファイル情報には、宇宙ステーションの食事メニューに関する情報は含まれていません。",
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "z6H1Vnkm-4Z7"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 5050
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 0.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 0.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "007_blocklist_question_word",
+      "query": "機械学習と京都の紅葉動画の共通点は？",
+      "stage1": {
+        "keywords": "京都 機械学習 紅葉 動画",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 1
+      },
+      "stage2": {
+        "top_file_ids": [
+          "rG-RB9DbOblv",
+          "xv2nmOPUTJvi",
+          "QzLEo8LTOgGr",
+          "E91YCBdvjlOT",
+          "mJLIgl6IaF3d"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.6,
+        "retrieved_gt_file_ids": [
+          "rG-RB9DbOblv",
+          "xv2nmOPUTJvi",
+          "QzLEo8LTOgGr"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "提供されたファイル情報からは、機械学習に関する情報と京都の紅葉に関する情報がそれぞれ別々に存在することは確認できますが、これら二つのトピックに共通する点についての直接的な記述は見当たりませんでした。",
+            "citation_file_ids": [
+              "rG-RB9DbOblv",
+              "xv2nmOPUTJvi"
+            ],
+            "retrieved_file_ids": [
+              "rG-RB9DbOblv",
+              "xv2nmOPUTJvi",
+              "QzLEo8LTOgGr",
+              "E91YCBdvjlOT",
+              "mJLIgl6IaF3d"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 1.0,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 7021
+          },
+          {
+            "answer": "提供されたファイル情報からは、機械学習に関する情報と京都の紅葉に関する情報がそれぞれ別々に存在することは確認できますが、これら二つのトピックに共通する点についての直接的な記述は見当たりませんでした。",
+            "citation_file_ids": [
+              "rG-RB9DbOblv",
+              "xv2nmOPUTJvi"
+            ],
+            "retrieved_file_ids": [
+              "rG-RB9DbOblv",
+              "xv2nmOPUTJvi",
+              "QzLEo8LTOgGr",
+              "E91YCBdvjlOT",
+              "mJLIgl6IaF3d"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 1.0,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 7994
+          },
+          {
+            "answer": "提供されたファイル情報からは、機械学習に関する情報と京都の紅葉に関する情報がそれぞれ別々に存在することは確認できますが、これら二つのトピックに共通する点についての直接的な記述は見当たりませんでした。",
+            "citation_file_ids": [
+              "rG-RB9DbOblv",
+              "xv2nmOPUTJvi"
+            ],
+            "retrieved_file_ids": [
+              "rG-RB9DbOblv",
+              "xv2nmOPUTJvi",
+              "QzLEo8LTOgGr",
+              "E91YCBdvjlOT",
+              "mJLIgl6IaF3d"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 1.0,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 7181
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 1.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 1.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 1.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "008_proper_noun_preservation",
+      "query": "東福寺の通天橋と哲学の道はどんな感じ？",
+      "stage1": {
+        "keywords": "東福寺 通天橋 哲学の道",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 0
+      },
+      "stage2": {
+        "top_file_ids": [
+          "qf--MrL_g_Gt",
+          "xv2nmOPUTJvi"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.4,
+        "retrieved_gt_file_ids": [
+          "qf--MrL_g_Gt",
+          "xv2nmOPUTJvi"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "東福寺の通天橋からの眺めは絶景で、橋の下一面に広がる紅葉の海が見られます。また、哲学の道を散歩しながら紅葉狩りを楽しんだ時間も良い思い出になったようです。",
+            "citation_file_ids": [
+              "qf--MrL_g_Gt",
+              "xv2nmOPUTJvi"
+            ],
+            "retrieved_file_ids": [
+              "qf--MrL_g_Gt",
+              "xv2nmOPUTJvi"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 4259
+          },
+          {
+            "answer": "東福寺の通天橋からの眺めは絶景で、橋の下一面に広がる紅葉の海が見られます。また、哲学の道を散歩しながら紅葉狩りを楽しんだ時間も良い思い出になったようです。",
+            "citation_file_ids": [
+              "qf--MrL_g_Gt",
+              "xv2nmOPUTJvi"
+            ],
+            "retrieved_file_ids": [
+              "qf--MrL_g_Gt",
+              "xv2nmOPUTJvi"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 5570
+          },
+          {
+            "answer": "東福寺の通天橋からの眺めは絶景で、橋の下一面に広がる紅葉の海が見られます。また、哲学の道を散歩しながら紅葉狩りを楽しんだ時間も良い思い出になったようです。",
+            "citation_file_ids": [
+              "qf--MrL_g_Gt",
+              "xv2nmOPUTJvi"
+            ],
+            "retrieved_file_ids": [
+              "qf--MrL_g_Gt",
+              "xv2nmOPUTJvi"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 5607
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 1.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 1.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "009_long_video_olive",
+      "query": "200年以上の古いオリーブの話、何て言ってた？",
+      "stage1": {
+        "keywords": "オリーブ 200年以上 古い 話",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 0
+      },
+      "stage2": {
+        "top_file_ids": [
+          "mJLIgl6IaF3d"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.2,
+        "retrieved_gt_file_ids": [
+          "mJLIgl6IaF3d"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "このオリーブは、少なくとも200年から300年以上生きているとされています。200年という年数は、日本が江戸時代、徳川幕府の時代から生きていることに相当します。",
+            "citation_file_ids": [
+              "mJLIgl6IaF3d",
+              "mJLIgl6IaF3d"
+            ],
+            "retrieved_file_ids": [
+              "mJLIgl6IaF3d"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 0.5,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 6058
+          },
+          {
+            "answer": "このオリーブは、少なくとも200年から300年以上生きているとされています。200年という年数は、日本が江戸時代、徳川幕府の時代から生きていることに相当します。",
+            "citation_file_ids": [
+              "mJLIgl6IaF3d",
+              "mJLIgl6IaF3d"
+            ],
+            "retrieved_file_ids": [
+              "mJLIgl6IaF3d"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 0.5,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 7410
+          },
+          {
+            "answer": "このオリーブは、少なくとも200年から300年以上生きているとされています。200年という年数は、日本が江戸時代、徳川幕府の時代から生きていることに相当します。",
+            "citation_file_ids": [
+              "mJLIgl6IaF3d",
+              "mJLIgl6IaF3d"
+            ],
+            "retrieved_file_ids": [
+              "mJLIgl6IaF3d"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 0.5,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 7421
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 1.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.5,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 1.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "010_long_video_chiikawa_taste",
+      "query": "ちいかわアイスの味の特徴は？",
+      "stage1": {
+        "keywords": "ちいかわ アイス 味 特徴",
+        "must_include_coverage": 0.5,
+        "must_exclude_violations": 0
+      },
+      "stage2": {
+        "top_file_ids": [
+          "z6H1Vnkm-4Z7"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.2,
+        "retrieved_gt_file_ids": [
+          "z6H1Vnkm-4Z7"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "ちいかわ一口ミルキーアイスは、ヨーグルトの酸味があり、甘さが控えめな味わいです。",
+            "citation_file_ids": [
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7"
+            ],
+            "retrieved_file_ids": [
+              "z6H1Vnkm-4Z7"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 0.0,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 5529
+          },
+          {
+            "answer": "ちいかわ一口ミルキーアイスは、ヨーグルトの酸味があり、甘さが控えめな味わいです。",
+            "citation_file_ids": [
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7"
+            ],
+            "retrieved_file_ids": [
+              "z6H1Vnkm-4Z7"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 0.0,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 6937
+          },
+          {
+            "answer": "ちいかわ一口ミルキーアイスは、ヨーグルトの酸味があり、甘さが控えめな味わいです。",
+            "citation_file_ids": [
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7"
+            ],
+            "retrieved_file_ids": [
+              "z6H1Vnkm-4Z7"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 0.0,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 6951
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 1.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 1.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "011_long_video_atashinchi_game",
+      "query": "半年かけてゲームを手に入れた話、何て言ってた？",
+      "stage1": {
+        "keywords": "ゲーム 話",
+        "must_include_coverage": 0.5,
+        "must_exclude_violations": 0
+      },
+      "stage2": {
+        "top_file_ids": [
+          "E91YCBdvjlOT"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.2,
+        "retrieved_gt_file_ids": [
+          "E91YCBdvjlOT"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "「半年かかって溜めた小豆がいと落としたまで ようやく手に入れたこのゲームと共に今日この日曜日だけは ゆいぎな一日にしたいんだあ」というセリフを言っていました。",
+            "citation_file_ids": [
+              "E91YCBdvjlOT"
+            ],
+            "retrieved_file_ids": [
+              "E91YCBdvjlOT"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 1.0,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 2949
+          },
+          {
+            "answer": "「半年かかって溜めた小豆がいと落としたまで ようやく手に入れたこのゲームと共に今日この日曜日だけは ゆいぎな一日にしたいんだあ」というセリフを言っていました。",
+            "citation_file_ids": [
+              "E91YCBdvjlOT"
+            ],
+            "retrieved_file_ids": [
+              "E91YCBdvjlOT"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 1.0,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 4265
+          },
+          {
+            "answer": "「半年かかって溜めた小豆がいと落としたまで ようやく手に入れたこのゲームと共に今日この日曜日だけは ゆいぎな一日にしたいんだあ」というセリフを言っていました。",
+            "citation_file_ids": [
+              "E91YCBdvjlOT"
+            ],
+            "retrieved_file_ids": [
+              "E91YCBdvjlOT"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": 1.0,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 4306
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 1.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 1.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 1.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "011_vault_md_tech_paper",
+      "query": "Vision Transformer ってどういう仕組み？",
+      "stage1": {
+        "keywords": "Vision Transformer 仕組み",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 1
+      },
+      "stage2": {
+        "top_file_ids": [
+          "QzLEo8LTOgGr"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.2,
+        "retrieved_gt_file_ids": [
+          "QzLEo8LTOgGr"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "Vision Transformer (ViT) は、画像をパッチ（小さな断片）の系列に分割し、その系列をTransformerモデルで直接処理する仕組みです。このアプローチは、大規模な事前学習を前提としており、ResNetのような古典的なモデルを上回る精度を示すことが報告されています。",
+            "citation_file_ids": [
+              "QzLEo8LTOgGr"
+            ],
+            "retrieved_file_ids": [
+              "QzLEo8LTOgGr"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 4004
+          },
+          {
+            "answer": "Vision Transformer (ViT) は、画像をパッチ（小さな断片）の系列に分割し、その系列をTransformerモデルで直接処理する仕組みです。このアプローチは、大規模な事前学習を前提としており、ResNetのような古典的なモデルを上回る精度を示すことが報告されています。",
+            "citation_file_ids": [
+              "QzLEo8LTOgGr"
+            ],
+            "retrieved_file_ids": [
+              "QzLEo8LTOgGr"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 5400
+          },
+          {
+            "answer": "Vision Transformer (ViT) は、画像をパッチ（小さな断片）の系列に分割し、その系列をTransformerモデルで直接処理する仕組みです。このアプローチは、大規模な事前学習を前提としており、ResNetのような古典的なモデルを上回る精度を示すことが報告されています。",
+            "citation_file_ids": [
+              "QzLEo8LTOgGr"
+            ],
+            "retrieved_file_ids": [
+              "QzLEo8LTOgGr"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 5358
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 1.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 1.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "012_vault_md_cat_diary_primary",
+      "query": "うちのミケってどんな性格？",
+      "stage1": {
+        "keywords": "ミケ 性格",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 1
+      },
+      "stage2": {
+        "top_file_ids": [
+          "ZmxTegJvjxAy"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.2,
+        "retrieved_gt_file_ids": [
+          "ZmxTegJvjxAy"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "ミケは人懐っこく、とても賢い性格です。来客に対しても警戒心が薄く、膝に乗ろうとすることがあります。",
+            "citation_file_ids": [
+              "ZmxTegJvjxAy",
+              "ZmxTegJvjxAy"
+            ],
+            "retrieved_file_ids": [
+              "ZmxTegJvjxAy"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 3264
+          },
+          {
+            "answer": "ミケは人懐っこく、とても賢い性格です。来客に対しても警戒心が薄く、膝に乗ろうとすることがあります。",
+            "citation_file_ids": [
+              "ZmxTegJvjxAy",
+              "ZmxTegJvjxAy"
+            ],
+            "retrieved_file_ids": [
+              "ZmxTegJvjxAy"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 4706
+          },
+          {
+            "answer": "ミケは人懐っこく、とても賢い性格です。来客に対しても警戒心が薄く、膝に乗ろうとすることがあります。",
+            "citation_file_ids": [
+              "ZmxTegJvjxAy",
+              "ZmxTegJvjxAy"
+            ],
+            "retrieved_file_ids": [
+              "ZmxTegJvjxAy"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 4709
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 1.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 1.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "012_vocab_mismatch_vit",
+      "query": "畳み込みを使わずに画像処理を実現した新しいアーキテクチャは何？",
+      "stage1": {
+        "keywords": "畳み込み 画像処理 アーキテクチャ",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 1
+      },
+      "stage2": {
+        "top_file_ids": [
+          "QzLEo8LTOgGr"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.2,
+        "retrieved_gt_file_ids": [
+          "QzLEo8LTOgGr"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "提供された技術ノートには、畳み込み（CNN）を使わずに画像処理を実現した新しいアーキテクチャとして、Vision Transformer (ViT) が挙げられています。ViTは画像をパッチ系列に分割し、Transformerで直接処理するモデルです。",
+            "citation_file_ids": [
+              "QzLEo8LTOgGr"
+            ],
+            "retrieved_file_ids": [
+              "QzLEo8LTOgGr"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 3405
+          },
+          {
+            "answer": "提供された技術ノートには、畳み込み（CNN）を使わずに画像処理を実現した新しいアーキテクチャとして、Vision Transformer (ViT) が挙げられています。ViTは画像をパッチ系列に分割し、Transformerで直接処理するモデルです。",
+            "citation_file_ids": [
+              "QzLEo8LTOgGr"
+            ],
+            "retrieved_file_ids": [
+              "QzLEo8LTOgGr"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 4886
+          },
+          {
+            "answer": "提供された技術ノートには、畳み込み（CNN）を使わずに画像処理を実現した新しいアーキテクチャとして、Vision Transformer (ViT) が挙げられています。ViTは画像をパッチ系列に分割し、Transformerで直接処理するモデルです。",
+            "citation_file_ids": [
+              "QzLEo8LTOgGr"
+            ],
+            "retrieved_file_ids": [
+              "QzLEo8LTOgGr"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 4826
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 1.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 1.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "013_required_proper_noun_han",
+      "query": "東福寺の紅葉はどうだった？",
+      "stage1": {
+        "keywords": "東福寺 紅葉",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 0
+      },
+      "stage2": {
+        "top_file_ids": [
+          "xv2nmOPUTJvi",
+          "qf--MrL_g_Gt"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.4,
+        "retrieved_gt_file_ids": [
+          "xv2nmOPUTJvi",
+          "qf--MrL_g_Gt"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "東福寺の通天橋からの紅葉の眺めは絶定とのことです。また、栄感道の紅葉も有名で、夜にはライトアップされ、鉄画区の道を歩きながら紅葉狩りを楽しめます。",
+            "citation_file_ids": [
+              "xv2nmOPUTJvi"
+            ],
+            "retrieved_file_ids": [
+              "xv2nmOPUTJvi",
+              "qf--MrL_g_Gt"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 3375
+          },
+          {
+            "answer": "東福寺の通天橋からの紅葉の眺めは絶定とのことです。また、栄感道の紅葉も有名で、夜にはライトアップされ、鉄画区の道を歩きながら紅葉狩りを楽しめます。",
+            "citation_file_ids": [
+              "xv2nmOPUTJvi"
+            ],
+            "retrieved_file_ids": [
+              "xv2nmOPUTJvi",
+              "qf--MrL_g_Gt"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 4612
+          },
+          {
+            "answer": "東福寺の通天橋からの紅葉の眺めは絶定とのことです。また、栄感道の紅葉も有名で、夜にはライトアップされ、鉄画区の道を歩きながら紅葉狩りを楽しめます。",
+            "citation_file_ids": [
+              "xv2nmOPUTJvi"
+            ],
+            "retrieved_file_ids": [
+              "xv2nmOPUTJvi",
+              "qf--MrL_g_Gt"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 4686
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 1.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 1.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "014_required_proper_noun_latin",
+      "query": "ViTの強みは何ですか？",
+      "stage1": {
+        "keywords": "ViT 強み",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 0
+      },
+      "stage2": {
+        "top_file_ids": [
+          "QzLEo8LTOgGr"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.2,
+        "retrieved_gt_file_ids": [
+          "QzLEo8LTOgGr"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "提供されたファイル情報には、ViTの強みに関する具体的な記述が見当たりませんでした。",
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "QzLEo8LTOgGr"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 2818
+          },
+          {
+            "answer": "提供されたファイル情報には、ViTの強みに関する具体的な記述が見当たりませんでした。",
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "QzLEo8LTOgGr"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 4207
+          },
+          {
+            "answer": "提供されたファイル情報には、ViTの強みに関する具体的な記述が見当たりませんでした。",
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "QzLEo8LTOgGr"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 3995
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 0.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 0.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "015_required_kana_chiikawa",
+      "query": "ちいかわのアイスはどんな味？",
+      "stage1": {
+        "keywords": "ちいかわ アイス",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 0
+      },
+      "stage2": {
+        "top_file_ids": [
+          "z6H1Vnkm-4Z7"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.2,
+        "retrieved_gt_file_ids": [
+          "z6H1Vnkm-4Z7"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "試食したところ、ヨーグルトの酸味があり甘さが控えめな味わいでした。",
+            "citation_file_ids": [
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7"
+            ],
+            "retrieved_file_ids": [
+              "z6H1Vnkm-4Z7"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 8678
+          },
+          {
+            "answer": "試食したところ、ヨーグルトの酸味があり甘さが控えめな味わいでした。",
+            "citation_file_ids": [
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7"
+            ],
+            "retrieved_file_ids": [
+              "z6H1Vnkm-4Z7"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 10206
+          },
+          {
+            "answer": "試食したところ、ヨーグルトの酸味があり甘さが控えめな味わいでした。",
+            "citation_file_ids": [
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7",
+              "z6H1Vnkm-4Z7"
+            ],
+            "retrieved_file_ids": [
+              "z6H1Vnkm-4Z7"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 10343
+          }
+        ],
+        "must_mention_coverage_median": 0.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 1.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 1.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "016_required_compound_old_olive",
+      "query": "古木オリーブの値段はいくらだった？",
+      "stage1": {
+        "keywords": "古木オリーブ 値段",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 0
+      },
+      "stage2": {
+        "top_file_ids": [
+          "mJLIgl6IaF3d"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.2,
+        "retrieved_gt_file_ids": [
+          "mJLIgl6IaF3d"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "動画内では、古木オリーブの具体的な購入価格についての言及はありませんでした。",
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "mJLIgl6IaF3d"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 4272
+          },
+          {
+            "answer": "動画内では、古木オリーブの具体的な購入価格についての言及はありませんでした。",
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "mJLIgl6IaF3d"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 5829
+          },
+          {
+            "answer": "動画内では、古木オリーブの具体的な購入価格についての言及はありませんでした。",
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "mJLIgl6IaF3d"
+            ],
+            "must_mention_coverage": 0.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 5827
+          }
+        ],
+        "must_mention_coverage_median": 0.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 0.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 0.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "017_required_kuroneko_curry",
+      "query": "黒猫が出てくるカレーの話を教えて",
+      "stage1": {
+        "keywords": "黒猫 カレー 話",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 0
+      },
+      "stage2": {
+        "top_file_ids": [
+          "ZmxTegJvjxAy",
+          "5z3uW83PgOb1",
+          "j_UPRviAs1Mm",
+          "6ZUevJjXSBVz",
+          "z6H1Vnkm-4Z7",
+          "qf--MrL_g_Gt"
+        ],
+        "file_recall_at_5": 0.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 0.16666666666666666,
+        "precision_at_5": 0.0,
+        "retrieved_gt_file_ids": [
+          "qf--MrL_g_Gt"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "提供されたファイル情報の中には、「黒猫が出てくるカレー」に関する具体的な情報は含まれていませんでした。",
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "ZmxTegJvjxAy",
+              "5z3uW83PgOb1",
+              "j_UPRviAs1Mm",
+              "6ZUevJjXSBVz",
+              "z6H1Vnkm-4Z7"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 3926
+          },
+          {
+            "answer": "提供されたファイル情報の中には、「黒猫が出てくるカレー」に関する具体的な情報は含まれていませんでした。",
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "ZmxTegJvjxAy",
+              "5z3uW83PgOb1",
+              "j_UPRviAs1Mm",
+              "6ZUevJjXSBVz",
+              "z6H1Vnkm-4Z7"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 5911
+          },
+          {
+            "answer": "提供されたファイル情報の中には、「黒猫が出てくるカレー」に関する具体的な情報は含まれていませんでした。",
+            "citation_file_ids": [],
+            "retrieved_file_ids": [
+              "ZmxTegJvjxAy",
+              "5z3uW83PgOb1",
+              "j_UPRviAs1Mm",
+              "6ZUevJjXSBVz",
+              "z6H1Vnkm-4Z7"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 0.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 0.0,
+            "took_ms": 5555
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 0.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 0.0,
+        "citation_in_retrieved_unstable": false
+      }
+    },
+    {
+      "id": "018_required_machine_learning_method",
+      "query": "機械学習でよく使う手法には何がありますか？",
+      "stage1": {
+        "keywords": "機械学習 手法",
+        "must_include_coverage": 1.0,
+        "must_exclude_violations": 0
+      },
+      "stage2": {
+        "top_file_ids": [
+          "rG-RB9DbOblv",
+          "QzLEo8LTOgGr"
+        ],
+        "file_recall_at_5": 1.0,
+        "file_recall_at_10": 1.0,
+        "segment_recall_at_5": 1.0,
+        "segment_recall_at_10": 1.0,
+        "mrr": 1.0,
+        "precision_at_5": 0.4,
+        "retrieved_gt_file_ids": [
+          "rG-RB9DbOblv",
+          "QzLEo8LTOgGr"
+        ]
+      },
+      "stage3": {
+        "runs": [
+          {
+            "answer": "機械学習でよく使われる代表的なアルゴリズムや手法には、以下のようなものがあります。\n\n*   **アルゴリズムの類型として:** 線形回帰、ロジスティック回帰、決定木、ランダムフォレスト、勾配ブースティング、ニューラルネットワーク（MLP、CNN、Transformer）などが挙げられます。\n*   **代表的なモデルやアーキテクチャとして:** 選挙会期、決定木、ニューラルネットワークなどが挙げられています。\n*   **画像分類などの具体的なタスクでは:** ResNet（残差接続を導入したモデル）、Vision Transformer (ViT)（画像をパッチ系列に分割しTransformerで処理）、CLIP（画像とテキストを対照学習するモデル）などが用いられています。\n\nまた、機械学習の学習の分類としては、教師あり学習、教師なし学習、強化学習の三つに大別されます。",
+            "citation_file_ids": [
+              "rG-RB9DbOblv",
+              "QzLEo8LTOgGr"
+            ],
+            "retrieved_file_ids": [
+              "rG-RB9DbOblv",
+              "QzLEo8LTOgGr"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 6913
+          },
+          {
+            "answer": "機械学習でよく使われる代表的なアルゴリズムや手法には、以下のようなものがあります。\n\n*   **アルゴリズムの類型として:** 線形回帰、ロジスティック回帰、決定木、ランダムフォレスト、勾配ブースティング、ニューラルネットワーク（MLP、CNN、Transformer）などが挙げられます。\n*   **代表的なモデルやアーキテクチャとして:** 選挙会期、決定木、ニューラルネットワークなどが挙げられています。\n*   **画像分類などの具体的なタスクでは:** ResNet（残差接続を導入したモデル）、Vision Transformer (ViT)（画像をパッチ系列に分割しTransformerで処理）、CLIP（画像とテキストを対照学習するモデル）などが用いられています。\n\nまた、機械学習の学習の分類としては、教師あり学習、教師なし学習、強化学習の三つに大別されます。",
+            "citation_file_ids": [
+              "rG-RB9DbOblv",
+              "QzLEo8LTOgGr"
+            ],
+            "retrieved_file_ids": [
+              "rG-RB9DbOblv",
+              "QzLEo8LTOgGr"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 8527
+          },
+          {
+            "answer": "機械学習でよく使われる代表的なアルゴリズムや手法には、以下のようなものがあります。\n\n*   **アルゴリズムの類型として:** 線形回帰、ロジスティック回帰、決定木、ランダムフォレスト、勾配ブースティング、ニューラルネットワーク（MLP、CNN、Transformer）などが挙げられます。\n*   **代表的なモデルやアーキテクチャとして:** 選挙会期、決定木、ニューラルネットワークなどが挙げられています。\n*   **画像分類などの具体的なタスクでは:** ResNet（残差接続を導入したモデル）、Vision Transformer (ViT)（画像をパッチ系列に分割しTransformerで処理）、CLIP（画像とテキストを対照学習するモデル）などが用いられています。\n\nまた、機械学習の学習の分類としては、教師あり学習、教師なし学習、強化学習の三つに大別されます。",
+            "citation_file_ids": [
+              "rG-RB9DbOblv",
+              "QzLEo8LTOgGr"
+            ],
+            "retrieved_file_ids": [
+              "rG-RB9DbOblv",
+              "QzLEo8LTOgGr"
+            ],
+            "must_mention_coverage": 1.0,
+            "citation_in_ground_truth": 1.0,
+            "citation_segment_match": null,
+            "citation_in_retrieved": 1.0,
+            "took_ms": 8559
+          }
+        ],
+        "must_mention_coverage_median": 1.0,
+        "must_mention_coverage_unstable": false,
+        "citation_in_ground_truth_median": 1.0,
+        "citation_in_ground_truth_unstable": false,
+        "citation_segment_match_median": 0.0,
+        "citation_segment_match_unstable": false,
+        "citation_in_retrieved_median": 1.0,
+        "citation_in_retrieved_unstable": false
+      }
+    }
+  ]
+}

@@ -96,9 +96,12 @@ def _settings_with_hierarchical(make_settings, *, enabled, **overrides):
 
 @pytest.fixture()
 def common_patches(monkeypatch):
+    from app.rag.query_transform import StructuredQuery as _SQ
     monkeypatch.setattr(
-        "app.rag.service.transform_query",
-        AsyncMock(return_value="kw"),
+        "app.rag.service.transform_query_structured",
+        AsyncMock(return_value=_SQ(
+            required=(), semantic=("kw",), raw_keywords="kw",
+        )),
     )
     monkeypatch.setattr(
         "app.rag.service.assemble_contexts",

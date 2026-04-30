@@ -513,10 +513,16 @@ class TestStreamAnswerHappyPath:
     async def test_emits_ordered_events(
         self, monkeypatch, patched_rag_enabled
     ):
+        from app.rag.query_transform import StructuredQuery
+
         candidates = [_retrieved("f1"), _retrieved("f2")]
         monkeypatch.setattr(
-            "app.rag.service.transform_query",
-            AsyncMock(return_value="京都 紅葉"),
+            "app.rag.service.transform_query_structured",
+            AsyncMock(return_value=StructuredQuery(
+                required=(),
+                semantic=("京都", "紅葉"),
+                raw_keywords="京都 紅葉",
+            )),
         )
         monkeypatch.setattr(
             "app.rag.service.retrieve_with_keywords",
@@ -590,9 +596,12 @@ class TestStreamAnswerEmptyRetrieval:
     async def test_empty_candidates_short_circuits(
         self, monkeypatch, patched_rag_enabled
     ):
+        from app.rag.query_transform import StructuredQuery as _SQ
         monkeypatch.setattr(
-            "app.rag.service.transform_query",
-            AsyncMock(return_value="kw"),
+            "app.rag.service.transform_query_structured",
+            AsyncMock(return_value=_SQ(
+                required=(), semantic=("kw",), raw_keywords="kw",
+            )),
         )
         monkeypatch.setattr(
             "app.rag.service.retrieve_with_keywords",
@@ -621,9 +630,12 @@ class TestStreamAnswerHallucinationFilter:
         self, monkeypatch, patched_rag_enabled
     ):
         candidates = [_retrieved("f1")]
+        from app.rag.query_transform import StructuredQuery as _SQ
         monkeypatch.setattr(
-            "app.rag.service.transform_query",
-            AsyncMock(return_value="kw"),
+            "app.rag.service.transform_query_structured",
+            AsyncMock(return_value=_SQ(
+                required=(), semantic=("kw",), raw_keywords="kw",
+            )),
         )
         monkeypatch.setattr(
             "app.rag.service.retrieve_with_keywords",
@@ -668,9 +680,12 @@ class TestStreamAnswerProgressiveCitations:
         self, monkeypatch, patched_rag_enabled
     ):
         candidates = [_retrieved("f1"), _retrieved("f2")]
+        from app.rag.query_transform import StructuredQuery as _SQ
         monkeypatch.setattr(
-            "app.rag.service.transform_query",
-            AsyncMock(return_value="kw"),
+            "app.rag.service.transform_query_structured",
+            AsyncMock(return_value=_SQ(
+                required=(), semantic=("kw",), raw_keywords="kw",
+            )),
         )
         monkeypatch.setattr(
             "app.rag.service.retrieve_with_keywords",
@@ -741,9 +756,12 @@ class TestStreamAnswerProgressiveCitations:
         stream too, not just the terminal list.
         """
         candidates = [_retrieved("real-1")]
+        from app.rag.query_transform import StructuredQuery as _SQ
         monkeypatch.setattr(
-            "app.rag.service.transform_query",
-            AsyncMock(return_value="kw"),
+            "app.rag.service.transform_query_structured",
+            AsyncMock(return_value=_SQ(
+                required=(), semantic=("kw",), raw_keywords="kw",
+            )),
         )
         monkeypatch.setattr(
             "app.rag.service.retrieve_with_keywords",
@@ -787,9 +805,12 @@ class TestStreamAnswerProgressiveCitations:
         render every citation.
         """
         candidates = [_retrieved("f1"), _retrieved("f2")]
+        from app.rag.query_transform import StructuredQuery as _SQ
         monkeypatch.setattr(
-            "app.rag.service.transform_query",
-            AsyncMock(return_value="kw"),
+            "app.rag.service.transform_query_structured",
+            AsyncMock(return_value=_SQ(
+                required=(), semantic=("kw",), raw_keywords="kw",
+            )),
         )
         monkeypatch.setattr(
             "app.rag.service.retrieve_with_keywords",
@@ -821,9 +842,12 @@ class TestStreamAnswerProgressiveCitations:
     ):
         """Prose-only LLM output emits zero progressive ``citation`` events."""
         candidates = [_retrieved("f1")]
+        from app.rag.query_transform import StructuredQuery as _SQ
         monkeypatch.setattr(
-            "app.rag.service.transform_query",
-            AsyncMock(return_value="kw"),
+            "app.rag.service.transform_query_structured",
+            AsyncMock(return_value=_SQ(
+                required=(), semantic=("kw",), raw_keywords="kw",
+            )),
         )
         monkeypatch.setattr(
             "app.rag.service.retrieve_with_keywords",
@@ -851,9 +875,12 @@ class TestStreamAnswerUnparseableJSON:
     ):
         """Prose-only output still emits a clean terminal ``citations`` event."""
         candidates = [_retrieved("f1")]
+        from app.rag.query_transform import StructuredQuery as _SQ
         monkeypatch.setattr(
-            "app.rag.service.transform_query",
-            AsyncMock(return_value="kw"),
+            "app.rag.service.transform_query_structured",
+            AsyncMock(return_value=_SQ(
+                required=(), semantic=("kw",), raw_keywords="kw",
+            )),
         )
         monkeypatch.setattr(
             "app.rag.service.retrieve_with_keywords",

@@ -41,7 +41,11 @@ from app.rag.history_client import fetch_viewer_history
 from app.rag.parser import Citation, _parse_citation, parse_answer
 from app.rag.prompt import build_system_prompt, build_user_prompt
 from app.rag.query_decomposer import DecomposedQuery, TimeRange, decompose_query
-from app.rag.query_transform import transform_query
+from app.rag.query_transform import (
+    RequiredTerm,
+    transform_query,
+    transform_query_structured,
+)
 from app.rag.retriever import (
     RetrievedFile,
     _filter_file_ids_via_internal_api,
@@ -520,6 +524,7 @@ async def _run_hierarchical_retrieval(
     top_k: int,
     original_query: str | None = None,
     pre_scope_file_ids: list[str] | None = None,
+    required: tuple[RequiredTerm, ...] | None = None,
 ) -> tuple[
     list[RetrievedFile],
     "ShortlistResult | None",
@@ -606,6 +611,7 @@ async def _run_hierarchical_retrieval(
             drive=drive,
             original_query=semantic,
             file_id_scope=bypass_scope,
+            required=required,
         )
         return candidates, None, None
 
@@ -673,6 +679,7 @@ async def _run_hierarchical_retrieval(
             drive=drive,
             original_query=semantic,
             file_id_scope=bypass_scope,
+            required=required,
         )
         return candidates, None, None
 
@@ -707,6 +714,7 @@ async def _run_hierarchical_retrieval(
             drive=drive,
             original_query=semantic,
             file_id_scope=bypass_scope,
+            required=required,
         )
         return candidates, None, None
 
@@ -764,6 +772,7 @@ async def _run_hierarchical_retrieval(
                 drive=drive,
                 original_query=semantic,
                 file_id_scope=list(filtered_shortlist.file_ids),
+                required=required,
             )
             for clue in clues
         ]
@@ -797,6 +806,7 @@ async def _run_hierarchical_retrieval(
             drive=drive,
             original_query=semantic,
             file_id_scope=pre_scope_file_ids,
+            required=required,
         )
         seen: set[str] = set()
         merged: list[RetrievedFile] = []
@@ -864,7 +874,11 @@ async def answer_question(
     # * hierarchical enabled + drive given → hierarchical helper.
     # * fallback → legacy single-stage retrieval.
     if history.file_ids and settings.rag.hierarchical.enabled and drive:
-        keywords = await transform_query(query, temperature=temperature)
+        structured = await transform_query_structured(
+            query, temperature=temperature
+        )
+        keywords = structured.raw_keywords or query
+        required = structured.required or None
         candidates, _shortlist, _clues = await _run_hierarchical_retrieval(
             query=query,
             keywords=keywords,
@@ -874,9 +888,14 @@ async def answer_question(
             top_k=effective_top_k,
             original_query=query,
             pre_scope_file_ids=history.file_ids,
+            required=required,
         )
     elif history.file_ids:
-        keywords = await transform_query(query, temperature=temperature)
+        structured = await transform_query_structured(
+            query, temperature=temperature
+        )
+        keywords = structured.raw_keywords or query
+        required = structured.required or None
         category_terms = await _resolve_category_expansion(history.decomposed)
         if category_terms:
             per_term_results = await asyncio.gather(
@@ -889,6 +908,7 @@ async def answer_question(
                         drive=drive,
                         original_query=query,
                         file_id_scope=history.file_ids,
+                        required=required,
                     )
                     for term in category_terms
                 ]
@@ -905,9 +925,14 @@ async def answer_question(
                 drive=drive,
                 original_query=query,
                 file_id_scope=history.file_ids,
+                required=required,
             )
     elif settings.rag.hierarchical.enabled and drive:
-        keywords = await transform_query(query, temperature=temperature)
+        structured = await transform_query_structured(
+            query, temperature=temperature
+        )
+        keywords = structured.raw_keywords or query
+        required = structured.required or None
         candidates, _shortlist, _clues = await _run_hierarchical_retrieval(
             query=query,
             keywords=keywords,
@@ -916,6 +941,7 @@ async def answer_question(
             file_type=file_type,
             top_k=effective_top_k,
             original_query=query,
+            required=required,
         )
     else:
         candidates = await retrieve_candidates(
@@ -1160,7 +1186,14 @@ async def stream_answer(
     # This is the earliest point we can give the user visible feedback
     # ("searching for: ...") which matters a lot when the downstream
     # retrieval + LLM latency is 2-5 seconds on a home LAN.
-    keywords = await transform_query(query)
+    # The structured form drives the required-keyword hard filter
+    # (Phase 2+ of 2026-04-30-required-semantic-hybrid-retrieval). The
+    # SSE event still carries the flat keyword string for backwards
+    # compatibility — surfacing required vs semantic to the UI is a
+    # follow-up (Phase 5).
+    structured = await transform_query_structured(query)
+    keywords = structured.raw_keywords or query
+    required = structured.required or None
     yield AnswerEvent(kind="keywords", data={"keywords": keywords})
 
     # Stage 1+3: retrieval. Routing mirrors ``answer_question``:
@@ -1184,6 +1217,7 @@ async def stream_answer(
             top_k=effective_top_k,
             original_query=query,
             pre_scope_file_ids=history.file_ids,
+            required=required,
         )
     elif history.file_ids:
         # Stage C: bilingual surface-form expansion of the decomposed
@@ -1212,6 +1246,7 @@ async def stream_answer(
                         drive=drive,
                         original_query=query,
                         file_id_scope=history.file_ids,
+                        required=required,
                     )
                     for term in category_terms
                 ]
@@ -1228,6 +1263,7 @@ async def stream_answer(
                 drive=drive,
                 original_query=query,
                 file_id_scope=history.file_ids,
+                required=required,
             )
         shortlist = None
         clues = None
@@ -1240,6 +1276,7 @@ async def stream_answer(
             file_type=file_type,
             top_k=effective_top_k,
             original_query=query,
+            required=required,
         )
 
     # Emit the shortlist + clues events ONLY when the hierarchical path
@@ -1744,6 +1781,22 @@ async def find_files(
         else (decomposed.semantic_query or question)
     )
 
+    # Stage D bonus: structured query transform for the required-keyword
+    # hard filter. Independent from ``decomposed`` (which carries
+    # time / personal_scope / file_type) — the structured transform
+    # extracts proper-noun-like ``required`` terms that anchor the
+    # retrieve. Failures collapse to ``required=None`` so Find still
+    # works without the hard filter.
+    try:
+        structured = await transform_query_structured(question)
+        required = structured.required or None
+    except Exception as exc:  # noqa: BLE001 — graceful fallback
+        logger.debug(
+            "Find Stage D structured transform failed: %s",
+            type(exc).__name__,
+        )
+        required = None
+
     # Top-K headroom for rerank: pull twice the user-visible limit so
     # the response cap doesn't starve downstream filtering.
     retrieve_top_k = max(effective_limit * 2, effective_limit)
@@ -1757,6 +1810,7 @@ async def find_files(
             drive=drive,
             original_query=question,
             file_id_scope=file_id_scope,
+            required=required,
         )
     except Exception as exc:  # noqa: BLE001 — graceful fallback
         logger.debug("Find Stage D retrieve failed: %s", type(exc).__name__)
