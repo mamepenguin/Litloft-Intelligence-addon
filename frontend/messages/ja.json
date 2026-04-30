@@ -70,6 +70,19 @@
       "text": "文書"
     }
   },
+  "find": {
+    "button": "「{query}」でファイルを探す",
+    "title": "ファイルを探す",
+    "placeholder": "例: 先週観た映画でSFっぽいの",
+    "submit": "探す",
+    "loading": "検索中…",
+    "error": "検索に失敗しました",
+    "empty": "該当するファイルが見つかりませんでした",
+    "totalCount": "{count} 件見つかりました",
+    "categoryExpansion": "意味展開: {terms}",
+    "chipPersonalViewed": "視聴済み",
+    "chipPersonalNotViewed": "未視聴"
+  },
   "search": {
     "matchTranscript": "音声一致",
     "matchTranscriptKeyword": "音声キーワード一致",

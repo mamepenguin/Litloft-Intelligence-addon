@@ -6,7 +6,8 @@
     "href": "/drive/{drive}/addons/intelligence",
     "slots": {
         "search-modes": [
-            {"id": "semantic-search", "label": "Semantic Search", "priority": 10}
+            {"id": "semantic-search", "label": "Semantic Search", "priority": 10},
+            {"id": "find-mode", "label": "Find", "priority": 15}
         ],
         "file-detail-sections": [
             {"id": "suggested-tags", "label": "Suggested Tags", "priority": 5},
@@ -310,6 +311,12 @@
                         "sources": "drive"
                     }
                 }
+            },
+            {
+                "path": "/find",
+                "methods": ["POST"],
+                "pre_check": {"type": "addon_feature", "feature": "rag"},
+                "response_filter": null
             },
             {
                 "path": "/files/{file_id}/visual_description",

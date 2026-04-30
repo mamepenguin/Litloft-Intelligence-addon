@@ -40,7 +40,7 @@ from app.rag.context import assemble_contexts
 from app.rag.history_client import fetch_viewer_history
 from app.rag.parser import Citation, _parse_citation, parse_answer
 from app.rag.prompt import build_system_prompt, build_user_prompt
-from app.rag.query_decomposer import DecomposedQuery, decompose_query
+from app.rag.query_decomposer import DecomposedQuery, TimeRange, decompose_query
 from app.rag.query_transform import transform_query
 from app.rag.retriever import (
     RetrievedFile,
@@ -1459,3 +1459,325 @@ def _parse_streamed_answer(
 
     allowed = frozenset(c.file_id for c in candidates)
     return parse_answer(raw_json, allowed)
+
+
+# ---------------------------------------------------------------------------
+# Find mode (file-listing sibling of Ask) — spec
+# ``2026-04-30-intelligence-find-mode.md``
+# ---------------------------------------------------------------------------
+
+
+# Default page size mirrors spec §3.2 example. The pydantic ``FindRequest``
+# clamps to [1, 20] but the service-level default lets callers omit the
+# argument entirely (e.g. internal tooling, eval harness).
+_FIND_DEFAULT_LIMIT = 20
+
+# File-type strings the LLM emits that must NOT be forwarded as a literal
+# filter — they translate to "no hint", which means "do not filter".
+_FIND_NO_FILE_TYPE = frozenset({"none", "", None})
+
+
+def _build_decomposed_from_overrides(
+    raw_query: str, overrides: dict[str, Any]
+) -> DecomposedQuery:
+    """Turn a chip-edited ``overrides`` dict into a ``DecomposedQuery``.
+
+    The frontend posts overrides as plain-string axis values
+    (``time_range="none"``, ``personal_scope="viewed"``, ...). We resolve
+    the symbolic time-range label here so downstream stages receive the
+    same shape as the LLM-decomposed path.
+    """
+    from app.rag.query_decomposer import _resolve_time_range  # local import
+
+    time_label = overrides.get("time_range") or "none"
+    if not isinstance(time_label, str):
+        time_label = "none"
+    personal_scope = overrides.get("personal_scope") or "none"
+    if not isinstance(personal_scope, str):
+        personal_scope = "none"
+    file_type_hint = overrides.get("file_type_hint") or "none"
+    if not isinstance(file_type_hint, str):
+        file_type_hint = "none"
+    semantic_query = overrides.get("semantic_query") or ""
+    if not isinstance(semantic_query, str):
+        semantic_query = ""
+
+    cfg_lookback = settings.rag.personal_history.max_lookback_days
+    try:
+        from datetime import UTC, datetime
+        time_range = _resolve_time_range(
+            time_label,
+            now=datetime.now(UTC),
+            max_lookback_days=cfg_lookback,
+        )
+    except Exception:  # noqa: BLE001 — defensive: never hard-fail Find
+        time_range = TimeRange.empty()
+
+    return DecomposedQuery(
+        raw_query=raw_query,
+        time_range=time_range,
+        personal_scope=personal_scope,
+        file_type_hint=file_type_hint,
+        semantic_query=semantic_query,
+    )
+
+
+def _decomposed_to_dict(
+    decomposed: DecomposedQuery, category_expansion: list[str]
+) -> dict[str, Any]:
+    """Render a ``DecomposedQuery`` as the spec §3.2 ``decomposed`` block.
+
+    All five keys are always present so the frontend can render its chip
+    layout without conditional existence checks. ``time_range`` is a
+    nested dict (kind / value / after / before); the other axes collapse
+    to plain strings.
+    """
+    tr = decomposed.time_range
+    return {
+        "time_range": {
+            "kind": "relative" if tr.label not in ("none", "") else "none",
+            "value": tr.label or "none",
+            "after": tr.after.isoformat() if tr.after else None,
+            "before": tr.before.isoformat() if tr.before else None,
+        },
+        "personal_scope": decomposed.personal_scope,
+        "file_type_hint": decomposed.file_type_hint,
+        "semantic_query": decomposed.semantic_query,
+        "category_expansion": list(category_expansion),
+    }
+
+
+def _segment_to_hit(retrieved: Any) -> dict[str, Any]:
+    """Build the spec §3.2 ``hit`` block from a retrieved file.
+
+    Picks the first segment as the representative hit. Segment shape is
+    duck-typed so the function works with both real ``RetrievedFile``
+    (segments are ``SegmentGroup`` instances) and the test mocks (which
+    expose ``text`` / ``start_seconds`` / ``end_seconds`` / ``kind``
+    directly on a ``MagicMock``).
+    """
+    segments = getattr(retrieved, "segments", None) or ()
+    if not segments:
+        return {
+            "kind": "transcript",
+            "location": None,
+            "text": "",
+        }
+    seg = segments[0]
+    text = getattr(seg, "text", None)
+    if not isinstance(text, str):
+        # SegmentGroup carries ``matches[].text`` instead of a flat
+        # ``text`` attribute; pull the first match's text as a fallback.
+        matches = getattr(seg, "matches", None) or ()
+        text = matches[0].text if matches and getattr(matches[0], "text", None) else ""
+
+    kind = getattr(seg, "kind", None)
+    if not isinstance(kind, str):
+        match_types = getattr(retrieved, "match_types", None) or ()
+        kind = match_types[0] if match_types else "transcript"
+
+    location: dict[str, Any] = {}
+    start = getattr(seg, "start_seconds", None)
+    end = getattr(seg, "end_seconds", None)
+    if isinstance(start, (int, float)):
+        location["start_seconds"] = float(start)
+    if isinstance(end, (int, float)):
+        location["end_seconds"] = float(end)
+    # SegmentGroup exposes ``time_range`` as a tuple instead of named
+    # attributes. Use it as a fallback when the explicit fields are
+    # missing — keeps real retrieve output usable without changes.
+    if not location:
+        time_range = getattr(seg, "time_range", None)
+        if isinstance(time_range, tuple) and len(time_range) >= 2:
+            location = {
+                "start_seconds": float(time_range[0]),
+                "end_seconds": float(time_range[1]),
+            }
+
+    # Normalise empty location to null so the wire format matches the TS
+    # contract (``location: {...} | null``). An empty dict is uninformative
+    # and a future consumer using ``if (hit.location !== null)`` would be
+    # surprised.
+    return {
+        "kind": kind,
+        "location": location if location else None,
+        "text": text,
+    }
+
+
+def _build_result_item(
+    retrieved: Any, viewed_at_by_id: dict[str, str]
+) -> dict[str, Any]:
+    """Render one retrieved file as a spec §3.2 ``results[]`` element."""
+    file_id = getattr(retrieved, "file_id", "")
+    score = getattr(retrieved, "score", 0.0)
+    name = getattr(retrieved, "filename", None) or getattr(retrieved, "title", "") or ""
+    file_type = getattr(retrieved, "file_type", "") or ""
+
+    return {
+        "file_id": file_id,
+        "score": float(score) if isinstance(score, (int, float)) else 0.0,
+        "hit": _segment_to_hit(retrieved),
+        "file": {
+            "name": name,
+            "file_type": file_type,
+            "thumbnail_url": f"/api/files/{file_id}/thumbnail",
+            "viewed_at": viewed_at_by_id.get(file_id),
+        },
+    }
+
+
+def _empty_find_response(
+    decomposed: DecomposedQuery,
+    limit: int,
+    category_expansion: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build a zero-result response with the decomposed block populated.
+
+    ``category_expansion`` reflects whatever Stage C produced (or ``[]``
+    on skip / failure) so the chip layout stays accurate even when no
+    files matched.
+    """
+    return {
+        "decomposed": _decomposed_to_dict(decomposed, category_expansion or []),
+        "results": [],
+        "total": 0,
+        "limit": limit,
+    }
+
+
+async def find_files(
+    question: str,
+    drive: str,
+    viewer_id: str | None = None,
+    overrides: dict[str, Any] | None = None,
+    limit: int = _FIND_DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    """Run the Find pipeline (Stage A-D) and return spec §3.2 JSON.
+
+    Find mode is the file-listing sibling of Ask: same Stages A-D, no
+    Stage E (LLM answer generation). On any per-stage failure the
+    pipeline degrades gracefully — empty history scope, raw semantic
+    fallback, empty retrieve — but never raises.
+
+    Args:
+        question: Raw user question (already length-validated).
+        drive: Canonical drive name.
+        viewer_id: Optional viewer hash. ``None`` skips Stage B
+            entirely (graceful: spec §13.A).
+        overrides: Chip-edited structured query. When present, Stage A
+            (LLM decompose) is skipped and the dict is treated as the
+            source of truth.
+        limit: Page size cap on the returned ``results`` list.
+
+    Returns:
+        A dict with ``decomposed`` / ``results`` / ``total`` / ``limit``
+        keys per spec §3.2.
+    """
+    effective_limit = max(1, int(limit))
+
+    # Stage A: decompose (or use overrides verbatim).
+    if overrides:
+        decomposed = _build_decomposed_from_overrides(question, overrides)
+    else:
+        try:
+            decomposed = await decompose_query(question)
+        except Exception as exc:  # noqa: BLE001 — graceful fallback
+            logger.debug("Find Stage A decompose failed: %s", type(exc).__name__)
+            decomposed = DecomposedQuery.passthrough(question)
+
+    # Stage B: viewer history filter. Only runs when the user asked
+    # something personal AND we have a viewer_id to filter by. Missing
+    # viewer_id is a graceful skip — spec §13.A explicitly forbids 4xx
+    # here so opt-in profile state stays optional.
+    file_id_scope: list[str] | None = None
+    viewed_at_by_id: dict[str, str] = {}
+    if (
+        decomposed.personal_scope in ("viewed", "not_viewed")
+        and viewer_id is not None
+    ):
+        try:
+            file_id_scope = await fetch_viewer_history(
+                viewer_id=viewer_id,
+                drive=drive,
+                after=decomposed.time_range.after,
+                before=decomposed.time_range.before,
+                kind=decomposed.personal_scope,  # type: ignore[arg-type]
+            )
+        except Exception as exc:  # noqa: BLE001 — graceful fallback
+            logger.debug(
+                "Find Stage B history failed: %s", type(exc).__name__
+            )
+            file_id_scope = None
+
+    # Stage C: category expansion. Skipped on empty semantic_query —
+    # the user gave us no concept to expand. Failures fall back to the
+    # raw semantic_query as a single-element list (mirror Ask's
+    # graceful degradation in query_transform).
+    category_expansion: list[str] = []
+    if decomposed.semantic_query.strip():
+        try:
+            expanded = await expand_category(decomposed.semantic_query)
+            if isinstance(expanded, list):
+                category_expansion = [
+                    term for term in expanded if isinstance(term, str)
+                ]
+        except Exception as exc:  # noqa: BLE001 — graceful fallback
+            logger.debug(
+                "Find Stage C expand failed: %s", type(exc).__name__
+            )
+            category_expansion = []
+
+    # Stage D: scoped retrieval. The keywords passed to the retriever
+    # are the expansion when present, else the raw semantic_query, else
+    # the original question as a last resort. ``file_type=None`` when
+    # the hint is "none" / empty — passing the literal "none" would
+    # filter to nothing.
+    file_type_hint = decomposed.file_type_hint
+    file_type_filter = (
+        None if file_type_hint in _FIND_NO_FILE_TYPE else file_type_hint
+    )
+
+    keywords = (
+        category_expansion[0]
+        if category_expansion
+        else (decomposed.semantic_query or question)
+    )
+
+    # Top-K headroom for rerank: pull twice the user-visible limit so
+    # the response cap doesn't starve downstream filtering.
+    retrieve_top_k = max(effective_limit * 2, effective_limit)
+
+    try:
+        retrieved = await retrieve_with_keywords(
+            keywords=keywords,
+            top_k=retrieve_top_k,
+            lit_token=None,
+            file_type=file_type_filter,
+            drive=drive,
+            original_query=question,
+            file_id_scope=file_id_scope,
+        )
+    except Exception as exc:  # noqa: BLE001 — graceful fallback
+        logger.debug("Find Stage D retrieve failed: %s", type(exc).__name__)
+        retrieved = []
+
+    if not retrieved:
+        return _empty_find_response(
+            decomposed, effective_limit, category_expansion
+        )
+
+    # Format results. ``viewed_at`` is populated from the history fetch
+    # when available; absent otherwise (frontend renders the missing
+    # case as "視聴履歴なし").
+    items = [
+        _build_result_item(r, viewed_at_by_id)
+        for r in retrieved[:effective_limit]
+    ]
+
+    return {
+        "decomposed": _decomposed_to_dict(decomposed, category_expansion),
+        "results": items,
+        "total": len(retrieved),
+        "limit": effective_limit,
+    }

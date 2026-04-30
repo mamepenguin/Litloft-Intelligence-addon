@@ -476,3 +476,38 @@ class AnswerResponseModel(BaseModel):
     sources: list[SourceModel]
     retrieved_count: int
     took_ms: int
+
+
+# --- Find mode (file-listing sibling of Ask) ---
+
+
+class FindRequest(BaseModel):
+    """Request body for POST /find.
+
+    Mirrors ``AskRequest`` size limits to share the LLM-driven Stages
+    A and C. ``overrides`` carries chip-edited structured fields when
+    the frontend re-POSTs after a chip × click — when present, the
+    service skips Stage A (LLM decompose) entirely.
+
+    ``limit`` caps the result list at 20 (spec §3.2 example default).
+    """
+
+    question: str = Field(..., min_length=1, max_length=1000)
+    limit: int = Field(default=20, ge=1, le=20)
+    overrides: dict[str, Any] | None = None
+
+
+class FindResponse(BaseModel):
+    """Response body for POST /find (spec §3.2).
+
+    ``decomposed`` carries the structured query for chip rendering;
+    keys are always present even when each axis collapsed to "no
+    signal" (so the frontend never needs existence checks). ``results``
+    is the file list capped at ``limit``; ``total`` is the post-filter
+    count BEFORE the cap.
+    """
+
+    decomposed: dict[str, Any]
+    results: list[dict[str, Any]]
+    total: int
+    limit: int

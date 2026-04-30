@@ -1031,6 +1031,126 @@ export async function getIntelligenceStatus(
   }
 }
 
+// --- Find mode (single-shot file-list output) ---
+
+/**
+ * Override values for the four decomposed slots, sent on chip × re-POST.
+ *
+ * Spec: ``2026-04-30-intelligence-find-mode.md`` §3.1.
+ *
+ * The frontend builds this object from the most-recent ``decomposed``
+ * snapshot, replacing the cleared slot with ``"none"`` (or ``""`` for
+ * ``semantic_query``). The backend treats overrides as the canonical
+ * decomposition for the request, bypassing the LLM ``query_decomposer``.
+ */
+export interface FindOverrides {
+  time_range?: string;
+  personal_scope?: string;
+  file_type_hint?: string;
+  semantic_query?: string;
+}
+
+/**
+ * Decomposed query slots returned alongside results. ``time_range`` is
+ * a half-resolved object so the chip layer can show "先週 (4/23-4/30)"
+ * even though the raw label is "last_week".
+ */
+export interface FindDecomposed {
+  time_range: {
+    kind: string;
+    value?: string;
+    after?: string | null;
+    before?: string | null;
+  };
+  personal_scope: string;
+  file_type_hint: string;
+  semantic_query: string;
+  category_expansion: string[];
+}
+
+export interface FindResultHit {
+  kind: string;
+  location: { start_seconds?: number; end_seconds?: number } | null;
+  text: string;
+}
+
+export interface FindResultFile {
+  name: string;
+  file_type: string;
+  thumbnail_url: string;
+  viewed_at: string | null;
+}
+
+export interface FindResultEntry {
+  file_id: string;
+  score: number;
+  hit: FindResultHit;
+  file: FindResultFile;
+}
+
+export interface FindResponse {
+  decomposed: FindDecomposed;
+  results: FindResultEntry[];
+  total: number;
+  limit: number;
+}
+
+/**
+ * POST a Find query to the intelligence addon and return a single-shot
+ * JSON response (no SSE — Find has no LLM streaming).
+ *
+ * Spec: ``2026-04-30-intelligence-find-mode.md`` §3.2.
+ *
+ * Header conventions:
+ *  - ``X-Lit-Drive``: required, percent-encoded for non-ASCII drives
+ *    (matches ``driveHeaders`` everywhere else in this module).
+ *  - ``X-HV-Viewer-Id``: forwarded from the ``hv_viewer`` cookie when
+ *    present so the personal-history filter (Stage B) can engage.
+ *
+ * Throws on non-2xx so the page-level error surface can render a
+ * graceful message.
+ */
+export async function findFiles(
+  question: string,
+  drive: string,
+  options?: { limit?: number; overrides?: FindOverrides },
+): Promise<FindResponse> {
+  const body: Record<string, unknown> = { question };
+  if (options?.limit != null) body.limit = options.limit;
+  if (options?.overrides) body.overrides = options.overrides;
+
+  // Viewer-id is injected by the host addon_proxy from the `lit_viewer`
+  // cookie (mirrors /ask). The frontend MUST NOT read the cookie or set
+  // X-Lit-Viewer-Id directly — the proxy strips client-supplied values
+  // to prevent forgery.
+  const headers: HeadersInit = {
+    "Content-Type": "application/json",
+    ...driveHeaders(drive),
+  };
+
+  const res = await fetch(`${API_BASE}/addons/intelligence/find`, {
+    method: "POST",
+    credentials: "include",
+    headers,
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const errBody = (await res.json()) as { detail?: string };
+      if (errBody?.detail) detail = errBody.detail;
+    } catch {
+      // ignore — fall back to status text
+    }
+    const err = new Error(detail) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
+
+  return (await res.json()) as FindResponse;
+}
+
 // --- Streaming Ask (SSE) ---
 
 /**
