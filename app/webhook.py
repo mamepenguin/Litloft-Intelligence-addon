@@ -63,6 +63,19 @@ class FilesPurgedPayload:
 
 
 @dataclass(frozen=True)
+class FilesMovedPayload:
+    """Payload for files-moved webhook (rename / move / folder rename / folder move).
+
+    Core emits this whenever ``File.file_path`` / ``filename`` / ``folder_path``
+    changes for an existing record. The handler refreshes the IndexedFile
+    snapshot from Litloft DB; payload itself carries only ids to avoid
+    drift between event and DB state.
+    """
+
+    file_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class PrioritizePayload:
     """Payload for queue prioritize request."""
 
@@ -193,6 +206,31 @@ async def handle_files_restored(
     return {
         "status": "accepted",
         "message": f"{len(payload.file_ids)} files restored",
+    }
+
+
+async def handle_files_moved(
+    payload: FilesMovedPayload,
+    index_manager: IndexManager,
+) -> dict[str, str]:
+    """Handle files-moved webhook from Litloft.
+
+    Re-syncs ``drive`` / ``file_path`` / ``filename`` / ``title`` on the
+    IndexedFile snapshot for each id, plus the FTS5 trigram row. File
+    content is unchanged, so ``*_indexed`` flags and embeddings are
+    preserved.
+    """
+    logger.info(
+        "Received files-moved webhook: %d files",
+        len(payload.file_ids),
+    )
+
+    await index_manager.handle_files_moved(list(payload.file_ids))
+    invalidate_similar_cache()
+
+    return {
+        "status": "accepted",
+        "message": f"{len(payload.file_ids)} files synced",
     }
 
 

@@ -7,6 +7,7 @@ from app.schemas import (
     MessageResponse,
     WebhookFilesDeleted,
     WebhookFilesMissing,
+    WebhookFilesMoved,
     WebhookFilesPurged,
     WebhookFilesRecovered,
     WebhookFilesRestored,
@@ -15,12 +16,14 @@ from app.schemas import (
 from app.webhook import (
     FilesDeletedPayload,
     FilesMissingPayload,
+    FilesMovedPayload,
     FilesPurgedPayload,
     FilesRecoveredPayload,
     FilesRestoredPayload,
     ScanCompletePayload,
     handle_files_deleted,
     handle_files_missing,
+    handle_files_moved,
     handle_files_purged,
     handle_files_recovered,
     handle_files_restored,
@@ -107,4 +110,16 @@ async def webhook_files_recovered(
     manager = get_index_manager()
     payload = FilesRecoveredPayload(file_ids=tuple(body.file_ids))
     result = await handle_files_recovered(payload, manager)
+    return MessageResponse(**result)
+
+
+@router.post("/webhook/files-moved", response_model=MessageResponse)
+async def webhook_files_moved(
+    body: WebhookFilesMoved,
+    _: None = Depends(verify_webhook_secret),
+) -> MessageResponse:
+    """Handle files-moved webhook from Litloft (rename / move / folder ops)."""
+    manager = get_index_manager()
+    payload = FilesMovedPayload(file_ids=tuple(body.file_ids))
+    result = await handle_files_moved(payload, manager)
     return MessageResponse(**result)

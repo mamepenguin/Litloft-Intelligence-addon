@@ -714,6 +714,72 @@ class IndexManager:
         for file_id in file_ids:
             _set_file_active(file_id, active=True)
 
+    async def handle_files_moved(self, file_ids: list[str]) -> None:
+        """Sync IndexedFile snapshot after rename / move / folder ops in core.
+
+        Refreshes ``drive`` / ``file_path`` / ``filename`` / ``title`` and
+        re-upserts the FTS5 row from Litloft DB. ``*_indexed`` flags and
+        embeddings are preserved — file content is unchanged.
+
+        Args:
+            file_ids: IDs whose path / name changed in core.
+        """
+        if not file_ids:
+            return
+
+        from app.policy_client import is_feature_enabled
+
+        litloft_meta = _get_litloft_files_by_ids(file_ids)
+        if not litloft_meta:
+            return
+
+        with get_search_db() as session:
+            for file_id, meta in litloft_meta.items():
+                # Per-drive policy gate (fail open). Workers also re-check
+                # so this is a worker-fast-path optimisation, not a security
+                # boundary.
+                try:
+                    if not await is_feature_enabled(meta["drive"], "index"):
+                        continue
+                except Exception:
+                    pass
+
+                indexed = (
+                    session.query(IndexedFile)
+                    .filter_by(file_id=file_id)
+                    .first()
+                )
+                if indexed is None:
+                    # Not indexed yet; reconcile() will pick it up as a
+                    # new file when the drive's policy permits.
+                    continue
+
+                abs_path = resolve_file_path(meta["drive"], meta["file_path"])
+                if abs_path is None:
+                    logger.warning(
+                        "Cannot resolve path for %s after move (drive=%s)",
+                        file_id, meta["drive"],
+                    )
+                    continue
+
+                title = meta.get("title") or ""
+                indexed.drive = meta["drive"]
+                indexed.file_path = abs_path
+                indexed.filename = meta["filename"]
+                indexed.title = title
+
+                # FTS5 has no UNIQUE on file_id, so ``INSERT OR REPLACE``
+                # would leave the old row alongside the new one. Delete
+                # first to keep the index single-rowed per file.
+                delete_fts_file(session, file_id)
+                upsert_fts_file(
+                    session, file_id,
+                    meta["filename"],
+                    title,
+                    indexed.description,
+                    indexed.tags_text,
+                )
+
     # --- Background workers ---
 
     async def _metadata_worker(self) -> None:
@@ -1081,6 +1147,38 @@ def cleanup_orphaned_embeddings() -> int:
 
 
 # --- Helper functions for Litloft DB interaction ---
+
+
+def _get_litloft_files_by_ids(file_ids: list[str]) -> dict[str, dict]:
+    """Look up core file metadata for the given ids.
+
+    Returns ``{file_id: {drive, file_path, filename, title}}``. Missing
+    ids (e.g. purged before the webhook arrived) are silently dropped —
+    the caller treats absence as "no-op for this id".
+    """
+    if not file_ids:
+        return {}
+
+    from sqlalchemy import bindparam
+
+    with get_litloft_db() as session:
+        rows = session.execute(
+            sql_text(
+                "SELECT id, drive, file_path, filename, title "
+                "FROM files WHERE id IN :ids"
+            ).bindparams(bindparam("ids", expanding=True)),
+            {"ids": list(file_ids)},
+        ).fetchall()
+
+        return {
+            row[0]: {
+                "drive": row[1],
+                "file_path": row[2],
+                "filename": row[3],
+                "title": row[4],
+            }
+            for row in rows
+        }
 
 
 def _get_litloft_files() -> list[dict]:

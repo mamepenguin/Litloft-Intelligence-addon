@@ -117,6 +117,10 @@ class WebhookFilesRecovered(BaseModel):
     file_ids: list[str] = Field(..., max_length=10000)
 
 
+class WebhookFilesMoved(BaseModel):
+    file_ids: list[str] = Field(..., max_length=10000)
+
+
 # --- Queue ---
 
 
