@@ -125,8 +125,16 @@ describe("SemanticSearchSlot", () => {
     expect(screen.queryByRole("heading", { level: 2 })).toBeNull();
   });
 
-  it("renders the page layout when context is 'page' — section heading + grid", async () => {
-    render(
+  it("renders nothing in page context — Phase 3 merges semantic into the host's unified list", async () => {
+    // Phase 3 (`2026-05-02-search-results-unification-phase3.md`)
+    // retired the slot's PageLayout. The host's `useFolderFiles`
+    // merges filename-match and semantic hits into a single
+    // `FolderContent` list, so the slot only contributes header
+    // chips (the Find handoff lives in `FindModeSlot`). The popup
+    // layout is unchanged. The slot also skips its availability
+    // probe / fetch in page context to avoid duplicating the host's
+    // request.
+    const { container } = render(
       <SemanticSearchSlot
         query="space"
         drive="family"
@@ -136,41 +144,12 @@ describe("SemanticSearchSlot", () => {
       />,
     );
 
-    // Page layout exposes a level-2 heading.
-    const heading = await screen.findByRole("heading", { level: 2 });
-    expect(heading).toBeInTheDocument();
-
-    // Result is still rendered.
-    await waitFor(() => {
-      expect(screen.queryByText("sample-movie.mp4")).toBeInTheDocument();
-    });
-
-    // Page layout uses a list role for the grid container.
-    expect(screen.queryByRole("list")).toBeInTheDocument();
+    expect(container.textContent).toBe("");
+    expect(getSearchStatus).not.toHaveBeenCalled();
+    expect(semanticSearch).not.toHaveBeenCalled();
   });
 
-  it("page layout card links to the file detail page", async () => {
-    // Phase 2 unified the semantic page card with the core FileCard,
-    // which uses Next ``<Link>`` to navigate. The slot-level onSelect
-    // is now reserved for sub-targets inside the card (timestamp pills
-    // in MatchOverlay, the Ask CTA in the section header).
-    render(
-      <SemanticSearchSlot
-        query="space"
-        drive="family"
-        filter="all"
-        onSelect={() => {}}
-        context="page"
-      />,
-    );
-
-    const titleNode = await screen.findByText("sample-movie.mp4");
-    const link = titleNode.closest("a");
-    expect(link).not.toBeNull();
-    expect(link!.getAttribute("href")).toBe("/files/f-1");
-  });
-
-  it("renders nothing when intelligence search is unavailable", async () => {
+  it("renders nothing when intelligence search is unavailable in popup context", async () => {
     vi.mocked(getSearchStatus).mockResolvedValue({ available: false } as any);
 
     const { container } = render(
@@ -179,7 +158,7 @@ describe("SemanticSearchSlot", () => {
         drive="family"
         filter="all"
         onSelect={() => {}}
-        context="page"
+        context="popup"
       />,
     );
 

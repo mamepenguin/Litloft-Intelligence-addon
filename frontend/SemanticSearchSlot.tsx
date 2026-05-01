@@ -7,11 +7,6 @@ import { Sparkles } from "lucide-react";
 import { semanticSearch, getSearchStatus } from "./api";
 import type { SemanticSearchResult, SemanticSearchSegment } from "./api";
 import { formatDuration } from "@/lib/format";
-import { FileCard } from "@/components/FileCard";
-import { FileContextMenu } from "@/components/FileContextMenu";
-import { useContextMenu } from "@/hooks/useContextMenu";
-import type { FileItem } from "@/types";
-import { MatchOverlay } from "./MatchOverlay";
 
 type SlotContext = "popup" | "page";
 
@@ -25,10 +20,11 @@ interface SemanticSearchSlotProps {
   context?: SlotContext;
 }
 
-// Popup-only badge palette. The page layout uses MatchOverlay (warm
-// palette per DESIGN.md §2.2). The popup view sits inside the search
-// modal which has its own visual context, so we keep the existing
-// compact badge style there to limit Phase 2 scope.
+// Popup-only badge palette. Phase 3 removed the page-context layout
+// from this slot; the host's MatchOverlay (warm palette per
+// DESIGN.md §2.2) is reused for the unified search list. The popup
+// view sits inside the search modal with its own visual context, so
+// the compact badge style is kept here.
 const POPUP_MATCH_TYPE_STYLES: Record<string, string> = {
   transcript: "bg-blue-500/15 text-blue-400",
   transcript_keyword: "bg-cyan-500/15 text-cyan-400",
@@ -152,41 +148,6 @@ function SemanticResultItem({
   );
 }
 
-/**
- * Build a minimal FileItem from a SemanticSearchResult when core's
- * bulk hydrate failed (``result.file === null``). The card stays
- * functional with reduced fidelity — favorite toggle and tag display
- * are unavailable, but title, thumbnail, and click-through still work.
- *
- * Should be rare: only fires when the core service is briefly
- * unreachable mid-search. The IndexedFile snapshot guarantees at least
- * filename / file_type / drive are present on every search hit.
- */
-function fileItemFromSnapshot(result: SemanticSearchResult): FileItem {
-  return {
-    id: result.file_id,
-    filename: result.filename,
-    title: result.filename,
-    description: "",
-    drive: result.drive,
-    folder_path: "",
-    file_type: result.file_type as FileItem["file_type"],
-    mime_type: "",
-    thumbnail_url: `/api/files/${result.file_id}/thumbnail`,
-    has_thumbnail: true,
-    file_size: 0,
-    duration: null,
-    likes: 0,
-    is_favorite: false,
-    tags: [],
-    subtitles: [],
-    deleted_at: null,
-    missing_since: null,
-    created_at: "",
-    updated_at: "",
-  };
-}
-
 function PopupLayout({
   results,
   loading,
@@ -233,130 +194,6 @@ function PopupLayout({
   );
 }
 
-function PageLayout({
-  results,
-  loading,
-  query,
-  drive,
-  onSelect,
-  onResultsChange,
-  t,
-  askT,
-}: {
-  results: SemanticSearchResult[];
-  loading: boolean;
-  query: string;
-  drive: string;
-  onSelect: (url: string) => void;
-  onResultsChange: (next: SemanticSearchResult[]) => void;
-  t: (key: string, values?: Record<string, string | number>) => string;
-  askT: (key: string, values?: Record<string, string | number>) => string;
-}) {
-  const askHref = `/drive/${encodeURIComponent(drive)}/addons/intelligence?q=${encodeURIComponent(query)}`;
-
-  const matchLabels: Record<string, string> = {
-    transcript: t("matchTranscript"),
-    transcript_keyword: t("matchTranscriptKeyword"),
-    clip: t("matchClip"),
-    metadata: t("matchMetadata"),
-    content: t("matchContent"),
-    text_content_keyword: t("matchTextContentKeyword"),
-  };
-
-  // Per-section context menu — semantic results have their own
-  // selection scope; cross-section selection (semantic + filename) is
-  // intentionally out of scope for Phase 2 to avoid mode confusion.
-  const { menuState, close, handlers } = useContextMenu();
-  const [menuTarget, setMenuTarget] = useState<FileItem | null>(null);
-
-  const handleFavoriteToggle = (updated: FileItem) => {
-    onResultsChange(
-      results.map((r) =>
-        r.file_id === updated.id ? { ...r, file: updated } : r,
-      ),
-    );
-  };
-
-  return (
-    <section
-      aria-labelledby="semantic-search-heading"
-      className="space-y-3"
-    >
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2
-            id="semantic-search-heading"
-            className="flex items-center gap-2 text-base font-semibold text-text-primary"
-          >
-            <Sparkles size={16} className="flex-shrink-0 text-accent-teal" />
-            {t("semanticResults")}
-          </h2>
-          <p className="mt-1 text-xs text-text-muted">
-            {t("semanticResultsDescription")}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => onSelect(askHref)}
-          className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-full bg-accent-teal/10 px-3 py-1.5 text-xs font-medium text-accent-teal transition-colors hover:bg-accent-teal/20"
-        >
-          <Sparkles size={12} className="flex-shrink-0" />
-          <span className="truncate">{askT("button", { query })}</span>
-        </button>
-      </header>
-      <div
-        role="list"
-        className="grid grid-cols-1 gap-x-4 gap-y-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-      >
-        {results.map((result) => {
-          const fileItem = result.file ?? fileItemFromSnapshot(result);
-          return (
-            <div role="listitem" key={result.file_id}>
-              <FileCard
-                file={fileItem}
-                onFavoriteToggle={
-                  result.file ? handleFavoriteToggle : undefined
-                }
-                onContextMenu={(e) => {
-                  setMenuTarget(fileItem);
-                  handlers.onContextMenu(e);
-                }}
-                onTouchStart={(e) => {
-                  setMenuTarget(fileItem);
-                  handlers.onTouchStart(e);
-                }}
-                onTouchEnd={handlers.onTouchEnd}
-                onTouchMove={handlers.onTouchMove}
-                matchOverlay={
-                  <MatchOverlay
-                    result={result}
-                    onSelect={onSelect}
-                    matchLabels={matchLabels}
-                    matchedPagesLabel={(pages) =>
-                      t("matchedPages", { pages: pages.join(", ") })
-                    }
-                  />
-                }
-              />
-            </div>
-          );
-        })}
-      </div>
-      <FileContextMenu
-        open={menuState.open}
-        position={menuState.position}
-        target={menuTarget}
-        onClose={close}
-      />
-      {loading && (
-        <div className="flex items-center justify-center py-3">
-          <div className="h-4 w-4 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-        </div>
-      )}
-    </section>
-  );
-}
-
 export default function SemanticSearchSlot({
   query,
   drive,
@@ -375,9 +212,16 @@ export default function SemanticSearchSlot({
   const [loading, setLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Phase 3 retired the slot's page layout; the host now owns the
+  // unified search-results list. Skip the availability probe and the
+  // debounced fetch in page context — they would only burn cycles
+  // duplicating what `useFolderFiles` already does.
+  const isPageContext = context === "page";
+
   // Check availability on mount (rechecked when the active drive
   // changes, since /status is now drive-scoped).
   useEffect(() => {
+    if (isPageContext) return;
     if (!drive) {
       setAvailable(false);
       return;
@@ -391,10 +235,11 @@ export default function SemanticSearchSlot({
     return () => {
       cancelled = true;
     };
-  }, [drive]);
+  }, [drive, isPageContext]);
 
   // Debounced search
   useEffect(() => {
+    if (isPageContext) return;
     if (!available || !query.trim() || !drive) {
       setResults([]);
       return;
@@ -423,7 +268,11 @@ export default function SemanticSearchSlot({
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [query, drive, filter, available]);
+  }, [query, drive, filter, available, isPageContext]);
+
+  // Page context renders nothing — see comment at the top of
+  // `isPageContext` above. The merged list lives in core.
+  if (isPageContext) return null;
 
   // Not available or not checked yet - render nothing
   if (available === null || !available) return null;
@@ -443,21 +292,6 @@ export default function SemanticSearchSlot({
   if (results.length === 0) return null;
 
   const trimmedQuery = query.trim();
-
-  if (context === "page") {
-    return (
-      <PageLayout
-        results={results}
-        loading={loading}
-        query={trimmedQuery}
-        drive={drive}
-        onSelect={onSelect}
-        onResultsChange={setResults}
-        t={t}
-        askT={askT}
-      />
-    );
-  }
 
   return (
     <PopupLayout
