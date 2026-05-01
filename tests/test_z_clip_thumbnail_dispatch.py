@@ -366,3 +366,79 @@ def test_unsupported_mime_closes_flags(patched_db):
     clip_done, thumb_done = _flags(Session, "txt-1")
     assert clip_done is True
     assert thumb_done is True
+
+
+# ---------------------------------------------------------------------------
+# _resolve_thumbnail_abspath: containment defense-in-depth
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_thumbnail_abspath_relative_in_base(monkeypatch, tmp_path):
+    base = tmp_path / "thumbnails"
+    base.mkdir()
+    monkeypatch.setenv("HOMEVAULT_THUMBNAILS_DIR", str(base))
+
+    out = clip_worker._resolve_thumbnail_abspath("default/clip.jpg")
+    assert out == str(base / "default/clip.jpg")
+
+
+def test_resolve_thumbnail_abspath_rejects_dotdot_traversal(monkeypatch, tmp_path):
+    base = tmp_path / "thumbnails"
+    base.mkdir()
+    (tmp_path / "secret.txt").write_text("x")
+    monkeypatch.setenv("HOMEVAULT_THUMBNAILS_DIR", str(base))
+
+    with pytest.raises(ValueError, match="escapes mount root"):
+        clip_worker._resolve_thumbnail_abspath("../secret.txt")
+
+
+def test_resolve_thumbnail_abspath_rejects_absolute_outside_base(
+    monkeypatch, tmp_path,
+):
+    base = tmp_path / "thumbnails"
+    base.mkdir()
+    monkeypatch.setenv("HOMEVAULT_THUMBNAILS_DIR", str(base))
+
+    with pytest.raises(ValueError, match="escapes mount root"):
+        clip_worker._resolve_thumbnail_abspath("/etc/passwd")
+
+
+def test_resolve_thumbnail_abspath_accepts_absolute_inside_base(
+    monkeypatch, tmp_path,
+):
+    base = tmp_path / "thumbnails"
+    base.mkdir()
+    monkeypatch.setenv("HOMEVAULT_THUMBNAILS_DIR", str(base))
+    real_inside = base / "ok.jpg"
+    real_inside.write_bytes(b"\x00")
+
+    out = clip_worker._resolve_thumbnail_abspath(str(real_inside))
+    assert out == str(real_inside)
+
+
+def test_loft_with_traversing_thumbnail_path_skips_cleanly(
+    monkeypatch, patched_db, tmp_path,
+):
+    """Defense-in-depth: a poisoned thumbnail_path must not crash the worker.
+
+    The dispatcher swallows the ``ValueError`` from
+    ``_resolve_thumbnail_abspath`` and closes the flags so the queue
+    does not spin on the poisoned row.
+    """
+    Session = patched_db
+    base = tmp_path / "thumbnails"
+    base.mkdir()
+    monkeypatch.setenv("HOMEVAULT_THUMBNAILS_DIR", str(base))
+
+    _seed_indexed_file(
+        Session, "loft-evil",
+        mime_type="application/vnd.litloft.loft+json",
+        thumbnail_path="../../etc/passwd",
+    )
+
+    ok = clip_worker._index_clip_sync("loft-evil")
+    assert ok is True
+    assert _emb_types(Session, "loft-evil") == []
+    clip_done, thumb_done = _flags(Session, "loft-evil")
+    assert clip_done is True
+    assert thumb_done is True

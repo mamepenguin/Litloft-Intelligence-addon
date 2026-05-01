@@ -7,6 +7,7 @@ For videos, uses hybrid frame extraction: scene detection + minimum interval.
 
 import asyncio
 import logging
+import os
 import subprocess
 import tempfile
 import threading
@@ -386,10 +387,18 @@ def _fill_interval_gaps(
 
 
 async def index_clip(file_id: str) -> bool:
-    """Index CLIP embeddings for a file (image or video).
+    """Index CLIP embeddings for a file across three dispatch routes.
 
-    For images: single embedding per file.
-    For videos: one embedding per extracted key frame.
+    Spec ``2026-05-02-thumbnail-clip-default-shallow-search.md``:
+
+    - ``IMAGE_TYPES`` → embed the image as
+      ``embedding_type="clip_thumbnail"``.
+    - ``VIDEO_TYPES`` → existing scene CLIP (``"clip"``) plus the
+      representative thumbnail (``"clip_thumbnail"``) when core has
+      generated ``data/thumbnails/<id>.jpg``.
+    - ``THUMBNAIL_FALLBACK_TYPES`` (.loft, HEIC) → embed core's
+      pre-rendered thumbnail as ``"clip_thumbnail"``; legacy rows
+      without a thumbnail close cleanly without an embedding.
 
     Args:
         file_id: The file ID to index.
@@ -497,15 +506,23 @@ def _index_clip_sync(file_id: str) -> bool:
     # Best-effort thumbnail: if core has not generated/synced the JPEG
     # yet, skip the thumbnail route silently — scanner will re-index
     # later when the projection populates.
+    abspath: str | None = None
     if thumbnail_path:
+        try:
+            abspath = _resolve_thumbnail_abspath(thumbnail_path)
+        except ValueError as e:
+            logger.warning(
+                "Skipping clip_thumbnail for %s: %s", file_id, e,
+            )
+    if abspath is not None:
         _index_clip_thumbnail(
-            file_id, _resolve_thumbnail_abspath(thumbnail_path),
-            filename, source_label="Thumbnail",
+            file_id, abspath, filename, source_label="Thumbnail",
         )
     else:
         # Mark thumbnail leg as done so the file isn't requeued every
-        # cycle for a thumbnail that doesn't exist. When core later
-        # populates ``thumbnail_path`` and re-emits a webhook, the
+        # cycle for a thumbnail that doesn't exist (or escaped the
+        # mount root). When core later populates a clean
+        # ``thumbnail_path`` and re-emits a webhook, the
         # ``files.moved``-style handler should reset this flag (Phase 4).
         with get_search_db() as session:
             f = session.query(IndexedFile).filter_by(file_id=file_id).first()
@@ -515,7 +532,7 @@ def _index_clip_sync(file_id: str) -> bool:
 
 
 def _resolve_thumbnail_abspath(thumbnail_path: str) -> str:
-    """Return the absolute path of a stored thumbnail.
+    """Return the absolute path of a stored thumbnail, contained under base.
 
     ``File.thumbnail_path`` is stored relative to core's
     ``config.THUMBNAILS_DIR`` (e.g. ``"default/folder/name.jpg"``,
@@ -526,17 +543,31 @@ def _resolve_thumbnail_abspath(thumbnail_path: str) -> str:
 
     Override via ``HOMEVAULT_THUMBNAILS_DIR`` for tests that need a
     different mount root.
-    """
-    import os
-    from pathlib import Path
 
+    Defense-in-depth: realpath + containment check rejects ``..``
+    traversal and absolute-path injection so a hypothetical poisoned
+    ``thumbnail_path`` value (symlink in a drive mount, malicious
+    folder name) cannot cause this worker to read arbitrary container
+    files. Raises ``ValueError`` on escape; the caller's broad
+    try/except logs and skips. Mirrors
+    ``backend/app/routers/internal.py:_resolve_text_content_path``.
+    """
     base = Path(
         os.environ.get("HOMEVAULT_THUMBNAILS_DIR", "/data/thumbnails")
     )
+    real_base = Path(os.path.realpath(str(base)))
     candidate = Path(thumbnail_path)
-    if candidate.is_absolute():
-        return str(candidate)
-    return str(base / candidate)
+    target = candidate if candidate.is_absolute() else base / candidate
+    real_target = Path(os.path.realpath(str(target)))
+    base_str = str(real_base)
+    if not (
+        str(real_target) == base_str
+        or str(real_target).startswith(base_str + os.sep)
+    ):
+        raise ValueError(
+            f"thumbnail path escapes mount root: {thumbnail_path!r}"
+        )
+    return str(real_target)
 
 
 def _handle_thumbnail_fallback(
@@ -565,7 +596,19 @@ def _handle_thumbnail_fallback(
                 f.clip_thumbnail_indexed = True
         return True
 
-    abspath = _resolve_thumbnail_abspath(thumbnail_path)
+    try:
+        abspath = _resolve_thumbnail_abspath(thumbnail_path)
+    except ValueError as e:
+        logger.warning(
+            "Skipping clip_thumbnail for %s (%s): %s",
+            file_id, mime_type, e,
+        )
+        with get_search_db() as session:
+            f = session.query(IndexedFile).filter_by(file_id=file_id).first()
+            if f is not None:
+                f.clip_indexed = True
+                f.clip_thumbnail_indexed = True
+        return True
     return _index_clip_thumbnail(
         file_id, abspath, filename, source_label="Thumbnail",
     )
