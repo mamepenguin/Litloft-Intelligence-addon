@@ -46,6 +46,13 @@ class IndexedFile(Base):
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
     duration: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # Projection of core File.thumbnail_path. Read by the CLIP worker
+    # to embed the representative thumbnail (`embedding_type="clip_thumbnail"`)
+    # without a per-file Internal API roundtrip. May be NULL when core
+    # has not generated/downloaded a thumbnail yet (e.g. legacy `.loft`
+    # rows from before media_import Phase 2).
+    thumbnail_path: Mapped[str | None] = mapped_column(String, nullable=True)
+
     # Index state flags
     active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="1"
@@ -54,6 +61,13 @@ class IndexedFile(Base):
         Boolean, nullable=False, default=False, server_default="0"
     )
     clip_indexed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    # Tracks completion of `embedding_type="clip_thumbnail"` indexing
+    # (the "1 representative frame" route, distinct from `clip_indexed`
+    # which covers scene-detected video frames). Spec
+    # 2026-05-02-thumbnail-clip-default-shallow-search.md.
+    clip_thumbnail_indexed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )
     whisper_indexed: Mapped[bool] = mapped_column(
@@ -83,6 +97,10 @@ class IndexedFile(Base):
         Index("idx_indexed_files_file_type", "file_type"),
         Index("idx_indexed_files_metadata_indexed", "metadata_indexed"),
         Index("idx_indexed_files_clip_indexed", "clip_indexed"),
+        Index(
+            "idx_indexed_files_clip_thumbnail_indexed",
+            "clip_thumbnail_indexed",
+        ),
         Index("idx_indexed_files_whisper_indexed", "whisper_indexed"),
         Index("idx_indexed_files_text_indexed", "text_indexed"),
     )

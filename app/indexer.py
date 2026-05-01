@@ -26,7 +26,12 @@ from app.database import (
 )
 from app.models import Embedding, IndexedFile, TranscriptChunk, TranscriptWord
 from app.workers.blip import check_idle_unload as check_blip_idle_unload
-from app.workers.clip import index_clip, IMAGE_TYPES, VIDEO_TYPES
+from app.workers.clip import (
+    index_clip,
+    IMAGE_TYPES,
+    THUMBNAIL_FALLBACK_TYPES,
+    VIDEO_TYPES,
+)
 from app.workers.metadata import index_metadata_batch, index_text_content
 from app.workers.whisper import (
     check_idle_unload as check_whisper_idle_unload,
@@ -191,7 +196,7 @@ class IndexManager:
             ).count()
 
             # Filter by applicable MIME types for type-specific counts
-            clip_types = list(IMAGE_TYPES | VIDEO_TYPES)
+            clip_types = list(IMAGE_TYPES | VIDEO_TYPES | THUMBNAIL_FALLBACK_TYPES)
             clip = active_files.filter(
                 IndexedFile.clip_indexed.is_(True),
                 IndexedFile.mime_type.in_(clip_types),
@@ -419,6 +424,7 @@ class IndexManager:
                         mime_type=file_data["mime_type"],
                         file_size=file_data["file_size"],
                         duration=file_data.get("duration"),
+                        thumbnail_path=file_data.get("thumbnail_path"),
                         title=title,
                         description=description,
                         tags_text=tags_text,
@@ -502,7 +508,7 @@ class IndexManager:
         """
         resumed = 0
 
-        clip_mimes = IMAGE_TYPES | VIDEO_TYPES
+        clip_mimes = IMAGE_TYPES | VIDEO_TYPES | THUMBNAIL_FALLBACK_TYPES
 
         with get_search_db() as session:
             from sqlalchemy import or_
@@ -1202,9 +1208,18 @@ def _get_litloft_files_by_ids(file_ids: list[str]) -> dict[str, dict]:
     from sqlalchemy import bindparam
 
     with get_litloft_db() as session:
+        # ``thumbnail_path`` was added to core's File model long ago, but
+        # some test fixtures still create a slimmer ``files`` table. Probe
+        # via PRAGMA so the addon stays compatible with both.
+        has_thumbnail_path = any(
+            row[1] == "thumbnail_path"
+            for row in session.execute(sql_text("PRAGMA table_info(files)")).fetchall()
+        )
+
+        thumb_select = "thumbnail_path" if has_thumbnail_path else "NULL AS thumbnail_path"
         rows = session.execute(
             sql_text(
-                "SELECT id, drive, file_path, filename, title "
+                f"SELECT id, drive, file_path, filename, title, {thumb_select} "
                 "FROM files WHERE id IN :ids"
             ).bindparams(bindparam("ids", expanding=True)),
             {"ids": list(file_ids)},
@@ -1216,6 +1231,7 @@ def _get_litloft_files_by_ids(file_ids: list[str]) -> dict[str, dict]:
                 "file_path": row[2],
                 "filename": row[3],
                 "title": row[4],
+                "thumbnail_path": row[5],
             }
             for row in rows
         }
@@ -1230,23 +1246,23 @@ def _get_litloft_files() -> list[dict]:
     still work.
     """
     with get_litloft_db() as session:
-        has_missing_since = any(
-            row[1] == "missing_since"
+        cols = {
+            row[1]
             for row in session.execute(sql_text("PRAGMA table_info(files)")).fetchall()
+        }
+        missing_since_select = (
+            "missing_since" if "missing_since" in cols else "NULL AS missing_since"
         )
-
-        if has_missing_since:
-            query = (
-                "SELECT id, filename, title, description, drive, folder_path, "
-                "file_path, file_size, file_type, mime_type, duration, deleted_at, "
-                "missing_since FROM files"
-            )
-        else:
-            query = (
-                "SELECT id, filename, title, description, drive, folder_path, "
-                "file_path, file_size, file_type, mime_type, duration, deleted_at, "
-                "NULL AS missing_since FROM files"
-            )
+        # Same defensive PRAGMA pattern as ``missing_since``: keeps slim
+        # test fixtures (and any pre-thumbnail core schema) working.
+        thumb_select = (
+            "thumbnail_path" if "thumbnail_path" in cols else "NULL AS thumbnail_path"
+        )
+        query = (
+            "SELECT id, filename, title, description, drive, folder_path, "
+            "file_path, file_size, file_type, mime_type, duration, deleted_at, "
+            f"{missing_since_select}, {thumb_select} FROM files"
+        )
 
         rows = session.execute(sql_text(query)).fetchall()
 
@@ -1265,6 +1281,7 @@ def _get_litloft_files() -> list[dict]:
                 "duration": row[10],
                 "deleted_at": row[11],
                 "missing_since": row[12],
+                "thumbnail_path": row[13],
             }
             for row in rows
         ]

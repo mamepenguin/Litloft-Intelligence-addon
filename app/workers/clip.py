@@ -49,6 +49,20 @@ IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp"
 # Video types that need frame extraction
 VIDEO_TYPES = {"video/mp4", "video/webm", "video/quicktime", "video/x-matroska"}
 
+# Mime types that have no PIL-friendly source file but DO have a
+# pre-rendered ``data/thumbnails/<id>.jpg`` we can embed instead.
+# Spec ``2026-05-02-thumbnail-clip-default-shallow-search.md``.
+# - ``application/vnd.litloft.loft+json``: remote URL pointer files;
+#   thumbnail is downloaded by ``_save_loft_thumbnail`` (media_import).
+# - ``image/heic`` / ``image/heif``: avoid Pillow on raw HEIC (libheif
+#   binding inconsistencies on some platforms); the JPEG thumbnail
+#   that core already generated is a reliable substitute.
+THUMBNAIL_FALLBACK_TYPES = {
+    "application/vnd.litloft.loft+json",
+    "image/heic",
+    "image/heif",
+}
+
 
 
 def _ensure_loaded() -> tuple[object, object, object]:
@@ -414,62 +428,211 @@ def _index_clip_sync(file_id: str) -> bool:
         filename = file.filename
         duration = file.duration
 
-    if mime_type not in IMAGE_TYPES and mime_type not in VIDEO_TYPES:
+    # Re-read so we can pull thumbnail_path. Done in a fresh session so
+    # the session above can be released before any heavy CPU work.
+    with get_search_db() as session:
+        file = session.query(IndexedFile).filter_by(
+            file_id=file_id, active=True
+        ).first()
+        thumbnail_path = file.thumbnail_path if file is not None else None
+
+    is_image = mime_type in IMAGE_TYPES
+    is_video = mime_type in VIDEO_TYPES
+    is_thumbnail_fallback = mime_type in THUMBNAIL_FALLBACK_TYPES
+
+    if not (is_image or is_video or is_thumbnail_fallback):
+        # Unsupported mime: mark both flags done so the queue doesn't
+        # re-pick the file. ``clip_indexed`` retains its catch-all
+        # "considered for CLIP" semantics; ``clip_thumbnail_indexed``
+        # is similarly closed because no thumbnail route applies.
         with get_search_db() as session:
             file = session.query(IndexedFile).filter_by(file_id=file_id).first()
             if file is not None:
                 file.clip_indexed = True
+                file.clip_thumbnail_indexed = True
         return True
 
+    # --- Image: only writes clip_thumbnail (the image *is* the thumbnail). ---
+    # The mime_type='clip' slot is reserved for video scene frames per
+    # spec 2026-05-02-thumbnail-clip-default-shallow-search.md.
+    if is_image:
+        if not validate_file_path(file_path):
+            logger.error(
+                "File path validation failed for image %s: %s",
+                file_id, file_path,
+            )
+            with get_search_db() as session:
+                f = session.query(IndexedFile).filter_by(file_id=file_id).first()
+                if f is not None:
+                    f.clip_indexed = True
+                    f.clip_thumbnail_indexed = True
+            return False
+        return _index_clip_thumbnail(
+            file_id, file_path, filename, source_label="Image",
+        )
+
+    # --- Thumbnail-fallback (.loft, HEIC): rely on core's pre-rendered
+    # JPEG thumbnail. Skip without error if it is missing — legacy
+    # ``.loft`` rows from before media_import Phase 2 are an expected
+    # gap that subscription refresh can heal later. ---
+    if is_thumbnail_fallback:
+        return _handle_thumbnail_fallback(
+            file_id, mime_type, filename, thumbnail_path,
+        )
+
+    # --- Video: scene CLIP (existing) + representative thumbnail CLIP. ---
     if not validate_file_path(file_path):
-        logger.error("File path validation failed for %s: %s", file_id, file_path)
+        logger.error(
+            "File path validation failed for video %s: %s",
+            file_id, file_path,
+        )
         with get_search_db() as session:
             f = session.query(IndexedFile).filter_by(file_id=file_id).first()
             if f is not None:
                 f.clip_indexed = True
+                f.clip_thumbnail_indexed = True
         return False
 
-    # --- Image: single embedding (no streaming needed) ---
-    if mime_type in IMAGE_TYPES:
-        return _index_clip_image(file_id, file_path, filename)
+    scene_ok = _index_clip_video(file_id, file_path, duration)
+    # Best-effort thumbnail: if core has not generated/synced the JPEG
+    # yet, skip the thumbnail route silently — scanner will re-index
+    # later when the projection populates.
+    if thumbnail_path:
+        _index_clip_thumbnail(
+            file_id, _resolve_thumbnail_abspath(thumbnail_path),
+            filename, source_label="Thumbnail",
+        )
+    else:
+        # Mark thumbnail leg as done so the file isn't requeued every
+        # cycle for a thumbnail that doesn't exist. When core later
+        # populates ``thumbnail_path`` and re-emits a webhook, the
+        # ``files.moved``-style handler should reset this flag (Phase 4).
+        with get_search_db() as session:
+            f = session.query(IndexedFile).filter_by(file_id=file_id).first()
+            if f is not None:
+                f.clip_thumbnail_indexed = True
+    return scene_ok
 
-    # --- Video: streaming batch processing ---
-    return _index_clip_video(file_id, file_path, duration)
+
+def _resolve_thumbnail_abspath(thumbnail_path: str) -> str:
+    """Return the absolute path of a stored thumbnail.
+
+    ``File.thumbnail_path`` is stored relative to core's
+    ``config.THUMBNAILS_DIR`` (e.g. ``"default/folder/name.jpg"``,
+    written by ``backend/app/services/scanner.py``). The intelligence
+    container mounts the host data dir read-only at ``/data``
+    (``docker-compose.override.yml`` ``./data:/data:ro``), so the
+    canonical resolution is ``/data/thumbnails/<thumbnail_path>``.
+
+    Override via ``HOMEVAULT_THUMBNAILS_DIR`` for tests that need a
+    different mount root.
+    """
+    import os
+    from pathlib import Path
+
+    base = Path(
+        os.environ.get("HOMEVAULT_THUMBNAILS_DIR", "/data/thumbnails")
+    )
+    candidate = Path(thumbnail_path)
+    if candidate.is_absolute():
+        return str(candidate)
+    return str(base / candidate)
 
 
-def _index_clip_image(file_id: str, file_path: str, filename: str) -> bool:
-    """Index a single image file with CLIP, and optionally generate BLIP caption.
+def _handle_thumbnail_fallback(
+    file_id: str,
+    mime_type: str,
+    filename: str,
+    thumbnail_path: str | None,
+) -> bool:
+    """Index a non-image, non-video file via its core-rendered thumbnail.
 
-    Args:
-        file_id: The file ID.
-        file_path: Path to the image file.
-        filename: Original filename for preview text.
+    Used for ``.loft`` and HEIC. If ``thumbnail_path`` is unset (legacy
+    ``.loft`` from before media_import Phase 2, or a HEIC without a
+    cached JPEG), close out the flags so the queue doesn't spin and
+    return ``True`` — search will simply not surface this file via
+    visual similarity until the thumbnail materialises.
+    """
+    if not thumbnail_path:
+        logger.debug(
+            "No thumbnail_path for %s (%s); skipping thumbnail CLIP",
+            file_id, mime_type,
+        )
+        with get_search_db() as session:
+            f = session.query(IndexedFile).filter_by(file_id=file_id).first()
+            if f is not None:
+                f.clip_indexed = True
+                f.clip_thumbnail_indexed = True
+        return True
 
-    Returns:
-        True if indexing succeeded.
+    abspath = _resolve_thumbnail_abspath(thumbnail_path)
+    return _index_clip_thumbnail(
+        file_id, abspath, filename, source_label="Thumbnail",
+    )
+
+
+def _index_clip_thumbnail(
+    file_id: str,
+    image_path: str,
+    filename: str,
+    *,
+    source_label: str = "Thumbnail",
+) -> bool:
+    """Embed a single representative image as ``embedding_type="clip_thumbnail"``.
+
+    Used for the three "1 representative frame" routes per spec
+    ``2026-05-02-thumbnail-clip-default-shallow-search.md``:
+
+    - Images: ``image_path`` is the image file itself
+      (``source_label="Image"``).
+    - Videos: ``image_path`` is the core-rendered ``data/thumbnails/<id>.jpg``
+      (ffmpeg ``thumbnail=300`` filter, hako ``a_-6OptR6AfI90zU4OncA``).
+    - Thumbnail-fallback (``.loft`` / HEIC): ``image_path`` is the same
+      core thumbnail file, written by ``_save_loft_thumbnail`` for ``.loft``
+      and by HEIC sidecar generation otherwise.
+
+    Sets ``clip_thumbnail_indexed=True`` on success. Also sets
+    ``clip_indexed=True`` for the **image** route only — videos keep
+    ``clip_indexed`` for their scene-frame route, and thumbnail-fallback
+    types are catch-all closed by the dispatcher.
+
+    Returns ``True`` on success. On failure, leaves flags untouched so a
+    subsequent retry can attempt again.
     """
     try:
-        image = Image.open(file_path).convert("RGB")
+        image = Image.open(image_path).convert("RGB")
         vector = embed_image(image)
-        embedding_id = f"clip_{file_id}_{uuid.uuid4().hex[:8]}"
+        embedding_id = f"clipt_{file_id}_{uuid.uuid4().hex[:8]}"
     except Exception as e:
-        logger.error("CLIP compute failed for %s: %s", file_id, e)
+        logger.error(
+            "clip_thumbnail compute failed for %s (%s): %s",
+            file_id, image_path, e,
+        )
         return False
 
     with get_search_db() as session:
-        _remove_clip_embeddings(session, file_id)
+        _remove_clip_embeddings(
+            session, file_id, embedding_type="clip_thumbnail",
+        )
         _store_clip_embedding(
             session=session,
             embedding_id=embedding_id,
             file_id=file_id,
             vector=vector,
-            content_preview=f"Image: {filename}",
+            content_preview=f"{source_label}: {filename}",
+            embedding_type="clip_thumbnail",
         )
         file = session.query(IndexedFile).filter_by(file_id=file_id).first()
         if file is not None:
-            file.clip_indexed = True
+            file.clip_thumbnail_indexed = True
+            # Image route has no scene CLIP; close that leg too so the
+            # CLIP queue does not re-pick the file.
+            if source_label == "Image":
+                file.clip_indexed = True
 
-    # Generate BLIP caption for the image (reuses the already-loaded PIL image)
+    # BLIP caption applies to the visible representative frame, which is
+    # what the user-facing detail page surfaces. Reusing the already-loaded
+    # PIL image is the lightweight path.
     _generate_blip_caption_if_needed(file_id, image)
 
     return True
@@ -704,6 +867,7 @@ def _store_clip_embedding(
     content_preview: str = "",
     timestamp_start: float | None = None,
     timestamp_end: float | None = None,
+    embedding_type: str = "clip",
 ) -> None:
     """Store a CLIP embedding in the database.
 
@@ -715,11 +879,17 @@ def _store_clip_embedding(
         content_preview: Human-readable description.
         timestamp_start: Optional start timestamp.
         timestamp_end: Optional end timestamp.
+        embedding_type: Either ``"clip"`` (scene-detected video frames)
+            or ``"clip_thumbnail"`` (representative single frame). Both
+            share the ``vec_clip`` virtual table because dimension and
+            model are identical; the type lets search distinguish
+            "video about X" from "scene with X" intent. Spec
+            ``2026-05-02-thumbnail-clip-default-shallow-search.md``.
     """
     embedding_record = Embedding(
         id=embedding_id,
         file_id=file_id,
-        embedding_type="clip",
+        embedding_type=embedding_type,
         vector_table="vec_clip",
         content_preview=content_preview[:500],
         timestamp_start=timestamp_start,
@@ -735,16 +905,25 @@ def _store_clip_embedding(
     )
 
 
-def _remove_clip_embeddings(session: object, file_id: str) -> None:
+def _remove_clip_embeddings(
+    session: object,
+    file_id: str,
+    embedding_type: str = "clip",
+) -> None:
     """Remove existing CLIP embeddings for a file.
 
     Args:
         session: Database session.
         file_id: The file ID.
+        embedding_type: ``"clip"`` (default, scene frames) or
+            ``"clip_thumbnail"`` (representative single frame). Restricting
+            by type keeps the two routes independent: re-running
+            ``_index_clip_thumbnail`` for a video must not blow away the
+            scene-frame embeddings, and vice versa.
     """
     existing = (
         session.query(Embedding)
-        .filter_by(file_id=file_id, embedding_type="clip")
+        .filter_by(file_id=file_id, embedding_type=embedding_type)
         .all()
     )
 

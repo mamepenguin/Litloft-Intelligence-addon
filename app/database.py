@@ -99,6 +99,10 @@ def init_search_db() -> None:
         _create_vec_tables(conn)
         conn.commit()
 
+    # Migrate indexed_files for thumbnail CLIP support (idempotent).
+    with _search_engine.begin() as conn:
+        _migrate_indexed_files_thumbnail_columns(conn)
+
     # Migrate transcript_chunks for AI refine columns (idempotent).
     with _search_engine.begin() as conn:
         _migrate_transcript_chunks_if_needed(conn)
@@ -315,6 +319,47 @@ def _migrate_vec_clip_if_needed(conn: object) -> None:
     conn.execute(text("UPDATE indexed_files SET clip_indexed = 0"))
 
     conn.commit()
+
+
+def _migrate_indexed_files_thumbnail_columns(conn: object) -> None:
+    """Add ``thumbnail_path`` and ``clip_thumbnail_indexed`` columns.
+
+    Spec ``2026-05-02-thumbnail-clip-default-shallow-search.md``:
+    - ``thumbnail_path`` projects core ``File.thumbnail_path`` so the
+      CLIP worker can embed the representative frame without a
+      per-file Internal API roundtrip.
+    - ``clip_thumbnail_indexed`` tracks completion of the new
+      ``embedding_type="clip_thumbnail"`` route, separate from
+      ``clip_indexed`` (which now means "scene-detected video frames").
+
+    Idempotent: skips columns that already exist. Image migration
+    (clip → clip_thumbnail) and the bulk ``thumbnail_path`` projection
+    happen later in Phase 4.
+    """
+    cols = {
+        row[1]
+        for row in conn.execute(
+            text("PRAGMA table_info(indexed_files)")
+        ).fetchall()
+    }
+    if "thumbnail_path" not in cols:
+        conn.execute(
+            text("ALTER TABLE indexed_files ADD COLUMN thumbnail_path TEXT")
+        )
+    if "clip_thumbnail_indexed" not in cols:
+        conn.execute(
+            text(
+                "ALTER TABLE indexed_files ADD COLUMN "
+                "clip_thumbnail_indexed BOOLEAN NOT NULL DEFAULT 0"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "idx_indexed_files_clip_thumbnail_indexed "
+                "ON indexed_files(clip_thumbnail_indexed)"
+            )
+        )
 
 
 def _migrate_transcript_chunks_if_needed(conn: object) -> None:
