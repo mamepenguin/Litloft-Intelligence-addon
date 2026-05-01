@@ -192,7 +192,7 @@ describe("FindModeSlot", () => {
     expect(screen.queryByRole("heading")).toBeNull();
   });
 
-  it("renders the page layout (prominent heading) when context is 'page'", async () => {
+  it("renders the page layout (compact chip CTA) when context is 'page'", async () => {
     vi.mocked(getIntelligenceStatus).mockResolvedValue(enabledStatus as any);
 
     render(
@@ -205,12 +205,12 @@ describe("FindModeSlot", () => {
       />,
     );
 
-    // Page layout exposes a level-2 section heading.
-    const heading = await screen.findByRole("heading", { level: 2 });
-    expect(heading).toBeInTheDocument();
-    // Page layout still has an actionable CTA button that hands off.
-    const cta = screen.getByRole("button", { name: /find/i });
+    // Page layout is a right-aligned chip — Find is a handoff to
+    // a different page, so it must not consume a heading slot on
+    // the search results page.
+    const cta = await screen.findByRole("button", { name: /find/i });
     expect(cta).toBeInTheDocument();
+    expect(screen.queryByRole("heading")).toBeNull();
   });
 
   it("page layout CTA still calls onSelect with the find URL", async () => {

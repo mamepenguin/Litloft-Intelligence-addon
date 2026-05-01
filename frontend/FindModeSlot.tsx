@@ -12,6 +12,10 @@
  *  - ``llm.enabled === true``, and
  *  - the user has typed a non-empty query (no point handing off with
  *    no seed).
+ *
+ * Page layout is a single right-aligned chip — Find is a side door
+ * (handoff to a different page), so it stays visually subordinate to
+ * the actual results on the search page.
  */
 
 import { useEffect, useState } from "react";
@@ -75,34 +79,18 @@ export default function FindModeSlot({
 
   if (context === "page") {
     return (
-      <section
-        aria-labelledby="find-mode-heading"
-        className="rounded-2xl border border-bg-border bg-bg-base/40 p-4 sm:p-5"
-      >
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0">
-            <h2
-              id="find-mode-heading"
-              className="flex items-center gap-2 text-base font-semibold text-text-primary"
-            >
-              <ListFilter size={16} className="flex-shrink-0 text-accent-teal" />
-              {t("pageHeading")}
-            </h2>
-            <p className="mt-1 text-xs text-text-muted">
-              {t("pageDescription", { query: trimmed })}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => onSelect(href)}
-            aria-label={`Find: ${trimmed}`}
-            className="flex flex-shrink-0 items-center gap-1.5 rounded-full bg-accent-teal/10 px-3 py-1.5 text-sm font-medium text-accent-teal transition-colors hover:bg-accent-teal/20"
-          >
-            <ListFilter size={14} className="flex-shrink-0" />
-            <span className="truncate">{t("pageCta")}</span>
-          </button>
-        </div>
-      </section>
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => onSelect(href)}
+          aria-label={`Find: ${trimmed}`}
+          title={t("pageDescription", { query: trimmed })}
+          className="inline-flex items-center gap-1.5 rounded-full bg-sand px-3 py-1.5 text-xs font-medium text-text-primary transition-colors hover:bg-sand-hover"
+        >
+          <ListFilter size={14} className="flex-shrink-0 text-accent-teal" />
+          <span className="truncate">{t("pageCta")}</span>
+        </button>
+      </div>
     );
   }
 
