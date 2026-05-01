@@ -179,6 +179,7 @@ function IntelligenceFindPageInner() {
 
   const [input, setInput] = useState(seedQuery);
   const [state, setState] = useState<FindPageState>({ kind: "idle" });
+  const [composing, setComposing] = useState(false);
   const autoFiredRef = useRef(false);
   // Track the question the current decomposition came from so chip ×
   // re-POSTs can reuse it without depending on the input field (the
@@ -223,9 +224,13 @@ function IntelligenceFindPageInner() {
   const handleSubmit = useCallback(
     (e: FormEvent<HTMLFormElement>) => {
       e.preventDefault();
+      // Skip Enter while IME composition is active (e.g. Japanese
+      // conversion), otherwise the conversion-confirming Enter would
+      // submit the form.
+      if (composing) return;
       void runFind(input);
     },
-    [input, runFind],
+    [composing, input, runFind],
   );
 
   const handleInputChange = useCallback(
@@ -263,6 +268,8 @@ function IntelligenceFindPageInner() {
           type="text"
           value={input}
           onChange={handleInputChange}
+          onCompositionStart={() => setComposing(true)}
+          onCompositionEnd={() => setComposing(false)}
           placeholder={t("placeholder")}
           className="flex-1 rounded-2xl border border-bg-border bg-bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
         />

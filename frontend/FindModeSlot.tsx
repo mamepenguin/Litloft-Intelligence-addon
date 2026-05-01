@@ -21,17 +21,24 @@ import { ListFilter } from "lucide-react";
 import { getIntelligenceStatus } from "./api";
 import type { IntelligenceStatus } from "./api";
 
+type SlotContext = "popup" | "page";
+
 interface FindModeSlotProps {
   query: string;
   drive: string;
   filter: string;
   onSelect: (url: string) => void;
+  /** Layout mode. "popup" (default) = compact list row for the search
+   *  modal, "page" = prominent section heading + CTA card for the
+   *  /drive/<name>/search page. */
+  context?: SlotContext;
 }
 
 export default function FindModeSlot({
   query,
   drive,
   onSelect,
+  context = "popup",
 }: FindModeSlotProps) {
   const t = useTranslations("find");
   const [status, setStatus] = useState<IntelligenceStatus | null>(null);
@@ -65,6 +72,39 @@ export default function FindModeSlot({
   if (trimmed.length === 0) return null;
 
   const href = `/drive/${encodeURIComponent(drive)}/addons/intelligence/find?q=${encodeURIComponent(trimmed)}`;
+
+  if (context === "page") {
+    return (
+      <section
+        aria-labelledby="find-mode-heading"
+        className="rounded-2xl border border-bg-border bg-bg-base/40 p-4 sm:p-5"
+      >
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <h2
+              id="find-mode-heading"
+              className="flex items-center gap-2 text-base font-semibold text-text-primary"
+            >
+              <ListFilter size={16} className="flex-shrink-0 text-accent-teal" />
+              {t("pageHeading")}
+            </h2>
+            <p className="mt-1 text-xs text-text-muted">
+              {t("pageDescription", { query: trimmed })}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => onSelect(href)}
+            aria-label={`Find: ${trimmed}`}
+            className="flex flex-shrink-0 items-center gap-1.5 rounded-full bg-accent-teal/10 px-3 py-1.5 text-sm font-medium text-accent-teal transition-colors hover:bg-accent-teal/20"
+          >
+            <ListFilter size={14} className="flex-shrink-0" />
+            <span className="truncate">{t("pageCta")}</span>
+          </button>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <button

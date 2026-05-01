@@ -8,11 +8,16 @@ import { semanticSearch, getSearchStatus } from "./api";
 import type { SemanticSearchResult, SemanticSearchSegment } from "./api";
 import { formatDuration } from "@/lib/format";
 
+type SlotContext = "popup" | "page";
+
 interface SemanticSearchSlotProps {
   query: string;
   drive: string;
   filter: string;
   onSelect: (url: string) => void;
+  /** Layout mode. "popup" (default) = compact list for the search modal,
+   *  "page" = full-page grid for /drive/<name>/search. */
+  context?: SlotContext;
 }
 
 const MATCH_TYPE_STYLES: Record<string, string> = {
@@ -133,11 +138,203 @@ function SemanticResultItem({
   );
 }
 
+function SemanticResultCard({
+  result,
+  onSelect,
+  t,
+}: {
+  result: SemanticSearchResult;
+  onSelect: (url: string) => void;
+  t: (key: string, values?: Record<string, string | number>) => string;
+}) {
+  const matchLabels: Record<string, string> = {
+    transcript: t("matchTranscript"),
+    transcript_keyword: t("matchTranscriptKeyword"),
+    clip: t("matchClip"),
+    metadata: t("matchMetadata"),
+    content: t("matchContent"),
+    text_content_keyword: t("matchTextContentKeyword"),
+  };
+
+  const timestamps = result.segments
+    .filter((seg): seg is SemanticSearchSegment & { time_range: [number, number] } =>
+      seg.time_range != null && seg.time_range[0] > 0,
+    )
+    .slice(0, 3);
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(`/files/${result.file_id}`)}
+      className="group flex flex-col rounded-2xl overflow-hidden bg-bg-elevated text-left transition-all duration-200 hover:shadow-md active:scale-[0.98]"
+    >
+      <div className="relative aspect-video w-full bg-bg-elevated">
+        <img
+          src={`/api/files/${result.file_id}/thumbnail`}
+          alt=""
+          className="h-full w-full object-cover"
+          loading="lazy"
+          onError={(e) => { e.currentTarget.style.display = "none"; }}
+        />
+      </div>
+      <div className="p-3">
+        <p className="line-clamp-2 text-sm font-semibold text-text-primary group-hover:text-accent">
+          {result.filename}
+        </p>
+        <div className="mt-1.5 flex flex-wrap items-center gap-1">
+          {result.match_types.map((type) => (
+            <MatchBadge
+              key={type}
+              type={type}
+              label={matchLabels[type] ?? type}
+            />
+          ))}
+        </div>
+        {timestamps.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap gap-0.5">
+            {timestamps.map((seg) => (
+              <TimestampLink
+                key={seg.time_range[0]}
+                seconds={seg.time_range[0]}
+                fileId={result.file_id}
+                onClick={onSelect}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </button>
+  );
+}
+
+function PopupLayout({
+  results,
+  loading,
+  query,
+  drive,
+  onSelect,
+  t,
+  askT,
+}: {
+  results: SemanticSearchResult[];
+  loading: boolean;
+  query: string;
+  drive: string;
+  onSelect: (url: string) => void;
+  t: (key: string, values?: Record<string, string | number>) => string;
+  askT: (key: string, values?: Record<string, string | number>) => string;
+}) {
+  // Hybrid entry point into the Ask pipeline: when the user has already
+  // found *some* results via keyword search, offer a one-click handoff
+  // to the RAG page (`/addons/intelligence?q=<query>`). The Ask page
+  // auto-fires on mount when a seed `q` is present so this link gives
+  // a true one-click "get me an answer" flow without disturbing the
+  // established input culture of the search modal. See the RAG
+  // redesign spec §"UI レイヤー: 完全分離 + ハイブリッド導線".
+  const askHref = `/drive/${encodeURIComponent(drive)}/addons/intelligence?q=${encodeURIComponent(query)}`;
+
+  return (
+    <>
+      {results.map((result) => (
+        <SemanticResultItem
+          key={result.file_id}
+          result={result}
+          onSelect={onSelect}
+          t={t}
+        />
+      ))}
+      {loading && (
+        <div className="flex items-center justify-center border-t border-bg-border py-3">
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={() => onSelect(askHref)}
+        className="flex w-full items-center gap-2 border-t border-bg-border px-4 py-2.5 text-left text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
+      >
+        <Sparkles size={12} className="flex-shrink-0 text-accent-teal" />
+        <span className="truncate">{askT("button", { query })}</span>
+      </button>
+    </>
+  );
+}
+
+function PageLayout({
+  results,
+  loading,
+  query,
+  drive,
+  onSelect,
+  t,
+  askT,
+}: {
+  results: SemanticSearchResult[];
+  loading: boolean;
+  query: string;
+  drive: string;
+  onSelect: (url: string) => void;
+  t: (key: string, values?: Record<string, string | number>) => string;
+  askT: (key: string, values?: Record<string, string | number>) => string;
+}) {
+  const askHref = `/drive/${encodeURIComponent(drive)}/addons/intelligence?q=${encodeURIComponent(query)}`;
+
+  return (
+    <section
+      aria-labelledby="semantic-search-heading"
+      className="rounded-2xl border border-bg-border bg-bg-base/40 p-4 sm:p-5"
+    >
+      <header className="mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2
+            id="semantic-search-heading"
+            className="flex items-center gap-2 text-base font-semibold text-text-primary"
+          >
+            <Sparkles size={16} className="flex-shrink-0 text-accent-teal" />
+            {t("semanticResults")}
+          </h2>
+          <p className="mt-1 text-xs text-text-muted">
+            {t("semanticResultsDescription")}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => onSelect(askHref)}
+          className="flex flex-shrink-0 items-center gap-1.5 rounded-full bg-accent-teal/10 px-3 py-1.5 text-xs font-medium text-accent-teal transition-colors hover:bg-accent-teal/20"
+        >
+          <Sparkles size={12} className="flex-shrink-0" />
+          <span className="truncate">{askT("button", { query })}</span>
+        </button>
+      </header>
+      <div
+        role="list"
+        className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
+      >
+        {results.map((result) => (
+          <div role="listitem" key={result.file_id}>
+            <SemanticResultCard
+              result={result}
+              onSelect={onSelect}
+              t={t}
+            />
+          </div>
+        ))}
+      </div>
+      {loading && (
+        <div className="mt-3 flex items-center justify-center py-3">
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function SemanticSearchSlot({
   query,
   drive,
   filter,
   onSelect,
+  context = "popup",
 }: SemanticSearchSlotProps) {
   const t = useTranslations("search");
   // Separate namespace for the Ask link label: reuses the already-
@@ -212,38 +409,31 @@ export default function SemanticSearchSlot({
 
   if (results.length === 0) return null;
 
-  // Hybrid entry point into the Ask pipeline: when the user has already
-  // found *some* results via keyword search, offer a one-click handoff
-  // to the RAG page (`/addons/intelligence?q=<query>`). The Ask page
-  // auto-fires on mount when a seed `q` is present so this link gives
-  // a true one-click "get me an answer" flow without disturbing the
-  // established input culture of the search modal. See the RAG
-  // redesign spec §"UI レイヤー: 完全分離 + ハイブリッド導線".
-  const askHref = `/drive/${encodeURIComponent(drive)}/addons/intelligence?q=${encodeURIComponent(query.trim())}`;
+  const trimmedQuery = query.trim();
+
+  if (context === "page") {
+    return (
+      <PageLayout
+        results={results}
+        loading={loading}
+        query={trimmedQuery}
+        drive={drive}
+        onSelect={onSelect}
+        t={t}
+        askT={askT}
+      />
+    );
+  }
 
   return (
-    <>
-      {results.map((result) => (
-        <SemanticResultItem
-          key={result.file_id}
-          result={result}
-          onSelect={onSelect}
-          t={t}
-        />
-      ))}
-      {loading && (
-        <div className="flex items-center justify-center border-t border-bg-border py-3">
-          <div className="h-4 w-4 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-        </div>
-      )}
-      <button
-        type="button"
-        onClick={() => onSelect(askHref)}
-        className="flex w-full items-center gap-2 border-t border-bg-border px-4 py-2.5 text-left text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
-      >
-        <Sparkles size={12} className="flex-shrink-0 text-accent-teal" />
-        <span className="truncate">{askT("button", { query: query.trim() })}</span>
-      </button>
-    </>
+    <PopupLayout
+      results={results}
+      loading={loading}
+      query={trimmedQuery}
+      drive={drive}
+      onSelect={onSelect}
+      t={t}
+      askT={askT}
+    />
   );
 }

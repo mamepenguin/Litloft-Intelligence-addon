@@ -77,6 +77,9 @@
   },
   "find": {
     "button": "Find files for “{query}”",
+    "pageHeading": "Find: file suggestion mode",
+    "pageDescription": "AI suggests files matching “{query}”",
+    "pageCta": "Open Find page",
     "title": "Find files",
     "placeholder": "e.g. SF movies I watched last week",
     "submit": "Find",
@@ -97,6 +100,7 @@
     "matchTextContentKeyword": "Content (exact)",
     "matchedPages": "p.{pages}",
     "semanticResults": "Semantic search results",
+    "semanticResultsDescription": "Files whose meaning is close to your query",
     "score": "{score}%"
   },
   "file": {

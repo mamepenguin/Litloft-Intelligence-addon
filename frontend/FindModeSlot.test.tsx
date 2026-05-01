@@ -155,4 +155,84 @@ describe("FindModeSlot", () => {
       expect(container.textContent).toBe("");
     });
   });
+
+  it("renders the popup layout (compact button) when context is undefined", async () => {
+    // Backwards-compat default: undefined context === popup.
+    vi.mocked(getIntelligenceStatus).mockResolvedValue(enabledStatus as any);
+
+    render(
+      <FindModeSlot
+        query="SF 映画"
+        drive="family"
+        filter="all"
+        onSelect={() => {}}
+      />,
+    );
+
+    // Popup layout renders a single button labelled "Find: <query>" and
+    // does NOT render a section heading.
+    await screen.findByRole("button", { name: /find/i });
+    expect(screen.queryByRole("heading")).toBeNull();
+  });
+
+  it("renders the popup layout when context is explicitly 'popup'", async () => {
+    vi.mocked(getIntelligenceStatus).mockResolvedValue(enabledStatus as any);
+
+    render(
+      <FindModeSlot
+        query="SF 映画"
+        drive="family"
+        filter="all"
+        onSelect={() => {}}
+        context="popup"
+      />,
+    );
+
+    await screen.findByRole("button", { name: /find/i });
+    expect(screen.queryByRole("heading")).toBeNull();
+  });
+
+  it("renders the page layout (prominent heading) when context is 'page'", async () => {
+    vi.mocked(getIntelligenceStatus).mockResolvedValue(enabledStatus as any);
+
+    render(
+      <FindModeSlot
+        query="SF 映画"
+        drive="family"
+        filter="all"
+        onSelect={() => {}}
+        context="page"
+      />,
+    );
+
+    // Page layout exposes a level-2 section heading.
+    const heading = await screen.findByRole("heading", { level: 2 });
+    expect(heading).toBeInTheDocument();
+    // Page layout still has an actionable CTA button that hands off.
+    const cta = screen.getByRole("button", { name: /find/i });
+    expect(cta).toBeInTheDocument();
+  });
+
+  it("page layout CTA still calls onSelect with the find URL", async () => {
+    vi.mocked(getIntelligenceStatus).mockResolvedValue(enabledStatus as any);
+    const onSelect = vi.fn();
+
+    render(
+      <FindModeSlot
+        query="先週観た映画"
+        drive="家族"
+        filter="all"
+        onSelect={onSelect}
+        context="page"
+      />,
+    );
+
+    const cta = await screen.findByRole("button", { name: /find/i });
+    cta.click();
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    const href = onSelect.mock.calls[0][0] as string;
+    expect(href).toContain("/addons/intelligence/find");
+    expect(href).toContain(`q=${encodeURIComponent("先週観た映画")}`);
+  });
 });

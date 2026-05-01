@@ -77,6 +77,9 @@
   },
   "find": {
     "button": "「{query}」でファイルを探す",
+    "pageHeading": "Find: ファイル提示モード",
+    "pageDescription": "AI が「{query}」に合致するファイルを推測して一覧化します",
+    "pageCta": "Find ページを開く",
     "title": "ファイルを探す",
     "placeholder": "例: 先週観た映画でSFっぽいの",
     "submit": "探す",
@@ -97,6 +100,7 @@
     "matchTextContentKeyword": "内容キーワード一致",
     "matchedPages": "p.{pages}",
     "semanticResults": "セマンティック検索結果",
+    "semanticResultsDescription": "クエリの意味に近いファイルを AI が推測して提示します",
     "score": "{score}%"
   },
   "file": {
