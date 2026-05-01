@@ -1,5 +1,5 @@
 import { fetchJSON } from "@/lib/api";
-import type { FileType } from "@/types";
+import type { FileItem, FileType } from "@/types";
 
 const API_BASE = "/api";
 
@@ -36,6 +36,14 @@ export interface SemanticSearchResult {
   score: number;
   match_types: string[];
   segments: SemanticSearchSegment[];
+  /**
+   * Hydrated FileItem-shaped metadata from core's
+   * ``POST /api/internal/files/bulk``. Null when core is unreachable
+   * or the file is missing/trashed — consumers should fall back to
+   * the IndexedFile-snapshot fields above (filename, file_type) for
+   * minimal display.
+   */
+  file: FileItem | null;
 }
 
 export interface SemanticSearchResponse {

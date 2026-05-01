@@ -7,6 +7,11 @@ import { Sparkles } from "lucide-react";
 import { semanticSearch, getSearchStatus } from "./api";
 import type { SemanticSearchResult, SemanticSearchSegment } from "./api";
 import { formatDuration } from "@/lib/format";
+import { FileCard } from "@/components/FileCard";
+import { FileContextMenu } from "@/components/FileContextMenu";
+import { useContextMenu } from "@/hooks/useContextMenu";
+import type { FileItem } from "@/types";
+import { MatchOverlay } from "./MatchOverlay";
 
 type SlotContext = "popup" | "page";
 
@@ -20,7 +25,11 @@ interface SemanticSearchSlotProps {
   context?: SlotContext;
 }
 
-const MATCH_TYPE_STYLES: Record<string, string> = {
+// Popup-only badge palette. The page layout uses MatchOverlay (warm
+// palette per DESIGN.md §2.2). The popup view sits inside the search
+// modal which has its own visual context, so we keep the existing
+// compact badge style there to limit Phase 2 scope.
+const POPUP_MATCH_TYPE_STYLES: Record<string, string> = {
   transcript: "bg-blue-500/15 text-blue-400",
   transcript_keyword: "bg-cyan-500/15 text-cyan-400",
   clip: "bg-emerald-500/15 text-emerald-400",
@@ -29,16 +38,19 @@ const MATCH_TYPE_STYLES: Record<string, string> = {
   text_content_keyword: "bg-violet-500/15 text-violet-400",
 };
 
-function MatchBadge({ type, label }: { type: string; label: string }) {
-  const style = MATCH_TYPE_STYLES[type] ?? "bg-zinc-500/15 text-zinc-400";
+function PopupMatchBadge({ type, label }: { type: string; label: string }) {
+  const style =
+    POPUP_MATCH_TYPE_STYLES[type] ?? "bg-zinc-500/15 text-zinc-400";
   return (
-    <span className={`inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium ${style}`}>
+    <span
+      className={`inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium ${style}`}
+    >
       {label}
     </span>
   );
 }
 
-function TimestampLink({
+function PopupTimestampLink({
   seconds,
   fileId,
   onClick,
@@ -47,16 +59,15 @@ function TimestampLink({
   fileId: string;
   onClick: (url: string) => void;
 }) {
-  const label = formatDuration(seconds);
   return (
     <button
       onClick={(e) => {
         e.stopPropagation();
         onClick(`/files/${fileId}?t=${Math.floor(seconds)}`);
       }}
-      className="rounded px-1 py-0.5 text-[10px] font-medium text-accent hover:bg-accent/10 transition-colors"
+      className="rounded px-1 py-0.5 text-[10px] font-medium text-accent transition-colors hover:bg-accent/10"
     >
-      {label}
+      {formatDuration(seconds)}
     </button>
   );
 }
@@ -84,13 +95,14 @@ function SemanticResultItem({
       result.segments
         .flatMap((seg) => seg.matches)
         .filter((m) => m.page != null)
-        .map((m) => m.page as number)
+        .map((m) => m.page as number),
     ),
   ].sort((a, b) => a - b);
 
   const timestamps = result.segments
-    .filter((seg): seg is SemanticSearchSegment & { time_range: [number, number] } =>
-      seg.time_range != null && seg.time_range[0] > 0,
+    .filter(
+      (seg): seg is SemanticSearchSegment & { time_range: [number, number] } =>
+        seg.time_range != null && seg.time_range[0] > 0,
     )
     .slice(0, 5);
 
@@ -103,13 +115,15 @@ function SemanticResultItem({
         src={`/api/files/${result.file_id}/thumbnail`}
         alt=""
         className="h-10 w-16 flex-shrink-0 rounded bg-bg-elevated object-cover"
-        onError={(e) => { e.currentTarget.style.display = "none"; }}
+        onError={(e) => {
+          e.currentTarget.style.display = "none";
+        }}
       />
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm text-text-primary">{result.filename}</p>
         <div className="mt-0.5 flex flex-wrap items-center gap-1">
           {result.match_types.map((type) => (
-            <MatchBadge
+            <PopupMatchBadge
               key={type}
               type={type}
               label={matchLabels[type] ?? type}
@@ -119,7 +133,7 @@ function SemanticResultItem({
         {timestamps.length > 0 && (
           <div className="mt-1 flex flex-wrap gap-0.5">
             {timestamps.map((seg) => (
-              <TimestampLink
+              <PopupTimestampLink
                 key={seg.time_range[0]}
                 seconds={seg.time_range[0]}
                 fileId={result.file_id}
@@ -129,7 +143,7 @@ function SemanticResultItem({
           </div>
         )}
         {matchedPages.length > 0 && (
-          <p className="mt-1 text-[11px] text-text-tertiary">
+          <p className="mt-1 text-[11px] text-text-muted">
             {t("matchedPages", { pages: matchedPages.join(", ") })}
           </p>
         )}
@@ -138,73 +152,39 @@ function SemanticResultItem({
   );
 }
 
-function SemanticResultCard({
-  result,
-  onSelect,
-  t,
-}: {
-  result: SemanticSearchResult;
-  onSelect: (url: string) => void;
-  t: (key: string, values?: Record<string, string | number>) => string;
-}) {
-  const matchLabels: Record<string, string> = {
-    transcript: t("matchTranscript"),
-    transcript_keyword: t("matchTranscriptKeyword"),
-    clip: t("matchClip"),
-    metadata: t("matchMetadata"),
-    content: t("matchContent"),
-    text_content_keyword: t("matchTextContentKeyword"),
+/**
+ * Build a minimal FileItem from a SemanticSearchResult when core's
+ * bulk hydrate failed (``result.file === null``). The card stays
+ * functional with reduced fidelity — favorite toggle and tag display
+ * are unavailable, but title, thumbnail, and click-through still work.
+ *
+ * Should be rare: only fires when the core service is briefly
+ * unreachable mid-search. The IndexedFile snapshot guarantees at least
+ * filename / file_type / drive are present on every search hit.
+ */
+function fileItemFromSnapshot(result: SemanticSearchResult): FileItem {
+  return {
+    id: result.file_id,
+    filename: result.filename,
+    title: result.filename,
+    description: "",
+    drive: result.drive,
+    folder_path: "",
+    file_type: result.file_type as FileItem["file_type"],
+    mime_type: "",
+    thumbnail_url: `/api/files/${result.file_id}/thumbnail`,
+    has_thumbnail: true,
+    file_size: 0,
+    duration: null,
+    likes: 0,
+    is_favorite: false,
+    tags: [],
+    subtitles: [],
+    deleted_at: null,
+    missing_since: null,
+    created_at: "",
+    updated_at: "",
   };
-
-  const timestamps = result.segments
-    .filter((seg): seg is SemanticSearchSegment & { time_range: [number, number] } =>
-      seg.time_range != null && seg.time_range[0] > 0,
-    )
-    .slice(0, 3);
-
-  return (
-    <button
-      type="button"
-      onClick={() => onSelect(`/files/${result.file_id}`)}
-      className="group flex flex-col rounded-2xl overflow-hidden bg-bg-elevated text-left transition-all duration-200 hover:shadow-md active:scale-[0.98]"
-    >
-      <div className="relative aspect-video w-full bg-bg-elevated">
-        <img
-          src={`/api/files/${result.file_id}/thumbnail`}
-          alt=""
-          className="h-full w-full object-cover"
-          loading="lazy"
-          onError={(e) => { e.currentTarget.style.display = "none"; }}
-        />
-      </div>
-      <div className="p-3">
-        <p className="line-clamp-2 text-sm font-semibold text-text-primary group-hover:text-accent">
-          {result.filename}
-        </p>
-        <div className="mt-1.5 flex flex-wrap items-center gap-1">
-          {result.match_types.map((type) => (
-            <MatchBadge
-              key={type}
-              type={type}
-              label={matchLabels[type] ?? type}
-            />
-          ))}
-        </div>
-        {timestamps.length > 0 && (
-          <div className="mt-1.5 flex flex-wrap gap-0.5">
-            {timestamps.map((seg) => (
-              <TimestampLink
-                key={seg.time_range[0]}
-                seconds={seg.time_range[0]}
-                fileId={result.file_id}
-                onClick={onSelect}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-    </button>
-  );
 }
 
 function PopupLayout({
@@ -224,13 +204,6 @@ function PopupLayout({
   t: (key: string, values?: Record<string, string | number>) => string;
   askT: (key: string, values?: Record<string, string | number>) => string;
 }) {
-  // Hybrid entry point into the Ask pipeline: when the user has already
-  // found *some* results via keyword search, offer a one-click handoff
-  // to the RAG page (`/addons/intelligence?q=<query>`). The Ask page
-  // auto-fires on mount when a seed `q` is present so this link gives
-  // a true one-click "get me an answer" flow without disturbing the
-  // established input culture of the search modal. See the RAG
-  // redesign spec §"UI レイヤー: 完全分離 + ハイブリッド導線".
   const askHref = `/drive/${encodeURIComponent(drive)}/addons/intelligence?q=${encodeURIComponent(query)}`;
 
   return (
@@ -266,6 +239,7 @@ function PageLayout({
   query,
   drive,
   onSelect,
+  onResultsChange,
   t,
   askT,
 }: {
@@ -274,17 +248,41 @@ function PageLayout({
   query: string;
   drive: string;
   onSelect: (url: string) => void;
+  onResultsChange: (next: SemanticSearchResult[]) => void;
   t: (key: string, values?: Record<string, string | number>) => string;
   askT: (key: string, values?: Record<string, string | number>) => string;
 }) {
   const askHref = `/drive/${encodeURIComponent(drive)}/addons/intelligence?q=${encodeURIComponent(query)}`;
 
+  const matchLabels: Record<string, string> = {
+    transcript: t("matchTranscript"),
+    transcript_keyword: t("matchTranscriptKeyword"),
+    clip: t("matchClip"),
+    metadata: t("matchMetadata"),
+    content: t("matchContent"),
+    text_content_keyword: t("matchTextContentKeyword"),
+  };
+
+  // Per-section context menu — semantic results have their own
+  // selection scope; cross-section selection (semantic + filename) is
+  // intentionally out of scope for Phase 2 to avoid mode confusion.
+  const { menuState, close, handlers } = useContextMenu();
+  const [menuTarget, setMenuTarget] = useState<FileItem | null>(null);
+
+  const handleFavoriteToggle = (updated: FileItem) => {
+    onResultsChange(
+      results.map((r) =>
+        r.file_id === updated.id ? { ...r, file: updated } : r,
+      ),
+    );
+  };
+
   return (
     <section
       aria-labelledby="semantic-search-heading"
-      className="rounded-2xl border border-bg-border bg-bg-base/40 p-4 sm:p-5"
+      className="space-y-3"
     >
-      <header className="mb-3 flex items-start justify-between gap-3">
+      <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h2
             id="semantic-search-heading"
@@ -300,7 +298,7 @@ function PageLayout({
         <button
           type="button"
           onClick={() => onSelect(askHref)}
-          className="flex flex-shrink-0 items-center gap-1.5 rounded-full bg-accent-teal/10 px-3 py-1.5 text-xs font-medium text-accent-teal transition-colors hover:bg-accent-teal/20"
+          className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-full bg-accent-teal/10 px-3 py-1.5 text-xs font-medium text-accent-teal transition-colors hover:bg-accent-teal/20"
         >
           <Sparkles size={12} className="flex-shrink-0" />
           <span className="truncate">{askT("button", { query })}</span>
@@ -308,20 +306,50 @@ function PageLayout({
       </header>
       <div
         role="list"
-        className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
+        className="grid grid-cols-1 gap-x-4 gap-y-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
       >
-        {results.map((result) => (
-          <div role="listitem" key={result.file_id}>
-            <SemanticResultCard
-              result={result}
-              onSelect={onSelect}
-              t={t}
-            />
-          </div>
-        ))}
+        {results.map((result) => {
+          const fileItem = result.file ?? fileItemFromSnapshot(result);
+          return (
+            <div role="listitem" key={result.file_id}>
+              <FileCard
+                file={fileItem}
+                onFavoriteToggle={
+                  result.file ? handleFavoriteToggle : undefined
+                }
+                onContextMenu={(e) => {
+                  setMenuTarget(fileItem);
+                  handlers.onContextMenu(e);
+                }}
+                onTouchStart={(e) => {
+                  setMenuTarget(fileItem);
+                  handlers.onTouchStart(e);
+                }}
+                onTouchEnd={handlers.onTouchEnd}
+                onTouchMove={handlers.onTouchMove}
+                matchOverlay={
+                  <MatchOverlay
+                    result={result}
+                    onSelect={onSelect}
+                    matchLabels={matchLabels}
+                    matchedPagesLabel={(pages) =>
+                      t("matchedPages", { pages: pages.join(", ") })
+                    }
+                  />
+                }
+              />
+            </div>
+          );
+        })}
       </div>
+      <FileContextMenu
+        open={menuState.open}
+        position={menuState.position}
+        target={menuTarget}
+        onClose={close}
+      />
       {loading && (
-        <div className="mt-3 flex items-center justify-center py-3">
+        <div className="flex items-center justify-center py-3">
           <div className="h-4 w-4 animate-spin rounded-full border-2 border-accent border-t-transparent" />
         </div>
       )}
@@ -360,7 +388,9 @@ export default function SemanticSearchSlot({
         setAvailable(res.available);
       }
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [drive]);
 
   // Debounced search
@@ -373,7 +403,10 @@ export default function SemanticSearchSlot({
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
     debounceRef.current = setTimeout(async () => {
-      const filterType = filter === "all" ? undefined : (filter as "video" | "image" | "audio" | "document");
+      const filterType =
+        filter === "all"
+          ? undefined
+          : (filter as "video" | "image" | "audio" | "document");
       setLoading(true);
       try {
         const res = await semanticSearch(query.trim(), drive, {
@@ -419,6 +452,7 @@ export default function SemanticSearchSlot({
         query={trimmedQuery}
         drive={drive}
         onSelect={onSelect}
+        onResultsChange={setResults}
         t={t}
         askT={askT}
       />

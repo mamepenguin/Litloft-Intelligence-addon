@@ -6,6 +6,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.drive_context import require_drive
+from app.file_hydrate import hydrate_files
 from app.schemas import (
     CompareResponseModel,
     SearchResponseModel,
@@ -21,8 +22,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["search"])
 
 
-def _to_response_model(result: Any) -> SearchResponseModel:
-    """Convert an internal SearchResponse to the API response model."""
+async def _to_response_model(result: Any) -> SearchResponseModel:
+    """Convert an internal SearchResponse to the API response model.
+
+    Calls ``POST /api/internal/files/bulk`` once per response to enrich
+    each result with FileItem-shaped metadata (favorite, tags, etc.) so
+    the frontend can render the same ``FileCard`` as filename-match
+    results. Hydration failures degrade silently — the IndexedFile
+    snapshot fields on each result remain valid for basic display.
+    """
+    file_ids = [r.file_id for r in result.results]
+    hydrate_map = await hydrate_files(file_ids)
+
     return SearchResponseModel(
         results=[
             SearchResultItem(
@@ -49,6 +60,7 @@ def _to_response_model(result: Any) -> SearchResponseModel:
                     )
                     for s in r.segments
                 ],
+                file=hydrate_map.get(r.file_id),
             )
             for r in result.results
         ],
@@ -97,7 +109,7 @@ async def search_endpoint(
         logger.error("Search failed: %s", e)
         raise HTTPException(status_code=500, detail="Search failed") from e
 
-    return _to_response_model(result)
+    return await _to_response_model(result)
 
 
 @router.get("/search/compare", response_model=CompareResponseModel)
@@ -117,10 +129,10 @@ async def search_compare_endpoint(
         raise HTTPException(status_code=500, detail="Search failed") from e
 
     return CompareResponseModel(
-        rrf=_to_response_model(compare.rrf),
-        cosine=_to_response_model(compare.cosine),
-        rrf_no_cutoff=_to_response_model(compare.rrf_no_cutoff),
-        cosine_no_cutoff=_to_response_model(compare.cosine_no_cutoff),
+        rrf=await _to_response_model(compare.rrf),
+        cosine=await _to_response_model(compare.cosine),
+        rrf_no_cutoff=await _to_response_model(compare.rrf_no_cutoff),
+        cosine_no_cutoff=await _to_response_model(compare.cosine_no_cutoff),
         source_counts=SourceCountsModel(
             text_vector=compare.source_counts.text_vector,
             clip_vector=compare.source_counts.clip_vector,

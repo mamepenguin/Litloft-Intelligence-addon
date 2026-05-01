@@ -29,6 +29,13 @@ class SearchResultItem(BaseModel):
     score: float
     match_types: list[str]
     segments: list[SearchResultSegment]
+    # Hydrated FileItem-shaped dict from core's
+    # ``POST /api/internal/files/bulk``. Frontend uses this to render
+    # the same ``FileCard`` as filename-match results (favorite, tags,
+    # selection, context menu). Null when core is unreachable or the
+    # file is missing/trashed — the frontend then falls back to the
+    # IndexedFile-snapshot fields on this item itself.
+    file: dict[str, Any] | None = None
 
 
 class SearchResponseModel(BaseModel):
