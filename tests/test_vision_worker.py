@@ -399,6 +399,81 @@ class TestProcessFileStatusTransitions:
         llm_stub.generate_vision.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_success_same_model_does_not_retry(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """An already-described file with the SAME model must skip LLM call.
+
+        Without this guard, every CLIP re-run (model swap, manual reindex)
+        would re-describe the image and burn LLM budget overwriting an
+        identical caption.
+        """
+        engine, _ = search_db
+        now = datetime.now(UTC).isoformat()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO file_summaries "
+                    "(file_id, short_summary, long_summary, model, "
+                    "context_type, context_chars, was_truncated, status, "
+                    "created_at, visual_description_status, "
+                    "visual_description_model) "
+                    "VALUES (:fid, '', '', '', 'image', 0, 0, 'hidden', "
+                    ":now, 'success', 'llava:13b')"
+                ),
+                {"fid": "img-ok", "now": now},
+            )
+
+        llm_stub = MagicMock()
+        llm_stub.enabled = True
+        llm_stub.generate_vision = AsyncMock(return_value="should not be called")
+        monkeypatch.setattr(
+            "app.workers.vision.get_llm_client", lambda: llm_stub
+        )
+
+        worker = VisionDescribeWorker()
+        accepted = await worker.enqueue("img-ok")
+        assert accepted is False
+        llm_stub.generate_vision.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_success_different_model_retries(
+        self, search_db, monkeypatch, make_settings, policy_allow_family,
+    ):
+        """Changing vision_model lets a previously successful file rerun."""
+        settings = make_settings(
+            features=FeaturesConfig(vision_describe="manual"),  # type: ignore[call-arg]
+            llm=LLMConfig(
+                provider="openai_compatible",
+                base_url="http://test",
+                model="gemma2:27b",
+                vision_model="gpt-4o-mini",  # Different from stored "llava:13b".
+            ),
+        )
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.workers.vision.settings", settings)
+
+        engine, _ = search_db
+        now = datetime.now(UTC).isoformat()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO file_summaries "
+                    "(file_id, short_summary, long_summary, model, "
+                    "context_type, context_chars, was_truncated, status, "
+                    "created_at, visual_description_status, "
+                    "visual_description_model) "
+                    "VALUES (:fid, 'old desc', '', '', 'image', 0, 0, "
+                    "'hidden', :now, 'success', 'llava:13b')"
+                ),
+                {"fid": "img-ok", "now": now},
+            )
+
+        worker = VisionDescribeWorker()
+        accepted = await worker.enqueue("img-ok")
+        assert accepted is True
+
+    @pytest.mark.asyncio
     async def test_unsupported_different_model_retries(
         self, search_db, monkeypatch, make_settings, policy_allow_family,
     ):

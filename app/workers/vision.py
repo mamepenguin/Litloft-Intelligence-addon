@@ -503,6 +503,15 @@ class VisionDescribeWorker:
 
         if state is not None:
             status, stored_model = state
+            # "success" is sticky for the SAME vision_model: re-running
+            # would just overwrite an identical description and burn
+            # LLM budget. Swap the model and we retry so the new model
+            # gets a chance.
+            if (
+                status == "success"
+                and (stored_model or "") == (settings.llm.vision_model or "")
+            ):
+                return False
             # "unsupported" is sticky only for the SAME vision_model. If
             # the operator swapped models we retry — the new model may
             # handle images even if the old one didn't.

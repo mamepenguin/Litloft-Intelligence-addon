@@ -655,6 +655,16 @@ class IndexManager:
                 file_id=file_id, task_type=TaskType.CLIP
             ))
 
+        # Vision-describe for images runs in parallel with CLIP — they
+        # share no intermediate state. Worker-side ``_should_accept``
+        # filters by mime/policy/stickiness; this just kicks the file
+        # at the same point CLIP is enqueued.
+        if (
+            mime_type in IMAGE_TYPES
+            and settings.features.vision_describe == "on_index"
+        ):
+            await self._enqueue_vision_describe(file_id)
+
         # Queue Whisper for audio/video (or VTT indexing for .loft)
         if mime_type in TRANSCRIBABLE_TYPES or mime_type == LOFT_MIME:
             await self._enqueue(IndexTask(
@@ -1101,12 +1111,6 @@ class IndexManager:
                     success = await index_clip(task.file_id)
                     if success:
                         logger.info("CLIP indexed: %s", task.file_id)
-                        # Vision describe on_index hook: after CLIP
-                        # completes for image files, enqueue the file
-                        # for an LLM description. Images, not videos —
-                        # Phase 1 excludes video frames.
-                        if settings.features.vision_describe == "on_index":
-                            await self._enqueue_vision_describe(task.file_id)
                     else:
                         logger.warning(
                             "CLIP indexing failed for %s, will retry on next reconciliation",
@@ -1238,9 +1242,14 @@ class IndexManager:
 def reset_falsely_completed_clip() -> int:
     """Reset clip_indexed for files marked complete but missing vectors.
 
-    Detects files where clip_indexed=True but no CLIP embeddings exist
-    in vec_clip. This happens when a previous run failed mid-indexing
-    but still marked the file as complete. Called once at startup.
+    Detects files where clip_indexed=True but no CLIP embeddings exist.
+    This happens when a previous run failed mid-indexing but still
+    marked the file as complete. Called once at startup.
+
+    Images store ``embedding_type='clip_thumbnail'`` (one per file;
+    spec ``2026-05-02-thumbnail-clip-default-shallow-search.md``) and
+    videos store ``embedding_type='clip'`` (per scene frame), so a
+    valid completion is "at least one row of either type exists".
 
     Returns:
         Number of files reset.
@@ -1249,8 +1258,6 @@ def reset_falsely_completed_clip() -> int:
     clip_mimes = list(IMAGE_TYPES | VIDEO_TYPES)
 
     with get_search_db() as session:
-        # Find files marked as clip_indexed but with no CLIP embeddings
-        # Build IN clause with positional placeholders for SQLite
         placeholders = ", ".join(f":m{i}" for i in range(len(clip_mimes)))
         params = {f"m{i}": m for i, m in enumerate(clip_mimes)}
         falsely_completed = session.execute(
@@ -1260,7 +1267,7 @@ def reset_falsely_completed_clip() -> int:
                 f"AND f.mime_type IN ({placeholders}) "
                 "AND f.file_id NOT IN ("
                 "  SELECT DISTINCT e.file_id FROM embeddings e "
-                "  WHERE e.embedding_type = 'clip'"
+                "  WHERE e.embedding_type IN ('clip', 'clip_thumbnail')"
                 ")"
             ),
             params,

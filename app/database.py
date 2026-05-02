@@ -138,12 +138,9 @@ def init_search_db() -> None:
         _create_file_insights_table(conn)
         conn.commit()
 
-    # Create pdf_markdown table and force re-index of existing PDFs so
-    # the new Markdown-based extractor populates it (idempotent: the
-    # reset only flips active PDFs that are still flagged text_indexed).
+    # Create pdf_markdown table (one Markdown body per PDF).
     with _search_engine.connect() as conn:
         _create_pdf_markdown_table(conn)
-        _reset_text_indexed_for_pdfs(conn)
         conn.commit()
 
     # Backfill file_insights from existing detailed_summary rows.
@@ -889,27 +886,6 @@ def _create_pdf_markdown_table(conn: object) -> None:
         "  FOREIGN KEY (file_id) REFERENCES indexed_files(file_id)"
         "    ON DELETE CASCADE"
         ")"
-    ))
-
-
-def _reset_text_indexed_for_pdfs(conn: object) -> None:
-    """Force re-indexing of active PDFs so they pick up the new path.
-
-    The PDF extractor is being switched from fitz raw-text to
-    PyMuPDF4LLM Markdown (spec ``2026-04-27-intelligence-pdf-markdown-indexing``).
-    Setting ``text_indexed = 0`` makes the reconciliation worker
-    requeue a TEXT_CONTENT task for each affected PDF, which the
-    standalone ``_text_content_worker`` then consumes.
-
-    Scoped to ``mime_type = 'application/pdf' AND active = 1`` to avoid
-    touching transcript-driven indexes or already soft-deleted rows.
-    Idempotent: a no-op once every PDF has been re-indexed.
-    """
-    conn.execute(text(
-        "UPDATE indexed_files "
-        "SET text_indexed = 0 "
-        "WHERE mime_type = 'application/pdf' "
-        "  AND active = 1"
     ))
 
 

@@ -8,8 +8,6 @@ Covers:
   and deleted through SQLAlchemy.
 - CASCADE: deleting an ``indexed_files`` row removes the matching
   ``pdf_markdown`` row.
-- ``_reset_text_indexed_for_pdfs`` only touches active PDFs and leaves
-  non-PDF text rows (``.txt``, ``.md`` etc.) unchanged.
 """
 
 from __future__ import annotations
@@ -244,50 +242,3 @@ def test_cascade_delete_when_indexed_file_removed(engine):
         )).scalar() == 0
 
 
-# ---------------------------------------------------------------------------
-# Reset of text_indexed for PDFs
-# ---------------------------------------------------------------------------
-
-
-def test_reset_text_indexed_targets_active_pdfs_only(engine):
-    """The migration flips ``text_indexed`` only for active PDFs.
-
-    The standalone ``_text_content_worker`` consumes TEXT_CONTENT tasks
-    independently of the metadata worker, so flipping just
-    ``text_indexed`` is enough — ``metadata_indexed`` stays as is to
-    avoid redundant metadata embedding work.
-    """
-    from app.database import _reset_text_indexed_for_pdfs
-
-    _insert_indexed_file(engine, file_id="pdf-active", mime_type="application/pdf")
-    _insert_indexed_file(
-        engine,
-        file_id="pdf-inactive",
-        mime_type="application/pdf",
-        active=False,
-    )
-    _insert_indexed_file(engine, file_id="md-active", mime_type="text/markdown")
-    _insert_indexed_file(engine, file_id="txt-active", mime_type="text/plain")
-
-    with engine.begin() as conn:
-        _reset_text_indexed_for_pdfs(conn)
-
-    with engine.connect() as conn:
-        rows = {
-            r[0]: (r[1], r[2])
-            for r in conn.execute(text(
-                "SELECT file_id, text_indexed, metadata_indexed "
-                "FROM indexed_files"
-            )).fetchall()
-        }
-
-    # Active PDF: only text_indexed flipped; the standalone
-    # _text_content_worker handles re-extraction without needing
-    # metadata to re-flow.
-    assert rows["pdf-active"] == (0, 1)
-    # Soft-deleted PDFs are out of scope (no point re-indexing missing data).
-    assert rows["pdf-inactive"] == (1, 1)
-    # Non-PDF text content is unaffected — its extractor pipeline did
-    # not change.
-    assert rows["md-active"] == (1, 1)
-    assert rows["txt-active"] == (1, 1)
