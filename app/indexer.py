@@ -717,6 +717,65 @@ class IndexManager:
 
             return True
 
+    async def requeue_after_whisper(self, file_id: str) -> None:
+        """Re-enqueue summaries / auto_tags after WHISPER completion.
+
+        Closes the race where METADATA-driven enqueue fires before
+        TranscriptChunk rows exist: the LLM workers `insufficient_content`
+        silent-return without writing a `file_summaries` / `suggested_tags`
+        row, leaving the file stuck until the next intelligence restart
+        sweep.
+
+        Conditions match the existing `enqueue_unprocessed` sweep so
+        user-deleted summaries / tags are not regenerated — only the
+        silent-return trace is rescued.
+        """
+        with get_search_db() as session:
+            row = session.execute(
+                sql_text(
+                    "SELECT metadata_indexed FROM indexed_files "
+                    "WHERE file_id = :fid AND active = 1"
+                ),
+                {"fid": file_id},
+            ).fetchone()
+            if row is None or not row[0]:
+                return
+
+            no_summary = session.execute(
+                sql_text(
+                    "SELECT 1 FROM file_summaries "
+                    "WHERE file_id = :fid LIMIT 1"
+                ),
+                {"fid": file_id},
+            ).fetchone() is None
+            no_tags = session.execute(
+                sql_text(
+                    "SELECT 1 FROM suggested_tags "
+                    "WHERE file_id = :fid LIMIT 1"
+                ),
+                {"fid": file_id},
+            ).fetchone() is None
+
+        # SummariesWorker.enqueue gates per-layer (short/long vs detailed)
+        # internally — hand it the file when either layer is on_index.
+        summaries_on = (
+            settings.features.summaries == "on_index"
+            or settings.features.detailed_summaries == "on_index"
+        )
+        if (
+            self._summaries_worker is not None
+            and no_summary
+            and summaries_on
+        ):
+            await self._summaries_worker.enqueue(file_id)
+
+        if (
+            self._auto_tags_worker is not None
+            and no_tags
+            and settings.features.auto_tags == "on_index"
+        ):
+            await self._auto_tags_worker.enqueue(file_id)
+
     async def reindex_all(self) -> None:
         """Trigger a full reindex of all files.
 
@@ -1091,6 +1150,14 @@ class IndexManager:
                         success = await index_whisper(task.file_id)
                         if success:
                             logger.info("Whisper indexed: %s", task.file_id)
+                            # Wake the LLM workers now that transcript
+                            # chunks exist — METADATA-driven enqueue may
+                            # have run before they were available. Must
+                            # stay light: still inside whisper_semaphore
+                            # to keep ordering simple, so this hook is
+                            # restricted to a few SELECTs + a non-blocking
+                            # queue put per worker.
+                            await self.requeue_after_whisper(task.file_id)
                 except Exception as e:
                     logger.error(
                         "Whisper indexing failed for %s: %s",
