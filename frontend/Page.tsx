@@ -59,6 +59,71 @@ import {
 // gate so we never send a request the server will reject.
 const MIN_QUERY_LENGTH = 3;
 
+// sessionStorage key prefix for the back-navigation cache. The actual
+// key includes the drive and trimmed question so each (drive,
+// question) pair gets its own slot — if the user asks two questions
+// in a row and walks back through both citations, both answers are
+// restored without re-running the SSE pipeline. The cache is
+// deliberately `sessionStorage` (cleared on tab close) rather than
+// `localStorage` — this is a UX continuity affordance, not a history
+// feature, and stale answers across browser sessions would surface
+// content from indexes that may have changed in the meantime.
+const ASK_CACHE_PREFIX = "intelligence-ask-cache:v1";
+
+function askCacheKey(drive: string, question: string): string {
+  return `${ASK_CACHE_PREFIX}:${drive}:${question}`;
+}
+
+interface CachedAnswered {
+  keywords: string | null;
+  clues: string[] | null;
+  personalHistory: PersonalHistorySnapshot | null;
+  sources: Source[];
+  answer: string;
+  citations: Citation[];
+  tookMs: number | null;
+}
+
+function readAskCache(
+  drive: string,
+  question: string,
+): CachedAnswered | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(askCacheKey(drive, question));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CachedAnswered;
+    // Defensive shape check — sessionStorage is technically
+    // user-writable (devtools / extensions), so don't trust the
+    // payload blindly.
+    if (typeof parsed?.answer !== "string") return null;
+    if (!Array.isArray(parsed?.citations)) return null;
+    if (!Array.isArray(parsed?.sources)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeAskCache(
+  drive: string,
+  question: string,
+  payload: CachedAnswered,
+): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(
+      askCacheKey(drive, question),
+      JSON.stringify(payload),
+    );
+  } catch {
+    // Quota exceeded or storage disabled — silently drop. A failed
+    // cache write degrades to "back-navigation re-runs the query",
+    // which is the pre-existing behaviour, so we never want this to
+    // surface as an error to the user.
+  }
+}
+
 // Non-terminal states describe the live request; terminal states
 // describe what the user should see once the stream has ended.
 // Snapshot of the personal-history scope after Stages A + B run. Held
@@ -117,27 +182,77 @@ type AskState =
     };
 
 /**
- * Parse backend `segment_location` into a display label + optional
- * seek-second. Format is one of `"m:ss"` (video/audio) or `"page 3"`.
+ * Parse backend `segment_location` into a display label + structured
+ * jump target. Recognised shapes:
+ *
+ *  * `"m:ss"` — video / audio timestamp (sets `seconds`)
+ *  * `"page N"` — PDF / paginated document (sets `page`)
+ *  * `"chunk N"` — vector-only document snippet, label only
+ *  * anything else — treated as a verbatim text anchor and copied
+ *    into `verbatim`. The system prompt asks the LLM to emit
+ *    `0:45` / `page 3`, but local LLMs (Ollama / Qwen / Gemma)
+ *    routinely ignore the instruction and put a verbatim sentence
+ *    from the cited passage there instead. That's actually a
+ *    higher-fidelity highlight anchor than whatever lands in
+ *    `citation.quote` (which the backend defaults to the file's
+ *    long_summary when no chunk-level snippet matched), so we keep
+ *    the string and let `buildCitationUrl` use it for `?highlight=`.
  */
 function parseSegmentLocation(
   loc: string | null,
-): { label: string; seconds: number | null } | null {
+): {
+  label: string;
+  seconds: number | null;
+  page: number | null;
+  verbatim: string | null;
+} | null {
   if (!loc) return null;
   const timeMatch = loc.match(/^(\d+):(\d{2})$/);
   if (timeMatch) {
     const m = parseInt(timeMatch[1], 10);
     const s = parseInt(timeMatch[2], 10);
     if (Number.isFinite(m) && Number.isFinite(s)) {
-      return { label: loc, seconds: m * 60 + s };
+      return { label: loc, seconds: m * 60 + s, page: null, verbatim: null };
     }
   }
-  return { label: loc, seconds: null };
+  const pageMatch = loc.match(/^page\s+(\d+)$/i);
+  if (pageMatch) {
+    const p = parseInt(pageMatch[1], 10);
+    if (Number.isFinite(p) && p > 0) {
+      return { label: loc, seconds: null, page: p, verbatim: null };
+    }
+  }
+  // Recognise the "chunk N" sentinel emitted by the vector-only
+  // snippet path (not a useful highlight anchor — strip it from the
+  // verbatim slot so we fall through to citation.quote).
+  if (/^chunk\s+\d+$/i.test(loc)) {
+    return { label: loc, seconds: null, page: null, verbatim: null };
+  }
+  // Anything else with at least ~12 characters is treated as a
+  // verbatim anchor. The 12-char floor avoids picking up unknown
+  // short labels that happen to slip past the explicit format
+  // recognisers above.
+  const verbatim = loc.trim().length >= 12 ? loc.trim() : null;
+  return { label: loc, seconds: null, page: null, verbatim };
 }
 
 /**
- * Build a file-detail URL from a citation, appending `?t=` when we
- * have a seekable timestamp so the detail page auto-scrubs there.
+ * Build a file-detail URL from a citation. Highlight-target priority
+ * (highest fidelity first):
+ *
+ *  1. `?t=<sec>`   — m:ss timestamp (video/audio auto-scrub)
+ *  2. `?page=<n>`  — PDF page jump
+ *  3. `?highlight=<verbatim>` — when the LLM put a verbatim sentence
+ *     in the `location` field (common with local LLMs that ignore
+ *     the m:ss / page N instruction). The verbatim sentence is the
+ *     actual cited passage and matches the source file character for
+ *     character.
+ *  4. `?highlight=<quote>` — fall back to `citation.quote`. Backend
+ *     populates this from a context snippet, but for files without a
+ *     chunk-level location match it can land on the file summary
+ *     (synthesis, not verbatim) — the highlight hook then fails to
+ *     match and just scrolls to the top. The verbatim path above
+ *     avoids that whenever the LLM cooperated.
  */
 function buildCitationUrl(citation: Citation): string {
   const parsed = parseSegmentLocation(
@@ -146,10 +261,21 @@ function buildCitationUrl(citation: Citation): string {
     // possibly null / undefined for defensive rendering).
     (citation as Citation & { segment_location?: string | null }).segment_location ?? null,
   );
+  const base = `/files/${citation.file_id}`;
   if (parsed?.seconds != null) {
-    return `/files/${citation.file_id}?t=${parsed.seconds}`;
+    return `${base}?t=${parsed.seconds}`;
   }
-  return `/files/${citation.file_id}`;
+  if (parsed?.page != null) {
+    return `${base}?page=${parsed.page}`;
+  }
+  if (parsed?.verbatim) {
+    return `${base}?highlight=${encodeURIComponent(parsed.verbatim)}`;
+  }
+  const quote = citation.quote?.trim();
+  if (quote) {
+    return `${base}?highlight=${encodeURIComponent(quote)}`;
+  }
+  return base;
 }
 
 function CitationCard({
@@ -190,15 +316,28 @@ function CitationCard({
           <span className="truncate text-sm font-medium text-text-primary">
             {citation.filename}
           </span>
-          {parsed && (
+          {parsed && !parsed.verbatim && (
+            // Only render the small accent badge for short formatted
+            // labels (m:ss / page N / chunk N). When the LLM put a
+            // verbatim sentence in `location`, it's far too long to
+            // render as a badge — we surface it as the quote line
+            // below instead, which is the natural place for prose.
             <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium text-accent">
               {parsed.label}
             </span>
           )}
         </div>
-        {citation.quote && (
+        {/*
+          Quote display priority: when the LLM provided a verbatim
+          sentence via `location`, prefer that — it matches the
+          source file character-for-character and is what the
+          highlight URL points to. Fall back to `citation.quote` (a
+          backend-populated chunk excerpt or summary) when no
+          verbatim is available.
+        */}
+        {(parsed?.verbatim || citation.quote) && (
           <p className="mt-1 line-clamp-3 text-xs italic text-text-muted">
-            “{citation.quote}”
+            “{parsed?.verbatim ?? citation.quote}”
           </p>
         )}
       </div>
@@ -318,6 +457,28 @@ function IntelligenceAskPageInner() {
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
+
+      // Reflect the question in the URL via replaceState (not
+      // pushState — we don't want each ask to add a back-stack
+      // entry). When the user clicks a citation card and then hits
+      // browser back we land on this same URL, and the auto-fire
+      // effect picks ?q= up to drive the sessionStorage cache lookup.
+      // Without this the URL stays at /addons/intelligence with no
+      // ?q=, the seed query is empty on remount, and the cache path
+      // never engages — which is exactly the regression the user
+      // reported.
+      if (typeof window !== "undefined") {
+        try {
+          const url = new URL(window.location.href);
+          if (url.searchParams.get("q") !== trimmed) {
+            url.searchParams.set("q", trimmed);
+            window.history.replaceState(null, "", url.toString());
+          }
+        } catch {
+          // location.href can throw in exotic sandbox contexts; URL
+          // sync is purely a UX affordance, so swallow and continue.
+        }
+      }
 
       setState({
         kind: "streaming",
@@ -590,8 +751,7 @@ function IntelligenceAskPageInner() {
           return;
         }
 
-        setState({
-          kind: "answered",
+        const answered: CachedAnswered = {
           keywords: liveKeywords,
           clues: liveClues,
           personalHistory: livePersonalHistory,
@@ -599,7 +759,15 @@ function IntelligenceAskPageInner() {
           answer: liveAnswer,
           citations: finalCitations,
           tookMs: finalTookMs,
-        });
+        };
+        setState({ kind: "answered", ...answered });
+        // Cache the answered snapshot so a citation click → back-nav
+        // restores the page without re-running the SSE pipeline. We
+        // intentionally do not cache `streaming` / `error` states —
+        // only fully resolved answers belong in the back-stack.
+        if (drive) {
+          writeAskCache(drive, trimmed, answered);
+        }
       } catch (err) {
         if (controller.signal.aborted) return;
         if (err instanceof DOMException && err.name === "AbortError") return;
@@ -621,14 +789,43 @@ function IntelligenceAskPageInner() {
     [t, drive],
   );
 
-  // --- Auto-fire on mount when the URL carries a seed query. ---
+  // --- Auto-fire on mount when the URL carries a seed query.
+  //
+  // Two paths converge here:
+  //
+  //   1. Cache restore — when the URL has ?q= and sessionStorage
+  //      holds a matching answered snapshot, paint it immediately.
+  //      This is the back-navigation continuity the user expects
+  //      after clicking a citation card and walking back to the Ask
+  //      page. We do NOT gate this on `ragAvailable`: the snapshot
+  //      is plain UI state, not a fresh LLM call, and refusing to
+  //      paint it just because the LLM is currently disabled would
+  //      strand the user on a blank page.
+  //
+  //   2. Fresh fire — when no cache hit, fall through to runAsk.
+  //      This path requires the LLM to be reachable, so it gates on
+  //      `ragAvailable === true`.
+  //
+  // `runAsk` (when it succeeds) writes both the URL `?q=` via
+  // replaceState and the cache, so a subsequent back navigation can
+  // round-trip through path 1. ---
   useEffect(() => {
     if (autoFiredRef.current) return;
-    if (!seedQuery.trim()) return;
+    const trimmed = seedQuery.trim();
+    if (!trimmed) return;
+    if (!drive) return;
+
+    const cached = readAskCache(drive, trimmed);
+    if (cached) {
+      autoFiredRef.current = true;
+      setState({ kind: "answered", ...cached });
+      return;
+    }
+
     if (ragAvailable !== true) return;
     autoFiredRef.current = true;
     void runAsk(seedQuery);
-  }, [seedQuery, ragAvailable, runAsk]);
+  }, [seedQuery, ragAvailable, drive, runAsk]);
 
   const canSubmit = useMemo(() => {
     return (

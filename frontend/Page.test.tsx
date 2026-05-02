@@ -401,4 +401,223 @@ describe("IntelligenceAskPage — progressive citations + thinking indicator", (
       expect(screen.queryByText("doc-2.md")).toBeNull();
     });
   });
+
+  it("builds citation URLs with ?t= for time, ?page= for paginated, ?highlight= for text", async () => {
+    await mountAndStart();
+    await act(async () => {
+      streamState.current.push({ kind: "keywords", keywords: "x" });
+      streamState.current.push({ kind: "sources", sources: [] });
+      streamState.current.push({
+        kind: "answer_chunk",
+        delta: "Mixed citations [1][2][3].",
+      });
+      streamState.current.push({
+        kind: "citation",
+        citation: {
+          ...sampleCitation(1),
+          file_id: "video-1",
+          filename: "lecture.mp4",
+          file_type: "video",
+          segment_location: "12:34",
+        },
+        index: 1,
+      });
+      streamState.current.push({
+        kind: "citation",
+        citation: {
+          ...sampleCitation(2),
+          file_id: "pdf-1",
+          filename: "paper.pdf",
+          file_type: "document",
+          segment_location: "page 7",
+        },
+        index: 2,
+      });
+      streamState.current.push({
+        kind: "citation",
+        citation: {
+          ...sampleCitation(3),
+          file_id: "md-1",
+          filename: "notes.md",
+          file_type: "document",
+          quote: "the cited passage about dragons",
+          segment_location: "chunk 5",
+        },
+        index: 3,
+      });
+    });
+
+    const videoLink = (await screen.findByText("lecture.mp4")).closest("a");
+    expect(videoLink?.getAttribute("href")).toBe("/files/video-1?t=754");
+
+    const pdfLink = (await screen.findByText("paper.pdf")).closest("a");
+    expect(pdfLink?.getAttribute("href")).toBe("/files/pdf-1?page=7");
+
+    const mdLink = (await screen.findByText("notes.md")).closest("a");
+    expect(mdLink?.getAttribute("href")).toBe(
+      `/files/md-1?highlight=${encodeURIComponent("the cited passage about dragons")}`,
+    );
+
+    await act(async () => {
+      streamState.current.push({ kind: "done" });
+      streamState.current.end();
+    });
+  });
+
+  it("prefers verbatim segment_location over citation.quote for highlight", async () => {
+    // Local LLMs (Ollama / Qwen / Gemma) commonly ignore the
+    // `location: '0:45' | 'page 3'` instruction and put a verbatim
+    // sentence from the cited passage there instead. That sentence
+    // matches the source file character-for-character, so it makes
+    // a far better highlight target than `citation.quote` — which
+    // the backend defaults to the file long_summary when no
+    // chunk-level snippet matched.
+    await mountAndStart();
+    await act(async () => {
+      streamState.current.push({ kind: "keywords", keywords: "x" });
+      streamState.current.push({ kind: "sources", sources: [] });
+      streamState.current.push({
+        kind: "answer_chunk",
+        delta: "Verbatim location citation [1].",
+      });
+      streamState.current.push({
+        kind: "citation",
+        citation: {
+          ...sampleCitation(1),
+          file_id: "md-2",
+          filename: "story.md",
+          file_type: "document",
+          // citation.quote here is the file's auto-summary (what the
+          // backend picks when chunk lookup fails).
+          quote:
+            "物語は退職を控えた郵便配達員が古い手紙を見つけるところから始まる。",
+          // The LLM put a verbatim source sentence in `location`.
+          segment_location:
+            "退職の日、徹は妻の節子と一緒に、藤原健一の墓を訪れた。",
+        },
+        index: 1,
+      });
+    });
+
+    const link = (await screen.findByText("story.md")).closest("a");
+    expect(link?.getAttribute("href")).toBe(
+      `/files/md-2?highlight=${encodeURIComponent("退職の日、徹は妻の節子と一緒に、藤原健一の墓を訪れた。")}`,
+    );
+
+    await act(async () => {
+      streamState.current.push({ kind: "done" });
+      streamState.current.end();
+    });
+  });
+});
+
+describe("IntelligenceAskPage — back-navigation cache (sessionStorage)", () => {
+  beforeEach(() => {
+    streamState.current = makeController();
+    if (typeof window !== "undefined") window.sessionStorage.clear();
+  });
+
+  afterEach(() => {
+    streamState.current.end();
+    if (typeof window !== "undefined") window.sessionStorage.clear();
+  });
+
+  it("restores an answered snapshot from sessionStorage when ?q= matches", async () => {
+    // Pre-seed the cache as if a previous run had completed.
+    const cached = {
+      keywords: "plot story",
+      clues: null,
+      personalHistory: null,
+      sources: [],
+      answer: "Cached answer body.",
+      citations: [
+        {
+          ...sampleCitation(1),
+          filename: "from-cache.md",
+        },
+      ],
+      tookMs: 999,
+    };
+    window.sessionStorage.setItem(
+      "intelligence-ask-cache:v1:family:what is the plot?",
+      JSON.stringify(cached),
+    );
+
+    // Mock useSearchParams to surface the seed query.
+    const navMock = await import("next/navigation");
+    const original = navMock.useSearchParams;
+    (navMock as unknown as { useSearchParams: () => URLSearchParams }).useSearchParams =
+      () => new URLSearchParams("q=what is the plot?");
+
+    try {
+      render(<IntelligenceAskPage />);
+      await waitFor(() => {
+        expect(screen.getByText("Cached answer body.")).toBeInTheDocument();
+        expect(screen.getByText("from-cache.md")).toBeInTheDocument();
+      });
+    } finally {
+      (navMock as unknown as { useSearchParams: typeof original }).useSearchParams =
+        original;
+    }
+  });
+
+  it("writes ?q= to the URL on submit so a back-navigation lands with a non-empty seed query", async () => {
+    // Reset the URL so the test does not inherit ?q= from a prior run.
+    const original = window.location.href;
+    window.history.replaceState(
+      null,
+      "",
+      "/drive/family/addons/intelligence",
+    );
+
+    try {
+      const utils = render(<IntelligenceAskPage />);
+      const textarea = (await screen.findByRole("textbox", {
+        name: /question input/i,
+      })) as HTMLTextAreaElement;
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!;
+      const form = textarea.closest("form")!;
+      await act(async () => {
+        setter.call(textarea, "what is the plot?");
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+        form.dispatchEvent(
+          new Event("submit", { bubbles: true, cancelable: true }),
+        );
+      });
+
+      // The submit handler updates the URL synchronously via
+      // replaceState before the SSE stream starts. By the time
+      // streaming events flush (next microtask) the search param
+      // must already be visible.
+      await waitFor(() => {
+        const params = new URLSearchParams(window.location.search);
+        expect(params.get("q")).toBe("what is the plot?");
+      });
+
+      // Drain a minimal stream so the answered transition runs and
+      // writes the cache. A subsequent mount with the same ?q= would
+      // then hit the cache (covered by the prior test).
+      await act(async () => {
+        streamState.current.push({ kind: "keywords", keywords: "x" });
+        streamState.current.push({ kind: "sources", sources: [] });
+        streamState.current.push({ kind: "answer_chunk", delta: "OK." });
+        streamState.current.push({ kind: "done" });
+        streamState.current.end();
+      });
+
+      await waitFor(() => {
+        const raw = window.sessionStorage.getItem(
+          "intelligence-ask-cache:v1:family:what is the plot?",
+        );
+        expect(raw).not.toBeNull();
+      });
+
+      utils.unmount();
+    } finally {
+      window.history.replaceState(null, "", original);
+    }
+  });
 });
