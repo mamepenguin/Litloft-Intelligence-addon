@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { useTranslations } from "next-intl";
 import { BookOpen, ChevronDown, ImageIcon, Sparkles } from "lucide-react";
 import {
@@ -28,18 +28,6 @@ export default function FolderAIActionsButton({
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState<Pending>(null);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [open]);
 
   const showResult = useCallback((msg: string, ms = 5000) => {
     setResultMessage(msg);
@@ -138,7 +126,7 @@ export default function FolderAIActionsButton({
   const busy = pending !== null;
 
   return (
-    <div ref={ref} className="relative flex items-center gap-2">
+    <div className="relative flex items-center gap-2">
       <button
         type="button"
         onClick={() => setOpen((s) => !s)}
@@ -154,10 +142,16 @@ export default function FolderAIActionsButton({
       </button>
 
       {open && (
-        <div
-          role="menu"
-          className="fixed inset-x-2 bottom-4 z-40 max-h-[60vh] overflow-y-auto rounded-2xl border border-bg-border bg-bg-primary py-1 shadow-xl animate-fade-in-scale sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:top-full sm:mt-1 sm:max-h-none sm:min-w-[240px] sm:overflow-visible sm:origin-top-left"
-        >
+        <>
+          <div
+            className="fixed inset-0 z-30 bg-black/30 sm:bg-transparent"
+            aria-hidden="true"
+            onClick={() => setOpen(false)}
+          />
+          <div
+            role="menu"
+            className="fixed inset-x-2 bottom-4 z-40 max-h-[60vh] overflow-y-auto rounded-2xl border border-bg-border bg-bg-primary py-1 shadow-xl animate-fade-in-scale sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:top-full sm:mt-1 sm:max-h-none sm:min-w-[240px] sm:overflow-visible sm:origin-top-left"
+          >
           <button
             type="button"
             role="menuitem"
@@ -189,7 +183,8 @@ export default function FolderAIActionsButton({
               })}
             </span>
           </button>
-        </div>
+          </div>
+        </>
       )}
 
       {resultMessage && (
