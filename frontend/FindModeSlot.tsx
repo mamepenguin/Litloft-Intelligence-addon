@@ -23,7 +23,7 @@ import { useTranslations } from "next-intl";
 import { ListFilter } from "lucide-react";
 
 import { getIntelligenceStatus } from "./api";
-import type { IntelligenceStatus } from "./api";
+import { getEnabledAddons } from "@/lib/addons";
 
 type SlotContext = "popup" | "page";
 
@@ -45,21 +45,38 @@ export default function FindModeSlot({
   context = "popup",
 }: FindModeSlotProps) {
   const t = useTranslations("find");
-  const [status, setStatus] = useState<IntelligenceStatus | null>(null);
-  const [statusReady, setStatusReady] = useState(false);
+  // ``ragGate`` is ``null`` when we have not finished probing yet,
+  // ``true`` when Find should render, ``false`` when we have a
+  // definitive signal that it should stay hidden. The probe combines
+  // two sources because the addon's own ``/status`` is admin-gated
+  // and returns ``null`` for any viewer that has not unlocked every
+  // protected drive — which would otherwise hide Find from the very
+  // viewers it is meant to serve.
+  const [ragGate, setRagGate] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (!drive) {
-      setStatus(null);
-      setStatusReady(true);
+      setRagGate(false);
       return;
     }
     let cancelled = false;
     const controller = new AbortController();
-    getIntelligenceStatus(drive, controller.signal).then((res) => {
+    Promise.all([
+      getIntelligenceStatus(drive, controller.signal),
+      getEnabledAddons(drive),
+    ]).then(([status, addons]) => {
       if (cancelled) return;
-      setStatus(res);
-      setStatusReady(true);
+      if (status === null) {
+        // /status unreachable (most often the admin gate). Fall back
+        // to "is intelligence enabled for this drive?" — Find then
+        // surfaces and any real LLM-not-configured error appears on
+        // the dedicated find page instead of in this slot.
+        setRagGate(Boolean(addons["intelligence"]));
+        return;
+      }
+      const ragEnabled = status.features?.rag === true;
+      const llmEnabled = status.llm?.enabled === true;
+      setRagGate(ragEnabled && llmEnabled);
     });
     return () => {
       cancelled = true;
@@ -67,10 +84,7 @@ export default function FindModeSlot({
     };
   }, [drive]);
 
-  if (!statusReady) return null;
-  const ragEnabled = status?.features?.rag === true;
-  const llmEnabled = status?.llm?.enabled === true;
-  if (!ragEnabled || !llmEnabled) return null;
+  if (ragGate !== true) return null;
 
   const trimmed = query.trim();
   if (trimmed.length === 0) return null;

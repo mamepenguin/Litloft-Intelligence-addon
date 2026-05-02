@@ -24,8 +24,13 @@ vi.mock("./api", async () => {
   };
 });
 
+vi.mock("@/lib/addons", () => ({
+  getEnabledAddons: vi.fn(),
+}));
+
 import FindModeSlot from "./FindModeSlot";
 import { getIntelligenceStatus } from "./api";
+import { getEnabledAddons } from "@/lib/addons";
 
 const enabledStatus = {
   status: "ok",
@@ -51,6 +56,11 @@ const disabledStatus = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: intelligence enabled for the drive. Individual tests
+  // override this to verify the fallback behaviour.
+  vi.mocked(getEnabledAddons).mockResolvedValue({
+    intelligence: { label: "Intelligence", icon: "brain" },
+  } as any);
 });
 
 afterEach(() => {
@@ -234,5 +244,48 @@ describe("FindModeSlot", () => {
     const href = onSelect.mock.calls[0][0] as string;
     expect(href).toContain("/addons/intelligence/find");
     expect(href).toContain(`q=${encodeURIComponent("先週観た映画")}`);
+  });
+
+  it("falls back to the core addon registry when /status is unreachable", async () => {
+    // Non-admin viewers cannot reach the addon's /status (it is admin-
+    // gated for queue counters), so getIntelligenceStatus returns null.
+    // The slot must still render based on the core's per-drive addon
+    // registry — otherwise Find would be hidden from the very viewers
+    // it is meant to serve.
+    vi.mocked(getIntelligenceStatus).mockResolvedValue(null);
+    vi.mocked(getEnabledAddons).mockResolvedValue({
+      intelligence: { label: "Intelligence", icon: "brain" },
+    } as any);
+
+    render(
+      <FindModeSlot
+        query="SF 映画"
+        drive="family"
+        filter="all"
+        onSelect={() => {}}
+      />,
+    );
+
+    const btn = await screen.findByRole("button", { name: /find/i });
+    expect(btn).toBeInTheDocument();
+  });
+
+  it("stays hidden when /status is null and intelligence is not enabled for the drive", async () => {
+    vi.mocked(getIntelligenceStatus).mockResolvedValue(null);
+    vi.mocked(getEnabledAddons).mockResolvedValue({} as any);
+
+    const { container } = render(
+      <FindModeSlot
+        query="SF 映画"
+        drive="family"
+        filter="all"
+        onSelect={() => {}}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getEnabledAddons).toHaveBeenCalled();
+    });
+    expect(container.textContent).toBe("");
   });
 });

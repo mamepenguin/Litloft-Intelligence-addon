@@ -4,8 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Sparkles } from "lucide-react";
 
-import { semanticSearch, getSearchStatus } from "./api";
+import { semanticSearch } from "./api";
 import type { SemanticSearchResult, SemanticSearchSegment } from "./api";
+import { getEnabledAddons } from "@/lib/addons";
 import { formatDuration } from "@/lib/format";
 
 type SlotContext = "popup" | "page";
@@ -219,7 +220,11 @@ export default function SemanticSearchSlot({
   const isPageContext = context === "page";
 
   // Check availability on mount (rechecked when the active drive
-  // changes, since /status is now drive-scoped).
+  // changes). The probe asks the core's addon registry whether
+  // intelligence is enabled for this drive — the addon's own /status
+  // is admin-gated and would 403 for any viewer who has not unlocked
+  // every protected drive, hiding semantic search even on drives the
+  // viewer can fully access.
   useEffect(() => {
     if (isPageContext) return;
     if (!drive) {
@@ -227,9 +232,9 @@ export default function SemanticSearchSlot({
       return;
     }
     let cancelled = false;
-    getSearchStatus(drive).then((res) => {
+    getEnabledAddons(drive).then((addons) => {
       if (!cancelled) {
-        setAvailable(res.available);
+        setAvailable(Boolean(addons["intelligence"]));
       }
     });
     return () => {

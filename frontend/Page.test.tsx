@@ -108,6 +108,7 @@ vi.mock("@/addons/intelligence/api", async () => {
 // Import _after_ mocks are registered.
 import IntelligenceAskPage from "@/addons/intelligence/Page";
 import {
+  getIntelligenceStatus,
   parseSseFrame,
   type AskStreamEvent,
   type Citation,
@@ -619,5 +620,61 @@ describe("IntelligenceAskPage — back-navigation cache (sessionStorage)", () =>
     } finally {
       window.history.replaceState(null, "", original);
     }
+  });
+});
+
+describe("IntelligenceAskPage — status probe fallback", () => {
+  // The addon's /status route is admin-gated (it surfaces process-
+  // global queue counters). Non-admin viewers — anyone who has not
+  // unlocked every protected drive — get null back from
+  // ``getIntelligenceStatus``. Treating that as "LLM not configured"
+  // hides Ask from the very viewers it is meant to serve. Instead the
+  // form must render enabled and let the actual /ask call surface any
+  // real backend error.
+  it("renders the form enabled and hides the llmDisabled alert when /status is null", async () => {
+    vi.mocked(getIntelligenceStatus).mockResolvedValueOnce(null);
+
+    render(<IntelligenceAskPage />);
+
+    const textarea = (await screen.findByRole("textbox", {
+      name: /question input/i,
+    })) as HTMLTextAreaElement;
+
+    await waitFor(() => {
+      expect(textarea.disabled).toBe(false);
+    });
+    expect(screen.queryByText("LLM が設定されていません")).toBeNull();
+  });
+
+  it("disables the form and shows the llmDisabled alert when llm.enabled is false", async () => {
+    vi.mocked(getIntelligenceStatus).mockResolvedValueOnce({
+      status: "ok",
+      features: {
+        indexing: true,
+        search: true,
+        auto_tags: "false",
+        summaries: "false",
+        rag: true,
+      },
+      llm: {
+        provider: "ollama",
+        model: "qwen",
+        enabled: false,
+        output_language: "auto",
+      },
+    });
+
+    render(<IntelligenceAskPage />);
+
+    const textarea = (await screen.findByRole("textbox", {
+      name: /question input/i,
+    })) as HTMLTextAreaElement;
+
+    await waitFor(() => {
+      expect(textarea.disabled).toBe(true);
+    });
+    expect(
+      await screen.findByText("LLM が設定されていません"),
+    ).toBeInTheDocument();
   });
 });

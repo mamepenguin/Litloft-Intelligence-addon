@@ -409,8 +409,15 @@ function IntelligenceAskPageInner() {
   // router update could accidentally re-trigger the request.
   const autoFiredRef = useRef(false);
 
-  // --- Status probe: gate the Ask button when the backend has RAG off
-  //     or the LLM isn't configured. Runs once on mount. ---
+  // --- Status probe: gate the Ask UI when RAG is off or the LLM is
+  //     not configured. ``getIntelligenceStatus`` returns ``null`` when
+  //     the addon's ``/status`` is unreachable for the current viewer
+  //     — most often because that route is admin-gated and the viewer
+  //     has not unlocked every protected drive. In that case we cannot
+  //     observe the LLM/RAG flags at all, so we let the form render
+  //     and let the actual /ask call surface any real backend error.
+  //     Only when /status returns a structured payload do we trust its
+  //     ``features.rag`` / ``llm.enabled`` flags as a hard gate. ---
   useEffect(() => {
     if (!drive) {
       setRagAvailable(false);
@@ -421,8 +428,12 @@ function IntelligenceAskPageInner() {
     getIntelligenceStatus(drive, controller.signal).then(
       (status: IntelligenceStatus | null) => {
         if (cancelled) return;
+        if (status === null) {
+          setRagAvailable(true);
+          return;
+        }
         const enabled =
-          status?.features?.rag === true && status?.llm?.enabled === true;
+          status.features?.rag === true && status.llm?.enabled === true;
         setRagAvailable(enabled);
       },
     );

@@ -13,7 +13,7 @@
  *  - When ``context === "page"``, a section heading + grid layout
  *    suited to a full-page context renders instead.
  *  - In both layouts, the data-fetching pipeline is identical
- *    (``semanticSearch`` + ``getSearchStatus`` calls).
+ *    (``semanticSearch`` + the core's per-drive addon-registry probe).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -24,10 +24,13 @@ vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
   return {
     ...actual,
-    getSearchStatus: vi.fn(),
     semanticSearch: vi.fn(),
   };
 });
+
+vi.mock("@/lib/addons", () => ({
+  getEnabledAddons: vi.fn(),
+}));
 
 // FileCard pulls clipboard context — the page layout uses the core
 // FileCard for unified styling with filename-match results.
@@ -59,7 +62,8 @@ vi.mock("next/link", () => ({
 }));
 
 import SemanticSearchSlot from "./SemanticSearchSlot";
-import { getSearchStatus, semanticSearch } from "./api";
+import { semanticSearch } from "./api";
+import { getEnabledAddons } from "@/lib/addons";
 
 const sampleResult = {
   file_id: "f-1",
@@ -75,7 +79,9 @@ const sampleResult = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(getSearchStatus).mockResolvedValue({ available: true } as any);
+  vi.mocked(getEnabledAddons).mockResolvedValue({
+    intelligence: { label: "Intelligence", icon: "brain" },
+  } as any);
   vi.mocked(semanticSearch).mockResolvedValue({
     results: [sampleResult],
   } as any);
@@ -145,12 +151,12 @@ describe("SemanticSearchSlot", () => {
     );
 
     expect(container.textContent).toBe("");
-    expect(getSearchStatus).not.toHaveBeenCalled();
+    expect(getEnabledAddons).not.toHaveBeenCalled();
     expect(semanticSearch).not.toHaveBeenCalled();
   });
 
-  it("renders nothing when intelligence search is unavailable in popup context", async () => {
-    vi.mocked(getSearchStatus).mockResolvedValue({ available: false } as any);
+  it("renders nothing when intelligence is disabled for the drive in popup context", async () => {
+    vi.mocked(getEnabledAddons).mockResolvedValue({} as any);
 
     const { container } = render(
       <SemanticSearchSlot
@@ -163,7 +169,7 @@ describe("SemanticSearchSlot", () => {
     );
 
     await waitFor(() => {
-      expect(getSearchStatus).toHaveBeenCalled();
+      expect(getEnabledAddons).toHaveBeenCalled();
     });
     expect(container.textContent).toBe("");
   });
