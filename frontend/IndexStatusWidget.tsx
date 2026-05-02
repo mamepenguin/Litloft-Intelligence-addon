@@ -4,12 +4,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import {
   Brain,
+  FileText,
+  Image as ImageIcon,
   Loader2,
+  MessageSquareText,
+  Mic,
   Pause,
   Play,
   RefreshCw,
+  ScrollText,
   SearchX,
+  Sparkles,
+  Tags,
+  WandSparkles,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 import {
   getSearchStatus,
@@ -17,10 +26,40 @@ import {
   searchQueueReindex,
   searchQueueResume,
 } from "./api";
-import type { SearchServiceStatus } from "./api";
+import type {
+  QueueProcessingFile,
+  QueueTaskBreakdown,
+  QueueTaskKind,
+  SearchServiceStatus,
+} from "./api";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 const POLL_INTERVAL = 10_000;
+
+// Display order on the dashboard. Indexing pipeline first (metadata →
+// clip → whisper → text), then LLM-driven tasks. Items without backend
+// state are filtered out at render time.
+const TASK_ORDER: QueueTaskKind[] = [
+  "metadata",
+  "clip",
+  "whisper",
+  "text_content",
+  "auto_tags",
+  "summaries",
+  "vision_describe",
+  "transcript_refine",
+];
+
+const TASK_ICON: Record<QueueTaskKind, LucideIcon> = {
+  metadata: ScrollText,
+  clip: ImageIcon,
+  whisper: Mic,
+  text_content: FileText,
+  auto_tags: Tags,
+  summaries: MessageSquareText,
+  vision_describe: Sparkles,
+  transcript_refine: WandSparkles,
+};
 
 function ProgressBar({
   done,
@@ -45,6 +84,66 @@ function ProgressBar({
           style={{ width: `${Math.min(percent, 100)}%` }}
         />
       </div>
+    </div>
+  );
+}
+
+function describeProcessingFile(file: QueueProcessingFile): string {
+  // Prefer the human-readable filename; fall back to a short id so the
+  // dashboard never renders an empty active row when a file was purged
+  // mid-flight.
+  if (file.filename) return file.filename;
+  return `#${file.file_id.slice(0, 8)}`;
+}
+
+function TaskRow({
+  kind,
+  breakdown,
+}: {
+  kind: QueueTaskKind;
+  breakdown: QueueTaskBreakdown;
+}) {
+  const t = useTranslations("semanticSearch");
+  const Icon = TASK_ICON[kind];
+  const processingCount = breakdown.processing.length;
+  const waiting = breakdown.waiting;
+  const isActive = processingCount > 0 || waiting > 0;
+
+  return (
+    <div className="rounded-lg border border-bg-border bg-bg-elevated/40 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-xs font-medium text-text-primary">
+          <Icon size={14} className={isActive ? "text-accent" : "text-text-muted"} />
+          <span>{t(`tasks.${kind}.label`)}</span>
+        </div>
+        <span className="text-xs text-text-muted">
+          {t("tasks.queueCounts", {
+            processing: processingCount,
+            waiting,
+          })}
+        </span>
+      </div>
+
+      {processingCount > 0 ? (
+        <ul className="mt-2 space-y-1 text-xs text-text-primary">
+          {breakdown.processing.map((file) => (
+            <li
+              key={file.file_id}
+              className="flex items-center gap-1.5 truncate"
+              title={file.filename ?? file.file_id}
+            >
+              <Loader2 size={10} className="animate-spin text-accent shrink-0" />
+              <span className="truncate">{describeProcessingFile(file)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : waiting > 0 ? (
+        <p className="mt-2 text-xs text-text-muted">
+          {t("tasks.waitingHint", { waiting })}
+        </p>
+      ) : (
+        <p className="mt-2 text-xs text-text-muted">{t("tasks.idle")}</p>
+      )}
     </div>
   );
 }
@@ -90,6 +189,16 @@ function StatusContent({ status, drive }: { status: SearchServiceStatus; drive?:
   const clipTotal = indexed
     ? indexed.clip + (pending?.clip ?? 0)
     : 0;
+  const textTotal = indexed
+    ? (indexed.text ?? 0) + (pending?.text ?? 0)
+    : 0;
+
+  const taskMap = queue?.tasks ?? {};
+  const taskRows = TASK_ORDER.map((kind) => ({ kind, breakdown: taskMap[kind] }))
+    .filter(
+      (entry): entry is { kind: QueueTaskKind; breakdown: QueueTaskBreakdown } =>
+        entry.breakdown !== undefined,
+    );
 
   return (
     <>
@@ -118,7 +227,7 @@ function StatusContent({ status, drive }: { status: SearchServiceStatus; drive?:
           />
         )}
 
-        {indexed && (
+        {indexed && whisperTotal > 0 && (
           <ProgressBar
             done={indexed.whisper}
             total={whisperTotal}
@@ -129,13 +238,24 @@ function StatusContent({ status, drive }: { status: SearchServiceStatus; drive?:
           />
         )}
 
-        {indexed && (
+        {indexed && clipTotal > 0 && (
           <ProgressBar
             done={indexed.clip}
             total={clipTotal}
             label={t("clipFiles", {
               done: indexed.clip.toLocaleString(),
               total: clipTotal.toLocaleString(),
+            })}
+          />
+        )}
+
+        {indexed && textTotal > 0 && (
+          <ProgressBar
+            done={indexed.text ?? 0}
+            total={textTotal}
+            label={t("textFiles", {
+              done: (indexed.text ?? 0).toLocaleString(),
+              total: textTotal.toLocaleString(),
             })}
           />
         )}
@@ -152,6 +272,19 @@ function StatusContent({ status, drive }: { status: SearchServiceStatus; drive?:
           </div>
         )}
       </div>
+
+      {taskRows.length > 0 && (
+        <div className="mt-4 space-y-2">
+          <div className="text-xs font-semibold text-text-muted">
+            {t("tasks.heading")}
+          </div>
+          <div className="space-y-2">
+            {taskRows.map(({ kind, breakdown }) => (
+              <TaskRow key={kind} kind={kind} breakdown={breakdown} />
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="mt-4 flex gap-2">
         <button

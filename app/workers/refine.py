@@ -539,10 +539,31 @@ async def _emit_ws_event(event: str, data: dict) -> None:
         return
 
 
+# Module-level set of refine jobs currently in flight, keyed by file_id.
+# Refine has no centralised queue (jobs are fire-and-forget asyncio
+# tasks), so the dashboard's /status endpoint reads this directly via
+# ``get_refine_status``. Add/remove is handled inside ``_run_refine_job``.
+_active_refine_files: set[str] = set()
+
+
+def get_refine_status() -> dict[str, object]:
+    """Snapshot for /status: ``{waiting, processing}``.
+
+    Refine doesn't queue — every job runs concurrently as its own
+    asyncio task — so ``waiting`` is always 0 and ``processing`` carries
+    the in-flight file_ids.
+    """
+    return {
+        "waiting": 0,
+        "processing": list(_active_refine_files),
+    }
+
+
 async def _run_refine_job(
     file_id: str, job_id: str, chunk_ids_snapshot: list[int]
 ) -> None:
     """Background task body for a single-file refine job."""
+    _active_refine_files.add(file_id)
     await _emit_ws_event(
         "intelligence.refine.started",
         {"file_id": file_id, "chunk_count": len(chunk_ids_snapshot), "job_id": job_id},
@@ -724,6 +745,8 @@ async def _run_refine_job(
             "intelligence.refine.failed",
             {"file_id": file_id, "job_id": job_id, "error": str(e)},
         )
+    finally:
+        _active_refine_files.discard(file_id)
 
 
 async def start_refine_job(session: Any, file_id: str) -> str:

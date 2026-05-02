@@ -120,6 +120,13 @@ class IndexManager:
         }
         self._state = QueueState.RUNNING
         self._processing_count = 0
+        # Per-task list of file_ids currently being processed, so /status
+        # can render "now doing: 文字起こし of foo.mp4" instead of a single
+        # opaque count. Lists (not sets) preserve enqueue order which makes
+        # the dashboard view stable across polls.
+        self._processing_by_type: dict[TaskType, list[str]] = {
+            task_type: [] for task_type in TaskType
+        }
         self._pause_event = asyncio.Event()
         self._pause_event.set()  # Start unpaused
         self._whisper_semaphore = asyncio.Semaphore(
@@ -184,6 +191,21 @@ class IndexManager:
             processing_count=self._processing_count,
             waiting_count=sum(q.qsize() for q in self._queues.values()),
         )
+
+    def get_queue_breakdown(self) -> dict[str, dict[str, Any]]:
+        """Per-task queue snapshot for the dashboard.
+
+        Returns a mapping ``{task_type.value: {"waiting": int,
+        "processing": [file_id, ...]}}``. ``processing`` is a copy so
+        callers can iterate without holding the worker's reference.
+        """
+        return {
+            task_type.value: {
+                "waiting": self._queues[task_type].qsize(),
+                "processing": list(self._processing_by_type[task_type]),
+            }
+            for task_type in TaskType
+        }
 
     def get_index_status(self) -> IndexStatus:
         """Get overall indexing status from the database."""
@@ -874,6 +896,7 @@ class IndexManager:
 
                 self._processing_count += len(batch)
                 file_ids = [t.file_id for t in batch]
+                self._processing_by_type[TaskType.METADATA].extend(file_ids)
 
                 try:
                     count = await asyncio.to_thread(
@@ -920,6 +943,11 @@ class IndexManager:
                         await self._enqueue(task)
                 finally:
                     self._processing_count -= len(batch)
+                    for fid in file_ids:
+                        try:
+                            self._processing_by_type[TaskType.METADATA].remove(fid)
+                        except ValueError:
+                            pass
 
             except asyncio.CancelledError:
                 return
@@ -951,6 +979,7 @@ class IndexManager:
 
                 task = batch[0]
                 self._processing_count += 1
+                self._processing_by_type[TaskType.TEXT_CONTENT].append(task.file_id)
 
                 try:
                     await asyncio.to_thread(index_text_content, task.file_id)
@@ -961,6 +990,10 @@ class IndexManager:
                     )
                 finally:
                     self._processing_count -= 1
+                    try:
+                        self._processing_by_type[TaskType.TEXT_CONTENT].remove(task.file_id)
+                    except ValueError:
+                        pass
 
             except asyncio.CancelledError:
                 return
@@ -1003,6 +1036,7 @@ class IndexManager:
 
                 task = batch[0]
                 self._processing_count += 1
+                self._processing_by_type[TaskType.CLIP].append(task.file_id)
 
                 try:
                     success = await index_clip(task.file_id)
@@ -1026,6 +1060,10 @@ class IndexManager:
                     )
                 finally:
                     self._processing_count -= 1
+                    try:
+                        self._processing_by_type[TaskType.CLIP].remove(task.file_id)
+                    except ValueError:
+                        pass
 
             except asyncio.CancelledError:
                 return
@@ -1046,6 +1084,7 @@ class IndexManager:
 
                 task = batch[0]
                 self._processing_count += 1
+                self._processing_by_type[TaskType.WHISPER].append(task.file_id)
 
                 try:
                     async with self._whisper_semaphore:
@@ -1059,6 +1098,10 @@ class IndexManager:
                     )
                 finally:
                     self._processing_count -= 1
+                    try:
+                        self._processing_by_type[TaskType.WHISPER].remove(task.file_id)
+                    except ValueError:
+                        pass
 
             except asyncio.CancelledError:
                 return

@@ -118,6 +118,23 @@ class AutoTagsWorker:
     def __init__(self, llm_client: LLMClient) -> None:
         self._llm_client = llm_client
         self._queue: asyncio.Queue[str] = asyncio.Queue()
+        # File ids currently being tagged. List preserves order; LLM
+        # workers process one file at a time so this stays a list of
+        # length 0 or 1 in practice — leaving it as a list keeps the
+        # /status surface symmetric with index_manager's per-task lists.
+        self._processing: list[str] = []
+
+    def get_status(self) -> dict[str, object]:
+        """Snapshot for /status: ``{waiting, processing}``.
+
+        ``waiting`` is the queue size (per-drive policy already
+        filtered at enqueue time). ``processing`` is a copy of the
+        in-flight file_id list.
+        """
+        return {
+            "waiting": self._queue.qsize(),
+            "processing": list(self._processing),
+        }
 
     async def enqueue(self, file_id: str) -> None:
         """Add a file to the auto-tagging queue.
@@ -169,7 +186,14 @@ class AutoTagsWorker:
         while True:
             try:
                 file_id = await self._queue.get()
-                await self._process_file(file_id)
+                self._processing.append(file_id)
+                try:
+                    await self._process_file(file_id)
+                finally:
+                    try:
+                        self._processing.remove(file_id)
+                    except ValueError:
+                        pass
             except asyncio.CancelledError:
                 return
             except Exception as e:

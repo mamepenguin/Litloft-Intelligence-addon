@@ -1089,6 +1089,14 @@ class SummariesWorker:
     def __init__(self, llm_client: LLMClient) -> None:
         self._llm_client = llm_client
         self._queue: asyncio.Queue[str] = asyncio.Queue()
+        self._processing: list[str] = []
+
+    def get_status(self) -> dict[str, object]:
+        """Snapshot for /status: ``{waiting, processing}``."""
+        return {
+            "waiting": self._queue.qsize(),
+            "processing": list(self._processing),
+        }
 
     async def enqueue(self, file_id: str) -> None:
         """Add a file to the summaries queue.
@@ -1192,7 +1200,14 @@ class SummariesWorker:
         while True:
             try:
                 file_id = await self._queue.get()
-                await self._process_file(file_id)
+                self._processing.append(file_id)
+                try:
+                    await self._process_file(file_id)
+                finally:
+                    try:
+                        self._processing.remove(file_id)
+                    except ValueError:
+                        pass
             except asyncio.CancelledError:
                 return
             except Exception as e:

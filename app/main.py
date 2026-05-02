@@ -301,6 +301,55 @@ async def status_endpoint() -> StatusResponse:
 
     llm_client = dependencies._llm_client
 
+    # Per-task breakdown for the dashboard. Index manager owns the four
+    # core indexing types (metadata / clip / whisper / text_content).
+    # The LLM workers (auto_tags / summaries / vision_describe) and the
+    # refine module each track their own in-flight files so they can be
+    # surfaced alongside.
+    tasks = manager.get_queue_breakdown()
+    if dependencies._auto_tags_worker is not None:
+        tasks["auto_tags"] = dependencies._auto_tags_worker.get_status()
+    if dependencies._summaries_worker is not None:
+        tasks["summaries"] = dependencies._summaries_worker.get_status()
+    if dependencies._vision_worker is not None:
+        tasks["vision_describe"] = dependencies._vision_worker.get_status()
+    try:
+        from app.workers.refine import get_refine_status
+        tasks["transcript_refine"] = get_refine_status()
+    except Exception:  # noqa: BLE001 — refine surface is non-critical
+        pass
+
+    # Resolve filenames for files currently being processed so the
+    # dashboard can show "now: 文字起こし of foo.mp4". We hit the search
+    # DB once with all unique ids to avoid an N+1.
+    all_active_ids = {
+        fid
+        for entry in tasks.values()
+        for fid in entry.get("processing", [])  # type: ignore[union-attr]
+    }
+    filenames: dict[str, str] = {}
+    if all_active_ids:
+        from app.database import get_search_db
+        from app.models import IndexedFile
+
+        with get_search_db() as session:
+            rows = (
+                session.query(IndexedFile.file_id, IndexedFile.filename)
+                .filter(IndexedFile.file_id.in_(all_active_ids))
+                .all()
+            )
+            filenames = {row[0]: row[1] for row in rows}
+
+    # Annotate each processing entry with a {file_id, filename} pair so
+    # the frontend doesn't need to re-query for names. Filename is
+    # nullable — purged or not-yet-indexed ids fall through.
+    for entry in tasks.values():
+        raw_ids: list[str] = list(entry.get("processing", []))  # type: ignore[arg-type]
+        entry["processing"] = [
+            {"file_id": fid, "filename": filenames.get(fid)}
+            for fid in raw_ids
+        ]
+
     return StatusResponse(
         status="running",
         indexed={
@@ -308,6 +357,7 @@ async def status_endpoint() -> StatusResponse:
             "metadata": index_status.metadata_indexed,
             "clip": index_status.clip_indexed,
             "whisper": index_status.whisper_indexed,
+            "text": index_status.text_indexed,
         },
         pending={
             "total": (
@@ -319,11 +369,13 @@ async def status_endpoint() -> StatusResponse:
             "metadata": index_status.pending_metadata,
             "clip": index_status.pending_clip,
             "whisper": index_status.pending_whisper,
+            "text": index_status.pending_text,
         },
         queue={
             "processing": queue_status.processing_count,
             "waiting": queue_status.waiting_count,
             "paused": queue_status.state == "paused",
+            "tasks": tasks,
         },
         models={
             "whisper": settings.models.whisper,

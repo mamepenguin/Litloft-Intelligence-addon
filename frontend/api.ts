@@ -52,12 +52,56 @@ export interface SemanticSearchResponse {
   total: number;
 }
 
+// One file currently being processed by a given task. Filename is null
+// when the file has been purged from the search index between enqueue
+// and the dashboard poll, or when it predates filename hydration.
+export interface QueueProcessingFile {
+  file_id: string;
+  filename: string | null;
+}
+
+export interface QueueTaskBreakdown {
+  waiting: number;
+  processing: QueueProcessingFile[];
+}
+
+// Task kinds that may appear under queue.tasks. The four indexing
+// types (metadata, clip, whisper, text_content) are always present;
+// LLM-task entries (auto_tags, summaries, vision_describe,
+// transcript_refine) are only present when their worker is running.
+export type QueueTaskKind =
+  | "metadata"
+  | "clip"
+  | "whisper"
+  | "text_content"
+  | "auto_tags"
+  | "summaries"
+  | "vision_describe"
+  | "transcript_refine";
+
 export interface SearchServiceStatus {
   available: boolean;
   status?: string;
-  indexed?: { total: number; metadata: number; clip: number; whisper: number };
-  pending?: { total: number; clip: number; whisper: number };
-  queue?: { processing: number; waiting: number; paused: boolean };
+  indexed?: {
+    total: number;
+    metadata: number;
+    clip: number;
+    whisper: number;
+    text?: number;
+  };
+  pending?: {
+    total: number;
+    metadata?: number;
+    clip: number;
+    whisper: number;
+    text?: number;
+  };
+  queue?: {
+    processing: number;
+    waiting: number;
+    paused: boolean;
+    tasks?: Partial<Record<QueueTaskKind, QueueTaskBreakdown>>;
+  };
   models?: { whisper: string; clip: string; text_embedding: string };
 }
 
