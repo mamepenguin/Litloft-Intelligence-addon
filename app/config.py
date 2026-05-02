@@ -33,6 +33,13 @@ class SearchConfig:
     # Pre-filter thresholds (exclude candidates below these before ranking)
     min_score_text: float = 0.85
     min_score_clip: float = 0.25
+    # ``clip_thumbnail`` (representative 1-frame route from spec
+    # 2026-05-02-thumbnail-clip-default-shallow-search.md) has a
+    # different false-positive profile than scene CLIP: 1 vector per
+    # file, ffmpeg ``thumbnail=300`` already filters black/blurred
+    # frames. Worth a looser threshold and a stronger weight in its
+    # own knob so tuning ``clip`` does not move ``clip_thumbnail``.
+    min_score_clip_thumbnail: float = 0.20
     # Score gap analysis: if (top_score - mean_score) < this threshold,
     # the result set is "flat" (no standout match) and discarded entirely.
     score_gap_threshold: float = 0.02
@@ -48,9 +55,14 @@ class SearchConfig:
     type_weight_transcript: float = 1.0
     type_weight_text_content: float = 0.9
     type_weight_clip: float = 1.0
+    # ``clip_thumbnail`` is the "video about X" main route, so it
+    # ranks at parity with metadata-class signals rather than the
+    # half-weight applied to scene CLIP.
+    type_weight_clip_thumbnail: float = 1.0
     # Legacy (kept for config file compatibility, used by compare endpoint)
     rrf_k: int = 60
     rrf_weight_clip: float = 0.5
+    rrf_weight_clip_thumbnail: float = 1.0
 
 
 @dataclass(frozen=True)

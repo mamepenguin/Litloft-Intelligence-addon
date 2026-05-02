@@ -237,6 +237,7 @@ async def retrieve_with_keywords(
     original_query: str | None = None,
     file_id_scope: list[str] | None = None,
     required: tuple[RequiredTerm, ...] | None = None,
+    include_scene_clip: bool = False,
 ) -> list[RetrievedFile]:
     """Retrieve top-k RAG candidates for a **pre-transformed** keyword query.
 
@@ -287,6 +288,7 @@ async def retrieve_with_keywords(
         semantic_query=original_query,
         file_id_scope=file_id_scope,
         required=required,
+        include_scene_clip=include_scene_clip,
     )
 
     results = list(response.results)
@@ -319,6 +321,7 @@ async def retrieve_with_keywords(
                 semantic_query=original_query,
                 file_id_scope=file_id_scope,
                 required=subset or None,
+                include_scene_clip=include_scene_clip,
             )
             results = list(response.results)
             if results:
@@ -359,6 +362,7 @@ async def retrieve_candidates(
     *,
     transform_temperature: float | None = None,
     file_id_scope: list[str] | None = None,
+    include_scene_clip: bool = False,
 ) -> list[RetrievedFile]:
     """Transform a natural-language question and retrieve RAG candidates.
 
@@ -398,4 +402,5 @@ async def retrieve_candidates(
         drive=drive,
         file_id_scope=file_id_scope,
         required=structured.required or None,
+        include_scene_clip=include_scene_clip,
     )

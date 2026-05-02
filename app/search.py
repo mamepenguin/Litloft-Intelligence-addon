@@ -151,6 +151,7 @@ def search(
     semantic_query: str | None = None,
     file_id_scope: list[str] | None = None,
     required: "tuple[RequiredTerm, ...] | None" = None,
+    include_scene_clip: bool = False,
 ) -> SearchResponse:
     """Execute a hybrid search query.
 
@@ -181,6 +182,15 @@ def search(
             (default) is the legacy behaviour. An empty tuple is also
             no-op so callers do not have to special-case the
             "transform succeeded but found no required terms" path.
+        include_scene_clip: When ``False`` (default), CLIP retrieval
+            is restricted to ``embedding_type="clip_thumbnail"`` (the
+            "video about X" / 1-frame route, spec
+            2026-05-02-thumbnail-clip-default-shallow-search.md). When
+            ``True``, scene-frame ``embedding_type="clip"`` rows are
+            unioned in — the explicit "scene with X" / "シーン検索"
+            toggle. The toggle is meant for cases where the user
+            specifically wants to find a moment inside a long video
+            rather than a video whose subject matches the query.
 
     Returns:
         SearchResponse with ranked results.
@@ -244,7 +254,10 @@ def search(
     # are candidate-slot noise. See _recall_clip_enabled() docstring.
     skip_clip = mode == "recall" and not _recall_clip_enabled()
     clip_matches = (
-        _vector_search_clip(clip_vector, candidates, mode=mode)
+        _vector_search_clip(
+            clip_vector, candidates,
+            mode=mode, include_scene_clip=include_scene_clip,
+        )
         if clip_vector is not None and not skip_clip
         else []
     )
@@ -501,6 +514,7 @@ def _vector_search_clip(
     limit: int,
     *,
     mode: SearchMode = "precision",
+    include_scene_clip: bool = False,
 ) -> list[_VectorMatch]:
     """Search the CLIP vector table for similar embeddings.
 
@@ -518,6 +532,14 @@ def _vector_search_clip(
         query_vector: CLIP query embedding vector.
         limit: Maximum results.
         mode: precision (default) or recall.
+        include_scene_clip: When ``False`` (default), only
+            ``embedding_type="clip_thumbnail"`` rows are returned
+            (the "video about X" / 1-frame route, spec
+            2026-05-02-thumbnail-clip-default-shallow-search.md).
+            When ``True``, scene-frame ``embedding_type="clip"`` rows
+            are added — the "scene with X" / shipped-from-the-toggle
+            route. Both types share ``vec_clip`` (same dim/model) so
+            this is a post-MATCH filter on ``embeddings.embedding_type``.
 
     Returns:
         List of vector matches.
@@ -580,18 +602,35 @@ def _vector_search_clip(
                 )
                 return []
 
-    min_score = search_config.min_score_clip
+    # Default: ``clip_thumbnail`` only. Scene CLIP is opt-in via
+    # ``include_scene_clip`` (search-modes "シーン検索" toggle, Ask
+    # ``include_scenes``). Spec 2026-05-02-thumbnail-clip-default-
+    # shallow-search.md.
+    allowed_types = (
+        ("clip_thumbnail", "clip") if include_scene_clip else ("clip_thumbnail",)
+    )
+    min_score_by_type = {
+        "clip": search_config.min_score_clip,
+        "clip_thumbnail": search_config.min_score_clip_thumbnail,
+    }
 
     with get_search_db() as session:
         embeddings = (
             session.query(Embedding)
-            .filter(Embedding.id.in_(embedding_ids))
+            .filter(
+                Embedding.id.in_(embedding_ids),
+                Embedding.embedding_type.in_(allowed_types),
+            )
             .all()
         )
 
         candidates: list[_VectorMatch] = []
         for emb in embeddings:
             score = _l2_to_cosine_similarity(distances.get(emb.id, 2.0))
+            min_score = min_score_by_type.get(
+                emb.embedding_type,
+                search_config.min_score_clip,
+            )
             if score < min_score:
                 continue
             candidates = [
@@ -1037,9 +1076,10 @@ def _combine_scores_rrf(
         ))
 
     for m in clip_matches:
-        file_match_types.setdefault(m.file_id, set()).add("clip")
+        match_label = m.embedding_type or "clip"
+        file_match_types.setdefault(m.file_id, set()).add(match_label)
         file_matches.setdefault(m.file_id, []).append(MatchInfo(
-            match_type="clip",
+            match_type=match_label,
             text=m.content_preview,
             score=m.score,
             timestamp_start=m.timestamp_start,
@@ -1625,9 +1665,15 @@ def _select_embedding_types(
     Returns:
         Tuple of (primary_type, fallback_type). fallback_type may be None.
     """
+    # Spec 2026-05-02-thumbnail-clip-default-shallow-search.md:
+    # the "find similar files" action uses the 1-frame route for
+    # both images and videos (visual similarity of the gestalt /
+    # main subject), not scene CLIP — which would surface "videos
+    # that contain a similar scene" rather than "videos about the
+    # same subject".
     type_map: dict[str, tuple[str, str | None]] = {
-        "image": ("clip", None),
-        "video": ("clip", "tfidf"),
+        "image": ("clip_thumbnail", None),
+        "video": ("clip_thumbnail", "tfidf"),
         "audio": ("whisper", None),
         "document": ("text_content", None),
     }
@@ -1654,9 +1700,13 @@ def _find_similar_by_embedding(
     Returns:
         List of dicts with file info and similarity score.
     """
-    # Determine which vector table to query
+    # Determine which vector table to query. ``clip`` and
+    # ``clip_thumbnail`` share ``vec_clip`` (same dim/model); other
+    # types live in ``vec_text``.
     vec_table = validate_vector_table(
-        "vec_clip" if embedding_type == "clip" else "vec_text"
+        "vec_clip"
+        if embedding_type in ("clip", "clip_thumbnail")
+        else "vec_text"
     )
 
     # For whisper embeddings, skip if transcript is too short to be meaningful.
@@ -1875,6 +1925,11 @@ _TYPE_WEIGHTS: dict[str, str] = {
     "transcript": "type_weight_transcript",
     "text_content": "type_weight_text_content",
     "clip": "type_weight_clip",
+    # ``clip_thumbnail`` ranks at parity with text-class signals because
+    # it represents a deliberately-chosen single frame (no per-file
+    # bias from frame count). Spec
+    # 2026-05-02-thumbnail-clip-default-shallow-search.md.
+    "clip_thumbnail": "type_weight_clip_thumbnail",
 }
 
 
@@ -1920,15 +1975,24 @@ def _combine_scores_cosine(
         src[m.file_id] = max(src.get(m.file_id, 0.0), weighted)
 
     for m in clip_matches:
-        file_match_types.setdefault(m.file_id, set()).add("clip")
+        # ``embedding_type`` is now opaque ("clip" or "clip_thumbnail");
+        # surface it as the match_type so the UI can label hits and
+        # apply the correct ``type_weight_*`` knob.
+        match_label = m.embedding_type or "clip"
+        file_match_types.setdefault(m.file_id, set()).add(match_label)
         file_matches.setdefault(m.file_id, []).append(MatchInfo(
-            match_type="clip",
+            match_type=match_label,
             text=m.content_preview,
             score=m.score,
             timestamp_start=m.timestamp_start,
             timestamp_end=m.timestamp_end,
         ))
-        weighted = m.score * search_config.type_weight_clip
+        weight = getattr(
+            search_config,
+            _TYPE_WEIGHTS.get(match_label, "type_weight_clip"),
+            search_config.type_weight_clip,
+        )
+        weighted = m.score * weight
         src = file_source_best["clip_vector"]
         src[m.file_id] = max(src.get(m.file_id, 0.0), weighted)
 

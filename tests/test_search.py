@@ -511,10 +511,13 @@ class TestSelectEmbeddingTypes:
     """Tests for file-type to embedding-type mapping."""
 
     def test_image(self) -> None:
-        assert _select_embedding_types("image") == ("clip", None)
+        # Spec 2026-05-02-thumbnail-clip-default-shallow-search.md: the
+        # "find similar files" route uses the 1-frame representative
+        # embedding, not scene CLIP — same intent as default search.
+        assert _select_embedding_types("image") == ("clip_thumbnail", None)
 
     def test_video(self) -> None:
-        assert _select_embedding_types("video") == ("clip", "tfidf")
+        assert _select_embedding_types("video") == ("clip_thumbnail", "tfidf")
 
     def test_audio(self) -> None:
         assert _select_embedding_types("audio") == ("whisper", None)

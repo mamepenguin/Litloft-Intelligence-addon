@@ -92,6 +92,16 @@ async def search_endpoint(
             "'recall' is for admin comparison with the RAG / Ask pipeline."
         ),
     ),
+    include_scene_clip: bool = Query(
+        default=False,
+        description=(
+            "When true, scene-frame CLIP embeddings (``embedding_type=\"clip\"``) "
+            "are included alongside the default representative-frame "
+            "(``embedding_type=\"clip_thumbnail\"``). The frontend's "
+            "'シーン検索' / 'Scene search' toggle drives this flag. "
+            "Spec 2026-05-02-thumbnail-clip-default-shallow-search.md."
+        ),
+    ),
     drive: str = Depends(require_drive),
 ) -> SearchResponseModel:
     """Execute a semantic search query within the request's drive.
@@ -104,6 +114,7 @@ async def search_endpoint(
     try:
         result = execute_search(
             query=q, limit=limit, file_type=type, drive=drive, mode=mode,
+            include_scene_clip=include_scene_clip,
         )
     except Exception as e:
         logger.error("Search failed: %s", e)
