@@ -87,10 +87,12 @@ class IndexStatus:
     total_indexed: int = 0
     metadata_indexed: int = 0
     clip_indexed: int = 0
+    clip_thumbnail_indexed: int = 0
     whisper_indexed: int = 0
     text_indexed: int = 0
     pending_metadata: int = 0
     pending_clip: int = 0
+    pending_clip_thumbnail: int = 0
     pending_whisper: int = 0
     pending_text: int = 0
 
@@ -201,6 +203,10 @@ class IndexManager:
                 IndexedFile.clip_indexed.is_(True),
                 IndexedFile.mime_type.in_(clip_types),
             ).count()
+            clip_thumbnail = active_files.filter(
+                IndexedFile.clip_thumbnail_indexed.is_(True),
+                IndexedFile.mime_type.in_(clip_types),
+            ).count()
 
             whisper_types = list(TRANSCRIBABLE_TYPES) + [LOFT_MIME]
             whisper = active_files.filter(
@@ -222,6 +228,10 @@ class IndexManager:
                 IndexedFile.clip_indexed.is_(False),
                 IndexedFile.mime_type.in_(clip_types),
             ).count()
+            pending_clip_thumbnail = active_files.filter(
+                IndexedFile.clip_thumbnail_indexed.is_(False),
+                IndexedFile.mime_type.in_(clip_types),
+            ).count()
 
             pending_whisper = active_files.filter(
                 IndexedFile.whisper_indexed.is_(False),
@@ -237,10 +247,12 @@ class IndexManager:
                 total_indexed=total,
                 metadata_indexed=metadata,
                 clip_indexed=clip,
+                clip_thumbnail_indexed=clip_thumbnail,
                 whisper_indexed=whisper,
                 text_indexed=text,
                 pending_metadata=pending_metadata,
                 pending_clip=pending_clip,
+                pending_clip_thumbnail=pending_clip_thumbnail,
                 pending_whisper=pending_whisper,
                 pending_text=pending_text,
             )
@@ -520,6 +532,12 @@ class IndexManager:
                     or_(
                         IndexedFile.metadata_indexed.is_(False),
                         IndexedFile.clip_indexed.is_(False),
+                        # Phase 4: existing files predating the
+                        # clip_thumbnail rollout (spec
+                        # 2026-05-02-thumbnail-clip-default-shallow-search.md)
+                        # surface here so the next CLIP pass will fill
+                        # the thumbnail leg.
+                        IndexedFile.clip_thumbnail_indexed.is_(False),
                         IndexedFile.whisper_indexed.is_(False),
                         IndexedFile.text_indexed.is_(False),
                     ),
@@ -532,25 +550,34 @@ class IndexManager:
             for f in incomplete:
                 if not f.clip_indexed and f.mime_type not in clip_mimes:
                     f.clip_indexed = True
+                if (
+                    not f.clip_thumbnail_indexed
+                    and f.mime_type not in clip_mimes
+                ):
+                    f.clip_thumbnail_indexed = True
                 if not f.whisper_indexed and f.mime_type not in TRANSCRIBABLE_TYPES and f.mime_type != LOFT_MIME:
                     f.whisper_indexed = True
                 if not f.text_indexed and f.mime_type not in TEXT_MIMES:
                     f.text_indexed = True
 
             # Snapshot what we need for queuing
-            file_tasks: list[tuple[str, str, bool, bool, bool, bool]] = [
+            file_tasks: list[tuple[str, str, bool, bool, bool, bool, bool]] = [
                 (
                     f.file_id,
                     f.mime_type,
                     f.metadata_indexed,
                     f.clip_indexed,
+                    f.clip_thumbnail_indexed,
                     f.whisper_indexed,
                     f.text_indexed,
                 )
                 for f in incomplete
             ]
 
-        for file_id, mime_type, meta_done, clip_done, whisper_done, text_done in file_tasks:
+        for (
+            file_id, mime_type,
+            meta_done, clip_done, thumb_done, whisper_done, text_done,
+        ) in file_tasks:
             queued_any = False
 
             if not meta_done:
@@ -559,7 +586,11 @@ class IndexManager:
                 ))
                 queued_any = True
 
-            if not clip_done:
+            # CLIP queue runs ``index_clip`` which handles both the
+            # scene route (clip_indexed) and the thumbnail route
+            # (clip_thumbnail_indexed) in one job — re-enqueue if
+            # *either* leg is incomplete.
+            if not clip_done or not thumb_done:
                 await self._enqueue(IndexTask(
                     file_id=file_id, task_type=TaskType.CLIP
                 ))

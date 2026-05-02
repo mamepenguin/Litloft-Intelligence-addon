@@ -14,7 +14,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 
-from sqlalchemy import event, create_engine, text
+from sqlalchemy import bindparam, event, create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
@@ -102,6 +102,9 @@ def init_search_db() -> None:
     # Migrate indexed_files for thumbnail CLIP support (idempotent).
     with _search_engine.begin() as conn:
         _migrate_indexed_files_thumbnail_columns(conn)
+    # Phase 4: rebrand legacy image clip embeddings as clip_thumbnail.
+    # Spec 2026-05-02-thumbnail-clip-default-shallow-search.md.
+    _migrate_image_clip_to_clip_thumbnail()
 
     # Migrate transcript_chunks for AI refine columns (idempotent).
     with _search_engine.begin() as conn:
@@ -319,6 +322,94 @@ def _migrate_vec_clip_if_needed(conn: object) -> None:
     conn.execute(text("UPDATE indexed_files SET clip_indexed = 0"))
 
     conn.commit()
+
+
+def _migrate_image_clip_to_clip_thumbnail() -> None:
+    """One-shot rebrand: image rows' ``clip`` embeddings → ``clip_thumbnail``.
+
+    Before this rollout images were stored with ``embedding_type="clip"``
+    (single embedding per file). Spec
+    ``2026-05-02-thumbnail-clip-default-shallow-search.md`` reserves
+    ``"clip"`` for video scene frames going forward and tags the
+    image's single representative embedding as ``"clip_thumbnail"``.
+
+    Done in chunks of ``_IMAGE_MIGRATION_CHUNK`` so the SQLite write
+    lock is not held for a multi-second UPDATE on large libraries.
+    Each chunk is its own transaction; partial completion is safe and
+    self-heals on the next startup. Idempotent: a run with no remaining
+    work returns immediately.
+
+    Side effect: also flips ``clip_thumbnail_indexed`` to ``True`` for
+    every migrated row so the new backfill queue does not re-pick
+    already-embedded images.
+    """
+    logger = logging.getLogger(__name__)
+    if _search_engine is None:
+        return
+
+    image_mimes = (
+        "image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp",
+    )
+
+    with _search_engine.connect() as conn:
+        # Discover the universe up front so progress is bounded and
+        # observable; chunking just paces the writes.
+        rows = conn.execute(
+            text(
+                "SELECT DISTINCT e.file_id "
+                "FROM embeddings e "
+                "JOIN indexed_files i ON i.file_id = e.file_id "
+                "WHERE e.embedding_type = 'clip' "
+                "AND i.mime_type IN :mimes"
+            ).bindparams(bindparam("mimes", expanding=True)),
+            {"mimes": list(image_mimes)},
+        ).fetchall()
+
+    file_ids = [r[0] for r in rows]
+    if not file_ids:
+        return
+
+    logger.info(
+        "Migrating %d image rows from embedding_type=clip → clip_thumbnail",
+        len(file_ids),
+    )
+
+    chunk = _IMAGE_MIGRATION_CHUNK
+    migrated = 0
+    for start in range(0, len(file_ids), chunk):
+        batch = file_ids[start:start + chunk]
+        with _search_engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE embeddings SET embedding_type = 'clip_thumbnail' "
+                    "WHERE embedding_type = 'clip' "
+                    "AND file_id IN :ids"
+                ).bindparams(bindparam("ids", expanding=True)),
+                {"ids": batch},
+            )
+            conn.execute(
+                text(
+                    "UPDATE indexed_files SET clip_thumbnail_indexed = 1 "
+                    "WHERE file_id IN :ids"
+                ).bindparams(bindparam("ids", expanding=True)),
+                {"ids": batch},
+            )
+        migrated += len(batch)
+        logger.debug(
+            "clip → clip_thumbnail batch committed: %d/%d",
+            migrated, len(file_ids),
+        )
+
+    logger.info(
+        "Image clip → clip_thumbnail migration complete: %d files",
+        migrated,
+    )
+
+
+# Tunable for tests. Production value chosen so the per-batch write
+# lock is sub-second on a typical SSD: 500 files × ~1 row each ≈ ~500
+# UPDATEs per transaction.
+_IMAGE_MIGRATION_CHUNK = 500
 
 
 def _migrate_indexed_files_thumbnail_columns(conn: object) -> None:
