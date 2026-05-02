@@ -23,9 +23,7 @@
             {"id": "index-status", "label": "Index Status", "priority": 10}
         ],
         "folder-actions": [
-            {"id": "folder-auto-tags", "label": "Generate AI Tags", "priority": 10},
-            {"id": "folder-summaries", "label": "Generate AI Summaries", "priority": 20},
-            {"id": "folder-visual-description", "label": "Generate AI Image Descriptions", "priority": 30}
+            {"id": "folder-ai-actions", "label": "AI", "priority": 10}
         ]
     },
     "proxy": {

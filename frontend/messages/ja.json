@@ -128,6 +128,7 @@
     "regenerateTags": "再生成",
     "generateTags": "AIタグを生成",
     "regeneratingTags": "生成中...",
+    "aiFolderActions": "AI",
     "generateFolderTags": "フォルダのAIタグを生成",
     "tagsBatchQueued": "{queued}件をキューに追加（{skipped}件スキップ）",
     "tagsBatchEmpty": "すべてのファイルがタグ推薦済みです",
