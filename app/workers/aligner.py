@@ -301,7 +301,10 @@ def release_job() -> None:
     if do_release:
         import gc
 
+        from app.utils.memory import malloc_trim
+
         gc.collect()
+        malloc_trim()
 
 
 def release_all() -> None:

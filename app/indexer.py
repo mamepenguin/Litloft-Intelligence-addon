@@ -26,6 +26,7 @@ from app.database import (
 )
 from app.models import Embedding, IndexedFile, TranscriptChunk, TranscriptWord
 from app.workers.blip import check_idle_unload as check_blip_idle_unload
+from app.workers.clip_concepts import check_idle_unload as check_clip_concepts_idle_unload
 from app.workers.clip import (
     index_clip,
     IMAGE_TYPES,
@@ -1218,6 +1219,7 @@ class IndexManager:
                 await asyncio.sleep(60)
                 check_whisper_idle_unload()
                 check_blip_idle_unload()
+                check_clip_concepts_idle_unload()
             except asyncio.CancelledError:
                 return
             except Exception as e:

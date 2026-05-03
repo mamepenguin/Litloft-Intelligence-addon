@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -37,6 +38,7 @@ _CONCEPTS_JSON = Path(__file__).parent.parent / "data" / "clip_concepts.json"
 _lock = threading.Lock()
 _cached_concepts: dict[str, np.ndarray] | None = None
 _cached_model_key: str | None = None
+_last_used: float = 0.0
 
 
 def load_preset_concepts(path: Path | None = None) -> list[str]:
@@ -168,7 +170,7 @@ def get_concept_embeddings(
     Returns:
         Map of concept string → normalized CLIP text embedding.
     """
-    global _cached_concepts, _cached_model_key
+    global _cached_concepts, _cached_model_key, _last_used
 
     model_key = settings.models.clip
     with _lock:
@@ -178,6 +180,7 @@ def get_concept_embeddings(
             and _cached_model_key == model_key
         )
         if cache_valid:
+            _last_used = time.monotonic()
             return _cached_concepts  # type: ignore[return-value]
 
         concepts = build_concept_pool(
@@ -194,7 +197,29 @@ def get_concept_embeddings(
         )
         _cached_concepts = _encode_concepts(concepts)
         _cached_model_key = model_key
+        _last_used = time.monotonic()
         return _cached_concepts
+
+
+def check_idle_unload() -> None:
+    """Discard concept embeddings after an idle period to free RAM.
+
+    Respects settings.memory.clip_concepts_idle_unload (0 = never unload).
+    The cache rebuilds automatically on the next auto-tag request.
+    """
+    global _cached_concepts, _cached_model_key, _last_used
+
+    idle_timeout = settings.memory.clip_concepts_idle_unload
+    if idle_timeout <= 0:
+        return
+
+    with _lock:
+        if _cached_concepts is None:
+            return
+        if time.monotonic() - _last_used > idle_timeout:
+            logger.info("Releasing CLIP concept embeddings (idle timeout)")
+            _cached_concepts = None
+            _cached_model_key = None
 
 
 def _load_file_clip_vectors(file_id: str) -> list[np.ndarray]:

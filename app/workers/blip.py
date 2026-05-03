@@ -106,7 +106,11 @@ def unload_model() -> None:
             _loaded = False
 
     import gc
+
+    from app.utils.memory import malloc_trim
+
     gc.collect()
+    malloc_trim()
 
 
 def check_idle_unload() -> None:

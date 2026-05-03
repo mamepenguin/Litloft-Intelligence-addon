@@ -34,29 +34,6 @@ from app.workers.summaries import SummariesWorker
 from app.workers.vision import VisionDescribeWorker
 
 
-async def _warm_up_auto_tag_candidates() -> None:
-    """Preload CLIP concepts + TF-IDF corpus IDF in the background.
-
-    On a cold container, the first auto-tag request pays ~15s for the
-    CLIP model load plus ~6s for the corpus IDF build. Running these
-    eagerly at startup keeps the first user-triggered tag generation
-    fast. Deliberately silent on failures: if the CLIP weights are
-    missing or the corpus is empty, auto_tags already falls back
-    gracefully, and a warm-up crash shouldn't take down the service.
-    """
-    from app.tfidf import _get_corpus_idf
-    from app.workers.clip_concepts import get_concept_embeddings
-
-    logger.info("Auto-tag warm-up starting in background")
-    try:
-        # Heavy numpy / torch / SQL work — offload from the event loop.
-        await asyncio.to_thread(get_concept_embeddings)
-        await asyncio.to_thread(_get_corpus_idf)
-    except Exception as e:
-        logger.warning("Auto-tag warm-up failed (non-fatal): %s", e)
-        return
-    logger.info("Auto-tag warm-up complete")
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -232,25 +209,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as e:
         logger.error("Failed to start index manager: %s", e)
 
-    # Kick off auto-tag warm-up as a background task so the first user
-    # request doesn't pay the CLIP / TF-IDF cold-start cost. Runs only
-    # when auto_tags is enabled — otherwise the caches are dead weight.
-    warm_up_task: asyncio.Task | None = None
-    if settings.features.auto_tags != "false":
-        warm_up_task = asyncio.create_task(
-            _warm_up_auto_tag_candidates(), name="auto_tags_warmup"
-        )
-
     logger.info("Semantic search service ready on port %d", settings.port)
     yield
 
     # Shutdown
-    if warm_up_task is not None and not warm_up_task.done():
-        warm_up_task.cancel()
-        try:
-            await warm_up_task
-        except asyncio.CancelledError:
-            pass
     if auto_tags_task is not None:
         auto_tags_task.cancel()
         try:
