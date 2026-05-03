@@ -115,6 +115,22 @@ MODEL_SPECS: dict[str, dict[str, str]] = {
         "kind": "open_clip",
         "name": "hf-hub:llm-jp/llm-jp-clip-vit-base-patch16",
     },
+    # Standard English OpenAI CLIP (open_clip name/pretrained format)
+    "clip-en-b32": {
+        "kind": "open_clip",
+        "name": "ViT-B-32",
+        "pretrained": "openai",
+    },
+    "clip-en-b16": {
+        "kind": "open_clip",
+        "name": "ViT-B-16",
+        "pretrained": "openai",
+    },
+    # LAION multilingual
+    "laion-b32": {
+        "kind": "open_clip",
+        "name": "hf-hub:laion/CLIP-ViT-B-32-laion2B-s34B-b79K",
+    },
     "siglip2-256": {
         "kind": "siglip2",
         "name": "google/siglip2-base-patch16-256",
@@ -175,8 +191,8 @@ def load_image_records(
             ORDER BY
               file_id,
               CASE embedding_type
-                WHEN 'blip_caption'    THEN 0
-                WHEN 'vision_describe' THEN 1
+                WHEN 'vision_describe' THEN 0
+                WHEN 'blip_caption'    THEN 1
               END
             """
         ).fetchall()
@@ -193,16 +209,18 @@ def load_image_records(
         if len(records) >= limit:
             break
         fpath = row["file_path"]
-        # Keep only files that live under images_dir
-        if not Path(fpath).is_absolute():
+        # Resolve to absolute path: join with images_dir when relative
+        p = Path(fpath)
+        full_path = p if p.is_absolute() else images_dir / fpath
+        full_path = full_path.resolve()
+        # Keep only files that live under images_dir and actually exist
+        if not str(full_path).startswith(images_dir_str):
             continue
-        if not fpath.startswith(images_dir_str):
-            continue
-        if not Path(fpath).exists():
+        if not full_path.exists():
             continue
         records.append(ImageRecord(
             file_id=row["id"],
-            file_path=fpath,
+            file_path=str(full_path),
             description=desc_map.get(row["id"], ""),
         ))
 
@@ -222,16 +240,27 @@ def _l2_normalize(v: np.ndarray) -> np.ndarray:
 
 
 class OpenClipEncoder:
-    """Wraps open_clip for the llm-jp model."""
+    """Wraps open_clip for CLIP-style models.
 
-    def __init__(self, model_name: str) -> None:
+    Supports two loading modes:
+    - hf-hub: prefix  → create_model_from_pretrained (e.g. llm-jp)
+    - name + pretrained → create_model_and_transforms (e.g. ViT-B-32/openai)
+    """
+
+    def __init__(self, model_name: str, pretrained: str | None = None) -> None:
         import open_clip
 
-        print(f"  Loading {model_name} ...", flush=True)
-        self._model, self._preprocess = open_clip.create_model_from_pretrained(
-            model_name, device="cpu"
-        )
-        self._tokenizer = open_clip.get_tokenizer(model_name)
+        print(f"  Loading {model_name} (pretrained={pretrained}) ...", flush=True)
+        if pretrained is not None:
+            self._model, _, self._preprocess = open_clip.create_model_and_transforms(
+                model_name, pretrained=pretrained, device="cpu"
+            )
+            self._tokenizer = open_clip.get_tokenizer(model_name)
+        else:
+            self._model, self._preprocess = open_clip.create_model_from_pretrained(
+                model_name, device="cpu"
+            )
+            self._tokenizer = open_clip.get_tokenizer(model_name)
         self._model.eval()
 
     def encode_images_batch(self, images: list[Image.Image]) -> np.ndarray:
@@ -254,42 +283,72 @@ class OpenClipEncoder:
 
 
 class SigLIP2Encoder:
-    """Wraps transformers AutoModel for SigLIP 2 variants."""
+    """Wraps transformers AutoModel for SigLIP 2 via joint forward pass.
+
+    SigLIP 2's text and image encoders do not produce aligned embeddings
+    when called separately (the text tokenizer omits attention_mask for
+    single inputs, breaking get_text_features). The correct approach is
+    the joint forward: pass both text and images together and rank by
+    logits_per_image. Images are cached as PIL objects; ranking is done
+    at query time in chunks of JOINT_CHUNK.
+    """
+
+    JOINT_CHUNK = 64
+    # Signals to the eval loop that this encoder uses joint forward ranking
+    uses_joint_forward: bool = True
 
     def __init__(self, model_name: str) -> None:
         from transformers import AutoModel, AutoProcessor
 
         print(f"  Loading {model_name} ...", flush=True)
-        self._processor = AutoProcessor.from_pretrained(model_name)
-        self._model = AutoModel.from_pretrained(model_name, device_map="cpu")
+        self._processor = AutoProcessor.from_pretrained(model_name, use_fast=True)
+        self._model = AutoModel.from_pretrained(model_name)
         self._model.eval()
+        self._pil_images: list[Image.Image] = []
 
     def encode_images_batch(self, images: list[Image.Image]) -> np.ndarray:
-        import torch
-
-        inputs = self._processor(images=images, return_tensors="pt", padding=True)
-        with torch.no_grad():
-            feats = self._model.get_image_features(**inputs)
-        arr = feats.cpu().numpy().astype(np.float32)
-        # L2 normalise each row
-        norms = np.linalg.norm(arr, axis=1, keepdims=True)
-        norms = np.where(norms < 1e-10, 1.0, norms)
-        return arr / norms
+        """Cache PIL images; return placeholder zeros (not used for ranking)."""
+        self._pil_images.extend(images)
+        return np.zeros((len(images), 1), dtype=np.float32)
 
     def encode_text(self, text: str) -> np.ndarray:
+        """Not used; joint_rank is used instead."""
+        return np.zeros(1, dtype=np.float32)
+
+    def joint_rank(self, query: str, k: int = 10) -> tuple[list[int], np.ndarray]:
+        """Rank all cached images by query using joint forward pass.
+
+        Returns (top_k_indices, all_logits) where indices are into
+        self._pil_images and logits are the raw SigLIP logit_per_image.
+        """
         import torch
 
-        inputs = self._processor(text=[text], return_tensors="pt", padding=True)
-        with torch.no_grad():
-            feats = self._model.get_text_features(**inputs)
-        arr = feats.squeeze().cpu().numpy().astype(np.float32)
-        return _l2_normalize(arr)
+        images = self._pil_images
+        all_logits: list[float] = []
+
+        for start in range(0, len(images), self.JOINT_CHUNK):
+            chunk = images[start : start + self.JOINT_CHUNK]
+            inp = self._processor(
+                text=[query] * len(chunk),
+                images=chunk,
+                return_tensors="pt",
+                padding="max_length",
+                truncation=True,
+            )
+            with torch.no_grad():
+                out = self._model(**inp)
+            # logits_per_image: [n_images, n_texts]; we have 1 text → [:,0]
+            all_logits.extend(out.logits_per_image[:, 0].tolist())
+
+        arr = np.array(all_logits, dtype=np.float32)
+        top_idx = np.argsort(arr)[::-1][:k].tolist()
+        return top_idx, arr
 
 
 def build_encoder(model_key: str) -> OpenClipEncoder | SigLIP2Encoder:
     spec = MODEL_SPECS[model_key]
     if spec["kind"] == "open_clip":
-        return OpenClipEncoder(spec["name"])
+        return OpenClipEncoder(spec["name"], pretrained=spec.get("pretrained"))
     return SigLIP2Encoder(spec["name"])
 
 
@@ -406,18 +465,66 @@ async def _judge_single(
             return JudgeResult(label="no", score=0.0)
 
 
+async def _judge_single_vision(
+    client: Any,
+    llm_model: str,
+    sem: asyncio.Semaphore,
+    query: str,
+    image_path: str,
+) -> JudgeResult:
+    """Judge relevance by sending the actual image to a vision LLM."""
+    import base64
+
+    ext = Path(image_path).suffix.lower()
+    mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+            "webp": "image/webp", "gif": "image/gif"}.get(ext.lstrip("."), "image/jpeg")
+    try:
+        img_b64 = base64.b64encode(Path(image_path).read_bytes()).decode()
+    except OSError as e:
+        return JudgeResult(label="no", score=0.0)
+
+    prompt = f"クエリ「{query}」に対してこの画像は関連していますか？ yes/somewhat/no で一言で答えてください。"
+    async with sem:
+        try:
+            response = await client.chat.completions.create(
+                model=llm_model,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url",
+                         "image_url": {"url": f"data:{mime};base64,{img_b64}"}},
+                        {"type": "text", "text": prompt},
+                    ],
+                }],
+                max_tokens=20,
+                temperature=0.0,
+            )
+            text = response.choices[0].message.content or ""
+            return _parse_judge_label(text)
+        except Exception as e:
+            print(f"\n  Vision judge error: {e}", flush=True)
+            return JudgeResult(label="no", score=0.0)
+
+
 async def judge_hits(
     client: Any,
     llm_model: str,
     query: str,
     hits: list[SearchHit],
     concurrency: int = 10,
+    vision: bool = False,
 ) -> list[JudgeResult]:
     sem = asyncio.Semaphore(concurrency)
-    tasks = [
-        _judge_single(client, llm_model, sem, query, hit.description)
-        for hit in hits
-    ]
+    if vision:
+        tasks = [
+            _judge_single_vision(client, llm_model, sem, query, hit.file_path)
+            for hit in hits
+        ]
+    else:
+        tasks = [
+            _judge_single(client, llm_model, sem, query, hit.description)
+            for hit in hits
+        ]
     return list(await asyncio.gather(*tasks))
 
 
@@ -588,7 +695,7 @@ async def run_eval(args: argparse.Namespace) -> None:
 
     # --- Load image records ---
     print(f"Loading image records from {litloft_db} (limit={args.limit}) ...")
-    records = load_image_records(db_path, litloft_db, images_dir, args.limit)
+    records = load_image_records(litloft_db, db_path, images_dir, args.limit)
     if not records:
         print(
             "Error: no image records found. "
@@ -599,10 +706,14 @@ async def run_eval(args: argparse.Namespace) -> None:
     print(f"Loaded {len(records)} image records")
 
     # --- Build OpenAI-compatible client ---
-    api_key = args.llm_api_key or os.environ.get("OPENAI_API_KEY") or ""
+    # ollama and similar local endpoints don't require a real key;
+    # AsyncOpenAI still needs a non-empty string, so fall back to "ollama".
+    api_key = args.llm_api_key or os.environ.get("OPENAI_API_KEY") or (
+        "ollama" if args.llm_base_url else ""
+    )
     if not api_key:
         print(
-            "Error: provide --llm-api-key or set OPENAI_API_KEY.",
+            "Error: provide --llm-api-key, set OPENAI_API_KEY, or pass --llm-base-url for a local endpoint.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -641,21 +752,36 @@ async def run_eval(args: argparse.Namespace) -> None:
 
         print(f"[{model_key}] Encoding {len(records)} images ...")
         image_vecs = compute_image_embeddings(encoder, records)
+        joint = getattr(encoder, "uses_joint_forward", False)
 
         print(f"[{model_key}] Running {len(queries)} queries ...")
         query_results: list[QueryResult] = []
 
         for qi, query in enumerate(queries, start=1):
             print(f"  Query {qi}/{len(queries)}: {query}", flush=True)
-            query_vec = encoder.encode_text(query)
-            hits = top_k_search(query_vec, image_vecs, records, k=10)
+            if joint:
+                assert isinstance(encoder, SigLIP2Encoder)
+                top_idx, logits = encoder.joint_rank(query, k=10)
+                hits = [
+                    SearchHit(
+                        rank=rank + 1,
+                        file_path=records[i].file_path,
+                        description=records[i].description,
+                        score=float(logits[i]),
+                    )
+                    for rank, i in enumerate(top_idx)
+                ]
+            else:
+                query_vec = encoder.encode_text(query)
+                hits = top_k_search(query_vec, image_vecs, records, k=10)
 
             judgements = await judge_hits(
                 llm_client,
                 llm_model,
                 query,
                 hits,
-                concurrency=10,
+                concurrency=4 if args.vision_judge else 10,
+                vision=args.vision_judge,
             )
             query_results.append(QueryResult(query=query, hits=hits, judgements=judgements))
 
@@ -746,6 +872,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         default=None,
         help="Optional path to write CSV results.",
+    )
+    parser.add_argument(
+        "--vision-judge",
+        action="store_true",
+        default=False,
+        help="Send actual images to the vision LLM for judging instead of using text descriptions.",
     )
     return parser
 
