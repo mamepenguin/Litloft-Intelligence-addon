@@ -121,6 +121,11 @@
   },
   "file": {
     "similarFiles": "似たファイル",
+    "similarFilesDetect": "似たファイルを検出",
+    "similarFilesDetecting": "検出中...",
+    "similarFilesEmpty": "似たファイルは見つかりませんでした",
+    "similarFilesUnavailable": "似たファイル検出は利用できません",
+    "similarFilesRetry": "再検出",
     "suggestedTags": "AIタグ提案",
     "acceptTag": "タグ「{tag}」を追加",
     "acceptAllTags": "すべて承認",

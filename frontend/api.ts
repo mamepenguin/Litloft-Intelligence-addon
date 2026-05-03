@@ -263,19 +263,28 @@ export async function getSearchStatus(
   }
 }
 
+/**
+ * Fetch similar files. Throws on transport failure so callers can
+ * distinguish "addon proxy timed out / 5xx" from a successful empty
+ * response. The first call against a cold file commonly hits the
+ * 15 s proxy timeout while CLIP / tf-idf / whisper similarity is
+ * computed; the backend continues and caches the result, so a retry
+ * a few seconds later succeeds instantly.
+ */
 export async function getSimilarFiles(
   fileId: string,
   drive: string,
   limit: number = 6
 ): Promise<SimilarFilesResponse> {
-  try {
-    return await fetchJSON<SimilarFilesResponse>(
-      `${API_BASE}/addons/intelligence/similar/${fileId}?limit=${limit}`,
-      { headers: driveHeaders(drive) },
-    );
-  } catch {
-    return { available: false, results: [], source_keywords: [] as KeywordScore[] };
-  }
+  const response = await fetchJSON<Omit<SimilarFilesResponse, "available">>(
+    `${API_BASE}/addons/intelligence/similar/${fileId}?limit=${limit}`,
+    { headers: driveHeaders(drive) },
+  );
+  return {
+    available: true,
+    results: response.results ?? [],
+    source_keywords: response.source_keywords ?? [],
+  };
 }
 
 // Queue control. The queue is a process-global resource owned by the

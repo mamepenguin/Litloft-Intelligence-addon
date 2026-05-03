@@ -44,66 +44,97 @@ function ScoreBadge({ item }: { item: SimilarFileItem }) {
   );
 }
 
+type Status = "idle" | "loading" | "loaded" | "unavailable";
+
+// Heavy similarity computations frequently exceed the 15 s addon
+// proxy timeout on the first request for a cold file. The backend
+// keeps computing and caches the result, so a follow-up request a
+// few seconds later hits the cache. We auto-retry up to twice with
+// growing delays before surrendering to the unavailable state.
+const RETRY_DELAYS_MS = [6000, 12000];
+
 export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSectionProps) {
   const t = useTranslations("file");
   const [results, setResults] = useState<SimilarFileItem[]>([]);
   const [sourceKeywords, setSourceKeywords] = useState<KeywordScore[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [visible, setVisible] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [status, setStatus] = useState<Status>("idle");
+  const requestIdRef = useRef(0);
 
+  // Reset to idle whenever we navigate to a different file. Detection
+  // is heavy on the backend (CLIP / tf-idf / whisper similarity), so we
+  // never auto-trigger — the user must explicitly press the button.
   useEffect(() => {
+    requestIdRef.current += 1;
     setResults([]);
     setSourceKeywords([]);
-    setLoaded(false);
-    setVisible(false);
-  }, [fileId]);
-
-  useEffect(() => {
-    if (!containerRef.current) return;
-
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          setVisible(true);
-          observer.disconnect();
-        }
-      },
-      { rootMargin: "200px" }
-    );
-
-    observer.observe(containerRef.current);
-    return () => observer.disconnect();
+    setStatus("idle");
   }, [fileId]);
 
   const fetchSimilar = useCallback(async () => {
-    const data = await getSimilarFiles(fileId, drive);
-    if (data.available && data.results.length > 0) {
-      setResults(data.results);
-      setSourceKeywords(data.source_keywords ?? []);
+    const reqId = ++requestIdRef.current;
+    setStatus("loading");
+
+    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
+      try {
+        const data = await getSimilarFiles(fileId, drive);
+        if (reqId !== requestIdRef.current) return; // stale (file changed / re-clicked)
+        setResults(data.results);
+        setSourceKeywords(data.source_keywords ?? []);
+        setStatus("loaded");
+        return;
+      } catch {
+        if (attempt === RETRY_DELAYS_MS.length) {
+          if (reqId !== requestIdRef.current) return;
+          setResults([]);
+          setSourceKeywords([]);
+          setStatus("unavailable");
+          return;
+        }
+        // Wait for the backend to finish + populate the cache, then retry.
+        await new Promise((resolve) =>
+          setTimeout(resolve, RETRY_DELAYS_MS[attempt]),
+        );
+        if (reqId !== requestIdRef.current) return;
+      }
     }
-    setLoaded(true);
   }, [fileId, drive]);
 
-  useEffect(() => {
-    if (visible && !loaded) {
-      fetchSimilar();
-    }
-  }, [visible, loaded, fetchSimilar]);
-
-  if (loaded && results.length === 0) {
-    return <div ref={containerRef} />;
-  }
-
   return (
-    <div ref={containerRef}>
-      {!loaded ? (
-        <div className="h-32" />
-      ) : (
+    <div>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-text-muted">
+          {t("similarFiles")}
+        </h2>
+        {status !== "loading" && (
+          <button
+            type="button"
+            onClick={fetchSimilar}
+            className="rounded-md bg-bg-elevated px-2.5 py-1 text-xs text-text-primary transition-colors hover:bg-bg-card"
+          >
+            {status === "idle"
+              ? t("similarFilesDetect")
+              : t("similarFilesRetry")}
+          </button>
+        )}
+        {status === "loading" && (
+          <span className="text-xs text-text-muted">
+            {t("similarFilesDetecting")}
+          </span>
+        )}
+      </div>
+
+      {status === "unavailable" && (
+        <p className="text-xs text-text-muted">
+          {t("similarFilesUnavailable")}
+        </p>
+      )}
+
+      {status === "loaded" && results.length === 0 && (
+        <p className="text-xs text-text-muted">{t("similarFilesEmpty")}</p>
+      )}
+
+      {status === "loaded" && results.length > 0 && (
         <>
-          <h2 className="mb-3 text-sm font-semibold text-text-muted">
-            {t("similarFiles")}
-          </h2>
           {sourceKeywords.length > 0 && (
             <div className="mb-3 flex flex-wrap gap-1">
               {sourceKeywords.map((kw) => (

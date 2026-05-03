@@ -121,6 +121,11 @@
   },
   "file": {
     "similarFiles": "Similar files",
+    "similarFilesDetect": "Find similar files",
+    "similarFilesDetecting": "Searching...",
+    "similarFilesEmpty": "No similar files found",
+    "similarFilesUnavailable": "Similar file detection unavailable",
+    "similarFilesRetry": "Search again",
     "suggestedTags": "AI Suggested Tags",
     "acceptTag": "Add tag {tag}",
     "acceptAllTags": "Accept all",
