@@ -148,7 +148,10 @@ def _enable_find(monkeypatch, *, fallback: str = "graceful") -> None:
         personal_history=PersonalHistoryConfig(
             enabled=True, fallback_when_empty=fallback
         ),
-        category_expansion=CategoryExpansionConfig(),
+        # Stage C is now driven by ``_resolve_category_expansion`` which
+        # gates on ``cfg.enabled`` (default False). Find tests need it
+        # on to exercise the multi-query path.
+        category_expansion=CategoryExpansionConfig(enabled=True),
     )
     settings_mock = MagicMock()
     settings_mock.rag = rag_cfg
@@ -625,6 +628,253 @@ class TestFindFilesStageD:
         # literal string "none" filter — that would never match. Either
         # absent or None is acceptable.
         assert kwargs.get("file_type") in (None, "")
+
+    @pytest.mark.asyncio
+    async def test_multi_term_expansion_runs_per_term_and_rrf_merges(
+        self, monkeypatch
+    ):
+        """Stage C with 2+ terms must fan out to per-term retrievals.
+
+        Regression: previously the service only used
+        ``category_expansion[0]`` as the keyword, which made expansion
+        cosmetic — single-term retrieval kept hitting embedding noise
+        (e.g. "料理" alone surfaced "スマホ料金プラン"). Mirror the Ask
+        path: run ``retrieve_with_keywords`` once per expansion term
+        and RRF-merge so the file that matches multiple expansions wins
+        over the file that only matches one weakly.
+        """
+        _enable_find(monkeypatch)
+        decomposed = _decomposed(personal_scope="none", semantic="料理")
+        monkeypatch.setattr(
+            service_mod, "decompose_query", AsyncMock(return_value=decomposed)
+        )
+        terms = ["料理", "レシピ", "調理", "食材"]
+        monkeypatch.setattr(
+            service_mod, "expand_category", AsyncMock(return_value=terms)
+        )
+
+        # Per-term retriever returns: only the noisy file appears for
+        # the head term, while the cooking file appears across multiple
+        # expansions. RRF must rank cooking above noise.
+        noise = _retrieved_file(file_id="noise", filename="phone-plan.mp4")
+        cooking = _retrieved_file(file_id="cooking", filename="recipe.mp4")
+
+        async def fake_retrieve(*, keywords, **_):
+            if keywords == "料理":
+                return [noise, cooking]
+            return [cooking]
+
+        retrieve_spy = AsyncMock(side_effect=fake_retrieve)
+        monkeypatch.setattr(
+            service_mod, "retrieve_with_keywords", retrieve_spy
+        )
+
+        result = await find_files(
+            question="料理に関する動画",
+            drive="movies",
+            viewer_id=None,
+            overrides=None,
+            limit=20,
+        )
+
+        # Called exactly once per expansion term.
+        assert retrieve_spy.await_count == len(terms)
+        called_keywords = sorted(
+            call.kwargs["keywords"] for call in retrieve_spy.await_args_list
+        )
+        assert called_keywords == sorted(terms)
+
+        # RRF merge: cooking (4 hits) ranks above noise (1 hit).
+        payload = result if isinstance(result, dict) else result.model_dump()
+        ordered_ids = [r["file_id"] for r in payload["results"]]
+        assert ordered_ids[0] == "cooking"
+        assert "noise" in ordered_ids
+
+    @pytest.mark.asyncio
+    async def test_required_overlapping_with_semantic_query_dropped_when_expanding(
+        self, monkeypatch
+    ):
+        """When category expansion runs, ``required`` terms whose
+        canonical overlaps with ``semantic_query`` must be dropped from
+        per-term retrieves.
+
+        Regression: small local LLMs (gemma e4b etc.) sometimes
+        misclassify the broad concept ("料理") as ``required`` even
+        though the prompt forbids it. Combined with multi-query
+        expansion, every per-term retrieve still hard-filters on
+        "料理", excluding actual recipe videos that say "弁当" / "副菜
+        レシピ" but never the literal "料理". Proper-noun anchors that
+        are NOT in semantic_query (e.g. "東福寺") must survive.
+        """
+        from app.rag.query_transform import RequiredTerm
+
+        _enable_find(monkeypatch)
+        decomposed = _decomposed(personal_scope="none", semantic="料理")
+        monkeypatch.setattr(
+            service_mod, "decompose_query", AsyncMock(return_value=decomposed)
+        )
+        monkeypatch.setattr(
+            service_mod,
+            "expand_category",
+            AsyncMock(return_value=["料理", "レシピ", "調理"]),
+        )
+
+        # LLM mis-classifies "料理" as required AND also extracts a
+        # legitimate proper noun "東福寺" — only the overlapping term
+        # should be dropped.
+        structured_mock = MagicMock()
+        structured_mock.required = (
+            RequiredTerm(canonical="料理", script="han", aliases=("料理",)),
+            RequiredTerm(
+                canonical="東福寺", script="han", aliases=("東福寺",)
+            ),
+        )
+        structured_mock.raw_keywords = "料理 東福寺"
+        monkeypatch.setattr(
+            service_mod,
+            "transform_query_structured",
+            AsyncMock(return_value=structured_mock),
+        )
+
+        retrieve_spy = AsyncMock(return_value=[])
+        monkeypatch.setattr(
+            service_mod, "retrieve_with_keywords", retrieve_spy
+        )
+
+        await find_files(
+            question="東福寺の料理",
+            drive="movies",
+            viewer_id=None,
+            overrides=None,
+            limit=20,
+        )
+
+        # Every per-term retrieve should drop "料理" but keep "東福寺".
+        for call in retrieve_spy.await_args_list:
+            req = call.kwargs.get("required")
+            assert req is not None, "東福寺 should survive as anchor"
+            canonicals = [t.canonical for t in req]
+            assert "料理" not in canonicals
+            assert "東福寺" in canonicals
+
+    @pytest.mark.asyncio
+    async def test_expansion_head_terms_outweigh_tail_terms_in_rrf(
+        self, monkeypatch
+    ):
+        """Linear-decay weighting biases the merge toward head expansion
+        terms.
+
+        Regression: with equal-weight RRF, a noise file that ranks
+        moderately high in tail terms ("ディナー" / "盛り付け") could
+        accumulate enough total score to outvote a true cooking file
+        that ranks #1 in only the head terms ("料理" / "レシピ").
+        Linear decay (head=1.0, tail=0.5) preserves the head signal
+        while still benefiting from tail consensus when present.
+        """
+        _enable_find(monkeypatch)
+        decomposed = _decomposed(personal_scope="none", semantic="料理")
+        monkeypatch.setattr(
+            service_mod, "decompose_query", AsyncMock(return_value=decomposed)
+        )
+        # 4-term expansion: head 2 = real cooking concepts, tail 2 =
+        # broad words that weakly attract noise files.
+        terms = ["料理", "レシピ", "ディナー", "盛り付け"]
+        monkeypatch.setattr(
+            service_mod, "expand_category", AsyncMock(return_value=terms)
+        )
+
+        cooking = _retrieved_file(file_id="cooking", filename="recipe.mp4")
+        noise = _retrieved_file(file_id="noise", filename="podcast.mp4")
+
+        async def fake_retrieve(*, keywords, **_):
+            # Realistic split: cooking files match the head terms
+            # ("料理"/"レシピ") strongly but not the tail; the tail
+            # words ("ディナー"/"盛り付け") happen to surface unrelated
+            # videos that mention them in passing. Both at rank 1 of
+            # their respective lists, so unweighted RRF would tie.
+            # Linear-decay weighting tilts toward head — cooking wins.
+            head_terms = {"料理", "レシピ"}
+            if keywords in head_terms:
+                return [cooking]
+            return [noise]
+
+        retrieve_spy = AsyncMock(side_effect=fake_retrieve)
+        monkeypatch.setattr(
+            service_mod, "retrieve_with_keywords", retrieve_spy
+        )
+
+        result = await find_files(
+            question="料理に関する動画",
+            drive="movies",
+            viewer_id=None,
+            overrides=None,
+            limit=20,
+        )
+
+        payload = result if isinstance(result, dict) else result.model_dump()
+        ordered_ids = [r["file_id"] for r in payload["results"]]
+        # cooking should rank above noise. Under unweighted RRF
+        # they would tie (both rank #1 in two lists each); the
+        # linear-decay weighting [1.0, 0.83, 0.67, 0.5] gives cooking
+        # the head's full weight while noise rides the discounted
+        # tail.
+        assert ordered_ids.index("cooking") < ordered_ids.index("noise")
+
+    @pytest.mark.asyncio
+    async def test_required_kept_intact_on_single_term_expansion_path(
+        self, monkeypatch
+    ):
+        """Single-keyword (non-expansion) path must NOT drop required.
+
+        The overlap-drop heuristic is justified only when the multi-
+        query expansion is actually replacing the discriminating role
+        of the keyword. When expansion collapses (single element →
+        ``[]`` per ``_resolve_category_expansion``), required keeps
+        its full hard-filter role.
+        """
+        from app.rag.query_transform import RequiredTerm
+
+        _enable_find(monkeypatch)
+        decomposed = _decomposed(personal_scope="none", semantic="料理")
+        monkeypatch.setattr(
+            service_mod, "decompose_query", AsyncMock(return_value=decomposed)
+        )
+        # Single-element expansion → helper returns [] → fallback path.
+        monkeypatch.setattr(
+            service_mod,
+            "expand_category",
+            AsyncMock(return_value=["料理"]),
+        )
+
+        structured_mock = MagicMock()
+        structured_mock.required = (
+            RequiredTerm(canonical="料理", script="han", aliases=("料理",)),
+        )
+        structured_mock.raw_keywords = "料理"
+        monkeypatch.setattr(
+            service_mod,
+            "transform_query_structured",
+            AsyncMock(return_value=structured_mock),
+        )
+
+        retrieve_spy = AsyncMock(return_value=[])
+        monkeypatch.setattr(
+            service_mod, "retrieve_with_keywords", retrieve_spy
+        )
+
+        await find_files(
+            question="料理",
+            drive="movies",
+            viewer_id=None,
+            overrides=None,
+            limit=20,
+        )
+
+        # Single retrieve, required intact.
+        assert retrieve_spy.await_count == 1
+        req = retrieve_spy.await_args.kwargs.get("required")
+        assert req is not None
+        assert [t.canonical for t in req] == ["料理"]
 
 
 # ---------------------------------------------------------------------------

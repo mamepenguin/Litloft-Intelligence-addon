@@ -351,6 +351,8 @@ class IndexManager:
                     snap["drive"] != core["drive"]
                     or snap["file_path"] != expected_path
                     or snap["filename"] != core["filename"]
+                    or snap.get("file_type") != core.get("file_type")
+                    or snap.get("mime_type") != core.get("mime_type")
                 ):
                     drifted.append(file_id)
 
@@ -935,6 +937,16 @@ class IndexManager:
                 indexed.file_path = abs_path
                 indexed.filename = meta["filename"]
                 indexed.title = title
+                # file_type / mime_type drift can come from a core
+                # ``classify()`` rule update (e.g. .loft promoted from
+                # ``other`` to ``video``). Sync them here so reconcile's
+                # drift repair fixes the search-time file_type filter.
+                core_file_type = meta.get("file_type")
+                core_mime_type = meta.get("mime_type")
+                if core_file_type is not None:
+                    indexed.file_type = core_file_type
+                if core_mime_type is not None:
+                    indexed.mime_type = core_mime_type
 
                 # FTS5 has no UNIQUE on file_id, so ``INSERT OR REPLACE``
                 # would leave the old row alongside the new one. Delete
@@ -1367,7 +1379,8 @@ def _get_litloft_files_by_ids(file_ids: list[str]) -> dict[str, dict]:
         thumb_select = "thumbnail_path" if has_thumbnail_path else "NULL AS thumbnail_path"
         rows = session.execute(
             sql_text(
-                f"SELECT id, drive, file_path, filename, title, {thumb_select} "
+                f"SELECT id, drive, file_path, filename, title, {thumb_select}, "
+                "file_type, mime_type "
                 "FROM files WHERE id IN :ids"
             ).bindparams(bindparam("ids", expanding=True)),
             {"ids": list(file_ids)},
@@ -1380,6 +1393,8 @@ def _get_litloft_files_by_ids(file_ids: list[str]) -> dict[str, dict]:
                 "filename": row[3],
                 "title": row[4],
                 "thumbnail_path": row[5],
+                "file_type": row[6],
+                "mime_type": row[7],
             }
             for row in rows
         }
@@ -1472,11 +1487,13 @@ def _get_indexed_file_ids() -> set[str]:
 
 
 def _get_indexed_metadata() -> dict[str, dict]:
-    """Get the (drive, file_path, filename) snapshot for every IndexedFile.
+    """Get the snapshot fields used by reconcile drift detection.
 
-    Used by reconcile() to detect drift against core DB. Returning a
-    dict per id keeps the call shape symmetric with
-    ``_get_litloft_files_by_ids`` so future callers can swap the source.
+    Returns drive / file_path / filename / file_type / mime_type per
+    IndexedFile so reconcile can repair both path-class drift
+    (rename / move missed by webhook) and classification drift
+    (core's ``classify()`` rule changed — e.g. a vendor wrapper mime
+    promoted from ``other`` to ``video``).
     """
     with get_search_db() as session:
         rows = session.query(
@@ -1484,12 +1501,16 @@ def _get_indexed_metadata() -> dict[str, dict]:
             IndexedFile.drive,
             IndexedFile.file_path,
             IndexedFile.filename,
+            IndexedFile.file_type,
+            IndexedFile.mime_type,
         ).all()
         return {
             row[0]: {
                 "drive": row[1],
                 "file_path": row[2],
                 "filename": row[3],
+                "file_type": row[4],
+                "mime_type": row[5],
             }
             for row in rows
         }

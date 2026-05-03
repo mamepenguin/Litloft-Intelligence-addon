@@ -13,6 +13,24 @@ PDF
 pdf
 ビデオ
 オーディオ
+# English variants — small local LLMs (gemma e4b etc.) sometimes emit
+# these instead of / alongside the Japanese forms even when the prompt
+# is Japanese. Without them the file-type word slips into ``required``
+# canonicals and becomes a hard filter that excludes legitimate hits.
+video
+audio
+image
+file
+files
+document
+documents
+media
+photo
+photos
+picture
+pictures
+movie
+movies
 # Content-genre nouns that act like file-type words for FTS poisoning:
 # users say "日記を見せて" or "メモを探して" expecting the doc genre,
 # not those literal characters in the body. Treat them as drop-on-sight.

@@ -358,20 +358,35 @@ def _rrf_merge_candidates(
     *,
     top_k: int,
     rrf_k: int = _RRF_K_DEFAULT,
+    weights: list[float] | None = None,
 ) -> list[RetrievedFile]:
     """Reciprocal Rank Fusion across per-clue candidate lists.
 
-    Each clue's ranked list contributes ``1 / (rrf_k + rank)`` to a
-    file's combined score. The standard IR constant ``rrf_k=60`` gives
-    a smooth blend without letting top-1 of any single clue dominate.
+    Each clue's ranked list contributes ``weight / (rrf_k + rank)`` to
+    a file's combined score. The standard IR constant ``rrf_k=60``
+    gives a smooth blend without letting top-1 of any single clue
+    dominate.
 
-    File metadata (title, segments, etc.) is taken from the first list
-    that surfaced the file — clues are run with the same scope/filters
-    so the metadata is functionally identical across lists, and picking
-    the first encountered keeps the merge deterministic without paying
-    for a full segment-level merge that the LLM context builder would
-    just down-trim later anyway.
+    ``weights`` (optional, same length as ``per_clue``) lets callers
+    bias the merge toward higher-priority lists — used by Find's
+    category-expansion path so the LLM's leading terms ("料理" /
+    "レシピ") outweigh the trailing tail ("ディナー" / "盛り付け")
+    that drift further from the user's intent. Default ``None``
+    treats all lists equally (legacy behaviour).
+
+    File metadata (title, segments, etc.) is taken from the first
+    list that surfaced the file — clues are run with the same
+    scope/filters so the metadata is functionally identical across
+    lists, and picking the first encountered keeps the merge
+    deterministic without paying for a full segment-level merge that
+    the LLM context builder would just down-trim later anyway.
     """
+    if weights is not None and len(weights) != len(per_clue):
+        raise ValueError(
+            "weights length must match per_clue length "
+            f"(got {len(weights)} vs {len(per_clue)})"
+        )
+
     # Local accumulator dicts — the project rule mandates immutability,
     # but rebuilding either dict per row is O(n²) and the rule's
     # rationale is shared-state safety, which doesn't apply to a
@@ -380,10 +395,12 @@ def _rrf_merge_candidates(
     # "fix" it into a comprehension that pessimises the merge.
     scores: dict[str, float] = {}
     first_seen: dict[str, RetrievedFile] = {}
-    for results in per_clue:
+    for idx, results in enumerate(per_clue):
+        weight = weights[idx] if weights is not None else 1.0
         for rank, candidate in enumerate(results, start=1):
             scores[candidate.file_id] = (
-                scores.get(candidate.file_id, 0.0) + 1.0 / (rrf_k + rank)
+                scores.get(candidate.file_id, 0.0)
+                + weight / (rrf_k + rank)
             )
             if candidate.file_id not in first_seen:
                 first_seen[candidate.file_id] = candidate
@@ -394,6 +411,32 @@ def _rrf_merge_candidates(
         reverse=True,
     )
     return ordered[:top_k]
+
+
+def _category_expansion_weights(n: int) -> list[float]:
+    """Linear-decay weights for ``n`` category-expansion terms.
+
+    ``expand_category`` returns terms in LLM-emitted order with the
+    user's original ``semantic_query`` always at index 0 (see
+    ``category_expander.py``). The order is "most-relevant first" by
+    construction, so per-term RRF should weigh head terms more than
+    tail terms — otherwise the broad expansion ("ディナー" /
+    "盛り付け") accumulates rank-30 noise from unrelated files and
+    can outvote a head term ("レシピ") that strongly surfaces the
+    real cooking content.
+
+    Decay: ``weight_i = 1.0 - 0.5 * (i / (n - 1))`` for ``n >= 2``.
+    Head term weight 1.0, tail term weight 0.5. Smooth enough not to
+    erase tail terms entirely (we still want their signal when the
+    head is ambiguous), aggressive enough to prevent tail-driven
+    rank inversions for queries like "料理に関する動画" where the
+    user clearly cares about the head concept.
+    """
+    if n <= 0:
+        return []
+    if n == 1:
+        return [1.0]
+    return [1.0 - 0.5 * (i / (n - 1)) for i in range(n)]
 
 
 # ---------------------------------------------------------------------------
@@ -422,6 +465,42 @@ class _PersonalHistoryResolution:
     decomposed: DecomposedQuery | None
     file_ids: list[str] | None
     short_circuit: bool = False  # strict mode + empty file_ids
+
+
+def _drop_required_overlapping_with_expansion(
+    required: tuple[RequiredTerm, ...] | None,
+    semantic_query: str,
+) -> tuple[RequiredTerm, ...] | None:
+    """Drop ``required`` terms whose canonical is contained in
+    ``semantic_query`` (case-insensitive substring match).
+
+    Architecture rationale: ``category_expansion`` exists precisely
+    because the broad ``semantic_query`` token is not a discriminating
+    anchor — multi-query fan-out replaces hard filtering with softer
+    retrieval over surface variants. Keeping that same token as a
+    ``required`` hard filter while expanding it short-circuits the
+    expansion: every per-term retrieve still requires the literal
+    ``semantic_query`` to appear, so files that match a synonym
+    ("レシピ" / "弁当") but not the original ("料理") get filtered out,
+    while files that mention the original token in passing survive —
+    the opposite of what the user wants.
+
+    Proper-noun anchors that are *not* in ``semantic_query`` (e.g.
+    "東福寺" in "東福寺の通天橋") survive because they don't overlap.
+    Callers must invoke this only when expansion is actually being
+    applied (``len(category_expansion) >= 2``); the single-keyword
+    path keeps ``required`` intact so proper-noun-only queries still
+    benefit from the hard filter.
+    """
+    if not required:
+        return None
+    sq = semantic_query.strip().lower()
+    if not sq:
+        return required
+    survivors = tuple(
+        t for t in required if t.canonical.strip().lower() not in sq
+    )
+    return survivors or None
 
 
 async def _resolve_category_expansion(
@@ -898,6 +977,12 @@ async def answer_question(
         required = structured.required or None
         category_terms = await _resolve_category_expansion(history.decomposed)
         if category_terms:
+            effective_required = _drop_required_overlapping_with_expansion(
+                required,
+                history.decomposed.semantic_query
+                if history.decomposed
+                else "",
+            )
             per_term_results = await asyncio.gather(
                 *[
                     retrieve_with_keywords(
@@ -906,15 +991,17 @@ async def answer_question(
                         lit_token=lit_token,
                         file_type=file_type,
                         drive=drive,
-                        original_query=query,
+                        original_query=term,
                         file_id_scope=history.file_ids,
-                        required=required,
+                        required=effective_required,
                     )
                     for term in category_terms
                 ]
             )
             candidates = _rrf_merge_candidates(
-                list(per_term_results), top_k=effective_top_k
+                list(per_term_results),
+                top_k=effective_top_k,
+                weights=_category_expansion_weights(len(category_terms)),
             )
         else:
             candidates = await retrieve_with_keywords(
@@ -1236,6 +1323,12 @@ async def stream_answer(
                     "expanded": list(category_terms),
                 },
             )
+            effective_required = _drop_required_overlapping_with_expansion(
+                required,
+                history.decomposed.semantic_query
+                if history.decomposed
+                else "",
+            )
             per_term_results = await asyncio.gather(
                 *[
                     retrieve_with_keywords(
@@ -1244,15 +1337,17 @@ async def stream_answer(
                         lit_token=lit_token,
                         file_type=file_type,
                         drive=drive,
-                        original_query=query,
+                        original_query=term,
                         file_id_scope=history.file_ids,
-                        required=required,
+                        required=effective_required,
                     )
                     for term in category_terms
                 ]
             )
             candidates = _rrf_merge_candidates(
-                list(per_term_results), top_k=effective_top_k
+                list(per_term_results),
+                top_k=effective_top_k,
+                weights=_category_expansion_weights(len(category_terms)),
             )
         else:
             candidates = await retrieve_with_keywords(
@@ -1747,38 +1842,25 @@ async def find_files(
             )
             file_id_scope = None
 
-    # Stage C: category expansion. Skipped on empty semantic_query —
-    # the user gave us no concept to expand. Failures fall back to the
-    # raw semantic_query as a single-element list (mirror Ask's
-    # graceful degradation in query_transform).
-    category_expansion: list[str] = []
-    if decomposed.semantic_query.strip():
-        try:
-            expanded = await expand_category(decomposed.semantic_query)
-            if isinstance(expanded, list):
-                category_expansion = [
-                    term for term in expanded if isinstance(term, str)
-                ]
-        except Exception as exc:  # noqa: BLE001 — graceful fallback
-            logger.debug(
-                "Find Stage C expand failed: %s", type(exc).__name__
-            )
-            category_expansion = []
+    # Stage C: category expansion. Shared with Ask via the
+    # ``_resolve_category_expansion`` helper so the two pipelines stay
+    # in lockstep — the helper handles config gating, empty
+    # semantic_query, and the "single-element collapse → []" rule
+    # (single term adds no multi-query value, so the caller falls
+    # back to the legacy single-keyword path). Failures degrade to
+    # ``[]`` to keep Find's no-raise contract.
+    try:
+        category_expansion = await _resolve_category_expansion(decomposed)
+    except Exception as exc:  # noqa: BLE001 — graceful fallback
+        logger.debug("Find Stage C expand failed: %s", type(exc).__name__)
+        category_expansion = []
 
-    # Stage D: scoped retrieval. The keywords passed to the retriever
-    # are the expansion when present, else the raw semantic_query, else
-    # the original question as a last resort. ``file_type=None`` when
-    # the hint is "none" / empty — passing the literal "none" would
-    # filter to nothing.
+    # Stage D: scoped retrieval. ``file_type=None`` when the hint is
+    # "none" / empty — passing the literal "none" would filter to
+    # nothing.
     file_type_hint = decomposed.file_type_hint
     file_type_filter = (
         None if file_type_hint in _FIND_NO_FILE_TYPE else file_type_hint
-    )
-
-    keywords = (
-        category_expansion[0]
-        if category_expansion
-        else (decomposed.semantic_query or question)
     )
 
     # Stage D bonus: structured query transform for the required-keyword
@@ -1801,17 +1883,63 @@ async def find_files(
     # the response cap doesn't starve downstream filtering.
     retrieve_top_k = max(effective_limit * 2, effective_limit)
 
+    # Multi-query RRF when Stage C produced 2+ expansion terms. Mirrors
+    # the Ask path (``answer_question`` / ``stream_answer``) — using a
+    # single term collapses retrieval onto one embedding's noise, which
+    # surfaces unrelated files (e.g. "料理" alone pulling in "スマホ料金
+    # プラン"). The per-term RRF dilutes single-term noise so files that
+    # match multiple expansions ("レシピ" + "調理" + "食材") rise.
+    #
+    # When expanding, drop any ``required`` term that overlaps with
+    # ``semantic_query`` — the expansion is the multi-query mechanism
+    # for that very token, so keeping it as a hard filter would defeat
+    # the expansion (see ``_drop_required_overlapping_with_expansion``).
     try:
-        retrieved = await retrieve_with_keywords(
-            keywords=keywords,
-            top_k=retrieve_top_k,
-            lit_token=None,
-            file_type=file_type_filter,
-            drive=drive,
-            original_query=question,
-            file_id_scope=file_id_scope,
-            required=required,
-        )
+        if len(category_expansion) >= 2:
+            effective_required = _drop_required_overlapping_with_expansion(
+                required, decomposed.semantic_query
+            )
+            # Per-term expansion must diversify BOTH the FTS keyword
+            # channel and the vector channel — pass the term as
+            # ``original_query`` so the vector embedding is computed
+            # per-term too. With the legacy ``original_query=question``
+            # every per-term retrieve fed the same "料理に関する動画"
+            # embedding into the vector channel; the per-term FTS hits
+            # got diversified but the vector channel returned the
+            # same noisy nearest-neighbours four times, which RRF
+            # then accumulated to push unrelated files (ポケモンGO,
+            # スマホ料金プラン etc.) above the actual cooking content.
+            per_term_results = await asyncio.gather(
+                *[
+                    retrieve_with_keywords(
+                        keywords=term,
+                        top_k=retrieve_top_k,
+                        lit_token=None,
+                        file_type=file_type_filter,
+                        drive=drive,
+                        original_query=term,
+                        file_id_scope=file_id_scope,
+                        required=effective_required,
+                    )
+                    for term in category_expansion
+                ]
+            )
+            retrieved = _rrf_merge_candidates(
+                list(per_term_results),
+                top_k=retrieve_top_k,
+                weights=_category_expansion_weights(len(category_expansion)),
+            )
+        else:
+            retrieved = await retrieve_with_keywords(
+                keywords=decomposed.semantic_query or question,
+                top_k=retrieve_top_k,
+                lit_token=None,
+                file_type=file_type_filter,
+                drive=drive,
+                original_query=question,
+                file_id_scope=file_id_scope,
+                required=required,
+            )
     except Exception as exc:  # noqa: BLE001 — graceful fallback
         logger.debug("Find Stage D retrieve failed: %s", type(exc).__name__)
         retrieved = []

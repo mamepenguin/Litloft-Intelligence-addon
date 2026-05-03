@@ -28,7 +28,7 @@ from dataclasses import dataclass
 
 from app.dependencies import get_llm_client
 from app.prompt_loader import render
-from app.rag.keyword_filter import filter_keywords
+from app.rag.keyword_filter import filter_keywords, is_blocked
 
 logger = logging.getLogger(__name__)
 
@@ -276,6 +276,18 @@ def _build_required_term(
         return None
     canonical = canonical_raw.strip()
     if not canonical:
+        return None
+
+    # Defense against the LLM mis-classifying a file-type or question
+    # word as a ``required`` canonical (e.g. emitting "video" / "動画"
+    # as required even though the prompt forbids it). The same
+    # blocklist that ``filter_keywords`` enforces on the flat keyword
+    # string is applied per-canonical here so the hard filter never
+    # contains a token that would universally exclude every file.
+    if is_blocked(canonical):
+        logger.debug(
+            "Required canonical %r matches blocklist; dropping", canonical
+        )
         return None
 
     # Python re-detects script. The LLM's claim is logged but ignored.

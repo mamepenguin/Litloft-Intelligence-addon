@@ -77,6 +77,26 @@ def _blocked_normals() -> tuple[str, ...]:
     return tuple(_normalize(w) for w in raw if w)
 
 
+def is_blocked(term: str) -> bool:
+    """Return True iff ``term`` normalises to a blocklist substring.
+
+    Single-token check used by ``query_transform._build_required_term``
+    to drop file-type / question words that the LLM mis-classified as
+    a ``required`` canonical. Same normalisation as
+    ``filter_keywords`` so a blocklist entry like ``video`` matches
+    ``Video`` / ``ＶＩＤＥＯ`` etc.
+    """
+    if not term:
+        return True
+    blocked = _blocked_normals()
+    if not blocked:
+        return False
+    norm = _normalize(term)
+    if not norm:
+        return True
+    return any(b and b in norm for b in blocked)
+
+
 def filter_keywords(keywords: str) -> str:
     """Drop tokens that match any blocklist entry; preserve order otherwise.
 

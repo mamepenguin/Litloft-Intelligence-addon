@@ -412,6 +412,60 @@ class TestTransformQueryStructuredFallbacks:
         assert spy_called is False  # no wasted LLM call
 
 
+class TestRequiredCanonicalBlocklist:
+    """A required canonical that matches the file-type / question-word
+    blocklist must be dropped, even if the LLM ignored the system
+    prompt's instruction to exclude it.
+
+    Otherwise the bad canonical becomes a hard filter — e.g. ``video``
+    or ``動画`` would force every retrieve to find the literal string,
+    excluding most legitimate hits. Defense-in-depth alongside the
+    prompt rule.
+    """
+
+    @pytest.mark.asyncio
+    async def test_english_video_dropped_from_required(self, monkeypatch):
+        llm_response = {
+            "required": [
+                {"canonical": "video", "script": "latin", "aliases": ["video"]},
+                {
+                    "canonical": "東福寺",
+                    "script": "han",
+                    "aliases": ["東福寺"],
+                },
+            ],
+            "semantic": ["京都"],
+        }
+        monkeypatch.setattr(
+            "app.rag.query_transform.get_llm_client",
+            lambda: _llm_stub(response=llm_response),
+        )
+
+        result = await transform_query_structured("東福寺の video")
+
+        canonicals = [t.canonical for t in result.required]
+        assert "video" not in canonicals
+        assert "東福寺" in canonicals
+
+    @pytest.mark.asyncio
+    async def test_japanese_doga_dropped_from_required(self, monkeypatch):
+        llm_response = {
+            "required": [
+                {"canonical": "動画", "script": "han", "aliases": ["動画"]},
+            ],
+            "semantic": ["料理"],
+        }
+        monkeypatch.setattr(
+            "app.rag.query_transform.get_llm_client",
+            lambda: _llm_stub(response=llm_response),
+        )
+
+        result = await transform_query_structured("料理の動画")
+
+        canonicals = [t.canonical for t in result.required]
+        assert "動画" not in canonicals
+
+
 class TestStructuredQueryHelpers:
     """Sanity tests for StructuredQuery helpers used by callers."""
 
