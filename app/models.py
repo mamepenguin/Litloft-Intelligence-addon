@@ -206,23 +206,6 @@ class TranscriptWord(Base):
     )
 
 
-class SimilarCache(Base):
-    """Cache for similar files search results.
-
-    Stores serialized find_similar() results to avoid expensive
-    recomputation (vector search + TF-IDF) on repeated requests.
-    Invalidated in bulk on index update events (webhooks).
-    """
-
-    __tablename__ = "similar_cache"
-
-    cache_key: Mapped[str] = mapped_column(String, primary_key=True)
-    # cache_key format: "{file_id}:{limit}:{drive or '_'}"
-
-    file_id: Mapped[str] = mapped_column(String(12), nullable=False, index=True)
-    result_json: Mapped[str] = mapped_column(Text, nullable=False)
-
-
 class FileInsight(Base):
     """Append-only history of AI-generated artefacts for a file.
 

@@ -14,7 +14,7 @@ Tables emptied per drive:
 - ``file_summaries`` (file_id)
 - ``file_insights`` (file_id, via ``_purge_file`` cascade)
 - FTS5 mirrors (``fts_files``, ``fts_transcripts``, ``fts_text_content``)
-- ``similar_cache`` (invalidated wholesale; cache is cheap to rebuild)
+- in-memory similar-files cache (invalidated wholesale; cheap to rebuild)
 
 The implementation reuses ``_purge_file`` per file. Volumes are small
 in practice (a few thousand files per disabled drive at most) and a
