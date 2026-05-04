@@ -289,12 +289,16 @@ models:
   # Text embedding model (multilingual, used for metadata + transcript)
   text_embedding: "intfloat/multilingual-e5-small"
 
-  # CLIP model for image/video frame analysis
-  # Swap for language-specific models:
-  #   Japanese: rinna/japanese-clip-vit-b-16
-  #   Chinese:  OFA-Sys/chinese-clip-vit-base-patch16
-  #   Multi:    M-CLIP/XLM-Roberta-Large-Vit-B-32 (~1.5GB)
-  clip: "openai/clip-vit-b-32"
+  # CLIP model for image/video frame analysis (transformers SigLIP2 or open_clip).
+  # Recommended:
+  #   llm-jp/waon-siglip2-base-patch16-256 — 768d, JP+multilingual, transformers backend
+  #     Uses split loading: SiglipTextModel for search, full AutoModel for indexing only.
+  #     Adjust min_score_clip / min_score_clip_thumbnail to 0.05 when using SigLIP2
+  #     (SigLIP sigmoid-loss produces lower absolute cosine values than CLIP).
+  # Legacy open_clip options:
+  #   llm-jp/llm-jp-clip-vit-base-patch16 — 512d, Japanese
+  #   openai/clip-vit-b-32               — 512d, English
+  clip: "llm-jp/waon-siglip2-base-patch16-256"
 
   # BLIP model for image captioning (optional, used by auto_tags)
   # Generates English text descriptions of images for tag generation.
@@ -316,6 +320,13 @@ search:
   # Default result limit
   default_limit: 20
   max_limit: 100
+
+  # Pre-filter: minimum cosine similarity to include as a candidate.
+  # SigLIP2 models (waon-siglip2, google/siglip2) produce lower absolute cosine
+  # values than CLIP due to sigmoid loss training. Set to 0.05 for SigLIP2 models.
+  # For CLIP-family models (openai/clip-vit-b-32, llm-jp-clip): use 0.20.
+  min_score_clip: 0.05
+  min_score_clip_thumbnail: 0.05
 
 # Indexing parameters
 indexing:
