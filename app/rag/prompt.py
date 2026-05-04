@@ -52,8 +52,18 @@ def _serialize_file_context(ctx: FileContext) -> str:
 
     if ctx.filename:
         lines = [*lines, f"filename: {ctx.filename}"]
-    if ctx.file_type:
-        lines = [*lines, f"type: {ctx.file_type}"]
+    # Normalise the type label the LLM sees. .loft files are stored as
+    # file_type="other" in older intelligence DB rows (before the core
+    # classify() update promoted them to "video").  When the context has
+    # transcript snippets the file is effectively a video — tell the LLM
+    # so it emits m:ss location markers instead of verbatim text.
+    display_type = ctx.file_type
+    if display_type not in ("video", "audio") and any(
+        s.source.startswith("transcript") for s in ctx.snippets
+    ):
+        display_type = "video"
+    if display_type:
+        lines = [*lines, f"type: {display_type}"]
     if ctx.title:
         lines = [*lines, f"title: {ctx.title}"]
     if ctx.description:

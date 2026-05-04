@@ -25,6 +25,7 @@ stages. The only differences are that ``stream_answer``:
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -77,6 +78,21 @@ class AnswerResponse:
     sources: list[dict[str, Any]]
     retrieved_count: int
     took_ms: int
+
+
+_LOCATION_MARKER_RE = re.compile(r"^\d+:\d{2,}$|^page\s+\d+$|^chunk\s+\d+$", re.IGNORECASE)
+
+
+def _is_location_marker(loc: str) -> bool:
+    """Return True when ``loc`` is a recognised short location marker.
+
+    Accepts the formats the system prompt teaches the LLM to emit:
+    ``m:ss`` (video timestamp), ``page N`` (document), ``chunk N``
+    (vector-only snippet).  Any longer string (a verbatim sentence from
+    the transcript) returns False so the caller falls through to the
+    candidate-segment timestamp lookup instead.
+    """
+    return bool(_LOCATION_MARKER_RE.match(loc.strip()))
 
 
 def _segment_location_for(
@@ -300,13 +316,18 @@ def _to_citation_dict(
         citation.file_id, contexts, location=citation.location
     )
 
-    # Prefer the LLM-provided location (exact marker from the prompt)
-    # over the quote-based lookup. The latter is still used as a
-    # fallback when location is empty (e.g. older prompt behaviour,
-    # or documents without timestamps).
-    segment_location = citation.location or _segment_location_for(
-        citation.file_id, candidates, quote, contexts=contexts
-    )
+    # Prefer the LLM-provided location when it's a recognised marker
+    # format (m:ss / page N). Local LLMs routinely ignore the format
+    # instruction and emit a verbatim sentence instead; in that case we
+    # fall through to the candidate-segment lookup so the frontend gets
+    # a seekable timestamp rather than a ?highlight= anchor.
+    raw_loc = citation.location or ""
+    if raw_loc and _is_location_marker(raw_loc):
+        segment_location = raw_loc
+    else:
+        segment_location = _segment_location_for(
+            citation.file_id, candidates, quote, contexts=contexts
+        ) or (raw_loc if raw_loc else None)
 
     if source_file is None:
         # Defensive: parser already dropped unknown file_ids, but guard
