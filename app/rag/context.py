@@ -156,7 +156,7 @@ def _fetch_transcript_chunks_around(
 def _fetch_document_chunks_around(
     file_id: str,
     chunk_index: int,
-) -> list[tuple[int, str]]:
+) -> list[tuple[int, str, int | None]]:
     """Fetch document FTS chunks around a given chunk index.
 
     Returns the chunk itself plus its immediate neighbors
@@ -170,7 +170,9 @@ def _fetch_document_chunks_around(
         hako memo ``EAiVExR4vGgOym5aAv_Up``.
 
     Returns:
-        List of ``(chunk_index, text)`` tuples in numeric order.
+        List of ``(chunk_index, text, page)`` tuples in numeric order.
+        ``page`` is the 1-indexed PDF page number, or ``None`` for
+        non-paginated formats.
     """
     lo = max(0, chunk_index - 1)
     hi = chunk_index + 1
@@ -178,18 +180,27 @@ def _fetch_document_chunks_around(
     with get_search_db() as session:
         rows = session.execute(
             sql_text(
-                "SELECT chunk_index, text FROM fts_text_content "
+                "SELECT chunk_index, text, page FROM fts_text_content "
                 "WHERE file_id = :fid "
                 "AND CAST(chunk_index AS INTEGER) BETWEEN :lo AND :hi "
                 "ORDER BY CAST(chunk_index AS INTEGER)"
             ),
             {"fid": file_id, "lo": lo, "hi": hi},
         ).fetchall()
-        return [
-            (int(row[0]), row[1])
-            for row in rows
-            if row[1]
-        ]
+
+    result: list[tuple[int, str, int | None]] = []
+    for row in rows:
+        if not row[1]:
+            continue
+        page_val = row[2]
+        page: int | None = None
+        if page_val is not None:
+            try:
+                page = int(page_val)
+            except (TypeError, ValueError):
+                pass
+        result = [*result, (int(row[0]), row[1], page)]
+    return result
 
 
 _TEXT_EMBEDDING_ID_CHUNK_RE = re.compile(r"^txt_[^_]+_(\d+)_")
@@ -774,10 +785,8 @@ def _collect_document_snippets(
         if chunk_idx in seen_indices:
             return
         seen_indices = {*seen_indices, chunk_idx}
+        chunks = _fetch_document_chunks_around(candidate.file_id, chunk_idx)
         if expand:
-            chunks = _fetch_document_chunks_around(
-                candidate.file_id, chunk_idx
-            )
             if not chunks:
                 return
             text = "\n\n".join(c[1] for c in chunks if c[1])
@@ -787,20 +796,21 @@ def _collect_document_snippets(
             # padding every hit would crowd the per-file budget so
             # only the first-ranked chunk fits. Emit the single chunk
             # text directly so top_n distinct chunks can coexist.
-            chunks = _fetch_document_chunks_around(
-                candidate.file_id, chunk_idx
-            )
             text = next(
                 (c[1] for c in chunks if c[0] == chunk_idx and c[1]), ""
             )
         if not text:
             return
+        # Use the PDF page number of the target chunk when available so
+        # the citation location reads "page N" instead of "chunk N".
+        page = next((c[2] for c in chunks if c[0] == chunk_idx), None)
+        location = f"page {page}" if page is not None else f"chunk {chunk_idx}"
         snippets = [
             *snippets,
             ContextSnippet(
                 source=source_tag,
                 text=text,
-                location=f"chunk {chunk_idx}",
+                location=location,
             ),
         ]
 

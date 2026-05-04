@@ -265,9 +265,9 @@ class TestBuildFileContextDocument:
         # Stub returns chunks at index 2, 3, 4 (neighborhood of match at 3).
         fetch_spy = MagicMock(
             return_value=[
-                (2, "Earlier paragraph text here."),
-                (3, "The matching paragraph mentions the topic."),
-                (4, "Following paragraph continues the argument."),
+                (2, "Earlier paragraph text here.", None),
+                (3, "The matching paragraph mentions the topic.", None),
+                (4, "Following paragraph continues the argument.", None),
             ]
         )
         monkeypatch.setattr(
@@ -847,7 +847,7 @@ class TestSummaryExcludedFromAnswerContext:
     def test_document_context_has_no_summary_snippet(self, monkeypatch):
         monkeypatch.setattr(
             "app.rag.context._fetch_document_chunks_around",
-            MagicMock(return_value=[(3, "chunk text")]),
+            MagicMock(return_value=[(3, "chunk text", None)]),
         )
         ctx = build_file_context(_retrieved_document(), RagConfig())
         assert not any(s.source == "summary" for s in ctx.snippets)
