@@ -38,7 +38,7 @@ from PIL import Image
 # Built-in query set (used when --queries-file is not provided)
 # ---------------------------------------------------------------------------
 
-_DEFAULT_QUERIES: list[str] = [
+_DEFAULT_QUERIES_JA: list[str] = [
     # attribute + object
     "赤い車",
     "白い猫",
@@ -63,6 +63,62 @@ _DEFAULT_QUERIES: list[str] = [
     "空白が多いシンプルな画像",
     "文字やテキストが写っている",
 ]
+
+_DEFAULT_QUERIES_EN: list[str] = [
+    # attribute + object
+    "red car",
+    "white cat",
+    "person wearing black clothes",
+    "blue sky with white clouds",
+    "yellow flowers",
+    "green plants or trees",
+    "photo of a dog",
+    "food or cooking",
+    # scene
+    "ocean or river landscape",
+    "bookshelf with books",
+    "computer or work desk",
+    "night view or city lights at night",
+    "buildings or architecture",
+    "mountain or nature scenery",
+    # abstract / mood
+    "old or vintage style photo",
+    "children or baby",
+    "sports or exercise",
+    "graph or chart or diagram",
+    "simple image with lots of white space",
+    "text or writing visible in the image",
+]
+
+_DEFAULT_QUERIES_SIGLIP: list[str] = [
+    # Composition / framing
+    "空が画面の大部分を占める構図",
+    "接写やクローズアップの写真",
+    "人物が中央に大きく写っている",
+    "広角で全体が写っている風景",
+    # Style / visual attributes
+    "白黒またはモノクロームの画像",
+    "夜や暗い場所で撮影された画像",
+    "鮮やかで彩度の高い色彩",
+    "ぼかしや浅い被写界深度のある写真",
+    # Fine-grained multi-attribute combinations
+    "赤色の乗り物",
+    "白い動物",
+    "木製の家具やインテリア",
+    "画面に文字やテキストが含まれている",
+    # Abstract scene properties
+    "複数の人物が写っているシーン",
+    "一人の人物だけが写っている",
+    "自然や屋外の風景",
+    "室内や建物の内部",
+    # Image characteristics
+    "鮮明でピントの合った写真",
+    "食べ物や料理の場面",
+    "動物が主役の写真",
+    "水や海や川が写っている",
+]
+
+_DEFAULT_QUERIES = _DEFAULT_QUERIES_JA
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -138,6 +194,29 @@ MODEL_SPECS: dict[str, dict[str, str]] = {
     "siglip2-384": {
         "kind": "siglip2",
         "name": "google/siglip2-base-patch16-384",
+    },
+    # Joint-forward variants (O(N) per query, kept for comparison)
+    "siglip2-256-joint": {
+        "kind": "siglip2_joint",
+        "name": "google/siglip2-base-patch16-256",
+    },
+    "siglip2-384-joint": {
+        "kind": "siglip2_joint",
+        "name": "google/siglip2-base-patch16-384",
+    },
+    # Line Corporation Japanese CLIP (trust_remote_code)
+    "clyp-v2": {
+        "kind": "clyp",
+        "name": "line-corporation/clip-japanese-base-v2",
+    },
+    "clyp-v1": {
+        "kind": "clyp",
+        "name": "line-corporation/clip-japanese-base",
+    },
+    # LLM-JP waon: SigLIP 2 fine-tuned on Japanese
+    "waon-256": {
+        "kind": "siglip2",
+        "name": "llm-jp/waon-siglip2-base-patch16-256",
     },
 }
 
@@ -283,19 +362,18 @@ class OpenClipEncoder:
 
 
 class SigLIP2Encoder:
-    """Wraps transformers AutoModel for SigLIP 2 via joint forward pass.
+    """Wraps transformers AutoModel for SigLIP 2 using processor-based separate encode.
 
-    SigLIP 2's text and image encoders do not produce aligned embeddings
-    when called separately (the text tokenizer omits attention_mask for
-    single inputs, breaking get_text_features). The correct approach is
-    the joint forward: pass both text and images together and rank by
-    logits_per_image. Images are cached as PIL objects; ranking is done
-    at query time in chunks of JOINT_CHUNK.
+    Uses the official HuggingFace recommended approach for retrieval:
+      - processor(images=...) -> get_image_features(**inputs) -> L2 normalize
+      - processor(text=...) -> get_text_features(**inputs) -> L2 normalize
+
+    Unlike the previous implementation that passed raw input_ids, this uses the
+    full processor output (including attention_mask, padding) matching training.
+    Reference: https://huggingface.co/docs/transformers/model_doc/siglip2#text-embeddings-and-retrieval
     """
 
-    JOINT_CHUNK = 64
-    # Signals to the eval loop that this encoder uses joint forward ranking
-    uses_joint_forward: bool = True
+    uses_joint_forward: bool = False
 
     def __init__(self, model_name: str) -> None:
         from transformers import AutoModel, AutoProcessor
@@ -304,23 +382,59 @@ class SigLIP2Encoder:
         self._processor = AutoProcessor.from_pretrained(model_name, use_fast=True)
         self._model = AutoModel.from_pretrained(model_name)
         self._model.eval()
+
+    def encode_images_batch(self, images: list[Image.Image]) -> np.ndarray:
+        import torch
+
+        inputs = self._processor(images=images, return_tensors="pt")
+        with torch.no_grad():
+            feats = self._model.get_image_features(**inputs)
+            feats = feats / feats.norm(p=2, dim=-1, keepdim=True)
+        return feats.cpu().numpy().astype(np.float32)
+
+    def encode_text(self, text: str) -> np.ndarray:
+        import torch
+
+        inputs = self._processor(
+            text=[text],
+            return_tensors="pt",
+            padding="max_length",
+            max_length=64,
+            truncation=True,
+        )
+        with torch.no_grad():
+            feats = self._model.get_text_features(**inputs)
+            feats = feats / feats.norm(p=2, dim=-1, keepdim=True)
+        return feats.squeeze().cpu().numpy().astype(np.float32)
+
+
+class SigLIP2JointEncoder:
+    """SigLIP 2 via joint forward pass (O(N) per query, kept for comparison).
+
+    Passes text+images together and ranks by logits_per_image. This avoids
+    the separate-encode alignment issue but does not scale to large pools.
+    """
+
+    JOINT_CHUNK = 64
+    uses_joint_forward: bool = True
+
+    def __init__(self, model_name: str) -> None:
+        from transformers import AutoModel, AutoProcessor
+
+        print(f"  Loading {model_name} (joint-forward) ...", flush=True)
+        self._processor = AutoProcessor.from_pretrained(model_name, use_fast=True)
+        self._model = AutoModel.from_pretrained(model_name)
+        self._model.eval()
         self._pil_images: list[Image.Image] = []
 
     def encode_images_batch(self, images: list[Image.Image]) -> np.ndarray:
-        """Cache PIL images; return placeholder zeros (not used for ranking)."""
         self._pil_images.extend(images)
         return np.zeros((len(images), 1), dtype=np.float32)
 
     def encode_text(self, text: str) -> np.ndarray:
-        """Not used; joint_rank is used instead."""
         return np.zeros(1, dtype=np.float32)
 
     def joint_rank(self, query: str, k: int = 10) -> tuple[list[int], np.ndarray]:
-        """Rank all cached images by query using joint forward pass.
-
-        Returns (top_k_indices, all_logits) where indices are into
-        self._pil_images and logits are the raw SigLIP logit_per_image.
-        """
         import torch
 
         images = self._pil_images
@@ -337,7 +451,6 @@ class SigLIP2Encoder:
             )
             with torch.no_grad():
                 out = self._model(**inp)
-            # logits_per_image: [n_images, n_texts]; we have 1 text → [:,0]
             all_logits.extend(out.logits_per_image[:, 0].tolist())
 
         arr = np.array(all_logits, dtype=np.float32)
@@ -345,10 +458,62 @@ class SigLIP2Encoder:
         return top_idx, arr
 
 
-def build_encoder(model_key: str) -> OpenClipEncoder | SigLIP2Encoder:
+class ClypEncoder:
+    """Line Corporation CLIP (clip-japanese-base-v2 / v1).
+
+    Uses separate AutoTokenizer (for text) + AutoImageProcessor (for images)
+    with trust_remote_code=True. Follows the official usage pattern:
+      processor(image) -> get_image_features(**inputs) -> L2 normalize
+      tokenizer([text]) -> get_text_features(**inputs) -> L2 normalize
+    """
+
+    uses_joint_forward: bool = False
+
+    def __init__(self, model_name: str) -> None:
+        from transformers import AutoImageProcessor, AutoModel, AutoTokenizer
+
+        print(f"  Loading {model_name} (trust_remote_code) ...", flush=True)
+        self._tokenizer = AutoTokenizer.from_pretrained(
+            model_name, trust_remote_code=True
+        )
+        self._processor = AutoImageProcessor.from_pretrained(
+            model_name, trust_remote_code=True
+        )
+        self._model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
+        self._model.eval()
+
+    def encode_images_batch(self, images: list[Image.Image]) -> np.ndarray:
+        import torch
+
+        inputs = self._processor(images, return_tensors="pt")
+        with torch.no_grad():
+            feats = self._model.get_image_features(**inputs)
+            feats = feats / feats.norm(p=2, dim=-1, keepdim=True)
+        return feats.cpu().numpy().astype(np.float32)
+
+    def encode_text(self, text: str) -> np.ndarray:
+        import torch
+
+        # CLYP tokenizer processes input_ids as Python lists internally before
+        # tensor conversion; passing return_tensors="pt" causes a type error.
+        # Call without return_tensors then use BatchEncoding.to() for conversion.
+        inputs = self._tokenizer([text], padding=True).to("cpu")
+        with torch.no_grad():
+            feats = self._model.get_text_features(**inputs)
+            feats = feats / feats.norm(p=2, dim=-1, keepdim=True)
+        return feats.squeeze().cpu().numpy().astype(np.float32)
+
+
+def build_encoder(
+    model_key: str,
+) -> OpenClipEncoder | SigLIP2Encoder | SigLIP2JointEncoder | ClypEncoder:
     spec = MODEL_SPECS[model_key]
     if spec["kind"] == "open_clip":
         return OpenClipEncoder(spec["name"], pretrained=spec.get("pretrained"))
+    if spec["kind"] == "siglip2_joint":
+        return SigLIP2JointEncoder(spec["name"])
+    if spec["kind"] == "clyp":
+        return ClypEncoder(spec["name"])
     return SigLIP2Encoder(spec["name"])
 
 
@@ -359,13 +524,32 @@ def build_encoder(model_key: str) -> OpenClipEncoder | SigLIP2Encoder:
 BATCH_SIZE = 32
 
 
+def _cache_path(cache_dir: Path, model_key: str, images_dir: Path, limit: int) -> Path:
+    safe_dir = str(images_dir).replace("/", "_").strip("_")
+    return cache_dir / f"{model_key}__{safe_dir}__{limit}.npy"
+
+
 def compute_image_embeddings(
     encoder: OpenClipEncoder | SigLIP2Encoder,
     records: list[ImageRecord],
+    cache_dir: Path | None = None,
+    model_key: str = "",
+    images_dir: Path | None = None,
 ) -> np.ndarray:
-    """Return float32 array of shape (N, D), one row per record."""
-    all_vecs: list[np.ndarray] = []
+    """Return float32 array of shape (N, D), one row per record.
 
+    If cache_dir is provided, saves/loads embeddings keyed by
+    (model_key, images_dir, len(records)) so repeated runs skip encoding.
+    """
+    cache_file: Path | None = None
+    if cache_dir is not None and model_key and images_dir is not None:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = _cache_path(cache_dir, model_key, images_dir, len(records))
+        if cache_file.exists():
+            print(f"  Loading cached embeddings from {cache_file.name}", flush=True)
+            return np.load(cache_file)
+
+    all_vecs: list[np.ndarray] = []
     for batch_start in range(0, len(records), BATCH_SIZE):
         batch = records[batch_start : batch_start + BATCH_SIZE]
         images: list[Image.Image] = []
@@ -376,7 +560,6 @@ def compute_image_embeddings(
                 images.append(img)
             except Exception as e:
                 print(f"  Warning: could not open {rec.file_path}: {e}", flush=True)
-                # Substitute with a black 224×224 image so batch shape stays consistent
                 images.append(Image.new("RGB", (224, 224)))
 
         vecs = encoder.encode_images_batch(images)
@@ -386,7 +569,13 @@ def compute_image_embeddings(
         print(f"  {done}/{len(records)} images encoded", end="\r", flush=True)
 
     print(flush=True)
-    return np.vstack(all_vecs).astype(np.float32)
+    result = np.vstack(all_vecs).astype(np.float32)
+
+    if cache_file is not None:
+        np.save(cache_file, result)
+        print(f"  Cached embeddings → {cache_file.name}", flush=True)
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -418,10 +607,68 @@ def top_k_search(
 # LLM-as-judge
 # ---------------------------------------------------------------------------
 
-_JUDGE_PROMPT_TEMPLATE = (
-    "クエリ「{query}」に対して、以下の画像説明は関連していますか？"
-    " yes/somewhat/no で一言で答えてください。\n説明: {description}"
-)
+
+class OllamaJudgeClient:
+    """Native Ollama /api/chat client that honours think=False.
+
+    Ollama's /v1 compatibility layer silently ignores think=False, causing
+    reasoning models (Gemma 4, DeepSeek-R1, QwQ) to think before answering
+    and return empty content via the OpenAI-compatible response shape.
+    The native /api/chat endpoint properly respects think=False.
+    """
+
+    def __init__(self, base_url: str, model: str) -> None:
+        import httpx
+
+        base = base_url.rstrip("/")
+        if base.endswith("/v1"):
+            base = base[:-3]
+        self._base_url = base
+        self._model = model
+        self._http = httpx.AsyncClient(timeout=60.0)
+
+    async def chat(self, prompt: str) -> str:
+        body = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+            "think": False,
+            "options": {"temperature": 0.0, "num_predict": 20},
+        }
+        resp = await self._http.post(f"{self._base_url}/api/chat", json=body)
+        return resp.json().get("message", {}).get("content", "")
+
+    async def chat_vision(self, prompt: str, image_b64: str) -> str:
+        body = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": prompt, "images": [image_b64]}],
+            "stream": False,
+            "think": False,
+            "options": {"temperature": 0.0, "num_predict": 20},
+        }
+        resp = await self._http.post(f"{self._base_url}/api/chat", json=body)
+        return resp.json().get("message", {}).get("content", "")
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
+
+
+def _build_judge_prompt(query: str, lang: str, description: str | None = None) -> str:
+    if lang == "en":
+        if description is not None:
+            desc_str = description if description else "(no description)"
+            return (
+                f'Is the following image description relevant to the query "{query}"?'
+                f" Answer yes, somewhat, or no in one word.\nDescription: {desc_str}"
+            )
+        return f'Is this image relevant to the query "{query}"? Answer yes, somewhat, or no in one word.'
+    if description is not None:
+        desc_str = description if description else "(説明なし)"
+        return (
+            f"クエリ「{query}」に対して、以下の画像説明は関連していますか？"
+            f" yes/somewhat/no で一言で答えてください。\n説明: {desc_str}"
+        )
+    return f"クエリ「{query}」に対してこの画像は関連していますか？ yes/somewhat/no で一言で答えてください。"
 
 _LABEL_TO_SCORE: dict[str, float] = {
     "yes": 1.0,
@@ -445,20 +692,21 @@ async def _judge_single(
     sem: asyncio.Semaphore,
     query: str,
     description: str,
+    lang: str = "ja",
 ) -> JudgeResult:
-    prompt = _JUDGE_PROMPT_TEMPLATE.format(
-        query=query,
-        description=description if description else "(説明なし)",
-    )
+    prompt = _build_judge_prompt(query, lang, description=description)
     async with sem:
         try:
-            response = await client.chat.completions.create(
-                model=llm_model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=10,
-                temperature=0.0,
-            )
-            text = response.choices[0].message.content or ""
+            if isinstance(client, OllamaJudgeClient):
+                text = await client.chat(prompt)
+            else:
+                response = await client.chat.completions.create(
+                    model=llm_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=10,
+                    temperature=0.0,
+                )
+                text = response.choices[0].message.content or ""
             return _parse_judge_label(text)
         except Exception as e:
             print(f"\n  LLM judge error: {e}", flush=True)
@@ -471,6 +719,7 @@ async def _judge_single_vision(
     sem: asyncio.Semaphore,
     query: str,
     image_path: str,
+    lang: str = "ja",
 ) -> JudgeResult:
     """Judge relevance by sending the actual image to a vision LLM."""
     import base64
@@ -483,23 +732,26 @@ async def _judge_single_vision(
     except OSError as e:
         return JudgeResult(label="no", score=0.0)
 
-    prompt = f"クエリ「{query}」に対してこの画像は関連していますか？ yes/somewhat/no で一言で答えてください。"
+    prompt = _build_judge_prompt(query, lang)
     async with sem:
         try:
-            response = await client.chat.completions.create(
-                model=llm_model,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url",
-                         "image_url": {"url": f"data:{mime};base64,{img_b64}"}},
-                        {"type": "text", "text": prompt},
-                    ],
-                }],
-                max_tokens=20,
-                temperature=0.0,
-            )
-            text = response.choices[0].message.content or ""
+            if isinstance(client, OllamaJudgeClient):
+                text = await client.chat_vision(prompt, img_b64)
+            else:
+                response = await client.chat.completions.create(
+                    model=llm_model,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url",
+                             "image_url": {"url": f"data:{mime};base64,{img_b64}"}},
+                            {"type": "text", "text": prompt},
+                        ],
+                    }],
+                    max_tokens=20,
+                    temperature=0.0,
+                )
+                text = response.choices[0].message.content or ""
             return _parse_judge_label(text)
         except Exception as e:
             print(f"\n  Vision judge error: {e}", flush=True)
@@ -513,16 +765,17 @@ async def judge_hits(
     hits: list[SearchHit],
     concurrency: int = 10,
     vision: bool = False,
+    lang: str = "ja",
 ) -> list[JudgeResult]:
     sem = asyncio.Semaphore(concurrency)
     if vision:
         tasks = [
-            _judge_single_vision(client, llm_model, sem, query, hit.file_path)
+            _judge_single_vision(client, llm_model, sem, query, hit.file_path, lang=lang)
             for hit in hits
         ]
     else:
         tasks = [
-            _judge_single(client, llm_model, sem, query, hit.description)
+            _judge_single(client, llm_model, sem, query, hit.description, lang=lang)
             for hit in hits
         ]
     return list(await asyncio.gather(*tasks))
@@ -572,24 +825,28 @@ def compute_mrr(judgements: list[JudgeResult], k: int = 10) -> float:
 # ---------------------------------------------------------------------------
 
 
-def load_queries(queries_file: Path | None) -> list[str]:
-    if queries_file is None:
-        return _DEFAULT_QUERIES
+def load_queries(queries_file: Path | None, lang: str = "ja") -> list[str]:
+    if queries_file is not None:
+        try:
+            import yaml  # type: ignore[import]
+        except ImportError:
+            print("Error: pyyaml is required to load --queries-file.", file=sys.stderr)
+            sys.exit(1)
 
-    try:
-        import yaml  # type: ignore[import]
-    except ImportError:
-        print("Error: pyyaml is required to load --queries-file.", file=sys.stderr)
-        sys.exit(1)
+        data = yaml.safe_load(queries_file.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or "queries" not in data:
+            print(
+                f"Error: {queries_file} must have a top-level 'queries' list.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return [str(q) for q in data["queries"]]
 
-    data = yaml.safe_load(queries_file.read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or "queries" not in data:
-        print(
-            f"Error: {queries_file} must have a top-level 'queries' list.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    return [str(q) for q in data["queries"]]
+    if lang == "en":
+        return _DEFAULT_QUERIES_EN
+    if lang == "siglip":
+        return _DEFAULT_QUERIES_SIGLIP
+    return _DEFAULT_QUERIES_JA
 
 
 # ---------------------------------------------------------------------------
@@ -690,7 +947,7 @@ async def run_eval(args: argparse.Namespace) -> None:
         print(f"Error: --queries-file does not exist: {queries_file}", file=sys.stderr)
         sys.exit(1)
 
-    queries = load_queries(queries_file)
+    queries = load_queries(queries_file, lang=args.queries_lang)
     print(f"Loaded {len(queries)} queries")
 
     # --- Load image records ---
@@ -705,30 +962,33 @@ async def run_eval(args: argparse.Namespace) -> None:
         sys.exit(1)
     print(f"Loaded {len(records)} image records")
 
-    # --- Build OpenAI-compatible client ---
-    # ollama and similar local endpoints don't require a real key;
-    # AsyncOpenAI still needs a non-empty string, so fall back to "ollama".
-    api_key = args.llm_api_key or os.environ.get("OPENAI_API_KEY") or (
-        "ollama" if args.llm_base_url else ""
-    )
-    if not api_key:
-        print(
-            "Error: provide --llm-api-key, set OPENAI_API_KEY, or pass --llm-base-url for a local endpoint.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    try:
-        from openai import AsyncOpenAI
-    except ImportError:
-        print("Error: openai package is required (pip install openai).", file=sys.stderr)
-        sys.exit(1)
-
-    client_kwargs: dict[str, Any] = {"api_key": api_key}
-    if args.llm_base_url:
-        client_kwargs["base_url"] = args.llm_base_url
-    llm_client = AsyncOpenAI(**client_kwargs)
+    # --- Build judge client ---
     llm_model = args.llm_model
+    if args.ollama_native and args.llm_base_url:
+        # Use native /api/chat endpoint so think=False is honoured.
+        # Ollama's /v1 layer silently ignores think=False, causing reasoning
+        # models (Gemma 4 etc.) to return empty content via OpenAI shape.
+        llm_client: Any = OllamaJudgeClient(args.llm_base_url, llm_model)
+        print(f"Using Ollama native /api/chat (think=False) at {args.llm_base_url}")
+    else:
+        api_key = args.llm_api_key or os.environ.get("OPENAI_API_KEY") or (
+            "ollama" if args.llm_base_url else ""
+        )
+        if not api_key:
+            print(
+                "Error: provide --llm-api-key, set OPENAI_API_KEY, or pass --llm-base-url for a local endpoint.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        try:
+            from openai import AsyncOpenAI
+        except ImportError:
+            print("Error: openai package is required (pip install openai).", file=sys.stderr)
+            sys.exit(1)
+        client_kwargs: dict[str, Any] = {"api_key": api_key}
+        if args.llm_base_url:
+            client_kwargs["base_url"] = args.llm_base_url
+        llm_client = AsyncOpenAI(**client_kwargs)
 
     # --- Per-model evaluation ---
     model_keys = args.models
@@ -751,7 +1011,13 @@ async def run_eval(args: argparse.Namespace) -> None:
             sys.exit(1)
 
         print(f"[{model_key}] Encoding {len(records)} images ...")
-        image_vecs = compute_image_embeddings(encoder, records)
+        cache_dir = Path(args.cache_dir) if args.cache_dir else None
+        image_vecs = compute_image_embeddings(
+            encoder, records,
+            cache_dir=cache_dir,
+            model_key=model_key,
+            images_dir=images_dir,
+        )
         joint = getattr(encoder, "uses_joint_forward", False)
 
         print(f"[{model_key}] Running {len(queries)} queries ...")
@@ -782,6 +1048,7 @@ async def run_eval(args: argparse.Namespace) -> None:
                 hits,
                 concurrency=4 if args.vision_judge else 10,
                 vision=args.vision_judge,
+                lang=args.queries_lang,
             )
             query_results.append(QueryResult(query=query, hits=hits, judgements=judgements))
 
@@ -841,6 +1108,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="YAML file with a top-level 'queries' list. Uses built-in 20 queries if omitted.",
     )
     parser.add_argument(
+        "--queries-lang",
+        default="ja",
+        choices=["ja", "en", "siglip"],
+        help="Built-in query language when --queries-file is not provided (default: ja).",
+    )
+    parser.add_argument(
         "--models",
         nargs="+",
         default=list(MODEL_SPECS.keys()),
@@ -872,6 +1145,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         default=None,
         help="Optional path to write CSV results.",
+    )
+    parser.add_argument(
+        "--ollama-native",
+        action="store_true",
+        default=False,
+        help=(
+            "Use Ollama native /api/chat with think=False instead of the OpenAI-compatible "
+            "/v1 endpoint. Required for reasoning models (Gemma 4, DeepSeek-R1, QwQ) that "
+            "return empty content via the /v1 layer."
+        ),
+    )
+    parser.add_argument(
+        "--cache-dir",
+        default=None,
+        help="Directory to cache image embeddings (keyed by model+dir+limit). Reused across runs.",
     )
     parser.add_argument(
         "--vision-judge",

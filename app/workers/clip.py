@@ -27,10 +27,17 @@ logger = logging.getLogger(__name__)
 
 # Model state (lazy-loaded, thread-safe)
 _lock = threading.Lock()
+# open_clip backend state
 _model: object | None = None
 _preprocess: object | None = None
 _tokenizer: object | None = None
 _loaded = False
+# SigLIP / transformers backend state
+_siglip_processor: object | None = None
+_siglip_text_model: object | None = None   # SiglipTextModel – search path, always loaded
+_siglip_text_loaded = False
+_siglip_full_model: object | None = None   # AutoModel (vision+text) – indexing only
+_siglip_full_loaded = False
 
 # Model name → embedding dimension mapping
 _CLIP_DIMS: dict[str, int] = {
@@ -38,7 +45,20 @@ _CLIP_DIMS: dict[str, int] = {
     "openai/clip-vit-b-16": 512,
     "llm-jp/llm-jp-clip-vit-base-patch16": 512,
     "llm-jp/llm-jp-clip-vit-large-patch14": 1024,
+    # SigLIP 2 family (transformers backend)
+    "llm-jp/waon-siglip2-base-patch16-256": 768,
+    "google/siglip2-base-patch16-256": 768,
+    "google/siglip2-base-patch16-384": 768,
+    "google/siglip2-base-patch16-224": 768,
 }
+
+_SIGLIP_PREFIXES = ("google/siglip", "llm-jp/waon-siglip")
+
+
+def _is_siglip_model(model_name: str) -> bool:
+    """Return True for models that use the SigLIP / transformers backend."""
+    return model_name.startswith(_SIGLIP_PREFIXES)
+
 
 # Default dimension (overwritten after model loads with actual value)
 CLIP_DIM = _CLIP_DIMS.get(settings.models.clip, 512)
@@ -172,6 +192,126 @@ def _detect_clip_dim(model: object) -> int:
     return _CLIP_DIMS.get(settings.models.clip, 512)
 
 
+# ---------------------------------------------------------------------------
+# SigLIP / transformers backend
+# ---------------------------------------------------------------------------
+
+def _detect_clip_dim_siglip(text_model: object) -> int:
+    """Detect embedding dim from a SiglipTextModel via dummy forward pass."""
+    import torch
+    try:
+        dummy_ids = torch.zeros(1, 64, dtype=torch.long)
+        dummy_mask = torch.ones(1, 64, dtype=torch.long)
+        with torch.no_grad():
+            out = text_model(input_ids=dummy_ids, attention_mask=dummy_mask)
+        return out[1].shape[-1]
+    except Exception:
+        return _CLIP_DIMS.get(settings.models.clip, 768)
+
+
+def _ensure_siglip_text_loaded() -> tuple[object, object]:
+    """Lazy-load SiglipTextModel + AutoProcessor (search path, stays resident).
+
+    Returns:
+        (text_model, processor)
+    """
+    global _siglip_text_model, _siglip_processor, _siglip_text_loaded, CLIP_DIM
+
+    if _siglip_text_loaded and _siglip_text_model is not None:
+        return _siglip_text_model, _siglip_processor
+
+    with _lock:
+        if _siglip_text_loaded and _siglip_text_model is not None:
+            return _siglip_text_model, _siglip_processor
+
+        from transformers import AutoProcessor, SiglipTextModel
+
+        model_name = settings.models.clip
+        cache_dir = str(settings.model_cache_dir)
+        logger.info("Loading SigLIP text encoder: %s", model_name)
+
+        _siglip_processor = AutoProcessor.from_pretrained(model_name, cache_dir=cache_dir)
+        _siglip_text_model = SiglipTextModel.from_pretrained(model_name, cache_dir=cache_dir)
+        _siglip_text_model.eval()
+
+        CLIP_DIM = _detect_clip_dim_siglip(_siglip_text_model)
+        _siglip_text_loaded = True
+        logger.info("SigLIP text encoder loaded (dim=%d)", CLIP_DIM)
+        return _siglip_text_model, _siglip_processor
+
+
+def _ensure_siglip_full_loaded() -> tuple[object, object]:
+    """Lazy-load full AutoModel for image encoding (indexing path only).
+
+    Ensures the text encoder + processor are loaded first so _siglip_processor
+    is always available when this returns.
+
+    Returns:
+        (full_model, processor)
+    """
+    global _siglip_full_model, _siglip_full_loaded
+
+    if _siglip_full_loaded and _siglip_full_model is not None:
+        return _siglip_full_model, _siglip_processor
+
+    # Ensure text model + processor are loaded BEFORE acquiring _lock.
+    # _ensure_siglip_text_loaded() also uses _lock internally; calling it
+    # inside the lock below would deadlock because threading.Lock is not
+    # re-entrant.
+    if not _siglip_text_loaded:
+        _ensure_siglip_text_loaded()
+
+    with _lock:
+        if _siglip_full_loaded and _siglip_full_model is not None:
+            return _siglip_full_model, _siglip_processor
+
+        from transformers import AutoModel
+
+        model_name = settings.models.clip
+        cache_dir = str(settings.model_cache_dir)
+        logger.info("Loading SigLIP full model for indexing: %s", model_name)
+
+        _siglip_full_model = AutoModel.from_pretrained(model_name, cache_dir=cache_dir)
+        _siglip_full_model.eval()
+        _siglip_full_loaded = True
+        logger.info("SigLIP full model loaded (vision + text)")
+        return _siglip_full_model, _siglip_processor
+
+
+def _embed_text_siglip(text: str) -> np.ndarray:
+    """Text embedding via SiglipTextModel (search path, no vision encoder needed)."""
+    import torch
+
+    text_model, processor = _ensure_siglip_text_loaded()
+    # max_length=64 is mandatory: omitting it silently disables padding and
+    # produces near-random embeddings (nDCG ≈ 0.02 observed in eval).
+    inputs = processor(
+        text=[text],
+        return_tensors="pt",
+        padding="max_length",
+        max_length=64,
+        truncation=True,
+    )
+    text_inputs = {k: v for k, v in inputs.items() if k in ("input_ids", "attention_mask")}
+    with torch.no_grad():
+        out = text_model(**text_inputs)
+        feats = out[1]  # pooler_output – identical to full_model.get_text_features()
+        feats = feats / feats.norm(dim=-1, keepdim=True)
+    return feats.squeeze().cpu().numpy().astype(np.float32)
+
+
+def _embed_image_siglip(image: Image.Image) -> np.ndarray:
+    """Image embedding via full AutoModel (indexing path, vision encoder required)."""
+    import torch
+
+    full_model, processor = _ensure_siglip_full_loaded()
+    inputs = processor(images=image, return_tensors="pt")
+    with torch.no_grad():
+        feats = full_model.get_image_features(**inputs)
+        feats = feats / feats.norm(dim=-1, keepdim=True)
+    return feats.squeeze().cpu().numpy().astype(np.float32)
+
+
 def embed_image(image: Image.Image) -> np.ndarray:
     """Generate CLIP embedding for a single image.
 
@@ -181,6 +321,9 @@ def embed_image(image: Image.Image) -> np.ndarray:
     Returns:
         Normalized embedding vector of shape (CLIP_DIM,).
     """
+    if _is_siglip_model(settings.models.clip):
+        return _embed_image_siglip(image)
+
     import torch
 
     model, preprocess, _ = _ensure_loaded()
@@ -203,6 +346,9 @@ def embed_text_clip(text: str) -> np.ndarray:
     Returns:
         Normalized embedding vector of shape (CLIP_DIM,).
     """
+    if _is_siglip_model(settings.models.clip):
+        return _embed_text_siglip(text)
+
     import torch
 
     model, _, tokenizer = _ensure_loaded()
