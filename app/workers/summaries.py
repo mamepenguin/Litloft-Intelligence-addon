@@ -161,7 +161,10 @@ DETAILED_STATUS_FAILED = "failed"
 def _build_system_prompt() -> str:
     """Build the system prompt with language instruction from config."""
     lang = settings.llm.output_language
-    lang_line = _LANGUAGE_INSTRUCTIONS.get(lang, "")
+    lang_line = _LANGUAGE_INSTRUCTIONS.get(
+        lang,
+        f"- Output must be in {lang}\n" if lang and lang != "auto" else "",
+    )
     return render(
         "summaries/short_long_system.jinja2",
         language_instruction=lang_line,
@@ -177,7 +180,15 @@ def _build_detailed_system_prompt() -> str:
     ``"auto"`` omits the style line so the model mirrors the source.
     """
     lang = settings.llm.output_language
-    lang_line = _DETAILED_LANGUAGE_INSTRUCTIONS.get(lang, "")
+    lang_line = _DETAILED_LANGUAGE_INSTRUCTIONS.get(
+        lang,
+        (
+            f"- Write in {lang} with a natural, readable style."
+            " Use headings for each section\n"
+        )
+        if lang and lang != "auto"
+        else "",
+    )
     return render(
         "summaries/detailed_system.jinja2",
         language_instruction=lang_line,

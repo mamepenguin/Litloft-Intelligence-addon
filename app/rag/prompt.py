@@ -23,12 +23,17 @@ def build_system_prompt(output_language: str) -> str:
     * ``"auto"`` — let the model mirror the query language (no line).
     * ``"ja"`` — explicitly force Japanese output.
     * ``"en"`` — explicitly force English output.
-    * anything else — treated as ``"auto"`` (no instruction line).
+    * anything else — forces output in that language (ISO code passed directly
+      to the model, e.g. ``"fr"`` → ``"- Answer in fr\n"``).
 
     The JSON schema hint and anti-fabrication rules are always
     included regardless of language.
     """
-    lang_line = _LANGUAGE_INSTRUCTIONS.get(output_language, "")
+    lang = output_language
+    lang_line = _LANGUAGE_INSTRUCTIONS.get(
+        lang,
+        f"- Answer in {lang}\n" if lang and lang != "auto" else "",
+    )
     # citations は file_id と location の2フィールドのみ。
     # 引用文（quote / text 等）の生成は LLM 出力末尾のレイテンシを
     # 5-10 秒延ばすため厳禁。実際の引用文はバックエンドが

@@ -105,7 +105,10 @@ class TagCandidates:
 def _build_system_prompt() -> str:
     """Build system prompt with language instruction based on config."""
     lang = settings.llm.output_language
-    lang_line = _LANGUAGE_INSTRUCTIONS.get(lang, "")
+    lang_line = _LANGUAGE_INSTRUCTIONS.get(
+        lang,
+        f"- Output tags in {lang}\n" if lang and lang != "auto" else "",
+    )
     return render(
         "auto_tags/system.jinja2",
         language_instruction=lang_line,
