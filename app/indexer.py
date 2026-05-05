@@ -48,6 +48,10 @@ TEXT_MIMES = frozenset({
     "text/plain", "text/markdown", "text/csv",
     "application/json", "application/pdf",
     "text/srt", "text/vtt",
+    # Office Open XML formats
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 })
 
 

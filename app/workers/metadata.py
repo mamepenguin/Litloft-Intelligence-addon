@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_search_db, upsert_fts_text_content, validate_vector_table
 from app.extractors.base import ExtractionResult
+from app.extractors.office import OfficeExtractor
 from app.extractors.pdf import PdfExtractor
 from app.extractors.text import TextExtractor
 from app.models import Embedding, IndexedFile
@@ -26,7 +27,7 @@ from app.workers.embedder import embed_passages
 logger = logging.getLogger(__name__)
 
 # Content extractors (instantiated once)
-_extractors = [TextExtractor(), PdfExtractor()]
+_extractors = [TextExtractor(), PdfExtractor(), OfficeExtractor()]
 
 # Cap for the persisted PDF Markdown body. Anything larger is dropped
 # from the ``pdf_markdown`` table (chunks/embeddings are still stored).
