@@ -73,11 +73,11 @@ describe("SummarySection — edit flow", () => {
     await waitFor(() =>
       expect(screen.getByText("AI short")).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole("button", { name: /^編集$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Edit$/ }));
 
-    const shortBox = (await screen.findByLabelText(/短い要約/)) as
+    const shortBox = (await screen.findByLabelText(/Short summary/)) as
       HTMLTextAreaElement;
-    const longBox = screen.getByLabelText(/詳しい要約/) as
+    const longBox = screen.getByLabelText(/Detailed summary/) as
       HTMLTextAreaElement;
 
     expect(shortBox.value).toBe("AI short");
@@ -97,18 +97,18 @@ describe("SummarySection — edit flow", () => {
     await waitFor(() =>
       expect(screen.getByText("AI short")).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole("button", { name: /^編集$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Edit$/ }));
 
-    const shortBox = (await screen.findByLabelText(/短い要約/)) as
+    const shortBox = (await screen.findByLabelText(/Short summary/)) as
       HTMLTextAreaElement;
-    const longBox = screen.getByLabelText(/詳しい要約/) as
+    const longBox = screen.getByLabelText(/Detailed summary/) as
       HTMLTextAreaElement;
 
     fireEvent.change(shortBox, { target: { value: "user short" } });
     fireEvent.change(longBox, { target: { value: "user long" } });
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /保存/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Save/ }));
     });
 
     await waitFor(() => {
@@ -121,9 +121,9 @@ describe("SummarySection — edit flow", () => {
     // Rehydrates from the edit response — the new short text + the
     // "Edited" badge appear without a second getSummary call.
     expect(await screen.findByText("user short")).toBeInTheDocument();
-    expect(screen.getByText(/編集済み/)).toBeInTheDocument();
+    expect(screen.getByText(/Edited/)).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /AI 版に戻す/ }),
+      screen.getByRole("button", { name: /Revert to AI version/ }),
     ).toBeInTheDocument();
     expect(getSummary).toHaveBeenCalledTimes(1); // only the initial load
   });
@@ -138,17 +138,17 @@ describe("SummarySection — edit flow", () => {
     await waitFor(() =>
       expect(screen.getByText("AI short")).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole("button", { name: /^編集$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Edit$/ }));
 
-    const shortBox = (await screen.findByLabelText(/短い要約/)) as
+    const shortBox = (await screen.findByLabelText(/Short summary/)) as
       HTMLTextAreaElement;
     fireEvent.change(shortBox, { target: { value: "throwaway" } });
-    fireEvent.click(screen.getByRole("button", { name: /キャンセル/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Cancel/ }));
 
     expect(editSummary).not.toHaveBeenCalled();
     // Back to the read-only view with the original AI text.
     expect(screen.getByText("AI short")).toBeInTheDocument();
-    expect(screen.queryByLabelText(/短い要約/)).toBeNull();
+    expect(screen.queryByLabelText(/Short summary/)).toBeNull();
   });
 
   it("hides the Revert button for untouched AI summaries", async () => {
@@ -161,9 +161,9 @@ describe("SummarySection — edit flow", () => {
     await waitFor(() =>
       expect(screen.getByText("AI short")).toBeInTheDocument(),
     );
-    expect(screen.queryByText(/編集済み/)).toBeNull();
+    expect(screen.queryByText(/Edited/)).toBeNull();
     expect(
-      screen.queryByRole("button", { name: /AI 版に戻す/ }),
+      screen.queryByRole("button", { name: /Revert to AI version/ }),
     ).toBeNull();
   });
 
@@ -180,11 +180,11 @@ describe("SummarySection — edit flow", () => {
     await waitFor(() =>
       expect(screen.getByText("user short")).toBeInTheDocument(),
     );
-    expect(screen.getByText(/編集済み/)).toBeInTheDocument();
+    expect(screen.getByText(/Edited/)).toBeInTheDocument();
 
     await act(async () => {
       fireEvent.click(
-        screen.getByRole("button", { name: /AI 版に戻す/ }),
+        screen.getByRole("button", { name: /Revert to AI version/ }),
       );
     });
 
@@ -192,9 +192,9 @@ describe("SummarySection — edit flow", () => {
       expect(revertSummary).toHaveBeenCalledWith("f1", "drive1");
     });
     expect(await screen.findByText("AI short")).toBeInTheDocument();
-    expect(screen.queryByText(/編集済み/)).toBeNull();
+    expect(screen.queryByText(/Edited/)).toBeNull();
     expect(
-      screen.queryByRole("button", { name: /AI 版に戻す/ }),
+      screen.queryByRole("button", { name: /Revert to AI version/ }),
     ).toBeNull();
   });
 
@@ -208,13 +208,13 @@ describe("SummarySection — edit flow", () => {
     await waitFor(() =>
       expect(screen.getByText("AI short")).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole("button", { name: /^編集$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Edit$/ }));
 
-    const shortBox = (await screen.findByLabelText(/短い要約/)) as
+    const shortBox = (await screen.findByLabelText(/Short summary/)) as
       HTMLTextAreaElement;
     fireEvent.change(shortBox, { target: { value: "" } });
 
-    const save = screen.getByRole("button", { name: /保存/ }) as
+    const save = screen.getByRole("button", { name: /Save/ }) as
       HTMLButtonElement;
     expect(save.disabled).toBe(true);
   });

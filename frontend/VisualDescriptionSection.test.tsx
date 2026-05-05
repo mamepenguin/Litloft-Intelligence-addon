@@ -87,7 +87,7 @@ describe("VisualDescriptionSection", () => {
     });
     renderSection();
     expect(
-      await screen.findByRole("button", { name: /AI で記述を生成/ }),
+      await screen.findByRole("button", { name: /Generate AI description/ }),
     ).toBeInTheDocument();
   });
 
@@ -101,7 +101,7 @@ describe("VisualDescriptionSection", () => {
     });
     renderSection();
     expect(
-      await screen.findByText(/vision 対応 LLM が設定されていません/),
+      await screen.findByText(/No vision-capable LLM is configured/),
     ).toBeInTheDocument();
   });
 
@@ -119,7 +119,7 @@ describe("VisualDescriptionSection", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("llava:13b")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /再生成/ }),
+      screen.getByRole("button", { name: /Regenerate/ }),
     ).toBeInTheDocument();
   });
 
@@ -133,9 +133,9 @@ describe("VisualDescriptionSection", () => {
     });
     renderSection();
     expect(
-      await screen.findByText(/記述の生成に失敗しました/),
+      await screen.findByText(/Description generation failed/),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /再試行/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Retry/ })).toBeInTheDocument();
   });
 
   it("posts to generate when the generate button is clicked", async () => {
@@ -150,7 +150,7 @@ describe("VisualDescriptionSection", () => {
       .mockResolvedValue({ status: "accepted", file_id: "f1" });
     renderSection();
     const button = await screen.findByRole("button", {
-      name: /AI で記述を生成/,
+      name: /Generate AI description/,
     });
     await act(async () => {
       fireEvent.click(button);
@@ -170,7 +170,7 @@ describe("VisualDescriptionSection", () => {
     });
     renderSection();
     expect(
-      await screen.findByText(/記述を生成中/),
+      await screen.findByText(/Generating description/),
     ).toBeInTheDocument();
   });
 });

@@ -156,7 +156,7 @@ describe("DetailedSummarySection — state machine", () => {
     renderSection();
 
     expect(
-      await screen.findByText(/詳細要約に必要なコンテンツが不足/),
+      await screen.findByText(/Not enough content for a detailed summary/),
     ).toBeInTheDocument();
   });
 
@@ -167,7 +167,7 @@ describe("DetailedSummarySection — state machine", () => {
     renderSection();
 
     expect(
-      await screen.findByRole("button", { name: /詳細要約を生成/ }),
+      await screen.findByRole("button", { name: /Generate detailed summary/ }),
     ).toBeInTheDocument();
   });
 
@@ -180,7 +180,7 @@ describe("DetailedSummarySection — state machine", () => {
     // Section defaults to collapsed; the expand button is the
     // entry point into the Markdown body.
     expect(
-      await screen.findByRole("button", { name: /展開/ }),
+      await screen.findByRole("button", { name: /Expand/ }),
     ).toBeInTheDocument();
   });
 
@@ -195,7 +195,7 @@ describe("DetailedSummarySection — state machine", () => {
     renderSection();
 
     expect(
-      await screen.findByText(/詳細要約の生成に失敗/),
+      await screen.findByText(/Detailed summary generation failed/),
     ).toBeInTheDocument();
     expect(screen.getByText("LLM error: boom")).toBeInTheDocument();
   });
@@ -257,7 +257,7 @@ describe("DetailedSummarySection — citations", () => {
     const { container } = renderSection();
 
     // Expand the section so the body (and citation markers) render.
-    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
 
     await waitFor(() => {
       // top_score=0.72 below the strong threshold (0.90), so this
@@ -290,7 +290,7 @@ describe("DetailedSummarySection — citations", () => {
 
     const { container } = renderSection();
 
-    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
 
     // Wait for the summary to render, then assert no citation marker
     // is present for this segment.
@@ -351,17 +351,17 @@ describe("DetailedSummarySection — edit flow", () => {
 
     renderSection();
 
-    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
 
     // There's one Edit button per section heading. Pick the first one.
     const editButtons = await screen.findAllByRole("button", {
-      name: /^編集$/,
+      name: /^Edit$/,
     });
     expect(editButtons.length).toBeGreaterThanOrEqual(1);
     fireEvent.click(editButtons[0]);
 
     const textarea = (await screen.findByLabelText(
-      /セクション内容を編集/,
+      /Edit section content/,
     )) as HTMLTextAreaElement;
     // The draft should be seeded with the entire H2 fragment so the
     // user can rename the heading or restructure the section in one
@@ -378,21 +378,21 @@ describe("DetailedSummarySection — edit flow", () => {
 
     renderSection();
 
-    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
     const editButtons = await screen.findAllByRole("button", {
-      name: /^編集$/,
+      name: /^Edit$/,
     });
     fireEvent.click(editButtons[0]);
 
     const textarea = (await screen.findByLabelText(
-      /セクション内容を編集/,
+      /Edit section content/,
     )) as HTMLTextAreaElement;
     fireEvent.change(textarea, {
       target: { value: "## 全体像\n編集後の概要。" },
     });
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /^保存$/ }));
+      fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     });
 
     await waitFor(() => {
@@ -409,11 +409,11 @@ describe("DetailedSummarySection — edit flow", () => {
       );
     });
 
-    // The response includes edited_at, so the "編集済み" badge
+    // The response includes edited_at, so the "Edited" badge
     // appears and the revert button becomes visible.
-    expect(await screen.findByText(/編集済み/)).toBeInTheDocument();
+    expect(await screen.findByText(/Edited/)).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /AI生成版に戻す/ }),
+      screen.getByRole("button", { name: /Revert to AI version/ }),
     ).toBeInTheDocument();
   });
 
@@ -423,20 +423,20 @@ describe("DetailedSummarySection — edit flow", () => {
 
     renderSection();
 
-    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
     const editButtons = await screen.findAllByRole("button", {
-      name: /^編集$/,
+      name: /^Edit$/,
     });
     fireEvent.click(editButtons[0]);
 
     const textarea = (await screen.findByLabelText(
-      /セクション内容を編集/,
+      /Edit section content/,
     )) as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: "捨てる" } });
-    fireEvent.click(screen.getByRole("button", { name: /キャンセル/ }));
+    fireEvent.change(textarea, { target: { value: "discard me" } });
+    fireEvent.click(screen.getByRole("button", { name: /Cancel/ }));
 
     expect(editDetailedSummarySection).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText(/セクション内容を編集/)).toBeNull();
+    expect(screen.queryByLabelText(/Edit section content/)).toBeNull();
   });
 
   it("revert shows a confirm dialog and calls revertDetailedSummary on confirm", async () => {
@@ -447,11 +447,11 @@ describe("DetailedSummarySection — edit flow", () => {
 
     renderSection();
 
-    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
 
-    // Edited state renders the "AI 版に戻す" button.
+    // Edited state renders the "Revert to AI version" button.
     const revertButtons = await screen.findAllByRole("button", {
-      name: /AI生成版に戻す/,
+      name: /Revert to AI version/,
     });
     // First one is the bottom toolbar button (the one that opens the
     // dialog — the dialog's confirm button shares the label).
@@ -459,13 +459,13 @@ describe("DetailedSummarySection — edit flow", () => {
 
     // Dialog appears with a confirmation message.
     expect(
-      await screen.findByText(/編集内容を破棄して/),
+      await screen.findByText(/Discard your edits/),
     ).toBeInTheDocument();
 
     // Confirm — the dialog's primary button carries the same label.
     await act(async () => {
       const dialogButtons = screen.getAllByRole("button", {
-        name: /AI生成版に戻す/,
+        name: /Revert to AI version/,
       });
       // Click the last one (the dialog's confirm button renders after
       // the toolbar button).
@@ -483,17 +483,17 @@ describe("DetailedSummarySection — edit flow", () => {
 
     renderSection();
 
-    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
 
     // The bottom toolbar has a Regenerate button. Click it.
     const regenButtons = await screen.findAllByRole("button", {
-      name: /^再生成$/,
+      name: /^Regenerate$/,
     });
     fireEvent.click(regenButtons[0]);
 
     // The confirm dialog warns that edits will be lost.
     expect(
-      await screen.findByText(/編集内容は失われます/),
+      await screen.findByText(/Your edits will be lost/),
     ).toBeInTheDocument();
   });
 
@@ -517,17 +517,17 @@ describe("DetailedSummarySection — edit flow", () => {
       // Body (heading '全体像') must not render.
       expect(screen.queryByText(/全体像/)).not.toBeInTheDocument();
       // Edit / Save-to-knowledge / Revert buttons must all be absent.
-      expect(screen.queryByText(/AI生成版に戻す/)).not.toBeInTheDocument();
-      expect(screen.queryByText(/knowledge に保存/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Revert to AI version/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Save to knowledge/)).not.toBeInTheDocument();
 
       // Regenerate is the only interactive action.
-      const regenButton = screen.getByRole("button", { name: /再生成/ });
+      const regenButton = screen.getByRole("button", { name: /Regenerate/ });
       fireEvent.click(regenButton);
 
       // The confirm dialog uses the with-note variant.
       expect(
         await screen.findByText(
-          /AI 版を再生成します。現在 knowledge に保存されているノートは残りますが/,
+          /Regenerating the AI version/,
         ),
       ).toBeInTheDocument();
     } finally {
@@ -541,19 +541,19 @@ describe("DetailedSummarySection — edit flow", () => {
 
     renderSection();
 
-    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
 
     const regenButtons = await screen.findAllByRole("button", {
-      name: /^再生成$/,
+      name: /^Regenerate$/,
     });
 
     await act(async () => {
       fireEvent.click(regenButtons[0]);
     });
 
-    // No "編集内容は失われます" dialog should appear.
+    // No "Your edits will be lost" dialog should appear.
     expect(
-      screen.queryByText(/編集内容は失われます/),
+      screen.queryByText(/Your edits will be lost/),
     ).not.toBeInTheDocument();
     // The un-edited regenerate path now calls regenerateDetailedSummary
     // with force=false — single endpoint for every regenerate case so
@@ -596,7 +596,7 @@ describe("DetailedSummarySection — inline markdown rendering", () => {
       });
 
     const { container } = renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
 
     await waitFor(() => {
       expect(container.querySelector("strong")?.textContent).toBe(
@@ -633,7 +633,7 @@ describe("DetailedSummarySection — inline markdown rendering", () => {
       });
 
     const { container } = renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
 
     await screen.findByText(/ここから物語が始まります/);
 
@@ -650,7 +650,7 @@ describe("DetailedSummarySection — inline markdown rendering", () => {
     expect(container.textContent ?? "").not.toContain("### 第二幕");
 
     // One edit button per H3 plus one for the outer H2.
-    const editButtons = container.querySelectorAll('button[aria-label="編集"]');
+    const editButtons = container.querySelectorAll('button[aria-label="Edit"]');
     expect(editButtons.length).toBeGreaterThanOrEqual(3);
   });
 
@@ -676,7 +676,7 @@ describe("DetailedSummarySection — inline markdown rendering", () => {
       });
 
     const { container } = renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
 
     await screen.findByText(/ここから物語が始まります/);
 
@@ -686,13 +686,13 @@ describe("DetailedSummarySection — inline markdown rendering", () => {
     ) as HTMLElement | null;
     expect(sub).not.toBeNull();
     const editButton = sub!.querySelector(
-      'button[aria-label="編集"]',
+      'button[aria-label="Edit"]',
     ) as HTMLButtonElement | null;
     expect(editButton).not.toBeNull();
     fireEvent.click(editButton!);
 
     const textarea = (await screen.findByLabelText(
-      /セクション内容を編集/,
+      /Edit section content/,
     )) as HTMLTextAreaElement;
     // Draft carries the H3 heading line so the user can rename it,
     // and the subsection body up to the next ``###``.
@@ -730,7 +730,7 @@ describe("DetailedSummarySection — inline markdown rendering", () => {
       });
 
     const { container } = renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
 
     await screen.findByText(/ここから物語が始まります/);
 
@@ -738,19 +738,19 @@ describe("DetailedSummarySection — inline markdown rendering", () => {
       '[data-subsection-heading="第一幕"]',
     ) as HTMLElement;
     const editButton = sub.querySelector(
-      'button[aria-label="編集"]',
+      'button[aria-label="Edit"]',
     ) as HTMLButtonElement;
     fireEvent.click(editButton);
 
     const textarea = (await screen.findByLabelText(
-      /セクション内容を編集/,
+      /Edit section content/,
     )) as HTMLTextAreaElement;
     fireEvent.change(textarea, {
       target: { value: "### 第一幕\n書き直し本文" },
     });
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /^保存$/ }));
+      fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     });
 
     await waitFor(() => {
@@ -782,7 +782,7 @@ describe("DetailedSummarySection — inline markdown rendering", () => {
       });
 
     const { container } = renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
 
     // Wait for the expanded body to render — look for the surrounding
     // text so we know markdown-it has processed the segment.
@@ -820,7 +820,7 @@ def foo():
       });
 
     const { container } = renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
     // Syntax-highlighted markup splits ``return 42`` across hljs span
     // boundaries, so we poll for the ``<pre>`` appearing instead of
     // the raw text — findByText can't span sibling elements.
@@ -858,7 +858,7 @@ def foo():
       });
 
     const { container } = renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
     await screen.findByText(/第一項/);
 
     const ul = container.querySelector("ul.markdown-body");
@@ -895,7 +895,7 @@ def foo():
       });
 
     const { container } = renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: /展開/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
     await screen.findByText(/長さ/);
 
     const table = container.querySelector("table");

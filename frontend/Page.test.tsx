@@ -643,7 +643,7 @@ describe("IntelligenceAskPage — status probe fallback", () => {
     await waitFor(() => {
       expect(textarea.disabled).toBe(false);
     });
-    expect(screen.queryByText("LLM が設定されていません")).toBeNull();
+    expect(screen.queryByText("LLM is not configured")).toBeNull();
   });
 
   it("disables the form and shows the llmDisabled alert when llm.enabled is false", async () => {
@@ -674,7 +674,7 @@ describe("IntelligenceAskPage — status probe fallback", () => {
       expect(textarea.disabled).toBe(true);
     });
     expect(
-      await screen.findByText("LLM が設定されていません"),
+      await screen.findByText("LLM is not configured"),
     ).toBeInTheDocument();
   });
 });

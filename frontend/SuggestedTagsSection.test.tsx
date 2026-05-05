@@ -90,7 +90,7 @@ describe("SuggestedTagsSection accept dispatch", () => {
       expect(screen.getByText("new-one")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByLabelText(/new-one.*追加/));
+    fireEvent.click(screen.getByLabelText(/Add tag new-one/));
 
     await waitFor(() => {
       expect(saveFileTags).toHaveBeenCalled();
@@ -107,7 +107,7 @@ describe("SuggestedTagsSection accept dispatch", () => {
       expect(screen.getByText("new-one")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText(/すべて承認/));
+    fireEvent.click(screen.getByText(/Accept all/));
 
     await waitFor(() => {
       expect(saveFileTags).toHaveBeenCalled();
@@ -137,7 +137,7 @@ describe("SuggestedTagsSection accept dispatch", () => {
     await waitFor(() => {
       expect(screen.getByText("new-one")).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByLabelText(/new-one.*追加/));
+    fireEvent.click(screen.getByLabelText(/Add tag new-one/));
 
     await waitFor(() => {
       expect(saveFileTags).toHaveBeenCalledTimes(2);
@@ -156,7 +156,7 @@ describe("SuggestedTagsSection accept dispatch", () => {
     await waitFor(() => {
       expect(screen.getByText("new-one")).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByLabelText(/new-one.*追加/));
+    fireEvent.click(screen.getByLabelText(/Add tag new-one/));
 
     await waitFor(() => {
       expect(consoleSpy).toHaveBeenCalled();
@@ -169,7 +169,7 @@ describe("SuggestedTagsSection accept dispatch", () => {
     await waitFor(() => {
       expect(screen.getByText("new-one")).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByLabelText(/new-one.*追加/));
+    fireEvent.click(screen.getByLabelText(/Add tag new-one/));
     await waitFor(() => expect(saveFileTags).toHaveBeenCalled());
 
     const putCalls = vi

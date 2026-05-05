@@ -94,10 +94,10 @@ describe("TranscriptSection — transcript refine UI", () => {
     cleanup();
   });
 
-  it("shows the 'AI で修正' button when feature is enabled", async () => {
+  it("shows the 'Refine with AI' button when feature is enabled", async () => {
     renderSection();
     // Button label text per spec UI section.
-    const btn = await screen.findByRole("button", { name: /AI で修正/ });
+    const btn = await screen.findByRole("button", { name: /Refine with AI/ });
     expect(btn).toBeInTheDocument();
   });
 
@@ -107,13 +107,13 @@ describe("TranscriptSection — transcript refine UI", () => {
     // Give the async mount a tick — chunks still render, button shouldn't.
     await screen.findByText("未修正の文章。");
     expect(
-      screen.queryByRole("button", { name: /AI で修正/ })
+      screen.queryByRole("button", { name: /Refine with AI/ })
     ).not.toBeInTheDocument();
   });
 
-  it("renders 'AI 修正済み' badge for refined chunks", async () => {
+  it("renders 'AI refined' badge for refined chunks", async () => {
     renderSection();
-    const badges = await screen.findAllByText(/AI 修正済み/);
+    const badges = await screen.findAllByText(/AI refined/);
     // One badge per refined chunk (1 out of 2 in our fixture).
     expect(badges).toHaveLength(1);
   });
@@ -140,7 +140,7 @@ describe("TranscriptSection — transcript refine UI", () => {
     renderSection();
     await screen.findByText("一切修正なし。");
     expect(
-      screen.queryByRole("button", { name: /AI 修正を取り消す/ })
+      screen.queryByRole("button", { name: /Undo AI refine/ })
     ).not.toBeInTheDocument();
   });
 });

@@ -36,9 +36,9 @@ describe("FolderRefineButton", () => {
         fileIds={["f1", "f2"]}
       />
     );
-    // Button label is something like "このフォルダのトランスクリプトを AI 修正"
+    // Button label is something like "Refine folder transcripts with AI"
     expect(
-      screen.getByRole("button", { name: /AI 修正/ })
+      screen.getByRole("button", { name: /Refine folder transcripts with AI/ })
     ).toBeInTheDocument();
   });
 
@@ -50,7 +50,7 @@ describe("FolderRefineButton", () => {
         fileIds={["f1", "f2"]}
       />
     );
-    fireEvent.click(screen.getByRole("button", { name: /AI 修正/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Refine folder transcripts with AI/ }));
 
     await waitFor(() => {
       expect(refineFolderTranscripts).toHaveBeenCalledWith(
@@ -78,12 +78,12 @@ describe("FolderRefineButton", () => {
         fileIds={["f1", "f2"]}
       />
     );
-    fireEvent.click(screen.getByRole("button", { name: /AI 修正/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Refine folder transcripts with AI/ }));
 
     // While pending, the button is disabled (matching FolderSummariesButton).
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: /AI 修正/ })
+        screen.getByRole("button", { name: /Refine folder transcripts with AI/ })
       ).toBeDisabled();
     });
 
