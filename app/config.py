@@ -13,10 +13,10 @@ import yaml
 
 @dataclass(frozen=True)
 class ModelConfig:
-    whisper: str = "openai/whisper-small"
+    whisper: str = "openai/whisper-large-v3-turbo"
     text_embedding: str = "intfloat/multilingual-e5-small"
-    clip: str = "llm-jp/llm-jp-clip-vit-base-patch16"
-    blip: str = ""  # empty = disabled. e.g. "Salesforce/blip-image-captioning-base"
+    clip: str = "llm-jp/waon-siglip2-base-patch16-256"
+    blip: str = "Salesforce/blip-image-captioning-base"
     blip_max_tokens: int = 50  # max tokens for BLIP caption generation
     blip_num_beams: int = 1  # beam search width (1 = greedy, higher = better quality but slower)
     text_query_prefix: str = ""
@@ -32,14 +32,14 @@ class SearchConfig:
     max_limit: int = 100
     # Pre-filter thresholds (exclude candidates below these before ranking)
     min_score_text: float = 0.85
-    min_score_clip: float = 0.25
+    min_score_clip: float = 0.05
     # ``clip_thumbnail`` (representative 1-frame route from spec
     # 2026-05-02-thumbnail-clip-default-shallow-search.md) has a
     # different false-positive profile than scene CLIP: 1 vector per
     # file, ffmpeg ``thumbnail=300`` already filters black/blurred
     # frames. Worth a looser threshold and a stronger weight in its
     # own knob so tuning ``clip`` does not move ``clip_thumbnail``.
-    min_score_clip_thumbnail: float = 0.20
+    min_score_clip_thumbnail: float = 0.05
     # Score gap analysis: if (top_score - mean_score) < this threshold,
     # the result set is "flat" (no standout match) and discarded entirely.
     score_gap_threshold: float = 0.02
@@ -132,8 +132,8 @@ class MemoryConfig:
 class FeaturesConfig:
     indexing: bool = True
     search: bool = True
-    auto_tags: str = "false"  # "false" | "manual" | "on_index"
-    summaries: str = "false"  # "false" | "manual" | "on_index"
+    auto_tags: str = "manual"  # "false" | "manual" | "on_index"
+    summaries: str = "manual"  # "false" | "manual" | "on_index"
     # Detailed (long-form, Markdown) summary modes:
     # - "false":    no generation
     # - "manual":   generated on user request (file-detail button)
@@ -147,7 +147,7 @@ class FeaturesConfig:
     # index-time equivalent to "on_index" because RAG only runs in
     # response to user queries. Default off for security — file content
     # (transcripts, captions, text) is sent to the LLM API.
-    rag: bool = False
+    rag: bool = True
     # Transcript AI refine ("false" | "manual" | "on_index"). Default off
     # since file contents are sent to the LLM API during refine.
     transcript_refine: str = "false"
@@ -155,7 +155,7 @@ class FeaturesConfig:
     # Default off — enabling sends image bytes to the LLM API. Requires
     # ``llm.vision_model`` to be set or the feature is unavailable even
     # when this flag is "manual"/"on_index" (graceful degradation).
-    vision_describe: str = "false"
+    vision_describe: str = "manual"
 
 
 @dataclass(frozen=True)
@@ -172,7 +172,7 @@ class HierarchicalRagConfig:
     """
 
     # Master switch. False keeps the legacy single-stage retrieval.
-    enabled: bool = False
+    enabled: bool = True
     # Top-K shortlist size: how many files survive Stage 1.
     coarse_top_k: int = 20
     # Below this top cosine similarity the Stage 1 result is considered
@@ -205,7 +205,7 @@ class PersonalHistoryConfig:
     """
 
     # Master switch. False keeps Ask viewer-agnostic (legacy behaviour).
-    enabled: bool = False
+    enabled: bool = True
     # Hard ceiling on Stage A's resolved time range. "ずっと前に観たやつ"
     # otherwise expands to a multi-year scan that defeats the point of
     # narrowing. 365 days matches a typical "this year" intuition.
