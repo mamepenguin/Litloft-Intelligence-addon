@@ -137,7 +137,12 @@ class IndexManager:
         self._whisper_semaphore = asyncio.Semaphore(
             settings.workers.whisper_parallel
         )
-        self._running_tasks: set[str] = set()
+        # Tracks file_ids already sitting in each per-type queue so that
+        # repeated reconcile() / _resume_incomplete() calls (e.g. one per
+        # scan-complete webhook) don't pile up duplicate entries.
+        self._queued_by_type: dict[TaskType, set[str]] = {
+            task_type: set() for task_type in TaskType
+        }
         self._background_tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
@@ -684,14 +689,25 @@ class IndexManager:
                 file_id=file_id, task_type=TaskType.TEXT_CONTENT
             ))
 
-    async def _enqueue(self, task: IndexTask) -> None:
+    async def _enqueue(self, task: IndexTask, *, force: bool = False) -> None:
         """Add a task to the per-type priority queue.
+
+        Skips if the same (file_id, task_type) is already queued or being
+        processed — prevents reconcile() / _resume_incomplete() from
+        accumulating duplicates across repeated webhook calls.
+
+        Pass ``force=True`` (used by prioritize()) to bypass the dedup check
+        so a file can be re-inserted at higher priority.
 
         Args:
             task: The indexing task to queue.
+            force: If True, enqueue even if the file_id is already present.
         """
-        # Priority queue: lower number = higher priority
-        # Negate priority so higher values are processed first
+        queued = self._queued_by_type[task.task_type]
+        processing = self._processing_by_type[task.task_type]
+        if not force and (task.file_id in queued or task.file_id in processing):
+            return
+        queued.add(task.file_id)
         queue = self._queues[task.task_type]
         await queue.put((-task.priority, time.monotonic(), task))
 
@@ -714,23 +730,25 @@ class IndexManager:
             if file is None:
                 return False
 
-            # Queue with high priority
+            # Queue with high priority (force=True allows re-inserting even if
+            # already queued at normal priority — a duplicate entry is acceptable
+            # here since index_* functions are idempotent on the *_indexed flag)
             if not file.metadata_indexed:
                 await self._enqueue(IndexTask(
                     file_id=file_id, task_type=TaskType.METADATA, priority=100
-                ))
+                ), force=True)
             if not file.clip_indexed and file.mime_type in (IMAGE_TYPES | VIDEO_TYPES):
                 await self._enqueue(IndexTask(
                     file_id=file_id, task_type=TaskType.CLIP, priority=100
-                ))
+                ), force=True)
             if not file.whisper_indexed and (file.mime_type in TRANSCRIBABLE_TYPES or file.mime_type == LOFT_MIME):
                 await self._enqueue(IndexTask(
                     file_id=file_id, task_type=TaskType.WHISPER, priority=100
-                ))
+                ), force=True)
             if not file.text_indexed:
                 await self._enqueue(IndexTask(
                     file_id=file_id, task_type=TaskType.TEXT_CONTENT, priority=100
-                ))
+                ), force=True)
 
             return True
 
@@ -1024,9 +1042,12 @@ class IndexManager:
 
                 except Exception as e:
                     logger.error("Metadata batch failed: %s", e)
-                    # Re-queue failed batch so they're retried
+                    # Re-queue failed batch so they're retried. Use force=True
+                    # because the files are still in _processing_by_type at this
+                    # point (finally runs after except) and would otherwise be
+                    # silently dropped by the dedup check.
                     for task in batch:
-                        await self._enqueue(task)
+                        await self._enqueue(task, force=True)
                 finally:
                     self._processing_count -= len(batch)
                     for fid in file_ids:
@@ -1244,9 +1265,11 @@ class IndexManager:
         queue = self._queues[task_type]
         collected: list[IndexTask] = []
 
+        queued = self._queued_by_type[task_type]
         while len(collected) < max_size:
             try:
                 _, _, task = queue.get_nowait()
+                queued.discard(task.file_id)
                 collected = [*collected, task]
             except asyncio.QueueEmpty:
                 break
@@ -1291,7 +1314,29 @@ def reset_falsely_completed_clip() -> int:
             params,
         ).fetchall()
 
+        # Also fetch filename + path for operator-visible logging so stuck
+        # files can be identified without diving into the DB directly.
+        file_meta: dict[str, tuple[str, str]] = {}
+        if falsely_completed:
+            ids = [row[0] for row in falsely_completed]
+            placeholders2 = ", ".join(f":fid{i}" for i in range(len(ids)))
+            rows = session.execute(
+                sql_text(
+                    f"SELECT file_id, filename, file_path FROM indexed_files "
+                    f"WHERE file_id IN ({placeholders2})"
+                ),
+                {f"fid{i}": fid for i, fid in enumerate(ids)},
+            ).fetchall()
+            file_meta = {row[0]: (row[1], row[2]) for row in rows}
+
         for (file_id,) in falsely_completed:
+            filename, fpath = file_meta.get(file_id, ("?", "?"))
+            logger.warning(
+                "reset_falsely_completed_clip: resetting %s (%s, path=%s) "
+                "— clip_indexed=True but no CLIP embeddings found; "
+                "will retry on next reconcile",
+                file_id, filename, fpath,
+            )
             session.execute(
                 sql_text(
                     "UPDATE indexed_files SET clip_indexed = 0 "

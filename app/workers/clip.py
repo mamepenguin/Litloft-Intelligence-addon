@@ -622,9 +622,25 @@ def _index_clip_sync(file_id: str) -> bool:
                     f.clip_indexed = True
                     f.clip_thumbnail_indexed = True
             return False
-        return _index_clip_thumbnail(
+        ok = _index_clip_thumbnail(
             file_id, file_path, filename, source_label="Image",
         )
+        if not ok:
+            # PIL could not read the image (corrupt, unsupported encoding,
+            # etc.). Mark both flags so we stop re-queuing on every reconcile.
+            # reset_falsely_completed_clip() at startup will detect the absence
+            # of embeddings and log the file for operator review.
+            logger.warning(
+                "clip_thumbnail failed for image %s (path=%s); "
+                "marking done — no embedding will be stored",
+                file_id, file_path,
+            )
+            with get_search_db() as session:
+                f = session.query(IndexedFile).filter_by(file_id=file_id).first()
+                if f is not None:
+                    f.clip_indexed = True
+                    f.clip_thumbnail_indexed = True
+        return ok
 
     # --- Thumbnail-fallback (.loft, HEIC): rely on core's pre-rendered
     # JPEG thumbnail. Skip without error if it is missing — legacy
@@ -661,9 +677,23 @@ def _index_clip_sync(file_id: str) -> bool:
                 "Skipping clip_thumbnail for %s: %s", file_id, e,
             )
     if abspath is not None:
-        _index_clip_thumbnail(
+        thumb_ok = _index_clip_thumbnail(
             file_id, abspath, filename, source_label="Thumbnail",
         )
+        if not thumb_ok:
+            # Thumbnail JPEG exists on disk but could not be embedded
+            # (corrupt file, incompatible format, etc.). Scene CLIP already
+            # succeeded so we close the thumbnail leg now rather than
+            # re-queuing this file on every reconcile cycle indefinitely.
+            logger.warning(
+                "clip_thumbnail failed for video %s (path=%s); "
+                "closing leg — no thumbnail embedding will be stored",
+                file_id, abspath,
+            )
+            with get_search_db() as session:
+                f = session.query(IndexedFile).filter_by(file_id=file_id).first()
+                if f is not None:
+                    f.clip_thumbnail_indexed = True
     else:
         # Mark thumbnail leg as done so the file isn't requeued every
         # cycle for a thumbnail that doesn't exist (or escaped the
@@ -755,9 +785,27 @@ def _handle_thumbnail_fallback(
                 f.clip_indexed = True
                 f.clip_thumbnail_indexed = True
         return True
-    return _index_clip_thumbnail(
+    ok = _index_clip_thumbnail(
         file_id, abspath, filename, source_label="Thumbnail",
     )
+    if not ok:
+        # Thumbnail exists but PIL could not read it (corrupt JPEG, etc.).
+        # Close out flags so the queue stops retrying indefinitely.
+        logger.warning(
+            "clip_thumbnail failed for %s (%s, path=%s); "
+            "marking done — no embedding will be stored",
+            file_id, mime_type, abspath,
+        )
+    # Thumbnail-fallback types have no scene-CLIP route, so clip_indexed
+    # must be closed here by the dispatcher regardless of success/failure.
+    # _index_clip_thumbnail only sets clip_indexed for source_label="Image".
+    with get_search_db() as session:
+        f = session.query(IndexedFile).filter_by(file_id=file_id).first()
+        if f is not None:
+            f.clip_indexed = True
+            if not ok:
+                f.clip_thumbnail_indexed = True
+    return True
 
 
 def _index_clip_thumbnail(
