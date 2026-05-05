@@ -159,20 +159,18 @@ class OfficeExtractor(ContentExtractor):
 
         for slide_num, slide in enumerate(prs.slides, start=1):
             lines: list[str] = []
-            title_text = ""
+
+            title_shape = slide.shapes.title
+            title_text = title_shape.text.strip() if title_shape and title_shape.has_text_frame else ""
 
             for shape in slide.shapes:
                 if not shape.has_text_frame:
                     continue
+                if shape is title_shape:
+                    continue
                 for para in shape.text_frame.paragraphs:
                     text = para.text.strip()
-                    if not text:
-                        continue
-                    if not title_text and shape.shape_type == 13:
-                        title_text = text
-                    elif not title_text and hasattr(shape, "placeholder_format") and shape.placeholder_format and shape.placeholder_format.idx == 0:
-                        title_text = text
-                    else:
+                    if text:
                         lines.append(text)
 
             if not title_text and not lines:
