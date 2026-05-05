@@ -25,14 +25,30 @@
       "queueCounts": "{processing}件処理中 / {waiting}件待機",
       "waitingHint": "{waiting}件が処理待ち",
       "idle": "待機中",
-      "metadata": { "label": "メタデータ抽出" },
-      "clip": { "label": "画像分析（CLIP）" },
-      "whisper": { "label": "文字起こし（Whisper）" },
-      "text_content": { "label": "テキスト抽出" },
-      "auto_tags": { "label": "AIタグ提案" },
-      "summaries": { "label": "AI要約生成" },
-      "vision_describe": { "label": "AI画像記述" },
-      "transcript_refine": { "label": "AI文字起こし校正" }
+      "metadata": {
+        "label": "メタデータ抽出"
+      },
+      "clip": {
+        "label": "画像分析（CLIP）"
+      },
+      "whisper": {
+        "label": "文字起こし（Whisper）"
+      },
+      "text_content": {
+        "label": "テキスト抽出"
+      },
+      "auto_tags": {
+        "label": "AIタグ提案"
+      },
+      "summaries": {
+        "label": "AI要約生成"
+      },
+      "vision_describe": {
+        "label": "AI画像記述"
+      },
+      "transcript_refine": {
+        "label": "AI文字起こし校正"
+      }
     }
   },
   "searchIndex": {
@@ -189,7 +205,8 @@
       "noExcerpt": "抜粋はありません",
       "pageLabel": "p.{page}",
       "jump": "ジャンプ",
-      "copyExcerpt": "抜粋をコピー"
+      "copyExcerpt": "抜粋をコピー",
+      "openFile": "元ファイルを開く"
     },
     "verify": {
       "toggle": {

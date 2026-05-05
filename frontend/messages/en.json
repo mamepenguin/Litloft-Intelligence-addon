@@ -25,14 +25,30 @@
       "queueCounts": "{processing} running / {waiting} waiting",
       "waitingHint": "{waiting} waiting",
       "idle": "Idle",
-      "metadata": { "label": "Metadata extraction" },
-      "clip": { "label": "Image analysis (CLIP)" },
-      "whisper": { "label": "Transcription (Whisper)" },
-      "text_content": { "label": "Text extraction" },
-      "auto_tags": { "label": "AI tag suggestions" },
-      "summaries": { "label": "AI summaries" },
-      "vision_describe": { "label": "AI image description" },
-      "transcript_refine": { "label": "AI transcript refine" }
+      "metadata": {
+        "label": "Metadata extraction"
+      },
+      "clip": {
+        "label": "Image analysis (CLIP)"
+      },
+      "whisper": {
+        "label": "Transcription (Whisper)"
+      },
+      "text_content": {
+        "label": "Text extraction"
+      },
+      "auto_tags": {
+        "label": "AI tag suggestions"
+      },
+      "summaries": {
+        "label": "AI summaries"
+      },
+      "vision_describe": {
+        "label": "AI image description"
+      },
+      "transcript_refine": {
+        "label": "AI transcript refine"
+      }
     }
   },
   "searchIndex": {
@@ -189,7 +205,8 @@
       "noExcerpt": "No excerpt available",
       "pageLabel": "p.{page}",
       "jump": "Jump",
-      "copyExcerpt": "Copy excerpt"
+      "copyExcerpt": "Copy excerpt",
+      "openFile": "Open file"
     },
     "verify": {
       "toggle": {
