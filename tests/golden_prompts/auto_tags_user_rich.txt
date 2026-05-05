@@ -1,7 +1,7 @@
-ファイル名: f.mp4
-タイプ: video
-タイトル: 別タイトル
-説明: 説明文。
-メタデータタグ: tag1, tag2
+Filename: f.mp4
+Type: video
+Title: 別タイトル
+Description: 説明文。
+Metadata tags: tag1, tag2
 本文ここ。
-既存タグ: existing1, existing2
+Existing tags: existing1, existing2

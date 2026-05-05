@@ -72,7 +72,7 @@ class TestBuildSystemPrompt:
 
         result = _build_system_prompt()
 
-        assert "日本語で生成" in result
+        assert "Japanese" in result
 
     def test_english_language_instruction(self, monkeypatch, make_settings):
         settings = make_settings(
@@ -143,9 +143,9 @@ class TestBuildUserPrompt:
             indexed_file, "video", "", ["existing-tag"]
         )
 
-        assert "ファイル名: video.mp4" in result
-        assert "タイプ: video" in result
-        assert "既存タグ: existing-tag" in result
+        assert "Filename: video.mp4" in result
+        assert "Type: video" in result
+        assert "Existing tags: existing-tag" in result
 
     def test_includes_title_when_different_from_filename(self):
         indexed_file = {
@@ -160,7 +160,7 @@ class TestBuildUserPrompt:
 
         result = _build_user_prompt(indexed_file, "video", "", [])
 
-        assert "タイトル: My Great Video" in result
+        assert "Title: My Great Video" in result
 
     def test_excludes_title_when_same_as_filename(self):
         indexed_file = {
@@ -175,7 +175,7 @@ class TestBuildUserPrompt:
 
         result = _build_user_prompt(indexed_file, "video", "", [])
 
-        assert "タイトル:" not in result
+        assert "Title:" not in result
 
     def test_includes_description(self):
         indexed_file = {
@@ -190,7 +190,7 @@ class TestBuildUserPrompt:
 
         result = _build_user_prompt(indexed_file, "video", "", [])
 
-        assert "説明: A test description" in result
+        assert "Description: A test description" in result
 
     def test_includes_tags_text(self):
         indexed_file = {
@@ -205,7 +205,7 @@ class TestBuildUserPrompt:
 
         result = _build_user_prompt(indexed_file, "image", "", [])
 
-        assert "メタデータタグ: sunset, beach" in result
+        assert "Metadata tags: sunset, beach" in result
 
     def test_includes_context_string(self):
         indexed_file = {
@@ -237,7 +237,7 @@ class TestBuildUserPrompt:
 
         result = _build_user_prompt(indexed_file, "document", "", [])
 
-        assert "既存タグ: なし" in result
+        assert "Existing tags: none" in result
 
     def test_multiple_existing_tags_comma_separated(self):
         indexed_file = {
@@ -254,7 +254,7 @@ class TestBuildUserPrompt:
             indexed_file, "document", "", ["tag1", "tag2", "tag3"]
         )
 
-        assert "既存タグ: tag1, tag2, tag3" in result
+        assert "Existing tags: tag1, tag2, tag3" in result
 
 
 # ---------------------------------------------------------------------------
@@ -440,32 +440,32 @@ class TestBuildUserPromptWithCandidates:
         result = _build_user_prompt(
             self._BASE_FILE, "video", "", [], candidates
         )
-        assert "参考候補" not in result
+        assert "Reference candidates" not in result
 
     def test_candidate_section_shown_when_clip_present(self):
         candidates = TagCandidates(clip=["料理", "屋内"], tfidf=[])
         result = _build_user_prompt(
             self._BASE_FILE, "video", "", [], candidates
         )
-        assert "参考候補" in result
-        assert "画像解析による候補: 料理, 屋内" in result
-        assert "キーワード抽出による候補" not in result
+        assert "Reference candidates" in result
+        assert "Image analysis candidates: 料理, 屋内" in result
+        assert "Keyword extraction candidates" not in result
 
     def test_candidate_section_shown_when_tfidf_present(self):
         candidates = TagCandidates(clip=[], tfidf=["パスタ", "トマト"])
         result = _build_user_prompt(
             self._BASE_FILE, "video", "", [], candidates
         )
-        assert "キーワード抽出による候補: パスタ, トマト" in result
-        assert "画像解析による候補" not in result
+        assert "Keyword extraction candidates: パスタ, トマト" in result
+        assert "Image analysis candidates" not in result
 
     def test_both_candidate_types_shown(self):
         candidates = TagCandidates(clip=["料理"], tfidf=["パスタ"])
         result = _build_user_prompt(
             self._BASE_FILE, "video", "", [], candidates
         )
-        assert "画像解析による候補: 料理" in result
-        assert "キーワード抽出による候補: パスタ" in result
+        assert "Image analysis candidates: 料理" in result
+        assert "Keyword extraction candidates: パスタ" in result
 
     def test_knn_candidates_shown_when_present(self):
         candidates = TagCandidates(
@@ -474,7 +474,7 @@ class TestBuildUserPromptWithCandidates:
         result = _build_user_prompt(
             self._BASE_FILE, "video", "", [], candidates
         )
-        assert "類似ファイルのタグ: 和食, レシピ" in result
+        assert "Tags from similar files: 和食, レシピ" in result
 
     def test_override_hint_present(self):
         """The LLM must be told candidates are advisory, not required."""
@@ -482,15 +482,15 @@ class TestBuildUserPromptWithCandidates:
         result = _build_user_prompt(
             self._BASE_FILE, "video", "", [], candidates
         )
-        assert "参考情報" in result or "参考" in result
+        assert "reference" in result.lower() or "hint" in result.lower()
 
     def test_legacy_call_without_candidates_still_works(self):
         """Backwards compatibility: the original 4-arg call still builds."""
         result = _build_user_prompt(
             self._BASE_FILE, "video", "", ["existing-tag"]
         )
-        assert "参考候補" not in result
-        assert "既存タグ: existing-tag" in result
+        assert "Reference candidates" not in result
+        assert "Existing tags: existing-tag" in result
 
 
 # ---------------------------------------------------------------------------
@@ -580,7 +580,7 @@ class TestProcessFileBranches:
 
         async def fake_generate_json(system, user):
             # Ensure candidates were passed to the LLM
-            assert "参考候補" in user
+            assert "Reference candidates" in user
             assert "料理" in user
             return ["料理失敗談", "パスタ料理"]
 

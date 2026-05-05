@@ -1,5 +1,5 @@
-ファイル名: same.mp4
-タイプ: video
+Filename: same.mp4
+Type: video
 
---- コンテンツ ---
+--- Content ---
 ctx

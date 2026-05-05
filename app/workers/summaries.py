@@ -101,7 +101,7 @@ async def _recalculate_citations(file_id: str, summary_text: str) -> None:
 _trim_to_sentence_boundary = trim_to_sentence_boundary
 
 _LANGUAGE_INSTRUCTIONS: dict[str, str] = {
-    "ja": "- 要約は日本語で生成すること\n",
+    "ja": "- Output must be in Japanese\n",
     "en": "- Summaries must be in English\n",
 }
 
@@ -110,7 +110,7 @@ _LANGUAGE_INSTRUCTIONS: dict[str, str] = {
 # style because the detailed output is user-facing prose, not a caption.
 _DETAILED_LANGUAGE_INSTRUCTIONS: dict[str, str] = {
     "ja": (
-        "- 日本語で、自然で読みやすい文体。各セクションの見出しを使用\n"
+        "- Write in Japanese with a natural, readable style. Use headings for each section\n"
     ),
     "en": (
         "- Write in English with a natural, readable style. "
@@ -124,7 +124,7 @@ _DETAILED_LANGUAGE_INSTRUCTIONS: dict[str, str] = {
 _SUPPORTED_CONTEXT_TYPES: frozenset[str] = frozenset({"video", "audio", "document"})
 
 # Separator inserted between sampled windows in truncated contexts.
-_WINDOW_SEPARATOR = "\n\n[...中略...]\n\n"
+_WINDOW_SEPARATOR = "\n\n[... excerpt ...]\n\n"
 
 # Proper-noun / topic-boundary / numeric handling rules now live in
 # prompts/summaries/_common_rules.jinja2 (included by both system templates).

@@ -1,13 +1,13 @@
-ファイル名: f.mp4
-タイプ: video
-タイトル: 別タイトル
-説明: 説明文。
-メタデータタグ: tag1, tag2
+Filename: f.mp4
+Type: video
+Title: 別タイトル
+Description: 説明文。
+Metadata tags: tag1, tag2
 本文。
 
-【参考候補】
-類似ファイルのタグ: knn1
-画像解析による候補: clip1, clip2
-キーワード抽出による候補: tfidf1
-※ 候補は参考情報です。より適切なタグがあればそちらを優先してください。
-既存タグ: existing
+[Reference candidates]
+Tags from similar files: knn1
+Image analysis candidates: clip1, clip2
+Keyword extraction candidates: tfidf1
+Note: These candidates are for reference. Prefer more appropriate tags if available.
+Existing tags: existing

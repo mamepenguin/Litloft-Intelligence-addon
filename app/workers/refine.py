@@ -52,9 +52,26 @@ class RefineResult:
 
 # --- LLM prompt helpers -----------------------------------------------------
 
+_PUNCTUATION_INSTRUCTIONS: dict[str, str] = {
+    "ja": (
+        "- Japanese: insert 。at sentence ends and 、at natural clause"
+        " boundaries; do not add other words.\n"
+    ),
+    "en": (
+        "- English: add standard punctuation (periods, commas) at natural"
+        " clause boundaries; do not add other words.\n"
+    ),
+}
+_DEFAULT_PUNCTUATION = (
+    "- Add punctuation at natural clause boundaries following the language's"
+    " conventions; do not add other words.\n"
+)
+
 
 def _build_system_prompt() -> str:
-    return render("refine/system.jinja2")
+    lang = config.settings.llm.output_language
+    punct = _PUNCTUATION_INSTRUCTIONS.get(lang, _DEFAULT_PUNCTUATION)
+    return render("refine/system.jinja2", punctuation_instruction=punct)
 
 
 def _build_user_prompt(chunks: list[Any]) -> str:

@@ -10,7 +10,7 @@ from app.rag.context import FileContext
 
 
 _LANGUAGE_INSTRUCTIONS: dict[str, str] = {
-    "ja": "- 回答は日本語で書くこと\n",
+    "ja": "- Answer in Japanese\n",
     "en": "- Answers must be in English\n",
 }
 

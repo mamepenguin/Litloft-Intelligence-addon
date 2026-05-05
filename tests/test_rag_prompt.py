@@ -48,7 +48,7 @@ class TestBuildSystemPrompt:
     def test_japanese_language_instruction(self):
         """T2: 'ja' -> Japanese instruction."""
         result = build_system_prompt("ja")
-        assert "日本語" in result
+        assert "Japanese" in result
 
     def test_english_language_instruction(self):
         """T3: 'en' -> English instruction."""

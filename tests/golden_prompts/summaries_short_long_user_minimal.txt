@@ -1,5 +1,5 @@
-ファイル名: test.mp4
-タイプ: video
+Filename: test.mp4
+Type: video
 
---- コンテンツ ---
+--- Content ---
 ここに本文。

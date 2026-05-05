@@ -1,14 +1,14 @@
 {#- vars: filename, context_type, title (or None), description (or None), tags_text (or None), context (or None), candidate_block (or None), tags_display — see workers/auto_tags.py:_build_user_prompt -#}
-ファイル名: {{ filename }}
-タイプ: {{ context_type }}
+Filename: {{ filename }}
+Type: {{ context_type }}
 {% if title -%}
-タイトル: {{ title }}
+Title: {{ title }}
 {% endif -%}
 {% if description -%}
-説明: {{ description }}
+Description: {{ description }}
 {% endif -%}
 {% if tags_text -%}
-メタデータタグ: {{ tags_text }}
+Metadata tags: {{ tags_text }}
 {% endif -%}
 {% if context -%}
 {{ context }}
@@ -16,4 +16,4 @@
 {% if candidate_block -%}
 {{ candidate_block }}
 {% endif -%}
-既存タグ: {{ tags_display }}
+Existing tags: {{ tags_display }}

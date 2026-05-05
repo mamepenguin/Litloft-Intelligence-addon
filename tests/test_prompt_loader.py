@@ -36,7 +36,7 @@ def _golden(name: str) -> str:
 def test_render_returns_string() -> None:
     out = render("auto_tags/system.jinja2", language_instruction="")
     assert isinstance(out, str)
-    assert "あなたはファイル管理システムのタグ付けアシスタント" in out
+    assert "tagging assistant" in out
 
 
 def test_render_strict_undefined_raises_on_missing_var() -> None:

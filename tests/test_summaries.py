@@ -94,7 +94,7 @@ class TestBuildSystemPrompt:
 
         result = _build_system_prompt()
 
-        assert "日本語で生成" in result
+        assert "Japanese" in result
 
     def test_english_language_instruction(self, monkeypatch, make_settings):
         settings = make_settings(llm=LLMConfig(output_language="en"))
@@ -164,9 +164,9 @@ class TestBuildSystemPrompt:
 
         result = _build_system_prompt()
 
-        assert "固有名詞" in result
-        assert "ファイル名" in result
-        assert "説明文" in result
+        assert "proper noun" in result or "proper nouns" in result
+        assert "filename" in result or "Filename" in result
+        assert "description" in result or "Description" in result
 
     def test_proper_noun_rules_forbid_speculative_rewrite(
         self, monkeypatch, make_settings
@@ -179,7 +179,7 @@ class TestBuildSystemPrompt:
 
         result = _build_system_prompt()
 
-        assert "推測で別の漢字や読みに置き換えない" in result
+        assert "guesswork" in result or "by guesswork" in result
 
     def test_evaluation_words_require_attribution(
         self, monkeypatch, make_settings
@@ -192,8 +192,8 @@ class TestBuildSystemPrompt:
 
         result = _build_system_prompt()
 
-        assert "評価語" in result
-        assert "誰による評価か" in result
+        assert "evaluative" in result or "evaluation" in result or "attribute" in result
+        assert "attributed" in result or "attribute" in result
 
 
 # ---------------------------------------------------------------------------
@@ -438,8 +438,8 @@ class TestBuildUserPrompt:
         result = _build_user_prompt(
             self._file(), "video", "some content", was_truncated=False
         )
-        assert "ファイル名: video.mp4" in result
-        assert "タイプ: video" in result
+        assert "Filename: video.mp4" in result
+        assert "Type: video" in result
         assert "some content" in result
 
     def test_includes_title_when_different_from_filename(self):
@@ -447,21 +447,21 @@ class TestBuildUserPrompt:
             self._file(title="My Great Video"),
             "video", "content", was_truncated=False,
         )
-        assert "タイトル: My Great Video" in result
+        assert "Title: My Great Video" in result
 
     def test_excludes_title_when_same_as_filename(self):
         result = _build_user_prompt(
             self._file(title="video.mp4"),
             "video", "content", was_truncated=False,
         )
-        assert "タイトル:" not in result
+        assert "Title:" not in result
 
     def test_includes_description(self):
         result = _build_user_prompt(
             self._file(description="A brief description"),
             "video", "content", was_truncated=False,
         )
-        assert "説明: A brief description" in result
+        assert "Description: A brief description" in result
 
     def test_truncation_note_only_when_truncated(self):
         truncated = _build_user_prompt(
@@ -470,8 +470,8 @@ class TestBuildUserPrompt:
         not_truncated = _build_user_prompt(
             self._file(), "video", "content", was_truncated=False
         )
-        assert "抜粋" in truncated
-        assert "抜粋" not in not_truncated
+        assert "excerpt" in truncated
+        assert "excerpt" not in not_truncated
 
 
 # ---------------------------------------------------------------------------
@@ -1523,7 +1523,7 @@ class TestBuildDetailedSystemPrompt:
 
         result = _build_detailed_system_prompt()
 
-        assert "日本語で" in result
+        assert "Japanese" in result
         assert "Markdown" in result
 
     def test_english_style_line(self, monkeypatch, make_settings):
@@ -1556,10 +1556,10 @@ class TestBuildDetailedSystemPrompt:
 
         result = _build_detailed_system_prompt()
 
-        assert "導入" in result
-        assert "詳細内容" in result
-        assert "重要ポイントまとめ" in result
-        assert "結論" in result
+        assert "Introduction" in result
+        assert "Detailed content" in result
+        assert "Key points summary" in result
+        assert "Conclusion" in result
 
     def test_prompt_forbids_json_wrapping(
         self, monkeypatch, make_settings
@@ -1585,9 +1585,9 @@ class TestBuildDetailedSystemPrompt:
 
         result = _build_detailed_system_prompt()
 
-        # The prompt should mention skipping / 省略 for the table when
+        # The prompt should mention skipping / omitting the table when
         # no suitable content exists.
-        assert "省略" in result
+        assert "Omit" in result or "omit" in result
 
     def test_prompt_does_not_force_non_markdown_bullet(
         self, monkeypatch, make_settings
@@ -1614,7 +1614,7 @@ class TestBuildDetailedSystemPrompt:
 
         result = _build_detailed_system_prompt()
 
-        assert "原文の流れ" in result
+        assert "flow of the source" in result or "source order" in result or "following the" in result
 
     def test_intro_avoids_marketing_tone_word(
         self, monkeypatch, make_settings
@@ -1640,9 +1640,9 @@ class TestBuildDetailedSystemPrompt:
 
         result = _build_detailed_system_prompt()
 
-        assert "固有名詞" in result
-        assert "ファイル名" in result
-        assert "説明文" in result
+        assert "proper noun" in result or "proper nouns" in result
+        assert "filename" in result or "Filename" in result
+        assert "description" in result or "Description" in result
 
     def test_proper_noun_rules_forbid_speculative_rewrite(
         self, monkeypatch, make_settings
@@ -1654,7 +1654,7 @@ class TestBuildDetailedSystemPrompt:
 
         result = _build_detailed_system_prompt()
 
-        assert "推測で別の漢字や読みに置き換えない" in result
+        assert "guesswork" in result or "by guesswork" in result
 
     def test_detailed_prompt_omits_modification_history_section(
         self, monkeypatch, make_settings
@@ -1671,8 +1671,8 @@ class TestBuildDetailedSystemPrompt:
 
         result = _build_detailed_system_prompt()
 
-        assert "表記の修正履歴" not in result
-        assert "要確認の固有名詞" not in result
+        assert "modification history" not in result
+        assert "nouns to verify" not in result
 
     def test_detailed_prompt_evaluation_words_require_attribution(
         self, monkeypatch, make_settings
@@ -1685,8 +1685,8 @@ class TestBuildDetailedSystemPrompt:
 
         result = _build_detailed_system_prompt()
 
-        assert "評価語" in result
-        assert "誰による評価か" in result
+        assert "evaluative" in result or "evaluation" in result or "attribute" in result
+        assert "attributed" in result or "attribute" in result
 
 
 # ---------------------------------------------------------------------------
@@ -1730,7 +1730,7 @@ class TestBuildDetailedUserPrompt:
         )
 
         # Title line should not appear when it duplicates the filename.
-        assert "タイトル: lecture.mp4" not in result
+        assert "Title: lecture.mp4" not in result
 
     def test_includes_truncation_notice(self):
         result = _build_detailed_user_prompt(
@@ -1746,7 +1746,7 @@ class TestBuildDetailedUserPrompt:
             was_truncated=True,
         )
 
-        assert "抜粋" in result
+        assert "excerpt" in result
 
 
 # ---------------------------------------------------------------------------

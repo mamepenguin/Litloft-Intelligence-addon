@@ -39,7 +39,7 @@ from app.workers.tag_knn import recommend_tags_by_similarity
 logger = logging.getLogger(__name__)
 
 _LANGUAGE_INSTRUCTIONS: dict[str, str] = {
-    "ja": "- タグは日本語で生成すること\n",
+    "ja": "- Output tags in Japanese\n",
     "en": "- Tags must be in English\n",
 }
 
@@ -635,7 +635,7 @@ def _build_user_prompt(
     """Build the user prompt for LLM tag generation.
 
     When ``candidates`` is provided (non-empty CLIP or TF-IDF lists),
-    the prompt includes a "参考候補" section so the LLM can use them
+    the prompt includes a "Reference candidates" section so the LLM can use them
     as grounding signals. The instruction deliberately allows the LLM
     to override or ignore them — they're hints, not ground truth.
     """
@@ -648,27 +648,27 @@ def _build_user_prompt(
 
     candidate_block = ""
     if candidates is not None and candidates.has_any():
-        candidate_lines: list[str] = ["", "【参考候補】"]
+        candidate_lines: list[str] = ["", "[Reference candidates]"]
         # k-NN first because "similar tagged files" is the strongest
         # signal for "what the user considers relevant".
         if candidates.knn:
             candidate_lines.append(
-                "類似ファイルのタグ: " + ", ".join(candidates.knn)
+                "Tags from similar files: " + ", ".join(candidates.knn)
             )
         if candidates.clip:
             candidate_lines.append(
-                "画像解析による候補: " + ", ".join(candidates.clip)
+                "Image analysis candidates: " + ", ".join(candidates.clip)
             )
         if candidates.tfidf:
             candidate_lines.append(
-                "キーワード抽出による候補: " + ", ".join(candidates.tfidf)
+                "Keyword extraction candidates: " + ", ".join(candidates.tfidf)
             )
         candidate_lines.append(
-            "※ 候補は参考情報です。より適切なタグがあればそちらを優先してください。"
+            "Note: These candidates are for reference. Prefer more appropriate tags if available."
         )
         candidate_block = "\n".join(candidate_lines)
 
-    tags_display = ", ".join(existing_tags) if existing_tags else "なし"
+    tags_display = ", ".join(existing_tags) if existing_tags else "none"
     return render(
         "auto_tags/user.jinja2",
         filename=indexed_file["filename"],
