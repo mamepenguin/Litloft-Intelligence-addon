@@ -17,6 +17,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    JSON,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -276,6 +277,34 @@ class FileInsight(Base):
             "file_id", "kind", "status",
         ),
         Index("idx_file_insights_kind_status", "kind", "status"),
+    )
+
+
+class PickupCache(Base):
+    """Precomputed recommendation cache for the pickup dashboard widget.
+
+    One row per (drive_id, viewer_id) pair. The background worker refreshes
+    the row whenever WatchHistory changes (detected via checkpoint hash).
+    File IDs are stored as a JSON array; the pickup endpoint returns them
+    directly without additional DB lookups.
+    """
+
+    __tablename__ = "pickup_cache"
+
+    drive_id: Mapped[str] = mapped_column(String, primary_key=True)
+    viewer_id: Mapped[str] = mapped_column(String(16), primary_key=True)
+
+    # JSON array of file_id strings (up to 12 items, ordered by relevance)
+    file_ids: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+    # MD5 of the last-N watched file_ids — used to skip recomputation when
+    # the viewer's history has not changed since the previous run.
+    watch_history_checkpoint: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
     )
 
 

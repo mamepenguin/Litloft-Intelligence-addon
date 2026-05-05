@@ -8,6 +8,7 @@ export const slotComponents: Record<string, React.LazyExoticComponent<React.Comp
   // dedicated page at /addons/intelligence. See manifest.json (href)
   // and frontend/Page.tsx.
   "similar-files": lazy(() => import("./SimilarFilesSection")),
+  "pickup": lazy(() => import("./PickupWidget")),
   "index-status": lazy(() => import("./IndexStatusWidget")),
   "clip-frames": lazy(() => import("./ClipFramesSection")),
   "index-details": lazy(() => import("./IndexDetailsSection")),

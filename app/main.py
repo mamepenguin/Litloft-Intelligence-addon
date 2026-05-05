@@ -19,6 +19,7 @@ from app.indexer import IndexManager
 from app.llm import create_llm_client
 from app.routers import (
     files,
+    pickup,
     queue,
     rag,
     refine,
@@ -30,6 +31,7 @@ from app.routers import (
 )
 from app.schemas import FeaturesStatus, LLMStatus, StatusResponse
 from app.workers.auto_tags import AutoTagsWorker
+from app.workers.pickup import PickupWorker
 from app.workers.summaries import SummariesWorker
 from app.workers.vision import VisionDescribeWorker
 
@@ -198,6 +200,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     "Vision: queued %d previously indexed files", pending
                 )
 
+    # Initialize pickup worker (always runs — no feature flag needed)
+    pickup_worker = PickupWorker()
+    dependencies._pickup_worker = pickup_worker
+    pickup_task = asyncio.create_task(pickup_worker.run(), name="pickup_worker")
+    logger.info("Pickup recommendation worker started")
+
     # Start index manager (pass workers for post-metadata hooks)
     index_manager = IndexManager(
         auto_tags_worker=auto_tags_worker,
@@ -213,6 +221,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     # Shutdown
+    pickup_task.cancel()
+    try:
+        await pickup_task
+    except asyncio.CancelledError:
+        pass
     if auto_tags_task is not None:
         auto_tags_task.cancel()
         try:
@@ -248,6 +261,7 @@ app.include_router(webhooks.router)
 app.include_router(queue.router)
 app.include_router(similar.router)
 app.include_router(files.router)
+app.include_router(pickup.router)
 app.include_router(summaries.router)
 app.include_router(rag.router)
 app.include_router(refine.router)

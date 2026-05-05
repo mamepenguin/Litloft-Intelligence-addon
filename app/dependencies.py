@@ -7,6 +7,7 @@ from fastapi import Header, HTTPException
 from app.indexer import IndexManager
 from app.llm import LLMClient
 from app.workers.auto_tags import AutoTagsWorker
+from app.workers.pickup import PickupWorker
 from app.workers.summaries import SummariesWorker
 from app.workers.vision import VisionDescribeWorker
 
@@ -15,6 +16,7 @@ _index_manager: IndexManager | None = None
 _auto_tags_worker: AutoTagsWorker | None = None
 _summaries_worker: SummariesWorker | None = None
 _vision_worker: VisionDescribeWorker | None = None
+_pickup_worker: PickupWorker | None = None
 _llm_client: LLMClient | None = None
 
 _WEBHOOK_SECRET = os.environ.get("SEARCH_WEBHOOK_SECRET", "")

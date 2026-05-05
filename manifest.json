@@ -19,6 +19,9 @@
             {"id": "index-details", "label": "Index Details", "priority": 30},
             {"id": "similar-files", "label": "Similar Files", "priority": 40}
         ],
+        "drive-home-sections": [
+            {"id": "pickup", "label": "Pickup", "priority": 5}
+        ],
         "dashboard-widgets": [
             {"id": "index-status", "label": "Index Status", "priority": 10}
         ],
@@ -31,6 +34,12 @@
         "target_default": "http://intelligence:8100",
         "health_check": "/health",
         "routes": [
+            {
+                "path": "/pickup",
+                "methods": ["GET"],
+                "pre_check": {"type": "addon_feature", "feature": "index"},
+                "response_filter": null
+            },
             {
                 "path": "/search",
                 "methods": ["GET"],

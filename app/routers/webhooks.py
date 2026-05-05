@@ -2,6 +2,9 @@
 
 from fastapi import APIRouter, Depends
 
+import asyncio
+
+from app import dependencies
 from app.dependencies import get_index_manager, verify_webhook_secret
 from app.schemas import (
     MessageResponse,
@@ -48,6 +51,10 @@ async def webhook_scan_complete(
         recovered=body.recovered,
     )
     result = await handle_scan_complete(payload, manager)
+
+    if dependencies._pickup_worker is not None:
+        await dependencies._pickup_worker.schedule_drive(body.drive)
+
     return MessageResponse(**result)
 
 
