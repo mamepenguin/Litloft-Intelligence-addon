@@ -1066,7 +1066,7 @@ class TestBuildResultsFileIdScope:
         def _gsd():
             yield session
 
-        monkeypatch.setattr("app.search.get_search_db", _gsd)
+        monkeypatch.setattr("app.search.get_search_db_read", _gsd)
 
     def test_scope_filters_out_of_set_ids(self, monkeypatch):
         from app.search import _build_results

@@ -4,6 +4,7 @@ import logging
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
 
 from app.drive_context import require_drive
 from app.file_hydrate import hydrate_files
@@ -112,7 +113,8 @@ async def search_endpoint(
     at all to keep drive-as-privacy-boundary intact.
     """
     try:
-        result = execute_search(
+        result = await run_in_threadpool(
+            execute_search,
             query=q, limit=limit, file_type=type, drive=drive, mode=mode,
             include_scene_clip=include_scene_clip,
         )

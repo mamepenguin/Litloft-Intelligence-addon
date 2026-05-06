@@ -10,6 +10,7 @@ prefix detection.
 
 import logging
 import threading
+from functools import lru_cache
 
 import numpy as np
 
@@ -146,10 +147,13 @@ def embed_texts(texts: list[str]) -> np.ndarray:
     return embeddings.astype(np.float32)
 
 
+@lru_cache(maxsize=512)
 def embed_query(query: str) -> np.ndarray:
     """Embed a search query text.
 
     Adds the appropriate query prefix for the configured model.
+    Results are cached (LRU, 512 entries) — the returned array is
+    read-only to prevent accidental cache corruption.
 
     Args:
         query: The search query string.
@@ -159,8 +163,9 @@ def embed_query(query: str) -> np.ndarray:
     """
     query_prefix, _ = _get_prefixes()
     prefixed = f"{query_prefix}{query}"
-    result = embed_texts([prefixed])
-    return result[0]
+    arr = embed_texts([prefixed])[0]
+    arr.flags.writeable = False
+    return arr
 
 
 def embed_passages(passages: list[str]) -> np.ndarray:

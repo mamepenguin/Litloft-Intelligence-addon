@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import threading
 import uuid
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -337,8 +338,12 @@ def embed_image(image: Image.Image) -> np.ndarray:
     return features.squeeze().cpu().numpy().astype(np.float32)
 
 
+@lru_cache(maxsize=512)
 def embed_text_clip(text: str) -> np.ndarray:
     """Generate CLIP text embedding for a search query.
+
+    Results are cached (LRU, 512 entries) — the returned array is
+    read-only to prevent accidental cache corruption.
 
     Args:
         text: Search query text.
@@ -347,7 +352,9 @@ def embed_text_clip(text: str) -> np.ndarray:
         Normalized embedding vector of shape (CLIP_DIM,).
     """
     if _is_siglip_model(settings.models.clip):
-        return _embed_text_siglip(text)
+        arr = _embed_text_siglip(text)
+        arr.flags.writeable = False
+        return arr
 
     import torch
 
@@ -359,7 +366,9 @@ def embed_text_clip(text: str) -> np.ndarray:
         features = model.encode_text(tokens)
         features = features / features.norm(dim=-1, keepdim=True)
 
-    return features.squeeze().cpu().numpy().astype(np.float32)
+    arr = features.squeeze().cpu().numpy().astype(np.float32)
+    arr.flags.writeable = False
+    return arr
 
 
 def _extract_frame_paths(

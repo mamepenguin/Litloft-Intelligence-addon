@@ -1092,6 +1092,26 @@ def get_search_db() -> Generator[Session, None, None]:
 
 
 @contextmanager
+def get_search_db_read() -> Generator[Session, None, None]:
+    """Get a read-only search database session.
+
+    Does not acquire the write lock. Safe for concurrent SELECT queries
+    under WAL mode — SQLite allows multiple simultaneous readers.
+    Use only for operations that do not modify the database.
+    """
+    if _SearchSession is None:
+        raise RuntimeError("Search database not initialized")
+    session = _SearchSession()
+    try:
+        yield session
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+@contextmanager
 def get_litloft_db() -> Generator[Session, None, None]:
     """Get a read-only Litloft database session."""
     if _HomevaultSession is None:

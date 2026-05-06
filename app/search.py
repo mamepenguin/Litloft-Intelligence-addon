@@ -15,7 +15,9 @@ import numpy as np
 from sqlalchemy import text as sql_text
 
 from app.config import settings
-from app.database import get_search_db, get_search_engine, validate_vector_table
+from concurrent.futures import ThreadPoolExecutor
+
+from app.database import get_search_db, get_search_db_read, get_search_engine, validate_vector_table
 from app.models import Embedding, IndexedFile, TranscriptChunk
 from app.workers.clip import embed_text_clip
 from app.workers.embedder import embed_query
@@ -224,7 +226,7 @@ def search(
                 # return an empty response immediately. The caller
                 # (retriever) is responsible for triggering the Tier 3
                 # fallback (re-search with required=None).
-                with get_search_db() as session:
+                with get_search_db_read() as session:
                     indexed_count = session.query(IndexedFile).filter(
                         IndexedFile.active.is_(True)
                     ).count()
@@ -249,22 +251,33 @@ def search(
     # Mode is threaded into the vector channels because their per-channel
     # thresholds differ between precision and recall. Keyword channels
     # are threshold-free so they do not need the mode argument.
-    text_matches = _vector_search_text(text_vector, candidates, mode=mode)
     # In recall mode, skip CLIP retrieval entirely when BLIP is disabled —
     # without BLIP captions the LLM cannot read the image, so CLIP hits
     # are candidate-slot noise. See _recall_clip_enabled() docstring.
     skip_clip = mode == "recall" and not _recall_clip_enabled()
-    clip_matches = (
-        _vector_search_clip(
-            clip_vector, candidates,
-            mode=mode, include_scene_clip=include_scene_clip,
+
+    # Five retrieval channels run concurrently. Each opens its own
+    # get_search_db_read() session (no write lock) and its own
+    # engine.connect() handle. WAL mode allows parallel readers.
+    with ThreadPoolExecutor(max_workers=5) as _pool:
+        _f_text = _pool.submit(_vector_search_text, text_vector, candidates, mode=mode)
+        _f_clip = (
+            _pool.submit(
+                _vector_search_clip, clip_vector, candidates,
+                mode=mode, include_scene_clip=include_scene_clip,
+            )
+            if clip_vector is not None and not skip_clip
+            else None
         )
-        if clip_vector is not None and not skip_clip
-        else []
-    )
-    keyword_matches = _keyword_search(query, candidates)
-    transcript_keyword_matches = _keyword_search_transcripts(query, candidates)
-    text_content_keyword_matches = _keyword_search_text_content(query, candidates)
+        _f_kw = _pool.submit(_keyword_search, query, candidates)
+        _f_tr = _pool.submit(_keyword_search_transcripts, query, candidates)
+        _f_tc = _pool.submit(_keyword_search_text_content, query, candidates)
+
+        text_matches = _f_text.result()
+        clip_matches = _f_clip.result() if _f_clip is not None else []
+        keyword_matches = _f_kw.result()
+        transcript_keyword_matches = _f_tr.result()
+        text_content_keyword_matches = _f_tc.result()
 
     if mode == "recall":
         # Weighted RRF with recall-tuned channel weights. We drop the
@@ -342,7 +355,7 @@ def search(
     )
 
     # Get total indexed count
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         indexed_count = session.query(IndexedFile).filter(
             IndexedFile.active.is_(True)
         ).count()
@@ -474,7 +487,7 @@ def _vector_search_text(
                 )
                 return []
 
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         embeddings = (
             session.query(Embedding)
             .filter(Embedding.id.in_(embedding_ids))
@@ -615,7 +628,7 @@ def _vector_search_clip(
         "clip_thumbnail": search_config.min_score_clip_thumbnail,
     }
 
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         embeddings = (
             session.query(Embedding)
             .filter(
@@ -726,7 +739,7 @@ def _keyword_search_transcripts(
     file_chunk_pairs = [(row[0], int(row[1])) for row in rows]
     file_ids = {pair[0] for pair in file_chunk_pairs}
 
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         # Verify files are active
         active_ids = {
             f.file_id
@@ -871,7 +884,7 @@ def _keyword_search(query: str, limit: int) -> list[_KeywordMatch]:
 
     # Filter to only active files
     file_ids = [row[0] for row in rows]
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         active_ids = {
             f.file_id
             for f in session.query(IndexedFile.file_id)
@@ -930,7 +943,7 @@ def _keyword_search_text_content(
 
     # Verify files are active
     file_ids = {row[0] for row in rows}
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         active_ids = {
             f.file_id
             for f in session.query(IndexedFile.file_id)
@@ -1220,7 +1233,7 @@ def _build_results(
 
     file_ids = list(file_scores.keys())
 
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         query = session.query(IndexedFile).filter(
             IndexedFile.file_id.in_(file_ids),
             IndexedFile.active.is_(True),
@@ -1451,7 +1464,7 @@ def find_similar(
     if cached is not None:
         return cached
 
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         source = (
             session.query(IndexedFile)
             .filter(
@@ -1676,7 +1689,7 @@ def _find_similar_by_embedding(
     # BGM-only files often produce a single spurious word ("you", "the", etc.)
     # whose embedding matches everything.
     if embedding_type == "whisper":
-        with get_search_db() as session:
+        with get_search_db_read() as session:
             from app.models import TranscriptChunk
             chunks = (
                 session.query(TranscriptChunk)
@@ -1692,7 +1705,7 @@ def _find_similar_by_embedding(
                 return []
 
     # Get the source file's embedding IDs
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         source_embeddings = (
             session.query(Embedding.id)
             .filter(
@@ -1757,7 +1770,7 @@ def _find_similar_by_embedding(
     distances = {row[0]: row[1] for row in rows}
 
     # Look up file info for neighbor embeddings
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         neighbor_embeddings = (
             session.query(Embedding)
             .filter(Embedding.id.in_(neighbor_ids))
@@ -2099,7 +2112,7 @@ def execute_search_compare(
         cosine_scores, file_type, drive, effective_limit, skip_cutoff=True,
     )
 
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         indexed_count = session.query(IndexedFile).filter(
             IndexedFile.active.is_(True)
         ).count()
@@ -2214,7 +2227,7 @@ def _fts_lookup_required(or_clause: str) -> set[str]:
     if not file_ids:
         return set()
 
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         active_ids = {
             row.file_id
             for row in session.query(IndexedFile.file_id)
