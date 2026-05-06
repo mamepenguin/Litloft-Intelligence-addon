@@ -100,7 +100,21 @@
       "audio": "audio",
       "image": "image",
       "text": "text"
-    }
+    },
+    "saveToKnowledge": "Save to Knowledge"
+  },
+  "askSave": {
+    "title": "Save Ask answer to Knowledge",
+    "loading": "Loading…",
+    "noVault": "No Vault registered on this drive. Create one to continue.",
+    "vaultLabel": "Vault name",
+    "vaultPath": "Vault folder path",
+    "createVault": "Create Vault",
+    "vault": "Destination Vault",
+    "folder": "Folder",
+    "filename": "Filename",
+    "save": "Save",
+    "saving": "Saving…"
   },
   "modeTabs": {
     "ariaLabel": "Answer mode",

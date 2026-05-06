@@ -40,7 +40,7 @@ import {
 import { flushSync } from "react-dom";
 import { useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
-import { AlertCircle, Send, Sparkles, Square, X } from "lucide-react";
+import { AlertCircle, BookmarkPlus, Send, Sparkles, Square, X } from "lucide-react";
 
 import { useCurrentDrive } from "@/components/CurrentDriveProvider";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
@@ -54,6 +54,7 @@ import {
   type IntelligenceStatus,
   type Source,
 } from "./api";
+import { AskSaveDialog } from "./AskSaveDialog";
 
 // Minimum allowed query length after trimming. Matches the backend
 // gate so we never send a request the server will reject.
@@ -278,6 +279,58 @@ function buildCitationUrl(citation: Citation): string {
   return base;
 }
 
+/** Build a loft:// URL from a citation for embedding in a saved .md note. */
+function citationToLoftUrl(citation: Citation): string {
+  const parsed = parseSegmentLocation(
+    (citation as Citation & { segment_location?: string | null }).segment_location ?? null,
+  );
+  const base = `loft://${citation.file_id}`;
+  if (parsed?.seconds != null) return `${base}?t=${parsed.seconds}`;
+  if (parsed?.page != null) return `${base}?page=${parsed.page}`;
+  return base;
+}
+
+/** Build the complete Markdown document to save as a Knowledge note. */
+function buildAskNoteMarkdown(
+  query: string,
+  answer: string,
+  citations: Citation[],
+): string {
+  const savedAt = new Date().toISOString();
+  const sourceIds = [...new Set(citations.map((c) => c.file_id))];
+  const fmLines = [
+    "---",
+    `origin: ask_answer`,
+    `query: ${JSON.stringify(query)}`,
+    `source_file_ids: [${sourceIds.map((id) => JSON.stringify(id)).join(", ")}]`,
+    `saved_at: ${savedAt}`,
+    "---",
+    "",
+  ];
+  const bodyLines = [`# ${query}`, "", answer.trimEnd(), ""];
+  if (citations.length > 0) {
+    bodyLines.push("## 引用元", "");
+    for (const c of citations) {
+      const url = citationToLoftUrl(c);
+      bodyLines.push(`- [${c.filename}](${url})`);
+    }
+    bodyLines.push("");
+  }
+  return fmLines.join("\n") + bodyLines.join("\n");
+}
+
+/** Slugify a query string into a safe .md filename stem. */
+function queryToFilename(query: string): string {
+  const slug = query
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s-]/gu, "")
+    .replace(/\s+/g, "-")
+    .slice(0, 60)
+    .replace(/-+$/, "");
+  return `${slug || "ask-note"}.md`;
+}
+
 function CitationCard({
   index,
   citation,
@@ -403,6 +456,7 @@ function IntelligenceAskPageInner() {
   const [state, setState] = useState<AskState>({ kind: "idle" });
   const [ragAvailable, setRagAvailable] = useState<boolean | null>(null);
   const [composing, setComposing] = useState(false);
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   // Guard so the seed-query auto-fire runs exactly once even when the
   // status check re-renders the component. Without this an upstream
@@ -1102,6 +1156,18 @@ function IntelligenceAskPageInner() {
               {t("takenMs", { ms: state.tookMs })}
             </p>
           )}
+          {state.kind === "answered" && state.citations.length > 0 && drive && (
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={() => setSaveDialogOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-bg-border px-3 py-1.5 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
+              >
+                <BookmarkPlus size={13} />
+                {t("saveToKnowledge")}
+              </button>
+            </div>
+          )}
         </section>
       )}
 
@@ -1136,6 +1202,17 @@ function IntelligenceAskPageInner() {
             </ul>
           </section>
         )}
+      {state.kind === "answered" && drive && (
+        <AskSaveDialog
+          open={saveDialogOpen}
+          drive={drive}
+          defaultFilename={queryToFilename(state.keywords ?? input)}
+          content={buildAskNoteMarkdown(input, state.answer, state.citations)}
+          sourceFileIds={[...new Set(state.citations.map((c) => c.file_id))]}
+          onClose={() => setSaveDialogOpen(false)}
+          onSaved={() => setSaveDialogOpen(false)}
+        />
+      )}
     </div>
   );
 }

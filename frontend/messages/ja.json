@@ -100,7 +100,21 @@
       "audio": "音声",
       "image": "画像",
       "text": "文書"
-    }
+    },
+    "saveToKnowledge": "Knowledge に保存"
+  },
+  "askSave": {
+    "title": "Ask の回答を Knowledge に保存",
+    "loading": "読み込み中…",
+    "noVault": "このドライブに Vault が登録されていません。作成して続けますか？",
+    "vaultLabel": "Vault 名",
+    "vaultPath": "Vault フォルダパス",
+    "createVault": "Vault を作成",
+    "vault": "保存先 Vault",
+    "folder": "フォルダ",
+    "filename": "ファイル名",
+    "save": "保存",
+    "saving": "保存中…"
   },
   "modeTabs": {
     "ariaLabel": "回答モード",

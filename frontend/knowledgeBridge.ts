@@ -104,6 +104,31 @@ export interface DistillResponse {
   vault_id: number;
 }
 
+export interface NoteCreateRequest {
+  vault_id: number;
+  folder: string;
+  filename: string;
+  content: string;
+  source_file_ids: string[];
+}
+
+export async function saveAskToKnowledge(
+  drive: string,
+  body: NoteCreateRequest,
+): Promise<DistillResponse> {
+  const res = await fetch(`${KNOWLEDGE_BASE}/notes`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", ...driveHeaders(drive) },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new Error(data?.detail ?? `Error: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function distillToKnowledge(
   drive: string,
   body: DistillRequest,
