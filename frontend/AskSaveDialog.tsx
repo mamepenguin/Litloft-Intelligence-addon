@@ -133,7 +133,7 @@ export function AskSaveDialog({
   if (!open) return null;
 
   const inputClass =
-    "w-full rounded-lg border border-bg-border bg-bg-primary px-3 py-2 text-sm text-text-primary focus:border-accent-blue focus:outline-none";
+    "w-full rounded-lg border border-bg-border bg-bg-primary px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none";
   const labelClass = "block text-xs font-medium text-text-muted mb-1";
 
   return (
@@ -189,7 +189,7 @@ export function AskSaveDialog({
               type="button"
               disabled={submitting}
               onClick={handleCreateVault}
-              className="self-end rounded-lg bg-accent-blue px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+              className="self-end rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
             >
               {submitting ? t("saving") : t("createVault")}
             </button>
@@ -240,7 +240,7 @@ export function AskSaveDialog({
                 type="button"
                 disabled={submitting || !selectedVaultId}
                 onClick={handleSubmit}
-                className="rounded-lg bg-accent-blue px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+                className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
               >
                 {submitting ? t("saving") : t("save")}
               </button>

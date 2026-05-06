@@ -1164,9 +1164,33 @@ function IntelligenceAskPageInner() {
       {((state.kind === "streaming" && state.citations.length > 0) ||
         (state.kind === "answered" && state.citations.length > 0)) && (
         <section>
-          <h2 className="mb-2 text-sm font-semibold text-text-primary">
-            {t("citationsTitle")}
-          </h2>
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-text-primary">
+              {t("citationsTitle")}
+            </h2>
+            {state.kind === "answered" && drive && (
+              savedNote ? (
+                <div className="flex items-center gap-1.5 text-xs text-accent-teal">
+                  <BookmarkPlus size={12} />
+                  <a
+                    href={`/drive/${encodeURIComponent(drive)}/addons/knowledge?edit=${encodeURIComponent(savedNote.fileId)}`}
+                    className="underline underline-offset-2 hover:opacity-80"
+                  >
+                    {t("saveSuccess")} — {t("openNote")}
+                  </a>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setSaveDialogOpen(true)}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
+                >
+                  <BookmarkPlus size={12} />
+                  {t("saveToKnowledge")}
+                </button>
+              )
+            )}
+          </div>
           <ul className="flex flex-col gap-2">
             {state.citations.map((citation, i) => (
               <li key={`${citation.file_id}-${i}`}>
@@ -1175,32 +1199,6 @@ function IntelligenceAskPageInner() {
             ))}
           </ul>
         </section>
-      )}
-
-      {state.kind === "answered" && state.citations.length > 0 && drive && (
-        <div className="flex flex-col gap-2">
-          {savedNote ? (
-            <div className="flex items-center gap-2 rounded-lg border border-accent-teal/30 bg-accent-teal/10 px-4 py-3 text-sm text-accent-teal">
-              <BookmarkPlus size={15} className="shrink-0" />
-              <span className="flex-1">{t("saveSuccess")}</span>
-              <a
-                href={`/drive/${encodeURIComponent(drive)}/addons/knowledge?edit=${encodeURIComponent(savedNote.fileId)}`}
-                className="shrink-0 rounded-md border border-accent-teal/40 px-2.5 py-1 text-xs font-medium hover:bg-accent-teal/20"
-              >
-                {t("openNote")}
-              </a>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setSaveDialogOpen(true)}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-bg-border bg-bg-card px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:bg-bg-elevated"
-            >
-              <BookmarkPlus size={15} />
-              {t("saveToKnowledge")}
-            </button>
-          )}
-        </div>
       )}
 
       {(state.kind === "streaming" || state.kind === "answered") &&
