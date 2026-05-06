@@ -312,7 +312,18 @@ function buildAskNoteMarkdown(
     bodyLines.push("## 引用元", "");
     for (const c of citations) {
       const url = citationToLoftUrl(c);
-      bodyLines.push(`- [${c.filename}](${url})`);
+      const loc = parseSegmentLocation(
+        (c as Citation & { segment_location?: string | null }).segment_location ?? null,
+      );
+      const locLabel = loc?.label ? ` — ${loc.label}` : "";
+      bodyLines.push(`- [${c.filename}](${url})${locLabel}`);
+      const quote = c.quote?.trim();
+      if (quote) {
+        // Indent blockquote lines so they render under the list item.
+        for (const line of quote.split("\n")) {
+          bodyLines.push(`  > ${line}`);
+        }
+      }
     }
     bodyLines.push("");
   }
