@@ -101,7 +101,9 @@
       "image": "画像",
       "text": "文書"
     },
-    "saveToKnowledge": "Knowledge に保存"
+    "saveToKnowledge": "Knowledge に保存",
+    "saveSuccess": "Knowledge に保存しました",
+    "openNote": "ノートを開く"
   },
   "askSave": {
     "title": "Ask の回答を Knowledge に保存",

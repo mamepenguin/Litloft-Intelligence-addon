@@ -101,7 +101,9 @@
       "image": "image",
       "text": "text"
     },
-    "saveToKnowledge": "Save to Knowledge"
+    "saveToKnowledge": "Save to Knowledge",
+    "saveSuccess": "Saved to Knowledge",
+    "openNote": "Open note"
   },
   "askSave": {
     "title": "Save Ask answer to Knowledge",

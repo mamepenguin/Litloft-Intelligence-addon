@@ -457,6 +457,7 @@ function IntelligenceAskPageInner() {
   const [ragAvailable, setRagAvailable] = useState<boolean | null>(null);
   const [composing, setComposing] = useState(false);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [savedNote, setSavedNote] = useState<{ fileId: string; path: string } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Guard so the seed-query auto-fire runs exactly once even when the
   // status check re-renders the component. Without this an upstream
@@ -904,6 +905,7 @@ function IntelligenceAskPageInner() {
     (e: FormEvent<HTMLFormElement>) => {
       e.preventDefault();
       if (!canSubmit) return;
+      setSavedNote(null);
       void runAsk(input);
     },
     [canSubmit, input, runAsk],
@@ -1156,18 +1158,6 @@ function IntelligenceAskPageInner() {
               {t("takenMs", { ms: state.tookMs })}
             </p>
           )}
-          {state.kind === "answered" && state.citations.length > 0 && drive && (
-            <div className="mt-3">
-              <button
-                type="button"
-                onClick={() => setSaveDialogOpen(true)}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-bg-border px-3 py-1.5 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
-              >
-                <BookmarkPlus size={13} />
-                {t("saveToKnowledge")}
-              </button>
-            </div>
-          )}
         </section>
       )}
 
@@ -1185,6 +1175,32 @@ function IntelligenceAskPageInner() {
             ))}
           </ul>
         </section>
+      )}
+
+      {state.kind === "answered" && state.citations.length > 0 && drive && (
+        <div className="flex flex-col gap-2">
+          {savedNote ? (
+            <div className="flex items-center gap-2 rounded-lg border border-accent-teal/30 bg-accent-teal/10 px-4 py-3 text-sm text-accent-teal">
+              <BookmarkPlus size={15} className="shrink-0" />
+              <span className="flex-1">{t("saveSuccess")}</span>
+              <a
+                href={`/drive/${encodeURIComponent(drive)}/addons/knowledge?edit=${encodeURIComponent(savedNote.fileId)}`}
+                className="shrink-0 rounded-md border border-accent-teal/40 px-2.5 py-1 text-xs font-medium hover:bg-accent-teal/20"
+              >
+                {t("openNote")}
+              </a>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setSaveDialogOpen(true)}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-bg-border bg-bg-card px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:bg-bg-elevated"
+            >
+              <BookmarkPlus size={15} />
+              {t("saveToKnowledge")}
+            </button>
+          )}
+        </div>
       )}
 
       {(state.kind === "streaming" || state.kind === "answered") &&
@@ -1210,7 +1226,10 @@ function IntelligenceAskPageInner() {
           content={buildAskNoteMarkdown(input, state.answer, state.citations)}
           sourceFileIds={[...new Set(state.citations.map((c) => c.file_id))]}
           onClose={() => setSaveDialogOpen(false)}
-          onSaved={() => setSaveDialogOpen(false)}
+          onSaved={(result) => {
+            setSaveDialogOpen(false);
+            setSavedNote({ fileId: result.noteFileId, path: result.notePath });
+          }}
         />
       )}
     </div>
