@@ -1,7 +1,7 @@
 {#- vars: query (string), context_blocks (list[str], pre-serialized via _serialize_file_context) — see rag/prompt.py:build_user_prompt -#}
-質問: {{ query }}
+Question: {{ query }}
 
-コンテキスト:
+Context:
 {% if not context_blocks -%}
 (no context available)
 {%- else -%}

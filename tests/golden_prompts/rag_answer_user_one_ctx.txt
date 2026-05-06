@@ -1,6 +1,6 @@
-質問: クエリ
+Question: クエリ
 
-コンテキスト:
+Context:
 [file_id: abc123]
 filename: video.mp4
 type: video

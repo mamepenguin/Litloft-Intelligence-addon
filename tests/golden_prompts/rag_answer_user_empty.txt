@@ -1,4 +1,4 @@
-質問: クエリだ
+Question: クエリだ
 
-コンテキスト:
+Context:
 (no context available)
