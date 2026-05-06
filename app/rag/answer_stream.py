@@ -306,6 +306,107 @@ class AnswerStreamExtractor:
 
 
 # ---------------------------------------------------------------------------
+# AnswerSanitizer
+# ---------------------------------------------------------------------------
+
+
+class AnswerSanitizer:
+    """Strip inline citation markers like ``[file_id: ...]`` from the stream.
+
+    Weak local LLMs sometimes ignore the system prompt's instruction
+    not to inline source references in the answer body and emit
+    fragments such as ``[file_id: abc, location: 0:45]`` next to the
+    prose. Because we already render a dedicated citations panel from
+    the JSON ``citations`` array, those fragments are pure visual
+    noise and we strip them here.
+
+    The sanitizer is fed the decoded answer-text chunks produced by
+    ``AnswerStreamExtractor``. It holds back characters starting at
+    ``[`` until it can decide whether the bracket opens a target
+    marker. Brackets whose head does NOT begin with one of the
+    suppression keywords are flushed back unchanged so legitimate
+    uses such as Markdown links ``[label](url)`` are unaffected.
+
+    Decision rules (head = chars between ``[`` and the next non-name
+    char, case-folded with leading whitespace stripped):
+
+    * head matches ``file_id`` or ``location`` → suppress entire
+      bracket including the closing ``]``
+    * head can no longer become any keyword prefix → flush as-is
+    * otherwise → keep holding until ``]`` or until ``_MAX_HOLD``
+
+    The class is **not** thread-safe. Use one instance per stream.
+    """
+
+    _KEYWORDS = ("file_id", "location")
+    _MAX_HOLD = 512
+
+    __slots__ = ("_held",)
+
+    def __init__(self) -> None:
+        self._held = ""
+
+    def feed(self, text: str) -> str:
+        if not text:
+            return ""
+        out: list[str] = []
+        for ch in text:
+            if self._held:
+                self._held = self._held + ch
+                if ch == "]":
+                    if self._matches_keyword():
+                        # suppress the entire bracket
+                        pass
+                    else:
+                        out.append(self._held)
+                    self._held = ""
+                elif len(self._held) > self._MAX_HOLD:
+                    out.append(self._held)
+                    self._held = ""
+                elif not self._could_match_keyword():
+                    out.append(self._held)
+                    self._held = ""
+            elif ch == "[":
+                self._held = "["
+            else:
+                out.append(ch)
+        return "".join(out)
+
+    def finalize(self) -> str:
+        """Flush any held content when the upstream stream ends.
+
+        If the tail looks like an unfinished suppression marker (e.g.
+        ``[file_id: abc`` with no closing bracket because the model hit
+        its token budget), drop it — emitting it half-finished would be
+        worse than emitting nothing.
+        """
+        flushed = self._held
+        self._held = ""
+        if flushed.startswith("[") and any(
+            flushed[1:].lstrip().lower().startswith(kw)
+            for kw in self._KEYWORDS
+        ):
+            return ""
+        return flushed
+
+    def _head(self) -> str:
+        return self._held[1:].lstrip().lower()
+
+    def _matches_keyword(self) -> bool:
+        head = self._head()
+        return any(head.startswith(kw) for kw in self._KEYWORDS)
+
+    def _could_match_keyword(self) -> bool:
+        head = self._head()
+        if not head:
+            return True
+        return any(
+            kw.startswith(head) or head.startswith(kw)
+            for kw in self._KEYWORDS
+        )
+
+
+# ---------------------------------------------------------------------------
 # CitationStreamExtractor
 # ---------------------------------------------------------------------------
 

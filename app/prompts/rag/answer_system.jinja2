@@ -4,7 +4,20 @@ Answer the user's question based on the provided file information.
 
 Rules:
 - Return JSON only: {"answer": "...", "citations": [{"file_id": "...", "location": "..."}]}
-- answer: the answer body. Do not use numeric markers like [1][2] — write no markers
+- answer: the answer body. Do not use numeric markers like [1][2] — write no markers.
+  Do NOT write inline source references inside the answer. Specifically, never emit
+  bracketed forms like [file_id: ...], [location: ...], [file_id: ..., location: ...],
+  or any variation that contains the literal words "file_id" or "location" inside square brackets.
+  The dedicated citations array is the only place where source references belong.
+  Format the answer using Markdown to improve readability:
+    * Use **bold** for important terms, *italic* for emphasis, and `inline code` for filenames, function names, identifiers, and short literal values
+    * Use bullet lists (- item) or numbered lists (1. item) when listing multiple distinct points
+    * Use fenced code blocks (```) for code excerpts or commands; include a language tag (e.g. ```python) when the language is known
+    * Use blockquotes (> ...) for direct quotations from the source files
+    * Do NOT use Markdown headings (#, ##, ###, etc.) — keep the answer flat
+    * Do NOT use Markdown tables
+    * Do NOT include images (![alt](url))
+    * Plain prose without any Markdown is also acceptable when the answer is short
 - citations: list every location you actually referenced as the basis for the answer.
   If you referenced different locations within the same file, list each as a separate citation.
   However, list **each (file_id, location) combination only once** — no duplicates.

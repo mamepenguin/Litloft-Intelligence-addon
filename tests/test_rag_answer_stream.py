@@ -20,7 +20,11 @@ These tests cover:
 
 from __future__ import annotations
 
-from app.rag.answer_stream import AnswerStreamExtractor, CitationStreamExtractor
+from app.rag.answer_stream import (
+    AnswerSanitizer,
+    AnswerStreamExtractor,
+    CitationStreamExtractor,
+)
 
 
 def _feed_all(ex: AnswerStreamExtractor, chunks: list[str]) -> str:
@@ -472,3 +476,92 @@ class TestCitationStreamExtractorIdempotency:
         # Trailing whitespace / garbage after array close — ignored.
         assert ex.feed("  \n  garbage") == []
         assert ex.finalize() == []
+
+
+def _sanitize_all(s: AnswerSanitizer, chunks: list[str]) -> str:
+    out = "".join(s.feed(c) for c in chunks)
+    return out + s.finalize()
+
+
+class TestAnswerSanitizer:
+    def test_no_brackets_passes_through(self):
+        s = AnswerSanitizer()
+        assert _sanitize_all(s, ["Hello, world!"]) == "Hello, world!"
+
+    def test_strips_file_id_marker(self):
+        s = AnswerSanitizer()
+        result = _sanitize_all(
+            s,
+            ["The video covers SwiftUI [file_id: abc123, location: 26:01] basics."],
+        )
+        assert result == "The video covers SwiftUI  basics."
+
+    def test_strips_location_only_marker(self):
+        s = AnswerSanitizer()
+        result = _sanitize_all(s, ["See [location: page 5] for details."])
+        assert result == "See  for details."
+
+    def test_preserves_markdown_link(self):
+        s = AnswerSanitizer()
+        result = _sanitize_all(s, ["Check [the docs](https://example.com)."])
+        assert result == "Check [the docs](https://example.com)."
+
+    def test_preserves_arbitrary_brackets(self):
+        s = AnswerSanitizer()
+        result = _sanitize_all(s, ["Use [important] notes here."])
+        assert result == "Use [important] notes here."
+
+    def test_strips_across_chunk_boundaries(self):
+        s = AnswerSanitizer()
+        chunks = [
+            "Here is content ",
+            "[fil",
+            "e_id: a",
+            "bc, location: 0:45",
+            "] tail.",
+        ]
+        result = _sanitize_all(s, chunks)
+        assert result == "Here is content  tail."
+
+    def test_case_insensitive_keyword(self):
+        s = AnswerSanitizer()
+        result = _sanitize_all(s, ["Marker [FILE_ID: abc] removed."])
+        assert result == "Marker  removed."
+
+    def test_keyword_with_leading_whitespace(self):
+        s = AnswerSanitizer()
+        result = _sanitize_all(s, ["A [  file_id : abc ] B"])
+        assert result == "A  B"
+
+    def test_unclosed_marker_at_stream_end_dropped(self):
+        s = AnswerSanitizer()
+        result = _sanitize_all(s, ["truncated [file_id: ab"])
+        assert result == "truncated "
+
+    def test_unclosed_normal_bracket_at_stream_end_kept(self):
+        s = AnswerSanitizer()
+        result = _sanitize_all(s, ["truncated [label"])
+        assert result == "truncated [label"
+
+    def test_oversized_held_buffer_flushes(self):
+        s = AnswerSanitizer()
+        # No closing bracket and content is keyword-prefixed: kept
+        # holding until the cap, then flushed.
+        long = "[file_id: " + "a" * (AnswerSanitizer._MAX_HOLD + 10)
+        result = _sanitize_all(s, [long])
+        # finalize drops the unfinished marker, but the cap-flush
+        # path emits the body once we exceed _MAX_HOLD.
+        assert result.startswith("[file_id: ")
+
+    def test_empty_chunk_is_noop(self):
+        s = AnswerSanitizer()
+        assert s.feed("") == ""
+        assert s.finalize() == ""
+
+    def test_multiple_markers_in_one_text(self):
+        s = AnswerSanitizer()
+        result = _sanitize_all(
+            s,
+            ["A [file_id: x] B [location: 1:00] C [normal] D"],
+        )
+        assert result == "A  B  C [normal] D"

@@ -33,7 +33,11 @@ from typing import Any, Literal
 
 from app.config import settings
 from app.dependencies import get_llm_client
-from app.rag.answer_stream import AnswerStreamExtractor, CitationStreamExtractor
+from app.rag.answer_stream import (
+    AnswerSanitizer,
+    AnswerStreamExtractor,
+    CitationStreamExtractor,
+)
 from app.rag.category_expander import expand_category
 from app.rag.clue_generator import fetch_long_summaries, generate_clues
 from app.rag.coarse_retriever import ShortlistResult, coarse_retrieve
@@ -1454,6 +1458,12 @@ async def stream_answer(
     # the progressive path is NOT an escape hatch around the
     # allowed-file-id gate.
     extractor = AnswerStreamExtractor()
+    # Some local LLMs ignore the system prompt's "no inline source
+    # references" rule and emit ``[file_id: ...]`` / ``[location: ...]``
+    # fragments next to the prose. The sanitizer strips them on the fly
+    # so the rendered answer stays clean while the dedicated citations
+    # panel is unaffected.
+    sanitizer = AnswerSanitizer()
     citation_extractor = CitationStreamExtractor()
     allowed = frozenset(c.file_id for c in candidates)
     emitted_keys: set[tuple[str, str]] = set()
@@ -1473,9 +1483,11 @@ async def stream_answer(
             buffered = [*buffered, delta]
             extracted = extractor.feed(delta)
             if extracted:
-                yield AnswerEvent(
-                    kind="answer_chunk", data={"delta": extracted}
-                )
+                cleaned = sanitizer.feed(extracted)
+                if cleaned:
+                    yield AnswerEvent(
+                        kind="answer_chunk", data={"delta": cleaned}
+                    )
             for raw in citation_extractor.feed(delta):
                 event = _build_progressive_citation_event(
                     raw,
@@ -1493,7 +1505,16 @@ async def stream_answer(
         # prose that never crossed the mode-decision threshold.
         tail = extractor.finalize()
         if tail:
-            yield AnswerEvent(kind="answer_chunk", data={"delta": tail})
+            cleaned_tail = sanitizer.feed(tail)
+            if cleaned_tail:
+                yield AnswerEvent(
+                    kind="answer_chunk", data={"delta": cleaned_tail}
+                )
+        sanitizer_tail = sanitizer.finalize()
+        if sanitizer_tail:
+            yield AnswerEvent(
+                kind="answer_chunk", data={"delta": sanitizer_tail}
+            )
         # CitationStreamExtractor.finalize is a no-op for completed
         # streams but may return late objects in future tolerant-parse
         # modes. Apply the same hallucination filter + dedup gate.
