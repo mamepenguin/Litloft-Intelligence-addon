@@ -5,9 +5,9 @@
 features:
   indexing: true
   search: true
-  auto_tags: manual    # "false" | "manual" | "on_index" (requires llm.provider != "disabled")
-  summaries: manual    # "false" | "manual" | "on_index" (requires llm.provider != "disabled")
-  detailed_summaries: false
+  auto_tags: "manual"    # "false" | "manual" | "on_index" (requires llm.provider != "disabled")
+  summaries: "manual"    # "false" | "manual" | "on_index" (requires llm.provider != "disabled")
+  detailed_summaries: "false"
                       # "false" | "manual" | "on_index" — long-form Markdown summary.
                       # - "manual":   generated on user request
                       # - "on_index": generated automatically after each indexing
@@ -24,11 +24,11 @@ features:
                       # SECURITY: when enabled, file content (transcripts, captions,
                       # text) is sent to the LLM API on every ask. For privacy-sensitive
                       # content use a local LLM (e.g., ollama).
-  transcript_refine: false
+  transcript_refine: "false"
                       # "false" | "manual" | "on_index" — LLM-based ASR transcript
                       # correction. Originals kept in text_original for revert.
                       # Requires llm.provider != "disabled".
-  vision_describe: manual
+  vision_describe: "manual"
                       # "false" | "manual" | "on_index" — vision-LLM image
                       # description for image files (image/*, HEIC via pillow-heif).
                       # SECURITY: image bytes are sent to the LLM API on each
