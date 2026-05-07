@@ -27,6 +27,9 @@
         ],
         "folder-actions": [
             {"id": "folder-ai-actions", "label": "AI", "priority": 10}
+        ],
+        "admin-settings-sections": [
+            {"id": "admin-transcription", "label": "Transcription Settings", "priority": 10}
         ]
     },
     "event_hooks": [
