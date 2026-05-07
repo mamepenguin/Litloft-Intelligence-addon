@@ -297,7 +297,7 @@
   "settings": {
     "transcription": {
       "title": "文字起こしプロバイダー",
-      "description": "Intelligence アドオンが新規ジョブで使うプロバイダーを切り替えます。設定は次回起動時に反映されます。プロバイダー固有の細かいパラメータ（モデル / base_url 等）は手動編集のままです。",
+      "description": "音声や動画の文字起こしに使うサービスを選びます。変更を反映するにはコンテナの再起動が必要です。クラウド型のサービスは事前に API キーを設定してください。",
       "provider": "プロバイダー",
       "languageHint": "言語ヒント",
       "languageHintHelp": "BCP-47 タグ（例: ja, en-US, zh-Hant-HK）。空欄なら自動検出",

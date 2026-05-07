@@ -297,7 +297,7 @@
   "settings": {
     "transcription": {
       "title": "Transcription provider",
-      "description": "Switches the provider the Intelligence addon uses for new transcription jobs. Changes take effect on next container restart. Provider-specific tuning (model / base_url / etc.) still lives in search-config.yml.",
+      "description": "Choose the service used to transcribe audio and video. Restart the container for changes to take effect. Cloud services require an API key configured in your environment.",
       "provider": "Provider",
       "languageHint": "Language hint",
       "languageHintHelp": "BCP-47 tag (e.g. ja, en-US, zh-Hant-HK). Leave empty for auto-detect.",
