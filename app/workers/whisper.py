@@ -90,11 +90,21 @@ _batched_pipeline: object | None = None
 _loaded = False
 _last_used: float = 0.0
 
-# Audio/video types that can be transcribed
+# Audio/video types that can be transcribed.
+#
+# Phase 2F additions: ``audio/mp4`` is the IANA-registered MIME for
+# AAC-in-MP4 audio (most ``.m4a`` files); ``audio/opus`` is the
+# IANA-registered MIME for Opus audio. Both are required because
+# Linux Docker's ``mimetypes`` DB lacks the ``.m4a`` / ``.opus``
+# entries so backend classify() falls back to extension lookup and
+# emits the IANA names (hako A-gF1mK3kDjRjS_dfuq1B). The de-facto
+# Apple variants (``audio/m4a``, ``audio/x-m4a``) are kept for
+# files registered through other paths.
 TRANSCRIBABLE_TYPES = {
     "video/mp4", "video/webm", "video/quicktime", "video/x-matroska",
     "audio/mpeg", "audio/mp3", "audio/wav", "audio/ogg", "audio/flac",
     "audio/aac", "audio/m4a", "audio/x-m4a",
+    "audio/mp4", "audio/opus",
 }
 
 # External source files (.loft) that use adjacent .vtt instead of Whisper
@@ -725,9 +735,23 @@ async def index_whisper(file_id: str) -> bool:
         file_path = file.file_path
         drive = file.drive
 
-        # Unsupported MIME: silently mark indexed (legacy behaviour).
+        # Unsupported MIME: mark indexed so reconcile won't re-enqueue
+        # the file, but record the skip in JobRecord + INFO log so
+        # operators can answer "why isn't this file transcribed?"
+        # without scraping logs (Phase 2F, hako A-gF1mK3kDjRjS_dfuq1B).
         if mime_type not in TRANSCRIBABLE_TYPES and mime_type != LOFT_MIME:
             file.whisper_indexed = True
+            session.commit()
+            logger.info(
+                "File %s skipped for transcription: mime=%s not in "
+                "TRANSCRIBABLE_TYPES",
+                file_id, mime_type,
+            )
+            await asyncio.to_thread(
+                _record_skipped_job,
+                file_id,
+                f"mime={mime_type}",
+            )
             return True
 
     # External source carve-out (adjacent .vtt → not a provider call).
@@ -855,6 +879,32 @@ async def _record_failed_job(
         # JobRecord write is best-effort observability; never fail the
         # caller because of an audit-log row.
         logger.exception("Failed to write JobRecord for %s", file_id)
+
+
+def _record_skipped_job(file_id: str, reason: str) -> None:
+    """Insert a status='skipped' JobRecord row.
+
+    Phase 2F: replaces the legacy silent-skip path so admins can
+    SELECT ``status='skipped'`` and see exactly why a file's
+    transcript is missing (hako A-gF1mK3kDjRjS_dfuq1B). The row has
+    ``provider=None`` because no provider was contacted, and a
+    non-retryable ``error_class`` so this is not lumped together
+    with transient cloud failures. ``whisper_indexed=True`` is set
+    by the caller so reconcile does not re-enqueue the file.
+    """
+    try:
+        with get_search_db() as session:
+            session.add(JobRecord(
+                file_id=file_id,
+                job_kind="transcription",
+                provider=None,
+                status="skipped",
+                error_class="UnsupportedMimeType",
+                error_message=reason[:1000],
+                completed_at=datetime.now(UTC),
+            ))
+    except Exception:
+        logger.exception("Failed to write skipped JobRecord for %s", file_id)
 
 
 async def _do_transcribe_and_index(

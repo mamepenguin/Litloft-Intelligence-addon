@@ -378,11 +378,17 @@ class JobRecord(Base):
     * ``failed``   — provider raised an error or container restarted
       mid-job (startup hook flips orphaned ``running`` rows to
       ``failed`` with ``error_class="ContainerRestart"``)
+    * ``skipped``  — Phase 2F: the file was never offered to a provider
+      because its MIME type is not transcribable. ``provider=NULL``,
+      ``error_class="UnsupportedMimeType"``, ``error_message="mime=..."``.
+      Kept distinct from ``failed`` so retry-eligible failures can be
+      filtered separately.
 
     ``error_class`` records the concrete exception name
     (``"TransientError"`` / ``"RateLimitError"`` / ``"FatalError"`` /
-    ``"CircuitBreakerOpen"`` / ``"ContainerRestart"``) so SQL queries
-    can group failures without parsing the message body.
+    ``"CircuitBreakerOpen"`` / ``"ContainerRestart"`` /
+    ``"UnsupportedMimeType"``) so SQL queries can group failures
+    without parsing the message body.
 
     ``provider`` is nullable so kinds without a provider (future
     embedding / summary jobs) can reuse the table.
@@ -408,7 +414,7 @@ class JobRecord(Base):
     # Provider name (e.g. "whisper_local", "deepgram") for transcription
     # jobs; NULL for kinds that have no provider concept.
     provider: Mapped[str | None] = mapped_column(String, nullable=True)
-    # "running" | "succeeded" | "failed".
+    # "running" | "succeeded" | "failed" | "skipped".
     status: Mapped[str] = mapped_column(String, nullable=False)
     error_class: Mapped[str | None] = mapped_column(String, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
