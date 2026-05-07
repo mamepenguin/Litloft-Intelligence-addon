@@ -375,15 +375,19 @@ indexing:
     # Log probability threshold: segments with average log prob below this
     # are discarded as low-confidence. -1.0 is lenient. 0 = disabled.
     log_prob_threshold: -1.0
-    # Short example sentence fed to the Whisper decoder to bias its style,
-    # primarily for punctuation insertion in languages that often omit it
-    # (Japanese, Chinese). Keep under ~1-2 sentences; longer prompts waste
-    # the 224-token context window and can drift the output topic.
+    # Optional override for the Whisper decoder's initial_prompt (style
+    # bias for punctuation insertion). LEAVE BLANK in normal use — the
+    # addon ships per-language defaults (ja/en/zh/ko/es/fr/de/pt/it/ru)
+    # in app/workers/whisper_prompts.py and picks the one matching the
+    # detected language automatically.
+    # Set this only when you need a domain-specific style hint that the
+    # generic default misses; the override fully replaces the default
+    # for ALL languages, so use it when your content is single-language.
+    # Keep it under ~1-2 sentences; longer prompts waste the 224-token
+    # context window and can drift the output topic.
     # DO NOT include filenames, titles, or proper noun lists here —
     # Whisper will latch onto unrelated words and hallucinate them into
     # the transcript. Use a curated glossary layer for vocabulary hints.
-    # Example (Japanese): "こんにちは、今日は良い天気ですね。では、本題に入りましょう。"
-    # Example (English):  "Hello, everyone. Today, we will cover a short introduction."
     initial_prompt: ""
 
   # Text chunking settings

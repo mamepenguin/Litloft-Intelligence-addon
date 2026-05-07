@@ -17,6 +17,7 @@ from app.config import settings, validate_file_path
 from app.database import delete_fts_transcripts, get_search_db, upsert_fts_transcripts
 from app.models import Embedding, IndexedFile, TranscriptChunk, TranscriptWord
 from app.workers.embedder import embed_passages
+from app.workers.whisper_prompts import resolve_initial_prompt
 from sqlalchemy import text as sql_text
 
 logger = logging.getLogger(__name__)
@@ -150,6 +151,38 @@ def check_idle_unload() -> None:
         unload_model()
 
 
+# Below this language-detection probability we treat the result as
+# unreliable and skip the default prompt rather than feeding Whisper a
+# mismatched language hint.
+_LANG_DETECT_MIN_PROB = 0.5
+
+
+def _detect_language(model: object, file_path: str) -> str | None:
+    """Run Whisper's lightweight language detector on a media file.
+
+    Uses faster-whisper's ``detect_language`` which only consumes a
+    short audio sample (~30 s), so the cost relative to a full
+    transcription is negligible. Returns ``None`` on low confidence
+    or any failure — callers must tolerate an absent language.
+    """
+    try:
+        language, probability, _ = model.detect_language(file_path)
+    except Exception as e:
+        logger.warning(
+            "Language detection failed for %s: %s", file_path, e
+        )
+        return None
+
+    if probability < _LANG_DETECT_MIN_PROB:
+        logger.info(
+            "Language detection low confidence for %s: %s (%.2f) — "
+            "skipping default initial_prompt",
+            file_path, language, probability,
+        )
+        return None
+    return language
+
+
 def _transcribe_file(file_path: str) -> list[dict]:
     """Transcribe a media file using faster-whisper.
 
@@ -165,15 +198,27 @@ def _transcribe_file(file_path: str) -> list[dict]:
     model, batched = _ensure_loaded()
     whisper_config = settings.indexing.whisper
 
+    override = whisper_config.initial_prompt or ""
+    if override.strip():
+        initial_prompt: str | None = override
+    else:
+        detected = _detect_language(model, file_path)
+        initial_prompt = resolve_initial_prompt(detected, "")
+
     if batched is not None:
-        return _transcribe_batched(batched, file_path, whisper_config)
-    return _transcribe_sequential(model, file_path, whisper_config)
+        return _transcribe_batched(
+            batched, file_path, whisper_config, initial_prompt
+        )
+    return _transcribe_sequential(
+        model, file_path, whisper_config, initial_prompt
+    )
 
 
 def _transcribe_batched(
     pipeline: object,
     file_path: str,
     whisper_config: object,
+    initial_prompt: str | None,
 ) -> list[dict]:
     """Transcribe using BatchedInferencePipeline for faster throughput."""
     try:
@@ -182,7 +227,7 @@ def _transcribe_batched(
             "beam_size": whisper_config.beam_size,
             "language": None,
             "word_timestamps": True,
-            "initial_prompt": whisper_config.initial_prompt or None,
+            "initial_prompt": initial_prompt,
         }
         if whisper_config.compression_ratio_threshold > 0:
             transcribe_kwargs["compression_ratio_threshold"] = (
@@ -233,13 +278,16 @@ def _transcribe_batched(
             file_path, e,
         )
         model, _ = _ensure_loaded()
-        return _transcribe_sequential(model, file_path, whisper_config)
+        return _transcribe_sequential(
+            model, file_path, whisper_config, initial_prompt
+        )
 
 
 def _transcribe_sequential(
     model: object,
     file_path: str,
     whisper_config: object,
+    initial_prompt: str | None,
 ) -> list[dict]:
     """Transcribe sequentially with VAD fallback."""
     # Try with VAD first, fall back without VAD if it fails.
@@ -253,7 +301,7 @@ def _transcribe_sequential(
                 "vad_filter": use_vad,
                 "condition_on_previous_text": whisper_config.condition_on_previous_text,
                 "word_timestamps": True,
-                "initial_prompt": whisper_config.initial_prompt or None,
+                "initial_prompt": initial_prompt,
             }
             if whisper_config.compression_ratio_threshold > 0:
                 transcribe_kwargs["compression_ratio_threshold"] = (

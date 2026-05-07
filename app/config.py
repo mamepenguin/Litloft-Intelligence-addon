@@ -79,12 +79,13 @@ class WhisperIndexConfig:
     beam_size: int = 1
     batch_size: int = 0
     condition_on_previous_text: bool = True
-    # Short example sentence (≤224 tokens) used to bias the decoder
-    # toward a desired style — primarily punctuation insertion. Written
-    # in the user's primary content language; an irrelevant prompt mostly
-    # wastes token budget rather than corrupting output. Do not include
-    # filenames or curated vocabulary here; put those in a dedicated
-    # glossary layer if needed.
+    # Optional override for the Whisper ``initial_prompt`` (≤224 tokens).
+    # When blank, ``app.workers.whisper_prompts`` supplies a per-language
+    # default keyed off Whisper's detected language; set this only when
+    # you need a domain-specific style hint (e.g. specialised
+    # vocabulary). The override fully replaces the default — we do not
+    # concatenate. Do not include filenames or curated vocabulary here;
+    # put those in a dedicated glossary layer if needed.
     initial_prompt: str = ""
     # Segments with compression ratio above this threshold are discarded
     # (repetitive/looping output). Lower = stricter. 0 = disabled.
