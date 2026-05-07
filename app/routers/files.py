@@ -26,6 +26,7 @@ from app.schemas import (
     IndexDetailsResponse,
     MessageResponse,
     PdfMarkdownResponse,
+    ProviderStats,
     SuggestedTagsResponse,
     TranscriptChunkResponse,
     TranscriptResponse,
@@ -228,6 +229,8 @@ async def get_index_details(
                 ],
             )
 
+        provider_stats = _compute_provider_stats(db, file_id)
+
     return IndexDetailsResponse(
         file_id=file_id,
         drive=indexed["drive"],
@@ -240,7 +243,78 @@ async def get_index_details(
         },
         indexed_at=indexed["indexed_at"],
         embeddings=embeddings_by_type,
+        provider_stats=provider_stats,
     )
+
+
+# Phase 1C: ``provider_stats`` aggregate window. 7 days matches the
+# spec; older rows stay in job_records for historical inspection but
+# the dashboard only surfaces "what's broken right now".
+_PROVIDER_STATS_WINDOW_DAYS = 7
+
+
+def _compute_provider_stats(db, file_id: str) -> dict[str, ProviderStats]:
+    """Aggregate transcription JobRecord rows for the file (last 7 days).
+
+    Returns a ``{provider_name: ProviderStats}`` mapping.
+
+    Args:
+        db: Active SQLAlchemy session bound to the search DB.
+        file_id: The file whose history we want.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import func
+
+    from app.models import JobRecord
+
+    cutoff = datetime.now(UTC) - timedelta(days=_PROVIDER_STATS_WINDOW_DAYS)
+
+    rows = (
+        db.query(
+            JobRecord.provider,
+            JobRecord.status,
+            func.count(JobRecord.id).label("count"),
+        )
+        .filter(
+            JobRecord.file_id == file_id,
+            JobRecord.job_kind == "transcription",
+            JobRecord.attempted_at >= cutoff,
+            JobRecord.provider.isnot(None),
+        )
+        .group_by(JobRecord.provider, JobRecord.status)
+        .all()
+    )
+
+    stats: dict[str, dict[str, int]] = {}
+    for provider, status, count in rows:
+        bucket = stats.setdefault(provider, {"calls": 0, "failures": 0})
+        bucket["calls"] += int(count)
+        if status == "failed":
+            bucket["failures"] += int(count)
+
+    # Resolve last_error per provider via a single per-provider query
+    # (cheap because each call does ``ORDER BY attempted_at DESC LIMIT 1``).
+    out: dict[str, ProviderStats] = {}
+    for provider, counts in stats.items():
+        last_error_row = (
+            db.query(JobRecord.error_class)
+            .filter(
+                JobRecord.file_id == file_id,
+                JobRecord.job_kind == "transcription",
+                JobRecord.provider == provider,
+                JobRecord.status == "failed",
+                JobRecord.attempted_at >= cutoff,
+            )
+            .order_by(JobRecord.attempted_at.desc())
+            .first()
+        )
+        out[provider] = ProviderStats(
+            calls=counts["calls"],
+            failures=counts["failures"],
+            last_error=last_error_row[0] if last_error_row else None,
+        )
+    return out
 
 
 @router.get("/files/{file_id}/clip-timestamps", response_model=ClipTimestampsResponse)

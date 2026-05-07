@@ -207,6 +207,20 @@ class IndexDetailType(BaseModel):
     items: list[IndexDetailEmbeddingItem]
 
 
+class ProviderStats(BaseModel):
+    """Per-provider transcription job aggregate (last 7 days).
+
+    Spec ``2026-05-07-cloud-transcription-providers.md`` §"観測性".
+    Computed from ``job_records WHERE job_kind='transcription'`` so
+    operators can see "Deepgram failed 3 times in the last week" at
+    a glance without parsing logs.
+    """
+
+    calls: int
+    failures: int
+    last_error: str | None = None
+
+
 class IndexDetailsResponse(BaseModel):
     file_id: str
     drive: str
@@ -214,6 +228,9 @@ class IndexDetailsResponse(BaseModel):
     status: dict[str, bool]
     indexed_at: str
     embeddings: dict[str, IndexDetailType]
+    # Phase 1C addition: per-provider transcription job stats.
+    # Empty dict when no JobRecord rows exist for the file.
+    provider_stats: dict[str, ProviderStats] = {}
 
 
 class ClipTimestampItem(BaseModel):
