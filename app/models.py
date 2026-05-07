@@ -18,6 +18,7 @@ from sqlalchemy import (
     String,
     Text,
     JSON,
+    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -166,6 +167,13 @@ class TranscriptChunk(Base):
         DateTime, nullable=True
     )
 
+    # Diarization speaker label, populated by providers that return
+    # diarized output (Deepgram / ElevenLabs Scribe). NULL for
+    # whisper_local / openai_compatible chunks and for AI-refined
+    # chunks (refine deletes/regenerates words; speaker linkage is
+    # not preserved across the realign).
+    speaker_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(UTC)
     )
@@ -197,6 +205,10 @@ class TranscriptWord(Base):
 
     timestamp_start: Mapped[float] = mapped_column(Float, nullable=False)
     timestamp_end: Mapped[float] = mapped_column(Float, nullable=False)
+
+    # Diarization speaker label, populated by providers that return
+    # diarized output. See ``TranscriptChunk.speaker_id`` for details.
+    speaker_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(UTC)
@@ -345,4 +357,72 @@ class PdfMarkdown(Base):
         nullable=False,
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class JobRecord(Base):
+    """Per-attempt history row for transcription / embedding / summary jobs.
+
+    Spec ``2026-05-07-cloud-transcription-providers.md`` §"Schema 変更"
+    introduces this table as the **fail-loud** persistence layer for
+    asynchronous worker jobs. The previous design returned ``True`` from
+    ``_index_whisper_sync`` even on provider error and silently flipped
+    ``whisper_indexed=True``, which made operator-side failure
+    observation impossible.
+
+    Status lifecycle:
+
+    * ``running``  — job claimed, work in progress
+    * ``succeeded`` — provider returned data (or 0 segments for silent
+      audio); worker committed transcript chunks
+    * ``failed``   — provider raised an error or container restarted
+      mid-job (startup hook flips orphaned ``running`` rows to
+      ``failed`` with ``error_class="ContainerRestart"``)
+
+    ``error_class`` records the concrete exception name
+    (``"TransientError"`` / ``"RateLimitError"`` / ``"FatalError"`` /
+    ``"CircuitBreakerOpen"`` / ``"ContainerRestart"``) so SQL queries
+    can group failures without parsing the message body.
+
+    ``provider`` is nullable so kinds without a provider (future
+    embedding / summary jobs) can reuse the table.
+
+    The FK targets ``indexed_files.file_id`` (the intelligence DB's
+    canonical file table) — ``CASCADE`` cleans up history when the
+    file is purged. ``index=True`` on ``file_id`` keeps the
+    "all attempts for file X" lookup fast.
+    """
+
+    __tablename__ = "job_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    file_id: Mapped[str] = mapped_column(
+        String(12),
+        ForeignKey("indexed_files.file_id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    # "transcription" | "embedding" | "summary" — free-form so adding
+    # a new kind does not require a migration.
+    job_kind: Mapped[str] = mapped_column(String, nullable=False)
+    # Provider name (e.g. "whisper_local", "deepgram") for transcription
+    # jobs; NULL for kinds that have no provider concept.
+    provider: Mapped[str | None] = mapped_column(String, nullable=True)
+    # "running" | "succeeded" | "failed".
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    error_class: Mapped[str | None] = mapped_column(String, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        default=lambda: datetime.now(UTC),
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        Index("idx_job_records_file_kind", "file_id", "job_kind"),
+        Index("idx_job_records_status", "status"),
     )

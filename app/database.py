@@ -114,6 +114,14 @@ def init_search_db() -> None:
     with _search_engine.begin() as conn:
         _migrate_transcript_words_if_needed(conn)
 
+    # Phase 1A foundation of the cloud-transcription-providers spec:
+    # add ``speaker_id`` to transcript_words / transcript_chunks for
+    # diarization-capable providers, and create ``job_records`` for
+    # fail-loud job lifecycle history. All idempotent.
+    with _search_engine.begin() as conn:
+        _migrate_transcript_speaker_id_columns(conn)
+        _create_job_records_table(conn)
+
     # Create suggested_tags table for auto-tagging
     with _search_engine.connect() as conn:
         _create_suggested_tags_table(conn)
@@ -542,6 +550,72 @@ def _migrate_transcript_words_if_needed(conn: object) -> None:
         logger.info(
             "Migrated transcript_words: dropped legacy word_index column + index"
         )
+
+
+def _migrate_transcript_speaker_id_columns(conn: object) -> None:
+    """Add ``speaker_id`` to ``transcript_words`` and ``transcript_chunks``.
+
+    Phase 1A foundation of the cloud-transcription-providers spec
+    (2026-05-07). Diarization-capable providers (Deepgram /
+    ElevenLabs Scribe) populate the column; non-diarized providers
+    (whisper_local / openai_compatible) leave it NULL.
+
+    Both columns are nullable so pre-existing rows stay NULL without
+    a data migration. ``ALTER TABLE ADD COLUMN`` is idempotent here
+    via the ``PRAGMA table_info`` probe.
+    """
+    for table in ("transcript_words", "transcript_chunks"):
+        cols = {
+            row[1]
+            for row in conn.execute(
+                text(f"PRAGMA table_info({table})")
+            ).fetchall()
+        }
+        if not cols:
+            # Table will be created fresh by ``Base.metadata.create_all``
+            # — the new column is part of that schema, no migration needed.
+            continue
+        if "speaker_id" not in cols:
+            conn.execute(
+                text(f"ALTER TABLE {table} ADD COLUMN speaker_id TEXT")
+            )
+
+
+def _create_job_records_table(conn: object) -> None:
+    """Create the ``job_records`` table if it doesn't exist.
+
+    Phase 1A of the cloud-transcription-providers spec. The table is
+    the fail-loud persistence layer for asynchronous worker jobs:
+    each transcription / embedding / summary attempt writes one row
+    so operators can ``SELECT * FROM job_records WHERE status='failed'``
+    to observe failures that previously vanished into worker logs.
+
+    Mirrors the ``JobRecord`` ORM model in ``app.models``. CREATE
+    only — no ALTER — because the model is brand new in this release.
+    """
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS job_records ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  file_id TEXT NOT NULL,"
+        "  job_kind TEXT NOT NULL,"
+        "  provider TEXT,"
+        "  status TEXT NOT NULL,"
+        "  error_class TEXT,"
+        "  error_message TEXT,"
+        "  attempted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+        "  completed_at TIMESTAMP,"
+        "  FOREIGN KEY (file_id) REFERENCES indexed_files(file_id)"
+        "    ON DELETE CASCADE"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_job_records_file_kind "
+        "ON job_records(file_id, job_kind)"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_job_records_status "
+        "ON job_records(status)"
+    ))
 
 
 def _create_vec_tables(conn: object) -> None:
