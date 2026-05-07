@@ -1,26 +1,76 @@
 """Whisper transcription worker.
 
-Transcribes audio from video/audio files using faster-whisper (CTranslate2).
-The model is lazy-loaded and can be unloaded after idle to save RAM.
+Transcribes audio from video/audio files using a configurable
+:class:`~app.workers.transcription.base.TranscriptionProvider`. The
+local faster-whisper backend stays the default; cloud providers
+(Deepgram, ElevenLabs Scribe, OpenAI-compatible) are wired through
+:func:`~app.workers.transcription.get_provider` and gated by
+per-drive cloud policy at both enqueue and dequeue time.
 
-Only one Whisper task runs at a time (controlled by the indexer's semaphore).
+Only one Whisper task runs at a time (controlled by the indexer's
+semaphore).
+
+Spec: ``2026-05-07-cloud-transcription-providers.md``.
 """
 
 import asyncio
 import logging
+import os
 import re
 import threading
 import time
 import uuid
+from datetime import UTC, datetime
 
 from app.config import settings, validate_file_path
 from app.database import delete_fts_transcripts, get_search_db, upsert_fts_transcripts
-from app.models import Embedding, IndexedFile, TranscriptChunk, TranscriptWord
+from app.models import (
+    Embedding,
+    IndexedFile,
+    JobRecord,
+    TranscriptChunk,
+    TranscriptWord,
+)
 from app.workers.embedder import embed_passages
+from app.workers.transcription import get_provider
+from app.workers.transcription.errors import (
+    FatalError,
+    RateLimitError,
+    TranscriptionError,
+    TransientError,
+)
+from app.workers.transcription.retry import (
+    CircuitBreakerOpen,
+    transcribe_with_retry,
+)
 from app.workers.whisper_prompts import resolve_initial_prompt
 from sqlalchemy import text as sql_text
 
 logger = logging.getLogger(__name__)
+
+
+async def _emit_ws_event(event: str, data: dict) -> None:
+    """Best-effort WebSocket event emission via the host's internal API.
+
+    Mirrors :func:`app.workers.refine._emit_ws_event` /
+    :func:`app.workers.summaries._emit_ws_event`. The host forwards
+    the posted JSON to its WebSocket broadcaster; delivery failures
+    are swallowed so a flaky core never fails a transcription job.
+    Tests monkeypatch this function.
+    """
+    logger.info("transcription-event %s %s", event, data)
+
+    base = os.environ.get(
+        "HOMEVAULT_INTERNAL_API_URL", "http://backend:8000/api/internal"
+    )
+    url = f"{base}/addon-events"
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post(url, json={"event": event, "data": data})
+    except Exception:
+        return
 
 # Model state (lazy-loaded, with idle unload support)
 _lock = threading.Lock()
@@ -615,64 +665,344 @@ def _merge_segments(
 async def index_whisper(file_id: str) -> bool:
     """Transcribe a media file and index the transcript.
 
-    Runs transcription in a thread to avoid blocking the event loop.
+    Phase 1C orchestration:
 
-    Args:
-        file_id: The file ID to transcribe and index.
-
-    Returns:
-        True if indexing succeeded.
-    """
-    return await asyncio.to_thread(_index_whisper_sync, file_id)
-
-
-def _index_whisper_sync(file_id: str) -> bool:
-    """Synchronous Whisper indexing implementation.
-
-    Splits into read → compute → write phases to minimize DB lock duration.
-
-    Args:
-        file_id: The file ID to transcribe and index.
+    * Resolves the file's drive + path from the search DB
+    * Routes ``.loft`` files to the legacy adjacent-VTT path
+      (untouched — those don't go through a TranscriptionProvider)
+    * Selects the configured provider via :func:`get_provider`
+    * Layer 1 policy: cloud providers (`sends_audio_offhost=True`)
+      fall back to ``whisper_local`` when ``transcription_cloud=false``
+      for the drive (fail-closed via ``default_on_failure=False``)
+    * Layer 2 policy: re-evaluates ``intelligence.index`` at dequeue
+      so a recent flip is honoured even if the file was enqueued
+      before the change
+    * Hands off to :func:`_do_transcribe_and_index`, which owns the
+      provider call, retry / circuit breaker, JobRecord lifecycle,
+      and DB write phase
 
     Returns:
-        True if indexing succeeded.
+        True iff the file was indexed (transcript written or
+        legitimate zero-segment success). False on provider error or
+        skipped-by-policy — both leave ``whisper_indexed=False`` so a
+        future re-index can re-attempt.
     """
-    # --- Phase 1: Read file info (short DB access) ---
+    # --- Resolve file_id → (path, drive, mime) ---
     with get_search_db() as session:
         file = session.query(IndexedFile).filter_by(
             file_id=file_id, active=True
         ).first()
-
         if file is None:
             return False
-
         mime_type = file.mime_type
         file_path = file.file_path
+        drive = file.drive
 
+        # Unsupported MIME: silently mark indexed (legacy behaviour).
         if mime_type not in TRANSCRIBABLE_TYPES and mime_type != LOFT_MIME:
             file.whisper_indexed = True
             return True
 
-    # External source: use adjacent .vtt instead of Whisper.
-    # Called outside get_search_db() to avoid self-deadlock on _write_lock
-    # (_index_loft_vtt internally acquires get_search_db()).
+    # External source carve-out (adjacent .vtt → not a provider call).
+    # Called outside the DB context to avoid self-deadlock on the
+    # internal write lock.
     if mime_type == LOFT_MIME:
-        return _index_loft_vtt(file_id, file_path)
+        return await asyncio.to_thread(_index_loft_vtt, file_id, file_path)
 
     if not validate_file_path(file_path):
         logger.error("File path validation failed for %s: %s", file_id, file_path)
         return False
 
-    # --- Phase 2: Transcribe + embed (no DB access, may be very slow) ---
-    raw_segments = _transcribe_file(file_path)
+    configured = settings.transcription.provider
+    try:
+        provider = get_provider(configured)
+    except (ValueError, FatalError) as exc:
+        # Misconfigured provider name OR missing API key. Record the
+        # failure so operators see it, then bail.
+        logger.error(
+            "Provider %r init failed for %s: %s", configured, file_id, exc
+        )
+        await _record_failed_job(
+            file_id=file_id,
+            provider=configured,
+            error=exc,
+        )
+        await _emit_ws_event(
+            "intelligence.transcription.failed",
+            {
+                "file_id": file_id,
+                "drive": drive,
+                "provider": configured,
+                "error_class": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        return False
+
+    # Layer 1 — per-drive cloud policy (fail closed).
+    if provider.capabilities.sends_audio_offhost:
+        from app.policy_client import is_feature_enabled
+
+        try:
+            allowed = await is_feature_enabled(
+                drive,
+                "transcription_cloud",
+                default_on_failure=False,
+            )
+        except TransientError:
+            # Cold-start grace path — leave the job for a future retry.
+            logger.info(
+                "Drive %s: cloud policy lookup transient error, deferring %s",
+                drive, file_id,
+            )
+            return False
+        if not allowed:
+            logger.info(
+                "Drive %s: transcription_cloud=false, falling back to "
+                "whisper_local for %s",
+                drive, file_id,
+            )
+            try:
+                provider = get_provider("whisper_local")
+            except (ValueError, FatalError) as exc:
+                logger.error(
+                    "whisper_local fallback init failed for %s: %s",
+                    file_id, exc,
+                )
+                await _record_failed_job(
+                    file_id=file_id, provider="whisper_local", error=exc,
+                )
+                return False
+
+    # Layer 2 — re-evaluate ``intelligence.index`` at dequeue.
+    from app.policy_client import is_feature_enabled
+
+    if not await is_feature_enabled(drive, "index"):
+        logger.info(
+            "Drive %s: intelligence.index=false at dequeue, skipping %s",
+            drive, file_id,
+        )
+        return False
+
+    return await _do_transcribe_and_index(file_id, file_path, drive, provider)
+
+
+async def _record_failed_job(
+    *,
+    file_id: str,
+    provider: str | None,
+    error: Exception,
+) -> None:
+    """Insert a single ``JobRecord`` row marking a transcription failure.
+
+    Called from ``index_whisper`` for early-exit failures (provider
+    factory error, missing API key, fallback init failure) where no
+    "running" row exists yet.
+    """
+    def _write() -> None:
+        with get_search_db() as session:
+            session.add(JobRecord(
+                file_id=file_id,
+                job_kind="transcription",
+                provider=provider,
+                status="failed",
+                error_class=type(error).__name__,
+                error_message=str(error)[:1000],
+                completed_at=datetime.now(UTC),
+            ))
+
+    try:
+        await asyncio.to_thread(_write)
+    except Exception:
+        # JobRecord write is best-effort observability; never fail the
+        # caller because of an audit-log row.
+        logger.exception("Failed to write JobRecord for %s", file_id)
+
+
+async def _do_transcribe_and_index(
+    file_id: str,
+    file_path: str,
+    drive: str,
+    provider,
+) -> bool:
+    """Run a provider transcription and persist the result.
+
+    Owns the JobRecord lifecycle:
+
+    * insert ``status='running'`` row before invoking the provider
+    * on success / 0-segment-silent: update to ``status='succeeded'``
+      and flip ``whisper_indexed=True``
+    * on provider error: update to ``status='failed'`` with the
+      classified ``error_class``, leave ``whisper_indexed=False`` so
+      a future re-index can re-attempt, and return False so
+      :meth:`IndexManager.requeue_after_whisper` is NOT called (would
+      otherwise enqueue summaries / auto_tags with no transcript).
+
+    Emits ``intelligence.transcription.completed`` /
+    ``intelligence.transcription.failed`` WS events on the way out.
+    """
+    job_id = await asyncio.to_thread(_insert_running_job, file_id, provider.name)
+
+    try:
+        segments = await transcribe_with_retry(
+            provider,
+            file_path,
+            language_hint=settings.transcription.language_hint or None,
+            hotwords=list(settings.transcription.hotwords) or None,
+        )
+    except TranscriptionError as exc:
+        # All classified provider errors land here (TransientError /
+        # RateLimitError exhausted, FatalError, CircuitBreakerOpen).
+        await asyncio.to_thread(
+            _finish_job_failed, job_id, exc,
+        )
+        await _emit_ws_event(
+            "intelligence.transcription.failed",
+            {
+                "file_id": file_id,
+                "drive": drive,
+                "provider": provider.name,
+                "error_class": type(exc).__name__,
+                "error_message": str(exc)[:500],
+            },
+        )
+        return False
+    except Exception as exc:
+        # Unclassified bug in the provider — record as TransientError
+        # so the operator sees something but the job can be retried.
+        logger.exception("Unclassified provider error for %s", file_id)
+        await asyncio.to_thread(_finish_job_failed, job_id, exc)
+        await _emit_ws_event(
+            "intelligence.transcription.failed",
+            {
+                "file_id": file_id,
+                "drive": drive,
+                "provider": provider.name,
+                "error_class": type(exc).__name__,
+                "error_message": str(exc)[:500],
+            },
+        )
+        return False
+
+    # Convert TranscriptionSegment → legacy dict shape that the chunk
+    # builder + DB writer already understand.
+    raw_segments = _segments_to_dicts(segments)
+    has_diarization = any(
+        w.get("speaker_id") is not None
+        for seg in raw_segments
+        for w in seg.get("words") or []
+    )
+
+    await asyncio.to_thread(
+        _persist_transcript,
+        file_id,
+        provider.name,
+        raw_segments,
+        job_id,
+    )
+
+    # Snapshot counts for the completion event after persist.
+    words_count = sum(len(seg.get("words") or []) for seg in raw_segments)
+    await _emit_ws_event(
+        "intelligence.transcription.completed",
+        {
+            "file_id": file_id,
+            "drive": drive,
+            "provider": provider.name,
+            "segments_count": len(raw_segments),
+            "words_count": words_count,
+            "has_diarization": has_diarization,
+        },
+    )
+    return True
+
+
+def _segments_to_dicts(segments) -> list[dict]:
+    """Convert a list of :class:`TranscriptionSegment` to legacy dicts.
+
+    Carries ``speaker_id`` through from :class:`WordToken`. The
+    legacy dict shape is what ``_flatten_words`` /
+    ``_build_chunks_from_words`` consume.
+    """
+    out: list[dict] = []
+    for seg in segments:
+        out.append({
+            "text": seg.text,
+            "start": seg.start,
+            "end": seg.end,
+            "language": seg.language,
+            "words": [
+                {
+                    "word": w.text,
+                    "start": w.start,
+                    "end": w.end,
+                    "speaker_id": w.speaker_id,
+                }
+                for w in seg.words
+            ],
+        })
+    return out
+
+
+def _insert_running_job(file_id: str, provider_name: str) -> int:
+    """Insert a fresh JobRecord with status='running' and return its id."""
+    with get_search_db() as session:
+        record = JobRecord(
+            file_id=file_id,
+            job_kind="transcription",
+            provider=provider_name,
+            status="running",
+        )
+        session.add(record)
+        session.flush()
+        return int(record.id)
+
+
+def _finish_job_failed(job_id: int, exc: Exception) -> None:
+    """Mark a previously-inserted JobRecord as failed."""
+    with get_search_db() as session:
+        record = session.query(JobRecord).filter_by(id=job_id).first()
+        if record is None:
+            # Should never happen — we wrote the row a moment ago.
+            return
+        record.status = "failed"
+        record.error_class = type(exc).__name__
+        record.error_message = str(exc)[:1000]
+        record.completed_at = datetime.now(UTC)
+
+
+def _finish_job_succeeded(job_id: int) -> None:
+    """Mark a previously-inserted JobRecord as succeeded."""
+    with get_search_db() as session:
+        record = session.query(JobRecord).filter_by(id=job_id).first()
+        if record is None:
+            return
+        record.status = "succeeded"
+        record.completed_at = datetime.now(UTC)
+
+
+def _persist_transcript(
+    file_id: str,
+    provider_name: str,
+    raw_segments: list[dict],
+    job_id: int,
+) -> None:
+    """DB write phase: chunks + words + embeddings + JobRecord update.
+
+    Also handles the "0 segments / 0 chunks" silent-audio case by
+    flipping ``whisper_indexed=True`` and marking the JobRecord as
+    succeeded — preserving legacy behaviour so silent files don't get
+    re-attempted forever.
+    """
     if not raw_segments:
         with get_search_db() as session:
             file = session.query(IndexedFile).filter_by(file_id=file_id).first()
             if file is not None:
                 file.whisper_indexed = True
-        return True
+        _finish_job_succeeded(job_id)
+        return
 
-    whisper_config = settings.indexing.whisper
+    whisper_config = settings.transcription.whisper_local
     words = _flatten_words(raw_segments)
     chunks = _build_chunks_from_words(
         words,
@@ -685,7 +1015,8 @@ def _index_whisper_sync(file_id: str) -> bool:
             file = session.query(IndexedFile).filter_by(file_id=file_id).first()
             if file is not None:
                 file.whisper_indexed = True
-        return True
+        _finish_job_succeeded(job_id)
+        return
 
     chunk_texts = [c["text"] for c in chunks if c["text"].strip()]
     vectors = None
@@ -695,7 +1026,6 @@ def _index_whisper_sync(file_id: str) -> bool:
         except Exception as e:
             logger.error("Whisper embedding failed for %s: %s", file_id, e)
 
-    # --- Phase 3: Write all results to DB (short transaction) ---
     with get_search_db() as session:
         _remove_whisper_data(session, file_id)
 
@@ -707,6 +1037,7 @@ def _index_whisper_sync(file_id: str) -> bool:
                 language=chunk["language"],
                 timestamp_start=chunk["start"],
                 timestamp_end=chunk["end"],
+                speaker_id=chunk.get("speaker_id"),
             )
             session.add(transcript)
 
@@ -720,6 +1051,7 @@ def _index_whisper_sync(file_id: str) -> bool:
                         "language": w.get("language", ""),
                         "timestamp_start": w["start"],
                         "timestamp_end": w["end"],
+                        "speaker_id": w.get("speaker_id"),
                     }
                     for w in words
                 ],
@@ -762,7 +1094,6 @@ def _index_whisper_sync(file_id: str) -> bool:
                         idx, file_id, e,
                     )
 
-        # Write transcript chunks to FTS5 for keyword search
         fts_chunks = [
             {"chunk_index": idx, "text": chunk["text"]}
             for idx, chunk in enumerate(chunks)
@@ -775,7 +1106,12 @@ def _index_whisper_sync(file_id: str) -> bool:
         if file is not None:
             file.whisper_indexed = True
 
-    return True
+        # Mark the JobRecord succeeded inside the same session so the
+        # state flip and the transcript write commit atomically.
+        record = session.query(JobRecord).filter_by(id=job_id).first()
+        if record is not None:
+            record.status = "succeeded"
+            record.completed_at = datetime.now(UTC)
 
 
 def _remove_whisper_data(session: object, file_id: str) -> None:
