@@ -779,14 +779,36 @@ def _parse_transcription(data: dict[str, Any]) -> TranscriptionConfig:
         )
         _whisper_deprecation_logged = True
 
-    return TranscriptionConfig(
-        provider=new_section.get(
+    # Phase 2D: GUI-managed overrides live in
+    # ``/intelligence-data/transcription-overrides.json`` and apply
+    # only to the three top-level fields below. Provider sub-configs
+    # (deepgram.model, openai_compatible.base_url, …) stay search-
+    # config.yml's responsibility — the GUI does not edit them.
+    from app.transcription_overrides import read_overrides
+
+    overrides = read_overrides()
+    if overrides is not None and overrides.provider is not None:
+        provider_value = overrides.provider
+    else:
+        provider_value = new_section.get(
             "provider", TranscriptionConfig.provider
-        ),
-        language_hint=new_section.get(
+        )
+    if overrides is not None and overrides.language_hint is not None:
+        # Empty string is a meaningful "no hint" override; keep it.
+        language_hint_value = overrides.language_hint
+    else:
+        language_hint_value = new_section.get(
             "language_hint", TranscriptionConfig.language_hint
-        ),
-        hotwords=tuple(new_section.get("hotwords", []) or []),
+        )
+    if overrides is not None and overrides.hotwords is not None:
+        hotwords_value = overrides.hotwords
+    else:
+        hotwords_value = tuple(new_section.get("hotwords", []) or [])
+
+    return TranscriptionConfig(
+        provider=provider_value,
+        language_hint=language_hint_value,
+        hotwords=hotwords_value,
         whisper_local=whisper_local,
         openai_compatible=_parse_nested(
             new_section, "openai_compatible", OpenAICompatibleProviderConfig

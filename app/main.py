@@ -18,6 +18,7 @@ from app.database import init_litloft_db, init_search_db
 from app.indexer import IndexManager
 from app.llm import create_llm_client
 from app.routers import (
+    admin,
     files,
     pickup,
     queue,
@@ -280,6 +281,7 @@ app.include_router(summaries.router)
 app.include_router(rag.router)
 app.include_router(refine.router)
 app.include_router(vision.router)
+app.include_router(admin.router)
 
 
 @app.get("/status", response_model=StatusResponse, tags=["status"])

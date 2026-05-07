@@ -430,6 +430,13 @@
                 "drive_optional": true,
                 "pre_check": {"type": "admin"},
                 "response_filter": null
+            },
+            {
+                "path": "/admin/transcription",
+                "methods": ["GET", "PUT"],
+                "drive_optional": true,
+                "pre_check": {"type": "admin"},
+                "response_filter": null
             }
         ]
     }
