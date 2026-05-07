@@ -298,6 +298,88 @@ def test_put_handles_notify_failure_without_rollback(
     assert read_overrides(data_dir) is not None
 
 
+# ---------------------------------------------------------------------------
+# DELETE /admin/transcription
+# ---------------------------------------------------------------------------
+
+
+def test_delete_removes_existing_overrides(client, admin_app, monkeypatch) -> None:
+    """A DELETE drops the overrides file so search-config.yml takes back
+    over on the next restart. The core is notified that a restart is
+    needed because the actual transcribe job switches over only after
+    intelligence reloads ``settings.transcription``."""
+    _app, data_dir = admin_app
+    write_overrides(
+        TranscriptionOverrides(provider="deepgram"),
+        data_dir=data_dir,
+    )
+    assert overrides_path(data_dir).is_file()
+
+    from app.routers import admin as admin_module
+
+    notify = _ok_notify()
+    monkeypatch.setattr(admin_module, "_notify_core_restart_pending", notify)
+
+    response = client.delete("/admin/transcription")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "reset"
+    assert body["removed"] is True
+    assert body["restart_required"] is True
+    assert body["core_notified"] == "ok"
+    assert not overrides_path(data_dir).is_file()
+    notify.assert_awaited_once()
+
+
+def test_delete_is_noop_when_no_overrides_present(
+    client, admin_app, monkeypatch
+) -> None:
+    """Calling DELETE without an existing overrides file returns 200
+    with ``removed=False`` so the GUI can debounce repeated clicks
+    without surfacing fake errors. Restart is not required because
+    nothing actually changed."""
+    _app, data_dir = admin_app
+    assert not overrides_path(data_dir).is_file()
+
+    from app.routers import admin as admin_module
+
+    notify = _ok_notify()
+    monkeypatch.setattr(admin_module, "_notify_core_restart_pending", notify)
+
+    response = client.delete("/admin/transcription")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "reset"
+    assert body["removed"] is False
+    assert body["restart_required"] is False
+    notify.assert_awaited_once()
+
+
+def test_delete_get_roundtrip_clears_overrides_present(
+    client, admin_app, monkeypatch
+) -> None:
+    """After a successful DELETE, GET reports ``overrides_present=False``
+    so the GUI banner disappears immediately (well before the
+    container restart actually swaps providers)."""
+    _app, data_dir = admin_app
+    write_overrides(
+        TranscriptionOverrides(provider="deepgram", language_hint="ja"),
+        data_dir=data_dir,
+    )
+    pre = client.get("/admin/transcription").json()
+    assert pre["overrides_present"] is True
+
+    from app.routers import admin as admin_module
+
+    monkeypatch.setattr(
+        admin_module, "_notify_core_restart_pending", _ok_notify()
+    )
+    client.delete("/admin/transcription")
+
+    post = client.get("/admin/transcription").json()
+    assert post["overrides_present"] is False
+
+
 def test_whisper_local_does_not_require_api_key(
     client, admin_app, monkeypatch
 ) -> None:

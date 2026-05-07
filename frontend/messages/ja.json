@@ -314,6 +314,12 @@
       "saveFailed": "保存に失敗しました",
       "providerNeedsKey": "このプロバイダーは {env} を必要とします。.env に追加して `docker compose up -d` 後に再保存してください",
       "notWhisperHint": "ホットワードは Whisper 系（whisper_local / openai_compatible）と AssemblyAI のみで使われます",
+      "overridesActive": "GUI で設定された値が search-config.yml の値を上書き中です",
+      "overridesHelp": "search-config.yml を直接編集して動かしたい場合は、GUI 設定をリセットしてください",
+      "reset": "GUI 設定をリセット",
+      "resetting": "リセット中...",
+      "resetSuccess": "リセットしました — 反映には再起動が必要",
+      "resetFailed": "リセットに失敗しました",
       "providers": {
         "whisper_local": "Whisper local (faster-whisper)",
         "openai_compatible": "OpenAI 互換 (Whisper API / Groq / Fireworks)",

@@ -156,4 +156,84 @@ describe("AdminTranscriptionSettingsSection", () => {
       expect(screen.getByText(/boom|HTTP 500|Failed/)).toBeInTheDocument(),
     );
   });
+
+  it("hides the overrides banner when no GUI override is active", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse(defaultPayload({ overrides_present: false })),
+    );
+    render(<AdminTranscriptionSettingsSection />);
+    await waitFor(() => screen.getByRole("radio", { name: /whisper local/i }));
+    expect(screen.queryByTestId("overrides-banner")).toBeNull();
+  });
+
+  it("renders the overrides banner with reset button when overrides exist", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse(defaultPayload({ overrides_present: true })),
+    );
+    render(<AdminTranscriptionSettingsSection />);
+    await waitFor(() =>
+      expect(screen.getByTestId("overrides-banner")).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: /reset/i })).toBeInTheDocument();
+  });
+
+  it("DELETEs the endpoint when reset is clicked, then refetches", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse(defaultPayload({ overrides_present: true })),
+    );
+    // DELETE response
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({
+        status: "reset",
+        removed: true,
+        restart_required: true,
+        core_notified: "ok",
+      }),
+    );
+    // Refetch after reset shows file-side baseline (overrides_present=false)
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse(defaultPayload({ overrides_present: false })),
+    );
+
+    render(<AdminTranscriptionSettingsSection />);
+    await waitFor(() =>
+      expect(screen.getByTestId("overrides-banner")).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /reset/i }));
+
+    await waitFor(() => {
+      const deleteCall = mockFetch.mock.calls.find(
+        (c) => c[1]?.method === "DELETE",
+      );
+      expect(deleteCall?.[0]).toBe(ENDPOINT);
+    });
+    await waitFor(() =>
+      expect(screen.queryByTestId("overrides-banner")).toBeNull(),
+    );
+  });
+
+  it("surfaces the server detail when reset fails", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse(defaultPayload({ overrides_present: true })),
+    );
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ detail: "filesystem read-only" }, 500),
+    );
+
+    render(<AdminTranscriptionSettingsSection />);
+    await waitFor(() =>
+      expect(screen.getByTestId("overrides-banner")).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /reset/i }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/filesystem read-only/i),
+      ).toBeInTheDocument(),
+    );
+    // Banner stays visible because the override is still on disk.
+    expect(screen.getByTestId("overrides-banner")).toBeInTheDocument();
+  });
 });

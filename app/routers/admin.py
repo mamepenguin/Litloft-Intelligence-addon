@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 import app.config as config
 from app.transcription_overrides import (
     TranscriptionOverrides,
+    delete_overrides,
     overrides_path,
     read_overrides,
     write_overrides,
@@ -149,6 +150,30 @@ async def update_transcription_config(
     return {
         "status": "saved",
         "restart_required": True,
+        "core_notified": notify_status,
+    }
+
+
+@router.delete("/transcription")
+async def reset_transcription_config() -> dict[str, Any]:
+    """Drop the GUI overrides so search-config.yml becomes authoritative.
+
+    Lets operators undo a GUI change without hand-editing the
+    /intelligence-data volume. No-op (still returns 200) when the
+    overrides file is already absent — keeps the call idempotent so
+    the GUI button can be clicked repeatedly without surfacing fake
+    errors.
+    """
+    removed = delete_overrides()
+    if removed:
+        logger.info("Transcription overrides reset (file removed)")
+    else:
+        logger.info("Transcription overrides reset requested but no file present")
+    notify_status = await _notify_core_restart_pending()
+    return {
+        "status": "reset",
+        "removed": removed,
+        "restart_required": removed,
         "core_notified": notify_status,
     }
 

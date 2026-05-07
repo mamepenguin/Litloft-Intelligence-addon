@@ -88,6 +88,20 @@ async function saveConfig(payload: {
   }
 }
 
+async function resetConfig(): Promise<void> {
+  const resp = await fetch(ENDPOINT, { method: "DELETE" });
+  if (!resp.ok) {
+    let detail = `HTTP ${resp.status}`;
+    try {
+      const body = await resp.json();
+      if (typeof body?.detail === "string") detail = body.detail;
+    } catch {
+      // ignore parse failures and use the HTTP status text
+    }
+    throw { status: resp.status, detail } as FetchError;
+  }
+}
+
 function describeSubconfig(
   provider: string,
   summary: SearchConfigSummary,
@@ -111,6 +125,19 @@ export default function AdminTranscriptionSettingsSection(): React.ReactElement 
   const [provider, setProvider] = useState("");
   const [languageHint, setLanguageHint] = useState("");
   const [hotwordsText, setHotwordsText] = useState("");
+
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetOk, setResetOk] = useState(false);
+
+  const reload = useCallback(() => {
+    return fetchConfig().then((payload) => {
+      setData(payload);
+      setProvider(payload.provider);
+      setLanguageHint(payload.language_hint || "");
+      setHotwordsText((payload.hotwords ?? []).join("\n"));
+    });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -150,6 +177,7 @@ export default function AdminTranscriptionSettingsSection(): React.ReactElement 
   const handleSave = useCallback(async () => {
     setSaveError(null);
     setSavedOk(false);
+    setResetOk(false);
     setSaving(true);
     const hotwords = hotwordsText
       .split(/\r?\n/)
@@ -162,6 +190,8 @@ export default function AdminTranscriptionSettingsSection(): React.ReactElement 
         hotwords,
       });
       setSavedOk(true);
+      // Refresh so overrides_present flips to true and the banner appears.
+      await reload();
     } catch (err: unknown) {
       const detail =
         (err as FetchError | undefined)?.detail ?? t("saveFailed");
@@ -169,7 +199,26 @@ export default function AdminTranscriptionSettingsSection(): React.ReactElement 
     } finally {
       setSaving(false);
     }
-  }, [provider, languageHint, hotwordsText, t]);
+  }, [provider, languageHint, hotwordsText, t, reload]);
+
+  const handleReset = useCallback(async () => {
+    setResetError(null);
+    setResetOk(false);
+    setSavedOk(false);
+    setResetting(true);
+    try {
+      await resetConfig();
+      // Pull the file-side baseline back into the form.
+      await reload();
+      setResetOk(true);
+    } catch (err: unknown) {
+      const detail =
+        (err as FetchError | undefined)?.detail ?? t("resetFailed");
+      setResetError(detail);
+    } finally {
+      setResetting(false);
+    }
+  }, [reload, t]);
 
   if (loadError) {
     return (
@@ -198,6 +247,33 @@ export default function AdminTranscriptionSettingsSection(): React.ReactElement 
         {t("title")}
       </h2>
       <p className="mb-4 text-xs text-text-muted">{t("description")}</p>
+
+      {data.overrides_present && (
+        <div
+          role="status"
+          data-testid="overrides-banner"
+          className="mb-4 rounded-md border border-accent-amber bg-bg-elevated p-3"
+        >
+          <p className="text-sm text-text-primary">{t("overridesActive")}</p>
+          <p className="mt-1 text-xs text-text-muted">{t("overridesHelp")}</p>
+          <div className="mt-2 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleReset}
+              disabled={resetting}
+              className="rounded-md border border-bg-border bg-bg-card px-3 py-1 text-sm text-text-primary hover:bg-bg-light disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {resetting ? t("resetting") : t("reset")}
+            </button>
+            {resetOk && (
+              <span className="text-xs text-success">{t("resetSuccess")}</span>
+            )}
+            {resetError && (
+              <span className="text-xs text-danger">{resetError}</span>
+            )}
+          </div>
+        </div>
+      )}
 
       <fieldset className="mb-4">
         <legend className="mb-2 text-sm font-medium text-text-primary">

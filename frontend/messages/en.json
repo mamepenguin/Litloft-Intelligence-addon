@@ -314,6 +314,12 @@
       "saveFailed": "Failed to save",
       "providerNeedsKey": "This provider needs {env}. Add it to .env, run `docker compose up -d`, then resave.",
       "notWhisperHint": "Hotwords are honoured only by Whisper-family (whisper_local / openai_compatible) and AssemblyAI.",
+      "overridesActive": "Values set from this GUI are shadowing the ones in search-config.yml",
+      "overridesHelp": "If you want to drive transcription from the YAML file directly, reset the GUI settings",
+      "reset": "Reset GUI settings",
+      "resetting": "Resetting...",
+      "resetSuccess": "Reset — restart required for the change to take effect",
+      "resetFailed": "Failed to reset",
       "providers": {
         "whisper_local": "Whisper local (faster-whisper)",
         "openai_compatible": "OpenAI-compatible (Whisper API / Groq / Fireworks)",

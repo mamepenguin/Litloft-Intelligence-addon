@@ -1,5 +1,14 @@
 # Semantic Search Service Configuration
 # Copy to search-config.yml and customize as needed.
+#
+# NOTE: transcription.{provider,language_hint,hotwords} can also be set
+# from the admin GUI at /admin/settings → "Transcription provider".
+# When the GUI is used, the chosen values are saved to
+# /intelligence-data/transcription-overrides.json and SHADOW the values
+# below at startup. To make file edits authoritative again, delete that
+# overrides file or click "Reset GUI settings" in the admin GUI banner.
+# All other transcription.* fields (model / base_url / timeouts / etc.)
+# are file-only — edit them here and restart.
 
 # Feature flags
 features:
