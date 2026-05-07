@@ -54,18 +54,82 @@ class CircuitBreakerOpen(TranscriptionError):
     """
 
 
-# Module-level singleton; reset between tests via reset_circuit_breaker().
-_breaker = ProviderCircuitBreaker()
+# Per-provider breaker registry. Each provider gets its own
+# ``ProviderCircuitBreaker`` so a custom ``circuit_breaker_threshold``
+# in ``config.transcription.<provider>.circuit_breaker_threshold``
+# can shape the trip behaviour for that provider only.
+#
+# A single legacy ``_breaker`` singleton would force every provider
+# to share the same threshold, which contradicts spec R2-4 ("per-
+# provider override"). The registry is keyed by provider name; the
+# ``"_default"`` slot is the back-compat slot returned by
+# ``get_circuit_breaker()`` and is what the wrapper uses when no
+# config override is found.
+_breaker_registry: dict[str, ProviderCircuitBreaker] = {
+    "_default": ProviderCircuitBreaker(),
+}
+
+
+def _resolve_threshold(provider_name: str) -> int | None:
+    """Look up ``circuit_breaker_threshold`` for a provider from config.
+
+    Returns ``None`` when no override is configured (caller should fall
+    back to the spec default of 20). Defensive: a missing config tree
+    or an attribute typo must not crash the worker — the breaker just
+    runs at default.
+    """
+    try:
+        from app.config import settings  # local: tests reload config
+        cfg = getattr(settings.transcription, provider_name, None)
+        threshold = getattr(cfg, "circuit_breaker_threshold", None) if cfg else None
+        if isinstance(threshold, int) and threshold > 0:
+            return threshold
+    except Exception:  # noqa: BLE001 — fail open on config wobble
+        return None
+    return None
+
+
+def get_breaker_for(provider_name: str) -> ProviderCircuitBreaker:
+    """Return the per-provider breaker, building it on first use.
+
+    Reads ``transcription.<provider>.circuit_breaker_threshold`` once
+    when the breaker is created; later config changes do not retune an
+    existing breaker (consistent with the rest of the worker — config
+    edits require a restart).
+    """
+    breaker = _breaker_registry.get(provider_name)
+    if breaker is not None:
+        return breaker
+    threshold = _resolve_threshold(provider_name)
+    breaker = (
+        ProviderCircuitBreaker(threshold=threshold)
+        if threshold is not None
+        else ProviderCircuitBreaker()
+    )
+    _breaker_registry[provider_name] = breaker
+    return breaker
 
 
 def get_circuit_breaker() -> ProviderCircuitBreaker:
-    """Return the process-wide circuit breaker instance."""
-    return _breaker
+    """Return the process-wide *default* circuit breaker instance.
+
+    Kept for back-compat; new code should call
+    :func:`get_breaker_for(provider_name)` so per-provider thresholds
+    apply.
+    """
+    return _breaker_registry["_default"]
 
 
 def reset_circuit_breaker() -> None:
-    """Reset the process-wide breaker to a clean state (test hook)."""
-    _breaker.reset()
+    """Reset the process-wide breakers to a clean state (test hook).
+
+    Drops every per-provider breaker so the next ``get_breaker_for``
+    rebuilds with whatever ``settings.transcription.<x>`` look like at
+    that point — important for tests that monkeypatch config between
+    cases.
+    """
+    _breaker_registry.clear()
+    _breaker_registry["_default"] = ProviderCircuitBreaker()
 
 
 async def transcribe_with_retry(
@@ -98,7 +162,11 @@ async def transcribe_with_retry(
             error after the retry budget is exhausted. Caller writes
             the class name into ``JobRecord.error_class``.
     """
-    breaker = circuit_breaker if circuit_breaker is not None else _breaker
+    breaker = (
+        circuit_breaker
+        if circuit_breaker is not None
+        else get_breaker_for(provider.name)
+    )
     sleep_fn = sleep if sleep is not None else asyncio.sleep
 
     if breaker.is_open(provider.name):

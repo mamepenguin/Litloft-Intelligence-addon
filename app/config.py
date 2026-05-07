@@ -145,6 +145,11 @@ class OpenAICompatibleProviderConfig:
     base_url: str = "https://api.openai.com/v1"
     model: str = "whisper-1"
     timeout_s: int = 600
+    # Per-provider override for the rate-limit circuit breaker
+    # threshold. ``None`` keeps the spec default (20 failures /
+    # 60 s window) — see
+    # ``2026-05-07-cloud-transcription-providers.md`` R2-4.
+    circuit_breaker_threshold: int | None = None
 
 
 @dataclass(frozen=True)
@@ -154,6 +159,7 @@ class DeepgramProviderConfig:
     smart_format: bool = True
     detect_language: bool = True
     timeout_s: int = 600
+    circuit_breaker_threshold: int | None = None
 
 
 @dataclass(frozen=True)
@@ -161,6 +167,7 @@ class ElevenLabsScribeProviderConfig:
     model_id: str = "scribe_v1"
     diarize: bool = True
     timeout_s: int = 600
+    circuit_breaker_threshold: int | None = None
 
 
 @dataclass(frozen=True)
