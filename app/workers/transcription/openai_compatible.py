@@ -18,7 +18,7 @@ Design notes:
 * The 25 MB pre-check is gated on the official OpenAI hostname only —
   Groq / Fireworks / self-hosted endpoints have no equivalent cap and
   silently blocking 26 MB clips on those backends would be wrong.
-* OpenAI's ``timestamp_granularities=["word"]`` is honoured by the
+* OpenAI's ``timestamp_granularities=["word", "segment"]`` is honoured by the
   official endpoint and most well-maintained compatibles, but at least
   one Groq variant has been observed returning empty ``words`` arrays.
   We treat that as :class:`FatalError` so the indexer surfaces the
@@ -30,10 +30,13 @@ Design notes:
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 
 import app.config as config
+
+logger = logging.getLogger(__name__)
 from app.workers.transcription.base import (
     ProviderCapabilities,
     TranscriptionSegment,
@@ -135,24 +138,34 @@ class OpenAICompatibleProvider:
                 # race.
                 if self._is_openai_official:
                     self._pre_check_size_fd(audio.fileno(), file_path)
-                # Pass (basename, fileobj) tuple so OpenAI sees just
-                # the filename (with extension) for format detection.
-                # Without this, the SDK uses fileobj.name = the full
-                # absolute path, which OpenAI fails to parse and may
-                # reject as "Invalid file format" even for supported
-                # formats. NOTE: OpenAI strictly trusts the extension
-                # for format detection, so files whose extension does
-                # not match content (e.g., M4A audio with .mp4
-                # extension) may still be rejected — see
-                # docs/PROVIDERS.md for the supported-format guidance.
-                file_arg = (os.path.basename(file_path), audio)
+                # Send as (synthetic_filename, fileobj). We use a
+                # generated ASCII filename of the form ``audio.<ext>``
+                # rather than the user's original basename for two
+                # reasons:
+                #   1. Without an explicit tuple the SDK derives the
+                #      filename from fileobj.name = the full absolute
+                #      path, which OpenAI fails to parse and rejects
+                #      as "Invalid file format".
+                #   2. Original basenames may contain non-ASCII
+                #      characters (Japanese, hash, spaces, etc.) that
+                #      httpx multipart encoding mangles or that OpenAI
+                #      silently misroutes (returning an empty
+                #      transcription with 0 segments instead of an
+                #      error).
+                # The extension is what OpenAI uses for format
+                # detection, so we preserve it. NOTE: extension and
+                # actual container must still match (e.g., M4A audio
+                # in a .mp4 wrapper is rejected — see docs/PROVIDERS.md).
+                ext = os.path.splitext(file_path)[1].lower() or ".bin"
+                synthetic_name = f"audio{ext}"
+                file_arg = (synthetic_name, audio)
                 if self._client is not None:
                     # Test path: a pre-built mock client is installed.
                     response = await self._client.audio.transcriptions.create(
                         file=file_arg,
                         model=self._model,
                         response_format="verbose_json",
-                        timestamp_granularities=["word"],
+                        timestamp_granularities=["word", "segment"],
                         language=language_hint or None,
                     )
                 else:
@@ -165,7 +178,7 @@ class OpenAICompatibleProvider:
                             file=file_arg,
                             model=self._model,
                             response_format="verbose_json",
-                            timestamp_granularities=["word"],
+                            timestamp_granularities=["word", "segment"],
                             language=language_hint or None,
                         )
         except _OpenAIRateLimitError as exc:
@@ -215,45 +228,87 @@ class OpenAICompatibleProvider:
 def _parse_response(response: object) -> list[TranscriptionSegment]:
     """Convert an OpenAI verbose_json response into TranscriptionSegments.
 
-    The SDK returns a Pydantic model with ``segments`` (each with
-    ``words``) and a top-level ``words`` list. We prefer per-segment
-    words to keep the segment / word grouping faithful — when a
-    backend returns segments with empty ``words`` everywhere we fail
-    loud rather than silently emit chunks with no seek data.
+    With ``timestamp_granularities=["word", "segment"]`` the SDK
+    returns segments (text + start/end) at one level and words at
+    another. Real-world response shapes vary by backend:
+
+    * **OpenAI official**: ``response.segments[*].text|start|end``
+      with empty per-segment ``words``, and a top-level ``response.words``
+      array of ``{word, start, end}``.
+    * **Some self-hosted backends** (Groq / Fireworks / vLLM whisper):
+      put words inside each ``segment.words`` instead.
+
+    We accept both shapes: prefer per-segment words when present,
+    otherwise distribute the top-level word list to segments by
+    timestamp window.
     """
     segments_raw = getattr(response, "segments", None) or []
+    top_words_raw = getattr(response, "words", None) or []
     language = getattr(response, "language", "") or ""
 
     # Empty audio / silence: legitimate "succeeded with zero segments"
     # case. The indexer marks the file ``whisper_indexed=True`` without
     # writing any chunks.
     if not segments_raw:
+        text = getattr(response, "text", "") or ""
+        duration = getattr(response, "duration", 0.0) or 0.0
+        logger.info(
+            "OpenAI returned 0 segments. language=%r duration=%s text_len=%d "
+            "text_preview=%r",
+            language, duration, len(text), text[:200],
+        )
         return []
 
-    if not any(getattr(seg, "words", None) for seg in segments_raw):
+    has_per_segment_words = any(
+        getattr(seg, "words", None) for seg in segments_raw
+    )
+    if not has_per_segment_words and not top_words_raw:
         raise FatalError(
             "Provider returned no word timestamps. "
-            "Verify timestamp_granularities=['word'] is supported by "
+            "Verify timestamp_granularities=['word', 'segment'] is supported by "
             "the configured base_url."
         )
 
+    # Pre-build top-level WordToken list (used when segments lack words)
+    top_words: list[WordToken] = [
+        WordToken(
+            text=str(getattr(w, "word", "")),
+            start=float(getattr(w, "start", 0.0)),
+            end=float(getattr(w, "end", 0.0)),
+            speaker_id=None,
+        )
+        for w in top_words_raw
+    ]
+
     segments: list[TranscriptionSegment] = []
     for seg in segments_raw:
+        seg_start = float(getattr(seg, "start", 0.0))
+        seg_end = float(getattr(seg, "end", 0.0))
         raw_words = getattr(seg, "words", None) or []
-        words = [
-            WordToken(
-                text=str(getattr(w, "word", "")),
-                start=float(getattr(w, "start", 0.0)),
-                end=float(getattr(w, "end", 0.0)),
-                speaker_id=None,
-            )
-            for w in raw_words
-        ]
+        if raw_words:
+            words = [
+                WordToken(
+                    text=str(getattr(w, "word", "")),
+                    start=float(getattr(w, "start", 0.0)),
+                    end=float(getattr(w, "end", 0.0)),
+                    speaker_id=None,
+                )
+                for w in raw_words
+            ]
+        else:
+            # Distribute top-level words by timestamp window. A word is
+            # included in this segment if its start falls within the
+            # segment's [start, end) window (inclusive at both ends for
+            # the final segment to avoid losing trailing words).
+            words = [
+                w for w in top_words
+                if seg_start <= w.start <= seg_end
+            ]
         segments.append(
             TranscriptionSegment(
                 text=str(getattr(seg, "text", "")),
-                start=float(getattr(seg, "start", 0.0)),
-                end=float(getattr(seg, "end", 0.0)),
+                start=seg_start,
+                end=seg_end,
                 language=str(getattr(seg, "language", language) or language),
                 words=words,
             )
