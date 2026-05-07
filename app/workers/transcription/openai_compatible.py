@@ -88,15 +88,28 @@ class OpenAICompatibleProvider:
             )
 
         cfg = config.settings.transcription.openai_compatible
+        self._api_key = api_key
         self._base_url = cfg.base_url
         self._model = cfg.model
         self._timeout_s = cfg.timeout_s
-        self._is_openai_official = OPENAI_OFFICIAL_HOST in (cfg.base_url or "")
-        self._client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=cfg.base_url,
-            timeout=float(cfg.timeout_s) if cfg.timeout_s else None,
-        )
+        # Strict host check via urlparse (was substring match — see hako
+        # ``tJV51mfYZWLqMBIHm9Qvi``). ``api.openai.com.attacker.com``
+        # used to slip past as "official" and trigger the 25 MB
+        # pre-check on a non-OpenAI endpoint.
+        from urllib.parse import urlparse
+
+        parsed = urlparse(cfg.base_url or "")
+        host = (parsed.hostname or "").lower()
+        self._is_openai_official = host == OPENAI_OFFICIAL_HOST
+        # We previously stored an ``AsyncOpenAI`` here, but
+        # ``get_provider()`` returns a fresh provider per request and
+        # the SDK never got ``aclose()``-ed. Build a short-lived client
+        # inside ``transcribe()`` via ``async with`` so sockets are
+        # released between jobs (hako ``W0F1YQspXF-lVYgaDb6V1``).
+        # ``_client`` remains a test injection point: when set, the
+        # tests pre-build a mock and the production lifecycle is
+        # bypassed.
+        self._client: AsyncOpenAI | None = None
 
     async def transcribe(
         self,
@@ -112,17 +125,38 @@ class OpenAICompatibleProvider:
         # the abstraction; we surface it as ``supports_hotwords=False``.
         del progress, hotwords
 
-        self._pre_check_size(file_path)
-
         try:
             with open(file_path, "rb") as audio:
-                response = await self._client.audio.transcriptions.create(
-                    file=audio,
-                    model=self._model,
-                    response_format="verbose_json",
-                    timestamp_granularities=["word"],
-                    language=language_hint or None,
-                )
+                # TOCTOU-safe size check: stat the open fd, not the
+                # path, so a file replaced/grown between stat and open
+                # cannot bypass the 25 MB OpenAI cap. Phase 1 impact is
+                # low (API would 413), but the spec contract for
+                # actionable error message would otherwise break in a
+                # race.
+                if self._is_openai_official:
+                    self._pre_check_size_fd(audio.fileno(), file_path)
+                if self._client is not None:
+                    # Test path: a pre-built mock client is installed.
+                    response = await self._client.audio.transcriptions.create(
+                        file=audio,
+                        model=self._model,
+                        response_format="verbose_json",
+                        timestamp_granularities=["word"],
+                        language=language_hint or None,
+                    )
+                else:
+                    async with AsyncOpenAI(
+                        api_key=self._api_key,
+                        base_url=self._base_url,
+                        timeout=float(self._timeout_s) if self._timeout_s else None,
+                    ) as client:
+                        response = await client.audio.transcriptions.create(
+                            file=audio,
+                            model=self._model,
+                            response_format="verbose_json",
+                            timestamp_granularities=["word"],
+                            language=language_hint or None,
+                        )
         except _OpenAIRateLimitError as exc:
             raise RateLimitError(str(exc)) from exc
         except APIStatusError as exc:
@@ -140,7 +174,7 @@ class OpenAICompatibleProvider:
 
         return _parse_response(response)
 
-    def _pre_check_size(self, file_path: str) -> None:
+    def _pre_check_size_fd(self, fd: int, file_path: str) -> None:
         """Reject >25 MB files when the target is api.openai.com.
 
         The official OpenAI endpoint hard-fails with HTTP 413 on
@@ -149,11 +183,13 @@ class OpenAICompatibleProvider:
         it here means the user gets an actionable error message
         suggesting Deepgram / ElevenLabs / Groq alternatives instead of
         a cryptic 413 from the SDK.
+
+        Stats the open file descriptor (``os.fstat``) rather than the
+        path so a TOCTOU race (file replaced/grown between stat and
+        SDK read) cannot bypass the cap. Same fd ⇒ same content.
         """
-        if not self._is_openai_official:
-            return
         try:
-            size = os.path.getsize(file_path)
+            size = os.fstat(fd).st_size
         except OSError as exc:
             raise FatalError(f"Cannot stat audio file {file_path}: {exc}") from exc
         if size > OPENAI_FILE_SIZE_LIMIT:
