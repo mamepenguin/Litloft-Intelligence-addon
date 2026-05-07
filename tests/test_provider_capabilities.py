@@ -95,10 +95,64 @@ def test_errors_carry_messages() -> None:
     assert str(err) == "bad api key"
 
 
-def test_get_provider_stub_raises_not_implemented() -> None:
-    """Phase 1A foundation: factory exists but cannot resolve providers yet."""
-    with pytest.raises(NotImplementedError):
-        get_provider("whisper_local")
+def test_get_provider_unknown_name_raises_value_error() -> None:
+    """Unknown provider names must surface as ``ValueError``.
+
+    Misconfigurations (typos in ``settings.transcription.provider``)
+    deserve a clear message at startup rather than a confusing import
+    error or a silent fallback.
+    """
+    with pytest.raises(ValueError, match="Unknown transcription provider"):
+        get_provider("not-a-real-provider")
+
+
+def test_get_provider_returns_whisper_local() -> None:
+    provider = get_provider("whisper_local")
+    assert provider.name == "whisper_local"
+    assert provider.capabilities.sends_audio_offhost is False
+
+
+def test_get_provider_returns_openai_compatible(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    provider = get_provider("openai_compatible")
+    assert provider.name == "openai_compatible"
+    assert provider.capabilities.sends_audio_offhost is True
+
+
+def test_get_provider_returns_deepgram(monkeypatch) -> None:
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-test")
+    provider = get_provider("deepgram")
+    assert provider.name == "deepgram"
+    assert provider.capabilities.supports_diarization is True
+
+
+def test_get_provider_returns_elevenlabs_scribe(monkeypatch) -> None:
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "el-test")
+    provider = get_provider("elevenlabs_scribe")
+    assert provider.name == "elevenlabs_scribe"
+    assert provider.capabilities.supports_diarization is True
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["whisper_local", "openai_compatible", "deepgram", "elevenlabs_scribe"],
+)
+def test_get_provider_capabilities_satisfy_indexer_invariants(
+    name, monkeypatch
+) -> None:
+    """Every Phase 1 provider must produce word-level timestamps.
+
+    The indexer pipeline (``_build_chunks_from_words`` + subtitle
+    rendering) is built around per-word timing. A provider that
+    declares ``supports_word_timestamps=False`` would silently break
+    those features; we pin the invariant here so a future addition
+    cannot regress.
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-test")
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "el-test")
+    provider = get_provider(name)
+    assert provider.capabilities.supports_word_timestamps is True
 
 
 class _FakeProvider:

@@ -1,12 +1,12 @@
 """Transcription provider abstraction.
 
-Phase 1A foundation: only the Protocol, dataclasses, errors and
-circuit breaker are exposed here. Concrete provider implementations
-(``WhisperLocalProvider``, ``OpenAICompatibleProvider``,
-``DeepgramProvider``, ``ElevenLabsScribeProvider``) land in Phase 1B.
-
-``get_provider`` is a stub that raises ``NotImplementedError`` until
-Phase 1B wires the factory through to the concrete classes.
+Phase 1B: the four concrete provider classes (``WhisperLocalProvider``,
+``OpenAICompatibleProvider``, ``DeepgramProvider``,
+``ElevenLabsScribeProvider``) are wired through :func:`get_provider`.
+Imports inside the factory are lazy so a misconfigured cloud provider
+(missing API key, missing dependency) only fails when that name is
+actually requested — startup of the intelligence container does not
+load every cloud SDK regardless of which one the user picked.
 """
 
 from app.workers.transcription.base import (
@@ -38,11 +38,30 @@ __all__ = [
 def get_provider(name: str) -> TranscriptionProvider:
     """Look up a registered transcription provider by name.
 
-    Phase 1A returns ``NotImplementedError`` for every name so callers
-    can already import the symbol but cannot instantiate providers
-    until Phase 1B lands.
+    Lazy imports are intentional: importing :mod:`whisper_local` would
+    eagerly pull in faster-whisper / ctranslate2 even on a cloud-only
+    deployment, and importing :mod:`openai_compatible` instantiates
+    the OpenAI SDK at the top level. The match arms only pay each
+    cost when the user has actually selected that provider.
     """
-    raise NotImplementedError(
-        f"Transcription provider {name!r} not implemented yet "
-        "(Phase 1B will register concrete provider classes)."
-    )
+    match name:
+        case "whisper_local":
+            from app.workers.transcription.whisper_local import (
+                WhisperLocalProvider,
+            )
+            return WhisperLocalProvider()
+        case "openai_compatible":
+            from app.workers.transcription.openai_compatible import (
+                OpenAICompatibleProvider,
+            )
+            return OpenAICompatibleProvider()
+        case "deepgram":
+            from app.workers.transcription.deepgram import DeepgramProvider
+            return DeepgramProvider()
+        case "elevenlabs_scribe":
+            from app.workers.transcription.elevenlabs_scribe import (
+                ElevenLabsScribeProvider,
+            )
+            return ElevenLabsScribeProvider()
+        case _:
+            raise ValueError(f"Unknown transcription provider: {name}")
