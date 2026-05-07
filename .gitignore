@@ -13,3 +13,8 @@ build/
 *.safetensors
 .env
 search-config.yml
+
+# Phase 2C eval cases: audio + per-user GT not committed
+app/evals_transcription/cases/audio/
+app/evals_transcription/cases/*.yml
+!app/evals_transcription/cases/sample.yml.example

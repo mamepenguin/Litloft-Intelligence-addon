@@ -26,6 +26,11 @@ RUN pip install --no-cache-dir \
     fastapi pydantic jinja2 \
     google-genai regex \
     pytest pytest-asyncio pytest-cov
+
+# Phase 2C: dev-only deps for the transcription eval harness. Kept
+# out of the production Dockerfile so the runtime image stays slim.
+COPY requirements-dev.txt .
+RUN pip install --no-cache-dir -r requirements-dev.txt
 # Install Pillow so the vision GPS-strip regression test can use a real
 # JPEG fixture. Existing vision tests keep working because conftest
 # still patches ``sys.modules["PIL"]`` to MagicMock before importing

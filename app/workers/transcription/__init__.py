@@ -31,8 +31,21 @@ __all__ = [
     "TranscriptionSegment",
     "TransientError",
     "WordToken",
+    "build_inner_provider",
     "get_provider",
 ]
+
+
+def build_inner_provider(name: str) -> "TranscriptionProvider":
+    """Public alias for :func:`_build_inner` — needed by Phase 2C.
+
+    The eval harness reaches past the auto-wrap logic to build the
+    raw provider and apply a temporary capability override (forcing a
+    custom ``max_input_bytes`` for split-test runs). Exposing the
+    inner builder lets evaluators do this without re-implementing the
+    factory's match arms.
+    """
+    return _build_inner(name)
 
 
 def get_provider(name: str) -> TranscriptionProvider:

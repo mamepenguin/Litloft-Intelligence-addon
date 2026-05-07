@@ -1,0 +1,9 @@
+# Dev-only dependencies for the intelligence addon.
+# Production image (Dockerfile) does NOT install these.
+#
+# Install inside the test container or for the eval CLI:
+#   docker compose exec intelligence pip install -r requirements-dev.txt
+#
+# Phase 2C: transcription provider comparison eval harness.
+jiwer>=3.0
+jaconv>=0.4

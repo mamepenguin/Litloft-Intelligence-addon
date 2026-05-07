@@ -1,0 +1,40 @@
+# Phase 2C eval case template. Copy to a real `*.yml` filename and
+# fill in your audio + ground truth.
+#
+# `name`           — used as the row label in the report
+# `audio_path`     — relative to the cases/ directory
+# `language`       — BCP-47-ish; Phase 2C supports `ja` and `en`
+# `duration_s`     — must match ffprobe within ±5% (or 0.5s, whichever
+#                    is bigger). Catches stale / wrong audio fixtures.
+# `tier`           — short | medium | long (drives per-tier breakdown)
+# `reference_transcript` — must be a literal block (`|`); folded
+#                          (`>`) collapses newlines into spaces.
+# `speakers`       — optional. Each segment is `[start, end]` in seconds.
+# `split_test`     — optional. Forces SplittingTranscriber for the named
+#                    providers; doubles their API spend on this case.
+
+name: sample_short_ja_news
+audio_path: audio/sample_short_ja_news.wav
+language: ja
+duration_s: 8.5
+tier: short
+reference_transcript: |
+  今日の天気予報をお伝えします。
+  関東地方は晴れ時々曇り、最高気温は二十五度の見込みです。
+
+# Optional: diarization GT for multi-speaker cases.
+# speakers:
+#   - id: speaker_0
+#     segments:
+#       - [0.0, 4.5]
+#       - [9.2, 12.0]
+#   - id: speaker_1
+#     segments:
+#       - [4.5, 9.2]
+
+# Optional: force SplittingTranscriber on a long case to measure the
+# Phase 2B chunked-transcription overhead.
+# split_test:
+#   forced_cap_bytes: 100000
+#   providers:
+#     - openai_compatible
