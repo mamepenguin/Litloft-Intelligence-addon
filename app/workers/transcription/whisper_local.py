@@ -1,0 +1,91 @@
+"""On-host transcription via faster-whisper (``whisper_local`` provider).
+
+This module is a thin async-shaped wrapper around the existing
+synchronous helpers in :mod:`app.workers.whisper`. The legacy code is
+preserved verbatim — Phase 1B only adds the Provider surface; Phase 1C
+will move ``_transcribe_file`` here and retire the legacy import path.
+
+Design notes:
+
+* ``_transcribe_file`` is CPU-bound (faster-whisper runs on a
+  background thread internally but blocks the caller until done). We
+  hand it to :func:`asyncio.to_thread` so it does not stall the
+  intelligence indexer's event loop.
+* Diarisation is not supported by faster-whisper, so every emitted
+  ``WordToken.speaker_id`` is ``None``. The chunker treats ``None`` as
+  "no speaker boundary", matching the legacy behaviour.
+* The ``progress`` callback in the Protocol is intentionally ignored:
+  faster-whisper has no streaming progress hook in our current
+  pipeline, and wiring a fake "50% then 100%" would mislead the UI.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable
+
+from app.workers.transcription.base import (
+    ProviderCapabilities,
+    TranscriptionSegment,
+    WordToken,
+)
+from app.workers.whisper import _transcribe_file
+
+
+def _segment_from_dict(raw: dict) -> TranscriptionSegment:
+    """Convert a legacy ``_transcribe_file`` dict into a TranscriptionSegment.
+
+    The legacy contract is documented in :func:`_transcribe_file`:
+    ``{text, start, end, language, words: [{word, start, end}, ...]}``.
+    Some segments (very short utterances under batched mode) come back
+    without a ``words`` key; we treat that the same as an empty list.
+    """
+    raw_words = raw.get("words") or []
+    words = [
+        WordToken(
+            text=str(w["word"]),
+            start=float(w["start"]),
+            end=float(w["end"]),
+            speaker_id=None,
+        )
+        for w in raw_words
+    ]
+    return TranscriptionSegment(
+        text=str(raw["text"]),
+        start=float(raw["start"]),
+        end=float(raw["end"]),
+        language=str(raw.get("language", "")),
+        words=words,
+    )
+
+
+class WhisperLocalProvider:
+    """faster-whisper backed Provider (default, on-host)."""
+
+    name = "whisper_local"
+    capabilities = ProviderCapabilities(
+        sends_audio_offhost=False,
+        supports_diarization=False,
+        supports_hotwords=False,
+        supports_word_timestamps=True,
+    )
+
+    async def transcribe(
+        self,
+        file_path: str,
+        *,
+        language_hint: str | None = None,
+        hotwords: list[str] | None = None,
+        progress: Callable[[float], None] | None = None,
+    ) -> list[TranscriptionSegment]:
+        """Run faster-whisper off the event-loop thread.
+
+        ``language_hint`` and ``hotwords`` are accepted for Protocol
+        conformance but ignored here — the existing
+        :func:`_transcribe_file` already does its own language
+        detection and reads ``settings.transcription.whisper_local`` for
+        the initial prompt. Wiring per-call hints would require a
+        deeper refactor that belongs in Phase 1C / 2.
+        """
+        raw = await asyncio.to_thread(_transcribe_file, file_path)
+        return [_segment_from_dict(seg) for seg in raw]
