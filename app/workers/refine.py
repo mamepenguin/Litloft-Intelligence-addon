@@ -334,7 +334,11 @@ def rechunk_from_words(session: Any, file_id: str) -> list[int]:
 
     import app.config as _cfg
 
-    whisper_cfg = _cfg.settings.indexing.whisper
+    # Read from the new ``transcription.whisper_local`` config tree.
+    # ``_parse_transcription`` populates this from legacy
+    # ``indexing.whisper.*`` keys when present, so existing
+    # deployments keep working without YAML changes.
+    whisper_cfg = _cfg.settings.transcription.whisper_local
     new_chunks = _build_chunks_from_words(
         word_dicts,
         whisper_cfg.min_segment_duration,

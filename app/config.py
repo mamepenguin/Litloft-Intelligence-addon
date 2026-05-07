@@ -4,11 +4,25 @@ Reads settings from environment variables and search-config.yml.
 All config values are immutable after initialization.
 """
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger(__name__)
+
+# Deprecation date for the legacy ``indexing.whisper.*`` keys. After
+# this date the shim is removed and the keys raise a ConfigError.
+# Spec: 2026-05-07-cloud-transcription-providers.md "Deprecation
+# timeline".
+_LEGACY_WHISPER_REMOVAL_DATE = "2026-07-07"
+
+# Once-per-process flag: log the deprecation warning only on the first
+# parse call so a worker that re-parses (test harness, hot reload)
+# does not spam the log.
+_whisper_deprecation_logged: bool = False
 
 
 @dataclass(frozen=True)
@@ -96,6 +110,83 @@ class WhisperIndexConfig:
     # Segments with average log probability below this are discarded.
     # 0 = disabled.
     log_prob_threshold: float = -1.0
+
+
+@dataclass(frozen=True)
+class WhisperLocalConfig:
+    """Provider config for the local faster-whisper backend.
+
+    Mirrors :class:`WhisperIndexConfig` for the new ``transcription``
+    config tree introduced by spec
+    ``2026-05-07-cloud-transcription-providers.md``. Fields stay
+    1:1 with the legacy ``indexing.whisper.*`` keys so the
+    backward-compat shim can copy values across without translation.
+    """
+
+    model: str = "openai/whisper-large-v3-turbo"
+    initial_prompt: str = ""
+    beam_size: int = 1
+    batch_size: int = 0
+    condition_on_previous_text: bool = True
+    compression_ratio_threshold: float = 2.0
+    no_speech_threshold: float = 0.45
+    log_prob_threshold: float = -1.0
+    # Same chunk-boundary knobs as WhisperIndexConfig — kept on the
+    # provider sub-config so each provider can theoretically tune
+    # independently in the future.
+    min_segment_duration: int = 10
+    max_segment_duration: int = 20
+
+
+@dataclass(frozen=True)
+class OpenAICompatibleProviderConfig:
+    """OpenAI Whisper API + base_url override (Groq / Fireworks)."""
+
+    base_url: str = "https://api.openai.com/v1"
+    model: str = "whisper-1"
+    timeout_s: int = 600
+
+
+@dataclass(frozen=True)
+class DeepgramProviderConfig:
+    model: str = "nova-3"
+    diarize: bool = True
+    smart_format: bool = True
+    detect_language: bool = True
+    timeout_s: int = 600
+
+
+@dataclass(frozen=True)
+class ElevenLabsScribeProviderConfig:
+    model_id: str = "scribe_v1"
+    diarize: bool = True
+    timeout_s: int = 600
+
+
+@dataclass(frozen=True)
+class TranscriptionConfig:
+    """Top-level transcription settings.
+
+    Replaces the legacy ``indexing.whisper.*`` section. The ``provider``
+    field selects which sub-config the worker reads at runtime. Phase
+    1B will ship four concrete provider classes
+    (``whisper_local`` / ``openai_compatible`` / ``deepgram`` /
+    ``elevenlabs_scribe``); Phase 1A only defines the shape.
+    """
+
+    provider: str = "whisper_local"
+    language_hint: str = ""
+    hotwords: tuple[str, ...] = ()
+    whisper_local: WhisperLocalConfig = field(default_factory=WhisperLocalConfig)
+    openai_compatible: OpenAICompatibleProviderConfig = field(
+        default_factory=OpenAICompatibleProviderConfig
+    )
+    deepgram: DeepgramProviderConfig = field(
+        default_factory=DeepgramProviderConfig
+    )
+    elevenlabs_scribe: ElevenLabsScribeProviderConfig = field(
+        default_factory=ElevenLabsScribeProviderConfig
+    )
 
 
 @dataclass(frozen=True)
@@ -525,6 +616,7 @@ class Settings:
     llm: LLMConfig = field(default_factory=LLMConfig)
     summaries: SummariesConfig = field(default_factory=SummariesConfig)
     rag: RagConfig = field(default_factory=RagConfig)
+    transcription: TranscriptionConfig = field(default_factory=TranscriptionConfig)
     service_version: str = "0.1.0"
     port: int = 8100
 
@@ -565,6 +657,95 @@ def _parse_rag(data: dict[str, Any]) -> RagConfig:
         ),
         category_expansion=_parse_nested(
             section, "category_expansion", CategoryExpansionConfig
+        ),
+    )
+
+
+_WHISPER_LOCAL_SHIM_FIELDS = (
+    "model",
+    "initial_prompt",
+    "beam_size",
+    "batch_size",
+    "condition_on_previous_text",
+    "compression_ratio_threshold",
+    "no_speech_threshold",
+    "log_prob_threshold",
+    "min_segment_duration",
+    "max_segment_duration",
+)
+
+
+def _parse_transcription(data: dict[str, Any]) -> TranscriptionConfig:
+    """Parse the ``transcription`` section with backward-compat shim.
+
+    Resolution rules (spec §"旧キー → 新キーの後方互換 shim"):
+
+    1. Read legacy ``indexing.whisper.*`` first.
+    2. Read new ``transcription.whisper_local.*`` if present.
+    3. New keys override old keys at field granularity.
+    4. If only legacy keys are present, log a once-per-process
+       deprecation warning naming the removal date.
+    """
+    global _whisper_deprecation_logged
+
+    new_section_raw = data.get("transcription", {})
+    new_section = new_section_raw if isinstance(new_section_raw, dict) else {}
+
+    indexing_section = data.get("indexing", {})
+    legacy_whisper_raw = (
+        indexing_section.get("whisper", {})
+        if isinstance(indexing_section, dict)
+        else {}
+    )
+    legacy_whisper = (
+        legacy_whisper_raw if isinstance(legacy_whisper_raw, dict) else {}
+    )
+
+    new_whisper_local_raw = new_section.get("whisper_local", {})
+    new_whisper_local = (
+        new_whisper_local_raw
+        if isinstance(new_whisper_local_raw, dict)
+        else {}
+    )
+
+    has_legacy = bool(legacy_whisper)
+    has_new = bool(new_whisper_local)
+
+    # Build whisper_local: legacy keys form the base; new keys override.
+    merged_whisper_local: dict[str, Any] = {}
+    for key in _WHISPER_LOCAL_SHIM_FIELDS:
+        if key in legacy_whisper:
+            merged_whisper_local[key] = legacy_whisper[key]
+        if key in new_whisper_local:
+            merged_whisper_local[key] = new_whisper_local[key]
+
+    whisper_local = WhisperLocalConfig(**merged_whisper_local)
+
+    if has_legacy and not has_new and not _whisper_deprecation_logged:
+        logger.warning(
+            "config: indexing.whisper.* is deprecated, will be removed "
+            "%s. Move to transcription.whisper_local.*",
+            _LEGACY_WHISPER_REMOVAL_DATE,
+        )
+        _whisper_deprecation_logged = True
+
+    return TranscriptionConfig(
+        provider=new_section.get(
+            "provider", TranscriptionConfig.provider
+        ),
+        language_hint=new_section.get(
+            "language_hint", TranscriptionConfig.language_hint
+        ),
+        hotwords=tuple(new_section.get("hotwords", []) or []),
+        whisper_local=whisper_local,
+        openai_compatible=_parse_nested(
+            new_section, "openai_compatible", OpenAICompatibleProviderConfig
+        ),
+        deepgram=_parse_nested(
+            new_section, "deepgram", DeepgramProviderConfig
+        ),
+        elevenlabs_scribe=_parse_nested(
+            new_section, "elevenlabs_scribe", ElevenLabsScribeProviderConfig
         ),
     )
 
@@ -673,6 +854,7 @@ def load_settings() -> Settings:
         llm=llm_config,
         summaries=_parse_nested(config_data, "summaries", SummariesConfig),
         rag=_parse_rag(config_data),
+        transcription=_parse_transcription(config_data),
     )
 
 
