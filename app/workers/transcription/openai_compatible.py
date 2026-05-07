@@ -135,10 +135,21 @@ class OpenAICompatibleProvider:
                 # race.
                 if self._is_openai_official:
                     self._pre_check_size_fd(audio.fileno(), file_path)
+                # Pass (basename, fileobj) tuple so OpenAI sees just
+                # the filename (with extension) for format detection.
+                # Without this, the SDK uses fileobj.name = the full
+                # absolute path, which OpenAI fails to parse and may
+                # reject as "Invalid file format" even for supported
+                # formats. NOTE: OpenAI strictly trusts the extension
+                # for format detection, so files whose extension does
+                # not match content (e.g., M4A audio with .mp4
+                # extension) may still be rejected — see
+                # docs/PROVIDERS.md for the supported-format guidance.
+                file_arg = (os.path.basename(file_path), audio)
                 if self._client is not None:
                     # Test path: a pre-built mock client is installed.
                     response = await self._client.audio.transcriptions.create(
-                        file=audio,
+                        file=file_arg,
                         model=self._model,
                         response_format="verbose_json",
                         timestamp_granularities=["word"],
@@ -151,7 +162,7 @@ class OpenAICompatibleProvider:
                         timeout=float(self._timeout_s) if self._timeout_s else None,
                     ) as client:
                         response = await client.audio.transcriptions.create(
-                            file=audio,
+                            file=file_arg,
                             model=self._model,
                             response_format="verbose_json",
                             timestamp_granularities=["word"],
