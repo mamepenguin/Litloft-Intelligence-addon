@@ -378,6 +378,10 @@ def _flatten_words(segments: list[dict]) -> list[dict]:
     Segments without word timestamps are skipped (batched mode occasionally
     omits words for very short utterances). The resulting list is ordered
     by the underlying segment iteration so timestamps stay monotonic.
+
+    Carries ``speaker_id`` through when present (Phase 1C: diarized
+    cloud providers stash speaker labels per word). Legacy callers
+    that omit the field continue to work — ``get`` returns None.
     """
     flat: list[dict] = []
     for seg in segments:
@@ -391,8 +395,29 @@ def _flatten_words(segments: list[dict]) -> list[dict]:
                 "start": float(w["start"]),
                 "end": float(w["end"]),
                 "language": language,
+                "speaker_id": w.get("speaker_id"),
             })
     return flat
+
+
+def _majority_speaker(words: list[dict]) -> str | None:
+    """Return the most common ``speaker_id`` among ``words`` (None tie-broken).
+
+    Used when emitting a chunk: if every word inside agrees on a
+    speaker, that label is preserved; if the chunk happened to
+    straddle speakers (e.g. an under-min flush that ignored R4),
+    majority wins. ``None`` entries are not counted — a chunk with
+    half NULL / half "spk_0" reports ``"spk_0"``.
+    """
+    counts: dict[str, int] = {}
+    for w in words:
+        sid = w.get("speaker_id")
+        if sid is None:
+            continue
+        counts[sid] = counts.get(sid, 0) + 1
+    if not counts:
+        return None
+    return max(counts.items(), key=lambda kv: kv[1])[0]
 
 
 def _build_chunks_from_words(
@@ -436,10 +461,29 @@ def _build_chunks_from_words(
         gap = max(0.0, next_start - chunk_end)
         break_strength = _is_break(word["text"], gap)
 
+        # R4 (Phase 1C): speaker change between this word and the next
+        # is treated as a hard boundary, but only past min_duration so
+        # rapid Q/A exchanges don't shred chunks under the searchable
+        # floor. The check requires both speaker IDs non-NULL — mixed
+        # streams (cloud-diarized followed by re-indexed local-whisper
+        # rows) fall back to the legacy R1-R3 conditions.
+        speaker_change = False
+        if i + 1 < len(words):
+            this_speaker = word.get("speaker_id")
+            next_speaker = words[i + 1].get("speaker_id")
+            if (
+                this_speaker is not None
+                and next_speaker is not None
+                and this_speaker != next_speaker
+            ):
+                speaker_change = True
+
         should_flush = False
         if duration >= max_duration:
             should_flush = True
         elif duration >= min_duration and break_strength == 2:
+            should_flush = True
+        elif duration >= min_duration and speaker_change:
             should_flush = True
         elif duration >= min_duration * 1.5 and break_strength == 1:
             should_flush = True
@@ -450,6 +494,7 @@ def _build_chunks_from_words(
                 "start": chunk_start,
                 "end": chunk_end,
                 "language": language,
+                "speaker_id": _majority_speaker(current),
             })
             current = []
             if i + 1 < len(words):
@@ -461,6 +506,7 @@ def _build_chunks_from_words(
             "start": chunk_start,
             "end": current[-1]["end"],
             "language": language,
+            "speaker_id": _majority_speaker(current),
         })
 
     return chunks
