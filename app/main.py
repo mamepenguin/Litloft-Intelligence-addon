@@ -74,6 +74,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if reset > 0:
         logger.info("Reset %d falsely completed CLIP files for re-indexing", reset)
 
+    # Phase 1C of cloud-transcription-providers spec: a container
+    # restart leaves "running" JobRecord rows orphaned (the worker that
+    # owned them is gone). Flip them to "failed" with
+    # error_class="ContainerRestart" so operators can distinguish real
+    # provider errors from stale rows, and purge any partial chunks /
+    # words the dead worker wrote.
+    try:
+        from app.workers.whisper import fail_orphaned_running_jobs
+        fail_orphaned_running_jobs()
+    except Exception:
+        logger.exception(
+            "Failed to fail orphaned running JobRecords; continuing startup"
+        )
+
     # Per-drive policy: drop everything indexed for drives whose
     # intelligence.index has been turned off in drives.json. Runs on
     # every startup so flipping the policy and restarting the addon is

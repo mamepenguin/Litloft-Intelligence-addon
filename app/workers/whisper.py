@@ -1114,6 +1114,52 @@ def _persist_transcript(
             record.completed_at = datetime.now(UTC)
 
 
+def fail_orphaned_running_jobs() -> None:
+    """Flip ``status='running'`` JobRecords to ``failed`` at startup.
+
+    Spec ``2026-05-07-cloud-transcription-providers.md`` §"Hot-swap /
+    半端ジョブ". When the intelligence container restarts mid-job,
+    any "running" rows are inherently orphaned — the in-memory worker
+    that owned them is gone. We mark them failed with
+    ``error_class='ContainerRestart'`` so operators can distinguish
+    a crash from a real provider error, and call
+    :func:`_remove_whisper_data` to drop any partial chunks / words /
+    embeddings the dead worker left behind.
+
+    Safe to call repeatedly; a no-op when there are no running rows.
+
+    Phase 1 assumes a single intelligence container — the multi-worker
+    variant (worker_id column + per-worker scoping) is Phase 2.
+    """
+    with get_search_db() as session:
+        running = session.query(JobRecord).filter_by(status="running").all()
+        if not running:
+            return
+        now = datetime.now(UTC)
+        for record in running:
+            record.status = "failed"
+            record.error_class = "ContainerRestart"
+            record.error_message = (
+                "Container restarted while job was in progress"
+            )
+            record.completed_at = now
+            try:
+                _remove_whisper_data(session, record.file_id)
+            except Exception:
+                # Cleanup is best-effort: we don't want a sqlite-vec
+                # absence (test envs without the loadable extension)
+                # to block startup. The "running" → "failed" status
+                # flip is the critical part.
+                logger.exception(
+                    "Failed to purge partial whisper data for %s",
+                    record.file_id,
+                )
+        logger.info(
+            "Marked %d orphaned 'running' transcription job(s) as failed",
+            len(running),
+        )
+
+
 def _remove_whisper_data(session: object, file_id: str) -> None:
     """Remove existing Whisper data (transcripts + embeddings) for a file.
 
