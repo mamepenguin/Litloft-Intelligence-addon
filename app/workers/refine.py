@@ -555,6 +555,12 @@ async def _emit_ws_event(event: str, data: dict) -> None:
     posts it to ``HOMEVAULT_INTERNAL_API_URL + /addon-events`` when
     configured. Tests monkeypatch this function, so production
     behaviour is decoupled from the worker logic under test.
+
+    Drive scoping: when ``data`` carries a ``drive`` key we lift it to
+    the top-level ``AddonEventRequest.drive`` so the host's
+    ``ConnectionManager.broadcast`` filter can suppress delivery to
+    viewers without access to the protected drive (hako pattern
+    ``HpeftQ_io8n7sJ5xxlasC``).
     """
     import os
 
@@ -564,11 +570,15 @@ async def _emit_ws_event(event: str, data: dict) -> None:
         "HOMEVAULT_INTERNAL_API_URL", "http://backend:8000/api/internal"
     )
     url = f"{base}/addon-events"
+    payload: dict = {"event": event, "data": data}
+    drive = data.get("drive") if isinstance(data, dict) else None
+    if drive:
+        payload["drive"] = drive
     try:
         import httpx
 
         async with httpx.AsyncClient(timeout=3.0) as client:
-            await client.post(url, json={"event": event, "data": data})
+            await client.post(url, json=payload)
     except Exception:
         # Host endpoint is optional; never fail the worker on WS.
         return
