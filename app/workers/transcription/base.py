@@ -80,6 +80,24 @@ class ProviderCapabilities:
     supports_diarization: bool
     supports_hotwords: bool
     supports_word_timestamps: bool
+    # Phase 2B: hard byte cap enforced by the provider (None means no
+    # cap). Used by ``SplittingTranscriber`` to decide when to invoke
+    # ffmpeg-based chunking. Pre-existing per-provider pre-checks
+    # remain as a final defence line for malformed input.
+    max_input_bytes: int | None = None
+    # Phase 2B: provider can take a "previous text" string and use it
+    # to seed the autoregressive decoder for the current call. Only
+    # Whisper-family providers (whisper_local / openai_compatible)
+    # honour this; cloud providers without prior-context semantics
+    # silently ignore. Drives whether chunked transcription seeds
+    # chunk N+1 with chunk N's tail (hako jqiF9yOk9VxEhU-H8sLbL).
+    accepts_initial_prompt: bool = False
+    # Phase 2B: provider invokes ``transcribe_with_retry`` internally
+    # (currently only ``SplittingTranscriber`` does so). The dispatch
+    # layer skips its outer retry wrap when this is True to avoid
+    # double-counting failures on the inner provider's circuit
+    # breaker. False for every concrete provider.
+    handles_own_retry: bool = False
 
 
 class TranscriptionProvider(Protocol):
@@ -101,7 +119,15 @@ class TranscriptionProvider(Protocol):
         *,
         language_hint: str | None = None,
         hotwords: list[str] | None = None,
+        initial_prompt: str | None = None,
         progress: Callable[[float], None] | None = None,
     ) -> list[TranscriptionSegment]:
-        """Transcribe ``file_path`` and return per-segment results."""
+        """Transcribe ``file_path`` and return per-segment results.
+
+        ``initial_prompt`` is the "previous text" passed to providers
+        that advertise ``accepts_initial_prompt=True``; SplittingTranscriber
+        seeds chunk N+1 with the tail of chunk N's transcript so
+        Whisper-family backends maintain vocabulary continuity across
+        chunk boundaries. Non-Whisper providers ignore it.
+        """
         ...

@@ -41,6 +41,9 @@ def test_provider_capabilities_match_spec() -> None:
         supports_diarization=False,
         supports_hotwords=False,
         supports_word_timestamps=True,
+        max_input_bytes=None,
+        accepts_initial_prompt=True,
+        handles_own_retry=False,
     )
 
 
@@ -154,7 +157,7 @@ async def test_transcribe_runs_sync_helper_in_thread() -> None:
     main_thread = threading.get_ident()
     captured: dict[str, int] = {}
 
-    def fake(file_path: str) -> list[dict]:
+    def fake(file_path: str, initial_prompt_override=None) -> list[dict]:
         captured["thread"] = threading.get_ident()
         return []
 
@@ -195,7 +198,7 @@ async def test_transcribe_passes_file_path_through() -> None:
     """The wrapper must forward ``file_path`` verbatim to the legacy helper."""
     seen: dict[str, str] = {}
 
-    def fake(file_path: str) -> list[dict]:
+    def fake(file_path: str, initial_prompt_override=None) -> list[dict]:
         seen["path"] = file_path
         return []
 

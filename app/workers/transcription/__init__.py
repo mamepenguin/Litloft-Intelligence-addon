@@ -43,7 +43,25 @@ def get_provider(name: str) -> TranscriptionProvider:
     deployment, and importing :mod:`openai_compatible` instantiates
     the OpenAI SDK at the top level. The match arms only pay each
     cost when the user has actually selected that provider.
+
+    Phase 2B: when the resolved provider declares a hard
+    ``max_input_bytes``, wrap it in :class:`SplittingTranscriber` so
+    long-form inputs are split via ffmpeg before delegation. The
+    splitter handles per-chunk retry internally and advertises
+    ``handles_own_retry=True`` so the dispatch layer skips its outer
+    ``transcribe_with_retry`` wrap.
     """
+    inner = _build_inner(name)
+    if inner.capabilities.max_input_bytes is not None:
+        from app.workers.transcription.splitting_transcriber import (
+            SplittingTranscriber,
+        )
+        return SplittingTranscriber(inner)
+    return inner
+
+
+def _build_inner(name: str) -> TranscriptionProvider:
+    """Resolve the concrete provider (no Phase 2B wrapping)."""
     match name:
         case "whisper_local":
             from app.workers.transcription.whisper_local import (

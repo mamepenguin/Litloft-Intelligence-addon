@@ -96,6 +96,9 @@ def test_provider_capabilities_match_spec() -> None:
         supports_diarization=True,
         supports_hotwords=False,
         supports_word_timestamps=True,
+        max_input_bytes=None,
+        accepts_initial_prompt=False,
+        handles_own_retry=False,
     )
 
 

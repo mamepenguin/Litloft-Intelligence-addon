@@ -244,7 +244,10 @@ def _detect_language(model: object, file_path: str) -> str | None:
     return language
 
 
-def _transcribe_file(file_path: str) -> list[dict]:
+def _transcribe_file(
+    file_path: str,
+    initial_prompt_override: str | None = None,
+) -> list[dict]:
     """Transcribe a media file using faster-whisper.
 
     Uses BatchedInferencePipeline when batch_size > 0 for faster throughput.
@@ -252,6 +255,11 @@ def _transcribe_file(file_path: str) -> list[dict]:
 
     Args:
         file_path: Path to the audio/video file.
+        initial_prompt_override: When non-empty, replaces both the
+            user-configured override and the language-default chain
+            entirely. Used by ``WhisperLocalProvider`` (Phase 2B) so
+            ``SplittingTranscriber`` can seed chunk N with chunk N-1's
+            tail without going through the language-default fallback.
 
     Returns:
         List of segment dicts with keys: text, start, end, language.
@@ -259,12 +267,20 @@ def _transcribe_file(file_path: str) -> list[dict]:
     model, batched = _ensure_loaded()
     whisper_config = settings.indexing.whisper
 
-    override = whisper_config.initial_prompt or ""
-    if override.strip():
-        initial_prompt: str | None = override
+    if initial_prompt_override and initial_prompt_override.strip():
+        # Phase 2B precedence (1): caller-supplied prior text wins
+        # over both the search-config override and the per-language
+        # default. This only fires for chunked Whisper calls (chunk
+        # N>0); chunk 0 / un-chunked passes ``None`` and falls into
+        # the legacy resolution below (R1 spec M-R1-2).
+        initial_prompt: str | None = initial_prompt_override
     else:
-        detected = _detect_language(model, file_path)
-        initial_prompt = resolve_initial_prompt(detected, "")
+        override = whisper_config.initial_prompt or ""
+        if override.strip():
+            initial_prompt = override
+        else:
+            detected = _detect_language(model, file_path)
+            initial_prompt = resolve_initial_prompt(detected, "")
 
     if batched is not None:
         return _transcribe_batched(
@@ -866,12 +882,24 @@ async def _do_transcribe_and_index(
     job_id = await asyncio.to_thread(_insert_running_job, file_id, provider.name)
 
     try:
-        segments = await transcribe_with_retry(
-            provider,
-            file_path,
-            language_hint=settings.transcription.language_hint or None,
-            hotwords=list(settings.transcription.hotwords) or None,
-        )
+        if provider.capabilities.handles_own_retry:
+            # Phase 2B: ``SplittingTranscriber`` runs per-chunk
+            # ``transcribe_with_retry`` itself. Wrapping again here
+            # would double-count failures on the inner provider's
+            # circuit breaker and discard already-transcribed chunks
+            # when the outer retry kicks in.
+            segments = await provider.transcribe(
+                file_path,
+                language_hint=settings.transcription.language_hint or None,
+                hotwords=list(settings.transcription.hotwords) or None,
+            )
+        else:
+            segments = await transcribe_with_retry(
+                provider,
+                file_path,
+                language_hint=settings.transcription.language_hint or None,
+                hotwords=list(settings.transcription.hotwords) or None,
+            )
     except TranscriptionError as exc:
         # All classified provider errors land here (TransientError /
         # RateLimitError exhausted, FatalError, CircuitBreakerOpen).

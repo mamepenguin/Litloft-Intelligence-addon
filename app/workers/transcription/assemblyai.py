@@ -55,6 +55,9 @@ class AssemblyAIProvider:
         supports_diarization=True,
         supports_hotwords=True,
         supports_word_timestamps=True,
+        max_input_bytes=ASSEMBLYAI_FILE_SIZE_LIMIT,
+        accepts_initial_prompt=False,   # AssemblyAI has no prior-text channel
+        handles_own_retry=False,
     )
 
     def __init__(self) -> None:
@@ -83,9 +86,10 @@ class AssemblyAIProvider:
         *,
         language_hint: str | None = None,
         hotwords: list[str] | None = None,
+        initial_prompt: str | None = None,
         progress: Callable[[float], None] | None = None,
     ) -> list[TranscriptionSegment]:
-        del progress  # See ProviderCapabilities
+        del progress, initial_prompt  # See ProviderCapabilities
 
         try:
             with open(file_path, "rb") as audio:

@@ -84,6 +84,14 @@ class GeminiProvider:
         supports_diarization=False,  # Gemini has no native diarization API.
         supports_hotwords=True,  # Hotwords forwarded via system prompt.
         supports_word_timestamps=False,  # Synthetic — see _synthetic_words.
+        max_input_bytes=GEMINI_FILE_SIZE_LIMIT,
+        # Gemini's chat prompt has no "previous text" semantics: a
+        # prepended prior tail risks a continuation segment with
+        # start=0 that overlaps the previous chunk's last segment.
+        # SplittingTranscriber therefore processes Gemini chunks
+        # independently (R1 spec M2).
+        accepts_initial_prompt=False,
+        handles_own_retry=False,
     )
 
     def __init__(self) -> None:
@@ -121,9 +129,10 @@ class GeminiProvider:
         *,
         language_hint: str | None = None,
         hotwords: list[str] | None = None,
+        initial_prompt: str | None = None,
         progress: Callable[[float], None] | None = None,
     ) -> list[TranscriptionSegment]:
-        del progress  # See ProviderCapabilities
+        del progress, initial_prompt  # See ProviderCapabilities
 
         # TOCTOU-safe size check: stat the open fd, not the path
         # (mirrors openai_compatible / assemblyai).

@@ -138,6 +138,7 @@ async def transcribe_with_retry(
     *,
     language_hint: str | None = None,
     hotwords: list[str] | None = None,
+    initial_prompt: str | None = None,
     progress: Callable[[float], None] | None = None,
     circuit_breaker: ProviderCircuitBreaker | None = None,
     sleep: Callable[[float], "asyncio.Future"] | None = None,
@@ -182,6 +183,7 @@ async def transcribe_with_retry(
                 file_path,
                 language_hint=language_hint,
                 hotwords=hotwords,
+                initial_prompt=initial_prompt,
                 progress=progress,
             )
         except RateLimitError as exc:

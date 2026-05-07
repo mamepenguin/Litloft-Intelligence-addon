@@ -78,6 +78,9 @@ class OpenAICompatibleProvider:
         supports_diarization=False,
         supports_hotwords=False,
         supports_word_timestamps=True,
+        max_input_bytes=OPENAI_FILE_SIZE_LIMIT,
+        accepts_initial_prompt=True,    # passes through API ``prompt`` kwarg
+        handles_own_retry=False,
     )
 
     def __init__(self) -> None:
@@ -120,12 +123,17 @@ class OpenAICompatibleProvider:
         *,
         language_hint: str | None = None,
         hotwords: list[str] | None = None,
+        initial_prompt: str | None = None,
         progress: Callable[[float], None] | None = None,
     ) -> list[TranscriptionSegment]:
         # Hotwords are ignored: OpenAI's Whisper API has no first-class
         # hotword field. Some compatibles repurpose ``prompt`` for that
         # purpose, but the behaviour is provider-specific and breaks
         # the abstraction; we surface it as ``supports_hotwords=False``.
+        # ``initial_prompt`` is intentionally distinct: it carries
+        # chunk N-1 tail text per Phase 2B chunk-handoff and goes
+        # through the API's ``prompt`` parameter, which IS the
+        # "previous text" channel (hako jqiF9yOk9VxEhU-H8sLbL).
         del progress, hotwords
 
         try:
@@ -159,14 +167,24 @@ class OpenAICompatibleProvider:
                 ext = os.path.splitext(file_path)[1].lower() or ".bin"
                 synthetic_name = f"audio{ext}"
                 file_arg = (synthetic_name, audio)
+                create_kwargs: dict = {
+                    "file": file_arg,
+                    "model": self._model,
+                    "response_format": "verbose_json",
+                    "timestamp_granularities": ["word", "segment"],
+                    "language": language_hint or None,
+                }
+                if initial_prompt:
+                    # OpenAI's ``prompt`` parameter is the
+                    # "previous text" channel (hako
+                    # ``jqiF9yOk9VxEhU-H8sLbL``); SplittingTranscriber
+                    # supplies chunk N-1's tail to keep vocabulary
+                    # consistent across chunk boundaries.
+                    create_kwargs["prompt"] = initial_prompt
                 if self._client is not None:
                     # Test path: a pre-built mock client is installed.
                     response = await self._client.audio.transcriptions.create(
-                        file=file_arg,
-                        model=self._model,
-                        response_format="verbose_json",
-                        timestamp_granularities=["word", "segment"],
-                        language=language_hint or None,
+                        **create_kwargs
                     )
                 else:
                     async with AsyncOpenAI(
@@ -175,11 +193,7 @@ class OpenAICompatibleProvider:
                         timeout=float(self._timeout_s) if self._timeout_s else None,
                     ) as client:
                         response = await client.audio.transcriptions.create(
-                            file=file_arg,
-                            model=self._model,
-                            response_format="verbose_json",
-                            timestamp_granularities=["word", "segment"],
-                            language=language_hint or None,
+                            **create_kwargs
                         )
         except _OpenAIRateLimitError as exc:
             raise RateLimitError(str(exc)) from exc

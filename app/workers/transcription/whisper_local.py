@@ -68,6 +68,9 @@ class WhisperLocalProvider:
         supports_diarization=False,
         supports_hotwords=False,
         supports_word_timestamps=True,
+        max_input_bytes=None,           # faster-whisper streams long input
+        accepts_initial_prompt=True,    # forwards to faster-whisper's prompt
+        handles_own_retry=False,
     )
 
     async def transcribe(
@@ -76,6 +79,7 @@ class WhisperLocalProvider:
         *,
         language_hint: str | None = None,
         hotwords: list[str] | None = None,
+        initial_prompt: str | None = None,
         progress: Callable[[float], None] | None = None,
     ) -> list[TranscriptionSegment]:
         """Run faster-whisper off the event-loop thread.
@@ -84,8 +88,17 @@ class WhisperLocalProvider:
         conformance but ignored here — the existing
         :func:`_transcribe_file` already does its own language
         detection and reads ``settings.transcription.whisper_local`` for
-        the initial prompt. Wiring per-call hints would require a
-        deeper refactor that belongs in Phase 1C / 2.
+        the language-default prompt. Wiring per-call hints would
+        require a deeper refactor that belongs in Phase 1C / 2.
+
+        ``initial_prompt`` is forwarded as a precedence-1 override
+        (Phase 2B): when a non-empty string is supplied the caller's
+        value replaces both the user-configured override and the
+        per-language default; when ``None`` / empty the legacy
+        resolution chain runs unchanged so non-chunked transcription
+        keeps its existing behaviour.
         """
-        raw = await asyncio.to_thread(_transcribe_file, file_path)
+        raw = await asyncio.to_thread(
+            _transcribe_file, file_path, initial_prompt
+        )
         return [_segment_from_dict(seg) for seg in raw]

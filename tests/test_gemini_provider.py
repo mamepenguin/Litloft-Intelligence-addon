@@ -235,13 +235,19 @@ def test_provider_declared_name(fake_genai, with_api_key) -> None:
 
 
 def test_provider_capabilities_match_spec(fake_genai, with_api_key) -> None:
-    from app.workers.transcription.gemini import GeminiProvider
+    from app.workers.transcription.gemini import (
+        GEMINI_FILE_SIZE_LIMIT,
+        GeminiProvider,
+    )
 
     assert GeminiProvider.capabilities == ProviderCapabilities(
         sends_audio_offhost=True,
         supports_diarization=False,
         supports_hotwords=True,
         supports_word_timestamps=False,
+        max_input_bytes=GEMINI_FILE_SIZE_LIMIT,
+        accepts_initial_prompt=False,
+        handles_own_retry=False,
     )
 
 

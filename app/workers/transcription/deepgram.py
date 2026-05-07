@@ -56,6 +56,9 @@ class DeepgramProvider:
         supports_diarization=True,
         supports_hotwords=False,
         supports_word_timestamps=True,
+        max_input_bytes=None,           # Deepgram has no practical cap
+        accepts_initial_prompt=False,
+        handles_own_retry=False,
     )
 
     def __init__(self) -> None:
@@ -90,9 +93,13 @@ class DeepgramProvider:
         *,
         language_hint: str | None = None,
         hotwords: list[str] | None = None,
+        initial_prompt: str | None = None,
         progress: Callable[[float], None] | None = None,
     ) -> list[TranscriptionSegment]:
-        del progress, hotwords  # See ProviderCapabilities
+        # Deepgram has no "prior text" channel, so initial_prompt is
+        # ignored. Capability matrix flags this via
+        # ``accepts_initial_prompt=False``.
+        del progress, hotwords, initial_prompt
 
         params = {
             "model": self._model,

@@ -53,6 +53,9 @@ class ElevenLabsScribeProvider:
         supports_diarization=True,
         supports_hotwords=False,
         supports_word_timestamps=True,
+        max_input_bytes=None,
+        accepts_initial_prompt=False,
+        handles_own_retry=False,
     )
 
     def __init__(self) -> None:
@@ -79,9 +82,10 @@ class ElevenLabsScribeProvider:
         *,
         language_hint: str | None = None,
         hotwords: list[str] | None = None,
+        initial_prompt: str | None = None,
         progress: Callable[[float], None] | None = None,
     ) -> list[TranscriptionSegment]:
-        del progress, hotwords
+        del progress, hotwords, initial_prompt
 
         data = {
             "model_id": self._model_id,
