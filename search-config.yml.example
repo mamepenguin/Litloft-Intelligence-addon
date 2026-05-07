@@ -333,6 +333,58 @@ search:
   min_score_clip: 0.05
   min_score_clip_thumbnail: 0.05
 
+# Transcription provider configuration. Selects the Speech-to-Text engine
+# used for audio/video transcription. See docs/PROVIDERS.md for the full
+# matrix (capabilities, env vars, caveats).
+#
+# Per-drive override: set `addons.intelligence.transcription_cloud: false`
+# in drives.json to force `whisper_local` for sensitive drives even when
+# `provider` here points at a cloud provider.
+transcription:
+  # whisper_local | openai_compatible | deepgram | elevenlabs_scribe
+  provider: whisper_local
+  # Optional ISO language code hint passed to the provider (empty = auto-detect)
+  language_hint: ""
+  # Vocabulary hints for proper nouns. Honored by providers that support
+  # hotwords (capabilities.supports_hotwords); silently ignored otherwise.
+  hotwords: []
+
+  # Local faster-whisper settings. Migrated from indexing.whisper.* — see
+  # the deprecation notice on `indexing.whisper` below.
+  whisper_local:
+    model: openai/whisper-large-v3-turbo
+    initial_prompt: ""
+    beam_size: 1
+    batch_size: 0
+    condition_on_previous_text: true
+    compression_ratio_threshold: 2.0
+    no_speech_threshold: 0.45
+    log_prob_threshold: -1.0
+
+  # OpenAI Whisper API + base_url override (works for Groq, Fireworks,
+  # self-hosted whisper). Requires OPENAI_API_KEY env var.
+  # WARNING: the official api.openai.com endpoint enforces a 25MB file
+  # limit. For long-form audio use Deepgram, ElevenLabs Scribe, Groq,
+  # or self-hosted Whisper instead.
+  openai_compatible:
+    base_url: https://api.openai.com/v1
+    model: whisper-1
+    timeout_s: 600
+
+  # Deepgram Nova-3 (best WER + diarization). Requires DEEPGRAM_API_KEY.
+  deepgram:
+    model: nova-3
+    diarize: true
+    smart_format: true
+    detect_language: true
+    timeout_s: 600
+
+  # ElevenLabs Scribe v1 (long-form, diarization). Requires ELEVENLABS_API_KEY.
+  elevenlabs_scribe:
+    model_id: scribe_v1
+    diarize: true
+    timeout_s: 600
+
 # Indexing parameters
 indexing:
   # Reconciliation interval with Litloft DB (seconds)
@@ -347,6 +399,8 @@ indexing:
     # Maximum frames per video
     max_frames: 500
 
+  # DEPRECATED 2026-07-07: move whisper.* settings to transcription.whisper_local.*
+  # Old keys are still read via shim, but will be removed on 2026-07-07.
   # Whisper transcription settings
   whisper:
     # Segment duration range (seconds)
