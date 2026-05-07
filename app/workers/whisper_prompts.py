@@ -21,17 +21,22 @@ and Whisper will over-weight them.
 
 The defaults below therefore aim for:
 
-1. **Natural conversational register** — Whisper imitates style, so
-   the prompt should match the casual/spoken register that most user
-   recordings will fall under.
-2. **Specific, low-overlap content** — a personal anecdote about a
-   bakery croissant. Picked because (a) it's mundane enough to read
-   as natural speech, and (b) the specific nouns (bakery, croissant)
-   rarely appear in typical home-video / lecture / meeting audio, so
-   even if Whisper conditions on them, the audio never matches and
-   they don't bleed through.
-3. **Rich punctuation** (``、。！？`` for CJK, ``,.;:!?—`` for Latin
-   scripts) — the actual signal we want Whisper to imitate.
+1. **High punctuation density** — Whisper imitates the comma/period
+   rhythm it sees, so a one-sentence civic notice with several commas
+   produces transcripts with noticeably more punctuation than two
+   short sentences with one comma each. Each language is calibrated
+   to its own native punctuation norms (e.g. Japanese tolerates 4
+   commas in one sentence; English does not — comma counts vary
+   across languages on purpose).
+2. **Civic-notice / public-information register** — vocabulary like
+   "sidewalk paving", "detour signs", "construction works" almost
+   never appears in family videos / lectures / meetings / podcasts,
+   so even though Whisper conditions on these tokens, the audio
+   never matches and they don't bleed through.
+3. **Conversational-but-informative tone** — close enough to natural
+   speech that Whisper imitates the right register for typical user
+   recordings, distinct enough in content to avoid hallucinating
+   construction terminology into them.
 4. **Short** — every token spent on the prompt steals from the
    224-token decoder context.
 
@@ -48,16 +53,16 @@ Traditional Chinese should set ``whisper.initial_prompt`` in
 """
 
 DEFAULT_INITIAL_PROMPTS: dict[str, str] = {
-    "ja": "昨日、近所のパン屋でクロワッサンを買ったよ。思ったより美味しかったな、あれ。",
-    "zh": "昨天去街角面包店买了个可颂，比想象中好吃多了。",
-    "ko": "어제 동네 빵집에서 크루아상 하나 샀어. 생각보다 맛있더라, 진짜.",
-    "en": "Yesterday, I picked up a croissant at the corner bakery. Better than expected, honestly.",
-    "es": "Ayer compré un cruasán en la panadería de la esquina. La verdad, mejor de lo que esperaba.",
-    "fr": "Hier, j'ai pris un croissant à la boulangerie du coin — finalement, meilleur que prévu.",
-    "de": "Gestern habe ich beim Bäcker an der Ecke ein Croissant geholt. Ehrlich, besser als gedacht.",
-    "pt": "Ontem peguei um croissant na padaria da esquina. Sinceramente, melhor do que eu esperava.",
-    "it": "Ieri ho preso un cornetto al bar all'angolo. Sinceramente, meglio del previsto.",
-    "ru": "Вчера купил круассан в булочной на углу. Честно, оказался вкуснее, чем ожидал.",
+    "ja": "市街地の中心部では、歩道の舗装工事が行われており、通行する際には、う回路が案内されています。",
+    "zh": "市中心区域，正在进行人行道铺装施工，通行时，请按照指示牌指引绕行。",
+    "ko": "시내 중심부에서, 보도 포장 공사가 진행 중입니다. 통행 시에는, 안내 표지에 따라 우회로를 이용해 주시기 바랍니다.",
+    "en": "In the downtown area, sidewalk paving is currently underway; please follow the posted detour signs while passing through.",
+    "es": "En el centro de la ciudad, se están realizando obras de pavimentación de la acera; al transitar, conviene seguir las señales de desvío indicadas.",
+    "fr": "Dans le centre-ville, des travaux de pavage du trottoir sont en cours ; lors du passage, veuillez suivre les indications de la déviation signalée.",
+    "de": "In der Innenstadt werden derzeit Pflasterarbeiten am Gehweg durchgeführt; beim Passieren sollten Sie, wie ausgeschildert, der Umleitung folgen.",
+    "pt": "No centro da cidade, estão sendo realizadas obras de pavimentação da calçada; ao passar, siga as placas de desvio indicadas.",
+    "it": "Nel centro città sono in corso lavori di pavimentazione del marciapiede; durante il passaggio, seguite le indicazioni del percorso alternativo.",
+    "ru": "В центре города ведутся работы по укладке тротуара; при проходе, пожалуйста, следуйте указателям объездного маршрута.",
 }
 
 
