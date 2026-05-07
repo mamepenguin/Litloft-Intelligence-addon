@@ -682,17 +682,30 @@ def _parse_nested(data: dict[str, Any], key: str, cls: type) -> Any:
 _RAG_NESTED_KEYS = ("hierarchical", "personal_history", "category_expansion")
 
 
-def _parse_rag(data: dict[str, Any]) -> RagConfig:
+def _parse_rag(
+    data: dict[str, Any],
+    overrides: "RagOverrides | None" = None,  # type: ignore[name-defined]
+) -> RagConfig:
     """Parse the rag config section with the nested sub-sections.
 
     Mirrors ``_parse_indexing`` so unknown top-level keys are dropped
     rather than blowing up dataclass construction, and the nested
     sub-sections (``hierarchical``, ``personal_history``,
     ``category_expansion``) hydrate via ``_parse_nested``.
+
+    GUI overrides for ``personal_history.enabled`` and
+    ``category_expansion.enabled`` are applied on top of the parsed
+    section before sub-section dataclasses are built.
     """
-    section = data.get("rag", {})
-    if not isinstance(section, dict):
-        return RagConfig()
+    section_raw = data.get("rag", {})
+    section: dict[str, Any] = (
+        section_raw if isinstance(section_raw, dict) else {}
+    )
+
+    if overrides is not None:
+        from app.rag_overrides import merge_into_rag_dict
+
+        section = merge_into_rag_dict(section, overrides)
 
     flat_kwargs = {
         k: v
@@ -890,29 +903,53 @@ def load_settings() -> Settings:
             name, path = entry.split("=", 1)
             drive_mounts[name.strip()] = path.strip()
 
-    # Parse LLM config with env var override for api_key
-    llm_config = _parse_nested(config_data, "llm", LLMConfig)
+    # GUI overrides for features / llm / rag — see
+    # ``app/{features,llm,rag}_overrides.py``. Each module reads a
+    # tiny JSON file written by the admin GUI and silently no-ops
+    # when the file is missing, so an unconfigured deployment keeps
+    # using whatever ``search-config.yml`` ships.
+    from app import features_overrides as _features_overrides
+    from app import llm_overrides as _llm_overrides
+    from app import rag_overrides as _rag_overrides
+
+    # Features (8 toggle gates)
+    features_yaml_raw = config_data.get("features", {})
+    features_yaml = features_yaml_raw if isinstance(features_yaml_raw, dict) else {}
+    features_merged = _features_overrides.merge_into_dict(
+        features_yaml, _features_overrides.read_overrides()
+    )
+    features_config = FeaturesConfig(
+        **{
+            k: v
+            for k, v in features_merged.items()
+            if k in FeaturesConfig.__dataclass_fields__
+        }
+    )
+
+    # LLM (provider / base_url / model / output_language / vision_model
+    # via GUI; api_key still env-only, sub-tuning still file-only)
+    llm_yaml_raw = config_data.get("llm", {})
+    llm_yaml = llm_yaml_raw if isinstance(llm_yaml_raw, dict) else {}
+    llm_merged = _llm_overrides.merge_into_dict(
+        llm_yaml, _llm_overrides.read_overrides()
+    )
     llm_api_key_env = os.environ.get("LLM_API_KEY", "")
     if llm_api_key_env:
-        # Rebuild with overridden api_key (frozen dataclass)
-        llm_config = LLMConfig(
-            provider=llm_config.provider,
-            base_url=llm_config.base_url,
-            api_key=llm_api_key_env,
-            model=llm_config.model,
-            max_tokens=llm_config.max_tokens,
-            temperature=llm_config.temperature,
-            output_language=llm_config.output_language,
-            retry_attempts=llm_config.retry_attempts,
-            retry_base_delay=llm_config.retry_base_delay,
-            retry_max_delay=llm_config.retry_max_delay,
-            min_request_interval_ms=llm_config.min_request_interval_ms,
-            request_timeout_seconds=llm_config.request_timeout_seconds,
-            request_connect_timeout_seconds=llm_config.request_connect_timeout_seconds,
-            vision_model=llm_config.vision_model,
-            vision_max_tokens=llm_config.vision_max_tokens,
-            vision_temperature=llm_config.vision_temperature,
-        )
+        # Env LLM_API_KEY wins over both the yaml field and any GUI
+        # override path (secrets do not live in the data volume).
+        llm_merged["api_key"] = llm_api_key_env
+    llm_config = LLMConfig(
+        **{
+            k: v
+            for k, v in llm_merged.items()
+            if k in LLMConfig.__dataclass_fields__
+        }
+    )
+
+    # RAG (only ``personal_history.enabled`` and
+    # ``category_expansion.enabled`` are GUI-overridable; everything
+    # else stays file-only because it's tuned, not operator-facing.)
+    rag_config = _parse_rag(config_data, _rag_overrides.read_overrides())
 
     return Settings(
         intelligence_data_dir=intelligence_data_dir,
@@ -926,10 +963,10 @@ def load_settings() -> Settings:
         indexing=_parse_indexing(config_data),
         workers=_parse_nested(config_data, "workers", WorkerConfig),
         memory=_parse_nested(config_data, "memory", MemoryConfig),
-        features=_parse_nested(config_data, "features", FeaturesConfig),
+        features=features_config,
         llm=llm_config,
         summaries=_parse_nested(config_data, "summaries", SummariesConfig),
-        rag=_parse_rag(config_data),
+        rag=rag_config,
         transcription=_parse_transcription(config_data),
     )
 

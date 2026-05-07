@@ -396,3 +396,248 @@ def test_whisper_local_does_not_require_api_key(
             json={"provider": "whisper_local", "hotwords": []},
         )
     assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# /admin/features
+# ---------------------------------------------------------------------------
+
+
+def test_features_get_returns_baseline(client) -> None:
+    response = client.get("/admin/features")
+    assert response.status_code == 200
+    body = response.json()
+    for key in (
+        "indexing", "search", "rag", "auto_tags", "summaries",
+        "detailed_summaries", "transcript_refine", "vision_describe",
+    ):
+        assert key in body
+    assert body["overrides_present"] is False
+    assert body["tristate_values"] == ["false", "manual", "on_index"]
+
+
+def test_features_put_persists_payload(client, admin_app, monkeypatch) -> None:
+    _app, data_dir = admin_app
+    from app.routers import admin as admin_module
+
+    monkeypatch.setattr(
+        admin_module, "_notify_core_restart_pending", _ok_notify()
+    )
+
+    response = client.put(
+        "/admin/features",
+        json={
+            "indexing": False,
+            "auto_tags": "on_index",
+            "vision_describe": "false",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "saved"
+
+    from app.features_overrides import read_overrides as read_features
+    persisted = read_features(data_dir=data_dir)
+    assert persisted is not None
+    assert persisted.indexing is False
+    assert persisted.auto_tags == "on_index"
+    assert persisted.vision_describe == "false"
+
+
+def test_features_put_rejects_invalid_enum(client) -> None:
+    response = client.put(
+        "/admin/features",
+        json={"auto_tags": "always"},
+    )
+    assert response.status_code == 400
+    assert "auto_tags" in response.json()["detail"]
+
+
+def test_features_delete_removes_overrides(
+    client, admin_app, monkeypatch
+) -> None:
+    _app, data_dir = admin_app
+    from app.features_overrides import (
+        FeaturesOverrides,
+        overrides_path as features_overrides_path,
+        write_overrides as write_features,
+    )
+    write_features(
+        FeaturesOverrides(indexing=False), data_dir=data_dir,
+    )
+    assert features_overrides_path(data_dir).is_file()
+
+    from app.routers import admin as admin_module
+
+    monkeypatch.setattr(
+        admin_module, "_notify_core_restart_pending", _ok_notify()
+    )
+
+    response = client.delete("/admin/features")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["removed"] is True
+    assert not features_overrides_path(data_dir).is_file()
+
+
+# ---------------------------------------------------------------------------
+# /admin/llm
+# ---------------------------------------------------------------------------
+
+
+def test_llm_get_returns_baseline(client, monkeypatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "sk-test")
+    response = client.get("/admin/llm")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["available_providers"] == ["disabled", "ollama", "openai_compatible"]
+    assert body["available_output_languages"] == ["auto", "ja", "en"]
+    assert body["api_key_present"] is True
+    assert body["api_key_env_var"] == "LLM_API_KEY"
+    assert body["overrides_present"] is False
+
+
+def test_llm_get_reflects_missing_api_key(client, monkeypatch) -> None:
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    body = client.get("/admin/llm").json()
+    assert body["api_key_present"] is False
+
+
+def test_llm_put_persists_payload(client, admin_app, monkeypatch) -> None:
+    _app, data_dir = admin_app
+    from app.routers import admin as admin_module
+
+    monkeypatch.setattr(
+        admin_module, "_notify_core_restart_pending", _ok_notify()
+    )
+
+    response = client.put(
+        "/admin/llm",
+        json={
+            "provider": "ollama",
+            "base_url": "http://host.docker.internal:11434",
+            "model": "gemma4:e4b",
+            "output_language": "ja",
+            "vision_model": "llava:13b",
+        },
+    )
+    assert response.status_code == 200
+    from app.llm_overrides import read_overrides as read_llm
+    persisted = read_llm(data_dir=data_dir)
+    assert persisted is not None
+    assert persisted.provider == "ollama"
+    assert persisted.model == "gemma4:e4b"
+    assert persisted.vision_model == "llava:13b"
+
+
+def test_llm_put_rejects_unknown_provider(client) -> None:
+    response = client.put(
+        "/admin/llm",
+        json={"provider": "anthropic"},
+    )
+    assert response.status_code == 400
+    assert "provider" in response.json()["detail"]
+
+
+def test_llm_put_rejects_invalid_output_language(client) -> None:
+    response = client.put(
+        "/admin/llm",
+        json={"output_language": "es"},
+    )
+    assert response.status_code == 400
+    assert "output_language" in response.json()["detail"]
+
+
+def test_llm_put_rejects_control_chars_in_url(client) -> None:
+    response = client.put(
+        "/admin/llm",
+        json={"base_url": "http://example.com/\nbad"},
+    )
+    assert response.status_code == 400
+
+
+def test_llm_delete_removes_overrides(
+    client, admin_app, monkeypatch
+) -> None:
+    _app, data_dir = admin_app
+    from app.llm_overrides import (
+        LLMOverrides,
+        overrides_path as llm_overrides_path,
+        write_overrides as write_llm,
+    )
+    write_llm(LLMOverrides(provider="ollama"), data_dir=data_dir)
+    assert llm_overrides_path(data_dir).is_file()
+
+    from app.routers import admin as admin_module
+
+    monkeypatch.setattr(
+        admin_module, "_notify_core_restart_pending", _ok_notify()
+    )
+
+    response = client.delete("/admin/llm")
+    assert response.status_code == 200
+    assert response.json()["removed"] is True
+    assert not llm_overrides_path(data_dir).is_file()
+
+
+# ---------------------------------------------------------------------------
+# /admin/rag
+# ---------------------------------------------------------------------------
+
+
+def test_rag_get_returns_baseline(client) -> None:
+    response = client.get("/admin/rag")
+    assert response.status_code == 200
+    body = response.json()
+    assert "personal_history_enabled" in body
+    assert "category_expansion_enabled" in body
+    assert body["overrides_present"] is False
+
+
+def test_rag_put_persists_payload(client, admin_app, monkeypatch) -> None:
+    _app, data_dir = admin_app
+    from app.routers import admin as admin_module
+
+    monkeypatch.setattr(
+        admin_module, "_notify_core_restart_pending", _ok_notify()
+    )
+
+    response = client.put(
+        "/admin/rag",
+        json={
+            "personal_history_enabled": False,
+            "category_expansion_enabled": True,
+        },
+    )
+    assert response.status_code == 200
+    from app.rag_overrides import read_overrides as read_rag
+    persisted = read_rag(data_dir=data_dir)
+    assert persisted is not None
+    assert persisted.personal_history_enabled is False
+    assert persisted.category_expansion_enabled is True
+
+
+def test_rag_delete_removes_overrides(
+    client, admin_app, monkeypatch
+) -> None:
+    _app, data_dir = admin_app
+    from app.rag_overrides import (
+        RagOverrides,
+        overrides_path as rag_overrides_path,
+        write_overrides as write_rag,
+    )
+    write_rag(
+        RagOverrides(personal_history_enabled=False),
+        data_dir=data_dir,
+    )
+    assert rag_overrides_path(data_dir).is_file()
+
+    from app.routers import admin as admin_module
+
+    monkeypatch.setattr(
+        admin_module, "_notify_core_restart_pending", _ok_notify()
+    )
+
+    response = client.delete("/admin/rag")
+    assert response.status_code == 200
+    assert response.json()["removed"] is True
+    assert not rag_overrides_path(data_dir).is_file()

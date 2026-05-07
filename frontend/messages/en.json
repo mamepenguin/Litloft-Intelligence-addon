@@ -295,6 +295,125 @@
     }
   },
   "settings": {
+    "features": {
+      "title": "Feature toggles",
+      "description": "Turn the addon's features on or off based on cost (cloud LLM usage) and privacy (data leaving the container) trade-offs. Restart the container for changes to take effect.",
+      "save": "Save",
+      "saving": "Saving...",
+      "saved": "Saved — restart required for the change to take effect",
+      "loadFailed": "Failed to load",
+      "saveFailed": "Failed to save",
+      "overridesActive": "Values set from this GUI are shadowing the ones in search-config.yml",
+      "overridesHelp": "If you want to drive intelligence from the YAML file directly, reset the GUI settings",
+      "reset": "Reset GUI settings",
+      "resetting": "Resetting...",
+      "resetSuccess": "Reset — restart required for the change to take effect",
+      "resetFailed": "Failed to reset",
+      "tristate": {
+        "false": "Off",
+        "manual": "Manual only",
+        "on_index": "Auto (on index)"
+      },
+      "fields": {
+        "indexing": {
+          "label": "Indexing",
+          "help": "Pulls in file changes and updates the semantic search index. With this off, new files won't be searchable."
+        },
+        "search": {
+          "label": "Semantic search",
+          "help": "Accept semantic queries from the search UI. Off disables intelligence search; filename search keeps working through core."
+        },
+        "rag": {
+          "label": "AI question answering (Ask)",
+          "help": "Enable the Ask feature. Each question sends file contents (transcripts, captions, text) to the LLM API. Use a local LLM for privacy-sensitive content."
+        },
+        "auto_tags": {
+          "label": "AI-suggested tags",
+          "help": "Generate candidate tags from file contents. Manual = on user request. Auto = generated for every newly indexed file. Suggestions only — they're not applied until you Approve."
+        },
+        "summaries": {
+          "label": "AI summary (short)",
+          "help": "1-sentence short summary plus a paragraph long summary. Auto generates one for every newly indexed file, scaling cost linearly."
+        },
+        "detailed_summaries": {
+          "label": "AI detailed summary (Markdown)",
+          "help": "Long-form summary including a key-points table. Auto adds thousands of tokens per file. Local LLMs or cheap cloud tiers recommended."
+        },
+        "transcript_refine": {
+          "label": "AI transcript refinement",
+          "help": "Run ASR transcripts through the LLM for punctuation and homophone fixes. Originals are kept and reverts are always possible. Transcripts are sent to the LLM API."
+        },
+        "vision_describe": {
+          "label": "AI image description",
+          "help": "Describe images (HEIC included) with a vision LLM. Image bytes are sent to the LLM API on each generation. For private photos, prefer Off or a local vision model. Requires vision_model to be set on the LLM provider."
+        }
+      }
+    },
+    "llm": {
+      "title": "LLM provider",
+      "description": "Selects the language model used for tag generation, summaries, Ask, and image description. A local LLM (ollama) keeps data in the container; a cloud provider needs the API key in the environment. Restart the container for changes to take effect.",
+      "save": "Save",
+      "saving": "Saving...",
+      "saved": "Saved — restart required for the change to take effect",
+      "loadFailed": "Failed to load",
+      "saveFailed": "Failed to save",
+      "overridesActive": "Values set from this GUI are shadowing the ones in search-config.yml",
+      "overridesHelp": "If you want to drive intelligence from the YAML file directly, reset the GUI settings",
+      "reset": "Reset GUI settings",
+      "resetting": "Resetting...",
+      "resetSuccess": "Reset — restart required for the change to take effect",
+      "resetFailed": "Failed to reset",
+      "provider": "Provider",
+      "baseUrl": "Base URL",
+      "baseUrlHelp": "ollama: http://host.docker.internal:11434 / openai-compatible: http://host.docker.internal:11434/v1 etc.",
+      "model": "Text model",
+      "modelHelp": "e.g. gemma4:e4b (ollama), gpt-4o-mini, deepseek-chat. Use whatever model name your provider exposes",
+      "visionModel": "Vision model",
+      "visionModelHelp": "Model used for image description. Empty disables vision_describe even if the feature is on. e.g. llava:13b, gpt-4o-mini",
+      "outputLanguage": "Output language",
+      "providers": {
+        "disabled": "Disabled",
+        "ollama": "Ollama (recommended: local LLM)",
+        "openai_compatible": "OpenAI-compatible API"
+      },
+      "providerHelp": {
+        "disabled": "Disable every AI feature (only indexing and search remain).",
+        "ollama": "Talk to a local ollama server. Data stays inside your container. Reasoning models (DeepSeek-R1, Gemma 4, etc.) run with think:false.",
+        "openai_compatible": "OpenAI / DeepSeek / Groq / vLLM / LM Studio etc. File contents are sent over the network — keep your privacy posture in mind."
+      },
+      "outputLanguages": {
+        "auto": "Auto",
+        "ja": "Japanese",
+        "en": "English"
+      },
+      "apiKeyPresent": "set",
+      "apiKeyMissing": "missing",
+      "apiKeyHelp": "API keys are read from the LLM_API_KEY environment variable. They cannot be edited from the GUI.",
+      "apiKeyRequired": "The selected provider needs LLM_API_KEY. Add it to .env, run `docker compose up -d`, then resave."
+    },
+    "rag": {
+      "title": "Ask (question answering) behaviour",
+      "description": "Fine-tune how the Ask feature retrieves and expands queries based on your privacy and cost preferences. Restart the container for changes to take effect.",
+      "save": "Save",
+      "saving": "Saving...",
+      "saved": "Saved — restart required for the change to take effect",
+      "loadFailed": "Failed to load",
+      "saveFailed": "Failed to save",
+      "overridesActive": "Values set from this GUI are shadowing the ones in search-config.yml",
+      "overridesHelp": "If you want to drive intelligence from the YAML file directly, reset the GUI settings",
+      "reset": "Reset GUI settings",
+      "resetting": "Resetting...",
+      "resetSuccess": "Reset — restart required for the change to take effect",
+      "resetFailed": "Failed to reset",
+      "personalHistory": {
+        "label": "Use viewing history",
+        "help": "Lets queries like \"what I watched last week\" or \"things I haven't seen this month\" filter to your own viewing history. Requires a profile (lit_viewer cookie)."
+      },
+      "categoryExpansion": {
+        "label": "Expand semantic categories",
+        "help": "Lets the LLM rewrite vague queries (\"sci-fi-ish\", \"horror-style\") into a small set of synonyms for multi-query retrieval. Adds an LLM call per question."
+      }
+    },
     "transcription": {
       "title": "Transcription provider",
       "description": "Choose the service used to transcribe audio and video. Restart the container for changes to take effect. Cloud services require an API key configured in your environment.",

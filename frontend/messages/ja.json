@@ -295,6 +295,125 @@
     }
   },
   "settings": {
+    "features": {
+      "title": "機能スイッチ",
+      "description": "インデックス・検索や AI 機能の有効/無効を切り替えます。コスト（クラウド LLM 利用）やプライバシー（外部 API への送信）に応じて選んでください。変更を反映するにはコンテナの再起動が必要です。",
+      "save": "保存",
+      "saving": "保存中...",
+      "saved": "保存しました — 反映には再起動が必要",
+      "loadFailed": "読み込みに失敗しました",
+      "saveFailed": "保存に失敗しました",
+      "overridesActive": "GUI で設定された値が search-config.yml の値を上書き中です",
+      "overridesHelp": "search-config.yml を直接編集して動かしたい場合は、GUI 設定をリセットしてください",
+      "reset": "GUI 設定をリセット",
+      "resetting": "リセット中...",
+      "resetSuccess": "リセットしました — 反映には再起動が必要",
+      "resetFailed": "リセットに失敗しました",
+      "tristate": {
+        "false": "無効",
+        "manual": "手動のみ",
+        "on_index": "自動（インデックス時）"
+      },
+      "fields": {
+        "indexing": {
+          "label": "インデックス処理",
+          "help": "ファイル変更を取り込んでセマンティック検索のインデックスを更新します。停止すると新規ファイルは検索対象になりません。"
+        },
+        "search": {
+          "label": "セマンティック検索",
+          "help": "検索 UI からのセマンティッククエリ受付。停止すると intelligence の検索が無効になります（ファイル名検索は core 側で動作）。"
+        },
+        "rag": {
+          "label": "AI による質問応答（Ask）",
+          "help": "Ask 機能の有効/無効。有効にすると質問のたびにファイル本文（字幕・テキスト）が LLM API に送信されます。プライバシー重視ならローカル LLM の利用を推奨。"
+        },
+        "auto_tags": {
+          "label": "AI による自動タグ付け候補",
+          "help": "ファイル内容から候補タグを生成します。「手動」はユーザー操作で生成、「自動」はインデックス時に毎回生成。提案として表示され、Approve するまで反映されません。"
+        },
+        "summaries": {
+          "label": "AI 要約（短文）",
+          "help": "1 文の短い要約 + 1 段落の長い要約を生成します。「自動」だと新規ファイルのたびに生成されてコストが増えます。"
+        },
+        "detailed_summaries": {
+          "label": "AI 詳細要約（Markdown）",
+          "help": "重要ポイントの表を含む長文要約を生成します。「自動」は新規ファイル × 数千〜万トークンで進むので、ローカル LLM もしくは安価なクラウド LLM 推奨。"
+        },
+        "transcript_refine": {
+          "label": "AI による文字起こし整形",
+          "help": "ASR の出力を LLM で整形（句読点や同音異義語の修正）。元のテキストは保持され、いつでも戻せます。文字起こし全文が LLM API に送信されます。"
+        },
+        "vision_describe": {
+          "label": "AI による画像説明",
+          "help": "画像（HEIC 含む）の内容を LLM に説明させます。画像バイナリが LLM API に送信されます。プライベートな写真があるドライブでは「無効」もしくはローカル vision モデル推奨。LLM プロバイダー側で vision_model を設定する必要があります。"
+        }
+      }
+    },
+    "llm": {
+      "title": "LLM プロバイダー",
+      "description": "タグ生成・要約・Ask・画像説明で使う言語モデルの設定です。ローカル LLM（ollama）を選ぶとデータはコンテナ外に出ません。クラウドを選ぶ場合は API キーを環境変数に設定してください。変更を反映するにはコンテナの再起動が必要です。",
+      "save": "保存",
+      "saving": "保存中...",
+      "saved": "保存しました — 反映には再起動が必要",
+      "loadFailed": "読み込みに失敗しました",
+      "saveFailed": "保存に失敗しました",
+      "overridesActive": "GUI で設定された値が search-config.yml の値を上書き中です",
+      "overridesHelp": "search-config.yml を直接編集して動かしたい場合は、GUI 設定をリセットしてください",
+      "reset": "GUI 設定をリセット",
+      "resetting": "リセット中...",
+      "resetSuccess": "リセットしました — 反映には再起動が必要",
+      "resetFailed": "リセットに失敗しました",
+      "provider": "プロバイダー",
+      "baseUrl": "Base URL",
+      "baseUrlHelp": "ollama: http://host.docker.internal:11434 / OpenAI 互換: http://host.docker.internal:11434/v1 など",
+      "model": "テキストモデル",
+      "modelHelp": "例: gemma4:e4b（ollama）、gpt-4o-mini、deepseek-chat。プロバイダー側で利用可能なモデル名を入力してください",
+      "visionModel": "画像（vision）モデル",
+      "visionModelHelp": "画像説明機能で使うモデル。空欄だと vision_describe は使えません。例: llava:13b、gpt-4o-mini",
+      "outputLanguage": "出力言語",
+      "providers": {
+        "disabled": "無効",
+        "ollama": "Ollama（推奨：ローカル LLM）",
+        "openai_compatible": "OpenAI 互換 API"
+      },
+      "providerHelp": {
+        "disabled": "AI 機能をすべて無効にします（インデックス・検索の基本動作のみ）",
+        "ollama": "ローカル ollama サーバーを使います。データはコンテナ外に出ません。reasoning モデル（DeepSeek-R1 等）も think:false で動作します",
+        "openai_compatible": "OpenAI 公式・DeepSeek・Groq・vLLM・LM Studio など。ファイル本文が送信されます。プライバシー要件に注意"
+      },
+      "outputLanguages": {
+        "auto": "自動",
+        "ja": "日本語",
+        "en": "英語"
+      },
+      "apiKeyPresent": "設定済",
+      "apiKeyMissing": "未設定",
+      "apiKeyHelp": "API キーは環境変数（LLM_API_KEY）でのみ設定可能です。GUI からは編集できません",
+      "apiKeyRequired": "選択中のプロバイダーは LLM_API_KEY が必要です。.env に追加して `docker compose up -d` 後に再保存してください"
+    },
+    "rag": {
+      "title": "Ask（質問応答）の挙動",
+      "description": "Ask 機能の細かい挙動を調整します。プライバシーやコストに応じて切り替えてください。変更を反映するにはコンテナの再起動が必要です。",
+      "save": "保存",
+      "saving": "保存中...",
+      "saved": "保存しました — 反映には再起動が必要",
+      "loadFailed": "読み込みに失敗しました",
+      "saveFailed": "保存に失敗しました",
+      "overridesActive": "GUI で設定された値が search-config.yml の値を上書き中です",
+      "overridesHelp": "search-config.yml を直接編集して動かしたい場合は、GUI 設定をリセットしてください",
+      "reset": "GUI 設定をリセット",
+      "resetting": "リセット中...",
+      "resetSuccess": "リセットしました — 反映には再起動が必要",
+      "resetFailed": "リセットに失敗しました",
+      "personalHistory": {
+        "label": "個人視聴履歴を考慮する",
+        "help": "「先週観たやつ」「今月見てないやつ」のようなクエリで、自分の視聴履歴に絞り込みます。プロファイル（lit_viewer cookie）が必要"
+      },
+      "categoryExpansion": {
+        "label": "ジャンル展開を有効にする",
+        "help": "「SF っぽい」「ホラー系」のような曖昧なクエリを LLM が同義語の集合に展開します。LLM 呼び出しが増えるためコスト増。"
+      }
+    },
     "transcription": {
       "title": "文字起こしプロバイダー",
       "description": "音声や動画の文字起こしに使うサービスを選びます。変更を反映するにはコンテナの再起動が必要です。クラウド型のサービスは事前に API キーを設定してください。",

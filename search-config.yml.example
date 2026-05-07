@@ -1,14 +1,26 @@
 # Semantic Search Service Configuration
 # Copy to search-config.yml and customize as needed.
 #
-# NOTE: transcription.{provider,language_hint,hotwords} can also be set
-# from the admin GUI at /admin/settings → "Transcription provider".
-# When the GUI is used, the chosen values are saved to
-# /intelligence-data/transcription-overrides.json and SHADOW the values
-# below at startup. To make file edits authoritative again, delete that
-# overrides file or click "Reset GUI settings" in the admin GUI banner.
-# All other transcription.* fields (model / base_url / timeouts / etc.)
-# are file-only — edit them here and restart.
+# GUI-EDITABLE FIELDS (sections marked below). The admin GUI at
+# /admin/settings can override any of these. When the GUI is used, the
+# chosen values land in /intelligence-data/<section>-overrides.json
+# and SHADOW the values below at startup. To make file edits
+# authoritative again for a section, delete that overrides file or
+# click "Reset GUI settings" in the corresponding banner.
+#
+#   * features.*                    → features-overrides.json
+#   * llm.{provider,base_url,model, → llm-overrides.json
+#         output_language,vision_model}
+#   * rag.personal_history.enabled  → rag-overrides.json
+#   * rag.category_expansion.enabled
+#   * transcription.{provider,      → transcription-overrides.json
+#         language_hint,hotwords}
+#
+# Everything else (citation tuning, retry / timeout knobs, model
+# selections, indexing parameters, worker counts, transcription
+# per-provider sub-config, …) is FILE-ONLY: edit it here and restart.
+# These are pre-tuned defaults — most operators never need to touch
+# them, and a wrong value can wedge indexing or search.
 
 # Feature flags
 features:

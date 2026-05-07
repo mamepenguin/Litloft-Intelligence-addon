@@ -20,4 +20,7 @@ export const slotComponents: Record<string, React.LazyExoticComponent<React.Comp
   "folder-ai-actions": lazy(() => import("./FolderAIActionsButton")),
   "folder-refine-transcripts": lazy(() => import("./FolderRefineButton")),
   "admin-transcription": lazy(() => import("./AdminTranscriptionSettingsSection")),
+  "admin-features": lazy(() => import("./AdminFeaturesSettingsSection")),
+  "admin-llm": lazy(() => import("./AdminLLMSettingsSection")),
+  "admin-rag": lazy(() => import("./AdminRAGSettingsSection")),
 };

@@ -284,6 +284,301 @@ def _frozen_subconfig_summary() -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# /admin/features
+# ---------------------------------------------------------------------------
+
+
+_FEATURES_BOOL_FIELDS = ("indexing", "search", "rag")
+_FEATURES_ENUM_FIELDS = (
+    "auto_tags",
+    "summaries",
+    "detailed_summaries",
+    "transcript_refine",
+    "vision_describe",
+)
+_FEATURES_TRISTATE = ("false", "manual", "on_index")
+
+
+class FeaturesUpdate(BaseModel):
+    """Optional override for each ``features.*`` field. Omitted keys
+    inherit from the prior overrides file or from search-config.yml."""
+
+    indexing: bool | None = None
+    search: bool | None = None
+    rag: bool | None = None
+    auto_tags: str | None = None
+    summaries: str | None = None
+    detailed_summaries: str | None = None
+    transcript_refine: str | None = None
+    vision_describe: str | None = None
+
+
+@router.get("/features")
+async def get_features_config() -> dict[str, Any]:
+    from app import features_overrides as fo
+
+    base = config.settings.features
+    overrides = fo.read_overrides()
+    return {
+        "indexing": base.indexing,
+        "search": base.search,
+        "rag": base.rag,
+        "auto_tags": base.auto_tags,
+        "summaries": base.summaries,
+        "detailed_summaries": base.detailed_summaries,
+        "transcript_refine": base.transcript_refine,
+        "vision_describe": base.vision_describe,
+        "tristate_values": list(_FEATURES_TRISTATE),
+        "overrides_present": overrides is not None,
+    }
+
+
+@router.put("/features")
+async def update_features_config(payload: FeaturesUpdate) -> dict[str, Any]:
+    from app import features_overrides as fo
+
+    _validate_features(payload)
+    overrides = fo.FeaturesOverrides(
+        indexing=payload.indexing,
+        search=payload.search,
+        rag=payload.rag,
+        auto_tags=payload.auto_tags,
+        summaries=payload.summaries,
+        detailed_summaries=payload.detailed_summaries,
+        transcript_refine=payload.transcript_refine,
+        vision_describe=payload.vision_describe,
+    )
+    path = fo.write_overrides(
+        overrides, updated_at=datetime.now(UTC).isoformat()
+    )
+    logger.info("Features overrides saved at %s", path)
+    notify_status = await _notify_core_restart_pending()
+    return {
+        "status": "saved",
+        "restart_required": True,
+        "core_notified": notify_status,
+    }
+
+
+@router.delete("/features")
+async def reset_features_config() -> dict[str, Any]:
+    from app import features_overrides as fo
+
+    removed = fo.delete_overrides()
+    notify_status = await _notify_core_restart_pending()
+    return {
+        "status": "reset",
+        "removed": removed,
+        "restart_required": removed,
+        "core_notified": notify_status,
+    }
+
+
+def _validate_features(payload: FeaturesUpdate) -> None:
+    for field in _FEATURES_ENUM_FIELDS:
+        value = getattr(payload, field)
+        if value is not None and value not in _FEATURES_TRISTATE:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"features.{field} must be one of "
+                    f"{list(_FEATURES_TRISTATE)}, got {value!r}"
+                ),
+            )
+
+
+# ---------------------------------------------------------------------------
+# /admin/llm
+# ---------------------------------------------------------------------------
+
+
+_LLM_PROVIDERS = ("disabled", "ollama", "openai_compatible")
+_LLM_OUTPUT_LANGUAGES = ("auto", "ja", "en")
+_LLM_API_KEY_ENV_VAR = "LLM_API_KEY"
+_LLM_BASE_URL_MAX_LEN = 2048
+_LLM_MODEL_MAX_LEN = 256
+
+
+class LLMUpdate(BaseModel):
+    provider: str | None = None
+    base_url: str | None = None
+    model: str | None = None
+    output_language: str | None = None
+    vision_model: str | None = None
+
+
+@router.get("/llm")
+async def get_llm_config() -> dict[str, Any]:
+    from app import llm_overrides as lo
+
+    base = config.settings.llm
+    overrides = lo.read_overrides()
+    return {
+        "provider": base.provider,
+        "base_url": base.base_url,
+        "model": base.model,
+        "output_language": base.output_language,
+        "vision_model": base.vision_model,
+        "available_providers": list(_LLM_PROVIDERS),
+        "available_output_languages": list(_LLM_OUTPUT_LANGUAGES),
+        "api_key_present": bool(os.getenv(_LLM_API_KEY_ENV_VAR, "")),
+        "api_key_env_var": _LLM_API_KEY_ENV_VAR,
+        "overrides_present": overrides is not None,
+    }
+
+
+@router.put("/llm")
+async def update_llm_config(payload: LLMUpdate) -> dict[str, Any]:
+    from app import llm_overrides as lo
+
+    _validate_llm(payload)
+    overrides = lo.LLMOverrides(
+        provider=payload.provider,
+        base_url=payload.base_url,
+        model=payload.model,
+        output_language=payload.output_language,
+        vision_model=payload.vision_model,
+    )
+    path = lo.write_overrides(
+        overrides, updated_at=datetime.now(UTC).isoformat()
+    )
+    logger.info("LLM overrides saved at %s", path)
+    notify_status = await _notify_core_restart_pending()
+    return {
+        "status": "saved",
+        "restart_required": True,
+        "core_notified": notify_status,
+    }
+
+
+@router.delete("/llm")
+async def reset_llm_config() -> dict[str, Any]:
+    from app import llm_overrides as lo
+
+    removed = lo.delete_overrides()
+    notify_status = await _notify_core_restart_pending()
+    return {
+        "status": "reset",
+        "removed": removed,
+        "restart_required": removed,
+        "core_notified": notify_status,
+    }
+
+
+def _validate_llm(payload: LLMUpdate) -> None:
+    if payload.provider is not None and payload.provider not in _LLM_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"llm.provider must be one of {list(_LLM_PROVIDERS)}, "
+                f"got {payload.provider!r}"
+            ),
+        )
+    if (
+        payload.output_language is not None
+        and payload.output_language not in _LLM_OUTPUT_LANGUAGES
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"llm.output_language must be one of "
+                f"{list(_LLM_OUTPUT_LANGUAGES)}, got "
+                f"{payload.output_language!r}"
+            ),
+        )
+    if payload.base_url is not None and len(payload.base_url) > _LLM_BASE_URL_MAX_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"llm.base_url must be <= {_LLM_BASE_URL_MAX_LEN} chars",
+        )
+    if payload.model is not None and len(payload.model) > _LLM_MODEL_MAX_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"llm.model must be <= {_LLM_MODEL_MAX_LEN} chars",
+        )
+    if (
+        payload.vision_model is not None
+        and len(payload.vision_model) > _LLM_MODEL_MAX_LEN
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"llm.vision_model must be <= {_LLM_MODEL_MAX_LEN} chars",
+        )
+    for field, value in (
+        ("base_url", payload.base_url),
+        ("model", payload.model),
+        ("vision_model", payload.vision_model),
+    ):
+        if value is not None and ("\n" in value or "\r" in value or "\x00" in value):
+            raise HTTPException(
+                status_code=400,
+                detail=f"llm.{field} must not contain control characters",
+            )
+
+
+# ---------------------------------------------------------------------------
+# /admin/rag
+# ---------------------------------------------------------------------------
+
+
+class RagUpdate(BaseModel):
+    personal_history_enabled: bool | None = None
+    category_expansion_enabled: bool | None = None
+
+
+@router.get("/rag")
+async def get_rag_config() -> dict[str, Any]:
+    from app import rag_overrides as ro
+
+    base = config.settings.rag
+    overrides = ro.read_overrides()
+    return {
+        "personal_history_enabled": base.personal_history.enabled,
+        "category_expansion_enabled": base.category_expansion.enabled,
+        "overrides_present": overrides is not None,
+    }
+
+
+@router.put("/rag")
+async def update_rag_config(payload: RagUpdate) -> dict[str, Any]:
+    from app import rag_overrides as ro
+
+    overrides = ro.RagOverrides(
+        personal_history_enabled=payload.personal_history_enabled,
+        category_expansion_enabled=payload.category_expansion_enabled,
+    )
+    path = ro.write_overrides(
+        overrides, updated_at=datetime.now(UTC).isoformat()
+    )
+    logger.info("RAG overrides saved at %s", path)
+    notify_status = await _notify_core_restart_pending()
+    return {
+        "status": "saved",
+        "restart_required": True,
+        "core_notified": notify_status,
+    }
+
+
+@router.delete("/rag")
+async def reset_rag_config() -> dict[str, Any]:
+    from app import rag_overrides as ro
+
+    removed = ro.delete_overrides()
+    notify_status = await _notify_core_restart_pending()
+    return {
+        "status": "reset",
+        "removed": removed,
+        "restart_required": removed,
+        "core_notified": notify_status,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+
 async def _notify_core_restart_pending() -> str:
     """POST to the core's restart-pending sentinel endpoint.
 
@@ -312,7 +607,7 @@ async def _notify_core_restart_pending() -> str:
                 headers={"X-Internal-Secret": secret},
                 json={
                     "source": "intelligence",
-                    "reason": "transcription config updated",
+                    "reason": "intelligence config updated",
                 },
             )
         if resp.status_code in (200, 204):
