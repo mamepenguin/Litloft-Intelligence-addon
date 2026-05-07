@@ -446,7 +446,28 @@
             },
             {
                 "path": "/admin/transcription",
-                "methods": ["GET", "PUT"],
+                "methods": ["GET", "PUT", "DELETE"],
+                "drive_optional": true,
+                "pre_check": {"type": "admin"},
+                "response_filter": null
+            },
+            {
+                "path": "/admin/features",
+                "methods": ["GET", "PUT", "DELETE"],
+                "drive_optional": true,
+                "pre_check": {"type": "admin"},
+                "response_filter": null
+            },
+            {
+                "path": "/admin/llm",
+                "methods": ["GET", "PUT", "DELETE"],
+                "drive_optional": true,
+                "pre_check": {"type": "admin"},
+                "response_filter": null
+            },
+            {
+                "path": "/admin/rag",
+                "methods": ["GET", "PUT", "DELETE"],
                 "drive_optional": true,
                 "pre_check": {"type": "admin"},
                 "response_filter": null
