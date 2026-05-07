@@ -1,4 +1,13 @@
 {
+  "intelligence": {
+    "policyFeatures": {
+      "transcriptionCloud": {
+        "label": "Allow cloud transcription",
+        "help": "Sends audio to external STT providers (Deepgram / OpenAI / ElevenLabs Scribe etc). When OFF, this drive falls back to local Whisper only",
+        "warning": "After turning OFF, in-progress cloud transcription jobs continue. Container restart is required for immediate effect"
+      }
+    }
+  },
   "semanticSearch": {
     "title": "Semantic Search",
     "statusRunning": "Running",

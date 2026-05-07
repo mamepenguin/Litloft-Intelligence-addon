@@ -1,4 +1,13 @@
 {
+  "intelligence": {
+    "policyFeatures": {
+      "transcriptionCloud": {
+        "label": "クラウド文字起こしを許可",
+        "help": "外部 STT プロバイダー（Deepgram / OpenAI / ElevenLabs Scribe 等）に音声を送信します。OFF にするとこのドライブだけローカル Whisper に強制 fallback",
+        "warning": "OFF に切替後、進行中のクラウド転写ジョブは継続されます。即時反映には container restart が必要"
+      }
+    }
+  },
   "semanticSearch": {
     "title": "セマンティック検索",
     "statusRunning": "稼働中",

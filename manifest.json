@@ -32,6 +32,13 @@
             {"id": "admin-transcription", "label": "Transcription Settings", "priority": 10}
         ]
     },
+    "policy_features": [
+        {
+            "name": "transcription_cloud",
+            "default": true,
+            "i18n_key": "intelligence.policyFeatures.transcriptionCloud"
+        }
+    ],
     "event_hooks": [
         {"event": "scan.complete",   "url": "http://intelligence:8100/webhook/scan-complete",   "addon": "intelligence", "feature": "index"},
         {"event": "files.deleted",   "url": "http://intelligence:8100/webhook/files-deleted",   "addon": "intelligence", "feature": "index"},
