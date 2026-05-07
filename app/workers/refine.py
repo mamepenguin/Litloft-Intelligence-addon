@@ -279,6 +279,13 @@ def realign_words_for_chunk(
             language=language,
             timestamp_start=float(unit["timestamp_start"]),
             timestamp_end=float(unit["timestamp_end"]),
+            # Phase 1C of cloud-transcription-providers spec: refine
+            # rewrites the word stream via WhisperX forced alignment;
+            # the original ↔ new mapping is N:M with no provider
+            # awareness, so we drop diarisation rather than mis-assign
+            # speakers. A future speaker UI may either inherit by
+            # time-overlap or display "edited (no speaker info)".
+            speaker_id=None,
         )
         session.add(row)
 
@@ -380,6 +387,13 @@ def rechunk_from_words(session: Any, file_id: str) -> list[int]:
             timestamp_start=float(chunk["start"]),
             timestamp_end=float(chunk["end"]),
             text_refined_at=now,
+            # Phase 1C: refine intentionally drops chunk-level
+            # speaker_id (matches the word-level NULL contract above).
+            # ``_build_chunks_from_words`` may have produced a value
+            # if the word rows still carried speaker_ids from before
+            # realignment; ignore it so the chunk is reported as
+            # "edited / no speaker" downstream.
+            speaker_id=None,
         )
         session.add(row)
         session.flush()
