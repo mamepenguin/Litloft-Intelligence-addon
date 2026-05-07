@@ -63,5 +63,13 @@ def get_provider(name: str) -> TranscriptionProvider:
                 ElevenLabsScribeProvider,
             )
             return ElevenLabsScribeProvider()
+        case "assemblyai":
+            from app.workers.transcription.assemblyai import (
+                AssemblyAIProvider,
+            )
+            return AssemblyAIProvider()
+        case "gemini":
+            from app.workers.transcription.gemini import GeminiProvider
+            return GeminiProvider()
         case _:
             raise ValueError(f"Unknown transcription provider: {name}")

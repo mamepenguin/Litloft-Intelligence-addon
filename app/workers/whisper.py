@@ -795,6 +795,17 @@ async def index_whisper(file_id: str) -> bool:
         )
         return False
 
+    # Phase 2A: providers without native word timestamps synthesise
+    # them by uniformly splitting segment text. Surface a one-shot WARN
+    # per dispatch so operators know alignment precision is reduced;
+    # the chunker itself does not branch on this flag.
+    if not provider.capabilities.supports_word_timestamps:
+        logger.warning(
+            "Provider %s does not return native word timestamps; "
+            "synthetic alignment will be used (lower precision) for %s",
+            provider.name, file_id,
+        )
+
     return await _do_transcribe_and_index(file_id, file_path, drive, provider)
 
 

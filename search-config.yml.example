@@ -341,7 +341,8 @@ search:
 # in drives.json to force `whisper_local` for sensitive drives even when
 # `provider` here points at a cloud provider.
 transcription:
-  # whisper_local | openai_compatible | deepgram | elevenlabs_scribe
+  # whisper_local | openai_compatible | deepgram | elevenlabs_scribe |
+  # assemblyai | gemini
   provider: whisper_local
   # Optional ISO language code hint passed to the provider (empty = auto-detect)
   language_hint: ""
@@ -384,6 +385,26 @@ transcription:
     model_id: scribe_v1
     diarize: true
     timeout_s: 600
+
+  # AssemblyAI Universal-2 (best multi-language WER + diarization).
+  # Requires ASSEMBLYAI_API_KEY. 5 GB upload cap per file (Phase 2B will
+  # add ffmpeg-based splitting for longer audio).
+  assemblyai:
+    model: best  # "best" (Universal-2) or "nano"
+    language_detection: true
+    speaker_labels: true
+    timeout_s: 1800
+    poll_interval_s: 3
+
+  # Google Gemini File API + generate_content. Requires GEMINI_API_KEY.
+  # 2 GB upload cap. NOTE: word-level timestamps are synthetic
+  # (uniform split of segment text); diarization is not supported. Pick
+  # AssemblyAI / Deepgram / ElevenLabs Scribe if you need either.
+  gemini:
+    model: gemini-2.5-flash  # "gemini-2.5-flash" or "gemini-2.5-pro"
+    output_language: ja
+    upload_wait_sec: 300
+    timeout_s: 1800
 
 # Indexing parameters
 indexing:

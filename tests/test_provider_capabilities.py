@@ -135,24 +135,41 @@ def test_get_provider_returns_elevenlabs_scribe(monkeypatch) -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["whisper_local", "openai_compatible", "deepgram", "elevenlabs_scribe"],
+    ["whisper_local", "openai_compatible", "deepgram",
+     "elevenlabs_scribe", "assemblyai"],
 )
-def test_get_provider_capabilities_satisfy_indexer_invariants(
+def test_native_word_ts_providers_declare_true(
     name, monkeypatch
 ) -> None:
-    """Every Phase 1 provider must produce word-level timestamps.
+    """Native word-ts provider must advertise ``supports_word_timestamps=True``.
 
-    The indexer pipeline (``_build_chunks_from_words`` + subtitle
-    rendering) is built around per-word timing. A provider that
-    declares ``supports_word_timestamps=False`` would silently break
-    those features; we pin the invariant here so a future addition
-    cannot regress.
+    Phase 2A contract evolution: ``False`` is reserved for providers
+    that synthesise word boundaries from segment-level output (Gemini).
+    Providers that decode word-level timing from audio must continue to
+    declare ``True`` so the dispatch-time WARN in
+    ``_do_transcribe_and_index`` only fires for genuinely synthetic
+    backends. End-to-end ``words`` non-emptiness is asserted in each
+    provider's own test module (``test_<name>_provider.py``).
     """
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-test")
     monkeypatch.setenv("ELEVENLABS_API_KEY", "el-test")
+    monkeypatch.setenv("ASSEMBLYAI_API_KEY", "aai-test")
     provider = get_provider(name)
     assert provider.capabilities.supports_word_timestamps is True
+
+
+def test_gemini_declares_synthetic_word_ts(monkeypatch) -> None:
+    """Gemini is the first ``supports_word_timestamps=False`` provider.
+
+    The flag is observability-only — the chunker still receives a
+    non-empty ``words`` list per segment (synthesised by uniform
+    splitting). Pin both the flag and the existence of synthetic words
+    so a future refactor cannot quietly flip the contract.
+    """
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    provider = get_provider("gemini")
+    assert provider.capabilities.supports_word_timestamps is False
 
 
 class _FakeProvider:

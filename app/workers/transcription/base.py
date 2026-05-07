@@ -64,9 +64,16 @@ class ProviderCapabilities:
     that POST audio to a third-party API (``deepgram``,
     ``elevenlabs_scribe``, ``openai_compatible``) set it to ``True``.
 
-    ``supports_word_timestamps`` is a hard requirement of the indexer
-    pipeline (subtitles + word seek). A provider declaring ``False``
-    here must fail at startup, not silently produce empty word lists.
+    ``supports_word_timestamps`` distinguishes native vs synthetic word
+    timestamps (Phase 2A contract evolution). ``True`` means the
+    provider returns word boundaries derived from the audio decoder.
+    ``False`` means the provider only returns segment-level timestamps
+    and synthesises word boundaries by splitting segment text uniformly
+    across segment duration; the indexer pipeline does not branch on
+    this flag, but the dispatch layer logs a one-shot WARN so
+    operators know alignment precision is reduced. Either way every
+    provider must return a non-empty ``words`` list per non-empty
+    segment — empty word lists silently break ``_build_chunks_from_words``.
     """
 
     sends_audio_offhost: bool

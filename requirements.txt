@@ -28,6 +28,11 @@ PyMuPDF==1.25.5
 pymupdf4llm==0.0.17
 janome==0.5.0
 openai>=1.0.0
+# Phase 2A cloud transcription providers (lazy-imported in providers/gemini.py)
+google-genai>=1.10
+# Phase 2A: grapheme-cluster split for synthetic word timestamps in
+# Gemini provider. stdlib re lacks the \X pattern.
+regex>=2024.11.6
 jinja2>=3.1
 python-docx>=1.1.0
 openpyxl>=3.1.0

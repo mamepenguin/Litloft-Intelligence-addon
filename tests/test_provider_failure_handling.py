@@ -353,6 +353,100 @@ async def test_provider_failure_writes_failed_jobrecord(patched_db) -> None:
 
 
 @pytest.mark.asyncio
+async def test_synthetic_word_provider_emits_warn_log(
+    patched_db, caplog
+) -> None:
+    """Phase 2A: a provider with ``supports_word_timestamps=False``
+    must emit a one-shot WARN at dispatch time so operators know
+    alignment precision is reduced. The chunker itself does not branch
+    on this flag (the provider already synthesised words), but the
+    operator-facing signal lives in the dispatch layer.
+    """
+    import logging
+
+    from app.workers import whisper as whisper_module
+
+    _seed_file(patched_db)
+
+    synthetic_provider = MagicMock()
+    synthetic_provider.name = "gemini"
+    synthetic_provider.capabilities = ProviderCapabilities(
+        sends_audio_offhost=True,
+        supports_diarization=False,
+        supports_hotwords=True,
+        supports_word_timestamps=False,
+    )
+    synthetic_provider.transcribe = AsyncMock(return_value=[])
+
+    caplog.set_level(logging.WARNING, logger="app.workers.whisper")
+
+    with (
+        patch.object(
+            whisper_module, "get_provider", return_value=synthetic_provider
+        ),
+        patch.object(whisper_module, "validate_file_path", return_value=True),
+        patch(
+            "app.policy_client.is_feature_enabled",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        await whisper_module.index_whisper("f00000000001")
+
+    warn_messages = [
+        rec.message
+        for rec in caplog.records
+        if rec.levelno >= logging.WARNING
+    ]
+    assert any(
+        "synthetic alignment" in m and "gemini" in m for m in warn_messages
+    ), f"expected synthetic-alignment WARN, got {warn_messages!r}"
+
+
+@pytest.mark.asyncio
+async def test_native_word_ts_provider_does_not_emit_synthetic_warn(
+    patched_db, caplog
+) -> None:
+    """Counter-test: a provider with ``supports_word_timestamps=True``
+    must NOT trip the synthetic-alignment WARN. Without this we would
+    have no way to confirm the dispatch-time check is gated correctly.
+    """
+    import logging
+
+    from app.workers import whisper as whisper_module
+
+    _seed_file(patched_db)
+
+    native_provider = MagicMock()
+    native_provider.name = "deepgram"
+    native_provider.capabilities = ProviderCapabilities(
+        sends_audio_offhost=True,
+        supports_diarization=True,
+        supports_hotwords=False,
+        supports_word_timestamps=True,
+    )
+    native_provider.transcribe = AsyncMock(return_value=[])
+
+    caplog.set_level(logging.WARNING, logger="app.workers.whisper")
+
+    with (
+        patch.object(
+            whisper_module, "get_provider", return_value=native_provider
+        ),
+        patch.object(whisper_module, "validate_file_path", return_value=True),
+        patch(
+            "app.policy_client.is_feature_enabled",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        await whisper_module.index_whisper("f00000000001")
+
+    assert not any(
+        "synthetic alignment" in (rec.message or "")
+        for rec in caplog.records
+    )
+
+
+@pytest.mark.asyncio
 async def test_provider_zero_segments_writes_succeeded_jobrecord(patched_db) -> None:
     """Empty / silent file is a *succeeded* run with 0 segments.
 

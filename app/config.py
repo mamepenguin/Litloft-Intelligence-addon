@@ -171,6 +171,43 @@ class ElevenLabsScribeProviderConfig:
 
 
 @dataclass(frozen=True)
+class AssemblyAIProviderConfig:
+    """AssemblyAI v2 API (httpx-based, no SDK).
+
+    Defaults reflect spec ``2026-05-08-transcription-providers-phase-2a.md``:
+    ``best`` (Universal-2) for highest-quality multi-language output;
+    diarisation on by default to match Deepgram / ElevenLabs parity.
+    Polling lives on this config (not the provider) so operators can
+    tune cost vs. latency without code changes.
+    """
+
+    model: str = "best"  # "best" (Universal-2) or "nano"
+    language_detection: bool = True
+    speaker_labels: bool = True
+    timeout_s: int = 1800
+    poll_interval_s: int = 3
+    circuit_breaker_threshold: int | None = None
+
+
+@dataclass(frozen=True)
+class GeminiProviderConfig:
+    """Gemini File API + generate_content.
+
+    ``upload_wait_sec`` covers the gap between ``client.files.upload``
+    completing and the file becoming ``ACTIVE`` for inference; it is
+    distinct from ``timeout_s`` which bounds the upload POST itself.
+    Synthetic word timestamps are provider-internal (see spec
+    §"Synthetic word 生成") so no knob is exposed here.
+    """
+
+    model: str = "gemini-2.5-flash"
+    output_language: str = "ja"
+    upload_wait_sec: int = 300
+    timeout_s: int = 1800
+    circuit_breaker_threshold: int | None = None
+
+
+@dataclass(frozen=True)
 class TranscriptionConfig:
     """Top-level transcription settings.
 
@@ -193,6 +230,12 @@ class TranscriptionConfig:
     )
     elevenlabs_scribe: ElevenLabsScribeProviderConfig = field(
         default_factory=ElevenLabsScribeProviderConfig
+    )
+    assemblyai: AssemblyAIProviderConfig = field(
+        default_factory=AssemblyAIProviderConfig
+    )
+    gemini: GeminiProviderConfig = field(
+        default_factory=GeminiProviderConfig
     )
 
 
@@ -754,6 +797,10 @@ def _parse_transcription(data: dict[str, Any]) -> TranscriptionConfig:
         elevenlabs_scribe=_parse_nested(
             new_section, "elevenlabs_scribe", ElevenLabsScribeProviderConfig
         ),
+        assemblyai=_parse_nested(
+            new_section, "assemblyai", AssemblyAIProviderConfig
+        ),
+        gemini=_parse_nested(new_section, "gemini", GeminiProviderConfig),
     )
 
 
