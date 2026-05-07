@@ -73,8 +73,16 @@ class DeepgramProvider:
         self._smart_format = cfg.smart_format
         self._detect_language = cfg.detect_language
         self._timeout_s = cfg.timeout_s
-        # Reusable client; tests inject an httpx.MockTransport variant.
-        self._client = httpx.AsyncClient(timeout=float(cfg.timeout_s))
+        # The previous design stored an ``httpx.AsyncClient`` on the
+        # instance. Combined with ``get_provider()`` returning a fresh
+        # provider per request, this leaked sockets/fds under batch
+        # indexing because ``aclose()`` was never called. We now build
+        # a short-lived client inside ``transcribe()`` via ``async
+        # with`` so the socket pool is released between jobs (hako
+        # pattern ``W0F1YQspXF-lVYgaDb6V1``).
+        # ``_transport`` is a test-only injection point for
+        # ``httpx.MockTransport`` instances.
+        self._transport: httpx.BaseTransport | None = None
 
     async def transcribe(
         self,
@@ -109,12 +117,16 @@ class DeepgramProvider:
         try:
             with open(file_path, "rb") as audio:
                 body = audio.read()
-            response = await self._client.post(
-                DEEPGRAM_LISTEN_URL,
-                params=params,
-                headers=headers,
-                content=body,
-            )
+            client_kwargs: dict = {"timeout": float(self._timeout_s)}
+            if self._transport is not None:
+                client_kwargs["transport"] = self._transport
+            async with httpx.AsyncClient(**client_kwargs) as client:
+                response = await client.post(
+                    DEEPGRAM_LISTEN_URL,
+                    params=params,
+                    headers=headers,
+                    content=body,
+                )
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
             raise TransientError(f"Deepgram network error: {exc}") from exc
         except OSError as exc:

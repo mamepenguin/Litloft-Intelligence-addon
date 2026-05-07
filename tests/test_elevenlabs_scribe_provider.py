@@ -75,8 +75,14 @@ def _scribe_response(words: list[dict] | None = None) -> dict:
 def _make_provider_with_transport(
     transport: httpx.MockTransport,
 ) -> ElevenLabsScribeProvider:
+    """Build a provider whose per-call AsyncClient uses the mock transport.
+
+    The provider builds an ``httpx.AsyncClient`` per ``transcribe()``
+    call (so sockets are released between jobs); ``_transport`` is the
+    test-only injection slot the implementation respects when set.
+    """
     provider = ElevenLabsScribeProvider()
-    provider._client = httpx.AsyncClient(transport=transport, timeout=10.0)
+    provider._transport = transport
     return provider
 
 

@@ -68,7 +68,10 @@ class ElevenLabsScribeProvider:
         self._model_id = cfg.model_id
         self._diarize = cfg.diarize
         self._timeout_s = cfg.timeout_s
-        self._client = httpx.AsyncClient(timeout=float(cfg.timeout_s))
+        # See DeepgramProvider — short-lived ``httpx.AsyncClient`` per
+        # call (hako ``W0F1YQspXF-lVYgaDb6V1``). ``_transport`` is the
+        # test-only injection slot.
+        self._transport: httpx.BaseTransport | None = None
 
     async def transcribe(
         self,
@@ -90,16 +93,20 @@ class ElevenLabsScribeProvider:
         headers = {"xi-api-key": self._api_key}
 
         try:
+            client_kwargs: dict = {"timeout": float(self._timeout_s)}
+            if self._transport is not None:
+                client_kwargs["transport"] = self._transport
             with open(file_path, "rb") as audio:
                 files = {
                     "file": (os.path.basename(file_path), audio, "application/octet-stream"),
                 }
-                response = await self._client.post(
-                    ELEVENLABS_STT_URL,
-                    headers=headers,
-                    data=data,
-                    files=files,
-                )
+                async with httpx.AsyncClient(**client_kwargs) as client:
+                    response = await client.post(
+                        ELEVENLABS_STT_URL,
+                        headers=headers,
+                        data=data,
+                        files=files,
+                    )
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
             raise TransientError(
                 f"ElevenLabs Scribe network error: {exc}"
