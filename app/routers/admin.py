@@ -316,19 +316,35 @@ class FeaturesUpdate(BaseModel):
 
 @router.get("/features")
 async def get_features_config() -> dict[str, Any]:
+    """Return the effective config = baseline + on-disk overrides.
+
+    Reads the overrides file authoritatively (NOT the frozen
+    ``config.settings.features`` from import time) so a freshly-saved
+    GUI value is reflected immediately, even before the container
+    restart actually swaps the in-memory config. Mirrors the
+    ``GET /admin/transcription`` contract.
+    """
     from app import features_overrides as fo
 
     base = config.settings.features
     overrides = fo.read_overrides()
+
+    def resolve(field: str) -> Any:
+        if overrides is not None:
+            override_value = getattr(overrides, field)
+            if override_value is not None:
+                return override_value
+        return getattr(base, field)
+
     return {
-        "indexing": base.indexing,
-        "search": base.search,
-        "rag": base.rag,
-        "auto_tags": base.auto_tags,
-        "summaries": base.summaries,
-        "detailed_summaries": base.detailed_summaries,
-        "transcript_refine": base.transcript_refine,
-        "vision_describe": base.vision_describe,
+        "indexing": resolve("indexing"),
+        "search": resolve("search"),
+        "rag": resolve("rag"),
+        "auto_tags": resolve("auto_tags"),
+        "summaries": resolve("summaries"),
+        "detailed_summaries": resolve("detailed_summaries"),
+        "transcript_refine": resolve("transcript_refine"),
+        "vision_describe": resolve("vision_describe"),
         "tristate_values": list(_FEATURES_TRISTATE),
         "overrides_present": overrides is not None,
     }
@@ -410,16 +426,30 @@ class LLMUpdate(BaseModel):
 
 @router.get("/llm")
 async def get_llm_config() -> dict[str, Any]:
+    """Return the effective LLM config = baseline + on-disk overrides.
+
+    Same idempotency guarantee as ``GET /admin/features`` /
+    ``GET /admin/transcription``: a freshly-saved GUI value is
+    visible before the container restart swaps the cached config.
+    """
     from app import llm_overrides as lo
 
     base = config.settings.llm
     overrides = lo.read_overrides()
+
+    def resolve(field: str) -> Any:
+        if overrides is not None:
+            override_value = getattr(overrides, field)
+            if override_value is not None:
+                return override_value
+        return getattr(base, field)
+
     return {
-        "provider": base.provider,
-        "base_url": base.base_url,
-        "model": base.model,
-        "output_language": base.output_language,
-        "vision_model": base.vision_model,
+        "provider": resolve("provider"),
+        "base_url": resolve("base_url"),
+        "model": resolve("model"),
+        "output_language": resolve("output_language"),
+        "vision_model": resolve("vision_model"),
         "available_providers": list(_LLM_PROVIDERS),
         "available_output_languages": list(_LLM_OUTPUT_LANGUAGES),
         "api_key_present": bool(os.getenv(_LLM_API_KEY_ENV_VAR, "")),
@@ -529,13 +559,26 @@ class RagUpdate(BaseModel):
 
 @router.get("/rag")
 async def get_rag_config() -> dict[str, Any]:
+    """Return the effective RAG sub-feature gates = baseline +
+    on-disk overrides. Mirrors the read-after-write contract of the
+    other admin GET endpoints."""
     from app import rag_overrides as ro
 
     base = config.settings.rag
     overrides = ro.read_overrides()
+
+    if overrides is not None and overrides.personal_history_enabled is not None:
+        ph_enabled = overrides.personal_history_enabled
+    else:
+        ph_enabled = base.personal_history.enabled
+    if overrides is not None and overrides.category_expansion_enabled is not None:
+        ce_enabled = overrides.category_expansion_enabled
+    else:
+        ce_enabled = base.category_expansion.enabled
+
     return {
-        "personal_history_enabled": base.personal_history.enabled,
-        "category_expansion_enabled": base.category_expansion.enabled,
+        "personal_history_enabled": ph_enabled,
+        "category_expansion_enabled": ce_enabled,
         "overrides_present": overrides is not None,
     }
 

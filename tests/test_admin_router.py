@@ -416,6 +416,28 @@ def test_features_get_returns_baseline(client) -> None:
     assert body["tristate_values"] == ["false", "manual", "on_index"]
 
 
+def test_features_get_reflects_saved_overrides_before_restart(
+    client, admin_app
+) -> None:
+    """Without this read-after-write guarantee the GUI form would snap
+    back to the YAML baseline as soon as the user saves, even though
+    the override has been persisted. Mirrors the transcription
+    endpoint's contract (R1 review H1)."""
+    _app, data_dir = admin_app
+    from app.features_overrides import (
+        FeaturesOverrides,
+        write_overrides as write_features,
+    )
+    write_features(
+        FeaturesOverrides(indexing=False, vision_describe="on_index"),
+        data_dir=data_dir,
+    )
+    body = client.get("/admin/features").json()
+    assert body["indexing"] is False
+    assert body["vision_describe"] == "on_index"
+    assert body["overrides_present"] is True
+
+
 def test_features_put_persists_payload(client, admin_app, monkeypatch) -> None:
     _app, data_dir = admin_app
     from app.routers import admin as admin_module
@@ -500,6 +522,29 @@ def test_llm_get_reflects_missing_api_key(client, monkeypatch) -> None:
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     body = client.get("/admin/llm").json()
     assert body["api_key_present"] is False
+
+
+def test_llm_get_reflects_saved_overrides_before_restart(
+    client, admin_app
+) -> None:
+    _app, data_dir = admin_app
+    from app.llm_overrides import (
+        LLMOverrides,
+        write_overrides as write_llm,
+    )
+    write_llm(
+        LLMOverrides(
+            provider="ollama",
+            model="gemma4:e4b",
+            base_url="http://host.docker.internal:11434",
+        ),
+        data_dir=data_dir,
+    )
+    body = client.get("/admin/llm").json()
+    assert body["provider"] == "ollama"
+    assert body["model"] == "gemma4:e4b"
+    assert body["base_url"] == "http://host.docker.internal:11434"
+    assert body["overrides_present"] is True
 
 
 def test_llm_put_persists_payload(client, admin_app, monkeypatch) -> None:
@@ -591,6 +636,27 @@ def test_rag_get_returns_baseline(client) -> None:
     assert "personal_history_enabled" in body
     assert "category_expansion_enabled" in body
     assert body["overrides_present"] is False
+
+
+def test_rag_get_reflects_saved_overrides_before_restart(
+    client, admin_app
+) -> None:
+    _app, data_dir = admin_app
+    from app.rag_overrides import (
+        RagOverrides,
+        write_overrides as write_rag,
+    )
+    write_rag(
+        RagOverrides(
+            personal_history_enabled=False,
+            category_expansion_enabled=True,
+        ),
+        data_dir=data_dir,
+    )
+    body = client.get("/admin/rag").json()
+    assert body["personal_history_enabled"] is False
+    assert body["category_expansion_enabled"] is True
+    assert body["overrides_present"] is True
 
 
 def test_rag_put_persists_payload(client, admin_app, monkeypatch) -> None:
