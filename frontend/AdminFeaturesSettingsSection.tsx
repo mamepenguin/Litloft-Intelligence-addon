@@ -216,7 +216,7 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
         <div
           role="status"
           data-testid="features-overrides-banner"
-          className="mb-4 rounded-md border border-accent-amber bg-bg-elevated p-3"
+          className="mb-4 rounded-lg border border-accent-amber bg-bg-elevated p-3"
         >
           <p className="text-sm text-text-primary">{t("overridesActive")}</p>
           <p className="mt-1 text-xs text-text-muted">{t("overridesHelp")}</p>
@@ -225,7 +225,7 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
               type="button"
               onClick={handleReset}
               disabled={resetting}
-              className="rounded-md border border-bg-border bg-bg-card px-3 py-1 text-sm text-text-primary hover:bg-bg-light disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-lg border border-bg-border bg-bg-card px-3 py-1 text-sm text-text-primary hover:bg-bg-light disabled:cursor-not-allowed disabled:opacity-50"
             >
               {resetting ? t("resetting") : t("reset")}
             </button>
@@ -262,7 +262,7 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
         ))}
 
         {TRISTATE_FIELDS.map((name) => (
-          <fieldset key={name} className="rounded-md border border-bg-border p-3">
+          <fieldset key={name} className="rounded-lg border border-bg-border p-3">
             <legend className="px-1 text-sm font-medium text-text-primary">
               {t(`fields.${name}.label`)}
             </legend>
@@ -297,7 +297,7 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
           type="button"
           onClick={handleSave}
           disabled={saving}
-          className="rounded-md border border-bg-border bg-bg-card px-3 py-1 text-sm text-text-primary hover:bg-bg-light disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-lg border border-bg-border bg-bg-card px-3 py-1 text-sm text-text-primary hover:bg-bg-light disabled:cursor-not-allowed disabled:opacity-50"
         >
           {saving ? t("saving") : t("save")}
         </button>

@@ -237,7 +237,7 @@ export default function TranscriptSection({ fileId, drive, videoRef, mediaContro
         <FileText size={14} />
         <span>{t("transcriptTitle")}</span>
         {language && (
-          <span className="rounded bg-bg-card px-1.5 py-0.5 text-xs">
+          <span className="rounded-lg bg-bg-card px-1.5 py-0.5 text-xs">
             {language}
           </span>
         )}
@@ -249,7 +249,7 @@ export default function TranscriptSection({ fileId, drive, videoRef, mediaContro
                 key={opt.id}
                 type="button"
                 onClick={() => setSource(opt.id)}
-                className={`rounded px-1.5 py-0.5 ${source === opt.id ? "bg-accent text-white" : "bg-bg-card"}`}
+                className={`rounded-lg px-1.5 py-0.5 ${source === opt.id ? "bg-accent text-white" : "bg-bg-card"}`}
               >
                 {opt.label}
               </button>
@@ -262,7 +262,7 @@ export default function TranscriptSection({ fileId, drive, videoRef, mediaContro
               type="button"
               onClick={handleRefine}
               disabled={refining}
-              className="flex items-center gap-1 rounded px-2 py-0.5 text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+              className="flex items-center gap-1 rounded-lg px-2 py-0.5 text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
             >
               <Sparkles size={11} className={refining ? "animate-pulse" : ""} />
               {t("transcriptRefine")}
@@ -281,7 +281,7 @@ export default function TranscriptSection({ fileId, drive, videoRef, mediaContro
               key={cue.index}
               ref={cue.index === activeIndex ? activeRef : undefined}
               onClick={() => seekTo(cue.start)}
-              className={`flex w-full cursor-pointer gap-3 rounded px-2 py-1.5 text-left text-sm transition-colors hover:bg-bg-primary ${
+              className={`flex w-full cursor-pointer gap-3 rounded-lg px-2 py-1.5 text-left text-sm transition-colors hover:bg-bg-primary ${
                 cue.index === activeIndex
                   ? "bg-accent/10 text-accent"
                   : "text-text-primary"
@@ -292,7 +292,7 @@ export default function TranscriptSection({ fileId, drive, videoRef, mediaContro
               </span>
               <span className="min-w-0 flex-1">{cue.text}</span>
               {isRefined && (
-                <span className="shrink-0 rounded bg-accent-teal/15 px-1.5 py-0.5 text-[10px] font-medium text-accent-teal">
+                <span className="shrink-0 rounded-lg bg-accent-teal/15 px-1.5 py-0.5 text-[10px] font-medium text-accent-teal">
                   {t("transcriptRefinedBadge")}
                 </span>
               )}

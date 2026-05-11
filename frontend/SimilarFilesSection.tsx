@@ -34,7 +34,7 @@ function ScoreBadge({ item }: { item: SimilarFileItem }) {
 
   return (
     <span className="inline-flex items-center gap-1 text-[10px] text-text-muted">
-      <span className="rounded bg-bg-elevated px-1 py-0.5">
+      <span className="rounded-lg bg-bg-elevated px-1 py-0.5">
         {matchTypeLabel(item.match_type)}
       </span>
       {parts.length > 0 && (
@@ -109,7 +109,7 @@ export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSecti
           <button
             type="button"
             onClick={fetchSimilar}
-            className="rounded-md bg-bg-elevated px-2.5 py-1 text-xs text-text-primary transition-colors hover:bg-bg-card"
+            className="rounded-lg bg-bg-elevated px-2.5 py-1 text-xs text-text-primary transition-colors hover:bg-bg-card"
           >
             {status === "idle"
               ? t("similarFilesDetect")
@@ -179,7 +179,7 @@ export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSecti
                         {item.shared_keywords.map((kw) => (
                           <span
                             key={kw.word}
-                            className="rounded bg-bg-elevated px-1 py-px text-[9px] text-text-muted"
+                            className="rounded-lg bg-bg-elevated px-1 py-px text-[9px] text-text-muted"
                             title={`src:${kw.source_tfidf?.toFixed(4)} tgt:${kw.target_tfidf?.toFixed(4)} rel:${kw.relevance?.toFixed(6)}`}
                           >
                             {kw.word}

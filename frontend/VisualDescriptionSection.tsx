@@ -185,7 +185,7 @@ export default function VisualDescriptionSection({
       </div>
 
       {status === "unsupported" && (
-        <div className="flex items-start gap-2 rounded-md border border-bg-border bg-bg-elevated/50 px-3 py-2 text-xs text-text-muted">
+        <div className="flex items-start gap-2 rounded-lg border border-bg-border bg-bg-elevated/50 px-3 py-2 text-xs text-text-muted">
           <Settings size={14} className="mt-0.5 flex-shrink-0" />
           <span>
             {t("visionUnsupported", {
@@ -209,7 +209,7 @@ export default function VisualDescriptionSection({
 
       {status === "failed" && (
         <div className="space-y-2">
-          <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+          <div className="flex items-start gap-2 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">
             <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
             <span>
               {t("visionFailed", {
@@ -221,7 +221,7 @@ export default function VisualDescriptionSection({
           <button
             onClick={handleGenerate}
             disabled={working}
-            className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+            className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
           >
             <RefreshCw size={11} className={working ? "animate-spin" : ""} />
             {t("visionRetry", { defaultMessage: "Retry" })}
@@ -238,7 +238,7 @@ export default function VisualDescriptionSection({
             <button
               onClick={handleRegenerate}
               disabled={working}
-              className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
             >
               <RefreshCw size={11} className={working ? "animate-spin" : ""} />
               {working
@@ -257,7 +257,7 @@ export default function VisualDescriptionSection({
         <button
           onClick={handleGenerate}
           disabled={working}
-          className="flex items-center gap-1 rounded px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+          className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
         >
           <RefreshCw size={11} className={working ? "animate-spin" : ""} />
           {working
@@ -271,7 +271,7 @@ export default function VisualDescriptionSection({
       )}
 
       {error && (
-        <p className="mt-2 text-[11px] text-red-400/80">{error}</p>
+        <p className="mt-2 text-[11px] text-danger/80">{error}</p>
       )}
     </div>
   );

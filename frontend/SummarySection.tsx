@@ -173,7 +173,7 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
           <button
             onClick={handleRegenerate}
             disabled={regenerating}
-            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+            className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
           >
             <RefreshCw size={11} className={regenerating ? "animate-spin" : ""} />
             {regenerating
@@ -201,7 +201,7 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
               ? t("summaryShow", { defaultMessage: "Show summary" })
               : t("summaryHide", { defaultMessage: "Hide summary" })
           }
-          className="flex items-center gap-2 rounded text-text-muted transition-colors hover:text-text-primary"
+          className="flex items-center gap-2 rounded-lg text-text-muted transition-colors hover:text-text-primary"
         >
           {collapsed ? (
             <ChevronRight size={14} className="text-text-muted" />
@@ -224,7 +224,7 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
           </span>
         )}
         {data.edited_at && (
-          <span className="rounded bg-bg-elevated px-1.5 py-0.5 text-[10px] text-text-muted/80">
+          <span className="rounded-lg bg-bg-elevated px-1.5 py-0.5 text-[10px] text-text-muted/80">
             {t("summaryEditedBadge", { defaultMessage: "Edited" })}
           </span>
         )}
@@ -259,7 +259,7 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
             <button
               onClick={handleSaveEdit}
               disabled={saving || shortInvalid || longInvalid}
-              className="flex items-center gap-1 rounded bg-accent-teal px-2 py-1 text-[11px] text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+              className="flex items-center gap-1 rounded-lg bg-accent-teal px-2 py-1 text-[11px] text-white transition-colors hover:bg-accent-teal/90 disabled:opacity-50"
             >
               {saving ? (
                 <RefreshCw size={11} className="animate-spin" />
@@ -271,7 +271,7 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
             <button
               onClick={handleCancelEdit}
               disabled={saving}
-              className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
             >
               <X size={11} />
               {t("summaryCancel", { defaultMessage: "Cancel" })}
@@ -295,7 +295,7 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button
               onClick={handleStartEdit}
-              className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
             >
               <Pencil size={11} />
               {t("summaryEdit", { defaultMessage: "Edit" })}
@@ -304,7 +304,7 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
               <button
                 onClick={handleRevert}
                 disabled={reverting}
-                className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+                className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
               >
                 {reverting ? (
                   <RefreshCw size={11} className="animate-spin" />
@@ -319,7 +319,7 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
             <button
               onClick={handleRegenerate}
               disabled={regenerating}
-              className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
             >
               <RefreshCw size={11} className={regenerating ? "animate-spin" : ""} />
               {regenerating

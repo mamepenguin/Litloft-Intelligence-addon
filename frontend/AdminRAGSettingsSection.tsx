@@ -181,7 +181,7 @@ export default function AdminRAGSettingsSection(): React.ReactElement {
         <div
           role="status"
           data-testid="rag-overrides-banner"
-          className="mb-4 rounded-md border border-accent-amber bg-bg-elevated p-3"
+          className="mb-4 rounded-lg border border-accent-amber bg-bg-elevated p-3"
         >
           <p className="text-sm text-text-primary">{t("overridesActive")}</p>
           <p className="mt-1 text-xs text-text-muted">{t("overridesHelp")}</p>
@@ -190,7 +190,7 @@ export default function AdminRAGSettingsSection(): React.ReactElement {
               type="button"
               onClick={handleReset}
               disabled={resetting}
-              className="rounded-md border border-bg-border bg-bg-card px-3 py-1 text-sm text-text-primary hover:bg-bg-light disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-lg border border-bg-border bg-bg-card px-3 py-1 text-sm text-text-primary hover:bg-bg-light disabled:cursor-not-allowed disabled:opacity-50"
             >
               {resetting ? t("resetting") : t("reset")}
             </button>
@@ -245,7 +245,7 @@ export default function AdminRAGSettingsSection(): React.ReactElement {
           type="button"
           onClick={handleSave}
           disabled={saving}
-          className="rounded-md border border-bg-border bg-bg-card px-3 py-1 text-sm text-text-primary hover:bg-bg-light disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-lg border border-bg-border bg-bg-card px-3 py-1 text-sm text-text-primary hover:bg-bg-light disabled:cursor-not-allowed disabled:opacity-50"
         >
           {saving ? t("saving") : t("save")}
         </button>

@@ -151,7 +151,7 @@ function ResultCard({ entry }: { entry: FindResultEntry }) {
           {file.name}
         </p>
         <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-text-muted">
-          <span className="rounded bg-bg-elevated px-1.5 py-0.5">
+          <span className="rounded-lg bg-bg-elevated px-1.5 py-0.5">
             {file.file_type}
           </span>
           {viewedAt && (
@@ -271,11 +271,11 @@ function IntelligenceFindPageInner() {
           onCompositionStart={() => setComposing(true)}
           onCompositionEnd={() => setComposing(false)}
           placeholder={t("placeholder")}
-          className="flex-1 rounded-2xl border border-bg-border bg-bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+          className="flex-1 rounded-2xl border border-bg-border bg-bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
         />
         <button
           type="submit"
-          className="inline-flex items-center gap-1.5 rounded-2xl bg-accent px-4 py-2 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex items-center gap-1.5 rounded-2xl bg-accent px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
           disabled={state.kind === "loading" || input.trim().length === 0}
         >
           <Search size={12} /> {t("submit")}
@@ -370,7 +370,7 @@ export default function IntelligenceFindPage() {
     <Suspense
       fallback={
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 sm:p-6">
-          <div className="h-6 w-32 animate-pulse rounded bg-bg-elevated" />
+          <div className="h-6 w-32 animate-pulse rounded-lg bg-bg-elevated" />
         </div>
       }
     >

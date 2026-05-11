@@ -252,7 +252,7 @@ export default function AdminTranscriptionSettingsSection(): React.ReactElement 
         <div
           role="status"
           data-testid="overrides-banner"
-          className="mb-4 rounded-md border border-accent-amber bg-bg-elevated p-3"
+          className="mb-4 rounded-lg border border-accent-amber bg-bg-elevated p-3"
         >
           <p className="text-sm text-text-primary">{t("overridesActive")}</p>
           <p className="mt-1 text-xs text-text-muted">{t("overridesHelp")}</p>
@@ -261,7 +261,7 @@ export default function AdminTranscriptionSettingsSection(): React.ReactElement 
               type="button"
               onClick={handleReset}
               disabled={resetting}
-              className="rounded-md border border-bg-border bg-bg-card px-3 py-1 text-sm text-text-primary hover:bg-bg-light disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-lg border border-bg-border bg-bg-card px-3 py-1 text-sm text-text-primary hover:bg-bg-light disabled:cursor-not-allowed disabled:opacity-50"
             >
               {resetting ? t("resetting") : t("reset")}
             </button>
@@ -341,7 +341,7 @@ export default function AdminTranscriptionSettingsSection(): React.ReactElement 
             value={languageHint}
             onChange={(e) => setLanguageHint(e.target.value)}
             placeholder="ja"
-            className="mt-1 block w-40 rounded-md border border-bg-border bg-bg-card px-2 py-1 text-sm text-text-primary"
+            className="mt-1 block w-40 rounded-lg border border-bg-border bg-bg-card px-2 py-1 text-sm text-text-primary"
           />
         </label>
         <p className="mt-1 text-xs text-text-muted">
@@ -358,7 +358,7 @@ export default function AdminTranscriptionSettingsSection(): React.ReactElement 
             value={hotwordsText}
             onChange={(e) => setHotwordsText(e.target.value)}
             rows={4}
-            className="mt-1 block w-full rounded-md border border-bg-border bg-bg-card px-2 py-1 font-mono text-sm text-text-primary"
+            className="mt-1 block w-full rounded-lg border border-bg-border bg-bg-card px-2 py-1 font-mono text-sm text-text-primary"
           />
         </label>
         <p className="mt-1 text-xs text-text-muted">
@@ -371,7 +371,7 @@ export default function AdminTranscriptionSettingsSection(): React.ReactElement 
           type="button"
           onClick={handleSave}
           disabled={saving || apiKeyMissing}
-          className="rounded-md border border-bg-border bg-bg-card px-3 py-1 text-sm text-text-primary hover:bg-bg-light disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-lg border border-bg-border bg-bg-card px-3 py-1 text-sm text-text-primary hover:bg-bg-light disabled:cursor-not-allowed disabled:opacity-50"
         >
           {saving ? t("saving") : t("save")}
         </button>

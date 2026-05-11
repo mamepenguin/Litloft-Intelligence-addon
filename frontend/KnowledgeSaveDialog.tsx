@@ -209,7 +209,7 @@ export function KnowledgeSaveDialog({
   }, []);
 
   const inputClass =
-    "w-full rounded-md border border-bg-border bg-bg-primary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent";
+    "w-full rounded-lg border border-bg-border bg-bg-primary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-focus-ring focus:outline-none focus:ring-1 focus:ring-focus-ring";
 
   const primaryLatestNote = useMemo(() => {
     if (state.kind !== "chooseExisting") return null;
@@ -228,7 +228,7 @@ export function KnowledgeSaveDialog({
         className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-fade-in"
         onClick={onClose}
       />
-      <div className="relative mx-4 w-full max-w-md rounded-2xl bg-bg-card p-6 shadow-2xl animate-fade-in-scale">
+      <div className="relative mx-4 w-full max-w-md rounded-2xl bg-bg-card p-6 shadow-lg animate-fade-in-scale">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-text-primary">
             {t("title")}
@@ -247,7 +247,7 @@ export function KnowledgeSaveDialog({
         )}
 
         {state.kind === "error" && (
-          <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+          <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
             {state.message}
           </div>
         )}
@@ -278,7 +278,7 @@ export function KnowledgeSaveDialog({
               />
             </label>
             {submitError && (
-              <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+              <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
                 {submitError}
               </div>
             )}
@@ -306,7 +306,7 @@ export function KnowledgeSaveDialog({
             <p className="text-sm text-text-muted">
               {t("existing.description")}
             </p>
-            <div className="rounded-md border border-bg-border bg-bg-elevated px-3 py-2 font-mono text-[13px] text-text-primary break-all">
+            <div className="rounded-lg border border-bg-border bg-bg-elevated px-3 py-2 font-mono text-[13px] text-text-primary break-anywhere">
               {primaryLatestNote.path}
             </div>
             {state.notes.length > 1 && (
@@ -321,7 +321,7 @@ export function KnowledgeSaveDialog({
                       <li key={n.note_file_id}>
                         <button
                           onClick={() => openExisting(n)}
-                          className="text-left font-mono text-text-muted hover:text-text-primary break-all"
+                          className="text-left font-mono text-text-muted hover:text-text-primary break-anywhere"
                         >
                           {n.path}
                         </button>
@@ -406,7 +406,7 @@ export function KnowledgeSaveDialog({
               />
             </label>
             {submitError && (
-              <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+              <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
                 {submitError}
               </div>
             )}

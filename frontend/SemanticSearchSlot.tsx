@@ -26,21 +26,24 @@ interface SemanticSearchSlotProps {
 // DESIGN.md §2.2) is reused for the unified search list. The popup
 // view sits inside the search modal with its own visual context, so
 // the compact badge style is kept here.
+// Semantic matches (vector similarity) get the accent-teal "positive
+// signal" treatment; keyword and metadata matches use the neutral
+// warm-light surface so the badge palette stays inside DESIGN.md §2.2.
 const POPUP_MATCH_TYPE_STYLES: Record<string, string> = {
-  transcript: "bg-blue-500/15 text-blue-400",
-  transcript_keyword: "bg-cyan-500/15 text-cyan-400",
-  clip: "bg-emerald-500/15 text-emerald-400",
-  metadata: "bg-zinc-500/15 text-zinc-400",
-  content: "bg-purple-500/15 text-purple-400",
-  text_content_keyword: "bg-violet-500/15 text-violet-400",
+  transcript: "bg-accent-teal/15 text-accent-teal",
+  transcript_keyword: "bg-warm-light text-text-muted",
+  clip: "bg-accent-teal/15 text-accent-teal",
+  metadata: "bg-warm-light text-text-muted",
+  content: "bg-accent-teal/15 text-accent-teal",
+  text_content_keyword: "bg-warm-light text-text-muted",
 };
 
 function PopupMatchBadge({ type, label }: { type: string; label: string }) {
   const style =
-    POPUP_MATCH_TYPE_STYLES[type] ?? "bg-zinc-500/15 text-zinc-400";
+    POPUP_MATCH_TYPE_STYLES[type] ?? "bg-warm-light text-text-muted";
   return (
     <span
-      className={`inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium ${style}`}
+      className={`inline-flex rounded-lg px-1.5 py-0.5 text-[10px] font-medium ${style}`}
     >
       {label}
     </span>
@@ -62,7 +65,7 @@ function PopupTimestampLink({
         e.stopPropagation();
         onClick(`/files/${fileId}?t=${Math.floor(seconds)}`);
       }}
-      className="rounded px-1 py-0.5 text-[10px] font-medium text-accent transition-colors hover:bg-accent/10"
+      className="rounded-lg px-1 py-0.5 text-[10px] font-medium text-accent transition-colors hover:bg-accent/10"
     >
       {formatDuration(seconds)}
     </button>
@@ -111,7 +114,7 @@ function SemanticResultItem({
       <img
         src={`/api/files/${result.file_id}/thumbnail`}
         alt=""
-        className="h-10 w-16 flex-shrink-0 rounded bg-bg-elevated object-cover"
+        className="h-10 w-16 flex-shrink-0 rounded-lg bg-bg-elevated object-cover"
         onError={(e) => {
           e.currentTarget.style.display = "none";
         }}

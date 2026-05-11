@@ -150,7 +150,7 @@ export default function FolderAIActionsButton({
           />
           <div
             role="menu"
-            className="fixed inset-x-2 bottom-4 z-40 max-h-[60vh] overflow-y-auto rounded-2xl border border-bg-border bg-bg-primary py-1 shadow-xl animate-fade-in-scale sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:top-full sm:mt-1 sm:max-h-none sm:min-w-[240px] sm:overflow-visible sm:origin-top-left"
+            className="fixed inset-x-2 bottom-4 z-40 max-h-[60vh] overflow-y-auto rounded-2xl border border-bg-border bg-bg-primary py-1 shadow-lg animate-fade-in-scale sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:top-full sm:mt-1 sm:max-h-none sm:min-w-[240px] sm:overflow-visible sm:origin-top-left"
           >
           <button
             type="button"

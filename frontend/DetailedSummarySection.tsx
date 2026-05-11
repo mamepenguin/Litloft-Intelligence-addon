@@ -438,7 +438,7 @@ export default function DetailedSummarySection({
         <button
           onClick={handleGenerate}
           disabled={working}
-          className="mt-2 flex items-center gap-1 rounded px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+          className="mt-2 flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
         >
           <RefreshCw size={11} className={working ? "animate-spin" : ""} />
           {t("detailedSummaryRetry", { defaultMessage: "Retry" })}
@@ -455,7 +455,7 @@ export default function DetailedSummarySection({
           <button
             onClick={handleGenerate}
             disabled={working}
-            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+            className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
           >
             <RefreshCw size={11} className={working ? "animate-spin" : ""} />
             {working
@@ -742,7 +742,7 @@ function DetailedSummaryBody({
           {t("detailedSummaryTitle", { defaultMessage: "AI Detailed Summary" })}
         </h2>
         <span
-          className="rounded bg-bg-elevated px-1.5 py-0.5 text-[10px] text-text-muted/70"
+          className="rounded-lg bg-bg-elevated px-1.5 py-0.5 text-[10px] text-text-muted/70"
           title={td("dormant.hint", {
             defaultMessage:
               "Knowledge note is the active summary; the AI draft is dormant",
@@ -753,7 +753,7 @@ function DetailedSummaryBody({
         <button
           onClick={onGenerate}
           disabled={working}
-          className="ml-auto flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+          className="ml-auto flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
         >
           <RefreshCw size={11} className={working ? "animate-spin" : ""} />
           {working
@@ -790,7 +790,7 @@ function DetailedSummaryBody({
               ? t("detailedSummaryShow", { defaultMessage: "Expand" })
               : t("detailedSummaryHide", { defaultMessage: "Collapse" })
           }
-          className="flex items-center gap-2 rounded text-text-muted transition-colors hover:text-text-primary"
+          className="flex items-center gap-2 rounded-lg text-text-muted transition-colors hover:text-text-primary"
         >
           {collapsed ? (
             <ChevronRight size={14} className="text-text-muted" />
@@ -815,7 +815,7 @@ function DetailedSummaryBody({
           </span>
         )}
         {edited && (
-          <span className="rounded bg-bg-elevated px-1.5 py-0.5 text-[10px] text-text-muted/80">
+          <span className="rounded-lg bg-bg-elevated px-1.5 py-0.5 text-[10px] text-text-muted/80">
             {td("edit.badge", { defaultMessage: "Edited" })}
           </span>
         )}
@@ -935,7 +935,7 @@ function DetailedSummaryBody({
             <button
               onClick={onDownload}
               disabled={downloading}
-              className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
             >
               <Download size={11} />
               {t("detailedSummaryDownload", {
@@ -946,7 +946,7 @@ function DetailedSummaryBody({
               <button
                 onClick={onOpenRevert}
                 disabled={reverting}
-                className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+                className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
               >
                 {reverting ? (
                   <RefreshCw size={11} className="animate-spin" />
@@ -961,7 +961,7 @@ function DetailedSummaryBody({
             {canSaveToKnowledge && (
               <button
                 onClick={onOpenSave}
-                className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-accent-teal transition-colors hover:bg-bg-elevated hover:text-text-primary"
+                className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-accent-teal transition-colors hover:bg-bg-elevated hover:text-text-primary"
               >
                 <BookmarkPlus size={11} />
                 {td("edit.saveToKnowledge", {
@@ -972,7 +972,7 @@ function DetailedSummaryBody({
             <button
               onClick={onGenerate}
               disabled={working}
-              className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
             >
               <RefreshCw size={11} className={working ? "animate-spin" : ""} />
               {working
@@ -1460,7 +1460,7 @@ function SectionView({
             type="button"
             onClick={() => onStartEdit(null)}
             aria-label={td("edit.button", { defaultMessage: "Edit" })}
-            className="shrink-0 flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
+            className="shrink-0 flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
           >
             <Pencil size={11} />
             {td("edit.button", { defaultMessage: "Edit" })}
@@ -1500,7 +1500,7 @@ function SectionView({
                       aria-label={td("edit.button", {
                         defaultMessage: "Edit",
                       })}
-                      className="shrink-0 flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
+                      className="shrink-0 flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
                     >
                       <Pencil size={11} />
                       {td("edit.button", { defaultMessage: "Edit" })}
@@ -1558,14 +1558,14 @@ function EditTextarea({
         value={draft}
         onChange={(e) => onDraftChange(e.target.value)}
         rows={Math.max(4, draft.split("\n").length + 1)}
-        className="block w-full resize-y rounded border border-bg-border bg-bg-card px-2 py-2 font-mono text-xs text-text-primary outline-none focus:border-accent-teal"
+        className="block w-full resize-y rounded-lg border border-bg-border bg-bg-card px-2 py-2 font-mono text-xs text-text-primary outline-none focus:border-focus-ring-teal"
       />
       <div className="mt-2 flex items-center gap-2">
         <button
           type="button"
           onClick={onSaveEdit}
           disabled={saving || draft.trim().length === 0}
-          className="flex items-center gap-1 rounded bg-accent-teal px-2 py-1 text-[11px] text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="flex items-center gap-1 rounded-lg bg-accent-teal px-2 py-1 text-[11px] text-white transition-colors hover:bg-accent-teal/90 disabled:opacity-50"
         >
           {saving ? (
             <RefreshCw size={11} className="animate-spin" />
@@ -1578,7 +1578,7 @@ function EditTextarea({
           type="button"
           onClick={onCancelEdit}
           disabled={saving}
-          className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+          className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
         >
           <X size={11} />
           {td("edit.cancel", { defaultMessage: "Cancel" })}
@@ -1981,7 +1981,7 @@ function KeyboardHintFooter({ text }: { text: string }) {
       {tokens.map((tok, i) => (
         <span key={i} className="inline-flex items-center gap-1.5">
           <kbd
-            className="inline-block rounded-md border border-bg-border bg-bg-elevated px-1.5 py-[1px] font-mono text-[11px] text-text-primary"
+            className="inline-block rounded-lg border border-bg-border bg-bg-elevated px-1.5 py-[1px] font-mono text-[11px] text-text-primary"
             style={{
               boxShadow: "inset 0 -1px 0 rgba(0,0,0,0.08)",
             }}

@@ -133,7 +133,7 @@ export function AskSaveDialog({
   if (!open) return null;
 
   const inputClass =
-    "w-full rounded-lg border border-bg-border bg-bg-primary px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none";
+    "w-full rounded-lg border border-bg-border bg-bg-primary px-3 py-2 text-sm text-text-primary focus:border-focus-ring focus:outline-none";
   const labelClass = "block text-xs font-medium text-text-muted mb-1";
 
   return (
@@ -144,13 +144,13 @@ export function AskSaveDialog({
       aria-modal
       aria-label={t("title")}
     >
-      <div className="flex w-full max-w-md flex-col gap-4 rounded-xl bg-bg-card p-5 shadow-2xl">
+      <div className="flex w-full max-w-md flex-col gap-4 rounded-xl bg-bg-card p-5 shadow-lg">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-text-primary">{t("title")}</h2>
           <button
             type="button"
             onClick={onClose}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-text-muted hover:bg-bg-elevated hover:text-text-primary"
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted hover:bg-bg-elevated hover:text-text-primary"
             aria-label={tc("close")}
           >
             <X size={14} />
@@ -162,7 +162,7 @@ export function AskSaveDialog({
         )}
 
         {state.kind === "error" && (
-          <p className="text-sm text-red-400">{state.message}</p>
+          <p className="text-sm text-danger">{state.message}</p>
         )}
 
         {state.kind === "createVault" && (
@@ -184,12 +184,12 @@ export function AskSaveDialog({
                 onChange={(e) => setNewVaultPath(e.target.value)}
               />
             </div>
-            {submitError && <p className="text-xs text-red-400">{submitError}</p>}
+            {submitError && <p className="text-xs text-danger">{submitError}</p>}
             <button
               type="button"
               disabled={submitting}
               onClick={handleCreateVault}
-              className="self-end rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+              className="self-end rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
             >
               {submitting ? t("saving") : t("createVault")}
             </button>
@@ -227,7 +227,7 @@ export function AskSaveDialog({
                 onChange={(e) => setFilename(e.target.value)}
               />
             </div>
-            {submitError && <p className="text-xs text-red-400">{submitError}</p>}
+            {submitError && <p className="text-xs text-danger">{submitError}</p>}
             <div className="flex justify-end gap-2">
               <button
                 type="button"
@@ -240,7 +240,7 @@ export function AskSaveDialog({
                 type="button"
                 disabled={submitting || !selectedVaultId}
                 onClick={handleSubmit}
-                className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+                className="rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
               >
                 {submitting ? t("saving") : t("save")}
               </button>

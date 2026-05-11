@@ -166,7 +166,7 @@ export default function SuggestedTagsSection({ fileId, drive }: SuggestedTagsSec
           <button
             onClick={handleRegenerate}
             disabled={regenerating}
-            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+            className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
           >
             <RefreshCw size={11} className={regenerating ? "animate-spin" : ""} />
             {regenerating
@@ -236,7 +236,7 @@ export default function SuggestedTagsSection({ fileId, drive }: SuggestedTagsSec
         <button
           onClick={handleAcceptAll}
           disabled={acceptingAll}
-          className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+          className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
         >
           {acceptingAll ? (
             <RefreshCw size={11} className="animate-spin" />
@@ -248,7 +248,7 @@ export default function SuggestedTagsSection({ fileId, drive }: SuggestedTagsSec
         <button
           onClick={handleDismiss}
           disabled={dismissing}
-          className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+          className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
         >
           {dismissing ? (
             <RefreshCw size={11} className="animate-spin" />
@@ -260,7 +260,7 @@ export default function SuggestedTagsSection({ fileId, drive }: SuggestedTagsSec
         <button
           onClick={handleRegenerate}
           disabled={regenerating}
-          className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+          className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
         >
           <RefreshCw size={11} className={regenerating ? "animate-spin" : ""} />
           {t("regenerateTags", { defaultMessage: "Regenerate" })}

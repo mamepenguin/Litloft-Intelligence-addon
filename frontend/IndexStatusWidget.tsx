@@ -203,12 +203,12 @@ function StatusContent({ status, drive }: { status: SearchServiceStatus; drive?:
   return (
     <>
       <div className="mb-3 flex items-center gap-2">
-        <span className="inline-flex items-center gap-1.5 rounded-md bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-400">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+        <span className="inline-flex items-center gap-1.5 rounded-lg bg-accent-teal/10 px-2 py-0.5 text-xs font-medium text-accent-teal">
+          <span className="h-1.5 w-1.5 rounded-full bg-accent-teal" />
           {t("statusRunning")}
         </span>
         {queue?.paused && (
-          <span className="inline-flex items-center gap-1.5 rounded-md bg-yellow-500/10 px-2 py-0.5 text-xs font-medium text-yellow-400">
+          <span className="inline-flex items-center gap-1.5 rounded-lg bg-accent-amber/10 px-2 py-0.5 text-xs font-medium text-accent-amber">
             <Pause size={10} />
             {t("paused")}
           </span>
@@ -358,11 +358,11 @@ export default function IndexStatusWidget({ drive }: IndexStatusWidgetProps) {
   if (status === null) {
     return (
       <div className="rounded-xl border border-bg-border bg-bg-card p-5 animate-pulse">
-        <div className="mb-4 h-5 w-40 rounded bg-bg-elevated" />
+        <div className="mb-4 h-5 w-40 rounded-lg bg-bg-elevated" />
         <div className="space-y-3">
-          <div className="h-3 w-full rounded bg-bg-elevated" />
-          <div className="h-3 w-3/4 rounded bg-bg-elevated" />
-          <div className="h-3 w-1/2 rounded bg-bg-elevated" />
+          <div className="h-3 w-full rounded-lg bg-bg-elevated" />
+          <div className="h-3 w-3/4 rounded-lg bg-bg-elevated" />
+          <div className="h-3 w-1/2 rounded-lg bg-bg-elevated" />
         </div>
       </div>
     );

@@ -238,7 +238,7 @@ export default function ClipFramesSection({ fileId, drive, videoRef, mediaContro
                     onPointerUp={stopArrowScroll}
                     onPointerCancel={stopArrowScroll}
                     onPointerLeave={stopArrowScroll}
-                    className="absolute left-2 top-[2.375rem] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-bg-primary/90 text-text-primary shadow-md ring-1 ring-bg-border backdrop-blur-sm transition-colors hover:bg-bg-primary"
+                    className="absolute left-2 top-[2.375rem] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-bg-primary/90 text-text-primary shadow-card ring-1 ring-bg-border backdrop-blur-sm transition-colors hover:bg-bg-primary"
                   >
                     <ChevronLeft size={22} />
                   </button>
@@ -249,7 +249,7 @@ export default function ClipFramesSection({ fileId, drive, videoRef, mediaContro
                     onPointerUp={stopArrowScroll}
                     onPointerCancel={stopArrowScroll}
                     onPointerLeave={stopArrowScroll}
-                    className="absolute right-2 top-[2.375rem] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-bg-primary/90 text-text-primary shadow-md ring-1 ring-bg-border backdrop-blur-sm transition-colors hover:bg-bg-primary"
+                    className="absolute right-2 top-[2.375rem] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-bg-primary/90 text-text-primary shadow-card ring-1 ring-bg-border backdrop-blur-sm transition-colors hover:bg-bg-primary"
                   >
                     <ChevronRight size={22} />
                   </button>

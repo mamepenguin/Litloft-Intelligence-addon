@@ -361,9 +361,9 @@ function CitationCard({
     <a
       id={`ask-citation-${index}`}
       href={buildCitationUrl(citation)}
-      className="group flex w-full items-start gap-2 rounded-md border border-bg-border bg-bg-card px-3 py-2 text-left transition-colors hover:bg-bg-elevated focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+      className="group flex w-full items-start gap-2 rounded-lg border border-bg-border bg-bg-card px-3 py-2 text-left transition-colors hover:bg-bg-elevated focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
     >
-      <span className="mt-0.5 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded px-1 text-[11px] font-semibold text-accent bg-accent/10">
+      <span className="mt-0.5 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-2xl px-1 text-[11px] font-semibold text-accent bg-accent/10">
         {index}
       </span>
       {isImage && (
@@ -372,7 +372,7 @@ function CitationCard({
           src={`/api/files/${citation.file_id}/thumbnail`}
           alt={citation.filename}
           loading="lazy"
-          className="h-16 w-16 flex-shrink-0 rounded object-cover"
+          className="h-16 w-16 flex-shrink-0 rounded-lg object-cover"
         />
       )}
       <div className="min-w-0 flex-1">
@@ -386,7 +386,7 @@ function CitationCard({
             // verbatim sentence in `location`, it's far too long to
             // render as a badge — we surface it as the quote line
             // below instead, which is the natural place for prose.
-            <span className="flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-medium text-accent">
+            <span className="flex-shrink-0 rounded-lg px-1 py-0.5 text-[10px] font-medium text-accent">
               {parsed.label}
             </span>
           )}
@@ -447,7 +447,7 @@ function SourceCard({ source }: { source: Source }) {
   return (
     <a
       href={`/files/${source.file_id}`}
-      className="flex min-w-0 items-center gap-2 rounded-md border border-bg-border bg-bg-card px-2 py-1.5 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
+      className="flex min-w-0 items-center gap-2 rounded-lg border border-bg-border bg-bg-card px-2 py-1.5 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
     >
       <span className="truncate">{source.filename}</span>
     </a>
@@ -964,7 +964,7 @@ function IntelligenceAskPageInner() {
       {ragAvailable === false && (
         <div
           role="alert"
-          className="flex items-start gap-2 rounded-md border border-bg-border bg-bg-card p-3"
+          className="flex items-start gap-2 rounded-lg border border-bg-border bg-bg-card p-3"
         >
           <AlertCircle
             size={16}
@@ -984,7 +984,7 @@ function IntelligenceAskPageInner() {
           placeholder={seedQuery || ""}
           rows={3}
           disabled={ragAvailable === false}
-          className="w-full resize-y rounded-md border border-bg-border bg-bg-card p-3 text-sm text-text-primary placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+          className="w-full resize-y rounded-lg border border-bg-border bg-bg-card p-3 text-sm text-text-primary placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
           aria-label="Question input"
         />
         <div className="flex items-center justify-between gap-2">
@@ -997,7 +997,7 @@ function IntelligenceAskPageInner() {
             <button
               type="button"
               onClick={handleAbort}
-              className="inline-flex items-center gap-1.5 rounded-md border border-bg-border bg-bg-card px-3 py-1.5 text-xs font-medium text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-bg-border bg-bg-card px-3 py-1.5 text-xs font-medium text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
             >
               <Square size={12} /> {t("close")}
             </button>
@@ -1005,7 +1005,7 @@ function IntelligenceAskPageInner() {
             <button
               type="submit"
               disabled={!canSubmit}
-              className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex items-center gap-1.5 rounded-2xl bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Send size={12} /> {t("poweredByLlm")}
             </button>
@@ -1059,11 +1059,11 @@ function IntelligenceAskPageInner() {
             );
           }
           return (
-            <div className="flex flex-wrap items-center gap-2 rounded-md border border-accent/30 bg-accent/5 px-3 py-2 text-xs text-text-muted">
+            <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-accent/30 bg-accent/5 px-3 py-2 text-xs text-text-muted">
               {chips.map((chip, i) => (
                 <span
                   key={`${i}-${chip}`}
-                  className="rounded bg-bg-card px-2 py-0.5"
+                  className="rounded-lg bg-bg-card px-2 py-0.5"
                 >
                   {chip}
                 </span>
@@ -1087,12 +1087,12 @@ function IntelligenceAskPageInner() {
               : [];
           if (chips.length === 0) return null;
           return (
-            <div className="flex flex-wrap items-center gap-2 rounded-md border border-bg-border bg-bg-elevated px-3 py-2 text-xs text-text-muted">
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-bg-border bg-bg-elevated px-3 py-2 text-xs text-text-muted">
               <Sparkles size={12} className="flex-shrink-0" />
               {chips.map((chip, i) => (
                 <span
                   key={`${i}-${chip}`}
-                  className="rounded bg-bg-card px-2 py-0.5"
+                  className="rounded-lg bg-bg-card px-2 py-0.5"
                 >
                   {chip}
                 </span>
@@ -1104,7 +1104,7 @@ function IntelligenceAskPageInner() {
       {state.kind === "error" && (
         <div
           role="alert"
-          className="flex items-start gap-2 rounded-md border border-bg-border bg-bg-card p-3"
+          className="flex items-start gap-2 rounded-lg border border-bg-border bg-bg-card p-3"
         >
           <AlertCircle
             size={16}
@@ -1118,7 +1118,7 @@ function IntelligenceAskPageInner() {
                 onClick={() => {
                   void runAsk(input);
                 }}
-                className="mt-2 inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-text-muted hover:bg-bg-elevated hover:text-text-primary"
+                className="mt-2 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-muted hover:bg-bg-elevated hover:text-text-primary"
               >
                 {t("retryHint")}
               </button>
@@ -1128,7 +1128,7 @@ function IntelligenceAskPageInner() {
             type="button"
             aria-label={t("close")}
             onClick={() => setState({ kind: "idle" })}
-            className="flex-shrink-0 rounded p-1 text-text-muted hover:bg-bg-elevated hover:text-text-primary"
+            className="flex-shrink-0 rounded-lg p-1 text-text-muted hover:bg-bg-elevated hover:text-text-primary"
           >
             <X size={12} />
           </button>
@@ -1138,7 +1138,7 @@ function IntelligenceAskPageInner() {
       {(state.kind === "streaming" || state.kind === "answered") && (
         <section
           aria-live="polite"
-          className="rounded-md border border-bg-border bg-bg-card p-4"
+          className="rounded-lg border border-bg-border bg-bg-card p-4"
         >
           {state.kind === "streaming" && state.answerBuffer === "" ? (
             // "Thinking" indicator — shown while retrieval / LLM
@@ -1194,7 +1194,7 @@ function IntelligenceAskPageInner() {
                 <button
                   type="button"
                   onClick={() => setSaveDialogOpen(true)}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
+                  className="inline-flex items-center gap-1.5 rounded-2xl bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover"
                 >
                   <BookmarkPlus size={12} />
                   {t("saveToKnowledge")}
@@ -1260,7 +1260,7 @@ export default function IntelligenceAskPage() {
     <Suspense
       fallback={
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 sm:p-6">
-          <div className="h-6 w-32 animate-pulse rounded bg-bg-elevated" />
+          <div className="h-6 w-32 animate-pulse rounded-lg bg-bg-elevated" />
         </div>
       }
     >

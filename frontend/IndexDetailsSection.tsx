@@ -21,12 +21,15 @@ const TYPE_LABELS: Record<string, string> = {
   blip_caption: "BLIP Caption",
 };
 
+// Category indicator dots. The visual cue is "AI-generated embedding"
+// (accent-teal) vs "filesystem-side metadata" (text-muted/warm) —
+// per-type hues collapse into the warm palette per DESIGN.md §2.2.
 const TYPE_COLORS: Record<string, string> = {
-  metadata: "bg-zinc-500",
-  clip: "bg-emerald-500",
-  whisper: "bg-blue-500",
-  text_content: "bg-purple-500",
-  blip_caption: "bg-amber-500",
+  metadata: "bg-text-muted",
+  clip: "bg-accent-teal",
+  whisper: "bg-accent-teal",
+  text_content: "bg-accent-teal",
+  blip_caption: "bg-accent-amber",
 };
 
 export default function IndexDetailsSection({ fileId, drive }: IndexDetailsSectionProps) {
@@ -58,8 +61,8 @@ export default function IndexDetailsSection({ fileId, drive }: IndexDetailsSecti
       <div className="rounded-lg bg-bg-card p-3">
         {/* BLIP caption (if available) */}
         {embeddings.blip_caption && embeddings.blip_caption.count > 0 && (
-          <div className="mb-3 rounded-md bg-amber-500/5 border border-amber-500/20 px-3 py-2">
-            <p className="text-xs text-amber-300/80 italic">
+          <div className="mb-3 rounded-lg bg-accent-amber/5 border border-accent-amber/20 px-3 py-2">
+            <p className="text-xs text-accent-amber/80 italic">
               &quot;{embeddings.blip_caption.items[0]?.content_preview}&quot;
             </p>
           </div>
@@ -72,11 +75,11 @@ export default function IndexDetailsSection({ fileId, drive }: IndexDetailsSecti
               key={key}
               className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
                 done
-                  ? "bg-green-500/10 text-green-400"
-                  : "bg-yellow-500/10 text-yellow-400"
+                  ? "bg-accent-teal/10 text-accent-teal"
+                  : "bg-accent-amber/10 text-accent-amber"
               }`}
             >
-              <span className={`h-1.5 w-1.5 rounded-full ${done ? "bg-green-400" : "bg-yellow-400"}`} />
+              <span className={`h-1.5 w-1.5 rounded-full ${done ? "bg-accent-teal" : "bg-accent-amber"}`} />
               {TYPE_LABELS[key] || key}
             </span>
           ))}
@@ -91,13 +94,13 @@ export default function IndexDetailsSection({ fileId, drive }: IndexDetailsSecti
               <div key={type}>
                 <button
                   onClick={() => setExpandedType(isExpanded ? null : type)}
-                  className="flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors hover:bg-bg-primary"
+                  className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors hover:bg-bg-primary"
                 >
                   <ChevronRight
                     size={14}
                     className={`shrink-0 text-text-muted transition-transform ${isExpanded ? "rotate-90" : ""}`}
                   />
-                  <span className={`h-2 w-2 shrink-0 rounded-full ${TYPE_COLORS[type] || "bg-gray-500"}`} />
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${TYPE_COLORS[type] || "bg-text-muted"}`} />
                   <span className="text-text-primary">
                     {TYPE_LABELS[type] || type}
                   </span>
@@ -110,7 +113,7 @@ export default function IndexDetailsSection({ fileId, drive }: IndexDetailsSecti
                     {detail.items.map((item, i) => (
                       <div
                         key={i}
-                        className="flex gap-2 rounded px-2 py-1 text-xs text-text-muted"
+                        className="flex gap-2 rounded-lg px-2 py-1 text-xs text-text-muted"
                       >
                         {item.start != null && (
                           <span className="shrink-0 font-mono">

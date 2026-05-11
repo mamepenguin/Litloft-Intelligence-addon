@@ -31,7 +31,7 @@ function ResultCard({ result, rank }: { result: SemanticSearchResult; rank: numb
       <img
         src={`/api/files/${result.file_id}/thumbnail`}
         alt=""
-        className="h-9 w-14 flex-shrink-0 rounded bg-bg-elevated object-cover"
+        className="h-9 w-14 flex-shrink-0 rounded-lg bg-bg-elevated object-cover"
         onError={(e) => {
           e.currentTarget.style.display = "none";
         }}
@@ -44,7 +44,7 @@ function ResultCard({ result, rank }: { result: SemanticSearchResult; rank: numb
           {result.match_types.map((type) => (
             <span
               key={type}
-              className="rounded bg-accent/10 px-1 py-0.5 text-[10px] text-accent"
+              className="rounded-2xl bg-accent/10 px-1 py-0.5 text-[10px] text-accent"
             >
               {type}
             </span>
@@ -241,12 +241,12 @@ export default function SearchComparePage() {
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleSearch()}
           placeholder="Search query..."
-          className="flex-1 rounded-lg border border-bg-border bg-bg-primary px-3 py-2 text-sm text-text-primary placeholder-text-muted outline-none focus:border-accent"
+          className="flex-1 rounded-lg border border-bg-border bg-bg-primary px-3 py-2 text-sm text-text-primary placeholder-text-muted outline-none focus:border-focus-ring"
         />
         <button
           onClick={handleSearch}
           disabled={loading || !query.trim() || !drive}
-          className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          className="rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
         >
           {loading ? "..." : "Search"}
         </button>
@@ -266,7 +266,7 @@ export default function SearchComparePage() {
               />
               Score cutoff
               {!showCutoff && data.rrf.length !== data.rrfNoCutoff.length && (
-                <span className="text-[10px] text-amber-400">
+                <span className="text-[10px] text-accent-amber">
                   (cutoff: RRF {data.rrf.length}/{data.rrfNoCutoff.length}, Cos {data.cosine.length}/{data.cosineNoCutoff.length})
                 </span>
               )}

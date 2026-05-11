@@ -40,7 +40,7 @@ interface CitationInlinePanelProps {
   citation: DetailedSummaryCitation;
   /**
    * Segment type context — shapes the outer frame.
-   *   - paragraph / bullet: rounded dashed (weak) or solid (strong) card.
+   *   - paragraph / bullet: rounded-lg dashed (weak) or solid (strong) card.
    *   - table: no outer card; the cited row already carries the
    *     border-left accent per DESIGN.md table H3 convention.
    */

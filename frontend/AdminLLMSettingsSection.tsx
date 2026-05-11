@@ -200,7 +200,7 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
         <div
           role="status"
           data-testid="llm-overrides-banner"
-          className="mb-4 rounded-md border border-accent-amber bg-bg-elevated p-3"
+          className="mb-4 rounded-lg border border-accent-amber bg-bg-elevated p-3"
         >
           <p className="text-sm text-text-primary">{t("overridesActive")}</p>
           <p className="mt-1 text-xs text-text-muted">{t("overridesHelp")}</p>
@@ -209,7 +209,7 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
               type="button"
               onClick={handleReset}
               disabled={resetting}
-              className="rounded-md border border-bg-border bg-bg-card px-3 py-1 text-sm text-text-primary hover:bg-bg-light disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-lg border border-bg-border bg-bg-card px-3 py-1 text-sm text-text-primary hover:bg-bg-light disabled:cursor-not-allowed disabled:opacity-50"
             >
               {resetting ? t("resetting") : t("reset")}
             </button>
@@ -264,7 +264,7 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
             placeholder="http://host.docker.internal:11434"
-            className="mt-1 block w-full rounded-md border border-bg-border bg-bg-card px-2 py-1 font-mono text-sm text-text-primary"
+            className="mt-1 block w-full rounded-lg border border-bg-border bg-bg-card px-2 py-1 font-mono text-sm text-text-primary"
           />
         </label>
         <p className="mt-1 text-xs text-text-muted">{t("baseUrlHelp")}</p>
@@ -280,7 +280,7 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
             value={model}
             onChange={(e) => setModel(e.target.value)}
             placeholder="gemma4:e4b"
-            className="mt-1 block w-full rounded-md border border-bg-border bg-bg-card px-2 py-1 font-mono text-sm text-text-primary"
+            className="mt-1 block w-full rounded-lg border border-bg-border bg-bg-card px-2 py-1 font-mono text-sm text-text-primary"
           />
         </label>
         <p className="mt-1 text-xs text-text-muted">{t("modelHelp")}</p>
@@ -296,7 +296,7 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
             value={visionModel}
             onChange={(e) => setVisionModel(e.target.value)}
             placeholder="llava:13b"
-            className="mt-1 block w-full rounded-md border border-bg-border bg-bg-card px-2 py-1 font-mono text-sm text-text-primary"
+            className="mt-1 block w-full rounded-lg border border-bg-border bg-bg-card px-2 py-1 font-mono text-sm text-text-primary"
           />
         </label>
         <p className="mt-1 text-xs text-text-muted">{t("visionModelHelp")}</p>
@@ -310,7 +310,7 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
           <select
             value={outputLanguage}
             onChange={(e) => setOutputLanguage(e.target.value)}
-            className="mt-1 block w-40 rounded-md border border-bg-border bg-bg-card px-2 py-1 text-sm text-text-primary"
+            className="mt-1 block w-40 rounded-lg border border-bg-border bg-bg-card px-2 py-1 text-sm text-text-primary"
           >
             {data.available_output_languages.map((lang) => (
               <option key={lang} value={lang}>
@@ -321,7 +321,7 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
         </label>
       </div>
 
-      <div className="mb-4 rounded-md border border-bg-border bg-bg-elevated p-3">
+      <div className="mb-4 rounded-lg border border-bg-border bg-bg-elevated p-3">
         <p className="text-xs">
           {data.api_key_env_var}:{" "}
           <span className={data.api_key_present ? "text-success" : "text-danger"}>
@@ -339,7 +339,7 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
           type="button"
           onClick={handleSave}
           disabled={saving || apiKeyMissingForCloud}
-          className="rounded-md border border-bg-border bg-bg-card px-3 py-1 text-sm text-text-primary hover:bg-bg-light disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-lg border border-bg-border bg-bg-card px-3 py-1 text-sm text-text-primary hover:bg-bg-light disabled:cursor-not-allowed disabled:opacity-50"
         >
           {saving ? t("saving") : t("save")}
         </button>
