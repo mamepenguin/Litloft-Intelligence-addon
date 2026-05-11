@@ -45,7 +45,11 @@ function makeTimestamps(n: number) {
   }));
 }
 
-function renderSection(props: { fileId?: string } = {}) {
+function renderSection(props: {
+  fileId?: string;
+  fileType?: string;
+  mimeType?: string;
+} = {}) {
   return render(
     <NextIntlClientProvider
       locale="en"
@@ -54,6 +58,8 @@ function renderSection(props: { fileId?: string } = {}) {
       <ClipFramesSection
         fileId={props.fileId ?? "f1"}
         drive="drive1"
+        fileType={props.fileType ?? "video"}
+        mimeType={props.mimeType ?? "video/mp4"}
       />
     </NextIntlClientProvider>,
   );
@@ -152,6 +158,27 @@ describe("ClipFramesSection", () => {
     // After the fetch resolves with no timestamps the component must
     // unmount itself — file detail pages must not show an empty header.
     await waitFor(() => expect(container.firstChild).toBeNull());
+  });
+
+  it("renders nothing (no header, no fetch) for non-video files", async () => {
+    mocked.mockResolvedValue({ available: true, timestamps: makeTimestamps(3) });
+    const { container } = renderSection({ fileType: "image", mimeType: "image/jpeg" });
+
+    expect(container.firstChild).toBeNull();
+    await Promise.resolve();
+    expect(mocked).not.toHaveBeenCalled();
+  });
+
+  it("renders nothing (no header, no fetch) for .loft remote embeds", async () => {
+    mocked.mockResolvedValue({ available: true, timestamps: makeTimestamps(3) });
+    const { container } = renderSection({
+      fileType: "video",
+      mimeType: "application/vnd.litloft.loft+json",
+    });
+
+    expect(container.firstChild).toBeNull();
+    await Promise.resolve();
+    expect(mocked).not.toHaveBeenCalled();
   });
 
   it("renders the infinite-scroll sentinel when more frames than PAGE_SIZE", async () => {

@@ -18,6 +18,11 @@ import type { MediaController } from "@/lib/mediaController";
 interface ClipFramesSectionProps {
   fileId: string;
   drive: string;
+  // Synchronously decides eligibility so the header never flashes for
+  // files that cannot have scene CLIP frames. Optional only because the
+  // slot prop wiring is untyped; FileDetailContent always supplies it.
+  fileType?: string;
+  mimeType?: string;
   // Legacy: still accepted for callers that pass a native video ref.
   videoRef?: React.RefObject<HTMLVideoElement | null>;
   // Preferred: works for native video AND LoftRef (YouTube) embeds.
@@ -28,7 +33,19 @@ const PAGE_SIZE = 20;
 const ARROW_SCROLL_PX_PER_FRAME = 8;
 const NEAR_END_ROOT_MARGIN_PX = 400;
 
-export default function ClipFramesSection({ fileId, drive, videoRef, mediaController }: ClipFramesSectionProps) {
+// .loft files report file_type='video' but are stored as
+// clip_thumbnail only (hako tOG7qDce-f1403dh6dkij) — they never have
+// scene timestamps.
+const LOFT_MIME_TYPE = "application/vnd.litloft.loft+json";
+
+export default function ClipFramesSection({
+  fileId,
+  drive,
+  fileType,
+  mimeType,
+  videoRef,
+  mediaController,
+}: ClipFramesSectionProps) {
   const t = useTranslations("searchIndex");
 
   // Tri-state. `null` means "we haven't fetched timestamps yet" — used to
@@ -158,10 +175,18 @@ export default function ClipFramesSection({ fileId, drive, videoRef, mediaContro
   const totalLabel = timestamps ? ` (${timestamps.length})` : "";
   const visible = timestamps ? timestamps.slice(0, showCount) : [];
 
-  // Hide the whole section once we've confirmed the file has no CLIP
-  // frames. Until then (closed default) the header is always visible
-  // because we don't yet know whether frames exist — the API call only
-  // fires on first expand, which is the whole point of this redesign.
+  // Scene CLIP frames only exist for native video files. Bail
+  // synchronously for everything else so the header never flashes for
+  // text / image / audio / .loft files (which the lazy-fetch design
+  // would otherwise reveal only after the first click).
+  if (fileType !== "video" || mimeType === LOFT_MIME_TYPE) {
+    return null;
+  }
+
+  // Hide the whole section once we've confirmed the (video) file has
+  // no CLIP frames yet — e.g. still queued for indexing. Until the
+  // first expand the header stays visible because we don't yet know
+  // whether frames exist; the API call only fires on first expand.
   if (timestamps !== null && timestamps.length === 0) {
     return null;
   }
