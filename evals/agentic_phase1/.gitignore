@@ -1,0 +1,4 @@
+# Generated report artifacts — only the README and this gitignore are tracked.
+*.md
+*.json
+!README.md

@@ -6,11 +6,17 @@ case × metric we classify the delta as ``improved`` / ``regressed`` /
 
 Only cases that appear in both sidecars are compared; cases added or
 removed are reported separately.
+
+Phase 1.D extension: aggregate-level rows for the agentic axes
+(tool_call_count distribution, route_correctness, max context tokens,
+forced answer rate) so an A/B report between legacy and agentic runs
+can be read top-down.
 """
 
 from __future__ import annotations
 
 import json
+import statistics
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,6 +46,21 @@ class MetricDelta:
 
 
 @dataclass(frozen=True)
+class AgenticAxisSummary:
+    """Aggregate-level summary for an agentic-only axis on one side.
+
+    Values are ``None`` when no run on that side produced the axis
+    (e.g. a legacy-only run will report ``None`` for tool_call_count).
+    """
+
+    label: str
+    baseline_median: float | None
+    current_median: float | None
+    baseline_p95: float | None = None
+    current_p95: float | None = None
+
+
+@dataclass(frozen=True)
 class ComparisonResult:
     baseline_label: str
     baseline_path: str
@@ -47,6 +68,7 @@ class ComparisonResult:
     only_in_baseline: tuple[str, ...]
     only_in_current: tuple[str, ...]
     deltas: tuple[MetricDelta, ...]
+    agentic_axes: tuple[AgenticAxisSummary, ...] = ()
 
 
 def _load_sidecar(path: Path) -> dict:
@@ -82,6 +104,99 @@ def _classify(baseline: float, current: float, epsilon: float, lower_is_better: 
         return "tied"
     improved = delta < 0 if lower_is_better else delta > 0
     return "improved" if improved else "regressed"
+
+
+def _collect_agentic_axis(
+    cases: list[dict], axis_key: str
+) -> list[float]:
+    """Pull the agentic ``axis_key`` from every run across all cases.
+
+    Each case's ``stage3.runs`` may contain an ``agentic`` dict written
+    by ``report.build_sidecar`` (Phase 1.A). Non-agentic runs are
+    skipped so legacy reports collapse to an empty list.
+    """
+    values: list[float] = []
+    for case in cases:
+        s3 = case.get("stage3")
+        if not isinstance(s3, dict):
+            continue
+        for run in s3.get("runs", []) or []:
+            agentic = (run or {}).get("agentic")
+            if not isinstance(agentic, dict):
+                continue
+            v = agentic.get(axis_key)
+            if v is None:
+                continue
+            try:
+                values.append(float(v))
+            except (TypeError, ValueError):
+                continue
+    return values
+
+
+def _percentile(values: list[float], pct: float) -> float | None:
+    if not values:
+        return None
+    sorted_vals = sorted(values)
+    if len(sorted_vals) == 1:
+        return sorted_vals[0]
+    k = (len(sorted_vals) - 1) * pct
+    lo = int(k)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    frac = k - lo
+    return sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * frac
+
+
+def _median(values: list[float]) -> float | None:
+    return statistics.median(values) if values else None
+
+
+def _agentic_axes_summary(
+    baseline: dict, current: dict
+) -> tuple[AgenticAxisSummary, ...]:
+    """Build aggregate-level summaries for the agentic axes."""
+    base_cases = baseline.get("cases", [])
+    cur_cases = current.get("cases", [])
+
+    tcc_base = _collect_agentic_axis(base_cases, "tool_call_count")
+    tcc_cur = _collect_agentic_axis(cur_cases, "tool_call_count")
+    rc_base = _collect_agentic_axis(base_cases, "route_correctness")
+    rc_cur = _collect_agentic_axis(cur_cases, "route_correctness")
+    ctx_base = _collect_agentic_axis(base_cases, "max_context_tokens_used")
+    ctx_cur = _collect_agentic_axis(cur_cases, "max_context_tokens_used")
+    forced_base = _collect_agentic_axis(base_cases, "forced_answer")
+    forced_cur = _collect_agentic_axis(cur_cases, "forced_answer")
+
+    return (
+        AgenticAxisSummary(
+            label="Agentic: tool_call_count",
+            baseline_median=_median(tcc_base),
+            current_median=_median(tcc_cur),
+            baseline_p95=_percentile(tcc_base, 0.95),
+            current_p95=_percentile(tcc_cur, 0.95),
+        ),
+        AgenticAxisSummary(
+            label="Agentic: route_correctness",
+            baseline_median=_median(rc_base),
+            current_median=_median(rc_cur),
+        ),
+        AgenticAxisSummary(
+            label="Agentic: max_context_tokens_used",
+            baseline_median=_median(ctx_base),
+            current_median=_median(ctx_cur),
+            baseline_p95=_percentile(ctx_base, 0.95),
+            current_p95=_percentile(ctx_cur, 0.95),
+        ),
+        AgenticAxisSummary(
+            label="Agentic: forced_answer_rate",
+            baseline_median=(
+                sum(forced_base) / len(forced_base) if forced_base else None
+            ),
+            current_median=(
+                sum(forced_cur) / len(forced_cur) if forced_cur else None
+            ),
+        ),
+    )
 
 
 def compare_sidecars(
@@ -121,7 +236,12 @@ def compare_sidecars(
         only_in_baseline=tuple(only_base),
         only_in_current=tuple(only_cur),
         deltas=tuple(deltas),
+        agentic_axes=_agentic_axes_summary(baseline, current_sidecar),
     )
+
+
+def _fmt_optional(value: float | None) -> str:
+    return "N/A" if value is None else f"{value:.2f}"
 
 
 def render_comparison_md(result: ComparisonResult) -> str:
@@ -141,4 +261,27 @@ def render_comparison_md(result: ComparisonResult) -> str:
     for d in result.deltas:
         lines.append(f"| {d.label} | {d.improved} | {d.regressed} | {d.tied} |")
     lines.append("")
+
+    if result.agentic_axes:
+        lines.append("### Agentic-loop axes (aggregate)\n")
+        lines.append(
+            "| axis | baseline (median / 95p) | current (median / 95p) |"
+        )
+        lines.append("|---|---|---|")
+        for axis in result.agentic_axes:
+            base = (
+                f"{_fmt_optional(axis.baseline_median)} / "
+                f"{_fmt_optional(axis.baseline_p95)}"
+                if axis.baseline_p95 is not None
+                else _fmt_optional(axis.baseline_median)
+            )
+            cur = (
+                f"{_fmt_optional(axis.current_median)} / "
+                f"{_fmt_optional(axis.current_p95)}"
+                if axis.current_p95 is not None
+                else _fmt_optional(axis.current_median)
+            )
+            lines.append(f"| {axis.label} | {base} | {cur} |")
+        lines.append("")
+
     return "\n".join(lines)
