@@ -21,9 +21,12 @@ Output shape (per spec §2.2):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
+from app.database import get_search_db_read
+from app.models import TranscriptChunk
 from app.rag.retriever import RetrievedFile, retrieve_with_keywords
 from app.rag.tools.budget import estimate_payload_tokens
 from app.rag.tools.context import ToolContext, ToolResultEnvelope
@@ -31,17 +34,33 @@ from app.rag.tools.context import ToolContext, ToolResultEnvelope
 logger = logging.getLogger(__name__)
 
 
-def _has_transcript(candidate: RetrievedFile) -> bool:
-    """True when the retriever surfaced a transcript-bearing segment.
+def _transcript_bearing_file_ids(file_ids: list[str]) -> set[str]:
+    """Return the subset of ``file_ids`` that have TranscriptChunk rows.
 
-    The hybrid search annotates results with ``match_types`` — when a
-    file has ``"transcript"`` or ``"transcript_text"`` among them, the
-    intelligence DB has TranscriptChunk rows for it. This avoids an
-    extra DB round-trip per result.
+    ``match_types`` alone is unreliable for the agentic loop: a file
+    may have transcript chunks but be ranked solely on title / tags,
+    leaving ``match_types`` without ``"transcript"`` and the LLM
+    thinking the file is unreadable. One ``DISTINCT`` query against
+    the intelligence DB beats N round-trips, and is cheaper than the
+    follow-up ``get_file_chunks`` call we want to encourage.
     """
-    return any(
-        m in ("transcript", "transcript_text") for m in candidate.match_types
-    )
+    if not file_ids:
+        return set()
+    try:
+        with get_search_db_read() as db:
+            rows = (
+                db.query(TranscriptChunk.file_id)
+                .filter(TranscriptChunk.file_id.in_(file_ids))
+                .distinct()
+                .all()
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "search_files: transcript existence check failed: %s",
+            type(exc).__name__,
+        )
+        return set()
+    return {row[0] for row in rows}
 
 
 async def search_files(
@@ -87,6 +106,12 @@ async def search_files(
         original_query=query,
     )
 
+    # Single batched DB check so the LLM sees a reliable
+    # ``has_transcript`` flag and learns to call get_file_chunks.
+    transcript_ids = await asyncio.to_thread(
+        _transcript_bearing_file_ids, [c.file_id for c in candidates]
+    )
+
     rows: list[dict[str, Any]] = []
     for c in candidates:
         rows.append(
@@ -95,7 +120,7 @@ async def search_files(
                 "title": c.title or c.filename,
                 "score": round(c.score, 4),
                 "tags": [],  # populated by get_file_detail; kept lean here
-                "has_transcript": _has_transcript(c),
+                "has_transcript": c.file_id in transcript_ids,
                 "has_active_summary": False,
                 # ``relations_summary`` is computed by get_file_detail
                 # against the core's file_relations endpoint; quoting

@@ -479,12 +479,16 @@ async def test_search_files_aggregates_to_file_rows() -> None:
     with patch(
         "app.rag.tools.search_files.retrieve_with_keywords",
         AsyncMock(return_value=fake_results),
+    ), patch(
+        "app.rag.tools.search_files._transcript_bearing_file_ids",
+        return_value={"a"},
     ):
         ctx = ToolContext(drive="d")
         env = await search_files(context=ctx, query="q", top_k=10)
 
     rows = env.payload["files"]
     assert [r["file_id"] for r in rows] == ["a", "b"]
+    # has_transcript now comes from the DB check, not match_types.
     assert rows[0]["has_transcript"] is True
     assert rows[1]["has_transcript"] is False
     assert ctx.tool_returned_file_ids == {"a", "b"}

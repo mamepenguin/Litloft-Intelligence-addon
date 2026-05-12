@@ -58,8 +58,12 @@ _TEXT_CHUNK_CHARS = 800
 # ``full`` mode hard cap. Matches spec §2.2.
 _FULL_MAX_CHUNKS = 50
 
-# ``summary`` mode preview length per chunk. Matches spec §2.6.
-_SUMMARY_PREVIEW_CHARS = 200
+# ``summary`` mode preview length per chunk. The spec §2.6 originally
+# picked 200; in practice long-form transcripts (40+ chunks) blow the
+# per-call cap and force the LLM to digest 8K+ tokens before its next
+# move. 80 chars keeps a 40-chunk video summary under ~4K tokens
+# (enough headroom for Qwen3:8b on a 32K context).
+_SUMMARY_PREVIEW_CHARS = 80
 
 # Hard cap on a single chunk's text. WhisperX transcript chunks have
 # no upstream size bound, so an LLM repeatedly fetching a giant chunk

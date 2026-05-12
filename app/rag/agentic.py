@@ -99,37 +99,49 @@ async def _dispatch_tool(
     tool wrapper already returns a well-formed envelope on its
     domain failure modes (404, fail-loud secrets, etc.).
     """
+    logger.info("agentic dispatch: %s args=%s", name, arguments)
     if name == "search_files":
-        return await search_files(
+        env = await search_files(
             context=context,
             query=str(arguments.get("query", "")),
             top_k=int(arguments.get("top_k", 10) or 10),
         )
-    if name == "get_file_detail":
-        return await get_file_detail(
+    elif name == "get_file_detail":
+        env = await get_file_detail(
             context=context,
             file_id=str(arguments.get("file_id", "")),
         )
-    if name == "get_file_chunks":
-        return await get_file_chunks(
+    elif name == "get_file_chunks":
+        env = await get_file_chunks(
             context=context,
             file_id=str(arguments.get("file_id", "")),
             type=str(arguments.get("type", "transcript")),
             mode=str(arguments.get("mode", "summary")),
             range=arguments.get("range"),
         )
-    if name == "get_related_files":
-        return await get_related_files(
+    elif name == "get_related_files":
+        env = await get_related_files(
             context=context,
             file_id=str(arguments.get("file_id", "")),
             kind=arguments.get("kind"),
         )
-    return ToolResultEnvelope(
-        payload={"error": f"unknown tool: {name}"},
-        token_estimate=0,
-        truncated=False,
-        warning="unknown_tool",
+    else:
+        env = ToolResultEnvelope(
+            payload={"error": f"unknown tool: {name}"},
+            token_estimate=0,
+            truncated=False,
+            warning="unknown_tool",
+        )
+    # Log a compact preview so operators can trace what the LLM saw.
+    payload_str = _serialise_tool_payload(env.payload)
+    logger.info(
+        "agentic result: %s tokens=%d truncated=%s payload[:600]=%s",
+        name,
+        env.token_estimate,
+        env.truncated,
+        payload_str[:600],
     )
+    return env
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +306,16 @@ async def run_agentic_loop(
                 citation_retries=citation_retries,
             )
             return _fail_loud_answer(telemetry)
+
+        logger.info(
+            "agentic turn: finish=%s content_len=%d tool_calls=%d forced=%s",
+            result.finish_reason,
+            len(result.content or ""),
+            len(result.tool_calls),
+            forced_answer,
+        )
+        if result.content:
+            logger.info("agentic content[:400]: %s", result.content[:400])
 
         # Account for the assistant content the LLM just produced;
         # otherwise long reasoning text would not press the budget
