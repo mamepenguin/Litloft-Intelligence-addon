@@ -104,7 +104,28 @@ llm:
   vision_model: ""                    # e.g. "llava:13b", "gpt-4o-mini"
   vision_max_tokens: 1024             # cap on description length
   vision_temperature: 0.1             # low temp — descriptions are near-deterministic
-  # Example: ollama (preferred — supports think: false for reasoning models)
+  # ----------------------------------------------------------------------
+  # Agentic Ask (Phase 1.C). The loop activates only when ALL of:
+  #   * provider == "openai_compatible" (ollama-native lacks tools API)
+  #   * agentic_mode == "auto"
+  #   * the active `model` above appears in `agentic_models` below
+  # When any check fails, Ask falls back to legacy single-turn RAG.
+  # ----------------------------------------------------------------------
+  agentic_mode: "auto"                # "auto" | "off"
+  # Per-model context window. Loop budget = context_window * 0.7. Only
+  # tool-calling-capable models belong here — Qwen3, Llama 3.1+, GPT-4o,
+  # Claude 3.5+. gemma (any size) does not support OpenAI-compatible
+  # tools at the moment.
+  agentic_models: []
+    # - name: "qwen3:8b"
+    #   context_window: 32768
+    # - name: "gpt-4o"
+    #   context_window: 128000
+  # Example: ollama via /v1 (preferred for the agentic loop)
+  # provider: "openai_compatible"
+  # base_url: "http://host.docker.internal:11434/v1"
+  # model: "qwen3:8b"
+  # Example: ollama-native (legacy single-turn RAG only)
   # provider: "ollama"
   # base_url: "http://host.docker.internal:11434"
   # model: "gemma4:e4b"
