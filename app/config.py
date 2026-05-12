@@ -617,6 +617,14 @@ class SummariesConfig:
 
 
 @dataclass(frozen=True)
+class AgenticModelEntry:
+    """Per-model capability + budget hint for the agentic Ask loop."""
+
+    name: str
+    context_window: int = 32768
+
+
+@dataclass(frozen=True)
 class LLMConfig:
     provider: str = "disabled"  # "openai_compatible" | "ollama" | "disabled"
     base_url: str = ""
@@ -625,6 +633,23 @@ class LLMConfig:
     max_tokens: int = 2048
     temperature: float = 0.3
     output_language: str = "auto"  # "auto" | "ja" | "en" | etc. — applies to auto_tags and summaries
+    # Agentic Ask (Phase 1.C). ``agentic_mode="off"`` is the kill
+    # switch; ``"auto"`` activates the loop iff the active model name
+    # appears in ``agentic_models``. Unknown models always fall back
+    # to legacy single-turn RAG.
+    #
+    # Default is "off": Phase 1.D testing on Apple Silicon (M-series,
+    # 64GB unified memory) found local LLMs hit a prefill wall on the
+    # 3rd loop iteration (~8K accumulated tool-result tokens):
+    # Qwen3:8b, Qwen3.5:9b, and Qwen3.5:35b-a3b all failed to complete
+    # within a 5-minute deadline. GPT-4o cloud completes the same
+    # query in ~15s. Operators with cloud LLM keys (or a future
+    # locally-runnable tool-capable model that doesn't choke on
+    # prefill) can opt in via ``agentic_mode: "auto"`` plus an entry
+    # in ``agentic_models``.
+    agentic_mode: str = "off"  # "auto" | "off"
+    agentic_min_capability: str = "tool_use_native"
+    agentic_models: tuple[AgenticModelEntry, ...] = field(default_factory=tuple)
     # Retry behavior for transient failures (timeouts, 429, 5xx)
     retry_attempts: int = 3  # total attempts = 1 + retries
     retry_base_delay: float = 1.0  # seconds, doubled on each retry
@@ -938,6 +963,31 @@ def load_settings() -> Settings:
         # Env LLM_API_KEY wins over both the yaml field and any GUI
         # override path (secrets do not live in the data volume).
         llm_merged["api_key"] = llm_api_key_env
+    # ``agentic_models`` arrives from yaml as a list of dicts; coerce
+    # to a tuple of dataclasses before passing through so consumers
+    # always see a typed sequence regardless of yaml authoring quirks.
+    raw_agentic = llm_merged.get("agentic_models")
+    if isinstance(raw_agentic, list):
+        coerced: list[AgenticModelEntry] = []
+        for entry in raw_agentic:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            context_window = entry.get("context_window", 32768)
+            try:
+                context_window_int = int(context_window)
+            except (TypeError, ValueError):
+                context_window_int = 32768
+            coerced.append(
+                AgenticModelEntry(
+                    name=name.strip(),
+                    context_window=max(1024, context_window_int),
+                )
+            )
+        llm_merged["agentic_models"] = tuple(coerced)
+
     llm_config = LLMConfig(
         **{
             k: v

@@ -33,6 +33,14 @@ from typing import Any, Literal
 
 from app.config import settings
 from app.dependencies import get_llm_client
+from app.rag.agentic import (
+    AgenticAnswer,
+    agentic_capability_supported,
+    compute_token_budget,
+    get_agentic_model_entry,
+    run_agentic_loop,
+)
+from app.rag.agentic_types import AgenticTelemetry
 from app.rag.answer_stream import (
     AnswerSanitizer,
     AnswerStreamExtractor,
@@ -82,6 +90,10 @@ class AnswerResponse:
     sources: list[dict[str, Any]]
     retrieved_count: int
     took_ms: int
+    # Populated only when the agentic loop ran (Phase 1.C). Legacy
+    # single-turn answers leave this as ``None`` so the eval harness can
+    # tell "ran legacy" apart from "ran agentic with no tool calls".
+    agentic_telemetry: AgenticTelemetry | None = None
 
 
 _LOCATION_MARKER_RE = re.compile(r"^\d+:\d{2,}$|^page\s+\d+$|^chunk\s+\d+$", re.IGNORECASE)
@@ -924,6 +936,115 @@ async def _run_hierarchical_retrieval(
     return scoped, filtered_shortlist, clue_tuple
 
 
+def _language_instruction() -> str:
+    """Mirror the legacy ``build_system_prompt`` language postfix.
+
+    Centralised here so the agentic system prompt picks up the same
+    operator-configured language directive (``llm.output_language``)
+    without re-importing the legacy prompt builder, which would
+    create a circular import (``service`` → ``prompt`` → ``service``).
+    """
+    lang = (settings.llm.output_language or "auto").strip().lower()
+    if lang == "auto" or not lang:
+        return ""
+    mapping = {
+        "ja": "- Always answer in Japanese.\n",
+        "en": "- Always answer in English.\n",
+    }
+    return mapping.get(lang, f"- Always answer in {lang}.\n")
+
+
+def _agentic_gate_open(*, force_legacy_rag: bool) -> bool:
+    """Single source of truth for "should we activate the agentic loop?".
+
+    The gate fails closed: any unmet precondition (eval bypass flag,
+    agentic_mode=off, model off the allowlist, LLM disabled, client
+    lacks chat_with_tools) returns False and the caller falls through
+    to legacy. Shared between ``answer_question`` and ``stream_answer``
+    so the two surfaces never drift on activation rules.
+    """
+    if force_legacy_rag:
+        return False
+    llm_config = settings.llm
+    if not agentic_capability_supported(llm_config.model, llm_config):
+        return False
+    llm_client = get_llm_client()
+    if llm_client is None or not getattr(llm_client, "enabled", False):
+        return False
+    # The OpenAI-compatible client owns ``chat_with_tools``; the
+    # Ollama-native client does not. Fall back to legacy for the
+    # latter so we never call a method that does not exist.
+    if not hasattr(llm_client, "chat_with_tools"):
+        return False
+    return True
+
+
+async def _run_agentic(
+    *,
+    query: str,
+    lit_token: str | None,
+    drive: str | None,
+    viewer_id: str | None,
+    temperature: float | None,
+) -> AgenticAnswer:
+    """Dispatch to ``run_agentic_loop`` with the active LLM config.
+
+    Pulled out of ``_maybe_run_agentic`` so ``stream_answer`` can call
+    it without re-doing the config plumbing.
+    """
+    llm_config = settings.llm
+    llm_client = get_llm_client()
+    entry = get_agentic_model_entry(llm_config.model, llm_config)
+    context_window = entry.context_window if entry is not None else 32768
+    budget = compute_token_budget(context_window)
+    return await run_agentic_loop(
+        query=query,
+        llm_client=llm_client,
+        drive=drive,
+        viewer_id=viewer_id,
+        lit_token=lit_token,
+        max_total_tokens=budget,
+        language_instruction=_language_instruction(),
+        temperature=temperature,
+    )
+
+
+async def _maybe_run_agentic(
+    *,
+    query: str,
+    lit_token: str | None,
+    drive: str | None,
+    viewer_id: str | None,
+    temperature: float | None,
+    force_legacy_rag: bool,
+    start: float,
+) -> AnswerResponse | None:
+    """Return an ``AnswerResponse`` if the agentic loop ran, else None."""
+    if not _agentic_gate_open(force_legacy_rag=force_legacy_rag):
+        return None
+
+    answer: AgenticAnswer = await _run_agentic(
+        query=query,
+        lit_token=lit_token,
+        drive=drive,
+        viewer_id=viewer_id,
+        temperature=temperature,
+    )
+
+    # ``sources`` is left empty: the agentic loop's tool transcript is
+    # the authoritative record. The eval harness reads
+    # ``agentic_telemetry`` for tool_call_count and route_correctness.
+    return AnswerResponse(
+        query=query,
+        answer=answer.answer,
+        citations=list(answer.citations),
+        sources=[],
+        retrieved_count=len(answer.telemetry.tool_calls),
+        took_ms=int((time.monotonic() - start) * 1000),
+        agentic_telemetry=answer.telemetry,
+    )
+
+
 async def answer_question(
     query: str,
     lit_token: str | None,
@@ -933,17 +1054,41 @@ async def answer_question(
     *,
     viewer_id: str | None = None,
     temperature: float | None = None,
+    force_legacy_rag: bool = False,
 ) -> AnswerResponse:
     """Run the full RAG pipeline and return an ``AnswerResponse``.
 
     The function never raises on LLM failure — it returns an answer
     with ``answer=None`` but populated ``sources`` so the caller can
     at least show the user which files were considered.
+
+    ``force_legacy_rag`` is an internal flag used by the eval harness
+    to force the legacy single-turn pipeline even when the agentic
+    loop (Phase 1.C) would otherwise activate. Production callers
+    never set it; it is not exposed through the HTTP surface.
     """
     rag_config = settings.rag
     effective_top_k = top_k if top_k is not None else rag_config.top_k
 
     start = time.monotonic()
+
+    # Phase 1.C agentic branch — gated by (a) the operator's
+    # ``agentic_mode`` config, (b) the active model being on the
+    # ``agentic_models`` allowlist, and (c) the eval-only
+    # ``force_legacy_rag`` flag. Anything missing falls through to
+    # the legacy single-turn pipeline below; this keeps the rollback
+    # path one config edit away.
+    agentic_response = await _maybe_run_agentic(
+        query=query,
+        lit_token=lit_token,
+        drive=drive,
+        viewer_id=viewer_id,
+        temperature=temperature,
+        force_legacy_rag=force_legacy_rag,
+        start=start,
+    )
+    if agentic_response is not None:
+        return agentic_response
 
     # Stages A + B: optional personal-history pre-scope. The legacy
     # callers that did not pass ``viewer_id`` get a no-op resolution
@@ -1209,6 +1354,78 @@ def _decomposed_to_event_payload(decomposed: DecomposedQuery) -> dict[str, Any]:
     }
 
 
+async def _stream_agentic(
+    *,
+    query: str,
+    lit_token: str | None,
+    drive: str | None,
+    viewer_id: str | None,
+    start: float,
+) -> AsyncIterator[AnswerEvent]:
+    """Run the agentic loop and adapt its single-shot result to the SSE
+    event vocabulary the router (and existing UI) already speaks.
+
+    The agentic loop has no native streaming surface — it runs to
+    completion then returns one ``AgenticAnswer``. We map that to:
+
+    * ``keywords`` — the raw query (the loop transforms it inside its
+      own ``search_files`` call, so there's no separate keyword
+      string to surface; the UI just needs an early signal that
+      "I'm working on it"). Backwards-compat for clients that gate
+      on the first event.
+    * ``sources`` — empty list. The agentic loop's "sources" concept
+      is its tool transcript, not the legacy retriever's candidates;
+      exposing it raw would mean a new event shape the UI does not
+      understand yet. Future work, not Phase 1.
+    * ``answer_chunk`` — single delta carrying the full answer text.
+    * ``citation`` events — progressive emission per citation (matches
+      the legacy progressive-citation contract).
+    * ``citations`` — terminal full list.
+    * ``done`` — with ``took_ms`` + a minimal agentic summary so
+      operators can spot agentic vs legacy in client logs.
+    """
+    yield AnswerEvent(kind="keywords", data={"keywords": query})
+
+    answer = await _run_agentic(
+        query=query,
+        lit_token=lit_token,
+        drive=drive,
+        viewer_id=viewer_id,
+        temperature=None,
+    )
+
+    # Empty sources event keeps the existing UI's "sources" panel
+    # initialised — better than no event at all so renderers do not
+    # render a stale list from a previous answer.
+    yield AnswerEvent(kind="sources", data={"sources": []})
+
+    if answer.answer:
+        yield AnswerEvent(
+            kind="answer_chunk", data={"delta": answer.answer}
+        )
+
+    for index, citation in enumerate(answer.citations, start=1):
+        yield AnswerEvent(
+            kind="citation",
+            data={"citation": citation, "index": index},
+        )
+
+    yield AnswerEvent(
+        kind="citations", data={"citations": list(answer.citations)}
+    )
+    yield _empty_done_event(
+        extra={
+            "retrieved_count": len(answer.telemetry.tool_calls),
+            "took_ms": int((time.monotonic() - start) * 1000),
+            "agentic": {
+                "tool_calls": list(answer.telemetry.tool_calls),
+                "forced_answer": answer.telemetry.forced_answer,
+                "citation_retries": answer.telemetry.citation_retries,
+            },
+        }
+    )
+
+
 async def stream_answer(
     query: str,
     lit_token: str | None,
@@ -1254,6 +1471,22 @@ async def stream_answer(
     effective_top_k = top_k if top_k is not None else rag_config.top_k
 
     start = time.monotonic()
+
+    # Phase 1.C agentic branch — same gate as ``_maybe_run_agentic``
+    # in ``answer_question``. When the loop activates, it owns the
+    # full event stream: legacy stages (personal-history, keyword
+    # transform, hierarchical retrieval, …) are bypassed because the
+    # LLM picks its own ``search_files`` query through tools.
+    if _agentic_gate_open(force_legacy_rag=False):
+        async for event in _stream_agentic(
+            query=query,
+            lit_token=lit_token,
+            drive=drive,
+            viewer_id=viewer_id,
+            start=start,
+        ):
+            yield event
+        return
 
     # Stages A + B: personal-history pre-scope. Resolved before the
     # keyword transform so the SSE event ordering is

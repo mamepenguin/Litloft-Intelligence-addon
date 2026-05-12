@@ -22,6 +22,7 @@ import logging
 import re
 import time
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 import httpx
 from openai import (
@@ -37,6 +38,33 @@ from app.config import LLMConfig
 from app.prompt_loader import render
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ChatToolCall:
+    """One tool call surfaced by the LLM during an agentic turn."""
+
+    id: str
+    name: str
+    arguments_raw: str  # Raw JSON string; the loop layer json.loads
+
+
+@dataclass(frozen=True)
+class ChatTurnResult:
+    """Outcome of a single ``chat_with_tools`` round-trip.
+
+    ``finish_reason`` mirrors OpenAI's vocabulary so the loop can branch
+    deterministically:
+      * ``"stop"`` → ``content`` carries the final answer.
+      * ``"tool_calls"`` → ``tool_calls`` is non-empty; ``content`` may
+        accompany them but is typically empty.
+      * Any other value (``"length"``, ``"content_filter"`` …) is a
+        non-fatal end-of-turn the loop should treat like ``"stop"``.
+    """
+
+    content: str | None
+    tool_calls: tuple[ChatToolCall, ...]
+    finish_reason: str
 
 # Exceptions that indicate transient failures and should trigger a retry.
 _RETRY_EXCEPTIONS: tuple[type[Exception], ...] = (
@@ -623,6 +651,105 @@ class LLMClient:
                 return None
 
         return _parse_json_response(raw)
+
+    async def chat_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        *,
+        temperature: float | None = None,
+        max_tokens_override: int | None = None,
+        tool_choice: str | dict = "auto",
+        response_format: dict | None = None,
+    ) -> ChatTurnResult | None:
+        """One turn of the agentic loop (Phase 1.C).
+
+        Sends the full message list to the OpenAI-compatible Chat
+        Completions endpoint with the ``tools`` parameter. ``messages``
+        is the loop's running transcript — system, user, assistant
+        (tool_calls), tool (results), …
+
+        Returns the parsed ``ChatTurnResult`` or ``None`` on permanent
+        / retried-out failure. The retry policy mirrors ``generate()``;
+        callers should treat ``None`` as fail-loud (stop the loop).
+        """
+        if not self._enabled:
+            return None
+
+        max_attempts = max(1, self._config.retry_attempts + 1)
+        effective_max_tokens = (
+            max_tokens_override
+            if max_tokens_override is not None
+            else self._config.max_tokens
+        )
+        effective_temperature = (
+            temperature
+            if temperature is not None
+            else self._config.temperature
+        )
+
+        extra_kwargs: dict = {}
+        if _uses_max_completion_tokens(self._config.model):
+            extra_kwargs["max_completion_tokens"] = effective_max_tokens
+        else:
+            extra_kwargs["max_tokens"] = effective_max_tokens
+        if tools is not None:
+            extra_kwargs["tools"] = tools
+            extra_kwargs["tool_choice"] = tool_choice
+        if response_format is not None:
+            extra_kwargs["response_format"] = response_format
+
+        for attempt in range(max_attempts):
+            await self._wait_for_rate_limit()
+            try:
+                response = await self._client.chat.completions.create(
+                    model=self._config.model,
+                    messages=messages,
+                    temperature=effective_temperature,
+                    **extra_kwargs,
+                )
+                choice = response.choices[0]
+                msg = choice.message
+                tool_calls_raw = getattr(msg, "tool_calls", None) or []
+                parsed_calls: list[ChatToolCall] = []
+                for tc in tool_calls_raw:
+                    fn = getattr(tc, "function", None)
+                    if fn is None:
+                        continue
+                    parsed_calls.append(
+                        ChatToolCall(
+                            id=getattr(tc, "id", "") or "",
+                            name=getattr(fn, "name", "") or "",
+                            arguments_raw=getattr(fn, "arguments", "") or "",
+                        )
+                    )
+                return ChatTurnResult(
+                    content=getattr(msg, "content", None),
+                    tool_calls=tuple(parsed_calls),
+                    finish_reason=choice.finish_reason or "stop",
+                )
+            except _RETRY_EXCEPTIONS as e:
+                if attempt + 1 >= max_attempts:
+                    logger.error(
+                        "chat_with_tools failed after %d attempts: %s",
+                        max_attempts, e,
+                    )
+                    return None
+                await asyncio.sleep(self._backoff_delay(attempt))
+            except APIStatusError as e:
+                if e.status_code in _PERMANENT_STATUS_CODES:
+                    logger.warning(
+                        "chat_with_tools permanent error %d: %s",
+                        e.status_code, e,
+                    )
+                    return None
+                if attempt + 1 >= max_attempts:
+                    return None
+                await asyncio.sleep(self._backoff_delay(attempt))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("chat_with_tools failed: %s", e)
+                return None
+        return None
 
 
 # ---------------------------------------------------------------------------

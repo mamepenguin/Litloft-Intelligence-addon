@@ -15,6 +15,12 @@ ground_truth_files: []
 
 must_mention: []
 
+# Agentic-loop route expectation (Phase 1.A). For an out-of-corpus
+# query the loop should call search_files once, see no relevant hits,
+# and stop (returning "情報なし"). No follow-up fetch is expected.
+expected_tool_sequence:
+  - search_files
+
 notes: |
   Phase G: "no answer" case. Exercises the empty-gt code paths in
   resolver / stages. citation_in_ground_truth denominator uses

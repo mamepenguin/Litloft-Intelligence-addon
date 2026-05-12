@@ -22,6 +22,14 @@ ground_truth_files:
 must_mention:
   - "カレー"
 
+# Agentic-loop route expectation (Phase 1.A). Prefix match: the loop
+# is expected to start with search_files and then drill into chunks
+# of the recipe audio. Extra trailing calls (e.g. cross-checking the
+# markdown re-telling) are tolerated by the prefix metric.
+expected_tool_sequence:
+  - search_files
+  - get_file_chunks
+
 notes: |
   Cross-modal case: audio transcript + markdown retelling. Also exercises
   segment-granular recall on an mp3 file (not just video). "作り方" is a

@@ -23,6 +23,12 @@ ground_truth_files:
 must_mention:
   - "ミケ"
 
+# Agentic-loop route expectation (Phase 1.A). Personality-of-X query
+# → top-1 markdown via search_files, then drill into text chunks.
+expected_tool_sequence:
+  - search_files
+  - get_file_chunks
+
 notes: |
   "性格" is a generic nominal that should survive as a retrieval
   keyword inside the .md body but not be treated as a search anchor.

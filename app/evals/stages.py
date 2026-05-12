@@ -14,6 +14,9 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from app.evals.agentic_metrics import (
+    route_correctness as _route_correctness,
+)
 from app.evals.loader import Case, GroundTruthFile, SegmentHint
 from app.evals.resolver import ResolvedGroundTruth
 from app.evals.text_match import (
@@ -21,6 +24,7 @@ from app.evals.text_match import (
     global_exclude_terms,
     violation_count as _violation_count,
 )
+from app.rag.agentic_types import AgenticTelemetry
 from app.rag.query_transform import (
     RequiredTerm,
     iter_required_fallback_subsets,
@@ -250,6 +254,14 @@ class Stage3SingleRun:
     citation_segment_match: float | None
     citation_in_retrieved: float
     took_ms: int
+    # Agentic-loop telemetry (Phase 1.A). ``None`` for legacy runs.
+    agentic_telemetry: AgenticTelemetry | None = None
+    # Cached per-run agentic metrics so the report layer does not
+    # recompute them. ``None`` means "not applicable for this run".
+    tool_call_count: int | None = None
+    route_correctness: float | None = None
+    max_context_tokens_used: int | None = None
+    forced_answer: bool | None = None
 
 
 async def run_stage3_once(
@@ -257,6 +269,8 @@ async def run_stage3_once(
     resolved: list[ResolvedGroundTruth],
     drive: str,
     top_k: int,
+    *,
+    force_legacy_rag: bool = False,
 ) -> Stage3SingleRun:
     start = time.monotonic()
     response = await answer_question(
@@ -265,6 +279,7 @@ async def run_stage3_once(
         top_k=top_k,
         drive=drive,
         temperature=EVAL_TEMPERATURE,
+        force_legacy_rag=force_legacy_rag,
     )
 
     answer = response.answer or ""
@@ -319,6 +334,7 @@ async def run_stage3_once(
                 seg_hits += 1
     seg_match = (seg_hits / seg_total) if seg_total > 0 else None
 
+    telemetry = response.agentic_telemetry
     return Stage3SingleRun(
         answer=response.answer,
         citation_file_ids=tuple(fid for fid in citation_ids if fid is not None),
@@ -328,6 +344,15 @@ async def run_stage3_once(
         citation_segment_match=seg_match,
         citation_in_retrieved=in_retrieved,
         took_ms=int((time.monotonic() - start) * 1000),
+        agentic_telemetry=telemetry,
+        tool_call_count=(
+            len(telemetry.tool_calls) if telemetry is not None else None
+        ),
+        route_correctness=_route_correctness(case.expected_tool_sequence, telemetry),
+        max_context_tokens_used=(
+            telemetry.max_context_tokens_used if telemetry is not None else None
+        ),
+        forced_answer=(telemetry.forced_answer if telemetry is not None else None),
     )
 
 
@@ -405,6 +430,8 @@ async def run_case(
     runs_stage3: int,
     epsilon: float,
     top_k: int,
+    *,
+    force_legacy_rag: bool = False,
 ) -> CaseReport:
     logger.info("Running case %s", case.id)
     stage1 = await run_stage1(case)
@@ -420,7 +447,9 @@ async def run_case(
     runs: list[Stage3SingleRun] = []
     for i in range(max(1, runs_stage3)):
         logger.info("  stage3 run %d/%d", i + 1, runs_stage3)
-        run = await run_stage3_once(case, resolved, drive, top_k=top_k)
+        run = await run_stage3_once(
+            case, resolved, drive, top_k=top_k, force_legacy_rag=force_legacy_rag
+        )
         runs.append(run)
     stage3 = aggregate_stage3(runs, epsilon)
 

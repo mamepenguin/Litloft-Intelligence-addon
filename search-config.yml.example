@@ -104,7 +104,38 @@ llm:
   vision_model: ""                    # e.g. "llava:13b", "gpt-4o-mini"
   vision_max_tokens: 1024             # cap on description length
   vision_temperature: 0.1             # low temp — descriptions are near-deterministic
-  # Example: ollama (preferred — supports think: false for reasoning models)
+  # ----------------------------------------------------------------------
+  # Agentic Ask (Phase 1.C). DEFAULT: OFF.
+  #
+  # Phase 1.D testing on Apple Silicon (64GB) found that local LLMs
+  # (Qwen3:8b, Qwen3.5:9b, Qwen3.5:35b-a3b) hit a prefill wall on the
+  # 3rd loop iteration and failed to complete within 5 minutes.
+  # GPT-4o cloud completes the same query in ~15s. The loop is left
+  # in tree behind a kill switch so cloud-LLM users can opt in and
+  # so future locally-runnable models can be evaluated against the
+  # eval harness (`evals/agentic_phase1/`).
+  #
+  # To enable:
+  #   1. set agentic_mode: "auto"
+  #   2. set provider: "openai_compatible" (ollama-native is unsupported)
+  #   3. set base_url + model to a tool-calling-capable LLM
+  #      (Qwen3, Llama 3.1+, Mistral Nemo+, GPT-4o, Claude 3.5+ —
+  #      gemma at any size does NOT support OpenAI-compatible tools)
+  #   4. add the active model to agentic_models with its context_window
+  # When any check fails, Ask falls back to legacy single-turn RAG.
+  # ----------------------------------------------------------------------
+  agentic_mode: "off"                 # "auto" | "off"
+  # Per-model context window. Loop budget = context_window * 0.7.
+  agentic_models: []
+    # - name: "qwen3:8b"
+    #   context_window: 32768
+    # - name: "gpt-4o"
+    #   context_window: 128000
+  # Example: ollama via /v1 (preferred for the agentic loop)
+  # provider: "openai_compatible"
+  # base_url: "http://host.docker.internal:11434/v1"
+  # model: "qwen3:8b"
+  # Example: ollama-native (legacy single-turn RAG only)
   # provider: "ollama"
   # base_url: "http://host.docker.internal:11434"
   # model: "gemma4:e4b"
