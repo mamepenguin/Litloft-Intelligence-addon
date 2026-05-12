@@ -660,6 +660,7 @@ class LLMClient:
         temperature: float | None = None,
         max_tokens_override: int | None = None,
         tool_choice: str | dict = "auto",
+        response_format: dict | None = None,
     ) -> ChatTurnResult | None:
         """One turn of the agentic loop (Phase 1.C).
 
@@ -695,6 +696,8 @@ class LLMClient:
         if tools is not None:
             extra_kwargs["tools"] = tools
             extra_kwargs["tool_choice"] = tool_choice
+        if response_format is not None:
+            extra_kwargs["response_format"] = response_format
 
         for attempt in range(max_attempts):
             await self._wait_for_rate_limit()

@@ -198,6 +198,13 @@ def _parse_final_answer(
 
     Returns (parsed, raw_citations) so the caller can distinguish
     "no citations" from "citations were dropped by strict check".
+
+    Fallback: if ``content`` is non-empty prose that does not parse
+    as JSON, treat it as ``{"answer": content, "citations": []}``.
+    That way a model that ignored the JSON-only instruction still
+    delivers something useful instead of a fail-loud envelope. The
+    citation-strict guarantee is preserved because the synthetic
+    payload carries an empty citations list.
     """
     if not content:
         return None, []
@@ -211,7 +218,12 @@ def _parse_final_answer(
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
-        return None, []
+        logger.info(
+            "agentic loop: final content was not JSON; "
+            "falling back to prose-with-no-citations"
+        )
+        synthetic = {"answer": content, "citations": []}
+        return parse_answer(synthetic, allowed_file_ids), []
     raw_citations: list[dict[str, Any]] = []
     if isinstance(payload, dict):
         citations_raw = payload.get("citations")
@@ -292,11 +304,17 @@ async def run_agentic_loop(
             context.cumulative_tokens += estimate_tokens(force_msg)
             forced_answer = True
 
+        # ``response_format=json_object`` enforces JSON output on the
+        # final-answer turn. OpenAI (and ollama 0.4+'s /v1 layer)
+        # honour it alongside ``tools``; backends that ignore the
+        # field fall back to the prompt-level "Return JSON only"
+        # instruction, which the system prompt already includes.
         result: ChatTurnResult | None = await llm_client.chat_with_tools(
             messages,
             tools=list(TOOL_SCHEMAS) if not forced_answer else None,
             temperature=temperature,
             tool_choice="auto" if not forced_answer else "none",
+            response_format={"type": "json_object"},
         )
         if result is None:
             telemetry = AgenticTelemetry(
@@ -387,6 +405,7 @@ async def run_agentic_loop(
                     tools=None,
                     temperature=temperature,
                     tool_choice="none",
+                    response_format={"type": "json_object"},
                 )
                 if retry is None:
                     logger.warning(

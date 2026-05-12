@@ -60,6 +60,7 @@ class _ScriptedLLM:
         temperature: float | None = None,
         max_tokens_override: int | None = None,
         tool_choice: str | dict = "auto",
+        response_format: dict | None = None,
     ) -> ChatTurnResult | None:
         # Capture for assertions about message growth & tool_choice.
         self.calls.append(list(messages))
