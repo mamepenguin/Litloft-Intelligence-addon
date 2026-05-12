@@ -25,6 +25,7 @@ RUN pip install --no-cache-dir \
     sqlalchemy pyyaml numpy openai httpx \
     fastapi pydantic jinja2 \
     google-genai regex \
+    beautifulsoup4 html2text lxml \
     pytest pytest-asyncio pytest-cov
 
 # Phase 2C: dev-only deps for the transcription eval harness. Kept
