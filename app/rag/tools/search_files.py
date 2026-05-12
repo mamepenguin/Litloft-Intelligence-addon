@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.rag.retriever import RetrievedFile, retrieve_candidates
+from app.rag.retriever import RetrievedFile, retrieve_with_keywords
 from app.rag.tools.budget import estimate_payload_tokens
 from app.rag.tools.context import ToolContext, ToolResultEnvelope
 
@@ -71,11 +71,20 @@ async def search_files(
     drive = context.drive
     token = lit_token if lit_token is not None else context.lit_token
 
-    candidates: list[RetrievedFile] = await retrieve_candidates(
-        query=query,
+    # Skip the LLM-driven query transform that ``retrieve_candidates``
+    # would run upstream. The agentic loop's LLM has already chosen
+    # this query; running another structured-transform call here just
+    # doubles the LLM hops (and the json_object retry path is unreliable
+    # on reasoning models like Qwen3 because thinking-mode output goes
+    # to ``reasoning`` and leaves ``content`` empty). The raw query is
+    # forwarded both as the keyword string and as the semantic query
+    # so the hybrid retriever still ranks by embeddings.
+    candidates: list[RetrievedFile] = await retrieve_with_keywords(
+        keywords=query,
         top_k=top_k,
         lit_token=token,
         drive=drive,
+        original_query=query,
     )
 
     rows: list[dict[str, Any]] = []

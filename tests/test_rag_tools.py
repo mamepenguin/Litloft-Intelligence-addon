@@ -477,7 +477,7 @@ async def test_search_files_aggregates_to_file_rows() -> None:
     ]
 
     with patch(
-        "app.rag.tools.search_files.retrieve_candidates",
+        "app.rag.tools.search_files.retrieve_with_keywords",
         AsyncMock(return_value=fake_results),
     ):
         ctx = ToolContext(drive="d")
