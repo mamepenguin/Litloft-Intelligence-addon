@@ -120,12 +120,26 @@ def test_agentic_capability_supported_unknown_model() -> None:
 def test_agentic_capability_supported_allowlisted() -> None:
     cfg = LLMConfig(
         model="qwen2.5:14b",
+        agentic_mode="auto",
         agentic_models=(
             AgenticModelEntry(name="qwen2.5:14b", context_window=32768),
             AgenticModelEntry(name="gpt-4o", context_window=128000),
         ),
     )
     assert agentic_capability_supported("qwen2.5:14b", cfg) is True
+
+
+def test_agentic_capability_default_off() -> None:
+    """Phase 1.D default is OFF: even an allow-listed model needs an
+    explicit ``agentic_mode="auto"`` to activate."""
+    cfg = LLMConfig(
+        model="qwen2.5:14b",
+        agentic_models=(
+            AgenticModelEntry(name="qwen2.5:14b", context_window=32768),
+        ),
+    )
+    assert cfg.agentic_mode == "off"
+    assert agentic_capability_supported("qwen2.5:14b", cfg) is False
 
 
 def test_get_agentic_model_entry_returns_matching_entry() -> None:

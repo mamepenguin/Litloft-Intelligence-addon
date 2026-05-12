@@ -637,7 +637,17 @@ class LLMConfig:
     # switch; ``"auto"`` activates the loop iff the active model name
     # appears in ``agentic_models``. Unknown models always fall back
     # to legacy single-turn RAG.
-    agentic_mode: str = "auto"  # "auto" | "off"
+    #
+    # Default is "off": Phase 1.D testing on Apple Silicon (M-series,
+    # 64GB unified memory) found local LLMs hit a prefill wall on the
+    # 3rd loop iteration (~8K accumulated tool-result tokens):
+    # Qwen3:8b, Qwen3.5:9b, and Qwen3.5:35b-a3b all failed to complete
+    # within a 5-minute deadline. GPT-4o cloud completes the same
+    # query in ~15s. Operators with cloud LLM keys (or a future
+    # locally-runnable tool-capable model that doesn't choke on
+    # prefill) can opt in via ``agentic_mode: "auto"`` plus an entry
+    # in ``agentic_models``.
+    agentic_mode: str = "off"  # "auto" | "off"
     agentic_min_capability: str = "tool_use_native"
     agentic_models: tuple[AgenticModelEntry, ...] = field(default_factory=tuple)
     # Retry behavior for transient failures (timeouts, 429, 5xx)
