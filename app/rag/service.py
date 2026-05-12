@@ -33,6 +33,7 @@ from typing import Any, Literal
 
 from app.config import settings
 from app.dependencies import get_llm_client
+from app.rag.agentic_types import AgenticTelemetry
 from app.rag.answer_stream import (
     AnswerSanitizer,
     AnswerStreamExtractor,
@@ -82,6 +83,10 @@ class AnswerResponse:
     sources: list[dict[str, Any]]
     retrieved_count: int
     took_ms: int
+    # Populated only when the agentic loop ran (Phase 1.C). Legacy
+    # single-turn answers leave this as ``None`` so the eval harness can
+    # tell "ran legacy" apart from "ran agentic with no tool calls".
+    agentic_telemetry: AgenticTelemetry | None = None
 
 
 _LOCATION_MARKER_RE = re.compile(r"^\d+:\d{2,}$|^page\s+\d+$|^chunk\s+\d+$", re.IGNORECASE)
@@ -933,13 +938,23 @@ async def answer_question(
     *,
     viewer_id: str | None = None,
     temperature: float | None = None,
+    force_legacy_rag: bool = False,
 ) -> AnswerResponse:
     """Run the full RAG pipeline and return an ``AnswerResponse``.
 
     The function never raises on LLM failure — it returns an answer
     with ``answer=None`` but populated ``sources`` so the caller can
     at least show the user which files were considered.
+
+    ``force_legacy_rag`` is an internal flag used by the eval harness
+    to force the legacy single-turn pipeline even when the agentic
+    loop (Phase 1.C) would otherwise activate. Production callers
+    never set it; it is not exposed through the HTTP surface.
     """
+    # Phase 1.A wires the flag through; Phase 1.C will branch on it.
+    # For now legacy is the only path, so the flag is accepted but
+    # has no behavioural effect.
+    _ = force_legacy_rag
     rag_config = settings.rag
     effective_top_k = top_k if top_k is not None else rag_config.top_k
 

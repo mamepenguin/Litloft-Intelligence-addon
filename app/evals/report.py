@@ -17,7 +17,8 @@ from typing import Any
 
 import yaml
 
-from app.evals.stages import CaseReport
+from app.evals.agentic_metrics import forced_answer_rate as _forced_answer_rate
+from app.evals.stages import CaseReport, Stage3SingleRun
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,60 @@ class ReportMeta:
 
 def _fmt_pct(x: float) -> str:
     return f"{x:.2f}"
+
+
+def _fmt_optional_pct(x: float | None) -> str:
+    return "N/A" if x is None else f"{x:.2f}"
+
+
+def _fmt_optional_int(x: int | None) -> str:
+    return "N/A" if x is None else str(x)
+
+
+def _all_runs(case_reports: list[CaseReport]) -> list[Stage3SingleRun]:
+    return [r for c in case_reports for r in c.stage3.runs]
+
+
+def _median_or_none(values: list[float]) -> float | None:
+    return statistics.median(values) if values else None
+
+
+def _percentile_or_none(values: list[float], pct: float) -> float | None:
+    """Naive percentile (linear interpolation). Returns None when empty."""
+    if not values:
+        return None
+    sorted_vals = sorted(values)
+    if len(sorted_vals) == 1:
+        return sorted_vals[0]
+    k = (len(sorted_vals) - 1) * pct
+    lo = int(k)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    frac = k - lo
+    return sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * frac
+
+
+def _tool_call_counts(case_reports: list[CaseReport]) -> list[float]:
+    return [
+        float(r.tool_call_count)
+        for r in _all_runs(case_reports)
+        if r.tool_call_count is not None
+    ]
+
+
+def _route_correctness_values(case_reports: list[CaseReport]) -> list[float]:
+    return [
+        r.route_correctness
+        for r in _all_runs(case_reports)
+        if r.route_correctness is not None
+    ]
+
+
+def _max_context_tokens(case_reports: list[CaseReport]) -> list[float]:
+    return [
+        float(r.max_context_tokens_used)
+        for r in _all_runs(case_reports)
+        if r.max_context_tokens_used is not None
+    ]
 
 
 def _agg_value(case_reports: list[CaseReport], pick) -> float:
@@ -209,21 +264,69 @@ def render(case_reports: list[CaseReport], meta: ReportMeta) -> str:
         "| Stage 3: citation_in_retrieved (median) | "
         f"{_fmt_pct(_stage3_median_of_medians(case_reports, 'citation_in_retrieved'))} |"
     )
+
+    # Agentic-loop axes (Phase 1.A). Each row reports N/A unless at
+    # least one run produced telemetry — legacy A/B reports show N/A,
+    # agentic A/B reports show real numbers.
+    tcc = _tool_call_counts(case_reports)
+    lines.append(
+        "| Agentic: tool_call_count (median) | "
+        f"{_fmt_optional_pct(_median_or_none(tcc))} |"
+    )
+    lines.append(
+        "| Agentic: tool_call_count (95p) | "
+        f"{_fmt_optional_pct(_percentile_or_none(tcc, 0.95))} |"
+    )
+    rc = _route_correctness_values(case_reports)
+    lines.append(
+        "| Agentic: route_correctness (median) | "
+        f"{_fmt_optional_pct(_median_or_none(rc))} |"
+    )
+    mct = _max_context_tokens(case_reports)
+    lines.append(
+        "| Agentic: max_context_tokens_used (median) | "
+        f"{_fmt_optional_pct(_median_or_none(mct))} |"
+    )
+    lines.append(
+        "| Agentic: max_context_tokens_used (95p) | "
+        f"{_fmt_optional_pct(_percentile_or_none(mct, 0.95))} |"
+    )
+    telemetries = [r.agentic_telemetry for r in _all_runs(case_reports)]
+    lines.append(
+        "| Agentic: forced_answer_rate | "
+        f"{_fmt_optional_pct(_forced_answer_rate(telemetries))} |"
+    )
     lines.append("")
 
     # Per-case -----------------------------------------------------------
     lines.append("## Per-case summary\n")
-    lines.append("| id | recall@5 | seg-recall@5 | MRR | must_mention | citations | flags |")
-    lines.append("|---|---|---|---|---|---|---|")
+    lines.append(
+        "| id | recall@5 | seg-recall@5 | MRR | must_mention | citations "
+        "| tools | route | flags |"
+    )
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     for c in case_reports:
+        per_case_tcc = [
+            float(r.tool_call_count)
+            for r in c.stage3.runs
+            if r.tool_call_count is not None
+        ]
+        per_case_route = [
+            r.route_correctness
+            for r in c.stage3.runs
+            if r.route_correctness is not None
+        ]
         lines.append(
-            "| {id} | {r5} | {sr5} | {mrr} | {mm} | {cit} | {flags} |".format(
+            "| {id} | {r5} | {sr5} | {mrr} | {mm} | {cit} | {tools} | "
+            "{route} | {flags} |".format(
                 id=c.case.id,
                 r5=_fmt_pct(c.stage2.file_recall_at_5),
                 sr5=_fmt_pct(c.stage2.segment_recall_at_5),
                 mrr=_fmt_pct(c.stage2.mrr),
                 mm=_fmt_pct(c.stage3.must_mention_coverage.median),
                 cit=_fmt_pct(c.stage3.citation_in_ground_truth.median),
+                tools=_fmt_optional_pct(_median_or_none(per_case_tcc)),
+                route=_fmt_optional_pct(_median_or_none(per_case_route)),
                 flags=_flags(c) or "-",
             )
         )
@@ -318,6 +421,22 @@ def build_sidecar(case_reports: list[CaseReport], meta: ReportMeta) -> dict:
                         "citation_segment_match": r.citation_segment_match,
                         "citation_in_retrieved": r.citation_in_retrieved,
                         "took_ms": r.took_ms,
+                        "agentic": (
+                            None
+                            if r.agentic_telemetry is None
+                            else {
+                                "tool_calls": list(r.agentic_telemetry.tool_calls),
+                                "tool_call_count": r.tool_call_count,
+                                "route_correctness": r.route_correctness,
+                                "max_context_tokens_used": (
+                                    r.max_context_tokens_used
+                                ),
+                                "forced_answer": r.forced_answer,
+                                "citation_retries": (
+                                    r.agentic_telemetry.citation_retries
+                                ),
+                            }
+                        ),
                     }
                     for r in s3.runs
                 ],

@@ -25,6 +25,13 @@ ground_truth_files:
 must_mention:
   - "Vision Transformer"
 
+# Agentic-loop route expectation (Phase 1.A). The .md is short enough
+# that a single search hit + chunk fetch should suffice. No relations
+# call is expected for this isolated tech note.
+expected_tool_sequence:
+  - search_files
+  - get_file_chunks
+
 notes: |
   Single-file, single-modality ground truth. No segment_hint because
   tech_paper.md is short enough that file-level recall is the right

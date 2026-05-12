@@ -18,6 +18,15 @@ ground_truth_files:
 must_mention:
   - "ヨーグルト"
 
+# Agentic-loop route expectation (Phase 1.A). A long-video case must
+# drill into transcript chunks (the search hit alone is insufficient
+# because the right ~30s window sits inside one of 37 chunks). Prefix:
+# search → fetch chunks. The loop may also call get_file_chunks twice
+# (summary then full); the prefix metric accepts that.
+expected_tool_sequence:
+  - search_files
+  - get_file_chunks
+
 notes: |
   Phase J (long-video extension): the taste description chunk sits at
   ~[92, 112]. A 30s hint window targets it cleanly. The same video

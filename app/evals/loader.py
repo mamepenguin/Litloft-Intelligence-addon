@@ -53,6 +53,13 @@ class Case:
     ground_truth_files: tuple[GroundTruthFile, ...]
     must_mention: tuple[str, ...] = ()
     notes: str = ""
+    # Optional ordered list of tool names the agentic loop is expected
+    # to call (Phase 1.A). Empty means "no expectation" — the
+    # route_correctness metric returns ``None`` for such cases and they
+    # are excluded from the aggregate, not scored as zero. Prefix
+    # match: the actual call sequence must start with these tools (in
+    # order); extra trailing calls are tolerated.
+    expected_tool_sequence: tuple[str, ...] = ()
     source_path: Path | None = field(default=None, compare=False)
 
 
@@ -144,6 +151,9 @@ def load_case(path: Path) -> Case:
 
     gt = _parse_ground_truth(data.get("ground_truth_files"))
     must_mention = _coerce_str_list(data.get("must_mention"), "must_mention")
+    expected_tool_sequence = _coerce_str_list(
+        data.get("expected_tool_sequence"), "expected_tool_sequence"
+    )
     notes = data.get("notes") or ""
     if not isinstance(notes, str):
         notes = str(notes)
@@ -154,6 +164,7 @@ def load_case(path: Path) -> Case:
         expected_keywords=expected_kw,
         ground_truth_files=gt,
         must_mention=must_mention,
+        expected_tool_sequence=expected_tool_sequence,
         notes=notes,
         source_path=path,
     )

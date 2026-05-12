@@ -50,6 +50,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to baseline report (.md or .json sidecar). "
              "When set, the current report gains a 'Pair comparison' section.",
     )
+    parser.add_argument(
+        "--force-legacy-rag",
+        action="store_true",
+        help="Force the legacy single-turn RAG path even when the agentic "
+             "loop would otherwise activate. Used for agentic-vs-legacy A/B.",
+    )
     return parser
 
 
@@ -136,6 +142,7 @@ async def _run(args: argparse.Namespace) -> int:
             runs_stage3=args.runs,
             epsilon=args.epsilon,
             top_k=top_k,
+            force_legacy_rag=args.force_legacy_rag,
         )
         case_reports.append(report)
 
