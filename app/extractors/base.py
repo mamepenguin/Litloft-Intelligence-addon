@@ -106,6 +106,13 @@ class ContentExtractor:
 
         chunks: list[str] = []
         start = 0
+        # Track the previous chunk boundary so ``rfind`` cannot
+        # rediscover it. Without this, when ``split_pos - overlap``
+        # falls before ``start + 1``, the loop crept forward 1 char at
+        # a time and produced a sequence of strict-suffix tail chunks
+        # (e.g. ``"short", "hort", "ort", "rt", "t"``) until ``start``
+        # finally crossed the separator.
+        last_split = -1
 
         while start < len(text):
             end = start + max_size
@@ -114,25 +121,29 @@ class ContentExtractor:
                 chunks = [*chunks, text[start:].strip()]
                 break
 
-            # Try to find a paragraph break
-            split_pos = text.rfind("\n\n", start, end)
-            if split_pos == -1 or split_pos <= start:
-                # Try sentence boundary
-                split_pos = text.rfind(". ", start, end)
-            if split_pos == -1 or split_pos <= start:
-                # Try any newline
-                split_pos = text.rfind("\n", start, end)
-            if split_pos == -1 or split_pos <= start:
-                # Fall back to space
-                split_pos = text.rfind(" ", start, end)
-            if split_pos == -1 or split_pos <= start:
-                # Hard split
-                split_pos = end
+            # Constrain search to positions strictly after the
+            # previous boundary so we never re-pick the same one.
+            search_start = max(start, last_split + 1)
+
+            split_pos = text.rfind("\n\n", search_start, end)
+            if split_pos == -1:
+                split_pos = text.rfind(". ", search_start, end)
+            if split_pos == -1:
+                split_pos = text.rfind("\n", search_start, end)
+            if split_pos == -1:
+                split_pos = text.rfind(" ", search_start, end)
+            if split_pos == -1:
+                split_pos = end  # Hard split
 
             chunk = text[start:split_pos].strip()
             if chunk:
                 chunks = [*chunks, chunk]
 
+            # Advance: prefer ``overlap`` chars of replay for boundary
+            # recall, but never regress below the previous chunk start.
+            # ``search_start`` (above) handles the orthogonal concern of
+            # not rediscovering ``last_split`` in the next iteration.
+            last_split = split_pos
             start = max(split_pos - overlap, start + 1)
 
         return chunks

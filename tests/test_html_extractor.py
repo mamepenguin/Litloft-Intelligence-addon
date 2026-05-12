@@ -169,6 +169,42 @@ def test_malformed_html_still_extracts(tmp_path: Path) -> None:
     assert "unclosed paragraph" in combined or "still readable" in combined
 
 
+def test_code_block_hash_not_treated_as_heading(tmp_path: Path) -> None:
+    """M1 fix: `#` lines inside fenced code blocks must not become sections.
+
+    html2text turns ``<pre><code>`` into triple-backtick fences in the
+    Markdown output. A Python comment like ``# this`` inside the fence
+    would falsely register as a section heading and over-segment the
+    surrounding prose.
+    """
+    html = """
+    <html><body>
+      <h1>Real Heading</h1>
+      <p>Intro paragraph before code.</p>
+      <pre><code>
+# this is a code comment, not a heading
+def foo():
+    # nested comment
+    return 1
+      </code></pre>
+      <p>Body paragraph after code.</p>
+    </body></html>
+    """
+    file_path = _write(tmp_path, "code.html", html)
+
+    result = HtmlExtractor().extract(file_path)
+
+    # All section metadata for produced chunks must reference "Real Heading"
+    # (or empty for pre-heading content). Code comments must never appear
+    # as section names.
+    sections = {c.metadata for c in result.chunks if c.metadata}
+    assert all(
+        ("Real Heading" in s) for s in sections
+    ), f"unexpected section metadata: {sections}"
+    assert not any("code comment" in s for s in sections)
+    assert not any("nested comment" in s for s in sections)
+
+
 def test_japanese_utf8_preserved(tmp_path: Path) -> None:
     """T9: UTF-8 Japanese content survives the parse → markdown roundtrip."""
     html = """
