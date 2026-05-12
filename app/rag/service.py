@@ -33,6 +33,13 @@ from typing import Any, Literal
 
 from app.config import settings
 from app.dependencies import get_llm_client
+from app.rag.agentic import (
+    AgenticAnswer,
+    agentic_capability_supported,
+    compute_token_budget,
+    get_agentic_model_entry,
+    run_agentic_loop,
+)
 from app.rag.agentic_types import AgenticTelemetry
 from app.rag.answer_stream import (
     AnswerSanitizer,
@@ -929,6 +936,86 @@ async def _run_hierarchical_retrieval(
     return scoped, filtered_shortlist, clue_tuple
 
 
+def _language_instruction() -> str:
+    """Mirror the legacy ``build_system_prompt`` language postfix.
+
+    Centralised here so the agentic system prompt picks up the same
+    operator-configured language directive (``llm.output_language``)
+    without re-importing the legacy prompt builder, which would
+    create a circular import (``service`` → ``prompt`` → ``service``).
+    """
+    lang = (settings.llm.output_language or "auto").strip().lower()
+    if lang == "auto" or not lang:
+        return ""
+    mapping = {
+        "ja": "- Always answer in Japanese.\n",
+        "en": "- Always answer in English.\n",
+    }
+    return mapping.get(lang, f"- Always answer in {lang}.\n")
+
+
+async def _maybe_run_agentic(
+    *,
+    query: str,
+    lit_token: str | None,
+    drive: str | None,
+    viewer_id: str | None,
+    temperature: float | None,
+    force_legacy_rag: bool,
+    start: float,
+) -> AnswerResponse | None:
+    """Return an ``AnswerResponse`` if the agentic loop ran, else None.
+
+    Falls through to legacy when any of:
+    * the eval harness passed ``force_legacy_rag=True``
+    * ``llm.agentic_mode == "off"``
+    * the active model is not on the operator's allowlist
+    * the LLM client is disabled (no provider configured)
+    * the LLM client lacks the tools-API entry point (Ollama-native)
+    """
+    if force_legacy_rag:
+        return None
+    llm_config = settings.llm
+    if not agentic_capability_supported(llm_config.model, llm_config):
+        return None
+    llm_client = get_llm_client()
+    if llm_client is None or not getattr(llm_client, "enabled", False):
+        return None
+    # The OpenAI-compatible client owns ``chat_with_tools``; the
+    # Ollama-native client does not. Fall back to legacy for the
+    # latter so we never call a method that does not exist.
+    if not hasattr(llm_client, "chat_with_tools"):
+        return None
+
+    entry = get_agentic_model_entry(llm_config.model, llm_config)
+    context_window = entry.context_window if entry is not None else 32768
+    budget = compute_token_budget(context_window)
+
+    answer: AgenticAnswer = await run_agentic_loop(
+        query=query,
+        llm_client=llm_client,
+        drive=drive,
+        viewer_id=viewer_id,
+        lit_token=lit_token,
+        max_total_tokens=budget,
+        language_instruction=_language_instruction(),
+        temperature=temperature,
+    )
+
+    # ``sources`` is left empty: the agentic loop's tool transcript is
+    # the authoritative record. The eval harness reads
+    # ``agentic_telemetry`` for tool_call_count and route_correctness.
+    return AnswerResponse(
+        query=query,
+        answer=answer.answer,
+        citations=list(answer.citations),
+        sources=[],
+        retrieved_count=len(answer.telemetry.tool_calls),
+        took_ms=int((time.monotonic() - start) * 1000),
+        agentic_telemetry=answer.telemetry,
+    )
+
+
 async def answer_question(
     query: str,
     lit_token: str | None,
@@ -951,14 +1038,28 @@ async def answer_question(
     loop (Phase 1.C) would otherwise activate. Production callers
     never set it; it is not exposed through the HTTP surface.
     """
-    # Phase 1.A wires the flag through; Phase 1.C will branch on it.
-    # For now legacy is the only path, so the flag is accepted but
-    # has no behavioural effect.
-    _ = force_legacy_rag
     rag_config = settings.rag
     effective_top_k = top_k if top_k is not None else rag_config.top_k
 
     start = time.monotonic()
+
+    # Phase 1.C agentic branch — gated by (a) the operator's
+    # ``agentic_mode`` config, (b) the active model being on the
+    # ``agentic_models`` allowlist, and (c) the eval-only
+    # ``force_legacy_rag`` flag. Anything missing falls through to
+    # the legacy single-turn pipeline below; this keeps the rollback
+    # path one config edit away.
+    agentic_response = await _maybe_run_agentic(
+        query=query,
+        lit_token=lit_token,
+        drive=drive,
+        viewer_id=viewer_id,
+        temperature=temperature,
+        force_legacy_rag=force_legacy_rag,
+        start=start,
+    )
+    if agentic_response is not None:
+        return agentic_response
 
     # Stages A + B: optional personal-history pre-scope. The legacy
     # callers that did not pass ``viewer_id`` get a no-op resolution
