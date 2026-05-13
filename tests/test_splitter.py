@@ -190,6 +190,85 @@ def test_choose_split_points_dedups_and_sorts() -> None:
     assert all(0 < p < 20.0 for p in points)
 
 
+def test_choose_split_points_window_does_not_grow_with_k() -> None:
+    """A single far-from-boundary silence must NOT collapse multiple
+    boundaries onto the same midpoint.
+
+    Regression: the window used to be ``boundary * (1 ± 0.25)``, which
+    widens linearly with ``k``. On long inputs the longest silence in
+    the whole file fell into several consecutive windows; ``seen``
+    dedup then collapsed them, the chunk count shrank by 2-3x and
+    cloud providers emitted chunks well above their hard cap (HTTP 413
+    for OpenAI / Gemini / AssemblyAI; outsized memory peaks for
+    whisper_local). The fix uses a fixed half-width of
+    ``TARGET_WINDOW_TOLERANCE * target_duration``.
+
+    Scenario: duration 1000 s, target 100 s ⇒ 9 boundaries
+    (k=1..9, at 100, 200, ..., 900). A single short silence at
+    midpoint 500 sits exactly on the k=5 boundary. With the old
+    proportional window, k=4 ([300, 500]) and k=6 ([450, 750]) would
+    have picked the same silence; dedup would have shrunk 9 points
+    to 7. Fixed-width windows confine the silence to k=5 only.
+    """
+    points = _choose_split_points(
+        duration=1000.0,
+        target_duration=100.0,
+        silences=[(499.5, 500.5)],  # midpoint = 500.0, width 1 s
+    )
+    assert len(points) == 9, (
+        "Expected 9 fixed-width boundaries; the old proportional "
+        "window collapsed this to 7 via seen-dedup."
+    )
+    # k=5 boundary should snap to the silence midpoint; the other
+    # boundaries fall back to their exact k*target_duration values.
+    assert points == [100.0, 200.0, 300.0, 400.0, 500.0,
+                      600.0, 700.0, 800.0, 900.0]
+
+
+def test_choose_split_points_far_boundary_ignores_distant_silence() -> None:
+    """A silence in the middle of the file must NOT influence a boundary
+    near the end.
+
+    With the old proportional window, ``k=9`` on a 1000 s file had
+    window ``[675, 1125]`` — wide enough to absorb a silence at 700
+    even though it's hundreds of seconds from the intended boundary
+    900. The fixed window keeps the search ±25 s.
+    """
+    points = _choose_split_points(
+        duration=1000.0,
+        target_duration=100.0,
+        silences=[(699.5, 700.5)],  # midpoint = 700, far from k=9 boundary 900
+    )
+    # k=7 (boundary 700) should snap; k=9 must NOT.
+    assert points[6] == pytest.approx(700.0)
+    assert points[8] == 900.0, (
+        "k=9 boundary at 900 must fall back to exact value, not "
+        "pull in the silence at 700."
+    )
+
+
+def test_choose_split_points_long_form_preserves_chunk_count() -> None:
+    """Long-form file with no silences emits all expected boundaries.
+
+    Stand-in for the 9-hour file scenario that triggered the original
+    splitter bug. With duration / target ratio = 30, the old logic
+    still emitted 29 points here (no dedup collisions without
+    silences), but the test pins the invariant so future window
+    changes are caught.
+    """
+    points = _choose_split_points(
+        duration=3000.0,
+        target_duration=100.0,
+        silences=[],
+    )
+    assert len(points) == 29
+    assert points[0] == 100.0
+    assert points[-1] == 2900.0
+    # All increments are exactly target_duration.
+    deltas = [points[i + 1] - points[i] for i in range(len(points) - 1)]
+    assert all(d == pytest.approx(100.0) for d in deltas)
+
+
 # ---------------------------------------------------------------------------
 # _measure_bytes_per_second
 # ---------------------------------------------------------------------------

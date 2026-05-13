@@ -333,20 +333,35 @@ def _choose_split_points(
 
     For each target boundary ``k * target_duration`` (k=1..N-1), look
     for a silence whose midpoint lies within
-    ``TARGET_WINDOW_TOLERANCE`` of that boundary. Prefer the longest
-    silence in the window. If no silence is found, fall back to the
-    exact target time (fail-soft for continuous-speech inputs).
+    ``TARGET_WINDOW_TOLERANCE * target_duration`` of that boundary.
+    Prefer the longest silence in the window. If no silence is found,
+    fall back to the exact target time (fail-soft for continuous-speech
+    inputs).
+
+    The window is a *fixed* half-width of
+    ``TARGET_WINDOW_TOLERANCE * target_duration`` around each boundary,
+    not a proportional fraction of the boundary itself. A proportional
+    window grows with ``k`` and starts overlapping with neighbouring
+    windows around ``k >= 2``; on long inputs (many ``k`` values) the
+    longest absolute silence in the file falls into many overlapping
+    windows at once and the final ``seen`` dedup collapses dozens of
+    split points into a handful. Cloud providers then emit chunks far
+    above their hard cap, which presents as HTTP 413 for OpenAI / Gemini
+    / AssemblyAI and as outsized memory peaks for whisper_local.
+    Fixed-width windows keep neighbour windows disjoint and preserve
+    the intended chunk count.
     """
     if duration <= target_duration:
         return []
     n = max(1, math.ceil(duration / target_duration) - 1)
+    half_window = TARGET_WINDOW_TOLERANCE * target_duration
     points: list[float] = []
     for k in range(1, n + 1):
         boundary = k * target_duration
         if boundary >= duration:
             break
-        window_low = boundary * (1 - TARGET_WINDOW_TOLERANCE)
-        window_high = boundary * (1 + TARGET_WINDOW_TOLERANCE)
+        window_low = boundary - half_window
+        window_high = boundary + half_window
         candidates = [
             (s, e)
             for s, e in silences
