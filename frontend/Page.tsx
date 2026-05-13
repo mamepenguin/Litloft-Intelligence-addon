@@ -55,6 +55,11 @@ import {
   type Source,
 } from "./api";
 import { AskSaveDialog } from "./AskSaveDialog";
+import {
+  buildAskNoteMarkdown,
+  parseSegmentLocation,
+  queryToFilename,
+} from "./askNoteFormat";
 
 // Minimum allowed query length after trimming. Matches the backend
 // gate so we never send a request the server will reject.
@@ -183,61 +188,6 @@ type AskState =
     };
 
 /**
- * Parse backend `segment_location` into a display label + structured
- * jump target. Recognised shapes:
- *
- *  * `"m:ss"` — video / audio timestamp (sets `seconds`)
- *  * `"page N"` — PDF / paginated document (sets `page`)
- *  * `"chunk N"` — vector-only document snippet, label only
- *  * anything else — treated as a verbatim text anchor and copied
- *    into `verbatim`. The system prompt asks the LLM to emit
- *    `0:45` / `page 3`, but local LLMs (Ollama / Qwen / Gemma)
- *    routinely ignore the instruction and put a verbatim sentence
- *    from the cited passage there instead. That's actually a
- *    higher-fidelity highlight anchor than whatever lands in
- *    `citation.quote` (which the backend defaults to the file's
- *    long_summary when no chunk-level snippet matched), so we keep
- *    the string and let `buildCitationUrl` use it for `?highlight=`.
- */
-function parseSegmentLocation(
-  loc: string | null,
-): {
-  label: string;
-  seconds: number | null;
-  page: number | null;
-  verbatim: string | null;
-} | null {
-  if (!loc) return null;
-  const timeMatch = loc.match(/^(\d+):(\d{2})$/);
-  if (timeMatch) {
-    const m = parseInt(timeMatch[1], 10);
-    const s = parseInt(timeMatch[2], 10);
-    if (Number.isFinite(m) && Number.isFinite(s)) {
-      return { label: loc, seconds: m * 60 + s, page: null, verbatim: null };
-    }
-  }
-  const pageMatch = loc.match(/^page\s+(\d+)$/i);
-  if (pageMatch) {
-    const p = parseInt(pageMatch[1], 10);
-    if (Number.isFinite(p) && p > 0) {
-      return { label: loc, seconds: null, page: p, verbatim: null };
-    }
-  }
-  // Recognise the "chunk N" sentinel emitted by the vector-only
-  // snippet path (not a useful highlight anchor — strip it from the
-  // verbatim slot so we fall through to citation.quote).
-  if (/^chunk\s+\d+$/i.test(loc)) {
-    return { label: loc, seconds: null, page: null, verbatim: null };
-  }
-  // Anything else with at least ~12 characters is treated as a
-  // verbatim anchor. The 12-char floor avoids picking up unknown
-  // short labels that happen to slip past the explicit format
-  // recognisers above.
-  const verbatim = loc.trim().length >= 12 ? loc.trim() : null;
-  return { label: loc, seconds: null, page: null, verbatim };
-}
-
-/**
  * Build a file-detail URL from a citation. Highlight-target priority
  * (highest fidelity first):
  *
@@ -277,69 +227,6 @@ function buildCitationUrl(citation: Citation): string {
     return `${base}?highlight=${encodeURIComponent(quote)}`;
   }
   return base;
-}
-
-/** Build a loft:// URL from a citation for embedding in a saved .md note. */
-function citationToLoftUrl(citation: Citation): string {
-  const parsed = parseSegmentLocation(
-    (citation as Citation & { segment_location?: string | null }).segment_location ?? null,
-  );
-  const base = `loft://${citation.file_id}`;
-  if (parsed?.seconds != null) return `${base}?t=${parsed.seconds}`;
-  if (parsed?.page != null) return `${base}?page=${parsed.page}`;
-  return base;
-}
-
-/** Build the complete Markdown document to save as a Knowledge note. */
-function buildAskNoteMarkdown(
-  query: string,
-  answer: string,
-  citations: Citation[],
-): string {
-  const savedAt = new Date().toISOString();
-  const sourceIds = [...new Set(citations.map((c) => c.file_id))];
-  const fmLines = [
-    "---",
-    `origin: ask_answer`,
-    `query: ${JSON.stringify(query)}`,
-    `source_file_ids: [${sourceIds.map((id) => JSON.stringify(id)).join(", ")}]`,
-    `saved_at: ${savedAt}`,
-    "---",
-    "",
-  ];
-  const bodyLines = [`# ${query}`, "", answer.trimEnd(), ""];
-  if (citations.length > 0) {
-    bodyLines.push("## 引用元", "");
-    for (const c of citations) {
-      const url = citationToLoftUrl(c);
-      const loc = parseSegmentLocation(
-        (c as Citation & { segment_location?: string | null }).segment_location ?? null,
-      );
-      const locLabel = loc?.label ? ` — ${loc.label}` : "";
-      bodyLines.push(`- [${c.filename}](${url})${locLabel}`);
-      const quote = c.quote?.trim();
-      if (quote) {
-        // Indent blockquote lines so they render under the list item.
-        for (const line of quote.split("\n")) {
-          bodyLines.push(`  > ${line}`);
-        }
-      }
-    }
-    bodyLines.push("");
-  }
-  return fmLines.join("\n") + bodyLines.join("\n");
-}
-
-/** Slugify a query string into a safe .md filename stem. */
-function queryToFilename(query: string): string {
-  const slug = query
-    .trim()
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s-]/gu, "")
-    .replace(/\s+/g, "-")
-    .slice(0, 60)
-    .replace(/-+$/, "");
-  return `${slug || "ask-note"}.md`;
 }
 
 function CitationCard({
