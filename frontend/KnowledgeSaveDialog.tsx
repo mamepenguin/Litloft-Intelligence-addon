@@ -1,22 +1,18 @@
 "use client";
 
 /**
- * Dialog that promotes an edited detailed_summary into a Vault ``.md``
+ * Dialog that promotes an edited detailed_summary into a Knowledge ``.md``
  * via the knowledge addon's ``/distill`` endpoint.
  *
  * Opens on "knowledge に保存" button click in DetailedSummarySection.
- * Handles four cases before showing the save form:
+ * Handles three cases before showing the save form:
  *
- *   A. No Vault exists on this drive — show an inline create form
- *      (mirrors VaultSetup.tsx's knobs but cheaper than bouncing the
- *      user to the knowledge page and losing the summary context).
- *   B. Exactly one prior promotion from this source file — default to
+ *   A. Exactly one prior promotion from this source file — default to
  *      "open existing", offering "create new" as a secondary action
  *      (保守的 default — avoid accidentally growing .md count).
- *   C. Multiple prior promotions — same as B, with a disclosure for
+ *   B. Multiple prior promotions — same as A, with a disclosure for
  *      the older notes.
- *   D. No prior promotion — show the full save form with Vault
- *      select, folder, filename, title.
+ *   C. No prior promotion — show the save form (folder + filename + title).
  *
  * On success, closes itself and calls `onSaved(noteFileId)` so the
  * parent component can refresh `useActiveSummary` (or rely on the WS
@@ -27,11 +23,8 @@ import { useTranslations } from "next-intl";
 import { X } from "lucide-react";
 
 import {
-  createKnowledgeVault,
   distillToKnowledge,
   getNotesBySourceFile,
-  listKnowledgeVaults,
-  type KnowledgeVault,
   type NoteOrigin,
 } from "./knowledgeBridge";
 
@@ -51,9 +44,8 @@ export interface KnowledgeSaveDialogProps {
 type ViewState =
   | { kind: "loading" }
   | { kind: "error"; message: string }
-  | { kind: "createVault"; reason: "none" | "user" }
-  | { kind: "chooseExisting"; notes: NoteOrigin[]; vaults: KnowledgeVault[]; activeId: number | null }
-  | { kind: "form"; vaults: KnowledgeVault[]; activeId: number | null };
+  | { kind: "chooseExisting"; notes: NoteOrigin[] }
+  | { kind: "form" };
 
 const DEFAULT_FOLDER = "AI-Drafts";
 
@@ -82,12 +74,9 @@ export function KnowledgeSaveDialog({
 
   const [state, setState] = useState<ViewState>({ kind: "loading" });
 
-  const [selectedVaultId, setSelectedVaultId] = useState<number | null>(null);
   const [folder, setFolder] = useState(DEFAULT_FOLDER);
   const [filename, setFilename] = useState(`${defaultStem}-summary.md`);
   const [title, setTitle] = useState(defaultTitle);
-  const [newVaultLabel, setNewVaultLabel] = useState("MyVault");
-  const [newVaultPath, setNewVaultPath] = useState("Knowledge");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -95,8 +84,6 @@ export function KnowledgeSaveDialog({
     setFolder(DEFAULT_FOLDER);
     setFilename(`${defaultStem}-summary.md`);
     setTitle(defaultTitle);
-    setNewVaultLabel("MyVault");
-    setNewVaultPath("Knowledge");
     setSubmitting(false);
     setSubmitError(null);
   }, [defaultStem, defaultTitle]);
@@ -105,26 +92,12 @@ export function KnowledgeSaveDialog({
     setState({ kind: "loading" });
     reset();
     try {
-      const [vaultRes, notes] = await Promise.all([
-        listKnowledgeVaults(drive),
-        getNotesBySourceFile(drive, fileId),
-      ]);
-      if (vaultRes.vaults.length === 0) {
-        setState({ kind: "createVault", reason: "none" });
-        return;
-      }
-      const activeId = vaultRes.active_vault_id ?? vaultRes.vaults[0].id;
-      setSelectedVaultId(activeId);
+      const notes = await getNotesBySourceFile(drive, fileId);
       if (notes.length > 0) {
-        setState({
-          kind: "chooseExisting",
-          notes,
-          vaults: vaultRes.vaults,
-          activeId,
-        });
+        setState({ kind: "chooseExisting", notes });
         return;
       }
-      setState({ kind: "form", vaults: vaultRes.vaults, activeId });
+      setState({ kind: "form" });
     } catch (err) {
       setState({ kind: "error", message: (err as Error).message });
     }
@@ -144,37 +117,17 @@ export function KnowledgeSaveDialog({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [open, onClose]);
 
-  const handleCreateVault = useCallback(async () => {
-    setSubmitting(true);
-    setSubmitError(null);
-    try {
-      const vault = await createKnowledgeVault(drive, {
-        label: newVaultLabel.trim() || "MyVault",
-        path: newVaultPath.trim(),
-      });
-      setSelectedVaultId(vault.id);
-      setState({ kind: "form", vaults: [vault], activeId: vault.id });
-    } catch (err) {
-      setSubmitError((err as Error).message);
-    } finally {
-      setSubmitting(false);
-    }
-  }, [drive, newVaultLabel, newVaultPath]);
-
   const handleSubmit = useCallback(async () => {
-    if (!selectedVaultId) return;
     setSubmitting(true);
     setSubmitError(null);
     try {
       const res = await distillToKnowledge(drive, {
         source_file_id: fileId,
-        vault_id: selectedVaultId,
         folder: folder.trim() || DEFAULT_FOLDER,
         filename: filename.trim(),
         title: title.trim() || defaultTitle,
         content,
         origin: "detailed_summary",
-        origin_ref: `intelligence:${fileId}/detailed_summary`,
       });
       onSaved({ noteFileId: res.note_file_id, notePath: res.note_path });
       onClose();
@@ -184,7 +137,6 @@ export function KnowledgeSaveDialog({
       setSubmitting(false);
     }
   }, [
-    selectedVaultId,
     drive,
     fileId,
     folder,
@@ -202,10 +154,7 @@ export function KnowledgeSaveDialog({
   }, [drive]);
 
   const proceedToFormFromExisting = useCallback(() => {
-    setState((prev) => {
-      if (prev.kind !== "chooseExisting") return prev;
-      return { kind: "form", vaults: prev.vaults, activeId: prev.activeId };
-    });
+    setState({ kind: "form" });
   }, []);
 
   const inputClass =
@@ -249,55 +198,6 @@ export function KnowledgeSaveDialog({
         {state.kind === "error" && (
           <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
             {state.message}
-          </div>
-        )}
-
-        {state.kind === "createVault" && (
-          <div className="flex flex-col gap-3">
-            <p className="text-sm text-text-muted">{t("createVault.description")}</p>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs text-text-muted">
-                {t("createVault.labelField")}
-              </span>
-              <input
-                type="text"
-                value={newVaultLabel}
-                onChange={(e) => setNewVaultLabel(e.target.value)}
-                className={inputClass}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs text-text-muted">
-                {t("createVault.pathField")}
-              </span>
-              <input
-                type="text"
-                value={newVaultPath}
-                onChange={(e) => setNewVaultPath(e.target.value)}
-                className={`${inputClass} font-mono text-[13px]`}
-              />
-            </label>
-            {submitError && (
-              <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
-                {submitError}
-              </div>
-            )}
-            <div className="mt-2 flex justify-end gap-2">
-              <button
-                onClick={onClose}
-                disabled={submitting}
-                className="rounded-2xl bg-sand px-4 py-2 text-sm font-medium text-text-primary hover:bg-sand-hover disabled:opacity-50"
-              >
-                {tc("cancel")}
-              </button>
-              <button
-                onClick={handleCreateVault}
-                disabled={submitting || !newVaultLabel.trim()}
-                className="rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
-              >
-                {submitting ? t("createVault.submitting") : t("createVault.submit")}
-              </button>
-            </div>
           </div>
         )}
 
@@ -355,29 +255,6 @@ export function KnowledgeSaveDialog({
 
         {state.kind === "form" && (
           <div className="flex flex-col gap-3">
-            {state.vaults.length > 1 ? (
-              <label className="flex flex-col gap-1">
-                <span className="text-xs text-text-muted">{t("form.vault")}</span>
-                <select
-                  value={selectedVaultId ?? ""}
-                  onChange={(e) => setSelectedVaultId(Number(e.target.value))}
-                  className={inputClass}
-                >
-                  {state.vaults.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : (
-              <div className="text-xs text-text-muted">
-                {t("form.vault")}:{" "}
-                <span className="font-medium text-text-primary">
-                  {state.vaults[0]?.label}
-                </span>
-              </div>
-            )}
             <label className="flex flex-col gap-1">
               <span className="text-xs text-text-muted">{t("form.folder")}</span>
               <input
@@ -422,7 +299,6 @@ export function KnowledgeSaveDialog({
                 onClick={handleSubmit}
                 disabled={
                   submitting
-                  || !selectedVaultId
                   || !filename.trim()
                   || !title.trim()
                 }

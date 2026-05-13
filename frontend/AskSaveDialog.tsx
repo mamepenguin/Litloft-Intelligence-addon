@@ -12,12 +12,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { X } from "lucide-react";
 
-import {
-  createKnowledgeVault,
-  listKnowledgeVaults,
-  saveAskToKnowledge,
-  type KnowledgeVault,
-} from "./knowledgeBridge";
+import { saveAskToKnowledge } from "./knowledgeBridge";
 
 interface Props {
   open: boolean;
@@ -28,12 +23,6 @@ interface Props {
   onClose: () => void;
   onSaved: (result: { noteFileId: string; notePath: string }) => void;
 }
-
-type ViewState =
-  | { kind: "loading" }
-  | { kind: "error"; message: string }
-  | { kind: "createVault" }
-  | { kind: "form"; vaults: KnowledgeVault[]; activeId: number | null };
 
 const DEFAULT_FOLDER = "Ask";
 
@@ -49,39 +38,18 @@ export function AskSaveDialog({
   const t = useTranslations("askSave");
   const tc = useTranslations("common");
 
-  const [state, setState] = useState<ViewState>({ kind: "loading" });
-  const [selectedVaultId, setSelectedVaultId] = useState<number | null>(null);
   const [folder, setFolder] = useState(DEFAULT_FOLDER);
   const [filename, setFilename] = useState(defaultFilename);
-  const [newVaultLabel, setNewVaultLabel] = useState("MyVault");
-  const [newVaultPath, setNewVaultPath] = useState("Knowledge");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setState({ kind: "loading" });
+  useEffect(() => {
+    if (!open) return;
     setFilename(defaultFilename);
     setFolder(DEFAULT_FOLDER);
     setSubmitting(false);
     setSubmitError(null);
-    try {
-      const res = await listKnowledgeVaults(drive);
-      if (res.vaults.length === 0) {
-        setState({ kind: "createVault" });
-        return;
-      }
-      const activeId = res.active_vault_id ?? res.vaults[0].id;
-      setSelectedVaultId(activeId);
-      setState({ kind: "form", vaults: res.vaults, activeId });
-    } catch (err) {
-      setState({ kind: "error", message: (err as Error).message });
-    }
-  }, [drive, defaultFilename]);
-
-  useEffect(() => {
-    if (!open) return;
-    void load();
-  }, [open, load]);
+  }, [open, defaultFilename]);
 
   useEffect(() => {
     if (!open) return;
@@ -92,30 +60,11 @@ export function AskSaveDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  const handleCreateVault = useCallback(async () => {
-    setSubmitting(true);
-    setSubmitError(null);
-    try {
-      const vault = await createKnowledgeVault(drive, {
-        label: newVaultLabel.trim() || "MyVault",
-        path: newVaultPath.trim(),
-      });
-      setSelectedVaultId(vault.id);
-      setState({ kind: "form", vaults: [vault], activeId: vault.id });
-    } catch (err) {
-      setSubmitError((err as Error).message);
-    } finally {
-      setSubmitting(false);
-    }
-  }, [drive, newVaultLabel, newVaultPath]);
-
   const handleSubmit = useCallback(async () => {
-    if (!selectedVaultId) return;
     setSubmitting(true);
     setSubmitError(null);
     try {
       const res = await saveAskToKnowledge(drive, {
-        vault_id: selectedVaultId,
         folder: folder.trim() || DEFAULT_FOLDER,
         filename: filename.trim() || defaultFilename,
         content,
@@ -128,7 +77,7 @@ export function AskSaveDialog({
     } finally {
       setSubmitting(false);
     }
-  }, [selectedVaultId, drive, folder, filename, defaultFilename, content, sourceFileIds, onSaved, onClose]);
+  }, [drive, folder, filename, defaultFilename, content, sourceFileIds, onSaved, onClose]);
 
   if (!open) return null;
 
@@ -157,96 +106,43 @@ export function AskSaveDialog({
           </button>
         </div>
 
-        {state.kind === "loading" && (
-          <p className="text-sm text-text-muted">{t("loading")}</p>
-        )}
-
-        {state.kind === "error" && (
-          <p className="text-sm text-danger">{state.message}</p>
-        )}
-
-        {state.kind === "createVault" && (
-          <div className="flex flex-col gap-3">
-            <p className="text-xs text-text-muted">{t("noVault")}</p>
-            <div>
-              <label className={labelClass}>{t("vaultLabel")}</label>
-              <input
-                className={inputClass}
-                value={newVaultLabel}
-                onChange={(e) => setNewVaultLabel(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className={labelClass}>{t("vaultPath")}</label>
-              <input
-                className={inputClass}
-                value={newVaultPath}
-                onChange={(e) => setNewVaultPath(e.target.value)}
-              />
-            </div>
-            {submitError && <p className="text-xs text-danger">{submitError}</p>}
+        <div className="flex flex-col gap-3">
+          <div>
+            <label className={labelClass}>{t("folder")}</label>
+            <input
+              className={inputClass}
+              value={folder}
+              onChange={(e) => setFolder(e.target.value)}
+              placeholder="Ask"
+            />
+          </div>
+          <div>
+            <label className={labelClass}>{t("filename")}</label>
+            <input
+              className={inputClass}
+              value={filename}
+              onChange={(e) => setFilename(e.target.value)}
+            />
+          </div>
+          {submitError && <p className="text-xs text-danger">{submitError}</p>}
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-bg-border px-4 py-2 text-sm text-text-muted hover:bg-bg-elevated"
+            >
+              {tc("cancel")}
+            </button>
             <button
               type="button"
               disabled={submitting}
-              onClick={handleCreateVault}
-              className="self-end rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
+              onClick={handleSubmit}
+              className="rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
             >
-              {submitting ? t("saving") : t("createVault")}
+              {submitting ? t("saving") : t("save")}
             </button>
           </div>
-        )}
-
-        {state.kind === "form" && (
-          <div className="flex flex-col gap-3">
-            <div>
-              <label className={labelClass}>{t("vault")}</label>
-              <select
-                className={inputClass}
-                value={selectedVaultId ?? ""}
-                onChange={(e) => setSelectedVaultId(Number(e.target.value))}
-              >
-                {state.vaults.map((v) => (
-                  <option key={v.id} value={v.id}>{v.label}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className={labelClass}>{t("folder")}</label>
-              <input
-                className={inputClass}
-                value={folder}
-                onChange={(e) => setFolder(e.target.value)}
-                placeholder="Ask"
-              />
-            </div>
-            <div>
-              <label className={labelClass}>{t("filename")}</label>
-              <input
-                className={inputClass}
-                value={filename}
-                onChange={(e) => setFilename(e.target.value)}
-              />
-            </div>
-            {submitError && <p className="text-xs text-danger">{submitError}</p>}
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={onClose}
-                className="rounded-lg border border-bg-border px-4 py-2 text-sm text-text-muted hover:bg-bg-elevated"
-              >
-                {tc("cancel")}
-              </button>
-              <button
-                type="button"
-                disabled={submitting || !selectedVaultId}
-                onClick={handleSubmit}
-                className="rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
-              >
-                {submitting ? t("saving") : t("save")}
-              </button>
-            </div>
-          </div>
-        )}
+        </div>
       </div>
     </div>
   );

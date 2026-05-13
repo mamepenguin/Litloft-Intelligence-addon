@@ -116,12 +116,6 @@
   },
   "askSave": {
     "title": "Save Ask answer to Knowledge",
-    "loading": "Loading…",
-    "noVault": "No Vault registered on this drive. Create one to continue.",
-    "vaultLabel": "Vault name",
-    "vaultPath": "Vault folder path",
-    "createVault": "Create Vault",
-    "vault": "Destination Vault",
     "folder": "Folder",
     "filename": "Filename",
     "save": "Save",
@@ -271,13 +265,6 @@
   "knowledgeSave": {
     "title": "Save to knowledge",
     "loading": "Loading…",
-    "createVault": {
-      "description": "No Vault is registered for this drive. Create one to continue?",
-      "labelField": "Vault label",
-      "pathField": "Vault folder path",
-      "submit": "Create and continue",
-      "submitting": "Creating…"
-    },
     "existing": {
       "description": "This file has already been saved to knowledge:",
       "moreNotes": "Show {count} other note(s)",
@@ -285,7 +272,6 @@
       "createNew": "Create new with different name"
     },
     "form": {
-      "vault": "Target Vault",
       "folder": "Folder",
       "filename": "Filename",
       "noteTitle": "Title",

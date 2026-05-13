@@ -116,12 +116,6 @@
   },
   "askSave": {
     "title": "Knowledgeに保存",
-    "loading": "読み込み中…",
-    "noVault": "このドライブに Vault が登録されていません。作成して続けますか？",
-    "vaultLabel": "Vault 名",
-    "vaultPath": "Vault フォルダパス",
-    "createVault": "Vault を作成",
-    "vault": "保存先 Vault",
     "folder": "フォルダ",
     "filename": "ファイル名",
     "save": "保存",
@@ -271,13 +265,6 @@
   "knowledgeSave": {
     "title": "knowledge に保存",
     "loading": "読み込み中…",
-    "createVault": {
-      "description": "このドライブに Vault が登録されていません。作成して続けますか？",
-      "labelField": "Vault 名",
-      "pathField": "Vault フォルダパス",
-      "submit": "作成して続行",
-      "submitting": "作成中…"
-    },
     "existing": {
       "description": "このファイルは既に knowledge に保存済みです：",
       "moreNotes": "その他のノート {count} 件を表示",
@@ -285,7 +272,6 @@
       "createNew": "別名で新規作成"
     },
     "form": {
-      "vault": "保存先 Vault",
       "folder": "フォルダ",
       "filename": "ファイル名",
       "noteTitle": "タイトル",
