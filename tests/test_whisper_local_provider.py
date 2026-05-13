@@ -34,14 +34,21 @@ def test_provider_declared_name() -> None:
 
 
 def test_provider_capabilities_match_spec() -> None:
-    """``whisper_local`` runs entirely on-host; no diarization / hotwords."""
+    """``whisper_local`` runs entirely on-host; no diarization / hotwords.
+
+    ``max_input_bytes`` is set so SplittingTranscriber wraps the provider:
+    faster-whisper's ``decode_audio`` loads the full audio into one
+    float32 numpy array (memory scales linearly with duration), so long
+    inputs must be chunked. 50 MB of normalized 16 kHz mono FLAC maps
+    to roughly 33 min of audio.
+    """
     provider = WhisperLocalProvider()
     assert provider.capabilities == ProviderCapabilities(
         sends_audio_offhost=False,
         supports_diarization=False,
         supports_hotwords=False,
         supports_word_timestamps=True,
-        max_input_bytes=None,
+        max_input_bytes=50 * 1024 * 1024,
         accepts_initial_prompt=True,
         handles_own_retry=False,
     )

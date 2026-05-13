@@ -68,7 +68,13 @@ class WhisperLocalProvider:
         supports_diarization=False,
         supports_hotwords=False,
         supports_word_timestamps=True,
-        max_input_bytes=None,           # faster-whisper streams long input
+        # faster-whisper's decode_audio() loads the full file into a
+        # single float32 numpy array before transcribing, so memory
+        # scales linearly with duration. A 9 h video peaked at ~14 GB
+        # and crash-looped the container. 50 MB of normalized 16 kHz
+        # mono FLAC (~20 KB/s × 0.8 safety) yields ~33 min chunks,
+        # capping per-chunk peak at a few hundred MB.
+        max_input_bytes=50 * 1024 * 1024,
         accepts_initial_prompt=True,    # forwards to faster-whisper's prompt
         handles_own_retry=False,
     )
