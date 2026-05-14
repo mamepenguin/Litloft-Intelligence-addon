@@ -190,8 +190,8 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
 
   if (loadError) {
     return (
-      <section className="rounded-xl border border-bg-border bg-bg-card p-4">
-        <h2 className="mb-2 text-base font-semibold text-text-primary">
+      <section className="rounded-xl border border-bg-border bg-bg-card p-6">
+        <h2 className="mb-2 text-lg font-semibold text-text-primary">
           {t("title")}
         </h2>
         <p className="text-xs text-danger">{loadError}</p>
@@ -201,8 +201,8 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
 
   if (!loaded || !data) {
     return (
-      <section className="rounded-xl border border-bg-border bg-bg-card p-4">
-        <h2 className="mb-2 text-base font-semibold text-text-primary">
+      <section className="rounded-xl border border-bg-border bg-bg-card p-6">
+        <h2 className="mb-2 text-lg font-semibold text-text-primary">
           {t("title")}
         </h2>
       </section>
@@ -229,7 +229,7 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
               type="button"
               onClick={handleReset}
               disabled={resetting}
-              className="rounded-lg border border-bg-border bg-bg-card px-3 py-1 text-sm text-text-primary hover:bg-bg-light disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-2xl bg-sand px-4 py-2 text-sm font-medium text-text-primary hover:bg-sand-hover disabled:cursor-not-allowed disabled:opacity-50"
             >
               {resetting ? t("resetting") : t("reset")}
             </button>
@@ -301,7 +301,7 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
           type="button"
           onClick={handleSave}
           disabled={saving}
-          className="rounded-lg border border-bg-border bg-bg-card px-3 py-1 text-sm text-text-primary hover:bg-bg-light disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
         >
           {saving ? t("saving") : t("save")}
         </button>
