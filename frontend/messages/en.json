@@ -149,6 +149,7 @@
     "matchMetadata": "Metadata",
     "matchContent": "Content",
     "matchTextContentKeyword": "Content (exact)",
+    "matchRetrievalKeywords": "Keyword",
     "matchedPages": "p.{pages}",
     "semanticResults": "Semantic search results",
     "semanticResultsDescription": "Files whose meaning is close to your query",

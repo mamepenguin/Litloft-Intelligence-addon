@@ -69,6 +69,13 @@ class _RecallParams:
     rrf_weight_transcript_keyword: float = 1.5
     rrf_weight_text_content_keyword: float = 1.5
     rrf_weight_clip: float = 0.2
+    # SIRA-style LLM-expanded retrieval keywords (fts_retrieval_keywords).
+    # Slightly below other keyword channels because the hits are tier-3
+    # (LLM-generated, not first-source) — they should reinforce real
+    # signals rather than dominate them on their own. Operators who
+    # observe the LLM producing low-quality expansions can dial this to
+    # 0 to drop the channel without touching the on_index data.
+    rrf_weight_retrieval_keywords: float = 0.8
 
 
 _RECALL_PARAMS = _RecallParams()
@@ -256,10 +263,12 @@ def search(
     # are candidate-slot noise. See _recall_clip_enabled() docstring.
     skip_clip = mode == "recall" and not _recall_clip_enabled()
 
-    # Five retrieval channels run concurrently. Each opens its own
+    # Six retrieval channels run concurrently. Each opens its own
     # get_search_db_read() session (no write lock) and its own
     # engine.connect() handle. WAL mode allows parallel readers.
-    with ThreadPoolExecutor(max_workers=5) as _pool:
+    # The retrieval_keywords channel is intentionally additive: a fresh
+    # DB without Phase 1 data simply returns [] and contributes nothing.
+    with ThreadPoolExecutor(max_workers=6) as _pool:
         _f_text = _pool.submit(_vector_search_text, text_vector, candidates, mode=mode)
         _f_clip = (
             _pool.submit(
@@ -272,12 +281,16 @@ def search(
         _f_kw = _pool.submit(_keyword_search, query, candidates)
         _f_tr = _pool.submit(_keyword_search_transcripts, query, candidates)
         _f_tc = _pool.submit(_keyword_search_text_content, query, candidates)
+        _f_rk = _pool.submit(
+            _keyword_search_retrieval_keywords, query, candidates
+        )
 
         text_matches = _f_text.result()
         clip_matches = _f_clip.result() if _f_clip is not None else []
         keyword_matches = _f_kw.result()
         transcript_keyword_matches = _f_tr.result()
         text_content_keyword_matches = _f_tc.result()
+        retrieval_keyword_matches = _f_rk.result()
 
     if mode == "recall":
         # Weighted RRF with recall-tuned channel weights. We drop the
@@ -290,6 +303,7 @@ def search(
             keyword_matches=keyword_matches,
             transcript_keyword_matches=transcript_keyword_matches,
             text_content_keyword_matches=text_content_keyword_matches,
+            retrieval_keyword_matches=retrieval_keyword_matches,
             k=search_config.rrf_k,
             recall_params=_RECALL_PARAMS,
             include_clip=not skip_clip,
@@ -302,6 +316,7 @@ def search(
             keyword_matches=keyword_matches,
             transcript_keyword_matches=transcript_keyword_matches,
             text_content_keyword_matches=text_content_keyword_matches,
+            retrieval_keyword_matches=retrieval_keyword_matches,
         )
 
     # Required-pass floor: any file that survived the hard filter but
@@ -700,6 +715,21 @@ class _TextContentKeywordMatch:
     page: int | None
 
 
+@dataclass(frozen=True)
+class _RetrievalKeywordMatch:
+    """Internal retrieval-keywords search match (SIRA-style expansion).
+
+    Carries the term that surfaced the hit so the UI can later annotate
+    the result (Phase 2.5+); the time_range / page positional fields
+    of the other keyword matches are intentionally absent because the
+    LLM expansion does not point at a body location.
+    """
+
+    file_id: str
+    score: float
+    matched_keyword: str
+
+
 def _keyword_search_transcripts(
     query: str, limit: int
 ) -> list[_TranscriptKeywordMatch]:
@@ -906,6 +936,88 @@ def _keyword_search(query: str, limit: int) -> list[_KeywordMatch]:
     ]
 
 
+def _keyword_search_retrieval_keywords(
+    query: str, limit: int
+) -> list[_RetrievalKeywordMatch]:
+    """Search SIRA-style LLM-expanded retrieval keywords (fts_retrieval_keywords).
+
+    Returns file-level matches with the matched keyword surfaced for
+    UI annotation. Falls back to an empty list whenever the table is
+    missing (legacy DBs that haven't run the Phase 1 migration) or
+    when the query produces no FTS hits.
+
+    Args:
+        query: The raw user query — the same string used for the other
+            keyword channels. ``_build_fts_query`` is applied for FTS5
+            tokenisation so katakana/hiragana variants land alongside
+            the literal form.
+        limit: Maximum results returned to the caller (the combiner
+            slices further if needed).
+
+    Returns:
+        Ranked list of ``_RetrievalKeywordMatch``. Scores are
+        normalised 0-1 against the top hit, matching the convention
+        of the other FTS channels so RRF / cosine combiners can mix
+        them without extra rescaling.
+    """
+    fts_query = _build_fts_query(query)
+    if not fts_query:
+        return []
+
+    engine = get_search_engine()
+
+    with engine.connect() as conn:
+        # Defensive: fts_retrieval_keywords lands in the Phase 1
+        # migration. A search service started against an old DB before
+        # _create_vec_tables has run would 500 here; treat the table
+        # missing as "no expansions yet" instead.
+        try:
+            rows = conn.execute(
+                sql_text(
+                    "SELECT file_id, keywords, -rank AS relevance "
+                    "FROM fts_retrieval_keywords "
+                    "WHERE fts_retrieval_keywords MATCH :query "
+                    "ORDER BY rank "
+                    "LIMIT :limit"
+                ),
+                {"query": fts_query, "limit": limit},
+            ).fetchall()
+        except Exception:
+            return []
+
+    if not rows:
+        return []
+
+    # Verify files are active (matches the existing channel pattern).
+    file_ids = [row[0] for row in rows]
+    with get_search_db_read() as session:
+        active_ids = {
+            f.file_id
+            for f in session.query(IndexedFile.file_id)
+            .filter(
+                IndexedFile.file_id.in_(file_ids),
+                IndexedFile.active.is_(True),
+            )
+            .all()
+        }
+
+    max_relevance = max(row[2] for row in rows) if rows else 1.0
+    normalizer = max_relevance if max_relevance > 0 else 1.0
+
+    return [
+        _RetrievalKeywordMatch(
+            file_id=row[0],
+            score=min(row[2] / normalizer, 1.0),
+            # The whole keywords field is what the FTS matched against;
+            # we surface it as-is so the UI can later show which term
+            # surfaced this hit. Truncate to keep wire size predictable.
+            matched_keyword=(row[1] or "")[:200],
+        )
+        for row in rows
+        if row[0] in active_ids
+    ]
+
+
 def _keyword_search_text_content(
     query: str, limit: int
 ) -> list[_TextContentKeywordMatch]:
@@ -1017,6 +1129,7 @@ def _file_ranking_from_keywords(
         list[_KeywordMatch]
         | list[_TranscriptKeywordMatch]
         | list[_TextContentKeywordMatch]
+        | list[_RetrievalKeywordMatch]
     ),
 ) -> dict[str, int]:
     """Produce a file-level ranking from keyword matches.
@@ -1044,6 +1157,7 @@ def _combine_scores_rrf(
     keyword_matches: list[_KeywordMatch],
     transcript_keyword_matches: list[_TranscriptKeywordMatch],
     text_content_keyword_matches: list[_TextContentKeywordMatch] | None = None,
+    retrieval_keyword_matches: list[_RetrievalKeywordMatch] | None = None,
     *,
     k: int,
     recall_params: _RecallParams | None = None,
@@ -1122,6 +1236,19 @@ def _combine_scores_rrf(
             page=m.page,
         ))
 
+    # SIRA retrieval-keywords hits: contribute a chip-only entry. The
+    # MatchInfo carries the matched keyword string as ``text`` so the
+    # UI can surface it later, but no time_range / page is set — the
+    # expansion does not point at a body location, so search_merge
+    # treats it as a chip-only badge rather than a jump target.
+    for m in (retrieval_keyword_matches or []):
+        file_match_types.setdefault(m.file_id, set()).add("retrieval_keywords")
+        file_matches.setdefault(m.file_id, []).append(MatchInfo(
+            match_type="retrieval_keywords",
+            text=m.matched_keyword,
+            score=m.score,
+        ))
+
     # --- Build per-system file rankings ---
     text_ranking, _ = _file_ranking_from_vector(text_matches)
     clip_ranking, _ = _file_ranking_from_vector(clip_matches)
@@ -1129,6 +1256,9 @@ def _combine_scores_rrf(
     transcript_kw_ranking = _file_ranking_from_keywords(transcript_keyword_matches)
     text_content_kw_ranking = _file_ranking_from_keywords(
         text_content_keyword_matches or []
+    )
+    retrieval_kw_ranking = _file_ranking_from_keywords(
+        retrieval_keyword_matches or []
     )
 
     # Weighted RRF. Precision mode uses the legacy weights (text/keyword
@@ -1148,6 +1278,7 @@ def _combine_scores_rrf(
             (keyword_ranking, recall_params.rrf_weight_keyword),
             (transcript_kw_ranking, recall_params.rrf_weight_transcript_keyword),
             (text_content_kw_ranking, recall_params.rrf_weight_text_content_keyword),
+            (retrieval_kw_ranking, recall_params.rrf_weight_retrieval_keywords),
         ]
     else:
         clip_weight = (
@@ -1159,6 +1290,11 @@ def _combine_scores_rrf(
             (keyword_ranking, 1.0),
             (transcript_kw_ranking, 1.0),
             (text_content_kw_ranking, 1.0),
+            # Precision mode mirrors the other keyword channels at
+            # weight 1.0; the small-than-keyword bias lives in
+            # _RecallParams.rrf_weight_retrieval_keywords (recall-mode
+            # only) where the cost of an LLM-only hit is more visible.
+            (retrieval_kw_ranking, 1.0),
         ]
 
     # --- RRF fusion ---
@@ -1915,6 +2051,7 @@ def _combine_scores_cosine(
     keyword_matches: list[_KeywordMatch],
     transcript_keyword_matches: list[_TranscriptKeywordMatch],
     text_content_keyword_matches: list[_TextContentKeywordMatch] | None = None,
+    retrieval_keyword_matches: list[_RetrievalKeywordMatch] | None = None,
 ) -> dict[str, _FileScore]:
     """Combine search results using weighted cosine similarity scores.
 
@@ -1934,6 +2071,7 @@ def _combine_scores_cosine(
         "keyword": {},
         "transcript_keyword": {},
         "text_content_keyword": {},
+        "retrieval_keywords": {},
     }
 
     for m in text_matches:
@@ -2000,6 +2138,20 @@ def _combine_scores_cosine(
         src = file_source_best["text_content_keyword"]
         src[m.file_id] = max(src.get(m.file_id, 0.0), m.score)
 
+    # SIRA retrieval-keywords hits: chip-only MatchInfo (no time_range
+    # / page) so search_merge.ts treats it as a badge rather than a
+    # jump target. The score participates in best_keyword max() so a
+    # file the LLM expanded to a relevant query still surfaces.
+    for m in (retrieval_keyword_matches or []):
+        file_match_types.setdefault(m.file_id, set()).add("retrieval_keywords")
+        file_matches.setdefault(m.file_id, []).append(MatchInfo(
+            match_type="retrieval_keywords",
+            text=m.matched_keyword,
+            score=m.score,
+        ))
+        src = file_source_best["retrieval_keywords"]
+        src[m.file_id] = max(src.get(m.file_id, 0.0), m.score)
+
     # Combine: alpha * best_vector + (1 - alpha) * best_keyword
     alpha = search_config.alpha
     all_file_ids: set[str] = set()
@@ -2016,6 +2168,7 @@ def _combine_scores_cosine(
             file_source_best["keyword"].get(fid, 0.0),
             file_source_best["transcript_keyword"].get(fid, 0.0),
             file_source_best["text_content_keyword"].get(fid, 0.0),
+            file_source_best["retrieval_keywords"].get(fid, 0.0),
         )
         combined = alpha * best_vector + (1.0 - alpha) * best_keyword
         file_scores[fid] = _FileScore(

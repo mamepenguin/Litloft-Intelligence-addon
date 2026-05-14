@@ -45,6 +45,7 @@ from app.search import (
     _KeywordMatch,
     _l2_to_cosine_similarity,
     _merge_similar_results,
+    _RetrievalKeywordMatch,
     _select_embedding_types,
     _TextContentKeywordMatch,
     _to_hiragana,
@@ -809,6 +810,49 @@ class TestCombineScoresCosine:
         )
         assert result == {}
 
+    def test_retrieval_keywords_joins_keyword_pool(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """retrieval_keywords-only hit feeds into the (1-alpha) keyword
+        pool: it competes against the other FTS channels via max()."""
+        self._patch_search_settings(monkeypatch, alpha=0.7)
+        result = _combine_scores_cosine(
+            text_matches=[],
+            clip_matches=[],
+            keyword_matches=[],
+            transcript_keyword_matches=[],
+            retrieval_keyword_matches=[
+                _RetrievalKeywordMatch(file_id="f1", score=0.8, matched_keyword="alt")
+            ],
+        )
+        assert "f1" in result
+        # (1-alpha) * 0.8 = 0.3 * 0.8 = 0.24
+        assert result["f1"].combined_score == pytest.approx(0.3 * 0.8)
+        assert "retrieval_keywords" in result["f1"].match_types
+
+    def test_retrieval_keywords_matchinfo_chip_only(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """MatchInfo from retrieval_keywords has no timestamp / page —
+        the UI uses other channels for jumps."""
+        self._patch_search_settings(monkeypatch, alpha=0.7)
+        result = _combine_scores_cosine(
+            text_matches=[],
+            clip_matches=[],
+            keyword_matches=[],
+            transcript_keyword_matches=[],
+            retrieval_keyword_matches=[
+                _RetrievalKeywordMatch(
+                    file_id="f1", score=0.5, matched_keyword="関連語",
+                )
+            ],
+        )
+        rk = [m for m in result["f1"].matches if m.match_type == "retrieval_keywords"]
+        assert len(rk) == 1
+        assert rk[0].text == "関連語"
+        assert rk[0].timestamp_start is None
+        assert rk[0].page is None
+
 
 # ---------------------------------------------------------------------------
 # 9. _combine_scores_rrf
@@ -897,6 +941,73 @@ class TestCombineScoresRrf:
             k=60,
         )
         assert result == {}
+
+    def test_retrieval_keywords_contributes_to_rank(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """retrieval_keywords-only hit produces a ranked file with the
+        weight-1.0 RRF contribution (precision mode)."""
+        self._patch_search_settings(monkeypatch, rrf_weight_clip=0.5)
+        rk = [_RetrievalKeywordMatch(file_id="f1", score=0.9, matched_keyword="alt")]
+        result = _combine_scores_rrf(
+            text_matches=[],
+            clip_matches=[],
+            keyword_matches=[],
+            transcript_keyword_matches=[],
+            retrieval_keyword_matches=rk,
+            k=60,
+        )
+        assert "f1" in result
+        assert result["f1"].combined_score == pytest.approx(1.0 / 61)
+        assert "retrieval_keywords" in result["f1"].match_types
+
+    def test_retrieval_keywords_boosts_when_stacked_with_text(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Same file from text vector AND retrieval_keywords gets boosted —
+        the user's "複数 channel hit で優先度アップ" requirement."""
+        self._patch_search_settings(monkeypatch, rrf_weight_clip=0.5)
+        result = _combine_scores_rrf(
+            text_matches=[self._make_vmatch("f1", 0.9)],
+            clip_matches=[],
+            keyword_matches=[],
+            transcript_keyword_matches=[],
+            retrieval_keyword_matches=[
+                _RetrievalKeywordMatch(file_id="f1", score=0.7, matched_keyword="x")
+            ],
+            k=60,
+        )
+        # 1.0/(60+0+1) [text] + 1.0/(60+0+1) [retrieval_keywords]
+        assert result["f1"].combined_score == pytest.approx(2.0 / 61)
+        assert "metadata" in result["f1"].match_types
+        assert "retrieval_keywords" in result["f1"].match_types
+
+    def test_retrieval_keywords_matchinfo_carries_keyword_text(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The matched keyword string flows through MatchInfo.text so the
+        UI can later annotate the chip."""
+        self._patch_search_settings(monkeypatch, rrf_weight_clip=0.5)
+        result = _combine_scores_rrf(
+            text_matches=[],
+            clip_matches=[],
+            keyword_matches=[],
+            transcript_keyword_matches=[],
+            retrieval_keyword_matches=[
+                _RetrievalKeywordMatch(
+                    file_id="f1", score=0.8, matched_keyword="退職 古典文学",
+                )
+            ],
+            k=60,
+        )
+        matches = result["f1"].matches
+        rk_matches = [m for m in matches if m.match_type == "retrieval_keywords"]
+        assert len(rk_matches) == 1
+        assert rk_matches[0].text == "退職 古典文学"
+        # MatchInfo has NO timestamp / page — chip-only, not a jump target.
+        assert rk_matches[0].timestamp_start is None
+        assert rk_matches[0].timestamp_end is None
+        assert rk_matches[0].page is None
 
 
 # ---------------------------------------------------------------------------
