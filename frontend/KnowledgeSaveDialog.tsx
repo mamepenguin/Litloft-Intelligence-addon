@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { X } from "lucide-react";
 
+import { FolderPicker } from "@/components/FolderPicker";
 import {
   distillToKnowledge,
   getNotesBySourceFile,
@@ -67,26 +68,20 @@ export function KnowledgeSaveDialog({
   const tc = useTranslations("common");
 
   const defaultStem = useMemo(() => stemOf(sourceFilename), [sourceFilename]);
-  const defaultTitle = useMemo(
-    () => t("form.defaultTitle", { filename: sourceFilename }),
-    [t, sourceFilename],
-  );
 
   const [state, setState] = useState<ViewState>({ kind: "loading" });
 
   const [folder, setFolder] = useState(DEFAULT_FOLDER);
   const [filename, setFilename] = useState(`${defaultStem}-summary.md`);
-  const [title, setTitle] = useState(defaultTitle);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const reset = useCallback(() => {
     setFolder(DEFAULT_FOLDER);
     setFilename(`${defaultStem}-summary.md`);
-    setTitle(defaultTitle);
     setSubmitting(false);
     setSubmitError(null);
-  }, [defaultStem, defaultTitle]);
+  }, [defaultStem]);
 
   const loadDialogState = useCallback(async () => {
     setState({ kind: "loading" });
@@ -121,11 +116,12 @@ export function KnowledgeSaveDialog({
     setSubmitting(true);
     setSubmitError(null);
     try {
+      const cleanFilename = filename.trim();
       const res = await distillToKnowledge(drive, {
         source_file_id: fileId,
         folder: folder.trim() || DEFAULT_FOLDER,
-        filename: filename.trim(),
-        title: title.trim() || defaultTitle,
+        filename: cleanFilename,
+        title: stemOf(cleanFilename),
         content,
         origin: "detailed_summary",
       });
@@ -136,17 +132,7 @@ export function KnowledgeSaveDialog({
     } finally {
       setSubmitting(false);
     }
-  }, [
-    drive,
-    fileId,
-    folder,
-    filename,
-    title,
-    defaultTitle,
-    content,
-    onSaved,
-    onClose,
-  ]);
+  }, [drive, fileId, folder, filename, content, onSaved, onClose]);
 
   const openExisting = useCallback((note: NoteOrigin) => {
     const url = `/drive/${encodeURIComponent(drive)}/addons/knowledge?edit=${encodeURIComponent(note.note_file_id)}`;
@@ -255,15 +241,10 @@ export function KnowledgeSaveDialog({
 
         {state.kind === "form" && (
           <div className="flex flex-col gap-3">
-            <label className="flex flex-col gap-1">
+            <div className="flex flex-col gap-1">
               <span className="text-xs text-text-muted">{t("form.folder")}</span>
-              <input
-                type="text"
-                value={folder}
-                onChange={(e) => setFolder(e.target.value)}
-                className={`${inputClass} font-mono text-[13px]`}
-              />
-            </label>
+              <FolderPicker drive={drive} value={folder} onChange={setFolder} />
+            </div>
             <label className="flex flex-col gap-1">
               <span className="text-xs text-text-muted">{t("form.filename")}</span>
               <input
@@ -271,15 +252,6 @@ export function KnowledgeSaveDialog({
                 value={filename}
                 onChange={(e) => setFilename(e.target.value)}
                 className={`${inputClass} font-mono text-[13px]`}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs text-text-muted">{t("form.noteTitle")}</span>
-              <input
-                type="text"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                className={inputClass}
               />
             </label>
             {submitError && (
@@ -297,11 +269,7 @@ export function KnowledgeSaveDialog({
               </button>
               <button
                 onClick={handleSubmit}
-                disabled={
-                  submitting
-                  || !filename.trim()
-                  || !title.trim()
-                }
+                disabled={submitting || !filename.trim()}
                 className="rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
               >
                 {submitting ? t("form.submitting") : t("form.submit")}
