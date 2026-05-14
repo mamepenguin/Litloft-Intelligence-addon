@@ -129,10 +129,22 @@ def make_worker():
     return _make
 
 
-def _stub_settings(monkeypatch, *, retrieval_keywords: str = "on_index") -> None:
-    """Patch the worker's settings.features.retrieval_keywords value."""
+def _stub_settings(
+    monkeypatch,
+    *,
+    retrieval_keywords: str = "on_index",
+    llm_model: str = "test-model",
+) -> None:
+    """Patch settings.features.retrieval_keywords and settings.llm.model.
+
+    The worker reads ``settings.llm.model`` (not ``self._llm_client.model``)
+    for the model label that lands in the DB row — the LLM client
+    classes do not all expose a uniform ``.model`` attribute, so we
+    rely on the config layer.
+    """
     fake_settings = MagicMock()
     fake_settings.features.retrieval_keywords = retrieval_keywords
+    fake_settings.llm.model = llm_model
     monkeypatch.setattr(rk_module, "settings", fake_settings)
 
 
@@ -384,7 +396,7 @@ class TestProcessFilePersistence:
 
     @pytest.mark.asyncio
     async def test_writes_kept_keywords(self, monkeypatch, make_worker):
-        _stub_settings(monkeypatch)
+        _stub_settings(monkeypatch, llm_model="gemini-2.5-flash")
         worker = make_worker(
             response={"keywords": ["佐々木徹", "退職前", "古い手紙"]},
             model="gemini-2.5-flash",

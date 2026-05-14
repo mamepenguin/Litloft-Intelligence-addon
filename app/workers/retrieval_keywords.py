@@ -229,7 +229,11 @@ class RetrievalKeywordsWorker:
         # of suggested_tags / file_summaries.
         stored_context_type = "transcript" if context_type in ("video", "audio") else "document"
 
-        model_label = self._llm_client.model or "unknown"
+        # ``settings.llm.model`` is the canonical model label across
+        # provider implementations; OllamaLLMClient / OpenAICompatibleLLMClient
+        # do not expose a uniform ``.model`` attribute, so read from
+        # config — matches auto_tags / summaries convention.
+        model_label = settings.llm.model or "unknown"
         with get_search_db() as session:
             upsert_retrieval_keywords(
                 session,
