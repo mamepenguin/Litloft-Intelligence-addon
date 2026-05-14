@@ -60,6 +60,21 @@ features:
                       # (graceful degradation). "on_index" scales cost linearly
                       # with new image count — enable with care on large
                       # photo libraries.
+  retrieval_keywords: "false"
+                      # "false" | "manual" | "on_index" — LLM-generated synonyms,
+                      # abbreviations, and alternate names per file, stored in a
+                      # dedicated FTS index used by file search and Ask.
+                      # Primary benefit: compensates for ASR misrecognition of
+                      # proper nouns — the LLM infers canonical names from context
+                      # even when the transcript text is garbled. Document files
+                      # benefit less because semantic search already bridges most
+                      # vocabulary gaps.
+                      # SECURITY: file content (transcript / extracted text,
+                      # up to 8 000 chars) is sent to the LLM API once per file.
+                      # Use a local LLM (ollama) for privacy-sensitive drives.
+                      # Per-drive opt-out via drives.json:
+                      #   "intelligence": {"retrieval_keywords": false}
+                      # Requires llm.provider != "disabled".
 
 # LLM provider configuration (required for auto_tags and future LLM features)
 # Supported providers:
