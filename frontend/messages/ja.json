@@ -255,7 +255,7 @@
       "revertConfirm": "編集内容を破棄して AI 生成版に戻しますか？",
       "regenerateConfirm": "編集内容は失われます。続行して再生成しますか？",
       "regenerateConfirmWithNote": "AI 版を再生成します。現在 knowledge に保存されているノートは残りますが、ファイル詳細ページでは AI 要約の表示に戻ります。続行しますか？",
-      "saveToKnowledge": "knowledge に保存",
+      "saveToKnowledge": "ファイルとして保存",
       "saveSuccess": "knowledge に保存しました：{path}"
     },
     "dormant": {

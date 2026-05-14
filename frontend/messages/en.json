@@ -255,7 +255,7 @@
       "revertConfirm": "Discard your edits and restore the AI-generated summary?",
       "regenerateConfirm": "Your edits will be lost. Continue and regenerate?",
       "regenerateConfirmWithNote": "Regenerating the AI version. Your saved knowledge note will remain, but the file detail page will switch back to the AI summary. Continue?",
-      "saveToKnowledge": "Save to knowledge",
+      "saveToKnowledge": "Save as file",
       "saveSuccess": "Saved to knowledge: {path}"
     },
     "dormant": {

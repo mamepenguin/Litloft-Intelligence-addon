@@ -474,7 +474,7 @@ export default function DetailedSummarySection({
   const edited = Boolean(data.edited_at);
   const canRevert = edited && (data.has_original !== false);
 
-  const canSaveToKnowledge = edited && knowledgeAvailable;
+  const canSaveToKnowledge = knowledgeAvailable;
 
   return (
     <CitationRailProvider fileId={fileId} drive={drive}>
@@ -965,7 +965,7 @@ function DetailedSummaryBody({
               >
                 <BookmarkPlus size={11} />
                 {td("edit.saveToKnowledge", {
-                  defaultMessage: "Save to knowledge",
+                  defaultMessage: "Save as file",
                 })}
               </button>
             )}
