@@ -127,6 +127,11 @@ def init_search_db() -> None:
         _create_suggested_tags_table(conn)
         conn.commit()
 
+    # Create retrieval_keywords table for SIRA-style LLM keyword expansion.
+    with _search_engine.connect() as conn:
+        _create_retrieval_keywords_table(conn)
+        conn.commit()
+
     # Create file_summaries table for AI summaries
     with _search_engine.connect() as conn:
         _create_file_summaries_table(conn)
@@ -697,6 +702,18 @@ def _create_vec_tables(conn: object) -> None:
         "USING fts5vocab('fts_text_content_word', 'row')"
     ))
 
+    # SIRA-style LLM-generated keywords per file: synonyms, abbreviations,
+    # alternate names the LLM predicts the user might search by. Lives in
+    # its own FTS surface (NOT mixed into fts_files) so the UI can render
+    # "expanded keyword" hits distinctly from body hits, and so the data
+    # stays out of citation paths (3-tier design: tier-3 retrieval signal
+    # only). Spec: docs/superpowers/specs/2026-05-14-sira-retrieval-keywords.md.
+    conn.execute(text(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS fts_retrieval_keywords "
+        "USING fts5(file_id, keywords, "
+        "tokenize=\"unicode61 remove_diacritics 2\")"
+    ))
+
 
 def _create_suggested_tags_table(conn: object) -> None:
     """Create the suggested_tags table for auto-tagging if it doesn't exist."""
@@ -710,6 +727,118 @@ def _create_suggested_tags_table(conn: object) -> None:
         "  status TEXT NOT NULL DEFAULT 'pending'"
         ")"
     ))
+
+
+def _create_retrieval_keywords_table(conn: object) -> None:
+    """Create the retrieval_keywords table for SIRA-style LLM keyword expansion.
+
+    One row per file. ``keywords`` is a single whitespace-separated
+    string (the canonical form the FTS engine indexes). ``model`` lets
+    a later regenerate pass detect the row was produced by a previous
+    model. ``context_type`` matches the existing summaries / auto_tags
+    classification ('transcript' / 'document') so regeneration can
+    pick the right extractor. ``status`` is either ``'generated'``
+    (active, queried) or ``'hidden'`` (user-suppressed; not queried).
+
+    No FK to indexed_files: matches the suggested_tags / file_summaries
+    convention — purge is handled explicitly in ``_purge_file``.
+
+    Spec: docs/superpowers/specs/2026-05-14-sira-retrieval-keywords.md.
+    """
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS retrieval_keywords ("
+        "  file_id TEXT PRIMARY KEY,"
+        "  keywords TEXT NOT NULL,"
+        "  model TEXT NOT NULL,"
+        "  context_type TEXT NOT NULL,"
+        "  status TEXT NOT NULL DEFAULT 'generated',"
+        "  created_at TEXT NOT NULL,"
+        "  updated_at TEXT"
+        ")"
+    ))
+
+
+def upsert_retrieval_keywords(
+    session: Session,
+    *,
+    file_id: str,
+    keywords: str,
+    model: str,
+    context_type: str,
+    status: str = "generated",
+) -> None:
+    """Write or replace a retrieval_keywords row + its FTS mirror.
+
+    Mirrors the ``upsert_fts_files`` / ``upsert_fts_transcripts``
+    pattern: the canonical table row and the FTS row are written
+    together so they cannot drift. The caller is responsible for the
+    surrounding transaction; this helper only runs the SQL.
+
+    Args:
+        session: Active search-DB session.
+        file_id: The file id (also the PK).
+        keywords: Whitespace-separated keyword string after blocklist +
+            rarity filtering. Empty strings are accepted (the caller
+            decides whether to skip writes for empty results).
+        model: Generation model label, e.g. ``"gemini-2.5-flash"``.
+        context_type: Either ``"transcript"`` or ``"document"`` to
+            match the summaries / auto_tags classification.
+        status: ``"generated"`` (default, active) or ``"hidden"``
+            (user-suppressed; FTS row is still dropped so the data
+            cannot accidentally re-enter queries).
+    """
+    now = datetime.now(UTC).isoformat()
+    session.execute(
+        text(
+            "INSERT INTO retrieval_keywords"
+            "(file_id, keywords, model, context_type, status, "
+            " created_at, updated_at) "
+            "VALUES(:file_id, :keywords, :model, :context_type, "
+            "       :status, :created_at, :updated_at) "
+            "ON CONFLICT(file_id) DO UPDATE SET "
+            "  keywords=excluded.keywords,"
+            "  model=excluded.model,"
+            "  context_type=excluded.context_type,"
+            "  status=excluded.status,"
+            "  updated_at=excluded.updated_at"
+        ),
+        {
+            "file_id": file_id,
+            "keywords": keywords,
+            "model": model,
+            "context_type": context_type,
+            "status": status,
+            "created_at": now,
+            "updated_at": now,
+        },
+    )
+    # FTS: always rewrite. ``hidden`` rows leave the FTS empty so they
+    # do not surface in search (the table row is kept as the audit
+    # trail of what the LLM generated for this file).
+    session.execute(
+        text("DELETE FROM fts_retrieval_keywords WHERE file_id = :file_id"),
+        {"file_id": file_id},
+    )
+    if status == "generated" and keywords:
+        session.execute(
+            text(
+                "INSERT INTO fts_retrieval_keywords(file_id, keywords) "
+                "VALUES(:file_id, :keywords)"
+            ),
+            {"file_id": file_id, "keywords": keywords},
+        )
+
+
+def delete_retrieval_keywords(session: Session, file_id: str) -> None:
+    """Remove the retrieval_keywords row and its FTS mirror for ``file_id``."""
+    session.execute(
+        text("DELETE FROM retrieval_keywords WHERE file_id = :file_id"),
+        {"file_id": file_id},
+    )
+    session.execute(
+        text("DELETE FROM fts_retrieval_keywords WHERE file_id = :file_id"),
+        {"file_id": file_id},
+    )
 
 
 def _create_file_summaries_table(conn: object) -> None:

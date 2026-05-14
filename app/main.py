@@ -33,6 +33,7 @@ from app.routers import (
 from app.schemas import FeaturesStatus, LLMStatus, StatusResponse
 from app.workers.auto_tags import AutoTagsWorker
 from app.workers.pickup import PickupWorker
+from app.workers.retrieval_keywords import RetrievalKeywordsWorker
 from app.workers.summaries import SummariesWorker
 from app.workers.vision import VisionDescribeWorker
 
@@ -215,6 +216,37 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     "Vision: queued %d previously indexed files", pending
                 )
 
+    # Initialize retrieval_keywords worker (SIRA-style keyword expansion).
+    # Same enable rule as auto_tags / summaries: needs LLM client AND a
+    # non-false feature mode. opt-in by default.
+    retrieval_keywords_worker = RetrievalKeywordsWorker(llm_client)
+    dependencies._retrieval_keywords_worker = retrieval_keywords_worker
+    retrieval_keywords_task: asyncio.Task | None = None
+
+    if (
+        settings.features.retrieval_keywords != "false"
+        and llm_client.enabled
+    ):
+        retrieval_keywords_task = asyncio.create_task(
+            retrieval_keywords_worker.run(),
+            name="retrieval_keywords_worker",
+        )
+        logger.info(
+            "Retrieval-keywords worker started (mode=%s)",
+            settings.features.retrieval_keywords,
+        )
+
+        # on_index: queue already-indexed files that still need a
+        # keyword expansion. Mirrors the auto_tags / summaries
+        # on_index sweep.
+        if settings.features.retrieval_keywords == "on_index":
+            pending = await retrieval_keywords_worker.enqueue_unprocessed()
+            if pending > 0:
+                logger.info(
+                    "Retrieval-keywords: queued %d previously indexed files",
+                    pending,
+                )
+
     # Initialize pickup worker (always runs — no feature flag needed)
     pickup_worker = PickupWorker()
     dependencies._pickup_worker = pickup_worker
@@ -225,6 +257,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     index_manager = IndexManager(
         auto_tags_worker=auto_tags_worker,
         summaries_worker=summaries_worker,
+        retrieval_keywords_worker=retrieval_keywords_worker,
     )
     dependencies._index_manager = index_manager
     try:
@@ -257,6 +290,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         vision_task.cancel()
         try:
             await vision_task
+        except asyncio.CancelledError:
+            pass
+    if retrieval_keywords_task is not None:
+        retrieval_keywords_task.cancel()
+        try:
+            await retrieval_keywords_task
         except asyncio.CancelledError:
             pass
     if dependencies._index_manager is not None:
@@ -305,6 +344,10 @@ async def status_endpoint() -> StatusResponse:
         tasks["summaries"] = dependencies._summaries_worker.get_status()
     if dependencies._vision_worker is not None:
         tasks["vision_describe"] = dependencies._vision_worker.get_status()
+    if dependencies._retrieval_keywords_worker is not None:
+        tasks["retrieval_keywords"] = (
+            dependencies._retrieval_keywords_worker.get_status()
+        )
     try:
         from app.workers.refine import get_refine_status
         tasks["transcript_refine"] = get_refine_status()

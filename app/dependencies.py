@@ -8,6 +8,7 @@ from app.indexer import IndexManager
 from app.llm import LLMClient
 from app.workers.auto_tags import AutoTagsWorker
 from app.workers.pickup import PickupWorker
+from app.workers.retrieval_keywords import RetrievalKeywordsWorker
 from app.workers.summaries import SummariesWorker
 from app.workers.vision import VisionDescribeWorker
 
@@ -16,6 +17,7 @@ _index_manager: IndexManager | None = None
 _auto_tags_worker: AutoTagsWorker | None = None
 _summaries_worker: SummariesWorker | None = None
 _vision_worker: VisionDescribeWorker | None = None
+_retrieval_keywords_worker: RetrievalKeywordsWorker | None = None
 _pickup_worker: PickupWorker | None = None
 _llm_client: LLMClient | None = None
 
@@ -64,6 +66,17 @@ def get_vision_worker() -> VisionDescribeWorker:
     if _vision_worker is None:
         raise RuntimeError("Vision describe worker not initialized")
     return _vision_worker
+
+
+def get_retrieval_keywords_worker() -> RetrievalKeywordsWorker:
+    """Get the retrieval_keywords worker instance.
+
+    Raises:
+        RuntimeError: If the worker is not initialized.
+    """
+    if _retrieval_keywords_worker is None:
+        raise RuntimeError("Retrieval-keywords worker not initialized")
+    return _retrieval_keywords_worker
 
 
 def get_llm_client() -> LLMClient:

@@ -118,9 +118,11 @@ class IndexManager:
         self,
         auto_tags_worker: object | None = None,
         summaries_worker: object | None = None,
+        retrieval_keywords_worker: object | None = None,
     ) -> None:
         self._auto_tags_worker = auto_tags_worker
         self._summaries_worker = summaries_worker
+        self._retrieval_keywords_worker = retrieval_keywords_worker
         self._queues: dict[TaskType, asyncio.PriorityQueue[tuple[int, float, IndexTask]]] = {
             task_type: asyncio.PriorityQueue()
             for task_type in TaskType
@@ -1042,6 +1044,19 @@ class IndexManager:
                         for file_id in file_ids:
                             await self._summaries_worker.enqueue(file_id)
 
+                    # Queue retrieval-keywords generation for newly indexed
+                    # files (on_index mode only). The worker enqueue gate
+                    # rechecks per-drive policy and the unsupported
+                    # context-type filter, so this fan-out is safe to call
+                    # for every file_id without pre-filtering by type.
+                    if (
+                        self._retrieval_keywords_worker is not None
+                        and count > 0
+                        and settings.features.retrieval_keywords == "on_index"
+                    ):
+                        for file_id in file_ids:
+                            await self._retrieval_keywords_worker.enqueue(file_id)
+
                 except Exception as e:
                     logger.error("Metadata batch failed: %s", e)
                     # Re-queue failed batch so they're retried. Use force=True
@@ -1635,6 +1650,21 @@ def _purge_file(file_id: str) -> None:
             sql_text("DELETE FROM file_summaries WHERE file_id = :fid"),
             {"fid": file_id},
         )
+        # retrieval_keywords + its FTS mirror. Older DBs that pre-date
+        # Phase 1 of the SIRA retrieval_keywords spec may not have the
+        # tables yet — probe sqlite_master before deleting so a missing
+        # table doesn't abort the whole purge. Once every install has
+        # been started on the current migration, this probe becomes
+        # noise and can be removed.
+        has_retrieval_kw = session.execute(
+            sql_text(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='retrieval_keywords'"
+            )
+        ).fetchone()
+        if has_retrieval_kw is not None:
+            from app.database import delete_retrieval_keywords
+            delete_retrieval_keywords(session, file_id)
         # detailed_summary_citations: linked 1:N to file_summaries via
         # file_id, so we drop them when the file leaves the index. The
         # table may not exist on very old DBs or in narrow unit-test

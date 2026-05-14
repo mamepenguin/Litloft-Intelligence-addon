@@ -298,6 +298,14 @@ class FeaturesConfig:
     # ``llm.vision_model`` to be set or the feature is unavailable even
     # when this flag is "manual"/"on_index" (graceful degradation).
     vision_describe: str = "manual"
+    # SIRA-style LLM-generated retrieval keywords per file
+    # ("false" | "manual" | "on_index"). The LLM predicts synonyms,
+    # abbreviations and alternate names users might search by; the
+    # output goes into a dedicated FTS surface (fts_retrieval_keywords)
+    # and improves file-search robustness against vocabulary gaps.
+    # Default off — file content is sent to the LLM API. Spec:
+    # docs/superpowers/specs/2026-05-14-sira-retrieval-keywords.md.
+    retrieval_keywords: str = "false"
 
 
 @dataclass(frozen=True)

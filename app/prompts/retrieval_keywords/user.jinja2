@@ -1,0 +1,20 @@
+{#-
+vars: filename, context_type (str), title, description, was_truncated (bool), context (str)
+see workers/retrieval_keywords.py:_generate_keywords
+-#}
+<filename>
+{{ filename }}
+</filename>
+{% if title %}
+<title>
+{{ title }}
+</title>
+{% endif %}
+{% if description %}
+<description>
+{{ description }}
+</description>
+{% endif %}
+<context type="{{ context_type }}"{% if was_truncated %} truncated="true"{% endif %}>
+{{ context }}
+</context>
