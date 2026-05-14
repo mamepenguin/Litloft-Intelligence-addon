@@ -31,6 +31,7 @@ from app.database import get_search_db
 from app.dependencies import get_llm_client
 from app.prompt_loader import render
 from app.rag.keyword_filter import filter_keywords
+from app.rag.rarity_filter import filter_clue_by_rarity
 
 logger = logging.getLogger(__name__)
 
@@ -198,11 +199,17 @@ async def generate_clues(
     for entry in raw_clues:
         if not isinstance(entry, str):
             continue
-        # Same blocklist that protects ``transform_query`` from local
-        # models leaking question / file-type words into the keyword
-        # string. If filtering empties this clue we drop it — but only
+        # Two-stage filter:
+        #   1. Static blocklist (``filter_keywords``) — protects from
+        #      local models leaking question / file-type words into the
+        #      keyword string.
+        #   2. Corpus-DF rarity (``filter_clue_by_rarity``) — SIRA-style
+        #      drop of tokens common in our chunk corpus (particles,
+        #      generic nouns) that would poison the FTS AND-query.
+        # If either stage empties this clue we drop it — but only
         # this clue, not the whole result.
         candidate = filter_keywords(entry.strip())
+        candidate = filter_clue_by_rarity(candidate)
         if candidate:
             cleaned = [*cleaned, candidate]
         if len(cleaned) >= clue_count:

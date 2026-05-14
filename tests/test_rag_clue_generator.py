@@ -311,6 +311,91 @@ class TestGenerateCluesFallbacks:
         assert result == ["good_a", "good_b"]
 
 
+class TestGenerateCluesRarityIntegration:
+    """The rarity filter runs after filter_keywords on each clue.
+
+    These tests stub ``filter_clue_by_rarity`` directly to assert the
+    integration wiring without standing up the FTS vocab tables. The
+    rarity filter's own behaviour is covered in test_rag_rarity_filter.
+    """
+
+    @pytest.mark.asyncio
+    async def test_rarity_dropped_clue_removed_from_result(self, monkeypatch):
+        # The rarity filter empties the second clue; the survivors must
+        # be returned without triggering the global fallback.
+        def _rarity(candidate: str) -> str:
+            return "" if candidate == "common_only" else candidate
+
+        monkeypatch.setattr(
+            "app.rag.clue_generator.filter_clue_by_rarity", _rarity
+        )
+        monkeypatch.setattr(
+            "app.rag.clue_generator.get_llm_client",
+            lambda: _llm_stub(
+                response={"clues": ["domain_a", "common_only", "domain_b"]}
+            ),
+        )
+
+        result = await generate_clues(
+            "q", ["s1"], clue_count=3, fallback_keywords="kw"
+        )
+
+        assert result == ["domain_a", "domain_b"]
+
+    @pytest.mark.asyncio
+    async def test_rarity_drops_all_returns_fallback(self, monkeypatch):
+        # When rarity empties every clue, no clue survives — fall back
+        # to the legacy single-keyword path.
+        monkeypatch.setattr(
+            "app.rag.clue_generator.filter_clue_by_rarity", lambda _s: ""
+        )
+        monkeypatch.setattr(
+            "app.rag.clue_generator.get_llm_client",
+            lambda: _llm_stub(response={"clues": ["a", "b", "c"]}),
+        )
+
+        result = await generate_clues(
+            "q", ["s1"], clue_count=3, fallback_keywords="kw"
+        )
+
+        assert result == ["kw"]
+
+    @pytest.mark.asyncio
+    async def test_rarity_runs_after_keyword_filter(self, monkeypatch):
+        # filter_keywords must run first (cheap static blocklist), then
+        # filter_clue_by_rarity (DB hit). Assert order via call sequence.
+        calls: list[tuple[str, str]] = []
+
+        def _kw(s: str) -> str:
+            calls.append(("kw", s))
+            return s + "_kw"
+
+        def _rarity(s: str) -> str:
+            calls.append(("rarity", s))
+            return s + "_rarity"
+
+        monkeypatch.setattr(
+            "app.rag.clue_generator.filter_keywords", _kw
+        )
+        monkeypatch.setattr(
+            "app.rag.clue_generator.filter_clue_by_rarity", _rarity
+        )
+        monkeypatch.setattr(
+            "app.rag.clue_generator.get_llm_client",
+            lambda: _llm_stub(response={"clues": ["one"]}),
+        )
+
+        result = await generate_clues(
+            "q", ["s1"], clue_count=3, fallback_keywords="kw"
+        )
+
+        # filter_keywords sees "one", then filter_clue_by_rarity sees
+        # "one_kw". The order matters: rarity hits the DB, so cheap
+        # filtering must run first.
+        assert calls == [("kw", "one"), ("rarity", "one_kw")]
+        assert result == ["one_kw_rarity"]
+
+
 # ---------------------------------------------------------------------------
 # fetch_long_summaries
 # ---------------------------------------------------------------------------

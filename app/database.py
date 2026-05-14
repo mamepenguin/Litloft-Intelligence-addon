@@ -683,6 +683,20 @@ def _create_vec_tables(conn: object) -> None:
         "tokenize=\"unicode61 remove_diacritics 2\")"
     ))
 
+    # fts5vocab auxiliary tables expose per-term document frequency for
+    # the SIRA-inspired rarity filter (app/rag/rarity_filter.py). They
+    # stay in sync with the host word-FTS tables automatically — no
+    # backfill needed. ``'row'`` aggregates counts across all columns
+    # so a single SELECT returns the term's DF in the chunk corpus.
+    conn.execute(text(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS fts_transcripts_word_vocab "
+        "USING fts5vocab('fts_transcripts_word', 'row')"
+    ))
+    conn.execute(text(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS fts_text_content_word_vocab "
+        "USING fts5vocab('fts_text_content_word', 'row')"
+    ))
+
 
 def _create_suggested_tags_table(conn: object) -> None:
     """Create the suggested_tags table for auto-tagging if it doesn't exist."""
