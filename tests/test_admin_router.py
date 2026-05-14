@@ -410,6 +410,7 @@ def test_features_get_returns_baseline(client) -> None:
     for key in (
         "indexing", "search", "rag", "auto_tags", "summaries",
         "detailed_summaries", "transcript_refine", "vision_describe",
+        "retrieval_keywords",
     ):
         assert key in body
     assert body["overrides_present"] is False

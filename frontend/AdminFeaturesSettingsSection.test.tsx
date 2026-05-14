@@ -33,6 +33,7 @@ function defaultPayload(overrides: Record<string, unknown> = {}) {
     detailed_summaries: "false",
     transcript_refine: "false",
     vision_describe: "manual",
+    retrieval_keywords: "false",
     tristate_values: ["false", "manual", "on_index"],
     overrides_present: false,
     ...overrides,
@@ -47,7 +48,7 @@ describe("AdminFeaturesSettingsSection", () => {
       expect(screen.getByRole("button", { name: /save/i })).toBeInTheDocument(),
     );
     expect(screen.getAllByRole("checkbox").length).toBe(3);
-    expect(screen.getAllByRole("radio").length).toBe(15); // 5 enums × 3 values
+    expect(screen.getAllByRole("radio").length).toBe(18); // 6 enums × 3 values
   });
 
   it("PUTs the form values on save", async () => {
