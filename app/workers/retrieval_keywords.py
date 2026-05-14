@@ -85,6 +85,17 @@ _MAX_KEPT_KEYWORDS = 20
 # first-source anchor. Revisit if a real use-case appears.
 _HANDLED_CONTEXT_TYPES = ("video", "audio", "document")
 
+# Language instruction matching the auto_tags / summaries pattern. The
+# system prompt template renders an empty string when the configured
+# output_language is ``"auto"`` or an unrecognised code — gemma will
+# then pick the language from the context tags, which is usually
+# right but can mix ja/en on bilingual content. Explicit ja / en
+# locks the output language.
+_LANGUAGE_INSTRUCTIONS: dict[str, str] = {
+    "ja": "- Output keywords in Japanese (proper nouns keep their original script)\n",
+    "en": "- Output keywords in English (proper nouns keep their original script)\n",
+}
+
 
 class RetrievalKeywordsWorker:
     """Async worker that generates SIRA-style retrieval keywords.
@@ -267,9 +278,13 @@ class RetrievalKeywordsWorker:
         malformed JSON / missing keywords key). The caller treats an
         empty list as "skip this file" silently.
         """
+        language_instruction = _LANGUAGE_INSTRUCTIONS.get(
+            settings.llm.output_language, ""
+        )
         system_prompt = render(
             "retrieval_keywords/system.jinja2",
             max_keywords=_MAX_KEPT_KEYWORDS,
+            language_instruction=language_instruction,
         )
         user_prompt = render(
             "retrieval_keywords/user.jinja2",
@@ -335,8 +350,12 @@ def _post_filter(raw_keywords: list[str]) -> str:
         return ""
 
     # Cap the final keyword count. Truncation is on whitespace-split
-    # tokens; we never split a keyword in the middle.
-    tokens = joined.split()
+    # tokens; we never split a keyword in the middle. dict.fromkeys
+    # preserves first-occurrence order while de-duplicating: gemma /
+    # other small models routinely repeat the same noun phrase across
+    # several keyword positions (observed: "クロノトリガー" x3 in a
+    # single response) and the duplicates add nothing to FTS recall.
+    tokens = list(dict.fromkeys(joined.split()))
     if len(tokens) > _MAX_KEPT_KEYWORDS:
         tokens = tokens[:_MAX_KEPT_KEYWORDS]
     return " ".join(tokens)

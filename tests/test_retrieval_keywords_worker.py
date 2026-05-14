@@ -89,6 +89,17 @@ class TestPostFilter:
         # Order is preserved — first 20 survive.
         assert tokens == [f"kw{i}" for i in range(20)]
 
+    def test_dedupes_repeated_tokens(self, monkeypatch):
+        # gemma routinely repeats the same noun phrase across keyword
+        # positions ("クロノトリガー" x3 observed in production). The
+        # dedupe step removes duplicates while preserving first
+        # occurrence order so downstream FTS row stays compact.
+        monkeypatch.setattr(rk_module, "filter_keywords", lambda s: s)
+        monkeypatch.setattr(rk_module, "filter_clue_by_rarity", lambda s: s)
+
+        result = _post_filter(["a", "b", "a", "c", "b", "d"])
+        assert result.split() == ["a", "b", "c", "d"]
+
     def test_skips_empty_entries(self, monkeypatch):
         monkeypatch.setattr(rk_module, "filter_keywords", lambda s: s)
         monkeypatch.setattr(rk_module, "filter_clue_by_rarity", lambda s: s)
