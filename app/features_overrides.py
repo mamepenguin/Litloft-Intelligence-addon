@@ -1,6 +1,6 @@
 """GUI-driven runtime overrides for the ``features`` config section.
 
-The admin GUI lets operators flip the eight feature gates without
+The admin GUI lets operators flip the feature gates without
 hand-editing search-config.yml. Persisted to
 ``/intelligence-data/features-overrides.json`` so the choice survives
 restarts.
@@ -8,14 +8,15 @@ restarts.
 Allowed fields (all optional — absent ⇒ keep baseline from
 search-config.yml):
 
-* ``indexing``           — bool
-* ``search``             — bool
-* ``rag``                — bool
-* ``auto_tags``          — "false" | "manual" | "on_index"
-* ``summaries``          — same enum
-* ``detailed_summaries`` — same enum
-* ``transcript_refine``  — same enum
-* ``vision_describe``    — same enum
+* ``indexing``              — bool
+* ``search``                — bool
+* ``rag``                   — bool
+* ``auto_tags``             — "false" | "manual" | "on_index"
+* ``summaries``             — same enum
+* ``detailed_summaries``    — same enum
+* ``transcript_refine``     — same enum
+* ``vision_describe``       — same enum
+* ``retrieval_keywords``    — same enum
 
 Defence in depth: any other key in the on-disk file is silently
 dropped during read so a buggy writer cannot smuggle additional
@@ -50,6 +51,7 @@ ENUM_FIELDS = (
     "detailed_summaries",
     "transcript_refine",
     "vision_describe",
+    "retrieval_keywords",
 )
 
 
@@ -68,6 +70,7 @@ class FeaturesOverrides:
     detailed_summaries: str | None = None
     transcript_refine: str | None = None
     vision_describe: str | None = None
+    retrieval_keywords: str | None = None
 
 
 def overrides_path(data_dir: str | os.PathLike[str] | None = None) -> Path:

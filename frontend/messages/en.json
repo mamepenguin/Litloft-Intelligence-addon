@@ -333,6 +333,10 @@
         "vision_describe": {
           "label": "AI image description",
           "help": "Describe images (HEIC included) with a vision LLM. Image bytes are sent to the LLM API on each generation. For private photos, prefer Off or a local vision model. Requires vision_model to be set on the LLM provider."
+        },
+        "retrieval_keywords": {
+          "label": "AI retrieval keyword expansion",
+          "help": "The LLM predicts synonyms, abbreviations, and alternate names per file and stores them in a dedicated FTS index for file search and Ask. Primary benefit: compensates for proper nouns misrecognised by ASR. Transcript or document text (up to 8,000 chars) is sent to the LLM API."
         }
       }
     },

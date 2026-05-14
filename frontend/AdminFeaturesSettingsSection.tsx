@@ -1,6 +1,6 @@
 "use client";
 
-// AdminFeaturesSettingsSection — toggles the eight ``features.*``
+// AdminFeaturesSettingsSection — toggles the ``features.*``
 // flags from the admin GUI. Save writes
 // ``/intelligence-data/features-overrides.json`` (Phase 2D pattern).
 // Reset deletes the file so search-config.yml becomes authoritative.
@@ -17,6 +17,7 @@ const TRISTATE_FIELDS = [
   "detailed_summaries",
   "transcript_refine",
   "vision_describe",
+  "retrieval_keywords",
 ] as const;
 const BOOL_FIELDS = ["indexing", "search", "rag"] as const;
 
@@ -32,6 +33,7 @@ interface FeaturesPayload {
   detailed_summaries: string;
   transcript_refine: string;
   vision_describe: string;
+  retrieval_keywords: string;
   tristate_values: string[];
   overrides_present: boolean;
 }
@@ -108,6 +110,7 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
     detailed_summaries: "false",
     transcript_refine: "false",
     vision_describe: "false",
+    retrieval_keywords: "false",
   });
 
   const reload = useCallback(async () => {
@@ -124,6 +127,7 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
       detailed_summaries: payload.detailed_summaries,
       transcript_refine: payload.transcript_refine,
       vision_describe: payload.vision_describe,
+      retrieval_keywords: payload.retrieval_keywords,
     });
   }, []);
 

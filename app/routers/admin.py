@@ -296,6 +296,7 @@ _FEATURES_ENUM_FIELDS = (
     "detailed_summaries",
     "transcript_refine",
     "vision_describe",
+    "retrieval_keywords",
 )
 _FEATURES_TRISTATE = ("false", "manual", "on_index")
 
@@ -312,6 +313,7 @@ class FeaturesUpdate(BaseModel):
     detailed_summaries: str | None = None
     transcript_refine: str | None = None
     vision_describe: str | None = None
+    retrieval_keywords: str | None = None
 
 
 @router.get("/features")
@@ -345,6 +347,7 @@ async def get_features_config() -> dict[str, Any]:
         "detailed_summaries": resolve("detailed_summaries"),
         "transcript_refine": resolve("transcript_refine"),
         "vision_describe": resolve("vision_describe"),
+        "retrieval_keywords": resolve("retrieval_keywords"),
         "tristate_values": list(_FEATURES_TRISTATE),
         "overrides_present": overrides is not None,
     }
@@ -364,6 +367,7 @@ async def update_features_config(payload: FeaturesUpdate) -> dict[str, Any]:
         detailed_summaries=payload.detailed_summaries,
         transcript_refine=payload.transcript_refine,
         vision_describe=payload.vision_describe,
+        retrieval_keywords=payload.retrieval_keywords,
     )
     path = fo.write_overrides(
         overrides, updated_at=datetime.now(UTC).isoformat()
