@@ -169,27 +169,6 @@ export interface TranscriptResponse {
   chunks?: TranscriptChunkItem[];
 }
 
-export interface IndexDetailEmbeddingItem {
-  content_preview: string;
-  start: number | null;
-  end: number | null;
-}
-
-export interface IndexDetailType {
-  count: number;
-  items: IndexDetailEmbeddingItem[];
-}
-
-export interface IndexDetailsResponse {
-  available: boolean;
-  file_id?: string;
-  drive?: string;
-  filename?: string;
-  status?: { metadata: boolean; clip: boolean; whisper: boolean; text: boolean };
-  indexed_at?: string;
-  embeddings?: Record<string, IndexDetailType>;
-}
-
 export interface ClipTimestampItem {
   start: number;
   content_preview: string;
@@ -376,20 +355,6 @@ export async function refineFolderTranscripts(
       body: JSON.stringify({ drive, file_ids: fileIds }),
     },
   );
-}
-
-export async function getFileIndexDetails(
-  fileId: string,
-  drive: string,
-): Promise<IndexDetailsResponse> {
-  try {
-    return await fetchJSON<IndexDetailsResponse>(
-      `${API_BASE}/addons/intelligence/files/${fileId}/index-details`,
-      { headers: driveHeaders(drive) },
-    );
-  } catch {
-    return { available: false };
-  }
 }
 
 export async function getClipTimestamps(
