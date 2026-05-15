@@ -644,6 +644,64 @@ def _idf_upper_bound_from_min_df(n_docs: int, min_doc_freq: int) -> float | None
     return math.log(n_docs / min_doc_freq) + 1.0
 
 
+def extract_top_keywords(
+    text: str,
+    filename: str,
+    k: int = 30,
+) -> list[str]:
+    """Extract top-k TF-IDF keywords from text + filename without a DB fetch.
+
+    Used by the whisper/VTT indexing path to build the tfidf_keywords
+    embedding at index time. Accepts the transcript text and filename
+    directly so the caller does not need to re-fetch from DB.
+
+    Falls back to raw TF (log-normalised term frequency) when the
+    corpus IDF cache is not yet populated (e.g. first few files).
+
+    Args:
+        text: Full transcript text.
+        filename: File's display name (used for topic-keyword boost).
+        k: Maximum number of keywords to return.
+
+    Returns:
+        List of keyword strings sorted by descending TF-IDF score.
+        Empty list when the text is too short or tokenisation yields nothing.
+    """
+    if len(text.strip()) < 20:
+        return []
+
+    from janome.tokenizer import Tokenizer
+    tokenizer = Tokenizer()
+    try:
+        transcript_tokens = _word_tokenize(text, tokenizer)
+        fn_tokens = _tokenize_filename(filename, tokenizer)
+    finally:
+        del tokenizer
+
+    tokens = transcript_tokens + fn_tokens * _FILENAME_BOOST
+    if not tokens:
+        return []
+
+    idf, _ = _get_corpus_idf()
+
+    if idf:
+        vec = _tfidf_vector(tokens, idf)
+    else:
+        # IDF not ready yet — use log-normalised TF as fallback.
+        tf = Counter(tokens)
+        total = sum(tf.values())
+        vec = {
+            token: math.log(1 + count / total)
+            for token, count in tf.items()
+        }
+
+    if not vec:
+        return []
+
+    sorted_items = sorted(vec.items(), key=lambda x: x[1], reverse=True)[:k]
+    return [word for word, _ in sorted_items]
+
+
 def get_tfidf_keywords_for_file(
     file_id: str,
     *,

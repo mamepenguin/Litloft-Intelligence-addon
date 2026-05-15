@@ -36,6 +36,7 @@ from app.workers.clip import (
 from app.workers.metadata import index_metadata_batch, index_text_content
 from app.workers.whisper import (
     check_idle_unload as check_whisper_idle_unload,
+    index_tfidf_keywords_backfill,
     index_whisper,
     TRANSCRIBABLE_TYPES,
     LOFT_MIME,
@@ -62,6 +63,7 @@ class TaskType(str, Enum):
     CLIP = "clip"
     WHISPER = "whisper"
     TEXT_CONTENT = "text_content"
+    TFIDF_KEYWORDS = "tfidf_keywords"
 
 
 class QueueState(str, Enum):
@@ -97,11 +99,13 @@ class IndexStatus:
     clip_thumbnail_indexed: int = 0
     whisper_indexed: int = 0
     text_indexed: int = 0
+    tfidf_keywords_indexed: int = 0
     pending_metadata: int = 0
     pending_clip: int = 0
     pending_clip_thumbnail: int = 0
     pending_whisper: int = 0
     pending_text: int = 0
+    pending_tfidf_keywords: int = 0
 
 
 class IndexManager:
@@ -167,6 +171,9 @@ class IndexManager:
                 for i in range(clip_count)
             ],
             asyncio.create_task(self._whisper_worker(), name="whisper_worker"),
+            asyncio.create_task(
+                self._tfidf_keywords_worker(), name="tfidf_keywords_worker"
+            ),
             asyncio.create_task(
                 self._reconciliation_worker(), name="reconciliation_worker"
             ),
@@ -255,6 +262,12 @@ class IndexManager:
                 IndexedFile.mime_type.in_(list(TEXT_MIMES)),
             ).count()
 
+            tfidf_kw_types = whisper_types  # same MIME scope
+            tfidf_kw = active_files.filter(
+                IndexedFile.tfidf_keywords_indexed.is_(True),
+                IndexedFile.mime_type.in_(tfidf_kw_types),
+            ).count()
+
             # Count pending by type
             pending_metadata = active_files.filter(
                 IndexedFile.metadata_indexed.is_(False),
@@ -279,6 +292,12 @@ class IndexManager:
                 IndexedFile.mime_type.in_(list(TEXT_MIMES)),
             ).count()
 
+            pending_tfidf_kw = active_files.filter(
+                IndexedFile.tfidf_keywords_indexed.is_(False),
+                IndexedFile.whisper_indexed.is_(True),
+                IndexedFile.mime_type.in_(tfidf_kw_types),
+            ).count()
+
             return IndexStatus(
                 total_indexed=total,
                 metadata_indexed=metadata,
@@ -286,11 +305,13 @@ class IndexManager:
                 clip_thumbnail_indexed=clip_thumbnail,
                 whisper_indexed=whisper,
                 text_indexed=text,
+                tfidf_keywords_indexed=tfidf_kw,
                 pending_metadata=pending_metadata,
                 pending_clip=pending_clip,
                 pending_clip_thumbnail=pending_clip_thumbnail,
                 pending_whisper=pending_whisper,
                 pending_text=pending_text,
+                pending_tfidf_keywords=pending_tfidf_kw,
             )
 
     async def reconcile(self) -> dict[str, int]:
@@ -578,6 +599,7 @@ class IndexManager:
                         IndexedFile.clip_thumbnail_indexed.is_(False),
                         IndexedFile.whisper_indexed.is_(False),
                         IndexedFile.text_indexed.is_(False),
+                        IndexedFile.tfidf_keywords_indexed.is_(False),
                     ),
                 )
                 .all()
@@ -597,9 +619,18 @@ class IndexManager:
                     f.whisper_indexed = True
                 if not f.text_indexed and f.mime_type not in TEXT_MIMES:
                     f.text_indexed = True
+                # tfidf_keywords: only video/loft files with completed whisper
+                if not f.tfidf_keywords_indexed and not f.whisper_indexed:
+                    f.tfidf_keywords_indexed = True
+                if (
+                    not f.tfidf_keywords_indexed
+                    and f.mime_type not in TRANSCRIBABLE_TYPES
+                    and f.mime_type != LOFT_MIME
+                ):
+                    f.tfidf_keywords_indexed = True
 
             # Snapshot what we need for queuing
-            file_tasks: list[tuple[str, str, bool, bool, bool, bool, bool]] = [
+            file_tasks: list[tuple[str, str, bool, bool, bool, bool, bool, bool]] = [
                 (
                     f.file_id,
                     f.mime_type,
@@ -608,6 +639,7 @@ class IndexManager:
                     f.clip_thumbnail_indexed,
                     f.whisper_indexed,
                     f.text_indexed,
+                    f.tfidf_keywords_indexed,
                 )
                 for f in incomplete
             ]
@@ -615,6 +647,7 @@ class IndexManager:
         for (
             file_id, mime_type,
             meta_done, clip_done, thumb_done, whisper_done, text_done,
+            tfidf_kw_done,
         ) in file_tasks:
             queued_any = False
 
@@ -643,6 +676,14 @@ class IndexManager:
             if not text_done:
                 await self._enqueue(IndexTask(
                     file_id=file_id, task_type=TaskType.TEXT_CONTENT
+                ))
+                queued_any = True
+
+            # Backfill: file has transcript but no tfidf_keywords embedding.
+            # New files get this automatically from _persist_transcript hook.
+            if not tfidf_kw_done and whisper_done:
+                await self._enqueue(IndexTask(
+                    file_id=file_id, task_type=TaskType.TFIDF_KEYWORDS
                 ))
                 queued_any = True
 
@@ -1234,6 +1275,43 @@ class IndexManager:
             except Exception as e:
                 logger.error("Whisper worker error: %s", e)
                 await asyncio.sleep(10)
+
+    async def _tfidf_keywords_worker(self) -> None:
+        """Process TF-IDF keyword embedding tasks."""
+        while True:
+            try:
+                await self._pause_event.wait()
+                batch = await self._collect_batch(TaskType.TFIDF_KEYWORDS, 1)
+
+                if not batch:
+                    await asyncio.sleep(5)
+                    continue
+
+                task = batch[0]
+                self._processing_count += 1
+                self._processing_by_type[TaskType.TFIDF_KEYWORDS].append(task.file_id)
+
+                try:
+                    success = await asyncio.to_thread(
+                        index_tfidf_keywords_backfill, task.file_id
+                    )
+                    if success:
+                        logger.info("TF-IDF keywords indexed: %s", task.file_id)
+                except Exception as e:
+                    logger.error(
+                        "TF-IDF keyword indexing failed for %s: %s",
+                        task.file_id, e,
+                    )
+                finally:
+                    self._processing_count -= 1
+                    try:
+                        self._processing_by_type[TaskType.TFIDF_KEYWORDS].remove(task.file_id)
+                    except ValueError:
+                        pass
+
+            except Exception as e:
+                logger.error("TF-IDF keywords worker error: %s", e)
+                await asyncio.sleep(5)
 
     async def _reconciliation_worker(self) -> None:
         """Periodically reconcile index with Litloft DB."""

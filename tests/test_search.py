@@ -518,7 +518,7 @@ class TestSelectEmbeddingTypes:
         assert _select_embedding_types("image") == ("clip_thumbnail", None)
 
     def test_video(self) -> None:
-        assert _select_embedding_types("video") == ("clip_thumbnail", "tfidf")
+        assert _select_embedding_types("video") == ("clip_thumbnail", "tfidf_keywords")
 
     def test_audio(self) -> None:
         assert _select_embedding_types("audio") == ("whisper", None)

@@ -178,6 +178,9 @@ def init_search_db() -> None:
     # "傾聴の技術" are one unicode61 token, making "傾聴" un-queryable.
     _migrate_fts_retrieval_keywords_to_trigram()
 
+    with _search_engine.begin() as conn:
+        _migrate_tfidf_keywords_indexed(conn)
+
 
 def _migrate_fts_retrieval_keywords_to_trigram() -> None:
     """Re-create fts_retrieval_keywords with trigram tokenizer if needed.
@@ -521,6 +524,33 @@ def _migrate_indexed_files_thumbnail_columns(conn: object) -> None:
                 "CREATE INDEX IF NOT EXISTS "
                 "idx_indexed_files_clip_thumbnail_indexed "
                 "ON indexed_files(clip_thumbnail_indexed)"
+            )
+        )
+
+
+def _migrate_tfidf_keywords_indexed(conn: object) -> None:
+    """Add ``tfidf_keywords_indexed`` column for pre-computed keyword embeddings.
+
+    Idempotent: skips if column already exists.
+    """
+    cols = {
+        row[1]
+        for row in conn.execute(
+            text("PRAGMA table_info(indexed_files)")
+        ).fetchall()
+    }
+    if "tfidf_keywords_indexed" not in cols:
+        conn.execute(
+            text(
+                "ALTER TABLE indexed_files ADD COLUMN "
+                "tfidf_keywords_indexed BOOLEAN NOT NULL DEFAULT 0"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "idx_indexed_files_tfidf_keywords_indexed "
+                "ON indexed_files(tfidf_keywords_indexed)"
             )
         )
 

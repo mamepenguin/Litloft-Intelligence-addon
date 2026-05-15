@@ -1621,18 +1621,10 @@ def find_similar(
         file_id, primary_type, limit * 2, drive,
     )
 
-    # For video files, use TF-IDF on transcripts instead of whisper embeddings
+    # For video files, also search by pre-computed TF-IDF keyword embeddings
     secondary_results: list[dict] = []
     source_keywords: list[str] = []
-    if secondary_type == "tfidf":
-        from app.tfidf import find_similar_by_tfidf
-        secondary_results, source_keywords = find_similar_by_tfidf(
-            file_id, limit * 2, drive,
-        )
-        merged = _merge_similar_results(
-            primary_results, secondary_results, limit,
-        )
-    elif secondary_type and secondary_type != primary_type:
+    if secondary_type and secondary_type != primary_type:
         secondary_results = _find_similar_by_embedding(
             file_id, secondary_type, limit * 2, drive,
         )
@@ -1641,6 +1633,20 @@ def find_similar(
         )
     else:
         merged = primary_results[:limit]
+
+    # For tfidf_keywords secondary, read source keywords from the stored
+    # content_preview (keyword string saved at index time) — O(1) DB lookup,
+    # no Janome or IDF rebuild needed at query time.
+    if secondary_type == "tfidf_keywords" and not source_keywords:
+        with get_search_db_read() as _kw_session:
+            _kw_emb = (
+                _kw_session.query(Embedding.content_preview)
+                .filter_by(file_id=file_id, embedding_type="tfidf_keywords")
+                .first()
+            )
+        if _kw_emb and _kw_emb.content_preview:
+            _words = _kw_emb.content_preview.split()
+            source_keywords = [{"word": w, "score": 1.0} for w in _words]
 
     # Build lookup maps for score breakdown and keywords
     primary_by_id = {r["file_id"]: r["score"] for r in primary_results}
@@ -1785,7 +1791,7 @@ def _select_embedding_types(
     # same subject".
     type_map: dict[str, tuple[str, str | None]] = {
         "image": ("clip_thumbnail", None),
-        "video": ("clip_thumbnail", "tfidf"),
+        "video": ("clip_thumbnail", "tfidf_keywords"),
         "audio": ("whisper", None),
         "document": ("text_content", None),
     }

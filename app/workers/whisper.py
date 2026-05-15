@@ -23,7 +23,7 @@ import uuid
 from datetime import UTC, datetime
 
 from app.config import settings, validate_file_path
-from app.database import delete_fts_transcripts, get_search_db, upsert_fts_transcripts
+from app.database import delete_fts_transcripts, get_search_db, get_search_db_read, upsert_fts_transcripts
 from app.models import (
     Embedding,
     IndexedFile,
@@ -1081,6 +1081,150 @@ def _finish_job_succeeded(job_id: int) -> None:
         record.completed_at = datetime.now(UTC)
 
 
+def _index_tfidf_keywords(file_id: str, chunk_texts: list[str]) -> None:
+    """Build and store a TF-IDF keyword embedding for a file.
+
+    Extracts top keywords from the supplied transcript chunks, embeds
+    them as a single dense vector via ``embed_passages``, and saves the
+    result to ``vec_text`` with ``embedding_type="tfidf_keywords"``.
+    Sets ``tfidf_keywords_indexed=True`` on success (or when the
+    transcript is too short to be worth indexing).
+
+    Leaves the flag ``False`` on embedding failures so the backfill
+    worker can retry on the next startup sweep.
+    """
+    text = " ".join(chunk_texts).strip()
+
+    def _mark_done() -> None:
+        with get_search_db() as session:
+            session.execute(
+                sql_text(
+                    "UPDATE indexed_files SET tfidf_keywords_indexed=1 "
+                    "WHERE file_id=:fid"
+                ),
+                {"fid": file_id},
+            )
+
+    if len(text) < 20:
+        _mark_done()
+        return
+
+    with get_search_db_read() as session:
+        row = (
+            session.query(IndexedFile.filename)
+            .filter_by(file_id=file_id)
+            .first()
+        )
+    filename = row.filename if row else ""
+
+    from app.tfidf import extract_top_keywords
+    keywords = extract_top_keywords(text, filename)
+    if not keywords:
+        _mark_done()
+        return
+
+    keyword_string = " ".join(keywords)
+    try:
+        vectors = embed_passages([keyword_string])
+    except Exception as e:
+        logger.warning("TF-IDF keyword embedding failed for %s: %s", file_id, e)
+        return  # leave tfidf_keywords_indexed=False for backfill retry
+
+    vector = vectors[0]
+    embedding_id = f"tk_{file_id}_{uuid.uuid4().hex[:8]}"
+
+    with get_search_db() as session:
+        old_embs = (
+            session.query(Embedding)
+            .filter_by(file_id=file_id, embedding_type="tfidf_keywords")
+            .all()
+        )
+        for old in old_embs:
+            session.execute(
+                sql_text("DELETE FROM vec_text WHERE embedding_id = :id"),
+                {"id": old.id},
+            )
+            session.delete(old)
+
+        embedding_record = Embedding(
+            id=embedding_id,
+            file_id=file_id,
+            embedding_type="tfidf_keywords",
+            vector_table="vec_text",
+            content_preview=keyword_string[:200],
+        )
+        session.add(embedding_record)
+        session.flush()
+
+        session.execute(
+            sql_text(
+                "INSERT INTO vec_text(embedding_id, vector) VALUES(:id, :vec)"
+            ),
+            {"id": embedding_id, "vec": vector.tobytes()},
+        )
+
+        session.execute(
+            sql_text(
+                "UPDATE indexed_files SET tfidf_keywords_indexed=1 "
+                "WHERE file_id=:fid"
+            ),
+            {"fid": file_id},
+        )
+
+    logger.debug(
+        "TF-IDF keyword embedding indexed for %s (%d keywords)",
+        file_id, len(keywords),
+    )
+
+
+def index_tfidf_keywords_backfill(file_id: str) -> bool:
+    """Backfill TF-IDF keyword embedding for a file that already has a transcript.
+
+    Used by the TFIDF_KEYWORDS task worker to process files indexed
+    before this feature was introduced.
+
+    Returns True on success (including "too short to index"),
+    False when the embedding step fails.
+    """
+    with get_search_db_read() as session:
+        chunks = (
+            session.query(TranscriptChunk.text)
+            .filter_by(file_id=file_id)
+            .order_by(TranscriptChunk.chunk_index)
+            .all()
+        )
+    chunk_texts = [c.text for c in chunks if c.text.strip()]
+
+    text = " ".join(chunk_texts).strip()
+    if len(text) < 20:
+        with get_search_db() as session:
+            f = session.query(IndexedFile).filter_by(file_id=file_id).first()
+            if f is not None:
+                f.tfidf_keywords_indexed = True
+        return True
+
+    # Check if embedding already exists (race guard)
+    with get_search_db_read() as session:
+        existing = (
+            session.query(Embedding)
+            .filter_by(file_id=file_id, embedding_type="tfidf_keywords")
+            .first()
+        )
+    if existing is not None:
+        with get_search_db() as session:
+            f = session.query(IndexedFile).filter_by(file_id=file_id).first()
+            if f is not None:
+                f.tfidf_keywords_indexed = True
+        return True
+
+    _index_tfidf_keywords(file_id, chunk_texts)
+
+    # Verify the flag was set
+    with get_search_db_read() as session:
+        f = session.query(IndexedFile.tfidf_keywords_indexed).filter_by(file_id=file_id).first()
+    return bool(f and f.tfidf_keywords_indexed)
+
+
 def _persist_transcript(
     file_id: str,
     provider_name: str,
@@ -1212,6 +1356,8 @@ def _persist_transcript(
         if record is not None:
             record.status = "succeeded"
             record.completed_at = datetime.now(UTC)
+
+    _index_tfidf_keywords(file_id, chunk_texts)
 
 
 def fail_orphaned_running_jobs() -> None:
@@ -1551,5 +1697,6 @@ def _index_loft_vtt(file_id: str, file_path: str) -> bool:
         if file is not None:
             file.whisper_indexed = True
 
+    _index_tfidf_keywords(file_id, chunk_texts)
     logger.info("Indexed loft ref VTT transcript for %s (%d chunks)", file_id, len(chunks))
     return True

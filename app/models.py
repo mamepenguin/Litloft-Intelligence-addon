@@ -78,6 +78,9 @@ class IndexedFile(Base):
     text_indexed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )
+    tfidf_keywords_indexed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
 
     # Metadata snapshot (for keyword matching)
     title: Mapped[str] = mapped_column(String, nullable=False, default="")
@@ -105,6 +108,7 @@ class IndexedFile(Base):
         ),
         Index("idx_indexed_files_whisper_indexed", "whisper_indexed"),
         Index("idx_indexed_files_text_indexed", "text_indexed"),
+        Index("idx_indexed_files_tfidf_keywords_indexed", "tfidf_keywords_indexed"),
     )
 
 
