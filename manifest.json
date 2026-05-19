@@ -1,5 +1,6 @@
 {
     "label": "Intelligence",
+    "description": "Semantic search, AI summaries, tag suggestions, transcription, and Ask over your files.",
     "icon": "brain",
     "type": "external_service",
     "scope": "drive",
