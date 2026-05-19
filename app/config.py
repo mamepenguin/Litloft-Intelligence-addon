@@ -941,6 +941,7 @@ def load_settings() -> Settings:
     # tiny JSON file written by the admin GUI and silently no-ops
     # when the file is missing, so an unconfigured deployment keeps
     # using whatever ``search-config.yml`` ships.
+    from app import embedding_overrides as _embedding_overrides
     from app import features_overrides as _features_overrides
     from app import llm_overrides as _llm_overrides
     from app import rag_overrides as _rag_overrides
@@ -1009,6 +1010,27 @@ def load_settings() -> Settings:
     # else stays file-only because it's tuned, not operator-facing.)
     rag_config = _parse_rag(config_data, _rag_overrides.read_overrides())
 
+    # Models (only ``text_embedding`` is GUI-overridable; clip /
+    # whisper / blip* / prefixes stay file-only). A model change
+    # triggers a full vec_text rebuild at restart — see
+    # ``database._migrate_vec_text_if_needed``. An allowlist-failing
+    # override is dropped on read, so the yaml baseline (never a
+    # silent dim-384 fallback) remains in effect (invariant §2.1-4).
+    models_yaml_raw = config_data.get("models", {})
+    models_yaml = (
+        models_yaml_raw if isinstance(models_yaml_raw, dict) else {}
+    )
+    models_merged = _embedding_overrides.merge_into_dict(
+        models_yaml, _embedding_overrides.read_overrides()
+    )
+    models_config = ModelConfig(
+        **{
+            k: v
+            for k, v in models_merged.items()
+            if k in ModelConfig.__dataclass_fields__
+        }
+    )
+
     return Settings(
         intelligence_data_dir=intelligence_data_dir,
         litloft_db_path=litloft_db_path,
@@ -1016,7 +1038,7 @@ def load_settings() -> Settings:
         search_db_path=search_db_path,
         allowed_base_dirs=allowed_base_dirs,
         drive_mounts=drive_mounts,
-        models=_parse_nested(config_data, "models", ModelConfig),
+        models=models_config,
         search=_parse_nested(config_data, "search", SearchConfig),
         indexing=_parse_indexing(config_data),
         workers=_parse_nested(config_data, "workers", WorkerConfig),

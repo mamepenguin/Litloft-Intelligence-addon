@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import bindparam, event, create_engine, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from app.config import settings
@@ -93,9 +94,14 @@ def init_search_db() -> None:
 
     _SearchSession = sessionmaker(bind=_search_engine, expire_on_commit=False)
 
-    # Migrate vec_clip if dimension changed (model swap), then create tables
+    # Migrate vec_clip if dimension changed (model swap), and vec_text
+    # if the configured text embedding MODEL NAME changed (spec
+    # 2026-05-20-gui-text-embedding-model §2.1-2 — model-name keyed,
+    # not dimension keyed). Both run BEFORE _create_vec_tables so a
+    # dropped table is recreated at the new float[dim].
     with _search_engine.connect() as conn:
         _migrate_vec_clip_if_needed(conn)
+        _migrate_vec_text_if_needed(conn)
         _create_vec_tables(conn)
         conn.commit()
 
@@ -397,6 +403,215 @@ def _migrate_vec_clip_if_needed(conn: object) -> None:
     conn.execute(text("UPDATE indexed_files SET clip_indexed = 0"))
 
     conn.commit()
+
+
+def _probe_vec_text_dim(conn: object) -> int | None:
+    """Return the dimension recorded in ``vec_text``'s CREATE SQL.
+
+    Mirrors the ``float[N]`` regex probe used by
+    ``_migrate_vec_clip_if_needed``. Returns ``None`` when the table
+    is absent or its schema carries no parsable dimension.
+    """
+    import re
+
+    schema_row = conn.execute(
+        text(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type='table' AND name='vec_text'"
+        )
+    ).fetchone()
+    if schema_row is None:
+        return None
+    match = re.search(r"float\[(\d+)\]", schema_row[0] or "")
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _read_index_meta(conn: object, key: str) -> str | None:
+    """Read ``index_meta[key]``; tolerate the table being absent.
+
+    On a DB that predates this feature ``index_meta`` may not exist
+    yet (it is created by ``_create_vec_tables``, which runs *after*
+    this migration in ``init_search_db``), so a missing table is a
+    legitimate "recorded value absent" signal, not an error.
+    """
+    try:
+        row = conn.execute(
+            text("SELECT value FROM index_meta WHERE key = :k"),
+            {"k": key},
+        ).fetchone()
+    except (OperationalError, sqlite3.OperationalError):
+        return None
+    return row[0] if row else None
+
+
+def _upsert_index_meta(conn: object, key: str, value: str) -> None:
+    """Idempotently set ``index_meta[key] = value``.
+
+    Creates ``index_meta`` first so this is safe to call before
+    ``_create_vec_tables`` has run (the migration may need to record
+    the configured model on a brand-new / pre-feature DB).
+    """
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS index_meta ("
+        "  key TEXT PRIMARY KEY,"
+        "  value TEXT"
+        ")"
+    ))
+    conn.execute(
+        text(
+            "INSERT INTO index_meta(key, value) VALUES(:k, :v) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        ),
+        {"k": key, "v": value},
+    )
+
+
+_TEXT_EMBEDDING_MODEL_KEY = "text_embedding_model"
+
+
+def _migrate_vec_text_if_needed(conn: object) -> None:
+    """Rebuild ``vec_text`` when the configured text embedding model
+    differs from the one the current index was built with.
+
+    The trigger keys on the recorded MODEL NAME
+    (``index_meta['text_embedding_model']``) versus the configured
+    ``settings.models.text_embedding`` — NOT the vector dimension.
+    Two different models can share a dimension (e5-base 768 ↔
+    ruri-130m 768) yet produce non-comparable vector spaces; cosine
+    distance across a mixed index is meaningless. Dimension-only
+    keying (the latent bug in ``_migrate_vec_clip_if_needed``) would
+    wrongly skip that swap. Spec invariant §2.1-1 / §2.1-2.
+
+    Branches:
+      (a) recorded absent, vec_text present, probed dim == expected
+          -> the index was built at baseline before this feature
+             existed; seed ``index_meta`` only, NO purge
+             (invariant §2.1-5, no surprise full re-embed on upgrade).
+      (b) recorded absent, vec_text absent
+          -> fresh DB; record the configured model and return.
+      (c) recorded == configured
+          -> no-op.
+      (d) recorded != configured (any dimension)
+          -> in one transaction: DROP vec_text (recreated at the new
+             ``float[dim]`` by ``_create_vec_tables`` immediately
+             after, see ``init_search_db``); purge text_content
+             embeddings, both FTS text tables, detailed summary
+             citations; reset ``text_indexed``; record the new model.
+
+    ``settings`` is imported lazily inside the function because the
+    migration tests rebind ``app.config.settings``; a module-top
+    binding would read a stale snapshot.
+    """
+    import logging
+
+    from app.config import settings
+
+    logger = logging.getLogger(__name__)
+
+    configured = settings.models.text_embedding
+    recorded = _read_index_meta(conn, _TEXT_EMBEDDING_MODEL_KEY)
+    # Defensive: a non-str / blank index_meta value (NULL, whitespace,
+    # a rolled-back build's payload) must route through the safe
+    # seed/fresh logic, never directly into the destructive branch (d)
+    # on a spurious string mismatch (a false positive here mass-purges
+    # the text index).
+    if not isinstance(recorded, str) or not recorded.strip():
+        recorded = None
+
+    if recorded is None:
+        probed_dim = _probe_vec_text_dim(conn)
+        if probed_dim is None:
+            # (b) fresh DB — no vec_text yet. Just record the model
+            # so the next restart can detect a change.
+            _upsert_index_meta(
+                conn, _TEXT_EMBEDDING_MODEL_KEY, configured
+            )
+            return
+        expected_dim = _get_text_embedding_dim()
+        if probed_dim == expected_dim:
+            # (a) upgrade path: an index built at the baseline model
+            # before index_meta existed. Treat as already-built;
+            # seed the record only, do NOT re-embed (§2.1-5).
+            logger.info(
+                "Seeding index_meta text_embedding_model=%s for an "
+                "existing vec_text (dim %d) — upgrade migration, no "
+                "re-index.",
+                configured, probed_dim,
+            )
+            _upsert_index_meta(
+                conn, _TEXT_EMBEDDING_MODEL_KEY, configured
+            )
+            return
+        # recorded absent but the existing vec_text dimension does
+        # not match the configured model: the model genuinely
+        # changed on a pre-feature DB. Fall through to the rebuild.
+        logger.warning(
+            "vec_text dim %d != configured model %s dim %d and no "
+            "recorded model — treating as a model change and "
+            "rebuilding.",
+            probed_dim, configured, expected_dim,
+        )
+    elif recorded == configured:
+        # (c) nothing changed.
+        return
+
+    # (d) recorded != configured (model name keyed; dimension is
+    # irrelevant to the decision — the regression-critical
+    # same-dimension swap path).
+    #
+    # Atomicity: _migrate_vec_clip_if_needed may have issued its own
+    # conn.commit() just before this runs (init_search_db), so the
+    # outer connection's implicit transaction is NOT guaranteed to
+    # span the whole rebuild. Wrap the destructive sequence + the
+    # index_meta upsert in an explicit SAVEPOINT so it is strictly
+    # all-or-nothing: a crash/exception mid-purge rolls back to the
+    # pre-migration state (old vec_text + embeddings intact, recorded
+    # model unchanged) and the next boot retries cleanly, instead of
+    # leaving a half-purged index later recreated empty by
+    # _create_vec_tables.
+    logger.warning(
+        "Text embedding model changed (%s -> %s). Dropping vec_text "
+        "and purging all text_content so the indexer re-embeds every "
+        "text-indexed file.",
+        recorded, configured,
+    )
+
+    nested = conn.begin_nested()
+    try:
+        conn.execute(text("DROP TABLE IF EXISTS vec_text"))
+        conn.execute(text(
+            "DELETE FROM embeddings "
+            "WHERE embedding_type = 'text_content'"
+        ))
+
+        # Full purge of both FTS text indices. The per-file owner of
+        # the fts_text_content / fts_text_content_word pair
+        # (delete_fts_text_content) takes a Session; inside this
+        # SAVEPOINT a Session(bind=conn) rolls its own DELETEs back on
+        # close(), which would leave FTS rows behind. Branch (d) wipes
+        # ALL text_content regardless, so a blanket delete on the same
+        # conn is the correct equivalent and additionally clears any
+        # orphan FTS rows. Keep both table names in lockstep with
+        # delete_fts_text_content.
+        conn.execute(text("DELETE FROM fts_text_content"))
+        conn.execute(text("DELETE FROM fts_text_content_word"))
+
+        conn.execute(
+            text("UPDATE indexed_files SET text_indexed = 0")
+        )
+        conn.execute(
+            text("DELETE FROM detailed_summary_citations")
+        )
+
+        _upsert_index_meta(
+            conn, _TEXT_EMBEDDING_MODEL_KEY, configured
+        )
+        nested.commit()
+    except Exception:
+        nested.rollback()
+        raise
 
 
 def _migrate_image_clip_to_clip_thumbnail() -> None:
@@ -729,6 +944,20 @@ def _create_vec_tables(conn: object) -> None:
     conn.execute(text(
         f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_clip "
         f"USING vec0(embedding_id TEXT PRIMARY KEY, vector float[{clip_dim}])"
+    ))
+
+    # Generic index-level metadata key/value store. Created alongside
+    # the vec tables so ``_migrate_vec_text_if_needed`` can read the
+    # recorded ``text_embedding_model`` on a brand-new DB. The rebuild
+    # trigger keys on the recorded MODEL NAME, not the vector
+    # dimension (spec invariant §2.1-2; vec_clip's dimension-only
+    # keying is a latent same-dim-swap bug we deliberately do not
+    # replicate here).
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS index_meta ("
+        "  key TEXT PRIMARY KEY,"
+        "  value TEXT"
+        ")"
     ))
 
     # FTS5 trigram index for keyword search on indexed_files
