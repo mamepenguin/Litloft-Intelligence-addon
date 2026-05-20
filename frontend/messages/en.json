@@ -3,8 +3,8 @@
     "policyFeatures": {
       "transcriptionCloud": {
         "label": "Allow cloud transcription",
-        "help": "Sends audio to external STT providers (Deepgram / OpenAI / ElevenLabs Scribe etc). When OFF, this drive falls back to local Whisper only",
-        "warning": "After turning OFF, in-progress cloud transcription jobs continue. Container restart is required for immediate effect"
+        "help": "Sends audio to external services such as Deepgram / OpenAI / ElevenLabs Scribe. When OFF, this drive uses local Whisper only.",
+        "warning": "Cloud transcription jobs already in progress will continue after you turn this OFF. Restart the container to apply the change immediately."
       }
     }
   },
@@ -21,7 +21,7 @@
     "clipFiles": "Image analysis {done} / {total}",
     "textLabel": "Text Analyzed",
     "textFiles": "Text analysis {done} / {total}",
-    "queueLabel": "Queue (all tasks)",
+    "queueLabel": "Task queue",
     "queueStatus": "{processing} processing / {waiting} waiting",
     "reindex": "Reindex",
     "pause": "Pause",
@@ -47,26 +47,26 @@
         "label": "Text extraction"
       },
       "auto_tags": {
-        "label": "AI tag suggestions"
+        "label": "AI tag candidates"
       },
       "summaries": {
         "label": "AI summaries"
       },
       "vision_describe": {
-        "label": "AI image description"
+        "label": "AI image descriptions"
       },
       "transcript_refine": {
-        "label": "AI transcript refine"
+        "label": "AI transcript cleanup"
       }
     }
   },
   "searchIndex": {
     "transcriptTitle": "Transcript",
-    "transcriptSourceChunks": "Chunks",
+    "transcriptSourceChunks": "Text chunks",
     "transcriptSourceWords": "Words",
     "transcriptSourceExternal": "External",
-    "transcriptRefine": "Refine with AI",
-    "transcriptRefinedBadge": "AI refined",
+    "transcriptRefine": "Clean up with AI",
+    "transcriptRefinedBadge": "AI cleaned",
     "indexTitle": "Index Details",
     "clipTitle": "CLIP Frames",
     "more": "more",
@@ -74,25 +74,25 @@
   },
   "askSearch": {
     "button": "Ask AI about “{query}”",
-    "loading": "Generating answer...",
-    "thinking": "Thinking…",
+    "loading": "Creating answer...",
+    "thinking": "Creating answer…",
     "loadingHint": "(may take a few seconds)",
-    "answerTitle": "AI Answer",
+    "answerTitle": "AI answer",
     "citationsTitle": "Citations",
-    "regenerate": "Regenerate",
+    "regenerate": "Create again",
     "close": "Close",
     "llmDisabled": "LLM is not configured",
-    "errorGenerate": "Failed to generate answer",
-    "noAnswer": "No answer could be found from the available files",
-    "noRetrieval": "No matching files found to base an answer on",
+    "errorGenerate": "Failed to create answer",
+    "noAnswer": "Could not answer from these file details",
+    "noRetrieval": "No files were found for the answer",
     "retryHint": "Retry",
-    "queryTooShort": "Query too short (3 characters minimum)",
-    "takenMs": "Generated in {ms}ms",
+    "queryTooShort": "Input is too short (3 characters minimum)",
+    "takenMs": "Created in {ms}ms",
     "poweredByLlm": "AI",
     "personalHistoryViewed": "Searching {count} files you viewed",
     "personalHistoryNotViewed": "Searching {count} unwatched files",
-    "personalHistoryFallback": "No matching history; searching all files",
-    "categoryExpanded": "Expanded: {terms}",
+    "personalHistoryFallback": "No viewing history matched, so all files will be searched",
+    "categoryExpanded": "Related terms: {terms}",
     "timeRange": {
       "today": "today",
       "yesterday": "yesterday",
@@ -110,12 +110,12 @@
       "image": "image",
       "text": "text"
     },
-    "saveToKnowledge": "Save to Knowledge",
-    "saveSuccess": "Saved to Knowledge",
+    "saveToKnowledge": "Save as Markdown",
+    "saveSuccess": "Markdown saved",
     "openNote": "Open note"
   },
   "askSave": {
-    "title": "Save Ask answer to Knowledge",
+    "title": "Save as Markdown",
     "folder": "Folder",
     "filename": "Filename",
     "save": "Save",
@@ -128,17 +128,17 @@
   },
   "find": {
     "button": "Find files for “{query}”",
-    "pageHeading": "Find: file suggestion mode",
-    "pageDescription": "AI suggests files matching “{query}”",
+    "pageHeading": "Find: Search files",
+    "pageDescription": "Shows files that may be related to “{query}”",
     "pageCta": "Open Find page",
     "title": "Find files",
-    "placeholder": "e.g. SF movies I watched last week",
+    "placeholder": "e.g. sci-fi-ish movies I watched last week",
     "submit": "Find",
     "loading": "Searching…",
     "error": "Search failed",
     "empty": "No files matched",
     "totalCount": "{count} results",
-    "categoryExpansion": "Expanded: {terms}",
+    "categoryExpansion": "Related terms: {terms}",
     "chipPersonalViewed": "viewed",
     "chipPersonalNotViewed": "not viewed"
   },
@@ -152,7 +152,7 @@
     "matchRetrievalKeywords": "Keyword",
     "matchedPages": "p.{pages}",
     "semanticResults": "Semantic search results",
-    "semanticResultsDescription": "Files whose meaning is close to your query",
+    "semanticResultsDescription": "Files close to the entered text",
     "score": "{score}%"
   },
   "file": {
@@ -162,60 +162,60 @@
     "similarFilesEmpty": "No similar files found",
     "similarFilesUnavailable": "Similar file detection unavailable",
     "similarFilesRetry": "Search again",
-    "suggestedTags": "AI Suggested Tags",
+    "suggestedTags": "AI tag candidates",
     "acceptTag": "Add tag {tag}",
-    "acceptAllTags": "Accept all",
-    "dismissTags": "Dismiss",
-    "regenerateTags": "Regenerate",
-    "generateTags": "Generate AI tags",
-    "regeneratingTags": "Generating...",
+    "acceptAllTags": "Add all",
+    "dismissTags": "Close",
+    "regenerateTags": "Create again",
+    "generateTags": "Create AI tag candidates",
+    "regeneratingTags": "Creating...",
     "aiFolderActions": "AI",
-    "generateFolderTags": "Generate AI tags for folder",
-    "tagsBatchQueued": "{queued} files queued ({skipped} skipped)",
-    "tagsBatchEmpty": "All files already have suggested tags",
-    "summaryTitle": "AI Summary",
-    "summaryGenerate": "Generate AI summary",
-    "summaryGenerating": "Generating summary...",
-    "summaryRegenerate": "Regenerate",
+    "generateFolderTags": "Create AI tag candidates for folder",
+    "tagsBatchQueued": "Added {queued} files to the queue ({skipped} skipped)",
+    "tagsBatchEmpty": "All files already have tag candidates",
+    "summaryTitle": "AI summary",
+    "summaryGenerate": "Create AI summary",
+    "summaryGenerating": "Creating summary...",
+    "summaryRegenerate": "Create again",
     "summaryHide": "Hide",
     "summaryTruncatedNote": "(excerpts from long content)",
     "summaryInsufficientContent": "Not enough content to summarize",
-    "generateFolderSummaries": "Generate AI summaries for folder",
-    "summariesBatchQueued": "{queued} summaries queued ({skipped} skipped)",
+    "generateFolderSummaries": "Create AI summaries for folder",
+    "summariesBatchQueued": "Added {queued} summaries to the queue ({skipped} skipped)",
     "summariesBatchEmpty": "All files already have summaries",
-    "generateFolderTranscriptRefine": "Refine folder transcripts with AI",
-    "refineBatchQueued": "{queued} queued",
-    "detailedSummaryTitle": "AI Detailed Summary",
-    "detailedSummaryGenerate": "Generate detailed summary",
-    "detailedSummaryGenerating": "Generating detailed summary…",
-    "detailedSummaryRegenerate": "Regenerate",
+    "generateFolderTranscriptRefine": "Clean up this folder's transcripts with AI",
+    "refineBatchQueued": "Added {queued} to the queue",
+    "detailedSummaryTitle": "AI detailed summary",
+    "detailedSummaryGenerate": "Create detailed summary",
+    "detailedSummaryGenerating": "Creating detailed summary…",
+    "detailedSummaryRegenerate": "Create again",
     "detailedSummaryDownload": "Download as Markdown",
     "detailedSummaryShow": "Expand",
     "detailedSummaryHide": "Collapse",
     "detailedSummaryInsufficientContent": "Not enough content for a detailed summary",
-    "detailedSummaryFailed": "Detailed summary generation failed",
+    "detailedSummaryFailed": "Failed to create detailed summary",
     "detailedSummaryRetry": "Retry",
     "detailedSummaryTruncatedNote": "(excerpts from long content)",
-    "visionTitle": "AI Visual Description",
-    "visionGenerate": "Generate AI description",
-    "visionGenerating": "Generating description…",
-    "visionRegenerate": "Regenerate",
+    "visionTitle": "AI image description",
+    "visionGenerate": "Create description",
+    "visionGenerating": "Creating description…",
+    "visionRegenerate": "Create again",
     "visionRetry": "Retry",
-    "visionRegenerateConfirm": "Regenerate the AI description? The current description will be overwritten.",
-    "visionFailed": "Description generation failed. Try again or check the intelligence logs.",
-    "visionUnsupported": "No vision-capable LLM is configured. Set `llm.vision_model` in search-config.yml to enable this feature.",
-    "visionFolderButton": "Generate AI descriptions for folder images",
-    "visionFolderConfirm": "Generate AI descriptions for every image in this folder? This may incur LLM costs.",
-    "visionFolderQueued": "{queued} images queued",
-    "visionFolderTooMany": "Too many files ({requested}). Max per batch: {max}.",
-    "visionFolderError": "Failed to queue folder — please retry."
+    "visionRegenerateConfirm": "Create the description again? The current description will be overwritten.",
+    "visionFailed": "Failed to create description. Try again or check the intelligence logs.",
+    "visionUnsupported": "No LLM capable of image description is configured. Set `llm.vision_model` in search-config.yml.",
+    "visionFolderButton": "Create descriptions for folder images",
+    "visionFolderConfirm": "Create descriptions for every image in this folder? LLM usage fees may apply.",
+    "visionFolderQueued": "Added {queued} images to the queue",
+    "visionFolderTooMany": "Too many images selected ({requested}). You can process up to {max} at once.",
+    "visionFolderError": "Could not start folder processing. Please try again."
   },
   "detailedSummary": {
     "citations": {
-      "markerStrong": "Strong source citation",
-      "markerWeak": "Weak source citation — verify",
-      "tierStrong": "strong",
-      "tierWeak": "weak",
+      "markerStrong": "Clear source citation",
+      "markerWeak": "Needs review - weaker source match",
+      "tierStrong": "clear",
+      "tierWeak": "needs review",
       "sourceTranscript": "transcript",
       "sourceDocument": "document",
       "sourceTable": "table",
@@ -230,11 +230,11 @@
     },
     "verify": {
       "toggle": {
-        "label": "Verify",
-        "on": "Verify ON",
-        "off": "Verify OFF"
+        "label": "Source check",
+        "on": "Source check ON",
+        "off": "Source check OFF"
       },
-      "expandAll": "All expanded",
+      "expandAll": "Expand all",
       "collapseAll": "Collapse all",
       "weakOnly": {
         "label": "Needs check"
@@ -249,25 +249,25 @@
       "save": "Save",
       "cancel": "Cancel",
       "badge": "Edited",
-      "textareaLabel": "Edit section content",
-      "recomputing": "Recomputing citations…",
-      "revertButton": "Revert to AI version",
-      "revertConfirm": "Discard your edits and restore the AI-generated summary?",
-      "regenerateConfirm": "Your edits will be lost. Continue and regenerate?",
-      "regenerateConfirmWithNote": "Regenerating the AI version. Your saved knowledge note will remain, but the file detail page will switch back to the AI summary. Continue?",
+      "textareaLabel": "Edit body",
+      "recomputing": "Checking sources…",
+      "revertButton": "Restore created version",
+      "revertConfirm": "Discard your edits and restore the created version?",
+      "regenerateConfirm": "Your edits will be lost. Continue and create it again?",
+      "regenerateConfirmWithNote": "The summary will be created again. Saved notes will remain, but the file detail page will show the new summary. Continue?",
       "saveToKnowledge": "Save as file",
-      "saveSuccess": "Saved to knowledge: {path}"
+      "saveSuccess": "Saved to file: {path}"
     },
     "dormant": {
       "badge": "Dormant",
-      "hint": "Knowledge note is the active summary; this is the dormant AI draft"
+      "hint": "A note is currently shown as the active summary. This is an older draft."
     }
   },
   "knowledgeSave": {
-    "title": "Save to knowledge",
+    "title": "Save as file",
     "loading": "Loading…",
     "existing": {
-      "description": "This file has already been saved to knowledge:",
+      "description": "This file has already been saved:",
       "moreNotes": "Show {count} other note(s)",
       "openExisting": "Open existing",
       "createNew": "Create new with different name"
@@ -284,17 +284,17 @@
   "settings": {
     "features": {
       "title": "Feature toggles",
-      "description": "Turn the addon's features on or off based on cost (cloud LLM usage) and privacy (data leaving the container) trade-offs. Restart the container for changes to take effect.",
+      "description": "Turn indexing, search, and AI features on or off. Check cloud LLM costs and what data is sent to external APIs before choosing. Restart the container for changes to take effect.",
       "save": "Save",
       "saving": "Saving...",
-      "saved": "Saved — restart required for the change to take effect",
+      "saved": "Saved. Restart required for the change to take effect",
       "loadFailed": "Failed to load",
       "saveFailed": "Failed to save",
-      "overridesActive": "Values set from this GUI are shadowing the ones in search-config.yml",
-      "overridesHelp": "If you want to drive intelligence from the YAML file directly, reset the GUI settings",
-      "reset": "Reset GUI settings",
+      "overridesActive": "Settings on this screen take priority over search-config.yml",
+      "overridesHelp": "To manage settings directly in search-config.yml, reset the settings on this screen",
+      "reset": "Reset screen settings",
       "resetting": "Resetting...",
-      "resetSuccess": "Reset — restart required for the change to take effect",
+      "resetSuccess": "Reset. Restart required for the change to take effect",
       "resetFailed": "Failed to reset",
       "tristate": {
         "false": "Off",
@@ -304,63 +304,63 @@
       "fields": {
         "indexing": {
           "label": "Indexing",
-          "help": "Pulls in file changes and updates the semantic search index. With this off, new files won't be searchable."
+          "help": "Picks up file changes and updates the semantic search index. When OFF, new files are not included in search."
         },
         "search": {
           "label": "Semantic search",
-          "help": "Accept semantic queries from the search UI. Off disables intelligence search; filename search keeps working through core."
+          "help": "Enables semantic search in the search screen. When OFF, intelligence search is disabled; filename search still works."
         },
         "rag": {
           "label": "AI question answering (Ask)",
-          "help": "Enable the Ask feature. Each question sends file contents (transcripts, captions, text) to the LLM API. Use a local LLM for privacy-sensitive content."
+          "help": "Enables Ask. Each question sends file contents such as captions and text to the LLM API."
         },
         "auto_tags": {
-          "label": "AI-suggested tags",
-          "help": "Generate candidate tags from file contents. Manual = on user request. Auto = generated for every newly indexed file. Suggestions only — they're not applied until you Approve."
+          "label": "AI tag candidates",
+          "help": "Creates tag candidates from file contents. Manual only creates them when requested; Auto creates them during indexing. Candidates are not applied until you add them."
         },
         "summaries": {
           "label": "AI summary (short)",
-          "help": "1-sentence short summary plus a paragraph long summary. Auto generates one for every newly indexed file, scaling cost linearly."
+          "help": "Creates a one-sentence summary and a slightly longer paragraph summary. Auto creates summaries per file, increasing usage."
         },
         "detailed_summaries": {
           "label": "AI detailed summary (Markdown)",
-          "help": "Long-form summary including a key-points table. Auto adds thousands of tokens per file. Local LLMs or cheap cloud tiers recommended."
+          "help": "Creates a longer summary with a key-points table. Auto can use a lot per file, so a local LLM or lower-cost LLM is recommended."
         },
         "transcript_refine": {
-          "label": "AI transcript refinement",
-          "help": "Run ASR transcripts through the LLM for punctuation and homophone fixes. Originals are kept and reverts are always possible. Transcripts are sent to the LLM API."
+          "label": "AI transcript cleanup",
+          "help": "Cleans up transcripts with an LLM, including punctuation and homophone fixes. Originals are kept and can always be restored. Full transcripts are sent to the LLM API."
         },
         "vision_describe": {
           "label": "AI image description",
-          "help": "Describe images (HEIC included) with a vision LLM. Image bytes are sent to the LLM API on each generation. For private photos, prefer Off or a local vision model. Requires vision_model to be set on the LLM provider."
+          "help": "Creates image descriptions with an LLM. Image data is sent to the LLM API. For drives with private photos, use Off or a local vision model. Requires vision_model to be set on the LLM provider."
         },
         "retrieval_keywords": {
-          "label": "AI retrieval keyword expansion",
-          "help": "The LLM predicts synonyms, abbreviations, and alternate names per file and stores them in a dedicated FTS index for file search and Ask. Primary benefit: compensates for proper nouns misrecognised by ASR. Transcript or document text (up to 8,000 chars) is sent to the LLM API."
+          "label": "AI search keyword expansion",
+          "help": "Creates helper keywords such as synonyms, abbreviations, and alternate names per file, then stores them in a dedicated search index. This helps cover proper nouns that speech recognition may misread. Transcript or document text (up to 8,000 characters) is sent to the LLM API."
         }
       }
     },
     "llm": {
       "title": "LLM provider",
-      "description": "Selects the language model used for tag generation, summaries, Ask, and image description. A local LLM (ollama) keeps data in the container; a cloud provider needs the API key in the environment. Restart the container for changes to take effect.",
+      "description": "Configures the language model used for tag candidates, summaries, Ask, and image descriptions. Data being processed is sent to the configured LLM API endpoint. Cloud providers require an API key in the environment. Restart the container for changes to take effect.",
       "save": "Save",
       "saving": "Saving...",
-      "saved": "Saved — restart required for the change to take effect",
+      "saved": "Saved. Restart required for the change to take effect",
       "loadFailed": "Failed to load",
       "saveFailed": "Failed to save",
-      "overridesActive": "Values set from this GUI are shadowing the ones in search-config.yml",
-      "overridesHelp": "If you want to drive intelligence from the YAML file directly, reset the GUI settings",
-      "reset": "Reset GUI settings",
+      "overridesActive": "Settings on this screen take priority over search-config.yml",
+      "overridesHelp": "To manage settings directly in search-config.yml, reset the settings on this screen",
+      "reset": "Reset screen settings",
       "resetting": "Resetting...",
-      "resetSuccess": "Reset — restart required for the change to take effect",
+      "resetSuccess": "Reset. Restart required for the change to take effect",
       "resetFailed": "Failed to reset",
       "provider": "Provider",
       "baseUrl": "Base URL",
       "baseUrlHelp": "ollama: http://host.docker.internal:11434 / openai-compatible: http://host.docker.internal:11434/v1 etc.",
       "model": "Text model",
-      "modelHelp": "e.g. gemma4:e4b (ollama), gpt-4o-mini, deepseek-chat. Use whatever model name your provider exposes",
+      "modelHelp": "e.g. gemma4:e4b (ollama), gpt-4o-mini, deepseek-chat. Enter a model name available from your provider",
       "visionModel": "Vision model",
-      "visionModelHelp": "Model used for image description. Empty disables vision_describe even if the feature is on. e.g. llava:13b, gpt-4o-mini",
+      "visionModelHelp": "Model used for image description. If empty, vision_describe cannot be used. e.g. llava:13b, gpt-4o-mini",
       "outputLanguage": "Output language",
       "providers": {
         "disabled": "Disabled",
@@ -368,9 +368,9 @@
         "openai_compatible": "OpenAI-compatible API"
       },
       "providerHelp": {
-        "disabled": "Disable every AI feature (only indexing and search remain).",
-        "ollama": "Talk to a local ollama server. Data stays inside your container. Reasoning models (DeepSeek-R1, Gemma 4, etc.) run with think:false.",
-        "openai_compatible": "OpenAI / DeepSeek / Groq / vLLM / LM Studio etc. File contents are sent over the network — keep your privacy posture in mind."
+        "disabled": "Disables AI features. Only basic indexing and search remain.",
+        "ollama": "Uses the ollama API on the local host. Reasoning models such as DeepSeek-R1 also run with think:false.",
+        "openai_compatible": "Use OpenAI, DeepSeek, Groq, vLLM, LM Studio, and other OpenAI-compatible providers."
       },
       "outputLanguages": {
         "auto": "Auto",
@@ -379,35 +379,35 @@
       },
       "apiKeyPresent": "set",
       "apiKeyMissing": "missing",
-      "apiKeyHelp": "API keys are read from the LLM_API_KEY environment variable. They cannot be edited from the GUI.",
-      "apiKeyRequired": "The selected provider needs LLM_API_KEY. Add it to .env, run `docker compose up -d`, then resave."
+      "apiKeyHelp": "API keys are configured with the LLM_API_KEY environment variable. They cannot be edited from this screen.",
+      "apiKeyRequired": "The selected provider requires LLM_API_KEY. Add it to .env, run `docker compose up -d`, then save again."
     },
     "rag": {
       "title": "Ask (question answering) behaviour",
-      "description": "Fine-tune how the Ask feature retrieves and expands queries based on your privacy and cost preferences. Restart the container for changes to take effect.",
+      "description": "Adjust how Ask works. Choose settings based on privacy and cost. Restart the container for changes to take effect.",
       "save": "Save",
       "saving": "Saving...",
-      "saved": "Saved — restart required for the change to take effect",
+      "saved": "Saved. Restart required for the change to take effect",
       "loadFailed": "Failed to load",
       "saveFailed": "Failed to save",
-      "overridesActive": "Values set from this GUI are shadowing the ones in search-config.yml",
-      "overridesHelp": "If you want to drive intelligence from the YAML file directly, reset the GUI settings",
-      "reset": "Reset GUI settings",
+      "overridesActive": "Settings on this screen take priority over search-config.yml",
+      "overridesHelp": "To manage settings directly in search-config.yml, reset the settings on this screen",
+      "reset": "Reset screen settings",
       "resetting": "Resetting...",
-      "resetSuccess": "Reset — restart required for the change to take effect",
+      "resetSuccess": "Reset. Restart required for the change to take effect",
       "resetFailed": "Failed to reset",
       "personalHistory": {
         "label": "Use viewing history",
-        "help": "Lets queries like \"what I watched last week\" or \"things I haven't seen this month\" filter to your own viewing history. Requires a profile (lit_viewer cookie)."
+        "help": "Lets inputs like \"what I watched last week\" or \"things I haven't seen this month\" filter to your own viewing history. Requires a profile."
       },
       "categoryExpansion": {
         "label": "Expand semantic categories",
-        "help": "Lets the LLM rewrite vague queries (\"sci-fi-ish\", \"horror-style\") into a small set of synonyms for multi-query retrieval. Adds an LLM call per question."
+        "help": "Expands vague input such as \"sci-fi-ish\" or \"horror-style\" into related keywords for search."
       }
     },
     "embedding": {
       "title": "Text embedding model",
-      "description": "Embedding model used for semantic search, Ask, and tag suggestions. Switching the model is heavyweight; review the cost items before confirming.",
+      "description": "Text embedding model used for semantic search, Ask, and tag candidates. Changing it reindexes all text. Ask and text search are unavailable until reindexing finishes. Restart the container for changes to take effect.",
       "groups": {
         "ja": "Japanese-specialised",
         "multi": "Multilingual"
@@ -415,45 +415,45 @@
       "weight": {
         "light": "Light",
         "normal": "Normal",
-        "heavy": "Heavy"
+        "heavy": "High load"
       },
-      "reindexPending": "Recorded model mismatch: Ask and text search are degraded until the full text reindex completes",
+      "reindexPending": "The saved model information does not match the current setting. Ask and text search are unavailable until the full text reindex finishes",
       "reset": "Reset to default",
       "retry": "Retry",
       "loadFailed": "Failed to load",
       "confirm": {
         "confirm": "Confirm",
         "cancel": "Cancel",
-        "reindex": "All text chunks must be reindexed; Ask and text search are degraded until it completes",
+        "reindex": "All text must be reindexed. Ask and text search are unavailable until it finishes.",
         "restart": "A container restart is required for the change to take effect",
-        "detailedCitations": "detailed_summary_citations must be backfilled separately via backfill_detailed_citations --force",
-        "minScore": "Calibrated thresholds such as min_score_text are not auto-adjusted"
+        "detailedCitations": "Detailed-summary citation data must be recreated separately with backfill_detailed_citations --force",
+        "minScore": "Tuned thresholds such as min_score_text are not adjusted automatically"
       }
     },
     "transcription": {
       "title": "Transcription provider",
-      "description": "Choose the service used to transcribe audio and video. Restart the container for changes to take effect. Cloud services require an API key configured in your environment.",
+      "description": "Choose the service used to transcribe audio and video. Restart the container for changes to take effect. Cloud services require an API key in the environment.",
       "provider": "Provider",
       "languageHint": "Language hint",
       "languageHintHelp": "BCP-47 tag (e.g. ja, en-US, zh-Hant-HK). Leave empty for auto-detect.",
       "hotwords": "Hotwords",
-      "hotwordsHelp": "One per line. Honoured by AssemblyAI and Whisper-family providers only.",
+      "hotwordsHelp": "Enter one proper noun or technical term per line. Used only by AssemblyAI and Whisper-family providers.",
       "apiKeyStatus": "API key status",
       "apiKeyPresent": "set",
       "apiKeyMissing": "missing",
       "subconfigSummary": "search-config.yml view (read-only)",
       "save": "Save",
       "saving": "Saving...",
-      "saved": "Saved — restart required for the change to take effect",
+      "saved": "Saved. Restart required for the change to take effect",
       "loadFailed": "Failed to load",
       "saveFailed": "Failed to save",
-      "providerNeedsKey": "This provider needs {env}. Add it to .env, run `docker compose up -d`, then resave.",
-      "notWhisperHint": "Hotwords are honoured only by Whisper-family (whisper_local / openai_compatible) and AssemblyAI.",
-      "overridesActive": "Values set from this GUI are shadowing the ones in search-config.yml",
-      "overridesHelp": "If you want to drive transcription from the YAML file directly, reset the GUI settings",
-      "reset": "Reset GUI settings",
+      "providerNeedsKey": "This provider requires {env}. Add it to .env, run `docker compose up -d`, then save again.",
+      "notWhisperHint": "Hotwords are used only by Whisper-family providers (whisper_local / openai_compatible) and AssemblyAI.",
+      "overridesActive": "Settings on this screen take priority over search-config.yml",
+      "overridesHelp": "To manage settings directly in search-config.yml, reset the settings on this screen",
+      "reset": "Reset screen settings",
       "resetting": "Resetting...",
-      "resetSuccess": "Reset — restart required for the change to take effect",
+      "resetSuccess": "Reset. Restart required for the change to take effect",
       "resetFailed": "Failed to reset",
       "providers": {
         "whisper_local": "Whisper local (faster-whisper)",
@@ -467,8 +467,8 @@
   },
   "errors": {
     "transcription": {
-      "providerFailed": "Transcription provider failed: {error}",
-      "openaiFileTooLarge": "OpenAI Whisper API has a 25MB file limit. For long-form audio, use Deepgram / ElevenLabs Scribe / Groq / self-hosted Whisper"
+      "providerFailed": "Transcription failed: {error}",
+      "openaiFileTooLarge": "OpenAI Whisper API cannot process files over 25MB. For long audio, use Deepgram / ElevenLabs Scribe / Groq / self-hosted Whisper."
     }
   }
 }

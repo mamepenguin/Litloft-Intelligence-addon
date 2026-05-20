@@ -3,8 +3,8 @@
     "policyFeatures": {
       "transcriptionCloud": {
         "label": "クラウド文字起こしを許可",
-        "help": "外部 STT プロバイダー（Deepgram / OpenAI / ElevenLabs Scribe 等）に音声を送信します。OFF にするとこのドライブだけローカル Whisper に強制 fallback",
-        "warning": "OFF に切替後、進行中のクラウド転写ジョブは継続されます。即時反映には container restart が必要"
+        "help": "Deepgram / OpenAI / ElevenLabs Scribeなどの外部サービスに音声を送信します。OFFにすると、このドライブではローカルWhisperだけを使います。",
+        "warning": "OFFに切り替えた後も、進行中のクラウド文字起こしは継続されます。すぐに反映するにはコンテナの再起動が必要です。"
       }
     }
   },
@@ -21,7 +21,7 @@
     "clipFiles": "画像分析完了 {done} / {total} 件",
     "textLabel": "テキスト解析済み",
     "textFiles": "テキスト解析完了 {done} / {total} 件",
-    "queueLabel": "キュー全体",
+    "queueLabel": "処理キュー",
     "queueStatus": "{processing}件処理中 / {waiting}件待機",
     "reindex": "再インデックス",
     "pause": "一時停止",
@@ -47,52 +47,52 @@
         "label": "テキスト抽出"
       },
       "auto_tags": {
-        "label": "AIタグ提案"
+        "label": "AIタグ候補"
       },
       "summaries": {
-        "label": "AI要約生成"
+        "label": "AI要約"
       },
       "vision_describe": {
-        "label": "AI画像記述"
+        "label": "AI画像説明"
       },
       "transcript_refine": {
-        "label": "AI文字起こし校正"
+        "label": "AI文字起こし整形"
       }
     }
   },
   "searchIndex": {
-    "transcriptTitle": "トランスクリプト",
-    "transcriptSourceChunks": "チャンク",
+    "transcriptTitle": "文字起こし",
+    "transcriptSourceChunks": "分割テキスト",
     "transcriptSourceWords": "単語",
     "transcriptSourceExternal": "外部字幕",
-    "transcriptRefine": "AI で修正",
-    "transcriptRefinedBadge": "AI 修正済み",
+    "transcriptRefine": "AIで整える",
+    "transcriptRefinedBadge": "AI整形済み",
     "indexTitle": "インデックス詳細",
-    "clipTitle": "CLIP フレーム",
+    "clipTitle": "CLIPフレーム",
     "more": "件以上",
     "showMore": "もっと見る"
   },
   "askSearch": {
-    "button": "「{query}」について AI に質問する",
-    "loading": "回答を生成中...",
-    "thinking": "回答を生成中…",
+    "button": "「{query}」についてAIに質問する",
+    "loading": "回答を作成中...",
+    "thinking": "回答を作成中…",
     "loadingHint": "(数秒かかることがあります)",
-    "answerTitle": "AI 回答",
+    "answerTitle": "AIの回答",
     "citationsTitle": "引用",
-    "regenerate": "再生成",
+    "regenerate": "作り直す",
     "close": "閉じる",
-    "llmDisabled": "LLM が設定されていません",
-    "errorGenerate": "回答の生成に失敗しました",
-    "noAnswer": "与えられたファイル情報からは答えが見つかりませんでした",
-    "noRetrieval": "回答のベースとなるファイルが見つかりませんでした",
+    "llmDisabled": "LLMが設定されていません",
+    "errorGenerate": "回答の作成に失敗しました",
+    "noAnswer": "このファイル情報からは回答できませんでした",
+    "noRetrieval": "回答に使えるファイルが見つかりませんでした",
     "retryHint": "再試行",
-    "queryTooShort": "クエリが短すぎます (3文字以上)",
-    "takenMs": "{ms}ms で生成",
+    "queryTooShort": "入力が短すぎます（3文字以上）",
+    "takenMs": "{ms}msで作成",
     "poweredByLlm": "AI",
     "personalHistoryViewed": "視聴履歴 {count} 件を対象に検索",
     "personalHistoryNotViewed": "未視聴 {count} 件を対象に検索",
-    "personalHistoryFallback": "視聴履歴が見つからないため全件検索",
-    "categoryExpanded": "意味展開: {terms}",
+    "personalHistoryFallback": "視聴履歴に一致しなかったため、すべてのファイルから検索します",
+    "categoryExpanded": "関連語: {terms}",
     "timeRange": {
       "today": "今日",
       "yesterday": "昨日",
@@ -110,12 +110,12 @@
       "image": "画像",
       "text": "文書"
     },
-    "saveToKnowledge": "Knowledgeに保存",
-    "saveSuccess": "Knowledge に保存しました",
+    "saveToKnowledge": "Markdownで保存",
+    "saveSuccess": "Markdownを保存しました",
     "openNote": "ノートを開く"
   },
   "askSave": {
-    "title": "Knowledgeに保存",
+    "title": "Markdownで保存",
     "folder": "フォルダ",
     "filename": "ファイル名",
     "save": "保存",
@@ -128,17 +128,17 @@
   },
   "find": {
     "button": "「{query}」でファイルを探す",
-    "pageHeading": "Find: ファイル提示モード",
-    "pageDescription": "AI が「{query}」に合致するファイルを推測して一覧化します",
-    "pageCta": "Find ページを開く",
+    "pageHeading": "Find: ファイルを探す",
+    "pageDescription": "「{query}」に関連しそうなファイルを表示します",
+    "pageCta": "Findページを開く",
     "title": "ファイルを探す",
-    "placeholder": "例: 先週観た映画でSFっぽいの",
+    "placeholder": "例: 先週観たSFっぽい映画",
     "submit": "探す",
     "loading": "検索中…",
     "error": "検索に失敗しました",
     "empty": "該当するファイルが見つかりませんでした",
     "totalCount": "{count} 件見つかりました",
-    "categoryExpansion": "意味展開: {terms}",
+    "categoryExpansion": "関連語: {terms}",
     "chipPersonalViewed": "視聴済み",
     "chipPersonalNotViewed": "未視聴"
   },
@@ -152,7 +152,7 @@
     "matchRetrievalKeywords": "キーワード",
     "matchedPages": "p.{pages}",
     "semanticResults": "セマンティック検索結果",
-    "semanticResultsDescription": "クエリの意味に近いファイルを AI が推測して提示します",
+    "semanticResultsDescription": "入力内容に近いファイルを表示します",
     "score": "{score}%"
   },
   "file": {
@@ -162,61 +162,61 @@
     "similarFilesEmpty": "似たファイルは見つかりませんでした",
     "similarFilesUnavailable": "似たファイル検出は利用できません",
     "similarFilesRetry": "再検出",
-    "suggestedTags": "AIタグ提案",
+    "suggestedTags": "AIタグ候補",
     "acceptTag": "タグ「{tag}」を追加",
-    "acceptAllTags": "すべて承認",
-    "dismissTags": "却下",
-    "regenerateTags": "再生成",
-    "generateTags": "AIタグを生成",
-    "regeneratingTags": "生成中...",
+    "acceptAllTags": "すべて追加",
+    "dismissTags": "閉じる",
+    "regenerateTags": "作り直す",
+    "generateTags": "AIタグ候補を作成",
+    "regeneratingTags": "作成中...",
     "aiFolderActions": "AI",
-    "generateFolderTags": "フォルダのAIタグを生成",
-    "tagsBatchQueued": "{queued}件をキューに追加（{skipped}件スキップ）",
-    "tagsBatchEmpty": "すべてのファイルがタグ推薦済みです",
+    "generateFolderTags": "フォルダのAIタグ候補を作成",
+    "tagsBatchQueued": "{queued}件を処理待ちに追加しました（{skipped}件はスキップ）",
+    "tagsBatchEmpty": "すべてのファイルにタグ候補があります",
     "summaryTitle": "AI要約",
-    "summaryGenerate": "AI要約を生成",
-    "summaryGenerating": "要約を生成中...",
-    "summaryRegenerate": "再生成",
+    "summaryGenerate": "AI要約を作成",
+    "summaryGenerating": "要約を作成中...",
+    "summaryRegenerate": "作り直す",
     "summaryHide": "非表示",
     "summaryTruncatedNote": "（長文のため抜粋から要約）",
-    "summaryInsufficientContent": "要約に必要なコンテンツが不足しています",
-    "generateFolderSummaries": "フォルダのAI要約を生成",
-    "summariesBatchQueued": "{queued}件の要約をキューに追加（{skipped}件スキップ）",
+    "summaryInsufficientContent": "要約できる内容が足りません",
+    "generateFolderSummaries": "フォルダのAI要約を作成",
+    "summariesBatchQueued": "{queued}件の要約を処理待ちに追加しました（{skipped}件はスキップ）",
     "summariesBatchEmpty": "すべてのファイルが要約済みです",
-    "generateFolderTranscriptRefine": "このフォルダのトランスクリプトを AI 修正",
-    "refineBatchQueued": "{queued} 件をキューに追加",
-    "detailedSummaryTitle": "AI 詳細要約",
-    "detailedSummaryGenerate": "詳細要約を生成",
-    "detailedSummaryGenerating": "詳細要約を生成中…",
-    "detailedSummaryRegenerate": "再生成",
-    "detailedSummaryDownload": "Markdown としてダウンロード",
+    "generateFolderTranscriptRefine": "このフォルダの文字起こしをAIで整える",
+    "refineBatchQueued": "{queued} 件を処理待ちに追加しました",
+    "detailedSummaryTitle": "AI詳細要約",
+    "detailedSummaryGenerate": "詳細要約を作成",
+    "detailedSummaryGenerating": "詳細要約を作成中…",
+    "detailedSummaryRegenerate": "作り直す",
+    "detailedSummaryDownload": "Markdownとしてダウンロード",
     "detailedSummaryShow": "展開",
     "detailedSummaryHide": "折りたたむ",
-    "detailedSummaryInsufficientContent": "詳細要約に必要なコンテンツが不足しています",
-    "detailedSummaryFailed": "詳細要約の生成に失敗しました",
+    "detailedSummaryInsufficientContent": "詳細要約を作れる内容が足りません",
+    "detailedSummaryFailed": "詳細要約の作成に失敗しました",
     "detailedSummaryRetry": "再試行",
     "detailedSummaryTruncatedNote": "（長文のため抜粋から要約）",
-    "visionTitle": "AI 画像記述",
-    "visionGenerate": "AI で記述を生成",
-    "visionGenerating": "記述を生成中…",
-    "visionRegenerate": "再生成",
+    "visionTitle": "AI画像説明",
+    "visionGenerate": "説明を作成",
+    "visionGenerating": "説明を作成中…",
+    "visionRegenerate": "作り直す",
     "visionRetry": "再試行",
-    "visionRegenerateConfirm": "AI 記述を再生成しますか？現在の記述は上書きされます。",
-    "visionFailed": "記述の生成に失敗しました。再試行するか intelligence のログを確認してください。",
-    "visionUnsupported": "vision 対応 LLM が設定されていません。search-config.yml の `llm.vision_model` を設定してください。",
-    "visionFolderButton": "フォルダ内の画像に AI 記述を生成",
-    "visionFolderConfirm": "このフォルダ内の全画像に AI 記述を生成しますか？LLM の利用料が発生する場合があります。",
-    "visionFolderQueued": "{queued} 件の画像をキューに追加",
-    "visionFolderTooMany": "選択範囲が多すぎます（{requested} 件）。1 バッチあたりの上限は {max} 件です。",
-    "visionFolderError": "フォルダの処理に失敗しました。再試行してください。"
+    "visionRegenerateConfirm": "説明を作り直しますか？現在の説明は上書きされます。",
+    "visionFailed": "説明の作成に失敗しました。再試行するかintelligenceのログを確認してください。",
+    "visionUnsupported": "画像説明に対応したLLMが設定されていません。search-config.ymlの`llm.vision_model`を設定してください。",
+    "visionFolderButton": "フォルダ内の画像説明を作成",
+    "visionFolderConfirm": "このフォルダ内のすべての画像説明を作成しますか？LLMの利用料が発生する場合があります。",
+    "visionFolderQueued": "{queued} 件の画像を処理待ちに追加しました",
+    "visionFolderTooMany": "選択した画像が多すぎます（{requested} 件）。一度に処理できるのは {max} 件までです。",
+    "visionFolderError": "フォルダの処理を開始できませんでした。もう一度お試しください。"
   },
   "detailedSummary": {
     "citations": {
-      "markerStrong": "根拠が明確な citation",
-      "markerWeak": "要確認 citation — 弱い出典マッチ",
+      "markerStrong": "根拠が明確な引用",
+      "markerWeak": "要確認の引用 - 関連度が低め",
       "tierStrong": "明確",
       "tierWeak": "要確認",
-      "sourceTranscript": "トランスクリプト",
+      "sourceTranscript": "文字起こし",
       "sourceDocument": "文書",
       "sourceTable": "表",
       "sourceExcerpt": "抜粋",
@@ -230,11 +230,11 @@
     },
     "verify": {
       "toggle": {
-        "label": "Verify",
-        "on": "Verify ON",
-        "off": "Verify OFF"
+        "label": "出典確認",
+        "on": "出典確認ON",
+        "off": "出典確認OFF"
       },
-      "expandAll": "全て展開",
+      "expandAll": "すべて展開",
       "collapseAll": "折りたたむ",
       "weakOnly": {
         "label": "要確認"
@@ -249,25 +249,25 @@
       "save": "保存",
       "cancel": "キャンセル",
       "badge": "編集済み",
-      "textareaLabel": "セクション内容を編集",
-      "recomputing": "出典を再計算中…",
-      "revertButton": "AI生成版に戻す",
-      "revertConfirm": "編集内容を破棄して AI 生成版に戻しますか？",
-      "regenerateConfirm": "編集内容は失われます。続行して再生成しますか？",
-      "regenerateConfirmWithNote": "AI 版を再生成します。現在 knowledge に保存されているノートは残りますが、ファイル詳細ページでは AI 要約の表示に戻ります。続行しますか？",
+      "textareaLabel": "本文を編集",
+      "recomputing": "出典を確認中…",
+      "revertButton": "作成時の内容に戻す",
+      "revertConfirm": "編集内容を破棄して、作成時の内容に戻しますか？",
+      "regenerateConfirm": "編集内容は失われます。続行して作り直しますか？",
+      "regenerateConfirmWithNote": "要約を作り直します。ナレッジに保存済みのノートは残りますが、ファイル詳細ページでは新しい要約が表示されます。続行しますか？",
       "saveToKnowledge": "ファイルとして保存",
-      "saveSuccess": "knowledge に保存しました：{path}"
+      "saveSuccess": "ファイルに保存しました：{path}"
     },
     "dormant": {
       "badge": "非アクティブ",
-      "hint": "knowledge ノートがアクティブな要約として表示されています。これは非アクティブな AI 下書きです"
+      "hint": "ノートが現在の要約として表示されています。こちらは以前に作成された下書きです。"
     }
   },
   "knowledgeSave": {
-    "title": "knowledge に保存",
+    "title": "ファイルとして保存",
     "loading": "読み込み中…",
     "existing": {
-      "description": "このファイルは既に knowledge に保存済みです：",
+      "description": "このファイルはすでに保存済みです：",
       "moreNotes": "その他のノート {count} 件を表示",
       "openExisting": "既存を開く",
       "createNew": "別名で新規作成"
@@ -284,17 +284,17 @@
   "settings": {
     "features": {
       "title": "機能スイッチ",
-      "description": "インデックス・検索や AI 機能の有効/無効を切り替えます。コスト（クラウド LLM 利用）やプライバシー（外部 API への送信）に応じて選んでください。変更を反映するにはコンテナの再起動が必要です。",
+      "description": "インデックス、検索、AI機能のオン/オフを切り替えます。クラウドLLMの費用や、外部APIへ送信されるデータを確認して設定してください。変更の反映にはコンテナの再起動が必要です。",
       "save": "保存",
       "saving": "保存中...",
-      "saved": "保存しました — 反映には再起動が必要",
+      "saved": "保存しました。反映には再起動が必要です",
       "loadFailed": "読み込みに失敗しました",
       "saveFailed": "保存に失敗しました",
-      "overridesActive": "GUI で設定された値が search-config.yml の値を上書き中です",
-      "overridesHelp": "search-config.yml を直接編集して動かしたい場合は、GUI 設定をリセットしてください",
-      "reset": "GUI 設定をリセット",
+      "overridesActive": "この画面の設定がsearch-config.ymlより優先されています",
+      "overridesHelp": "search-config.ymlで直接管理したい場合は、この画面の設定をリセットしてください",
+      "reset": "画面設定をリセット",
       "resetting": "リセット中...",
-      "resetSuccess": "リセットしました — 反映には再起動が必要",
+      "resetSuccess": "リセットしました。反映には再起動が必要です",
       "resetFailed": "リセットに失敗しました",
       "tristate": {
         "false": "無効",
@@ -304,73 +304,73 @@
       "fields": {
         "indexing": {
           "label": "インデックス処理",
-          "help": "ファイル変更を取り込んでセマンティック検索のインデックスを更新します。停止すると新規ファイルは検索対象になりません。"
+          "help": "ファイルの変更を取り込み、セマンティック検索のインデックスを更新します。OFFにすると、新しいファイルは検索対象に入りません。"
         },
         "search": {
           "label": "セマンティック検索",
-          "help": "検索 UI からのセマンティッククエリ受付。停止すると intelligence の検索が無効になります（ファイル名検索は core 側で動作）。"
+          "help": "検索画面でセマンティック検索を使えるようにします。OFFにするとintelligenceの検索は無効になります（ファイル名検索は引き続き使えます）。"
         },
         "rag": {
-          "label": "AI による質問応答（Ask）",
-          "help": "Ask 機能の有効/無効。有効にすると質問のたびにファイル本文（字幕・テキスト）が LLM API に送信されます。プライバシー重視ならローカル LLM の利用を推奨。"
+          "label": "AI質問応答（Ask）",
+          "help": "Ask機能を有効にします。質問するたびに、字幕やテキストなどのファイル本文がLLM APIに送信されます。"
         },
         "auto_tags": {
-          "label": "AI による自動タグ付け候補",
-          "help": "ファイル内容から候補タグを生成します。「手動」はユーザー操作で生成、「自動」はインデックス時に毎回生成。提案として表示され、Approve するまで反映されません。"
+          "label": "AIタグ候補",
+          "help": "ファイル内容からタグ候補を作成します。「手動」はユーザー操作時のみ、「自動」はインデックス時に作成します。候補は追加するまで反映されません。"
         },
         "summaries": {
-          "label": "AI 要約（短文）",
-          "help": "1 文の短い要約 + 1 段落の長い要約を生成します。「自動」だと新規ファイルのたびに生成されてコストが増えます。"
+          "label": "AI要約（短文）",
+          "help": "1文の短い要約と、1段落の少し長い要約を作成します。「自動」にするとファイルごとに要約を作成するため、利用量が増えます。"
         },
         "detailed_summaries": {
-          "label": "AI 詳細要約（Markdown）",
-          "help": "重要ポイントの表を含む長文要約を生成します。「自動」は新規ファイル × 数千〜万トークンで進むので、ローカル LLM もしくは安価なクラウド LLM 推奨。"
+          "label": "AI詳細要約（Markdown）",
+          "help": "重要ポイントの表を含む長めの要約を作成します。「自動」にするとファイルごとの利用量が大きくなるため、ローカルLLMか低コストのLLMをおすすめします。"
         },
         "transcript_refine": {
-          "label": "AI による文字起こし整形",
-          "help": "ASR の出力を LLM で整形（句読点や同音異義語の修正）。元のテキストは保持され、いつでも戻せます。文字起こし全文が LLM API に送信されます。"
+          "label": "AI文字起こし整形",
+          "help": "文字起こし結果をLLMで整えます（句読点や同音異義語の修正など）。元のテキストは保持され、いつでも戻せます。文字起こし全文がLLM APIに送信されます。"
         },
         "vision_describe": {
-          "label": "AI による画像説明",
-          "help": "画像（HEIC 含む）の内容を LLM に説明させます。画像バイナリが LLM API に送信されます。プライベートな写真があるドライブでは「無効」もしくはローカル vision モデル推奨。LLM プロバイダー側で vision_model を設定する必要があります。"
+          "label": "AI画像説明",
+          "help": "画像の説明文をLLMで作成します。画像データがLLM APIに送信されます。プライベートな写真があるドライブでは「無効」かローカルのvisionモデルをおすすめします。利用するにはLLMプロバイダー側でvision_modelの設定が必要です。"
         },
         "retrieval_keywords": {
-          "label": "AI 検索キーワード拡張",
-          "help": "ファイルごとに LLM が同義語・略語・別名を予測し、専用の FTS インデックスに格納します。音声認識（ASR）が誤認識した固有名詞をカバーするのが主な効果です。トランスクリプトまたは本文テキスト（最大 8,000 字）が LLM API に送信されます。"
+          "label": "AI検索キーワード拡張",
+          "help": "ファイルごとに同義語、略語、別名などの補助キーワードを作成し、専用の検索インデックスに保存します。音声認識で誤認識されやすい固有名詞を補うのに役立ちます。文字起こしまたは本文テキスト（最大8,000字）がLLM APIに送信されます。"
         }
       }
     },
     "llm": {
-      "title": "LLM プロバイダー",
-      "description": "タグ生成・要約・Ask・画像説明で使う言語モデルの設定です。ローカル LLM（ollama）を選ぶとデータはコンテナ外に出ません。クラウドを選ぶ場合は API キーを環境変数に設定してください。変更を反映するにはコンテナの再起動が必要です。",
+      "title": "LLMプロバイダー",
+      "description": "タグ候補、要約、Ask、画像説明で使う言語モデルを設定します。処理対象のデータは、設定されたLLM APIエンドポイントへ送信されます。クラウドを使う場合は、APIキーを環境変数に設定してください。変更の反映にはコンテナの再起動が必要です。",
       "save": "保存",
       "saving": "保存中...",
-      "saved": "保存しました — 反映には再起動が必要",
+      "saved": "保存しました。反映には再起動が必要です",
       "loadFailed": "読み込みに失敗しました",
       "saveFailed": "保存に失敗しました",
-      "overridesActive": "GUI で設定された値が search-config.yml の値を上書き中です",
-      "overridesHelp": "search-config.yml を直接編集して動かしたい場合は、GUI 設定をリセットしてください",
-      "reset": "GUI 設定をリセット",
+      "overridesActive": "この画面の設定がsearch-config.ymlより優先されています",
+      "overridesHelp": "search-config.ymlで直接管理したい場合は、この画面の設定をリセットしてください",
+      "reset": "画面設定をリセット",
       "resetting": "リセット中...",
-      "resetSuccess": "リセットしました — 反映には再起動が必要",
+      "resetSuccess": "リセットしました。反映には再起動が必要です",
       "resetFailed": "リセットに失敗しました",
       "provider": "プロバイダー",
-      "baseUrl": "Base URL",
-      "baseUrlHelp": "ollama: http://host.docker.internal:11434 / OpenAI 互換: http://host.docker.internal:11434/v1 など",
+      "baseUrl": "ベースURL",
+      "baseUrlHelp": "ollama: http://host.docker.internal:11434 / OpenAI互換: http://host.docker.internal:11434/v1など",
       "model": "テキストモデル",
-      "modelHelp": "例: gemma4:e4b（ollama）、gpt-4o-mini、deepseek-chat。プロバイダー側で利用可能なモデル名を入力してください",
-      "visionModel": "画像（vision）モデル",
-      "visionModelHelp": "画像説明機能で使うモデル。空欄だと vision_describe は使えません。例: llava:13b、gpt-4o-mini",
+      "modelHelp": "例: gemma4:e4b（ollama）、gpt-4o-mini、deepseek-chat。プロバイダーで利用できるモデル名を入力してください",
+      "visionModel": "画像モデル",
+      "visionModelHelp": "画像説明で使うモデルです。空欄の場合、vision_describeは使えません。例: llava:13b、gpt-4o-mini",
       "outputLanguage": "出力言語",
       "providers": {
         "disabled": "無効",
-        "ollama": "Ollama（推奨：ローカル LLM）",
-        "openai_compatible": "OpenAI 互換 API"
+        "ollama": "Ollama（推奨：ローカルLLM）",
+        "openai_compatible": "OpenAI互換API"
       },
       "providerHelp": {
-        "disabled": "AI 機能をすべて無効にします（インデックス・検索の基本動作のみ）",
-        "ollama": "ローカル ollama サーバーを使います。データはコンテナ外に出ません。reasoning モデル（DeepSeek-R1 等）も think:false で動作します",
-        "openai_compatible": "OpenAI 公式・DeepSeek・Groq・vLLM・LM Studio など。ファイル本文が送信されます。プライバシー要件に注意"
+        "disabled": "AI機能を無効にします。インデックスと検索の基本機能だけが動作します。",
+        "ollama": "ローカルホスト上のollama APIを使う設定です。reasoningモデル（DeepSeek-R1など）もthink:falseで動作します。",
+        "openai_compatible": "OpenAI公式、DeepSeek、Groq、vLLM、LM Studioなどを利用できます。"
       },
       "outputLanguages": {
         "auto": "自動",
@@ -379,35 +379,35 @@
       },
       "apiKeyPresent": "設定済",
       "apiKeyMissing": "未設定",
-      "apiKeyHelp": "API キーは環境変数（LLM_API_KEY）でのみ設定可能です。GUI からは編集できません",
-      "apiKeyRequired": "選択中のプロバイダーは LLM_API_KEY が必要です。.env に追加して `docker compose up -d` 後に再保存してください"
+      "apiKeyHelp": "APIキーは環境変数（LLM_API_KEY）で設定します。この画面からは編集できません",
+      "apiKeyRequired": "選択中のプロバイダーを使うにはLLM_API_KEYが必要です。.envに追加し、`docker compose up -d`のあとで再度保存してください"
     },
     "rag": {
       "title": "Ask（質問応答）の挙動",
-      "description": "Ask 機能の細かい挙動を調整します。プライバシーやコストに応じて切り替えてください。変更を反映するにはコンテナの再起動が必要です。",
+      "description": "Ask機能の動作を調整します。プライバシーや費用に合わせて設定してください。変更の反映にはコンテナの再起動が必要です。",
       "save": "保存",
       "saving": "保存中...",
-      "saved": "保存しました — 反映には再起動が必要",
+      "saved": "保存しました。反映には再起動が必要です",
       "loadFailed": "読み込みに失敗しました",
       "saveFailed": "保存に失敗しました",
-      "overridesActive": "GUI で設定された値が search-config.yml の値を上書き中です",
-      "overridesHelp": "search-config.yml を直接編集して動かしたい場合は、GUI 設定をリセットしてください",
-      "reset": "GUI 設定をリセット",
+      "overridesActive": "この画面の設定がsearch-config.ymlより優先されています",
+      "overridesHelp": "search-config.ymlで直接管理したい場合は、この画面の設定をリセットしてください",
+      "reset": "画面設定をリセット",
       "resetting": "リセット中...",
-      "resetSuccess": "リセットしました — 反映には再起動が必要",
+      "resetSuccess": "リセットしました。反映には再起動が必要です",
       "resetFailed": "リセットに失敗しました",
       "personalHistory": {
         "label": "個人視聴履歴を考慮する",
-        "help": "「先週観たやつ」「今月見てないやつ」のようなクエリで、自分の視聴履歴に絞り込みます。プロファイル（lit_viewer cookie）が必要"
+        "help": "「先週観たやつ」「今月見てないやつ」のような入力で、自分の視聴履歴に絞り込みます。プロフィール設定が必要です。"
       },
       "categoryExpansion": {
         "label": "ジャンル展開を有効にする",
-        "help": "「SF っぽい」「ホラー系」のような曖昧なクエリを LLM が同義語の集合に展開します。LLM 呼び出しが増えるためコスト増。"
+        "help": "「SFっぽい」「ホラー系」のようなあいまいな入力を、関連するキーワードに広げて検索します。"
       }
     },
     "embedding": {
       "title": "テキスト埋め込みモデル",
-      "description": "意味検索・Ask・タグ提案などで使うテキスト埋め込みモデル。日本語特化と多言語のいずれかを選びます。変更すると全テキストの再 index が必要で、Ask とテキスト検索は再 index 完了まで縮退します。コンテナの再起動も必要です。",
+      "description": "セマンティック検索、Ask、タグ候補などで使うテキスト埋め込みモデルです。変更すると全テキストの再インデックスが行われます。完了するまでAskとテキスト検索は利用できません。反映にはコンテナの再起動が必要です。",
       "groups": {
         "ja": "日本語特化",
         "multi": "多言語"
@@ -415,49 +415,49 @@
       "weight": {
         "light": "軽量",
         "normal": "標準",
-        "heavy": "重い"
+        "heavy": "高負荷"
       },
-      "reindexPending": "記録モデル不一致：全テキストの再 index が完了するまで Ask・テキスト検索は縮退します",
+      "reindexPending": "保存されているモデル情報と現在の設定が一致していません。全テキストの再インデックスが完了するまで、Askとテキスト検索は利用できません",
       "reset": "デフォルトに戻す",
       "retry": "再試行",
       "loadFailed": "読み込みに失敗しました",
       "confirm": {
         "confirm": "変更する",
         "cancel": "キャンセル",
-        "reindex": "全テキストの再 index が必要です。完了するまで Ask とテキスト検索は縮退します",
+        "reindex": "全テキストの再インデックスが必要です。完了するまでAskとテキスト検索は利用できません。",
         "restart": "反映にはコンテナの再起動が必要です",
-        "detailedCitations": "detailed_summary_citations は別途 backfill_detailed_citations --force での再生成が必要です",
-        "minScore": "min_score_text など校正済みの閾値は自動で再調整されません"
+        "detailedCitations": "詳細要約の引用情報は、別途backfill_detailed_citations --forceで作り直す必要があります",
+        "minScore": "min_score_textなどの調整済みしきい値は自動では再調整されません"
       }
     },
     "transcription": {
       "title": "文字起こしプロバイダー",
-      "description": "音声や動画の文字起こしに使うサービスを選びます。変更を反映するにはコンテナの再起動が必要です。クラウド型のサービスは事前に API キーを設定してください。",
+      "description": "音声や動画の文字起こしに使うサービスを選びます。変更を反映するにはコンテナの再起動が必要です。クラウド型のサービスは事前にAPIキーを設定してください。",
       "provider": "プロバイダー",
-      "languageHint": "言語ヒント",
-      "languageHintHelp": "BCP-47 タグ（例: ja, en-US, zh-Hant-HK）。空欄なら自動検出",
+      "languageHint": "言語のヒント",
+      "languageHintHelp": "BCP-47タグ（例: ja, en-US, zh-Hant-HK）。空欄なら自動検出",
       "hotwords": "ホットワード",
-      "hotwordsHelp": "固有名詞や専門用語を 1 行 1 件で。AssemblyAI と Whisper 系のみ反映",
-      "apiKeyStatus": "API キー状態",
+      "hotwordsHelp": "固有名詞や専門用語を1行1件で入力してください。AssemblyAIとWhisper系でのみ使われます",
+      "apiKeyStatus": "APIキーの状態",
       "apiKeyPresent": "設定済",
       "apiKeyMissing": "未設定",
-      "subconfigSummary": "search-config.yml の設定（読み取り専用）",
+      "subconfigSummary": "search-config.ymlの設定（読み取り専用）",
       "save": "保存",
       "saving": "保存中...",
-      "saved": "保存しました — 反映には再起動が必要",
+      "saved": "保存しました。反映には再起動が必要です",
       "loadFailed": "読み込みに失敗しました",
       "saveFailed": "保存に失敗しました",
-      "providerNeedsKey": "このプロバイダーは {env} を必要とします。.env に追加して `docker compose up -d` 後に再保存してください",
-      "notWhisperHint": "ホットワードは Whisper 系（whisper_local / openai_compatible）と AssemblyAI のみで使われます",
-      "overridesActive": "GUI で設定された値が search-config.yml の値を上書き中です",
-      "overridesHelp": "search-config.yml を直接編集して動かしたい場合は、GUI 設定をリセットしてください",
-      "reset": "GUI 設定をリセット",
+      "providerNeedsKey": "このプロバイダーを使うには {env} が必要です。.envに追加し、`docker compose up -d`のあとで再度保存してください",
+      "notWhisperHint": "ホットワードはWhisper系（whisper_local / openai_compatible）とAssemblyAIのみで使われます",
+      "overridesActive": "この画面の設定がsearch-config.ymlより優先されています",
+      "overridesHelp": "search-config.ymlで直接管理したい場合は、この画面の設定をリセットしてください",
+      "reset": "画面設定をリセット",
       "resetting": "リセット中...",
-      "resetSuccess": "リセットしました — 反映には再起動が必要",
+      "resetSuccess": "リセットしました。反映には再起動が必要です",
       "resetFailed": "リセットに失敗しました",
       "providers": {
         "whisper_local": "Whisper local (faster-whisper)",
-        "openai_compatible": "OpenAI 互換 (Whisper API / Groq / Fireworks)",
+        "openai_compatible": "OpenAI互換 (Whisper API / Groq / Fireworks)",
         "deepgram": "Deepgram (Nova)",
         "elevenlabs_scribe": "ElevenLabs Scribe",
         "assemblyai": "AssemblyAI (Universal-2)",
@@ -467,8 +467,8 @@
   },
   "errors": {
     "transcription": {
-      "providerFailed": "文字起こしプロバイダーが失敗しました: {error}",
-      "openaiFileTooLarge": "OpenAI Whisper API は 25MB 制限があります。長尺は Deepgram / ElevenLabs Scribe / Groq / セルフホスト推奨"
+      "providerFailed": "文字起こしに失敗しました: {error}",
+      "openaiFileTooLarge": "OpenAI Whisper APIでは25MBを超えるファイルを処理できません。長時間の音声にはDeepgram / ElevenLabs Scribe / Groq / セルフホスト版Whisperなどを使ってください"
     }
   }
 }
