@@ -255,7 +255,9 @@ export default function AdminEmbeddingSettingsSection(): React.ReactElement {
         </div>
       )}
 
-      {(["ja", "multi"] as Family[]).map((family) => (
+      {/* Multilingual first (broader applicability for most operators),
+          then Japanese-specialised. */}
+      {(["multi", "ja"] as Family[]).map((family) => (
         <fieldset key={family} className="mb-4">
           <legend className="mb-2 text-sm font-medium text-text-primary">
             {t(`groups.${family}`)}
