@@ -32,6 +32,7 @@
         "admin-intelligence-sections": [
             {"id": "admin-features", "label": "Features", "priority": 5},
             {"id": "admin-llm", "label": "LLM Provider", "priority": 7},
+            {"id": "admin-embedding", "label": "Text Embedding", "priority": 8},
             {"id": "admin-transcription", "label": "Transcription Settings", "priority": 10},
             {"id": "admin-rag", "label": "RAG Behaviour", "priority": 15}
         ]

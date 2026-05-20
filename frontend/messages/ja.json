@@ -405,6 +405,31 @@
         "help": "「SF っぽい」「ホラー系」のような曖昧なクエリを LLM が同義語の集合に展開します。LLM 呼び出しが増えるためコスト増。"
       }
     },
+    "embedding": {
+      "title": "テキスト埋め込みモデル",
+      "description": "意味検索・Ask・タグ提案などで使うテキスト埋め込みモデル。日本語特化と多言語のいずれかを選びます。変更すると全テキストの再 index が必要で、Ask とテキスト検索は再 index 完了まで縮退します。コンテナの再起動も必要です。",
+      "groups": {
+        "ja": "日本語特化",
+        "multi": "多言語"
+      },
+      "weight": {
+        "light": "軽量",
+        "normal": "標準",
+        "heavy": "重い"
+      },
+      "reindexPending": "記録モデル不一致：全テキストの再 index が完了するまで Ask・テキスト検索は縮退します",
+      "reset": "デフォルトに戻す",
+      "retry": "再試行",
+      "loadFailed": "読み込みに失敗しました",
+      "confirm": {
+        "confirm": "変更する",
+        "cancel": "キャンセル",
+        "reindex": "全テキストの再 index が必要です。完了するまで Ask とテキスト検索は縮退します",
+        "restart": "反映にはコンテナの再起動が必要です",
+        "detailedCitations": "detailed_summary_citations は別途 backfill_detailed_citations --force での再生成が必要です",
+        "minScore": "min_score_text など校正済みの閾値は自動で再調整されません"
+      }
+    },
     "transcription": {
       "title": "文字起こしプロバイダー",
       "description": "音声や動画の文字起こしに使うサービスを選びます。変更を反映するにはコンテナの再起動が必要です。クラウド型のサービスは事前に API キーを設定してください。",

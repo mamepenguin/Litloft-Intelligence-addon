@@ -22,4 +22,5 @@ export const slotComponents: Record<string, React.LazyExoticComponent<React.Comp
   "admin-features": lazy(() => import("./AdminFeaturesSettingsSection")),
   "admin-llm": lazy(() => import("./AdminLLMSettingsSection")),
   "admin-rag": lazy(() => import("./AdminRAGSettingsSection")),
+  "admin-embedding": lazy(() => import("./AdminEmbeddingSettingsSection")),
 };

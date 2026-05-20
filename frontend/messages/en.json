@@ -405,6 +405,31 @@
         "help": "Lets the LLM rewrite vague queries (\"sci-fi-ish\", \"horror-style\") into a small set of synonyms for multi-query retrieval. Adds an LLM call per question."
       }
     },
+    "embedding": {
+      "title": "Text embedding model",
+      "description": "Embedding model used for semantic search, Ask, and tag suggestions. Switching the model is heavyweight; review the cost items before confirming.",
+      "groups": {
+        "ja": "Japanese-specialised",
+        "multi": "Multilingual"
+      },
+      "weight": {
+        "light": "Light",
+        "normal": "Normal",
+        "heavy": "Heavy"
+      },
+      "reindexPending": "Recorded model mismatch: Ask and text search are degraded until the full text reindex completes",
+      "reset": "Reset to default",
+      "retry": "Retry",
+      "loadFailed": "Failed to load",
+      "confirm": {
+        "confirm": "Confirm",
+        "cancel": "Cancel",
+        "reindex": "All text chunks must be reindexed; Ask and text search are degraded until it completes",
+        "restart": "A container restart is required for the change to take effect",
+        "detailedCitations": "detailed_summary_citations must be backfilled separately via backfill_detailed_citations --force",
+        "minScore": "Calibrated thresholds such as min_score_text are not auto-adjusted"
+      }
+    },
     "transcription": {
       "title": "Transcription provider",
       "description": "Choose the service used to transcribe audio and video. Restart the container for changes to take effect. Cloud services require an API key configured in your environment.",
