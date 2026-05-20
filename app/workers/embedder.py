@@ -14,7 +14,15 @@ from functools import lru_cache
 
 import numpy as np
 
-from app.config import settings
+# ``app.config`` is imported lazily inside the functions that actually
+# read ``settings``. A module-level ``from app.config import settings``
+# creates a circular import in the boot path:
+# ``config.load_settings()`` → ``embedding_overrides.read_overrides()``
+# → (allowlist check) → ``from app.workers.embedder import _MODEL_DIMS``
+# → this module's top-level ``from app.config import settings`` while
+# ``app.config`` is still partially initialised, so ``settings`` is
+# not yet bound. The lazy import inside functions breaks the cycle
+# without changing public behaviour.
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +82,8 @@ def _get_prefixes() -> tuple[str, str]:
     Returns:
         Tuple of (query_prefix, passage_prefix) strings.
     """
+    from app.config import settings
+
     models_config = settings.models
     if models_config.text_query_prefix or models_config.text_passage_prefix:
         return (models_config.text_query_prefix, models_config.text_passage_prefix)
@@ -101,6 +111,8 @@ def _ensure_loaded() -> object:
 
         try:
             from sentence_transformers import SentenceTransformer
+
+            from app.config import settings
 
             model_name = settings.models.text_embedding
             cache_dir = str(settings.model_cache_dir)

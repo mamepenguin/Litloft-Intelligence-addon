@@ -109,3 +109,54 @@ def test_ruri_and_e5_prefixes_are_preserved() -> None:
     """Existing families must not regress when granite was added."""
     assert _MODEL_PREFIXES["ruri"] == ("検索クエリ: ", "検索文書: ")
     assert _MODEL_PREFIXES["e5"] == ("query: ", "passage: ")
+
+
+# ---------------------------------------------------------------------------
+# Regression: no module-level ``from app.config import settings``
+# ---------------------------------------------------------------------------
+
+
+def test_embedder_module_does_not_top_level_import_config_settings() -> None:
+    """``app.workers.embedder`` must not bind ``settings`` at module level.
+
+    A module-level ``from app.config import settings`` creates a boot-
+    time circular import: ``app.config.load_settings()`` calls
+    ``embedding_overrides.read_overrides()`` which calls
+    ``_allowed_models()`` which imports this module, which then asks
+    ``app.config`` for an attribute that has not been bound yet.
+    The lookup fails with ``ImportError: cannot import name 'settings'
+    from partially initialized module``. This regression actually
+    shipped: when the embedding overrides file existed at boot the
+    container would crash-loop on startup. See production trace from
+    2026-05-20 (this commit).
+
+    The fix is to ``from app.config import settings`` lazily, inside
+    the functions that actually read ``settings``. This test locks
+    that contract in by reading the module source and asserting no
+    module-level import remains. A code-search assertion is the
+    right shape here: any reintroduction of the top-level import
+    re-creates the production-crash path.
+    """
+    import inspect
+
+    from app.workers import embedder
+
+    source = inspect.getsource(embedder)
+    # Strip the docstring comment block so the assertion does not
+    # trigger on the explanatory comment that documents the rule.
+    code_only_lines = [
+        line
+        for line in source.splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    for line in code_only_lines:
+        stripped = line.strip()
+        # The lazy ``from app.config import settings`` lives inside
+        # function bodies and is therefore indented. A top-level
+        # import would start at column 0.
+        if stripped.startswith("from app.config import") and line == stripped:
+            raise AssertionError(
+                "embedder.py must not import from app.config at module "
+                "level — the import must be lazy inside functions. "
+                f"Offending line: {line!r}"
+            )
