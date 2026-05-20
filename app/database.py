@@ -572,18 +572,34 @@ def _migrate_vec_text_if_needed(conn: object) -> None:
     # leaving a half-purged index later recreated empty by
     # _create_vec_tables.
     logger.warning(
-        "Text embedding model changed (%s -> %s). Dropping vec_text "
-        "and purging all text_content so the indexer re-embeds every "
-        "text-indexed file.",
+        "Text embedding model changed (%s -> %s). Dropping vec_text and "
+        "purging vec_text-resident embeddings (text_content, whisper, "
+        "tfidf_keywords) so the indexer re-embeds every affected file.",
         recorded, configured,
     )
 
     nested = conn.begin_nested()
     try:
         conn.execute(text("DROP TABLE IF EXISTS vec_text"))
+        # Dropping vec_text wipes every vector that lived there. The
+        # embeddings table is the metadata side; rows whose vectors are
+        # gone are dead weight and (on next boot) get mass-deleted by
+        # cleanup_orphaned_embeddings, which leaves the indexer with
+        # stale *_indexed flags and no path back to a populated index.
+        # Purge them here, in the same transaction as the corresponding
+        # *_indexed reset, so the indexer re-embeds on the next pass.
+        #
+        # Keep this list in sync with every writer that stores into
+        # vec_text — currently: workers/metadata.py (text_content),
+        # workers/whisper.py (whisper, tfidf_keywords), workers/vision.py
+        # (vision_description), workers/refine.py (whisper). Adding a
+        # new vec_text-resident embedding_type without extending this
+        # purge re-introduces the orphan-embedding bug.
         conn.execute(text(
-            "DELETE FROM embeddings "
-            "WHERE embedding_type = 'text_content'"
+            "DELETE FROM embeddings WHERE embedding_type IN ("
+            "'text_content', 'whisper', 'tfidf_keywords', "
+            "'vision_description', 'metadata'"
+            ")"
         ))
 
         # Full purge of both FTS text indices. The per-file owner of
@@ -598,9 +614,16 @@ def _migrate_vec_text_if_needed(conn: object) -> None:
         conn.execute(text("DELETE FROM fts_text_content"))
         conn.execute(text("DELETE FROM fts_text_content_word"))
 
-        conn.execute(
-            text("UPDATE indexed_files SET text_indexed = 0")
-        )
+        # Reset every *_indexed flag whose worker writes into vec_text,
+        # so the indexer re-runs each path on the next reconciliation.
+        # whisper_indexed covers both real Whisper transcription and
+        # the .loft VTT subtitle path (workers/whisper.py:_index_loft_vtt).
+        conn.execute(text(
+            "UPDATE indexed_files SET "
+            "text_indexed = 0, "
+            "whisper_indexed = 0, "
+            "tfidf_keywords_indexed = 0"
+        ))
         conn.execute(
             text("DELETE FROM detailed_summary_citations")
         )

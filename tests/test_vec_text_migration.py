@@ -81,7 +81,9 @@ def _build_db(tmp_path, *, vec_text_dim: int | None, recorded_model: str | None)
             "CREATE TABLE indexed_files ("
             "  file_id TEXT PRIMARY KEY,"
             "  drive TEXT NOT NULL,"
-            "  text_indexed BOOLEAN NOT NULL DEFAULT 0"
+            "  text_indexed BOOLEAN NOT NULL DEFAULT 0,"
+            "  whisper_indexed BOOLEAN NOT NULL DEFAULT 0,"
+            "  tfidf_keywords_indexed BOOLEAN NOT NULL DEFAULT 0"
             ")"
         ))
         conn.execute(text(
@@ -132,18 +134,43 @@ def _build_db(tmp_path, *, vec_text_dim: int | None, recorded_model: str | None)
 
 def _seed_indexed_text(engine) -> None:
     """Insert one text-indexed file with text_content embeddings,
-    FTS rows, and a citation row so a purge is observable."""
+    FTS rows, and a citation row so a purge is observable.
+
+    Also seeds ``whisper`` and ``tfidf_keywords`` embeddings (both stored
+    in ``vec_text`` per workers/whisper.py) so the migration's handling
+    of those vec_text-resident, non-text_content embedding types is
+    observable. ``whisper_indexed`` / ``tfidf_keywords_indexed`` flags
+    are flipped on so we can verify they are reset when (and only when)
+    the destructive branch fires."""
     with engine.begin() as conn:
         conn.execute(
             text(
-                "INSERT INTO indexed_files(file_id, drive, text_indexed) "
-                "VALUES('f1', 'default', 1)"
+                "INSERT INTO indexed_files("
+                "file_id, drive, text_indexed, whisper_indexed, "
+                "tfidf_keywords_indexed"
+                ") VALUES('f1', 'default', 1, 1, 1)"
             )
         )
         conn.execute(
             text(
                 "INSERT INTO embeddings(embedding_id, file_id, embedding_type) "
                 "VALUES('txt_f1_0', 'f1', 'text_content')"
+            )
+        )
+        # vec_text-resident audio/VTT transcript embedding. Must purge
+        # with text_content because vec_text itself is dropped: the
+        # vectors disappear, leaving these rows orphaned.
+        conn.execute(
+            text(
+                "INSERT INTO embeddings(embedding_id, file_id, embedding_type) "
+                "VALUES('wh_f1_0', 'f1', 'whisper')"
+            )
+        )
+        # vec_text-resident TF-IDF keyword embedding. Same reasoning.
+        conn.execute(
+            text(
+                "INSERT INTO embeddings(embedding_id, file_id, embedding_type) "
+                "VALUES('tfidf_f1_0', 'f1', 'tfidf_keywords')"
             )
         )
         # A non-text embedding that must SURVIVE the purge.
@@ -257,13 +284,35 @@ def test_a_model_name_change_diff_dim_drops_and_purges(
         engine,
         "SELECT COUNT(*) FROM embeddings WHERE embedding_type='text_content'",
     ) == 0
-    # Non-text embeddings untouched.
+    # vec_text-resident embeddings other than text_content must also
+    # purge: dropping vec_text wipes their vectors, leaving the
+    # embeddings rows orphaned (later mass-deleted by
+    # cleanup_orphaned_embeddings, which leaves the indexer with stale
+    # *_indexed flags and no way to recover).
+    assert _scalar(
+        engine,
+        "SELECT COUNT(*) FROM embeddings WHERE embedding_type='whisper'",
+    ) == 0, "whisper embeddings live in vec_text and must purge with it"
+    assert _scalar(
+        engine,
+        "SELECT COUNT(*) FROM embeddings WHERE embedding_type='tfidf_keywords'",
+    ) == 0, "tfidf_keywords embeddings live in vec_text and must purge with it"
+    # Non-text embeddings (vec_clip-resident) untouched.
     assert _scalar(
         engine, "SELECT COUNT(*) FROM embeddings WHERE embedding_type='clip'"
     ) == 1
     assert _scalar(
         engine, "SELECT COUNT(*) FROM indexed_files WHERE text_indexed=1"
     ) == 0
+    # whisper_indexed / tfidf_keywords_indexed must reset together with
+    # text_indexed so the indexer re-runs the .loft VTT / TF-IDF paths.
+    assert _scalar(
+        engine, "SELECT COUNT(*) FROM indexed_files WHERE whisper_indexed=1"
+    ) == 0, "whisper_indexed must reset so the indexer re-embeds"
+    assert _scalar(
+        engine,
+        "SELECT COUNT(*) FROM indexed_files WHERE tfidf_keywords_indexed=1",
+    ) == 0, "tfidf_keywords_indexed must reset so the indexer re-embeds"
     assert _scalar(engine, "SELECT COUNT(*) FROM fts_text_content") == 0
     assert _scalar(engine, "SELECT COUNT(*) FROM fts_text_content_word") == 0
     assert _scalar(
@@ -298,7 +347,22 @@ def test_b_same_dimension_different_model_still_fires(
         "SELECT COUNT(*) FROM embeddings WHERE embedding_type='text_content'",
     ) == 0
     assert _scalar(
+        engine,
+        "SELECT COUNT(*) FROM embeddings WHERE embedding_type='whisper'",
+    ) == 0
+    assert _scalar(
+        engine,
+        "SELECT COUNT(*) FROM embeddings WHERE embedding_type='tfidf_keywords'",
+    ) == 0
+    assert _scalar(
         engine, "SELECT COUNT(*) FROM indexed_files WHERE text_indexed=1"
+    ) == 0
+    assert _scalar(
+        engine, "SELECT COUNT(*) FROM indexed_files WHERE whisper_indexed=1"
+    ) == 0
+    assert _scalar(
+        engine,
+        "SELECT COUNT(*) FROM indexed_files WHERE tfidf_keywords_indexed=1",
     ) == 0
     assert _scalar(engine, "SELECT COUNT(*) FROM fts_text_content") == 0
     assert _scalar(engine, "SELECT COUNT(*) FROM fts_text_content_word") == 0
@@ -354,9 +418,25 @@ def test_d_upgrade_path_seeds_meta_without_purge(
         engine,
         "SELECT COUNT(*) FROM embeddings WHERE embedding_type='text_content'",
     ) == 1, "text_content embeddings must be preserved"
+    # Upgrade path: all vec_text-resident embeddings survive.
+    assert _scalar(
+        engine,
+        "SELECT COUNT(*) FROM embeddings WHERE embedding_type='whisper'",
+    ) == 1
+    assert _scalar(
+        engine,
+        "SELECT COUNT(*) FROM embeddings WHERE embedding_type='tfidf_keywords'",
+    ) == 1
     assert _scalar(
         engine, "SELECT COUNT(*) FROM indexed_files WHERE text_indexed=1"
     ) == 1, "text_indexed must NOT be reset"
+    assert _scalar(
+        engine, "SELECT COUNT(*) FROM indexed_files WHERE whisper_indexed=1"
+    ) == 1, "whisper_indexed must NOT be reset on the upgrade path"
+    assert _scalar(
+        engine,
+        "SELECT COUNT(*) FROM indexed_files WHERE tfidf_keywords_indexed=1",
+    ) == 1
     assert _scalar(engine, "SELECT COUNT(*) FROM fts_text_content") == 1
     assert _scalar(
         engine, "SELECT COUNT(*) FROM detailed_summary_citations"
@@ -383,7 +463,22 @@ def test_e_recorded_equals_configured_is_noop(
         "SELECT COUNT(*) FROM embeddings WHERE embedding_type='text_content'",
     ) == 1
     assert _scalar(
+        engine,
+        "SELECT COUNT(*) FROM embeddings WHERE embedding_type='whisper'",
+    ) == 1
+    assert _scalar(
+        engine,
+        "SELECT COUNT(*) FROM embeddings WHERE embedding_type='tfidf_keywords'",
+    ) == 1
+    assert _scalar(
         engine, "SELECT COUNT(*) FROM indexed_files WHERE text_indexed=1"
+    ) == 1
+    assert _scalar(
+        engine, "SELECT COUNT(*) FROM indexed_files WHERE whisper_indexed=1"
+    ) == 1
+    assert _scalar(
+        engine,
+        "SELECT COUNT(*) FROM indexed_files WHERE tfidf_keywords_indexed=1",
     ) == 1
     assert _scalar(engine, "SELECT COUNT(*) FROM fts_text_content") == 1
     assert _scalar(
