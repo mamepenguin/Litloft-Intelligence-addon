@@ -8,8 +8,8 @@ The rebuild trigger keys on the **recorded model NAME**
 ``settings.models.text_embedding`` — NOT on the vector dimension.
 Dimension-only keying (the latent bug in the existing
 ``_migrate_vec_clip_if_needed``) would wrongly skip a same-dimension
-model swap (e5-base 768 ↔ ruri-130m 768), leaving a vector space
-that is non-comparable under cosine distance. Test (b) is the
+model swap (granite-311m-r2 768 ↔ ruri-130m 768), leaving a vector
+space that is non-comparable under cosine distance. Test (b) is the
 regression-critical case that locks this in.
 
 Branches under test (plan Phase 2):
@@ -58,10 +58,10 @@ from app.config import ModelConfig  # noqa: E402
 
 
 # Model ids drawn from app.workers.embedder._MODEL_DIMS.
-_E5_SMALL = "intfloat/multilingual-e5-small"      # 384
-_E5_BASE = "intfloat/multilingual-e5-base"        # 768
-_E5_LARGE = "intfloat/multilingual-e5-large"      # 1024
-_RURI_130 = "cl-nagoya/ruri-v3-130m"              # 768  (same dim as e5-base)
+_GRANITE_97 = "ibm-granite/granite-embedding-97m-multilingual-r2"   # 384
+_GRANITE_311 = "ibm-granite/granite-embedding-311m-multilingual-r2"  # 768
+_RURI_130 = "cl-nagoya/ruri-v3-130m"              # 768  (same dim as granite-311m)
+_RURI_310 = "cl-nagoya/ruri-v3-310m"              # 1024
 
 
 # ---------------------------------------------------------------------------
@@ -245,10 +245,10 @@ def _run_migration(engine) -> None:
 def test_a_model_name_change_diff_dim_drops_and_purges(
     tmp_path, monkeypatch
 ) -> None:
-    # recorded e5-small (384), configured e5-large (1024).
-    engine = _build_db(tmp_path, vec_text_dim=384, recorded_model=_E5_SMALL)
+    # recorded granite-97m-r2 (384), configured ruri-v3-310m (1024).
+    engine = _build_db(tmp_path, vec_text_dim=384, recorded_model=_GRANITE_97)
     _seed_indexed_text(engine)
-    _patch_configured_model(monkeypatch, _E5_LARGE)
+    _patch_configured_model(monkeypatch, _RURI_310)
 
     _run_migration(engine)
 
@@ -269,7 +269,7 @@ def test_a_model_name_change_diff_dim_drops_and_purges(
     assert _scalar(
         engine, "SELECT COUNT(*) FROM detailed_summary_citations"
     ) == 0
-    assert _read_meta(engine) == _E5_LARGE
+    assert _read_meta(engine) == _RURI_310
 
 
 # ---------------------------------------------------------------------------
@@ -280,10 +280,10 @@ def test_a_model_name_change_diff_dim_drops_and_purges(
 def test_b_same_dimension_different_model_still_fires(
     tmp_path, monkeypatch
 ) -> None:
-    """e5-base (768) -> ruri-130m (768): identical dimension but a
-    different vector space. Dimension-only keying would WRONGLY skip
-    this; model-name keying must rebuild."""
-    engine = _build_db(tmp_path, vec_text_dim=768, recorded_model=_E5_BASE)
+    """granite-311m-r2 (768) -> ruri-130m (768): identical dimension
+    but a different vector space. Dimension-only keying would WRONGLY
+    skip this; model-name keying must rebuild."""
+    engine = _build_db(tmp_path, vec_text_dim=768, recorded_model=_GRANITE_311)
     _seed_indexed_text(engine)
     _patch_configured_model(monkeypatch, _RURI_130)
 
@@ -318,11 +318,11 @@ def test_c_fresh_db_records_model_no_purge(tmp_path, monkeypatch) -> None:
     # A pre-existing text-indexed row (e.g. created later by the indexer)
     # — nothing exists yet at migration time, but assert no destructive
     # action regardless.
-    _patch_configured_model(monkeypatch, _E5_SMALL)
+    _patch_configured_model(monkeypatch, _GRANITE_97)
 
     _run_migration(engine)
 
-    assert _read_meta(engine) == _E5_SMALL
+    assert _read_meta(engine) == _GRANITE_97
     # vec_text was absent and stays absent (created later by
     # _create_vec_tables, out of scope here).
     assert not _vec_text_exists(engine)
@@ -343,12 +343,12 @@ def test_d_upgrade_path_seeds_meta_without_purge(
     Must NOT re-embed everything (invariant §2.1-5)."""
     engine = _build_db(tmp_path, vec_text_dim=768, recorded_model=None)
     _seed_indexed_text(engine)
-    # Configured model is e5-base (768) == vec_text's existing dim.
-    _patch_configured_model(monkeypatch, _E5_BASE)
+    # Configured model is granite-311m-r2 (768) == vec_text's existing dim.
+    _patch_configured_model(monkeypatch, _GRANITE_311)
 
     _run_migration(engine)
 
-    assert _read_meta(engine) == _E5_BASE
+    assert _read_meta(engine) == _GRANITE_311
     assert _vec_text_exists(engine), "vec_text must NOT be dropped"
     assert _scalar(
         engine,
@@ -371,9 +371,9 @@ def test_d_upgrade_path_seeds_meta_without_purge(
 def test_e_recorded_equals_configured_is_noop(
     tmp_path, monkeypatch
 ) -> None:
-    engine = _build_db(tmp_path, vec_text_dim=384, recorded_model=_E5_SMALL)
+    engine = _build_db(tmp_path, vec_text_dim=384, recorded_model=_GRANITE_97)
     _seed_indexed_text(engine)
-    _patch_configured_model(monkeypatch, _E5_SMALL)
+    _patch_configured_model(monkeypatch, _GRANITE_97)
 
     _run_migration(engine)
 
@@ -389,7 +389,7 @@ def test_e_recorded_equals_configured_is_noop(
     assert _scalar(
         engine, "SELECT COUNT(*) FROM detailed_summary_citations"
     ) == 1
-    assert _read_meta(engine) == _E5_SMALL
+    assert _read_meta(engine) == _GRANITE_97
 
 
 # ---------------------------------------------------------------------------

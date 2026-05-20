@@ -38,7 +38,9 @@ from app.embedding_overrides import (  # noqa: E402 — Phase 1 module (RED)
 # A model id that exists in app.workers.embedder._MODEL_DIMS.
 _VALID_MODEL = "cl-nagoya/ruri-v3-30m"
 # A second valid id (different dimension) used for merge assertions.
-_VALID_MODEL_ALT = "intfloat/multilingual-e5-large"
+_VALID_MODEL_ALT = "ibm-granite/granite-embedding-311m-multilingual-r2"
+# Baseline model id (the shipped default in search-config.yml.example).
+_BASELINE_MODEL = "ibm-granite/granite-embedding-97m-multilingual-r2"
 # A model id that is NOT in the allowlist (typo / unsupported).
 _INVALID_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
@@ -198,14 +200,14 @@ def test_read_returns_none_for_malformed_json(tmp_path: Path) -> None:
 
 
 def test_merge_into_dict_preserves_baseline_when_overrides_absent() -> None:
-    base = {"text_embedding": "intfloat/multilingual-e5-small", "clip": "x"}
+    base = {"text_embedding": _BASELINE_MODEL, "clip": "x"}
     out = merge_into_dict(base, None)
     assert out == base
     assert out is not base  # new dict, no mutation
 
 
 def test_merge_into_dict_override_replaces_baseline_value() -> None:
-    base = {"text_embedding": "intfloat/multilingual-e5-small", "clip": "x"}
+    base = {"text_embedding": _BASELINE_MODEL, "clip": "x"}
     out = merge_into_dict(
         base, EmbeddingOverrides(text_embedding=_VALID_MODEL_ALT)
     )
@@ -213,13 +215,13 @@ def test_merge_into_dict_override_replaces_baseline_value() -> None:
     # Sibling keys in the models section are untouched.
     assert out["clip"] == "x"
     # Baseline dict not mutated.
-    assert base["text_embedding"] == "intfloat/multilingual-e5-small"
+    assert base["text_embedding"] == _BASELINE_MODEL
 
 
 def test_merge_into_dict_none_field_leaves_baseline() -> None:
-    base = {"text_embedding": "intfloat/multilingual-e5-small"}
+    base = {"text_embedding": _BASELINE_MODEL}
     out = merge_into_dict(base, EmbeddingOverrides(text_embedding=None))
-    assert out["text_embedding"] == "intfloat/multilingual-e5-small"
+    assert out["text_embedding"] == _BASELINE_MODEL
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +241,7 @@ def test_config_load_settings_reflects_written_override(
     yml = tmp_path / "search-config.yml"
     yml.write_text(
         "models:\n"
-        "  text_embedding: intfloat/multilingual-e5-small\n"
+        f"  text_embedding: {_BASELINE_MODEL}\n"
         "  clip: keep-this-clip\n"
     )
     monkeypatch.setenv("SEARCH_CONFIG_PATH", str(yml))
@@ -268,7 +270,7 @@ def test_config_load_settings_keeps_yaml_when_override_invalid(
     yml = tmp_path / "search-config.yml"
     yml.write_text(
         "models:\n"
-        "  text_embedding: intfloat/multilingual-e5-base\n"
+        f"  text_embedding: {_VALID_MODEL_ALT}\n"
     )
     monkeypatch.setenv("SEARCH_CONFIG_PATH", str(yml))
     monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(data_dir))
@@ -286,4 +288,4 @@ def test_config_load_settings_keeps_yaml_when_override_invalid(
     )
 
     settings = cfg.load_settings()
-    assert settings.models.text_embedding == "intfloat/multilingual-e5-base"
+    assert settings.models.text_embedding == _VALID_MODEL_ALT

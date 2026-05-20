@@ -353,13 +353,16 @@ models:
   # keep the default 300s.
   whisper: "openai/whisper-large-v3-turbo"
 
-  # Text embedding model (multilingual, used for metadata + transcript)
+  # Text embedding model (used for metadata + transcript)
   # Options (accuracy ↑ = size/speed ↓, requires re-index on change):
-  #   intfloat/multilingual-e5-small  — 384d, ~120MB, fast but noisy
-  #   intfloat/multilingual-e5-base   — 768d, ~470MB, recommended balance
-  #   cl-nagoya/ruri-v3-30m           — 256d, ~150MB, best for Japanese
-  #   cl-nagoya/ruri-v3-130m          — 768d, ~520MB, best Japanese accuracy
-  text_embedding: "intfloat/multilingual-e5-small"
+  # Multilingual (default, 200+ languages, Apache 2.0, prefix-free):
+  #   ibm-granite/granite-embedding-97m-multilingual-r2   — 384d, ~190MB, fast multilingual default
+  #   ibm-granite/granite-embedding-311m-multilingual-r2  — 768d, ~620MB, higher-quality multilingual
+  # Japanese-only (specialised, stronger on JMTEB retrieval than multilingual):
+  #   cl-nagoya/ruri-v3-30m           — 256d, ~150MB, lightweight Japanese
+  #   cl-nagoya/ruri-v3-130m          — 768d, ~520MB, recommended for Japanese accuracy
+  #   cl-nagoya/ruri-v3-310m          — 1024d, ~1.2GB, max Japanese accuracy
+  text_embedding: "ibm-granite/granite-embedding-97m-multilingual-r2"
 
   # CLIP model for image/video frame analysis (transformers SigLIP2 or open_clip).
   # Recommended:
@@ -535,9 +538,10 @@ indexing:
   # Text chunking settings
   text_chunking:
     # Maximum characters per chunk.
-    # 400 chars ≒ 256 tokens is the sweet spot for multilingual-e5-small
-    # embedders. Short enough for precise citations while long enough for
-    # hybrid BM25 retrieval (kanji/katakana runs remain salient).
+    # 400 chars ≒ 256 tokens is the sweet spot for 384-dim multilingual
+    # embedders (Granite-97m-r2 / ruri-30m). Short enough for precise
+    # citations while long enough for hybrid BM25 retrieval (kanji/katakana
+    # runs remain salient).
     max_chunk_size: 400
     # Overlap between chunks (≈20% of max_chunk_size).
     overlap: 80

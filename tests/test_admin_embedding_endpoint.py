@@ -65,8 +65,9 @@ from app.embedding_overrides import read_overrides, write_overrides
 from app.workers.embedder import _MODEL_DIMS
 
 # Baseline default from config.ModelConfig.text_embedding.
-_BASELINE_MODEL = "intfloat/multilingual-e5-small"
-_E5_BASE = "intfloat/multilingual-e5-base"      # 768, "multi"
+_BASELINE_MODEL = "ibm-granite/granite-embedding-97m-multilingual-r2"  # 384, "multi"
+# A second allowlisted multilingual model used for PUT / mismatch fixtures.
+_GRANITE_311 = "ibm-granite/granite-embedding-311m-multilingual-r2"    # 768, "multi"
 _RURI_30 = "cl-nagoya/ruri-v3-30m"              # 256, "ja"
 
 
@@ -217,11 +218,11 @@ def test_get_reflects_saved_override_before_restart(
     write_overrides_path(
         __import__(
             "app.embedding_overrides", fromlist=["EmbeddingOverrides"]
-        ).EmbeddingOverrides(text_embedding=_E5_BASE),
+        ).EmbeddingOverrides(text_embedding=_GRANITE_311),
         data_dir=data_dir,
     )
     body = client.get("/admin/embedding").json()
-    assert body["effective"] == _E5_BASE
+    assert body["effective"] == _GRANITE_311
 
 
 # ---------------------------------------------------------------------------
@@ -245,9 +246,9 @@ def test_get_reindex_pending_true_when_recorded_differs(
 ) -> None:
     """recorded set to a model different from the effective baseline
     → reindex_pending true (a restart will rebuild vec_text)."""
-    stub_recorded(_E5_BASE)  # effective baseline is e5-small
+    stub_recorded(_GRANITE_311)  # effective baseline is the 97m multilingual default
     body = client.get("/admin/embedding").json()
-    assert body["recorded"] == _E5_BASE
+    assert body["recorded"] == _GRANITE_311
     assert body["effective"] == _BASELINE_MODEL
     assert body["reindex_pending"] is True
 
@@ -286,7 +287,7 @@ def test_put_persists_allowlisted_model_and_touches_restart(
 
     response = client.put(
         "/admin/embedding",
-        json={"text_embedding": _E5_BASE},
+        json={"text_embedding": _GRANITE_311},
     )
     assert response.status_code == 200
     body = response.json()
@@ -295,7 +296,7 @@ def test_put_persists_allowlisted_model_and_touches_restart(
 
     persisted = read_overrides(data_dir)
     assert persisted is not None
-    assert persisted.text_embedding == _E5_BASE
+    assert persisted.text_embedding == _GRANITE_311
 
 
 def test_put_response_reports_effective_recorded_reindex(
@@ -410,7 +411,7 @@ def test_delete_removes_override_and_touches_restart(
     from app.embedding_overrides import EmbeddingOverrides
 
     write_overrides(
-        EmbeddingOverrides(text_embedding=_E5_BASE),
+        EmbeddingOverrides(text_embedding=_GRANITE_311),
         data_dir=data_dir,
     )
     assert read_overrides(data_dir) is not None
@@ -457,7 +458,7 @@ def test_auth_parity_no_authorization_header_required(
     assert get_resp.status_code == 200
 
     put_resp = client.put(
-        "/admin/embedding", json={"text_embedding": _E5_BASE}
+        "/admin/embedding", json={"text_embedding": _GRANITE_311}
     )
     assert put_resp.status_code not in (401, 403)
 

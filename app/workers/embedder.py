@@ -4,8 +4,8 @@ Provides shared text-to-vector embedding functionality used by
 both metadata indexing and whisper transcript indexing.
 
 The model is lazy-loaded on first use and kept in memory.
-Supports multilingual-e5 and Ruri model families with automatic
-prefix detection.
+Supports IBM Granite Embedding R2 (multilingual) and Ruri model
+families with automatic prefix detection.
 """
 
 import logging
@@ -28,18 +28,22 @@ EMBEDDING_DIM = 384
 
 # Model name → embedding dimension mapping
 _MODEL_DIMS: dict[str, int] = {
-    "intfloat/multilingual-e5-small": 384,
-    "intfloat/multilingual-e5-base": 768,
-    "intfloat/multilingual-e5-large": 1024,
+    "ibm-granite/granite-embedding-97m-multilingual-r2": 384,
+    "ibm-granite/granite-embedding-311m-multilingual-r2": 768,
     "cl-nagoya/ruri-v3-30m": 256,
     "cl-nagoya/ruri-v3-130m": 768,
     "cl-nagoya/ruri-v3-310m": 1024,
 }
 
 # Model family → (query_prefix, passage_prefix)
+# Granite R2 is prefix-free per the IBM model card; the e5 family is
+# retained as a defence-in-depth fallback for any out-of-allowlist
+# model id whose name happens to contain "e5", so a stray override
+# does not silently end up with the wrong prefix scheme.
 _MODEL_PREFIXES: dict[str, tuple[str, str]] = {
-    "e5": ("query: ", "passage: "),
+    "granite": ("", ""),
     "ruri": ("検索クエリ: ", "検索文書: "),
+    "e5": ("query: ", "passage: "),
 }
 
 
@@ -50,11 +54,13 @@ def _detect_prefix_family(model_name: str) -> str:
         model_name: HuggingFace model identifier.
 
     Returns:
-        Prefix family key ("e5", "ruri", etc.).
+        Prefix family key ("granite", "ruri", "e5").
     """
     lower = model_name.lower()
     if "ruri" in lower:
         return "ruri"
+    if "granite" in lower:
+        return "granite"
     return "e5"
 
 
@@ -72,7 +78,7 @@ def _get_prefixes() -> tuple[str, str]:
     if models_config.text_query_prefix or models_config.text_passage_prefix:
         return (models_config.text_query_prefix, models_config.text_passage_prefix)
     family = _detect_prefix_family(models_config.text_embedding)
-    return _MODEL_PREFIXES.get(family, _MODEL_PREFIXES["e5"])
+    return _MODEL_PREFIXES.get(family, _MODEL_PREFIXES["granite"])
 
 
 def _ensure_loaded() -> object:

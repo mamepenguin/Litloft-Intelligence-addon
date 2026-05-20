@@ -61,10 +61,10 @@ function defaultPayload(overrides: Record<string, unknown> = {}) {
     recorded: "cl-nagoya/ruri-v3-130m",
     reindex_pending: false,
     catalog: [
-      { id: "cl-nagoya/ruri-v3-130m", family: "ja", dim: 768, weight: "light" },
-      { id: "cl-nagoya/ruri-v3-310m", family: "ja", dim: 1024, weight: "normal" },
-      { id: "intfloat/multilingual-e5-base", family: "multi", dim: 768, weight: "light" },
-      { id: "intfloat/multilingual-e5-large", family: "multi", dim: 1024, weight: "heavy" },
+      { id: "cl-nagoya/ruri-v3-130m", family: "ja", dim: 768, weight: "normal" },
+      { id: "cl-nagoya/ruri-v3-310m", family: "ja", dim: 1024, weight: "heavy" },
+      { id: "ibm-granite/granite-embedding-97m-multilingual-r2", family: "multi", dim: 384, weight: "light" },
+      { id: "ibm-granite/granite-embedding-311m-multilingual-r2", family: "multi", dim: 768, weight: "normal" },
     ],
     ...overrides,
   };
@@ -92,10 +92,10 @@ describe("AdminEmbeddingSettingsSection", () => {
     );
     expect(screen.getByRole("radio", { name: /ruri-v3-310m/i })).toBeInTheDocument();
     expect(
-      screen.getByRole("radio", { name: /multilingual-e5-base/i }),
+      screen.getByRole("radio", { name: /granite-embedding-97m-multilingual-r2/i }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("radio", { name: /multilingual-e5-large/i }),
+      screen.getByRole("radio", { name: /granite-embedding-311m-multilingual-r2/i }),
     ).toBeInTheDocument();
 
     // Effective is the radio that comes back checked
@@ -127,7 +127,7 @@ describe("AdminEmbeddingSettingsSection", () => {
     mockFetch.mockResolvedValueOnce(
       jsonResponse(
         defaultPayload({
-          effective: "intfloat/multilingual-e5-base",
+          effective: "ibm-granite/granite-embedding-97m-multilingual-r2",
           recorded: "cl-nagoya/ruri-v3-130m",
           reindex_pending: true,
         }),
@@ -191,9 +191,9 @@ describe("AdminEmbeddingSettingsSection", () => {
     render(<AdminEmbeddingSettingsSection />);
 
     await waitFor(() =>
-      expect(screen.getByRole("radio", { name: /multilingual-e5-base/i })).toBeInTheDocument(),
+      expect(screen.getByRole("radio", { name: /granite-embedding-97m-multilingual-r2/i })).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole("radio", { name: /multilingual-e5-base/i }));
+    fireEvent.click(screen.getByRole("radio", { name: /granite-embedding-97m-multilingual-r2/i }));
 
     const dialog = await screen.findByRole("dialog");
     // (a) Reindex required + Ask/text-search degraded until done
@@ -250,10 +250,10 @@ describe("AdminEmbeddingSettingsSection", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByRole("radio", { name: /multilingual-e5-base/i }),
+        screen.getByRole("radio", { name: /granite-embedding-97m-multilingual-r2/i }),
       ).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole("radio", { name: /multilingual-e5-base/i }));
+    fireEvent.click(screen.getByRole("radio", { name: /granite-embedding-97m-multilingual-r2/i }));
 
     const dialog = await screen.findByRole("dialog");
     fireEvent.click(
@@ -273,7 +273,7 @@ describe("AdminEmbeddingSettingsSection", () => {
     mockFetch.mockResolvedValueOnce(jsonResponse(defaultPayload()));
     mockFetch.mockResolvedValueOnce(
       jsonResponse({
-        effective: "intfloat/multilingual-e5-base",
+        effective: "ibm-granite/granite-embedding-97m-multilingual-r2",
         recorded: "cl-nagoya/ruri-v3-130m",
         reindex_pending: true,
         catalog: defaultPayload().catalog,
@@ -286,7 +286,7 @@ describe("AdminEmbeddingSettingsSection", () => {
     mockFetch.mockResolvedValueOnce(
       jsonResponse(
         defaultPayload({
-          effective: "intfloat/multilingual-e5-base",
+          effective: "ibm-granite/granite-embedding-97m-multilingual-r2",
           recorded: "cl-nagoya/ruri-v3-130m",
           reindex_pending: true,
         }),
@@ -296,11 +296,11 @@ describe("AdminEmbeddingSettingsSection", () => {
     render(<AdminEmbeddingSettingsSection />);
     await waitFor(() =>
       expect(
-        screen.getByRole("radio", { name: /multilingual-e5-base/i }),
+        screen.getByRole("radio", { name: /granite-embedding-97m-multilingual-r2/i }),
       ).toBeInTheDocument(),
     );
 
-    fireEvent.click(screen.getByRole("radio", { name: /multilingual-e5-base/i }));
+    fireEvent.click(screen.getByRole("radio", { name: /granite-embedding-97m-multilingual-r2/i }));
 
     const dialog = await screen.findByRole("dialog");
     fireEvent.click(
@@ -314,7 +314,7 @@ describe("AdminEmbeddingSettingsSection", () => {
       const putCall = mockFetch.mock.calls.find((c) => c[1]?.method === "PUT");
       expect(putCall?.[0]).toBe(ENDPOINT);
       const body = JSON.parse(String(putCall?.[1]?.body ?? "{}"));
-      expect(body.text_embedding).toBe("intfloat/multilingual-e5-base");
+      expect(body.text_embedding).toBe("ibm-granite/granite-embedding-97m-multilingual-r2");
     });
 
     // Dialog closes after success
@@ -323,7 +323,7 @@ describe("AdminEmbeddingSettingsSection", () => {
     // Re-render reflects the new effective + reindex_pending badge
     await waitFor(() =>
       expect(
-        screen.getByRole("radio", { name: /multilingual-e5-base/i }),
+        screen.getByRole("radio", { name: /granite-embedding-97m-multilingual-r2/i }),
       ).toBeChecked(),
     );
     expect(
@@ -350,11 +350,11 @@ describe("AdminEmbeddingSettingsSection", () => {
     render(<AdminEmbeddingSettingsSection />);
     await waitFor(() =>
       expect(
-        screen.getByRole("radio", { name: /multilingual-e5-base/i }),
+        screen.getByRole("radio", { name: /granite-embedding-97m-multilingual-r2/i }),
       ).toBeInTheDocument(),
     );
 
-    fireEvent.click(screen.getByRole("radio", { name: /multilingual-e5-base/i }));
+    fireEvent.click(screen.getByRole("radio", { name: /granite-embedding-97m-multilingual-r2/i }));
 
     const dialog = await screen.findByRole("dialog");
     fireEvent.click(
@@ -379,7 +379,7 @@ describe("AdminEmbeddingSettingsSection", () => {
     mockFetch.mockResolvedValueOnce(
       jsonResponse(
         defaultPayload({
-          effective: "intfloat/multilingual-e5-base",
+          effective: "ibm-granite/granite-embedding-97m-multilingual-r2",
           recorded: "cl-nagoya/ruri-v3-130m",
           reindex_pending: true,
         }),
@@ -402,7 +402,7 @@ describe("AdminEmbeddingSettingsSection", () => {
     render(<AdminEmbeddingSettingsSection />);
     await waitFor(() =>
       expect(
-        screen.getByRole("radio", { name: /multilingual-e5-base/i }),
+        screen.getByRole("radio", { name: /granite-embedding-97m-multilingual-r2/i }),
       ).toBeChecked(),
     );
 
@@ -469,7 +469,7 @@ describe("AdminEmbeddingSettingsSection", () => {
     mockFetch.mockResolvedValueOnce(
       jsonResponse(
         defaultPayload({
-          effective: "intfloat/multilingual-e5-base",
+          effective: "ibm-granite/granite-embedding-97m-multilingual-r2",
           recorded: "cl-nagoya/ruri-v3-130m",
           reindex_pending: true,
         }),
@@ -478,7 +478,7 @@ describe("AdminEmbeddingSettingsSection", () => {
     render(<AdminEmbeddingSettingsSection />);
     await waitFor(() =>
       expect(
-        screen.getByRole("radio", { name: /multilingual-e5-base/i }),
+        screen.getByRole("radio", { name: /granite-embedding-97m-multilingual-r2/i }),
       ).toBeInTheDocument(),
     );
 
@@ -499,19 +499,19 @@ describe("AdminEmbeddingSettingsSection", () => {
       ).toBeInTheDocument(),
     );
 
-    // light (used by ruri-v3-130m + e5-base) → "軽量" / "Light"
+    // light (used by granite-97m-r2) → "軽量" / "Light"
     expect(
       screen.getAllByText(
         re("軽量", "light", "settings\\.embedding\\.weight\\.light"),
       ).length,
     ).toBeGreaterThan(0);
-    // normal (used by ruri-v3-310m) → "標準" / "Normal"
+    // normal (used by ruri-v3-130m + granite-311m-r2) → "標準" / "Normal"
     expect(
       screen.getAllByText(
         re("標準", "normal", "settings\\.embedding\\.weight\\.normal"),
       ).length,
     ).toBeGreaterThan(0);
-    // heavy (used by e5-large) → "重い" / "Heavy"
+    // heavy (used by ruri-v3-310m) → "重い" / "Heavy"
     expect(
       screen.getAllByText(
         re("重い", "heavy", "settings\\.embedding\\.weight\\.heavy"),

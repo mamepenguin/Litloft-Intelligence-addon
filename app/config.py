@@ -28,7 +28,7 @@ _whisper_deprecation_logged: bool = False
 @dataclass(frozen=True)
 class ModelConfig:
     whisper: str = "openai/whisper-large-v3-turbo"
-    text_embedding: str = "intfloat/multilingual-e5-small"
+    text_embedding: str = "ibm-granite/granite-embedding-97m-multilingual-r2"
     clip: str = "llm-jp/waon-siglip2-base-patch16-256"
     blip: str = "Salesforce/blip-image-captioning-base"
     blip_max_tokens: int = 50  # max tokens for BLIP caption generation
