@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Settings,
 } from "lucide-react";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { getFile } from "@/lib/api";
 import type { FileItem } from "@/types";
 import {
@@ -47,6 +48,7 @@ export default function VisualDescriptionSection({
   const [available, setAvailable] = useState<boolean>(true);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmRegenerateOpen, setConfirmRegenerateOpen] = useState(false);
 
   // Guard against state updates from requests that race a file-id
   // change — when the parent navigates to a new file the in-flight
@@ -77,6 +79,7 @@ export default function VisualDescriptionSection({
     setAvailable(true);
     setError(null);
     setWorking(false);
+    setConfirmRegenerateOpen(false);
     (async () => {
       try {
         const [fileResult] = await Promise.all([
@@ -129,14 +132,12 @@ export default function VisualDescriptionSection({
     }
   }, [fileId, drive]);
 
-  const handleRegenerate = useCallback(async () => {
-    const confirmed = window.confirm(
-      t("visionRegenerateConfirm", {
-        defaultMessage:
-          "Regenerate the AI description? The current description will be overwritten.",
-      }),
-    );
-    if (!confirmed) return;
+  const handleRegenerate = useCallback(() => {
+    setConfirmRegenerateOpen(true);
+  }, []);
+
+  const handleConfirmRegenerate = useCallback(async () => {
+    setConfirmRegenerateOpen(false);
     const requestId = requestIdRef.current;
     setWorking(true);
     setError(null);
@@ -155,7 +156,7 @@ export default function VisualDescriptionSection({
       setError(e instanceof Error ? e.message : String(e));
       setWorking(false);
     }
-  }, [fileId, drive, handleGenerate, t]);
+  }, [fileId, drive, handleGenerate]);
 
   if (!loaded) return null;
 
@@ -273,6 +274,18 @@ export default function VisualDescriptionSection({
       {error && (
         <p className="mt-2 text-[11px] text-danger/80">{error}</p>
       )}
+
+      <ConfirmDialog
+        open={confirmRegenerateOpen}
+        title={t("visionRegenerate", { defaultMessage: "Regenerate" })}
+        message={t("visionRegenerateConfirm", {
+          defaultMessage:
+            "Regenerate the AI description? The current description will be overwritten.",
+        })}
+        confirmLabel={t("visionRegenerate", { defaultMessage: "Regenerate" })}
+        onConfirm={handleConfirmRegenerate}
+        onCancel={() => setConfirmRegenerateOpen(false)}
+      />
     </div>
   );
 }
