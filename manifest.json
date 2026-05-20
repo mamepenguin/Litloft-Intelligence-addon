@@ -472,6 +472,13 @@
                 "drive_optional": true,
                 "pre_check": {"type": "admin"},
                 "response_filter": null
+            },
+            {
+                "path": "/admin/embedding",
+                "methods": ["GET", "PUT", "DELETE"],
+                "drive_optional": true,
+                "pre_check": {"type": "admin"},
+                "response_filter": null
             }
         ]
     }

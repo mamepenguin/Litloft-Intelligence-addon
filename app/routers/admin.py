@@ -622,6 +622,197 @@ async def reset_rag_config() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# /admin/embedding
+# ---------------------------------------------------------------------------
+
+
+class EmbeddingUpdate(BaseModel):
+    """Payload for ``PUT /admin/embedding``.
+
+    Only ``text_embedding`` is GUI-overridable per spec §3.1 / §3.4.
+    Spec §3.4 mandates HTTP 422 (not 400) for an out-of-allowlist or
+    empty value so the structural guard against the silent dim-384
+    fallback (§2.1-4) is symmetric with FastAPI's body-validation
+    error code. The router converts the validator's ``ValueError``
+    into a 422 via the explicit ``HTTPException`` raised in
+    :func:`_validate_embedding`.
+    """
+
+    text_embedding: str
+
+
+def _model_family(model_id: str) -> str:
+    return "ja" if "ruri" in model_id else "multi"
+
+
+def _model_weight(dim: int) -> str:
+    if dim <= 384:
+        return "light"
+    if dim <= 768:
+        return "normal"
+    return "heavy"
+
+
+def _build_catalog() -> list[dict[str, Any]]:
+    """Build the catalog list from the embedder's ``_MODEL_DIMS``.
+
+    Imported lazily to keep the heavy embedder transitive deps out of
+    the module-import path of ``admin.py`` (the test conftest stubs
+    them, but production loads them only when actually embedding).
+    """
+    from app.workers.embedder import _MODEL_DIMS
+
+    return [
+        {
+            "id": model_id,
+            "family": _model_family(model_id),
+            "dim": dim,
+            "weight": _model_weight(dim),
+        }
+        for model_id, dim in _MODEL_DIMS.items()
+    ]
+
+
+def _effective_embedding_model() -> str:
+    """Resolve the effective ``models.text_embedding``.
+
+    Mirrors the read-after-write contract of the other admin GETs:
+    a freshly-saved override is reflected immediately, before the
+    container restart swaps the frozen ``config.settings.models``.
+    """
+    from app import embedding_overrides as eo
+
+    overrides = eo.read_overrides()
+    if overrides is not None and overrides.text_embedding is not None:
+        return overrides.text_embedding
+    return config.settings.models.text_embedding
+
+
+def _read_recorded_model() -> str | None:
+    """Read the search-DB recorded text-embedding model name.
+
+    Goes through ``app.database`` as a module so the tests' patches
+    on ``get_search_db_read`` / ``_read_index_meta`` take effect
+    (project rule: ``import app.database as ...``, never
+    ``from app.database import X``).
+    """
+    import app.database as database_mod
+
+    try:
+        with database_mod.get_search_db_read() as session:
+            conn = session.connection()
+            return database_mod._read_index_meta(
+                conn, database_mod._TEXT_EMBEDDING_MODEL_KEY
+            )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Could not read recorded text embedding model: %s", exc)
+        return None
+
+
+def _embedding_status_payload() -> dict[str, Any]:
+    from app import embedding_overrides as eo
+
+    effective = _effective_embedding_model()
+    recorded = _read_recorded_model()
+    overrides = eo.read_overrides()
+    # A fresh DB with no override is NOT pending: the first index run
+    # will simply record the effective model. A divergence between
+    # recorded and effective IS pending — either because an override
+    # was just saved (recorded may still be None until restart rebuilds
+    # vec_text) or because the user previously indexed with a
+    # different model.
+    if recorded is None and overrides is None:
+        reindex_pending = False
+    else:
+        reindex_pending = recorded != effective
+    return {
+        "effective": effective,
+        "catalog": _build_catalog(),
+        "recorded": recorded,
+        "reindex_pending": reindex_pending,
+    }
+
+
+def _validate_embedding(payload: EmbeddingUpdate) -> None:
+    from app.workers.embedder import _MODEL_DIMS
+
+    value = payload.text_embedding
+    if not value or value not in set(_MODEL_DIMS):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unknown text_embedding model {value!r}. "
+                f"Choose one of {sorted(_MODEL_DIMS)}"
+            ),
+        )
+
+
+@router.get("/embedding")
+async def get_embedding_config() -> dict[str, Any]:
+    """Return the effective text-embedding model + catalog + status.
+
+    Spec §3.4. Reads the on-disk override authoritatively so a
+    freshly-saved value is reflected before the next restart.
+    """
+    return _embedding_status_payload()
+
+
+@router.put("/embedding")
+async def update_embedding_config(payload: EmbeddingUpdate) -> dict[str, Any]:
+    """Validate against the embedder allowlist and persist the override.
+
+    A model outside ``_MODEL_DIMS`` (including empty) returns 422 and
+    does NOT touch the overrides file or the restart_pending hook
+    (structural prevention of the silent dim-384 fallback, §2.1-4).
+    """
+    from app import embedding_overrides as eo
+
+    _validate_embedding(payload)
+    overrides = eo.EmbeddingOverrides(text_embedding=payload.text_embedding)
+    written_at = datetime.now(UTC).isoformat()
+    path = eo.write_overrides(overrides, updated_at=written_at)
+    logger.info(
+        "Embedding overrides saved (text_embedding=%s) at %s",
+        payload.text_embedding, path,
+    )
+    notify_status = await _notify_core_restart_pending()
+    body = _embedding_status_payload()
+    body.update({
+        "status": "saved",
+        "restart_required": True,
+        "core_notified": notify_status,
+    })
+    return body
+
+
+@router.delete("/embedding")
+async def reset_embedding_config() -> dict[str, Any]:
+    """Drop the GUI override; search-config.yml becomes authoritative.
+
+    Idempotent: still returns 200 (with ``removed: False``) when no
+    overrides file is present, mirroring ``DELETE /admin/transcription``.
+    """
+    from app import embedding_overrides as eo
+
+    removed = eo.delete_overrides()
+    if removed:
+        logger.info("Embedding overrides reset (file removed)")
+    else:
+        logger.info(
+            "Embedding overrides reset requested but no file present"
+        )
+    notify_status = await _notify_core_restart_pending()
+    body = _embedding_status_payload()
+    body.update({
+        "status": "reset",
+        "removed": removed,
+        "restart_required": removed,
+        "core_notified": notify_status,
+    })
+    return body
+
+
+# ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
 
