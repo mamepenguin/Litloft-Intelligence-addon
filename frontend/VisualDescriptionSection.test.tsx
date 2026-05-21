@@ -87,7 +87,7 @@ describe("VisualDescriptionSection", () => {
     });
     renderSection();
     expect(
-      await screen.findByRole("button", { name: /Generate AI description/ }),
+      await screen.findByRole("button", { name: /Create description/ }),
     ).toBeInTheDocument();
   });
 
@@ -101,7 +101,7 @@ describe("VisualDescriptionSection", () => {
     });
     renderSection();
     expect(
-      await screen.findByText(/No vision-capable LLM is configured/),
+      await screen.findByText(/No LLM capable of image description is configured/),
     ).toBeInTheDocument();
   });
 
@@ -119,7 +119,7 @@ describe("VisualDescriptionSection", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("llava:13b")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /Regenerate/ }),
+      screen.getByRole("button", { name: /Create again/ }),
     ).toBeInTheDocument();
   });
 
@@ -133,7 +133,7 @@ describe("VisualDescriptionSection", () => {
     });
     renderSection();
     expect(
-      await screen.findByText(/Description generation failed/),
+      await screen.findByText(/Failed to create description/),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Retry/ })).toBeInTheDocument();
   });
@@ -150,7 +150,7 @@ describe("VisualDescriptionSection", () => {
       .mockResolvedValue({ status: "accepted", file_id: "f1" });
     renderSection();
     const button = await screen.findByRole("button", {
-      name: /Generate AI description/,
+      name: /Create description/,
     });
     await act(async () => {
       fireEvent.click(button);
@@ -170,7 +170,7 @@ describe("VisualDescriptionSection", () => {
     });
     renderSection();
     expect(
-      await screen.findByText(/Generating description/),
+      await screen.findByText(/Creating description/),
     ).toBeInTheDocument();
   });
 });

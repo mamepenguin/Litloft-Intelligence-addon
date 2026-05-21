@@ -94,10 +94,10 @@ describe("TranscriptSection — transcript refine UI", () => {
     cleanup();
   });
 
-  it("shows the 'Refine with AI' button when feature is enabled", async () => {
+  it("shows the transcript cleanup button when feature is enabled", async () => {
     renderSection();
     // Button label text per spec UI section.
-    const btn = await screen.findByRole("button", { name: /Refine with AI/ });
+    const btn = await screen.findByRole("button", { name: /Clean up with AI/ });
     expect(btn).toBeInTheDocument();
   });
 
@@ -107,13 +107,13 @@ describe("TranscriptSection — transcript refine UI", () => {
     // Give the async mount a tick — chunks still render, button shouldn't.
     await screen.findByText("未修正の文章。");
     expect(
-      screen.queryByRole("button", { name: /Refine with AI/ })
+      screen.queryByRole("button", { name: /Clean up with AI/ })
     ).not.toBeInTheDocument();
   });
 
-  it("renders 'AI refined' badge for refined chunks", async () => {
+  it("renders the AI cleanup badge for refined chunks", async () => {
     renderSection();
-    const badges = await screen.findAllByText(/AI refined/);
+    const badges = await screen.findAllByText(/AI cleaned/);
     // One badge per refined chunk (1 out of 2 in our fixture).
     expect(badges).toHaveLength(1);
   });

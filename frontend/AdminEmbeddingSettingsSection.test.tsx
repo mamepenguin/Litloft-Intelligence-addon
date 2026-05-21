@@ -139,10 +139,8 @@ describe("AdminEmbeddingSettingsSection", () => {
       expect(
         screen.getByText(
           re(
-            "記録モデル不一致",
-            "Recorded model mismatch",
-            "reindex",
-            "pending",
+            "保存されているモデル情報と現在の設定が一致していません",
+            "saved model information does not match",
             "settings\\.embedding\\.reindexPending",
           ),
         ),
@@ -160,8 +158,8 @@ describe("AdminEmbeddingSettingsSection", () => {
     expect(
       screen.queryByText(
         re(
-          "記録モデル不一致",
-          "Recorded model mismatch",
+          "保存されているモデル情報と現在の設定が一致していません",
+          "saved model information does not match",
           "settings\\.embedding\\.reindexPending",
         ),
       ),
@@ -329,8 +327,8 @@ describe("AdminEmbeddingSettingsSection", () => {
     expect(
       screen.getByText(
         re(
-          "記録モデル不一致",
-          "Recorded model mismatch",
+          "保存されているモデル情報と現在の設定が一致していません",
+          "saved model information does not match",
           "settings\\.embedding\\.reindexPending",
         ),
       ),
@@ -511,10 +509,10 @@ describe("AdminEmbeddingSettingsSection", () => {
         re("標準", "normal", "settings\\.embedding\\.weight\\.normal"),
       ).length,
     ).toBeGreaterThan(0);
-    // heavy (used by ruri-v3-310m) → "重い" / "Heavy"
+    // heavy (used by ruri-v3-310m) → "高負荷" / "High load"
     expect(
       screen.getAllByText(
-        re("重い", "heavy", "settings\\.embedding\\.weight\\.heavy"),
+        re("高負荷", "High load", "settings\\.embedding\\.weight\\.heavy"),
       ).length,
     ).toBeGreaterThan(0);
   });

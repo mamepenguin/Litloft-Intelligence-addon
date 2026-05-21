@@ -107,7 +107,7 @@ describe("SuggestedTagsSection accept dispatch", () => {
       expect(screen.getByText("new-one")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText(/Accept all/));
+    fireEvent.click(screen.getByText(/Add all/));
 
     await waitFor(() => {
       expect(saveFileTags).toHaveBeenCalled();

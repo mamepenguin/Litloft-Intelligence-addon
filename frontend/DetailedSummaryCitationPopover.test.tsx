@@ -128,7 +128,7 @@ describe("DetailedSummaryCitationPopover (dot marker)", () => {
         '[data-citation-marker="linked-weak"]',
       );
       expect(marker).not.toBeNull();
-      expect(marker?.getAttribute("aria-label")).toMatch(/弱い|要確認|verify/i);
+      expect(marker?.getAttribute("aria-label")).toMatch(/Needs review|要確認/i);
     });
   });
 
@@ -194,7 +194,7 @@ describe("CitationInlinePanel (in-flow accordion)", () => {
     renderMarkerWithPanel({ citation: linkedCitation });
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: /Strong|明確/ }),
+        screen.getByRole("button", { name: /Clear source citation|根拠が明確/ }),
       ).toBeInTheDocument();
     });
     expect(screen.queryByRole("region")).toBeNull();
@@ -217,7 +217,7 @@ describe("CitationInlinePanel (in-flow accordion)", () => {
 
     await act(async () => {
       fireEvent.click(
-        await screen.findByRole("button", { name: /Strong|明確/ }),
+        await screen.findByRole("button", { name: /Clear source citation|根拠が明確/ }),
       );
     });
 
@@ -242,7 +242,7 @@ describe("CitationInlinePanel (in-flow accordion)", () => {
 
     renderMarkerWithPanel({ citation: linkedCitation });
 
-    const marker = await screen.findByRole("button", { name: /Strong|明確/ });
+    const marker = await screen.findByRole("button", { name: /Clear source citation|根拠が明確/ });
     await act(async () => {
       fireEvent.click(marker);
     });
@@ -272,7 +272,7 @@ describe("CitationInlinePanel (in-flow accordion)", () => {
     renderMarkerWithPanel({ citation: linkedCitation });
     await act(async () => {
       fireEvent.click(
-        await screen.findByRole("button", { name: /Strong|明確/ }),
+        await screen.findByRole("button", { name: /Clear source citation|根拠が明確/ }),
       );
     });
 
@@ -302,7 +302,7 @@ describe("CitationInlinePanel (in-flow accordion)", () => {
     renderMarkerWithPanel({ citation: linkedCitation });
     await act(async () => {
       fireEvent.click(
-        await screen.findByRole("button", { name: /Strong|明確/ }),
+        await screen.findByRole("button", { name: /Clear source citation|根拠が明確/ }),
       );
     });
 
@@ -337,7 +337,7 @@ describe("CitationInlinePanel (in-flow accordion)", () => {
 
     await act(async () => {
       fireEvent.click(
-        await screen.findByRole("button", { name: /Strong|明確/ }),
+        await screen.findByRole("button", { name: /Clear source citation|根拠が明確/ }),
       );
     });
     await screen.findByText(/抜粋テキスト/);
@@ -365,7 +365,7 @@ describe("CitationInlinePanel (in-flow accordion)", () => {
     const { container } = renderMarkerWithPanel({ citation: linkedCitation });
     await act(async () => {
       fireEvent.click(
-        await screen.findByRole("button", { name: /Strong|明確/ }),
+        await screen.findByRole("button", { name: /Clear source citation|根拠が明確/ }),
       );
     });
 
@@ -394,7 +394,7 @@ describe("CitationInlinePanel (in-flow accordion)", () => {
     });
     await act(async () => {
       fireEvent.click(
-        await screen.findByRole("button", { name: /Weak|要確認|弱い/ }),
+        await screen.findByRole("button", { name: /Needs review|要確認/ }),
       );
     });
 

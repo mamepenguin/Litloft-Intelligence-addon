@@ -167,7 +167,7 @@ describe("DetailedSummarySection — state machine", () => {
     renderSection();
 
     expect(
-      await screen.findByRole("button", { name: /Generate detailed summary/ }),
+      await screen.findByRole("button", { name: /Create detailed summary/ }),
     ).toBeInTheDocument();
   });
 
@@ -195,7 +195,7 @@ describe("DetailedSummarySection — state machine", () => {
     renderSection();
 
     expect(
-      await screen.findByText(/Detailed summary generation failed/),
+      await screen.findByText(/Failed to create detailed summary/),
     ).toBeInTheDocument();
     expect(screen.getByText("LLM error: boom")).toBeInTheDocument();
   });
@@ -361,7 +361,7 @@ describe("DetailedSummarySection — edit flow", () => {
     fireEvent.click(editButtons[0]);
 
     const textarea = (await screen.findByLabelText(
-      /Edit section content/,
+      /Edit body/,
     )) as HTMLTextAreaElement;
     // The draft should be seeded with the entire H2 fragment so the
     // user can rename the heading or restructure the section in one
@@ -385,7 +385,7 @@ describe("DetailedSummarySection — edit flow", () => {
     fireEvent.click(editButtons[0]);
 
     const textarea = (await screen.findByLabelText(
-      /Edit section content/,
+      /Edit body/,
     )) as HTMLTextAreaElement;
     fireEvent.change(textarea, {
       target: { value: "## 全体像\n編集後の概要。" },
@@ -413,7 +413,7 @@ describe("DetailedSummarySection — edit flow", () => {
     // appears and the revert button becomes visible.
     expect(await screen.findByText(/Edited/)).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /Revert to AI version/ }),
+      screen.getByRole("button", { name: /Restore created version/ }),
     ).toBeInTheDocument();
   });
 
@@ -430,13 +430,13 @@ describe("DetailedSummarySection — edit flow", () => {
     fireEvent.click(editButtons[0]);
 
     const textarea = (await screen.findByLabelText(
-      /Edit section content/,
+      /Edit body/,
     )) as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: "discard me" } });
     fireEvent.click(screen.getByRole("button", { name: /Cancel/ }));
 
     expect(editDetailedSummarySection).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText(/Edit section content/)).toBeNull();
+    expect(screen.queryByLabelText(/Edit body/)).toBeNull();
   });
 
   it("revert shows a confirm dialog and calls revertDetailedSummary on confirm", async () => {
@@ -449,9 +449,9 @@ describe("DetailedSummarySection — edit flow", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
 
-    // Edited state renders the "Revert to AI version" button.
+    // Edited state renders the restore button.
     const revertButtons = await screen.findAllByRole("button", {
-      name: /Revert to AI version/,
+      name: /Restore created version/,
     });
     // First one is the bottom toolbar button (the one that opens the
     // dialog — the dialog's confirm button shares the label).
@@ -465,7 +465,7 @@ describe("DetailedSummarySection — edit flow", () => {
     // Confirm — the dialog's primary button carries the same label.
     await act(async () => {
       const dialogButtons = screen.getAllByRole("button", {
-        name: /Revert to AI version/,
+        name: /Restore created version/,
       });
       // Click the last one (the dialog's confirm button renders after
       // the toolbar button).
@@ -485,9 +485,9 @@ describe("DetailedSummarySection — edit flow", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
 
-    // The bottom toolbar has a Regenerate button. Click it.
+    // The bottom toolbar has a create-again button. Click it.
     const regenButtons = await screen.findAllByRole("button", {
-      name: /^Regenerate$/,
+      name: /^Create again$/,
     });
     fireEvent.click(regenButtons[0]);
 
@@ -517,17 +517,17 @@ describe("DetailedSummarySection — edit flow", () => {
       // Body (heading '全体像') must not render.
       expect(screen.queryByText(/全体像/)).not.toBeInTheDocument();
       // Edit / Save-to-knowledge / Revert buttons must all be absent.
-      expect(screen.queryByText(/Revert to AI version/)).not.toBeInTheDocument();
-      expect(screen.queryByText(/Save to knowledge/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Restore created version/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Save as file/)).not.toBeInTheDocument();
 
-      // Regenerate is the only interactive action.
-      const regenButton = screen.getByRole("button", { name: /Regenerate/ });
+      // Create again is the only interactive action.
+      const regenButton = screen.getByRole("button", { name: /Create again/ });
       fireEvent.click(regenButton);
 
       // The confirm dialog uses the with-note variant.
       expect(
         await screen.findByText(
-          /Regenerating the AI version/,
+          /The summary will be created again/,
         ),
       ).toBeInTheDocument();
     } finally {
@@ -544,7 +544,7 @@ describe("DetailedSummarySection — edit flow", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
 
     const regenButtons = await screen.findAllByRole("button", {
-      name: /^Regenerate$/,
+      name: /^Create again$/,
     });
 
     await act(async () => {
@@ -692,7 +692,7 @@ describe("DetailedSummarySection — inline markdown rendering", () => {
     fireEvent.click(editButton!);
 
     const textarea = (await screen.findByLabelText(
-      /Edit section content/,
+      /Edit body/,
     )) as HTMLTextAreaElement;
     // Draft carries the H3 heading line so the user can rename it,
     // and the subsection body up to the next ``###``.
@@ -743,7 +743,7 @@ describe("DetailedSummarySection — inline markdown rendering", () => {
     fireEvent.click(editButton);
 
     const textarea = (await screen.findByLabelText(
-      /Edit section content/,
+      /Edit body/,
     )) as HTMLTextAreaElement;
     fireEvent.change(textarea, {
       target: { value: "### 第一幕\n書き直し本文" },
