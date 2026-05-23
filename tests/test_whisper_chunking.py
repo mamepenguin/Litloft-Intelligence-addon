@@ -104,6 +104,11 @@ def test_join_words_japanese_uses_no_separator():
     assert _join_words(["今日", "は", "良い", "天気"], "ja") == "今日は良い天気"
 
 
+def test_join_words_jpn_iso639_uses_no_separator():
+    # ElevenLabs returns ISO 639-2 "jpn" instead of "ja"
+    assert _join_words(["耳", "掃", "除", "は"], "jpn") == "耳掃除は"
+
+
 def test_join_words_english_uses_space():
     assert _join_words(["hello", "world"], "en") == "hello world"
 

@@ -84,7 +84,7 @@ def _display_width(text: str) -> int:
 
 def _join_for_language(tokens: list[str], language: str) -> str:
     lang = (language or "").lower()
-    if lang.startswith(("ja", "zh", "ko", "th")):
+    if lang.startswith(("ja", "jp", "zh", "ko", "th")):
         return "".join(tokens)
     return " ".join(tokens)
 
@@ -268,7 +268,7 @@ def build_cues(
 
     # Japanese: re-group subword / per-char timestamps into morpheme-level
     # words via janome so cue breaks land on real word boundaries.
-    if (language or "").lower().startswith("ja"):
+    if (language or "").lower().startswith(("ja", "jp")):
         words = _regroup_ja_with_janome(words)
         if not words:
             return []

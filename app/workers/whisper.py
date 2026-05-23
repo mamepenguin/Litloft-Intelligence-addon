@@ -623,7 +623,7 @@ def _join_words(tokens: list[str], language: str) -> str:
     if not tokens:
         return ""
     lang = (language or "").lower()
-    if lang.startswith(("ja", "zh", "ko", "th")):
+    if lang.startswith(("ja", "jp", "zh", "ko", "th")):
         return _strip_cjk_spaces("".join(tokens))
     return " ".join(tokens)
 
