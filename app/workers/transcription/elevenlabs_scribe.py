@@ -24,6 +24,7 @@ Notes:
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable
 
 import httpx
@@ -43,6 +44,19 @@ from app.workers.transcription.errors import (
 ELEVENLABS_STT_URL = "https://api.elevenlabs.io/v1/speech-to-text"
 _FATAL_STATUS_CODES = frozenset({400, 401, 402, 403, 404, 409, 413, 415, 422})
 
+# ElevenLabs treats each CJK character as a separate word token and joins them
+# with spaces in the ``text`` field. Strip those inter-character spaces so the
+# stored text is natural (「耳掃除」 not 「耳 掃 除」).
+_CJK_SPACE_RE = re.compile(
+    r"([぀-ヿ㐀-鿿豈-﫿가-힯　-〿＀-￯])"
+    r"\s+"
+    r"(?=[぀-ヿ㐀-鿿豈-﫿가-힯　-〿＀-￯])"
+)
+
+
+def _strip_cjk_spaces(text: str) -> str:
+    return _CJK_SPACE_RE.sub(r"\1", text)
+
 
 class ElevenLabsScribeProvider:
     """Cloud transcription via ElevenLabs Scribe."""
@@ -51,7 +65,7 @@ class ElevenLabsScribeProvider:
     capabilities = ProviderCapabilities(
         sends_audio_offhost=True,
         supports_diarization=True,
-        supports_hotwords=False,
+        supports_hotwords=True,
         supports_word_timestamps=True,
         max_input_bytes=None,
         accepts_initial_prompt=False,
@@ -70,6 +84,7 @@ class ElevenLabsScribeProvider:
         self._api_key = api_key
         self._model_id = cfg.model_id
         self._diarize = cfg.diarize
+        self._no_verbatim = cfg.no_verbatim
         self._timeout_s = cfg.timeout_s
         # See DeepgramProvider — short-lived ``httpx.AsyncClient`` per
         # call (hako ``W0F1YQspXF-lVYgaDb6V1``). ``_transport`` is the
@@ -85,15 +100,19 @@ class ElevenLabsScribeProvider:
         initial_prompt: str | None = None,
         progress: Callable[[float], None] | None = None,
     ) -> list[TranscriptionSegment]:
-        del progress, hotwords, initial_prompt
+        del progress, initial_prompt
 
-        data = {
+        data: dict = {
             "model_id": self._model_id,
             "diarize": "true" if self._diarize else "false",
             "timestamps_granularity": "word",
         }
         if language_hint:
             data["language_code"] = language_hint
+        if self._no_verbatim:
+            data["no_verbatim"] = "true"
+        if hotwords:
+            data["keyterms"] = list(hotwords)
         headers = {"xi-api-key": self._api_key}
 
         try:
@@ -173,7 +192,7 @@ def _parse_response(payload: dict) -> list[TranscriptionSegment]:
     if not words:
         return []
 
-    transcript_text = (
+    transcript_text = _strip_cjk_spaces(
         payload.get("text") or " ".join(w.text for w in words)
     )
     return [

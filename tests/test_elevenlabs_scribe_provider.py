@@ -94,7 +94,7 @@ def test_provider_capabilities_match_spec() -> None:
     assert ElevenLabsScribeProvider.capabilities == ProviderCapabilities(
         sends_audio_offhost=True,
         supports_diarization=True,
-        supports_hotwords=False,
+        supports_hotwords=True,
         supports_word_timestamps=True,
         max_input_bytes=None,
         accepts_initial_prompt=False,
@@ -136,7 +136,7 @@ async def test_transcribe_posts_with_xi_api_key_header_and_multipart(
     # Multipart body must contain the configured fields.
     body = seen["content"]
     assert b"name=\"model_id\"" in body
-    assert b"scribe_v1" in body  # default model id
+    assert b"scribe_v2" in body  # default model id
     assert b"name=\"diarize\"" in body
     assert b"name=\"timestamps_granularity\"" in body
     assert b"word" in body  # granularity value
@@ -290,3 +290,75 @@ async def test_connect_error_maps_to_transient(
     provider = _make_provider_with_transport(httpx.MockTransport(handler))
     with pytest.raises(TransientError):
         await provider.transcribe(fake_audio_file)
+
+
+@pytest.mark.asyncio
+async def test_keyterms_sent_in_multipart_when_hotwords_given(
+    with_api_key, fake_audio_file
+) -> None:
+    """``hotwords`` must appear as repeated ``keyterms`` fields in the body."""
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["content"] = request.content
+        return httpx.Response(200, json=_scribe_response())
+
+    provider = _make_provider_with_transport(httpx.MockTransport(handler))
+    await provider.transcribe(fake_audio_file, hotwords=["Litloft", "FFmpeg"])
+
+    body = seen["content"]
+    assert b"name=\"keyterms\"" in body
+    assert b"Litloft" in body
+    assert b"FFmpeg" in body
+
+
+@pytest.mark.asyncio
+async def test_keyterms_absent_when_hotwords_empty(
+    with_api_key, fake_audio_file
+) -> None:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["content"] = request.content
+        return httpx.Response(200, json=_scribe_response())
+
+    provider = _make_provider_with_transport(httpx.MockTransport(handler))
+    await provider.transcribe(fake_audio_file, hotwords=[])
+
+    assert b"keyterms" not in seen["content"]
+
+
+@pytest.mark.asyncio
+async def test_no_verbatim_field_sent_when_enabled(
+    with_api_key, fake_audio_file
+) -> None:
+    """Setting ``_no_verbatim=True`` must include ``no_verbatim=true`` in body."""
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["content"] = request.content
+        return httpx.Response(200, json=_scribe_response())
+
+    provider = _make_provider_with_transport(httpx.MockTransport(handler))
+    provider._no_verbatim = True
+    await provider.transcribe(fake_audio_file)
+
+    body = seen["content"]
+    assert b"name=\"no_verbatim\"" in body
+    assert b"true" in body
+
+
+@pytest.mark.asyncio
+async def test_no_verbatim_field_absent_by_default(
+    with_api_key, fake_audio_file
+) -> None:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["content"] = request.content
+        return httpx.Response(200, json=_scribe_response())
+
+    provider = _make_provider_with_transport(httpx.MockTransport(handler))
+    await provider.transcribe(fake_audio_file)
+
+    assert b"no_verbatim" not in seen["content"]

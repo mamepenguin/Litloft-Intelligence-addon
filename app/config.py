@@ -164,8 +164,9 @@ class DeepgramProviderConfig:
 
 @dataclass(frozen=True)
 class ElevenLabsScribeProviderConfig:
-    model_id: str = "scribe_v1"
+    model_id: str = "scribe_v2"
     diarize: bool = True
+    no_verbatim: bool = False
     timeout_s: int = 600
     circuit_breaker_threshold: int | None = None
 

@@ -437,7 +437,7 @@
       "languageHint": "Language hint",
       "languageHintHelp": "BCP-47 tag (e.g. ja, en-US, zh-Hant-HK). Leave empty for auto-detect.",
       "hotwords": "Hotwords",
-      "hotwordsHelp": "Enter one proper noun or technical term per line. Used only by AssemblyAI and Whisper-family providers.",
+      "hotwordsHelp": "Enter one proper noun or technical term per line. Used by AssemblyAI, ElevenLabs Scribe, and Whisper-family providers.",
       "apiKeyStatus": "API key status",
       "apiKeyPresent": "set",
       "apiKeyMissing": "missing",

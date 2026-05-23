@@ -437,7 +437,7 @@
       "languageHint": "言語のヒント",
       "languageHintHelp": "BCP-47タグ（例: ja, en-US, zh-Hant-HK）。空欄なら自動検出",
       "hotwords": "ホットワード",
-      "hotwordsHelp": "固有名詞や専門用語を1行1件で入力してください。AssemblyAIとWhisper系でのみ使われます",
+      "hotwordsHelp": "固有名詞や専門用語を1行1件で入力してください。AssemblyAI・ElevenLabs Scribe・Whisper系で使われます",
       "apiKeyStatus": "APIキーの状態",
       "apiKeyPresent": "設定済",
       "apiKeyMissing": "未設定",

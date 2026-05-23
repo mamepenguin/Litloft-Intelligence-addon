@@ -452,8 +452,9 @@ transcription:
 
   # ElevenLabs Scribe v1 (long-form, diarization). Requires ELEVENLABS_API_KEY.
   elevenlabs_scribe:
-    model_id: scribe_v1
+    model_id: scribe_v2  # "scribe_v1" or "scribe_v2"
     diarize: true
+    no_verbatim: false  # remove filler words ("uh", "um"); scribe_v2 only
     timeout_s: 600
 
   # AssemblyAI Universal-2 (best multi-language WER + diarization).
