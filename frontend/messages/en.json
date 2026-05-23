@@ -23,12 +23,40 @@
     "textFiles": "Text analysis {done} / {total}",
     "queueLabel": "Task queue",
     "queueStatus": "{processing} processing / {waiting} waiting",
-    "reindex": "Reindex",
     "pause": "Pause",
     "resume": "Resume",
     "paused": "Paused",
-    "confirmReindex": "Reindex all files? This may take a while.",
     "models": "Models",
+    "failedJobs": {
+      "none": "No failed jobs",
+      "summary": "{count} failed jobs",
+      "view": "View",
+      "title": "Failed jobs",
+      "countBadge": "{count}",
+      "retry": "Retry",
+      "details": "Details",
+      "attemptsValue": "{count}x",
+      "pagination": "{from}-{to} of {total}",
+      "prev": "Previous",
+      "next": "Next",
+      "col": {
+        "file": "File",
+        "drive": "Drive",
+        "task": "Task",
+        "provider": "Provider",
+        "error": "Error",
+        "attempts": "Attempts",
+        "attemptedAt": "Attempted at",
+        "actions": "Actions"
+      }
+    },
+    "indexDetails": {
+      "title": "Index details",
+      "regenerate": "Regenerate",
+      "confirmRegenerate": "Regenerate {task}? The current index will be discarded and rebuilt.",
+      "statusDone": "Indexed",
+      "statusPending": "Pending"
+    },
     "tasks": {
       "heading": "Current activity",
       "queueCounts": "{processing} running / {waiting} waiting",

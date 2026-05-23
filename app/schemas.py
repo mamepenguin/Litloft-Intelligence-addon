@@ -539,3 +539,54 @@ class FindResponse(BaseModel):
     results: list[dict[str, Any]]
     total: int
     limit: int
+
+
+# --- Reindex (per-file × per-task) ---
+#
+# Spec ``2026-05-24-intelligence-reindex-controls.md`` §2.1. The
+# request body lists the task names to reset; the handler validates
+# them against ``ReindexTaskName`` and returns a typed response.
+
+
+class ReindexRequest(BaseModel):
+    """Body for ``POST /files/{file_id}/reindex``.
+
+    Pydantic only enforces "is a list of strings, minimum 1 element"
+    here so the handler can produce a richer 422 message (enumerating
+    the allowed task names) than Pydantic's default error shape.
+    """
+
+    tasks: list[str] = Field(..., min_length=1)
+
+
+class ReindexResponse(BaseModel):
+    status: str
+    file_id: str
+    tasks_reset: list[str]
+
+
+# --- Admin failed-jobs (global summary) ---
+#
+# Spec ``2026-05-24-intelligence-reindex-controls.md`` §2.2. Rows are
+# aggregated by (file_id, job_kind, provider) and the latest row per
+# group surfaces. ``attempts`` counts consecutive failures since the
+# last ``succeeded`` — not a lifetime tally.
+
+
+class FailedJobItem(BaseModel):
+    file_id: str
+    filename: str
+    drive: str
+    job_kind: str
+    provider: str | None = None
+    error_class: str | None = None
+    error_message_excerpt: str | None = None
+    attempted_at: datetime
+    attempts: int
+
+
+class FailedJobsResponse(BaseModel):
+    items: list[FailedJobItem]
+    total: int
+    limit: int
+    offset: int

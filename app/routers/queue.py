@@ -1,4 +1,12 @@
-"""Queue control endpoints: pause, resume, reindex, prioritize."""
+"""Queue control endpoints: pause, resume, prioritize.
+
+Per spec ``2026-05-24-intelligence-reindex-controls.md`` §1 the
+``POST /queue/reindex`` global-reset handler is permanently removed —
+its blast radius was unbounded (every active file across every drive
+flipped to ``*_indexed=False`` on one click; hako WmAMUDZSsMHlutJFKsyAe
+records the production incident). The per-file × per-task replacement
+lives in ``app.routers.files.reindex_file``.
+"""
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -47,15 +55,3 @@ async def queue_resume(
     manager = get_index_manager()
     manager.resume()
     return MessageResponse(status="accepted", message="Queue resumed")
-
-
-@router.post("/queue/reindex", response_model=MessageResponse)
-async def queue_reindex(
-    _: None = Depends(verify_webhook_secret),
-) -> MessageResponse:
-    """Trigger a full reindex of all files."""
-    manager = get_index_manager()
-    await manager.reindex_all()
-    return MessageResponse(
-        status="accepted", message="Full reindex initiated"
-    )

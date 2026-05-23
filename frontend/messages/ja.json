@@ -23,12 +23,40 @@
     "textFiles": "テキスト解析完了 {done} / {total} 件",
     "queueLabel": "処理キュー",
     "queueStatus": "{processing}件処理中 / {waiting}件待機",
-    "reindex": "再インデックス",
     "pause": "一時停止",
     "resume": "再開",
     "paused": "一時停止中",
-    "confirmReindex": "全ファイルを再インデックスしますか？処理に時間がかかる場合があります。",
     "models": "モデル",
+    "failedJobs": {
+      "none": "失敗ジョブはありません",
+      "summary": "失敗ジョブ {count} 件",
+      "view": "確認",
+      "title": "失敗ジョブ",
+      "countBadge": "{count}",
+      "retry": "再試行",
+      "details": "詳細",
+      "attemptsValue": "{count}回",
+      "pagination": "{from}-{to} / {total}",
+      "prev": "前へ",
+      "next": "次へ",
+      "col": {
+        "file": "ファイル",
+        "drive": "ドライブ",
+        "task": "タスク",
+        "provider": "プロバイダー",
+        "error": "エラー",
+        "attempts": "失敗回数",
+        "attemptedAt": "発生時刻",
+        "actions": "操作"
+      }
+    },
+    "indexDetails": {
+      "title": "インデックス詳細",
+      "regenerate": "再生成",
+      "confirmRegenerate": "{task} を再生成しますか？現在のインデックスは破棄され再構築されます。",
+      "statusDone": "インデックス済",
+      "statusPending": "未処理"
+    },
     "tasks": {
       "heading": "現在の処理状況",
       "queueCounts": "{processing}件処理中 / {waiting}件待機",

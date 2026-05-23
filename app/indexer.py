@@ -797,6 +797,58 @@ class IndexManager:
 
             return True
 
+    # ------------------------------------------------------------------
+    # Per-file × per-task reindex hooks
+    # ------------------------------------------------------------------
+    #
+    # Spec ``2026-05-24-intelligence-reindex-controls.md`` §2.1. The
+    # router-side handler validates the task name and flips the
+    # ``*_indexed`` flag to ``False`` itself (so a single transaction
+    # covers all tasks for the request); these helpers exist so the
+    # handler can talk to the queue without poking the manager's
+    # private state.
+
+    # Spec-name → internal TaskType. The spec uses ``"text"`` for the
+    # text-content task; the internal enum keeps ``TEXT_CONTENT`` for
+    # parity with the existing worker / queue naming.
+    _TASK_NAME_TO_TYPE: dict[str, TaskType] = {
+        "metadata": TaskType.METADATA,
+        "clip": TaskType.CLIP,
+        "whisper": TaskType.WHISPER,
+        "text": TaskType.TEXT_CONTENT,
+    }
+
+    def is_queued(self, file_id: str, task: str) -> bool:
+        """Return ``True`` if ``(file_id, task)`` is already in the queue.
+
+        Used by ``POST /files/{id}/reindex`` to short-circuit with HTTP
+        202 ``already_queued`` so connect-clicks from the failed-jobs
+        modal don't pile up duplicate flag flips + enqueue entries.
+        """
+        task_type = self._TASK_NAME_TO_TYPE.get(task)
+        if task_type is None:
+            return False
+        return file_id in self._queued_by_type[task_type]
+
+    async def enqueue_task_for_file(self, file_id: str, task: str) -> None:
+        """Enqueue a single ``(file_id, task)`` pair at high priority.
+
+        The caller (``reindex_file`` handler) has already flipped the
+        flag to ``False`` and verified the file lives in the caller's
+        drive. We enqueue with ``priority=100`` so the user-initiated
+        reindex is processed ahead of the regular background sweep.
+        ``force=True`` lets us re-enqueue if a stale entry already
+        exists; ``is_queued`` is the front-line guard against
+        double-clicks.
+        """
+        task_type = self._TASK_NAME_TO_TYPE.get(task)
+        if task_type is None:
+            return
+        await self._enqueue(
+            IndexTask(file_id=file_id, task_type=task_type, priority=100),
+            force=True,
+        )
+
     async def requeue_after_whisper(self, file_id: str) -> None:
         """Re-enqueue summaries / auto_tags after WHISPER completion.
 
@@ -856,27 +908,12 @@ class IndexManager:
         ):
             await self._auto_tags_worker.enqueue(file_id)
 
-    async def reindex_all(self) -> None:
-        """Trigger a full reindex of all files.
-
-        Resets all indexing flags and re-queues everything.
-        """
-        logger.info("Starting full reindex")
-
-        from app.search import invalidate_similar_cache
-        invalidate_similar_cache()
-
-        with get_search_db() as session:
-            session.query(IndexedFile).filter(
-                IndexedFile.active.is_(True)
-            ).update({
-                "metadata_indexed": False,
-                "clip_indexed": False,
-                "whisper_indexed": False,
-                "text_indexed": False,
-            })
-
-        await self.reconcile()
+    # ``reindex_all`` permanently removed per spec
+    # ``2026-05-24-intelligence-reindex-controls.md`` §1. The single
+    # caller (``POST /queue/reindex``) was a global blast-radius bug
+    # (hako WmAMUDZSsMHlutJFKsyAe). Per-file × per-task reindex lives
+    # in ``app.routers.files.reindex_file`` which talks to
+    # :meth:`is_queued` + :meth:`enqueue_task_for_file` below.
 
     async def handle_scan_complete(self, drive: str) -> None:
         """Handle scan-complete webhook from Litloft.

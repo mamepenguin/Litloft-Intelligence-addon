@@ -34,6 +34,8 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from app.schemas import FailedJobItem, FailedJobsResponse
+
 import app.config as config
 from app.transcription_overrides import (
     TranscriptionOverrides,
@@ -858,3 +860,220 @@ async def _notify_core_restart_pending() -> str:
     except (httpx.NetworkError, httpx.TimeoutException) as exc:
         logger.warning("Could not notify core of restart_pending: %s", exc)
         return "error"
+
+
+# ---------------------------------------------------------------------------
+# /admin/failed-jobs (spec 2026-05-24-intelligence-reindex-controls §2.2)
+# ---------------------------------------------------------------------------
+#
+# Aggregates ``JobRecord.status='failed'`` rows by
+# (file_id, job_kind, provider), surfacing the latest row per group.
+# ``status='skipped'`` is excluded because retrying an unsupported-mime
+# file would just be skipped again (UnsupportedMimeType is permanent
+# until the file's mime changes).
+
+# Reuse the 7-day cutoff from ``files._compute_provider_stats`` — the
+# modal is for "what's broken right now", not historical archaeology.
+_FAILED_JOBS_WINDOW_DAYS = 7
+
+# Cap per-call payload size. ``error_message`` for a stack-trace dump
+# can be multi-kilobyte; 256 chars is enough for the user to grok the
+# class of failure without inflating the JSON response.
+_FAILED_JOB_MESSAGE_EXCERPT_CHARS = 256
+
+_FAILED_JOBS_DEFAULT_LIMIT = 50
+_FAILED_JOBS_MAX_LIMIT = 200
+
+
+_SENSITIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # Bearer / Authorization headers a provider SDK echoed back on 4xx.
+    re.compile(r"(?i)(authorization\s*[:=]\s*)bearer\s+[A-Za-z0-9._\-]+"),
+    re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]{8,}"),
+    # Generic "api_key=" / "apikey=" / "api-key=" query / form fragments.
+    re.compile(r"(?i)(api[_\-]?key)\s*[:=]\s*[A-Za-z0-9._\-]+"),
+    # Common provider key prefixes (OpenAI / Anthropic / etc).
+    re.compile(r"\bsk-[A-Za-z0-9_\-]{8,}\b"),
+    re.compile(r"\bskey-[A-Za-z0-9_\-]{8,}\b"),
+)
+
+# Container-absolute paths that leak the deploy layout to admins. Drop
+# the prefix and keep the trailing filename so the excerpt still
+# identifies which file blew up.
+_PATH_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"/data/drives/[^\s'\"]+/"),
+    re.compile(r"/app/[^\s'\"]+/"),
+    re.compile(r"/intelligence-data/[^\s'\"]+/"),
+)
+
+
+def _scrub_excerpt(text: str) -> str:
+    """Strip credentials and container-absolute path prefixes.
+
+    Worker code stores ``str(exception)`` verbatim — provider SDKs
+    occasionally echo Authorization headers / API keys, and ffmpeg /
+    Python stack frames embed container-internal paths. Both surface in
+    the admin Failed Jobs modal, which the master viewer reads. Scrub
+    before truncation so the 256-char excerpt is always credential-free.
+    """
+    out = text
+    for pat in _SENSITIVE_PATTERNS:
+        out = pat.sub("[REDACTED]", out)
+    for pat in _PATH_PATTERNS:
+        out = pat.sub("…/", out)
+    return out
+
+
+def _truncate_excerpt(text: str | None, max_chars: int) -> str | None:
+    if text is None:
+        return None
+    scrubbed = _scrub_excerpt(text)
+    if len(scrubbed) <= max_chars:
+        return scrubbed
+    return scrubbed[: max_chars - 1] + "…"
+
+
+@router.get("/failed-jobs", response_model=FailedJobsResponse)
+async def get_failed_jobs(
+    limit: int = _FAILED_JOBS_DEFAULT_LIMIT,
+    offset: int = 0,
+) -> FailedJobsResponse:
+    """Return failed indexing jobs, aggregated by (file, kind, provider).
+
+    Spec §2.2. Excludes ``status='skipped'`` (retry would be a no-op),
+    ``status='succeeded'`` / ``status='running'`` (not actionable), and
+    rows whose ``file_id`` has no ``IndexedFile`` row (purged files
+    have no filename / drive to link to). Rows older than 7 days fall
+    out via the window cutoff.
+
+    ``attempts`` counts consecutive ``failed`` rows since the latest
+    ``succeeded`` row for the same (file_id, job_kind, provider). A
+    file that has never succeeded reports its lifetime failure count.
+    """
+    # Clamp manually rather than relying on FastAPI's ``Query(ge=,le=)``
+    # so the handler stays callable from tests that bypass the proxy.
+    limit = max(1, min(limit, _FAILED_JOBS_MAX_LIMIT))
+    offset = max(0, offset)
+
+    import app.database as database_mod
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import func
+
+    from app.models import IndexedFile, JobRecord
+
+    cutoff = datetime.now(UTC) - timedelta(days=_FAILED_JOBS_WINDOW_DAYS)
+
+    with database_mod.get_search_db() as session:
+        # Step 1: distinct groups (file_id, job_kind, provider) ordered
+        # by their latest attempted_at — with LIMIT/OFFSET pushed into
+        # SQL so the cheap badge poll (limit=1) and large windows alike
+        # don't pay for a full table scan + Python aggregation.
+        latest_attempted = func.max(JobRecord.attempted_at).label("latest")
+        groups_query = (
+            session.query(
+                JobRecord.file_id,
+                JobRecord.job_kind,
+                JobRecord.provider,
+                latest_attempted,
+            )
+            .join(IndexedFile, IndexedFile.file_id == JobRecord.file_id)
+            .filter(
+                JobRecord.status == "failed",
+                JobRecord.attempted_at >= cutoff,
+            )
+            .group_by(JobRecord.file_id, JobRecord.job_kind, JobRecord.provider)
+            .order_by(latest_attempted.desc())
+        )
+
+        # Total = number of distinct surfaced groups. Operators read
+        # this number on the IndexStatusWidget badge every 10 seconds,
+        # so it must stay cheap. Subquery + COUNT(*) keeps the work in
+        # SQL and avoids materialising rows just to count.
+        total = (
+            session.query(func.count())
+            .select_from(groups_query.subquery())
+            .scalar()
+        ) or 0
+
+        # Step 2: hydrate only the paged groups with filename / drive /
+        # latest error_class / message, then count attempts since the
+        # latest success per group.
+        paged_groups = groups_query.offset(offset).limit(limit).all()
+
+        items: list[FailedJobItem] = []
+        for file_id, job_kind, provider, latest_at in paged_groups:
+            provider_filter = (
+                JobRecord.provider == provider
+                if provider is not None
+                else JobRecord.provider.is_(None)
+            )
+
+            # Latest failed row for this group — gives error_class /
+            # excerpt and the surface IndexedFile join.
+            latest_row = (
+                session.query(JobRecord, IndexedFile.filename, IndexedFile.drive)
+                .join(IndexedFile, IndexedFile.file_id == JobRecord.file_id)
+                .filter(
+                    JobRecord.file_id == file_id,
+                    JobRecord.job_kind == job_kind,
+                    provider_filter,
+                    JobRecord.status == "failed",
+                    JobRecord.attempted_at == latest_at,
+                )
+                .first()
+            )
+            if latest_row is None:
+                # Race: the row was hard-deleted between the aggregate
+                # and the hydrate. Skip silently.
+                continue
+            record, filename, drive = latest_row
+
+            # Latest success (if any) for the group — used to clamp the
+            # attempts counter to "since last success" rather than
+            # lifetime.
+            last_success_row = (
+                session.query(JobRecord.attempted_at)
+                .filter(
+                    JobRecord.file_id == file_id,
+                    JobRecord.job_kind == job_kind,
+                    provider_filter,
+                    JobRecord.status == "succeeded",
+                )
+                .order_by(JobRecord.attempted_at.desc())
+                .first()
+            )
+            attempts_query = session.query(func.count(JobRecord.id)).filter(
+                JobRecord.file_id == file_id,
+                JobRecord.job_kind == job_kind,
+                provider_filter,
+                JobRecord.status == "failed",
+            )
+            if last_success_row is not None:
+                attempts_query = attempts_query.filter(
+                    JobRecord.attempted_at > last_success_row[0]
+                )
+            attempts = attempts_query.scalar() or 0
+
+            items.append(
+                FailedJobItem(
+                    file_id=record.file_id,
+                    filename=filename,
+                    drive=drive,
+                    job_kind=record.job_kind,
+                    provider=record.provider,
+                    error_class=record.error_class,
+                    error_message_excerpt=_truncate_excerpt(
+                        record.error_message,
+                        _FAILED_JOB_MESSAGE_EXCERPT_CHARS,
+                    ),
+                    attempted_at=record.attempted_at,
+                    attempts=attempts,
+                )
+            )
+
+    return FailedJobsResponse(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )

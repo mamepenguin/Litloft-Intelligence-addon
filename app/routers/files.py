@@ -8,12 +8,12 @@ from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import unquote
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from fastapi.responses import FileResponse, Response
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
+from fastapi.responses import FileResponse, JSONResponse, Response
 from sqlalchemy import text as sql_text
 
 from app.config import settings
-from app.dependencies import get_auto_tags_worker
+from app.dependencies import get_auto_tags_worker, get_index_manager
 from app.drive_context import assert_file_in_drive, require_drive
 from app.schemas import (
     BatchSuggestedTagsRequest,
@@ -27,6 +27,7 @@ from app.schemas import (
     MessageResponse,
     PdfMarkdownResponse,
     ProviderStats,
+    ReindexResponse,
     SuggestedTagsResponse,
     TranscriptChunkResponse,
     TranscriptResponse,
@@ -178,6 +179,144 @@ async def get_subtitles_vtt(
         content=vtt,
         media_type="text/vtt; charset=utf-8",
         headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
+# --- Per-file × per-task reindex (spec 2026-05-24-intelligence-reindex-controls) ---
+
+# Spec §2.1 fixes the task vocabulary; the handler validates the
+# body against this set before touching any DB row so a malformed
+# payload can never reset a flag partially.
+_REINDEX_ALLOWED_TASKS: tuple[str, ...] = ("metadata", "clip", "whisper", "text")
+
+# Spec task name → ``IndexedFile`` column name. The frontend speaks
+# spec names; the DB column for the text-content leg is
+# ``text_indexed`` (no ``_content`` suffix), so we keep the mapping
+# explicit rather than string-concatenating.
+_REINDEX_FLAG_COLUMN: dict[str, str] = {
+    "metadata": "metadata_indexed",
+    "clip": "clip_indexed",
+    "whisper": "whisper_indexed",
+    "text": "text_indexed",
+}
+
+
+@router.post("/files/{file_id}/reindex")
+async def reindex_file(
+    file_id: str,
+    body: dict[str, Any] = Body(...),
+    drive: str = Depends(require_drive),
+):
+    """Reset selected ``*_indexed`` flags for one file and re-enqueue.
+
+    Spec ``2026-05-24-intelligence-reindex-controls.md`` §2.1. The
+    legacy ``POST /queue/reindex`` global reset has been removed; this
+    endpoint is the targeted replacement.
+
+    Request body shape::
+
+        {"tasks": ["whisper", "clip", ...]}
+
+    Behaviour:
+
+    * Unknown task names → 422 (``detail`` enumerates the allowed set)
+      *before* any DB mutation, so a rejected payload can never leave a
+      flag half-reset.
+    * Empty ``tasks`` array → 422 (Pydantic-style validation surfaced
+      as ``HTTPException`` for parity with the admin endpoints).
+    * Unknown / soft-deleted / cross-drive ``file_id`` → 404 (never
+      leak the existence of files in other drives — see the project's
+      drive-boundary rule).
+    * Tasks already sitting in the index queue are short-circuited: the
+      response is 202 with ``status='already_queued'`` and **no** flag
+      flip + **no** new enqueue. Mixed batches still progress the
+      fresh tasks (queued ones drop out of ``tasks_reset``).
+    """
+    # ---- Layer 1: validate the request payload before any mutation ----
+    raw_tasks = body.get("tasks") if isinstance(body, dict) else None
+    if not isinstance(raw_tasks, list) or len(raw_tasks) == 0:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Request body must include a non-empty 'tasks' array. "
+                f"Allowed: {', '.join(_REINDEX_ALLOWED_TASKS)}"
+            ),
+        )
+    unknown = [t for t in raw_tasks if t not in _REINDEX_ALLOWED_TASKS]
+    if unknown:
+        # Surface the first unknown name explicitly so the operator can
+        # spot a typo at a glance; the full allow-list is included so
+        # they don't have to grep source.
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unknown task: {unknown[0]!r}. "
+                f"Allowed: {', '.join(_REINDEX_ALLOWED_TASKS)}"
+            ),
+        )
+
+    # Dedup while preserving order (a caller asking for whisper twice
+    # in one payload would otherwise double-enqueue).
+    seen: set[str] = set()
+    tasks: list[str] = []
+    for t in raw_tasks:
+        if t not in seen:
+            seen.add(t)
+            tasks.append(t)
+
+    # ---- Layer 2: drive boundary + soft-delete check ----
+    # 404 (not 403) on cross-drive / soft-deleted / unknown — keeps the
+    # drive boundary opaque to the caller.
+    _get_indexed_file_or_404(file_id, drive)
+
+    # ---- Layer 3: split tasks into already-queued vs fresh ----
+    manager = get_index_manager()
+    fresh: list[str] = []
+    already_queued: list[str] = []
+    for t in tasks:
+        if manager.is_queued(file_id, t):
+            already_queued.append(t)
+        else:
+            fresh.append(t)
+
+    # All tasks were already queued — short-circuit per spec §2.1.
+    if fresh == []:
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "already_queued",
+                "file_id": file_id,
+                "tasks_reset": [],
+            },
+        )
+
+    # ---- Layer 4: flip flags and enqueue ----
+    from app.database import get_search_db
+    from app.models import IndexedFile
+
+    with get_search_db() as session:
+        row = (
+            session.query(IndexedFile)
+            .filter(
+                IndexedFile.file_id == file_id,
+                IndexedFile.active.is_(True),
+            )
+            .first()
+        )
+        # Re-fetch under the write session — between the lookup above
+        # and now the row could have been soft-deleted; surface as 404.
+        if row is None:
+            raise HTTPException(status_code=404, detail="File not indexed")
+        for t in fresh:
+            setattr(row, _REINDEX_FLAG_COLUMN[t], False)
+
+    for t in fresh:
+        await manager.enqueue_task_for_file(file_id, t)
+
+    return ReindexResponse(
+        status="accepted",
+        file_id=file_id,
+        tasks_reset=fresh,
     )
 
 

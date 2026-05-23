@@ -17,6 +17,7 @@
             {"id": "visual-description", "label": "AI Visual Description", "priority": 8},
             {"id": "transcript", "label": "Transcript", "priority": 10},
             {"id": "clip-frames", "label": "CLIP Frames", "priority": 20},
+            {"id": "index-details", "label": "Index Details", "priority": 30},
             {"id": "similar-files", "label": "Similar Files", "priority": 40}
         ],
         "drive-home-sections": [
@@ -151,6 +152,15 @@
             {
                 "path": "/files/{file_id}/index-details",
                 "methods": ["GET"],
+                "pre_check": {
+                    "type": "file_access",
+                    "param": "file_id"
+                },
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/reindex",
+                "methods": ["POST"],
                 "pre_check": {
                     "type": "file_access",
                     "param": "file_id"
@@ -433,13 +443,6 @@
                 "response_filter": null
             },
             {
-                "path": "/queue/reindex",
-                "methods": ["POST"],
-                "drive_optional": true,
-                "pre_check": {"type": "admin"},
-                "response_filter": null
-            },
-            {
                 "path": "/queue/prioritize",
                 "methods": ["POST"],
                 "drive_optional": true,
@@ -477,6 +480,13 @@
             {
                 "path": "/admin/embedding",
                 "methods": ["GET", "PUT", "DELETE"],
+                "drive_optional": true,
+                "pre_check": {"type": "admin"},
+                "response_filter": null
+            },
+            {
+                "path": "/admin/failed-jobs",
+                "methods": ["GET"],
                 "drive_optional": true,
                 "pre_check": {"type": "admin"},
                 "response_filter": null

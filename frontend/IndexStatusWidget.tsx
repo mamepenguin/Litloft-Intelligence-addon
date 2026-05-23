@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import {
+  AlertTriangle,
   Brain,
+  CheckCircle2,
   FileText,
   Image as ImageIcon,
   Loader2,
@@ -11,7 +13,6 @@ import {
   Mic,
   Pause,
   Play,
-  RefreshCw,
   ScrollText,
   SearchX,
   Sparkles,
@@ -21,9 +22,9 @@ import {
 import type { LucideIcon } from "lucide-react";
 
 import {
+  getFailedJobs,
   getSearchStatus,
   searchQueuePause,
-  searchQueueReindex,
   searchQueueResume,
 } from "./api";
 import type {
@@ -32,7 +33,7 @@ import type {
   QueueTaskKind,
   SearchServiceStatus,
 } from "./api";
-import { ConfirmDialog } from "@/components/ConfirmDialog";
+import FailedJobsModal from "./FailedJobsModal";
 
 const POLL_INTERVAL = 10_000;
 
@@ -148,9 +149,55 @@ function TaskRow({
   );
 }
 
-function StatusContent({ status, drive }: { status: SearchServiceStatus; drive?: string }) {
+function FailedJobsSummary({
+  count,
+  onOpen,
+}: {
+  count: number;
+  onOpen: () => void;
+}) {
+  const t = useTranslations("semanticSearch.failedJobs");
+
+  if (count <= 0) {
+    return (
+      <div
+        className="mt-4 flex items-center gap-2 rounded-lg border border-bg-border bg-bg-elevated/40 px-3 py-2 text-xs text-text-muted"
+        aria-disabled
+      >
+        <CheckCircle2 size={14} className="text-accent-teal" />
+        <span>{t("none")}</span>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="mt-4 flex w-full items-center justify-between gap-2 rounded-lg bg-accent-amber/10 px-3 py-2 text-xs font-medium text-accent-amber transition-colors hover:bg-accent-amber/20"
+      aria-label={t("view")}
+    >
+      <span className="flex items-center gap-2">
+        <AlertTriangle size={14} />
+        <span>{count}</span>
+        <span>{t("summary", { count })}</span>
+      </span>
+    </button>
+  );
+}
+
+function StatusContent({
+  status,
+  drive,
+  failedCount,
+  onOpenFailed,
+}: {
+  status: SearchServiceStatus;
+  drive?: string;
+  failedCount: number;
+  onOpenFailed: () => void;
+}) {
   const t = useTranslations("semanticSearch");
-  const [confirmReindex, setConfirmReindex] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const handlePauseResume = useCallback(async () => {
@@ -167,17 +214,6 @@ function StatusContent({ status, drive }: { status: SearchServiceStatus; drive?:
     }
     setActionLoading(null);
   }, [status.queue?.paused, drive]);
-
-  const handleReindex = useCallback(async () => {
-    setConfirmReindex(false);
-    setActionLoading("reindex");
-    try {
-      await searchQueueReindex(drive);
-    } catch {
-      // Silently fail
-    }
-    setActionLoading(null);
-  }, [drive]);
 
   const indexed = status.indexed;
   const pending = status.pending;
@@ -286,19 +322,9 @@ function StatusContent({ status, drive }: { status: SearchServiceStatus; drive?:
         </div>
       )}
 
+      <FailedJobsSummary count={failedCount} onOpen={onOpenFailed} />
+
       <div className="mt-4 flex gap-2">
-        <button
-          onClick={() => setConfirmReindex(true)}
-          disabled={actionLoading === "reindex"}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-bg-elevated px-3 py-1.5 text-xs font-medium text-text-primary transition-colors hover:bg-bg-border disabled:opacity-50"
-        >
-          {actionLoading === "reindex" ? (
-            <Loader2 size={12} className="animate-spin" />
-          ) : (
-            <RefreshCw size={12} />
-          )}
-          {t("reindex")}
-        </button>
         <button
           onClick={handlePauseResume}
           disabled={actionLoading === "pause" || actionLoading === "resume"}
@@ -314,14 +340,6 @@ function StatusContent({ status, drive }: { status: SearchServiceStatus; drive?:
           {queue?.paused ? t("resume") : t("pause")}
         </button>
       </div>
-
-      <ConfirmDialog
-        open={confirmReindex}
-        title={t("reindex")}
-        message={t("confirmReindex")}
-        onConfirm={handleReindex}
-        onCancel={() => setConfirmReindex(false)}
-      />
     </>
   );
 }
@@ -338,17 +356,35 @@ interface IndexStatusWidgetProps {
 export default function IndexStatusWidget({ drive }: IndexStatusWidgetProps) {
   const t = useTranslations("semanticSearch");
   const [status, setStatus] = useState<SearchServiceStatus | null>(null);
+  const [failedCount, setFailedCount] = useState<number>(0);
+  const [modalOpen, setModalOpen] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mountedRef = useRef<boolean>(true);
 
   const fetchStatus = useCallback(async () => {
-    const result = await getSearchStatus(drive);
+    const [result, failed] = await Promise.all([
+      getSearchStatus(drive),
+      // Cheap poll: ask the server for limit=1 so we get the
+      // aggregate ``total`` count without paying for a full page of
+      // rows. The Modal does the real fetch when opened.
+      getFailedJobs(1, 0).catch(() => ({
+        items: [],
+        total: 0,
+        limit: 1,
+        offset: 0,
+      })),
+    ]);
+    if (!mountedRef.current) return;
     setStatus(result);
+    setFailedCount(failed.total ?? 0);
   }, [drive]);
 
   useEffect(() => {
+    mountedRef.current = true;
     fetchStatus();
     intervalRef.current = setInterval(fetchStatus, POLL_INTERVAL);
     return () => {
+      mountedRef.current = false;
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
       }
@@ -378,13 +414,23 @@ export default function IndexStatusWidget({ drive }: IndexStatusWidgetProps) {
       </div>
 
       {status.available ? (
-        <StatusContent status={status} drive={drive} />
+        <StatusContent
+          status={status}
+          drive={drive}
+          failedCount={failedCount}
+          onOpenFailed={() => setModalOpen(true)}
+        />
       ) : (
         <div className="flex items-center gap-2 text-sm text-text-muted">
           <SearchX size={16} />
           {t("unavailable")}
         </div>
       )}
+
+      <FailedJobsModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+      />
     </div>
   );
 }

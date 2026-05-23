@@ -286,13 +286,6 @@ export async function searchQueueResume(drive?: string): Promise<void> {
   });
 }
 
-export async function searchQueueReindex(drive?: string): Promise<void> {
-  await fetchJSON(`${API_BASE}/addons/intelligence/queue/reindex`, {
-    method: "POST",
-    headers: drive ? driveHeaders(drive) : undefined,
-  });
-}
-
 export async function searchQueuePrioritize(
   fileId: string,
   drive?: string,
@@ -1515,4 +1508,146 @@ export async function* askQuestionStream(
       // ignore
     }
   }
+}
+
+// --- Reindex controls (spec 2026-05-24-intelligence-reindex-controls) ---
+
+/**
+ * Per-task reindex flags surfaced through ``GET /files/{id}/index-details``.
+ *
+ * Each flag is True when the corresponding embedding/index slice exists
+ * for the file. They drive the per-row "Regenerate" buttons in
+ * ``IndexDetailsSection`` — when False the section can offer to kick
+ * off the missing task without forcing a full reindex.
+ */
+export interface IndexDetailsStatus {
+  metadata: boolean;
+  clip: boolean;
+  whisper: boolean;
+  text: boolean;
+}
+
+export interface IndexDetailsResponse {
+  file_id: string;
+  drive: string;
+  filename: string;
+  status: IndexDetailsStatus;
+  indexed_at: string;
+  // The embeddings + provider_stats payload is opaque to the
+  // IndexDetailsSection UI today — declared as ``unknown`` so callers
+  // that introspect deeper can narrow it locally without forcing the
+  // shared type to grow ahead of the consumer.
+  embeddings?: Record<string, unknown>;
+  provider_stats?: Record<string, unknown>;
+}
+
+export type ReindexTask = "metadata" | "clip" | "whisper" | "text";
+
+export interface ReindexResponse {
+  status: "accepted" | "already_queued";
+  file_id: string;
+  tasks_reset: string[];
+}
+
+/**
+ * Fetch the per-task indexing status (and provider stats) for a file.
+ *
+ * Used by ``IndexDetailsSection`` to render the per-task table with
+ * Regenerate buttons. 404s and network failures are propagated so the
+ * caller can hide the section gracefully.
+ */
+export async function getIndexDetails(
+  fileId: string,
+  drive: string,
+): Promise<IndexDetailsResponse> {
+  return fetchJSON<IndexDetailsResponse>(
+    `${API_BASE}/addons/intelligence/files/${fileId}/index-details`,
+    { headers: driveHeaders(drive) },
+  );
+}
+
+/**
+ * Reset selected ``*_indexed`` flags for a single file and re-enqueue
+ * the corresponding tasks.
+ *
+ * Backend spec ``2026-05-24-intelligence-reindex-controls.md`` §2.1.
+ * The legacy ``POST /queue/reindex`` global reset has been removed; this
+ * is the targeted replacement.
+ *
+ * Returns ``status: "accepted"`` on success or
+ * ``status: "already_queued"`` when every requested task was already in
+ * the queue (HTTP 202 — no flag flip, no double enqueue).
+ *
+ * ``drive`` is optional because both callers reach this endpoint from
+ * surfaces that already have the active drive — ``IndexDetailsSection``
+ * runs inside a file-detail-sections slot with the drive injected, and
+ * ``FailedJobsModal`` carries the row's drive. Passing it explicitly
+ * keeps the X-Lit-Drive header in sync with the file's owning drive,
+ * which the host proxy requires for the ``file_access`` pre-check.
+ */
+export async function reindexFile(
+  fileId: string,
+  tasks: ReindexTask[] | string[],
+  drive?: string,
+): Promise<ReindexResponse> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (drive) Object.assign(headers, driveHeaders(drive));
+  return fetchJSON<ReindexResponse>(
+    `${API_BASE}/addons/intelligence/files/${fileId}/reindex`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ tasks }),
+    },
+  );
+}
+
+/**
+ * A single failed-job aggregate row from
+ * ``GET /admin/failed-jobs``.
+ *
+ * Aggregated by (file_id, job_kind, provider). ``attempts`` is the
+ * number of consecutive failures since the last success — not lifetime
+ * total — so an admin can tell "this just broke" from "this has been
+ * failing for hours".
+ */
+export interface FailedJobItem {
+  file_id: string;
+  filename: string;
+  drive: string;
+  job_kind: string;
+  provider: string | null;
+  // ``error_class`` / ``error_message_excerpt`` are nullable on the
+  // backend (``JobRecord`` columns are NULL-able) — be conservative on
+  // the UI side so we never render the literal "null" string.
+  error_class: string | null;
+  error_message_excerpt: string | null;
+  attempted_at: string;
+  attempts: number;
+}
+
+export interface FailedJobsResponse {
+  items: FailedJobItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/**
+ * Fetch the global failed-jobs queue for the admin dashboard.
+ *
+ * ``limit`` defaults to 50 (spec §3.2). Drive header is omitted —
+ * ``/admin/failed-jobs`` is marked ``drive_optional`` on the proxy.
+ */
+export async function getFailedJobs(
+  limit: number = 50,
+  offset: number = 0,
+): Promise<FailedJobsResponse> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  return fetchJSON<FailedJobsResponse>(
+    `${API_BASE}/addons/intelligence/admin/failed-jobs?${params.toString()}`,
+  );
 }

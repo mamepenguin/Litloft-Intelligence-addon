@@ -125,3 +125,173 @@ def test_admin_embedding_specifically_registered_with_admin_pre_check() -> None:
         "pre_check.type == 'admin' (spec §2.1, parity with "
         "/admin/transcription)."
     )
+
+
+# ---------------------------------------------------------------------------
+# Spec 2026-05-24-intelligence-reindex-controls additions
+# ---------------------------------------------------------------------------
+
+
+def _load_all_manifest_routes() -> list[dict]:
+    """Return every entry under ``proxy.routes`` so the death-confirm
+    tests can inspect non-``/admin/*`` paths as well."""
+    manifest = json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
+    routes = manifest.get("proxy", {}).get("routes", [])
+    return [entry for entry in routes if isinstance(entry, dict)]
+
+
+def _router_all_paths() -> set[str]:
+    """Return the path string of every route declared in the admin
+    router. Other routers are imported lazily by ``app.routers.*``; here
+    we collect from the queue router too because the death-confirm
+    targets ``/queue/reindex``."""
+    out: set[str] = set()
+    for route in router.routes:
+        path = getattr(route, "path", None)
+        if isinstance(path, str):
+            out.add(path)
+
+    # The queue router is what owned ``/queue/reindex`` historically;
+    # importing it lets the death-confirm test verify the handler is
+    # gone from the FastAPI surface too.
+    import sys as _sys
+    from unittest.mock import MagicMock as _MM
+    for _m in (
+        "PIL", "PIL.Image",
+        "open_clip",
+        "torch",
+        "sentence_transformers",
+        "faster_whisper",
+        "onnxruntime",
+        "transformers",
+        "janome", "janome.tokenizer",
+        "sqlite_vec",
+    ):
+        if _m not in _sys.modules:
+            _sys.modules[_m] = _MM()
+
+    from app.routers.queue import router as queue_router  # noqa: E402
+
+    for route in queue_router.routes:
+        path = getattr(route, "path", None)
+        if isinstance(path, str):
+            out.add(path)
+    return out
+
+
+def test_queue_reindex_route_is_removed_from_manifest() -> None:
+    """Death-confirm: spec §1 deletes ``POST /queue/reindex`` entirely.
+
+    The host's addon_proxy resolves manifest paths first; leaving the
+    entry behind would let "let's restore the convenience" come back
+    silently. This test fires the moment someone re-adds it."""
+    entries = _load_all_manifest_routes()
+    paths_with_post = [
+        e["path"]
+        for e in entries
+        if isinstance(e.get("path"), str)
+        and "POST" in (e.get("methods") or [])
+    ]
+    assert "/queue/reindex" not in paths_with_post, (
+        "spec 2026-05-24-intelligence-reindex-controls §1 removed "
+        "POST /queue/reindex permanently. Re-adding it re-introduces "
+        "the global reset blast-radius bug "
+        "(hako WmAMUDZSsMHlutJFKsyAe)."
+    )
+
+
+def test_queue_reindex_handler_is_removed_from_router() -> None:
+    """Death-confirm: the handler itself must also be gone (spec §1
+    deletes ``queue.queue_reindex``)."""
+    router_paths = _router_all_paths()
+    assert "/queue/reindex" not in router_paths, (
+        "queue.queue_reindex handler must be removed alongside the "
+        "manifest entry (spec §1). A re-introduced handler would be "
+        "reachable as soon as the manifest entry is restored."
+    )
+
+
+def test_reindex_all_method_is_removed_from_index_manager() -> None:
+    """Death-confirm: ``IndexManager.reindex_all`` was only ever called
+    by the deleted HTTP handler (spec §1 architect review). The method
+    body is removed so future contributors can't wire it up to a new
+    endpoint without seeing the spec rationale first."""
+    import sys as _sys
+    from unittest.mock import MagicMock as _MM
+    for _m in (
+        "PIL", "PIL.Image",
+        "open_clip",
+        "torch",
+        "sentence_transformers",
+        "faster_whisper",
+        "onnxruntime",
+        "transformers",
+        "janome", "janome.tokenizer",
+        "sqlite_vec",
+    ):
+        if _m not in _sys.modules:
+            _sys.modules[_m] = _MM()
+
+    from app.indexer import IndexManager  # noqa: E402
+
+    assert not hasattr(IndexManager, "reindex_all"), (
+        "IndexManager.reindex_all must be removed (spec §1). The "
+        "single caller (POST /queue/reindex) is gone; restoring this "
+        "method makes the dangerous global reset a one-line "
+        "endpoint away."
+    )
+
+
+# ---------------------------------------------------------------------------
+# New routes added by spec §2.1 (file_access pre_check) and §2.2 (admin
+# pre_check) must be reachable.
+# ---------------------------------------------------------------------------
+
+
+def test_admin_failed_jobs_manifest_entry_exists() -> None:
+    """Spec §2.2: ``GET /admin/failed-jobs`` is gated by
+    ``pre_check.type='admin'``. The general loop above validates
+    every ``/admin/*`` route, but pinning the name here makes a
+    regression message point at the right line in the spec."""
+    manifest_routes = _load_admin_manifest_routes()
+    entry = manifest_routes.get("/admin/failed-jobs")
+    assert entry is not None, (
+        "/admin/failed-jobs must be declared in manifest.json "
+        "(spec 2026-05-24-intelligence-reindex-controls §2.2)."
+    )
+    assert "GET" in (entry.get("methods") or []), (
+        "/admin/failed-jobs must expose GET (spec §2.2)."
+    )
+    assert (entry.get("pre_check") or {}).get("type") == "admin", (
+        "/admin/failed-jobs must carry pre_check.type == 'admin' "
+        "(spec §2.2, parity with /admin/embedding)."
+    )
+
+
+def test_files_reindex_manifest_entry_exists() -> None:
+    """Spec §2.1: ``POST /files/{file_id}/reindex`` must carry
+    ``pre_check.type='file_access'`` so cross-drive writes are blocked
+    (Internal API policy R4 mirrored at the addon-proxy layer)."""
+    entries = _load_all_manifest_routes()
+    matching = [
+        e for e in entries
+        if e.get("path") == "/files/{file_id}/reindex"
+        and "POST" in (e.get("methods") or [])
+    ]
+    assert matching, (
+        "POST /files/{file_id}/reindex must be declared in "
+        "manifest.json (spec 2026-05-24-intelligence-reindex-controls "
+        "§2.1)."
+    )
+    entry = matching[0]
+    pre = entry.get("pre_check") or {}
+    assert pre.get("type") == "file_access", (
+        "POST /files/{file_id}/reindex must carry "
+        "pre_check.type == 'file_access' to block cross-drive writes "
+        "(spec §2.1)."
+    )
+    assert pre.get("param") == "file_id", (
+        "pre_check.param must be 'file_id' so the host proxy resolves "
+        "the path parameter to the right access-control subject "
+        "(spec §2.1)."
+    )
