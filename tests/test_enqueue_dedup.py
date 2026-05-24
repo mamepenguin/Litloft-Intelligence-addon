@@ -7,9 +7,10 @@ force=True bypasses the guard for prioritize() use cases.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -95,9 +96,51 @@ async def test_force_bypasses_dedup(manager):
 
     task = IndexTask(file_id="abc", task_type=TaskType.WHISPER)
     await manager._enqueue(task)
-    await manager._enqueue(IndexTask(file_id="abc", task_type=TaskType.WHISPER, priority=100), force=True)
+    await manager._enqueue(
+        IndexTask(file_id="abc", task_type=TaskType.WHISPER, priority=100),
+        force=True,
+    )
 
     assert manager._queues[TaskType.WHISPER].qsize() == 2
+
+
+@pytest.mark.asyncio
+async def test_collect_batch_skips_duplicate_already_processing(manager):
+    """Stale duplicate queue entries must not enter processing twice."""
+    from app.indexer import IndexTask, TaskType
+
+    manager._processing_by_type[TaskType.METADATA].append("abc")
+    await manager._enqueue(
+        IndexTask(file_id="abc", task_type=TaskType.METADATA),
+        force=True,
+    )
+
+    collected = await manager._collect_batch(TaskType.METADATA, 1)
+
+    assert collected == []
+    assert "abc" not in manager._queued_by_type[TaskType.METADATA]
+
+
+@pytest.mark.asyncio
+async def test_collect_batch_skips_stale_duplicate_after_priority_bump(manager):
+    """Priority bumps may leave old entries, but only one may be collected."""
+    from app.indexer import IndexTask, TaskType
+
+    await manager._enqueue(IndexTask(file_id="abc", task_type=TaskType.CLIP))
+    await manager._enqueue(
+        IndexTask(file_id="abc", task_type=TaskType.CLIP, priority=100),
+        force=True,
+    )
+
+    first = await manager._collect_batch(TaskType.CLIP, 1)
+    assert len(first) == 1
+    assert first[0].file_id == "abc"
+    assert first[0].priority == 100
+
+    manager._processing_by_type[TaskType.CLIP].append("abc")
+    second = await manager._collect_batch(TaskType.CLIP, 1)
+
+    assert second == []
 
 
 @pytest.mark.asyncio
@@ -127,3 +170,53 @@ async def test_after_collect_reenqueue_allowed(manager):
     # Should be accepted again (not blocked by stale queued set)
     await manager._enqueue(task)
     assert manager._queues[TaskType.METADATA].qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_start_honors_whisper_parallel(monkeypatch):
+    """``workers.whisper_parallel`` starts that many transcription workers."""
+    workers_ns = SimpleNamespace(
+        whisper_parallel=3,
+        clip_parallel=1,
+        metadata_batch_size=10,
+    )
+    settings_ns = SimpleNamespace(
+        workers=workers_ns,
+        indexing=SimpleNamespace(reconciliation_interval=3600),
+        features=SimpleNamespace(
+            auto_tags="false",
+            summaries="false",
+            detailed_summaries="false",
+            vision_describe="false",
+        ),
+    )
+    monkeypatch.setattr("app.indexer.settings", settings_ns)
+
+    from app.indexer import IndexManager
+
+    manager = IndexManager()
+    stop_event = asyncio.Event()
+
+    async def idle_worker() -> None:
+        await stop_event.wait()
+
+    manager._metadata_worker = idle_worker
+    manager._text_content_worker = idle_worker
+    manager._clip_worker = idle_worker
+    manager._whisper_worker = idle_worker
+    manager._tfidf_keywords_worker = idle_worker
+    manager._reconciliation_worker = idle_worker
+    manager._idle_unload_worker = idle_worker
+    manager.reconcile = AsyncMock(return_value={})
+
+    await manager.start()
+    try:
+        whisper_workers = [
+            task
+            for task in manager._background_tasks
+            if task.get_name().startswith("whisper_worker_")
+        ]
+        assert len(whisper_workers) == 3
+    finally:
+        stop_event.set()
+        await manager.stop()

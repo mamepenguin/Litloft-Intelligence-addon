@@ -142,9 +142,8 @@ class IndexManager:
         }
         self._pause_event = asyncio.Event()
         self._pause_event.set()  # Start unpaused
-        self._whisper_semaphore = asyncio.Semaphore(
-            settings.workers.whisper_parallel
-        )
+        self._whisper_parallel = max(1, int(settings.workers.whisper_parallel))
+        self._whisper_semaphore = asyncio.Semaphore(self._whisper_parallel)
         # Tracks file_ids already sitting in each per-type queue so that
         # repeated reconcile() / _resume_incomplete() calls (e.g. one per
         # scan-complete webhook) don't pile up duplicate entries.
@@ -170,7 +169,12 @@ class IndexManager:
                 )
                 for i in range(clip_count)
             ],
-            asyncio.create_task(self._whisper_worker(), name="whisper_worker"),
+            *[
+                asyncio.create_task(
+                    self._whisper_worker(), name=f"whisper_worker_{i}"
+                )
+                for i in range(self._whisper_parallel)
+            ],
             asyncio.create_task(
                 self._tfidf_keywords_worker(), name="tfidf_keywords_worker"
             ),
@@ -1279,7 +1283,7 @@ class IndexManager:
                 await asyncio.sleep(5)
 
     async def _whisper_worker(self) -> None:
-        """Process Whisper transcription tasks (1 at a time)."""
+        """Process transcription tasks, one file per worker."""
         while True:
             try:
                 await self._pause_event.wait()
@@ -1409,10 +1413,13 @@ class IndexManager:
         collected: list[IndexTask] = []
 
         queued = self._queued_by_type[task_type]
+        processing = self._processing_by_type[task_type]
         while len(collected) < max_size:
             try:
                 _, _, task = queue.get_nowait()
                 queued.discard(task.file_id)
+                if task.file_id in processing:
+                    continue
                 collected = [*collected, task]
             except asyncio.QueueEmpty:
                 break

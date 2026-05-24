@@ -549,6 +549,13 @@ indexing:
 
 # Worker concurrency
 workers:
+  # Number of audio/video transcription jobs processed at the same time.
+  # Applies to cloud providers too (Deepgram, ElevenLabs Scribe,
+  # AssemblyAI, Gemini, OpenAI-compatible). Keep 1 for local Whisper on
+  # memory-constrained hosts; raise for cloud STT only up to your plan's
+  # concurrency limit. ElevenLabs Scribe may consume more than one
+  # provider-side concurrency slot for long files because it chunks
+  # >8-minute audio internally.
   whisper_parallel: 1
   clip_parallel: 2
   metadata_batch_size: 32
