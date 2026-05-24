@@ -1,8 +1,7 @@
 """Tests for RAG-related configuration.
 
-Covers the new RAG fields on FeaturesConfig, the new RagConfig
-dataclass (with defaults defined in spec Phase A), and YAML
-parsing integration with load_settings().
+Covers the RAG fields on FeaturesConfig, the tuned RagConfig defaults,
+and YAML parsing integration with load_settings().
 """
 
 import pytest
@@ -28,11 +27,10 @@ from app.config import (
 class TestFeaturesConfigRag:
     """Tests for the new `rag` bool field on FeaturesConfig."""
 
-    def test_default_is_false(self):
-        # RAG must default to disabled for security (file content
-        # is sent to the LLM, so opt-in only).
+    def test_default_is_enabled(self):
+        # RAG is enabled by default; runtime still requires an LLM provider.
         cfg = FeaturesConfig()
-        assert cfg.rag is False
+        assert cfg.rag is True
 
     def test_can_enable(self):
         cfg = FeaturesConfig(rag=True)
@@ -59,8 +57,8 @@ class TestFeaturesConfigRag:
 
         assert result.rag is True
         # Other defaults preserved.
-        assert result.auto_tags == "false"
-        assert result.summaries == "false"
+        assert result.auto_tags == "manual"
+        assert result.summaries == "manual"
 
     def test_yaml_false_remains_false(self):
         data = {"features": {"rag": False}}
@@ -71,7 +69,7 @@ class TestFeaturesConfigRag:
     def test_yaml_missing_section_keeps_default(self):
         result = _parse_nested({}, "features", FeaturesConfig)
 
-        assert result.rag is False
+        assert result.rag is True
 
 
 # ---------------------------------------------------------------------------
@@ -80,22 +78,22 @@ class TestFeaturesConfigRag:
 
 
 class TestRagConfigDefaults:
-    """The RagConfig defaults must match spec Phase A values exactly."""
+    """The RagConfig defaults must match the current tuned values."""
 
     def test_top_k_default(self):
         assert RagConfig().top_k == 5
 
     def test_max_context_chars_per_file_default(self):
-        assert RagConfig().max_context_chars_per_file == 2000
+        assert RagConfig().max_context_chars_per_file == 3500
 
     def test_max_total_context_chars_default(self):
-        assert RagConfig().max_total_context_chars == 10000
+        assert RagConfig().max_total_context_chars == 17500
 
     def test_max_tokens_default(self):
-        assert RagConfig().max_tokens == 1024
+        assert RagConfig().max_tokens == 2048
 
     def test_transcript_window_seconds_default(self):
-        assert RagConfig().transcript_window_seconds == 30.0
+        assert RagConfig().transcript_window_seconds == 60.0
 
     def test_is_frozen(self):
         # Spec mandates frozen=True for all config dataclasses so
@@ -222,10 +220,10 @@ class TestLoadSettingsRag:
 
         assert result.rag.top_k == 3
         # Unspecified -> defaults preserved.
-        assert result.rag.max_context_chars_per_file == 2000
-        assert result.rag.max_total_context_chars == 10000
-        assert result.rag.max_tokens == 1024
-        assert result.rag.transcript_window_seconds == 30.0
+        assert result.rag.max_context_chars_per_file == 3500
+        assert result.rag.max_total_context_chars == 17500
+        assert result.rag.max_tokens == 2048
+        assert result.rag.transcript_window_seconds == 60.0
 
     def test_parses_hierarchical_section_from_yaml(self, tmp_path, monkeypatch):
         config_file = tmp_path / "search-config.yml"
@@ -273,7 +271,7 @@ class TestLoadSettingsRag:
 
         # Defaults preserved when the nested block is absent.
         assert result.rag.hierarchical == HierarchicalRagConfig()
-        assert result.rag.hierarchical.enabled is False
+        assert result.rag.hierarchical.enabled is True
 
     def test_parses_personal_history_section_from_yaml(
         self, tmp_path, monkeypatch
@@ -311,7 +309,7 @@ class TestLoadSettingsRag:
         result = load_settings()
 
         assert result.rag.personal_history == PersonalHistoryConfig()
-        assert result.rag.personal_history.enabled is False
+        assert result.rag.personal_history.enabled is True
         assert result.rag.personal_history.max_lookback_days == 365
         assert result.rag.personal_history.fallback_when_empty == "graceful"
 

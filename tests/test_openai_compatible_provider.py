@@ -167,7 +167,7 @@ async def test_transcribe_passes_language_hint(with_api_key, fake_audio_file) ->
     kwargs = client.audio.transcriptions.create.await_args.kwargs
     assert kwargs.get("language") == "ja"
     assert kwargs.get("response_format") == "verbose_json"
-    assert kwargs.get("timestamp_granularities") == ["word"]
+    assert kwargs.get("timestamp_granularities") == ["word", "segment"]
 
 
 @pytest.mark.asyncio
@@ -239,7 +239,7 @@ async def test_empty_word_timestamps_is_fatal(
     """Provider returned segments but no words anywhere → FatalError.
 
     Catches Groq / Fireworks endpoints whose
-    ``timestamp_granularities=["word"]`` support is broken — silent
+    ``timestamp_granularities=["word", "segment"]`` support is broken — silent
     skip would lose subtitle + word-seek data downstream.
     """
     bad = SimpleNamespace(

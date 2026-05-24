@@ -190,7 +190,7 @@ def test_transcription_subconfigs_have_provider_specific_fields() -> None:
     assert tc.openai_compatible.model == "whisper-1"
     assert tc.deepgram.model == "nova-3"
     assert tc.deepgram.diarize is True
-    assert tc.elevenlabs_scribe.model_id == "scribe_v1"
+    assert tc.elevenlabs_scribe.model_id == "scribe_v2"
 
 
 def test_load_settings_with_only_old_keys_populates_transcription(

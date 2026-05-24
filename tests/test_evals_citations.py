@@ -271,9 +271,9 @@ class TestAggregateMetrics:
 class TestReportRendering:
     def _setup(self):
         from app.evals_citations.runner import (
-            AggregateMetrics,
             CaseReport,
             SegmentScore,
+            aggregate,
         )
 
         segments = (
@@ -306,17 +306,7 @@ class TestReportRendering:
                 segments=segments,
             )
         ]
-        agg = AggregateMetrics(
-            total_segments=2,
-            top1_accuracy=0.5,
-            recall_at_3=0.5,
-            has_citation_precision=1.0,
-            missing_required_citations=1,
-            by_segment_type={
-                "paragraph": (1.0, 1.0, 1),
-                "bullet": (0.0, 0.0, 1),
-            },
-        )
+        agg = aggregate(reports)
         return reports, agg
 
     def test_markdown_has_aggregate_and_case_sections(self):

@@ -49,9 +49,9 @@ def test_search_config_exposes_clip_thumbnail_threshold():
 
 
 def test_search_config_clip_thumbnail_threshold_default():
-    """Default is looser than scene CLIP because false-positive profile differs."""
+    """Default follows the tuned shallow-search threshold."""
     cfg = SearchConfig()
-    assert cfg.min_score_clip_thumbnail == 0.20
+    assert cfg.min_score_clip_thumbnail == 0.05
     # And it is strictly looser than (or equal to) scene CLIP.
     assert cfg.min_score_clip_thumbnail <= cfg.min_score_clip
 

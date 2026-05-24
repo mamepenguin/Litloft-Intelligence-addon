@@ -10,7 +10,7 @@
 ``FeaturesConfig`` must grow a ``vision_describe`` field with the same
 3-mode shape as ``detailed_summaries`` / ``transcript_refine``:
 
-* "false" (default) — fully disabled
+* "false" — fully disabled
 * "manual" — UI-triggered only
 * "on_index" — auto-run after indexing completes
 
@@ -53,8 +53,8 @@ class TestLLMConfigVisionFields:
 
     def test_defaults(self):
         cfg = LLMConfig()
-        # vision_model empty by default so the feature stays off without
-        # explicit opt-in (graceful degradation).
+        # vision_model empty by default so auto/manual requests degrade
+        # gracefully until a provider is configured.
         assert cfg.vision_model == ""
         # Tight but generous defaults per spec.
         assert cfg.vision_max_tokens == 1024
@@ -101,10 +101,10 @@ class TestLLMConfigVisionFields:
 class TestFeaturesConfigVisionDescribe:
     """features.vision_describe must mirror the 3-mode string pattern."""
 
-    def test_default_is_false(self):
-        """Security default — image bytes leave the host only on explicit opt-in."""
+    def test_default_is_manual(self):
+        """Default allows manual runs once a vision model is configured."""
         cfg = FeaturesConfig()
-        assert cfg.vision_describe == "false"
+        assert cfg.vision_describe == "manual"
 
     @pytest.mark.parametrize("mode", ["false", "manual", "on_index"])
     def test_accepts_three_modes(self, mode):

@@ -27,7 +27,7 @@ for _mod in (
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
 
-from app.config import LLMConfig, RagConfig  # noqa: E402
+from app.config import HierarchicalRagConfig, LLMConfig, RagConfig  # noqa: E402
 from app.rag.context import ContextSnippet, FileContext  # noqa: E402
 from app.rag.retriever import RetrievedFile  # noqa: E402
 from app.rag.service import (  # noqa: E402
@@ -107,7 +107,7 @@ def patched_rag_enabled(monkeypatch, make_settings):
             base_url="http://localhost:11434/v1",
             model="llama3",
         ),
-        rag=RagConfig(),
+        rag=RagConfig(hierarchical=HierarchicalRagConfig(enabled=False)),
     )
     monkeypatch.setattr("app.config.settings", settings)
     monkeypatch.setattr("app.rag.service.settings", settings)

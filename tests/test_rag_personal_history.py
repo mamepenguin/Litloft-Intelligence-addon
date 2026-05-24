@@ -43,6 +43,7 @@ for _mod in (
 
 from app.config import (  # noqa: E402
     CategoryExpansionConfig,
+    HierarchicalRagConfig,
     PersonalHistoryConfig,
     RagConfig,
 )
@@ -80,6 +81,7 @@ def _enable_personal_history(
     how production loads it from YAML).
     """
     rag_cfg = RagConfig(
+        hierarchical=HierarchicalRagConfig(enabled=False),
         personal_history=PersonalHistoryConfig(
             enabled=enabled, fallback_when_empty=fallback
         ),

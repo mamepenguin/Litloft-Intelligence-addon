@@ -288,14 +288,14 @@ class FeaturesConfig:
     detailed_summaries: str = "false"  # "false" | "manual" | "on_index"
     # RAG (question answering) is a simple on/off switch: there is no
     # index-time equivalent to "on_index" because RAG only runs in
-    # response to user queries. Default off for security — file content
-    # (transcripts, captions, text) is sent to the LLM API.
+    # response to user queries. Enabled by default; runtime still requires
+    # an LLM provider, and file content is sent to that provider.
     rag: bool = True
     # Transcript AI refine ("false" | "manual" | "on_index"). Default off
     # since file contents are sent to the LLM API during refine.
     transcript_refine: str = "false"
     # Vision-LLM image description ("false" | "manual" | "on_index").
-    # Default off — enabling sends image bytes to the LLM API. Requires
+    # Default is manual; running it sends image bytes to the LLM API. Requires
     # ``llm.vision_model`` to be set or the feature is unavailable even
     # when this flag is "manual"/"on_index" (graceful degradation).
     vision_describe: str = "manual"
@@ -317,9 +317,8 @@ class HierarchicalRagConfig:
     scopes the chunk-level retrieval to the shortlist. See
     ``docs/superpowers/specs/2026-04-26-intelligence-ask-hierarchical-retrieval.md``.
 
-    Defaults are conservative: hierarchical is OFF until an operator
-    opts in, the bypass thresholds err on the side of running the
-    legacy full-file retrieval when in doubt.
+    Defaults enable the shortlist path, while bypass thresholds err on
+    the side of running legacy full-file retrieval when in doubt.
     """
 
     # Master switch. False keeps the legacy single-stage retrieval.
@@ -350,9 +349,9 @@ class PersonalHistoryConfig:
     form (time range + viewer scope), then narrows retrieval to the
     file_ids the caller has actually opened in the requested window.
 
-    Defaults are conservative: the feature is OFF until an operator
-    opts in, and the lookback ceiling defends against pathologically
-    wide ``last_year`` resolutions on long-running deployments.
+    Defaults enable personal scoping, while the lookback ceiling defends
+    against pathologically wide ``last_year`` resolutions on long-running
+    deployments.
     """
 
     # Master switch. False keeps Ask viewer-agnostic (legacy behaviour).
@@ -409,7 +408,7 @@ class RagConfig:
 
     Controls how many files are retrieved, how much context per file
     is extracted, the hard total-context cap, and the LLM max_tokens
-    override for answer generation. Defaults match spec Phase A.
+    override for answer generation. Defaults are tuned for current Ask.
     """
 
     # Number of files retrieved and fed to the LLM as context.
@@ -441,14 +440,13 @@ class RagConfig:
     # (2-3 sentences) so more fit under the per-file budget.
     # 0 disables the additional passes.
     transcript_vector_top_n: int = 4
-    # Hierarchical retrieval (Stage 1 coarse shortlist). Default
-    # disabled — opt-in via ``rag.hierarchical.enabled: true`` in
-    # ``search-config.yml``.
+    # Hierarchical retrieval (Stage 1 coarse shortlist). Enabled by default;
+    # set ``rag.hierarchical.enabled: false`` to force legacy retrieval.
     hierarchical: HierarchicalRagConfig = field(
         default_factory=HierarchicalRagConfig
     )
-    # Personal-history scoping (Stage A/B/D). Default disabled — opt-in
-    # via ``rag.personal_history.enabled: true`` in ``search-config.yml``.
+    # Personal-history scoping (Stage A/B/D). Enabled by default; set
+    # ``rag.personal_history.enabled: false`` to force viewer-agnostic Ask.
     personal_history: PersonalHistoryConfig = field(
         default_factory=PersonalHistoryConfig
     )

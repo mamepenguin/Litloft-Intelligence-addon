@@ -309,8 +309,8 @@ rag:
   max_total_context_chars: 17500    # hard cap on combined context size
   max_tokens: 2048                  # LLM max_tokens override for answer generation
   transcript_window_seconds: 60.0   # context window around each timestamped match
-  # Hierarchical retrieval (Stage 1 coarse shortlist). Off by default;
-  # set ``enabled: true`` to scope chunk-level retrieval by a per-file
+  # Hierarchical retrieval (Stage 1 coarse shortlist). Enabled by default;
+  # set ``enabled: false`` to skip the per-file
   # AI-summary embedding shortlist. See spec
   # ``2026-04-26-intelligence-ask-hierarchical-retrieval.md``.
   hierarchical:
@@ -324,7 +324,7 @@ rag:
     clue_count: 3                        # Stage 2 multi-query expansion target
                                          # (1 = legacy single-keyword path;
                                          # 2-4 expands via shortlist summaries)
-  # Personal-history scoping (Stage A/B/D). Off by default; opt-in to
+  # Personal-history scoping (Stage A/B/D). Enabled by default to
   # answer "先週観た〜" / "今月観てない〜" style queries by narrowing
   # retrieval to file_ids the caller has actually opened. Requires the
   # caller to have a ``lit_viewer`` cookie (profile nickname) — without
