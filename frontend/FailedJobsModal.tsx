@@ -146,166 +146,207 @@ export default function FailedJobsModal({ open, onClose }: FailedJobsModalProps)
   const hasItems = items.length > 0;
   const showingFrom = total > 0 ? offset + 1 : 0;
   const showingTo = Math.min(offset + items.length, total);
+  const pageSummary =
+    total > 0
+      ? t("pagination", { from: showingFrom, to: showingTo, total })
+      : null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center px-3 py-4 sm:px-6"
+      role="dialog"
+      aria-modal
+      aria-labelledby="failed-jobs-modal-title"
+    >
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-fade-in"
         onClick={onClose}
       />
-      <div className="relative mx-4 flex w-full max-w-4xl flex-col rounded-2xl bg-bg-card p-6 shadow-lg animate-fade-in-scale max-h-[85vh]">
-        <div className="mb-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <AlertTriangle size={18} className="text-accent-amber" />
-            <h2 className="text-lg font-semibold text-text-primary">
-              {t("title")}
-            </h2>
-            {total > 0 && (
-              <span className="rounded-lg bg-accent-amber/10 px-2 py-0.5 text-xs font-medium text-accent-amber">
-                {t("countBadge", { count: total })}
-              </span>
-            )}
+      <div className="relative flex max-h-[min(86vh,760px)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-bg-border bg-bg-card shadow-lg animate-fade-in-scale">
+        <div className="flex items-start justify-between gap-4 border-b border-bg-border bg-bg-elevated/70 px-4 py-4 sm:px-5">
+          <div className="flex min-w-0 items-start gap-3">
+            <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-danger/10 text-danger">
+              <AlertTriangle size={18} aria-hidden />
+            </div>
+            <div className="min-w-0">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <h2
+                  id="failed-jobs-modal-title"
+                  className="truncate text-base font-semibold text-text-primary sm:text-lg"
+                >
+                  {t("title")}
+                </h2>
+                {total > 0 && (
+                  <span className="inline-flex h-6 items-center rounded-full bg-danger/10 px-2.5 text-xs font-semibold tabular-nums text-danger">
+                    {t("countBadge", { count: total })}
+                  </span>
+                )}
+              </div>
+              {pageSummary && (
+                <p className="mt-1 text-xs text-text-muted">{pageSummary}</p>
+              )}
+            </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="rounded-xl p-1 text-text-muted hover:text-text-primary"
+            className="rounded-xl p-2 text-text-muted transition-colors hover:bg-bg-card hover:text-text-primary"
             aria-label={tc("close")}
           >
             <X size={18} />
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden bg-bg-primary/60">
           {loading && !hasItems ? (
-            <div className="flex items-center justify-center py-12 text-text-muted">
-              <Loader2 size={20} className="animate-spin" />
+            <div className="flex min-h-64 items-center justify-center text-text-muted">
+              <Loader2 size={22} className="animate-spin" aria-hidden />
             </div>
           ) : !hasItems ? (
-            <div className="py-12 text-center text-sm text-text-muted">
-              {t("none")}
+            <div className="flex min-h-64 flex-col items-center justify-center px-6 text-center">
+              <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-bg-elevated text-text-muted">
+                <AlertTriangle size={22} aria-hidden />
+              </div>
+              <p className="text-sm font-medium text-text-primary">{t("none")}</p>
             </div>
           ) : (
-            <table className="w-full text-xs" role="table">
-              <thead>
-                <tr className="border-b border-bg-border text-left text-text-muted">
-                  <th
-                    className="w-6 px-1 py-2"
-                    aria-hidden
-                    data-checkbox-slot
-                    style={{ width: "24px" }}
-                  />
-                  <th className="px-2 py-2 font-medium">{t("col.file")}</th>
-                  <th className="px-2 py-2 font-medium">{t("col.drive")}</th>
-                  <th className="px-2 py-2 font-medium">{t("col.task")}</th>
-                  <th className="px-2 py-2 font-medium">{t("col.provider")}</th>
-                  <th className="px-2 py-2 font-medium">{t("col.error")}</th>
-                  <th className="px-2 py-2 font-medium">{t("col.attempts")}</th>
-                  <th className="px-2 py-2 font-medium">{t("col.attemptedAt")}</th>
-                  <th className="px-2 py-2 font-medium">{t("col.actions")}</th>
-                </tr>
-              </thead>
-              <tbody>
+            <div className="p-2 sm:p-3">
+              <div
+                className="mb-2 hidden grid-cols-[24px_minmax(112px,1.2fr)_minmax(66px,0.62fr)_minmax(78px,0.74fr)_minmax(92px,0.78fr)_minmax(144px,1.15fr)_minmax(46px,0.42fr)_minmax(112px,0.85fr)_minmax(86px,0.72fr)] gap-2 px-2 text-[11px] font-semibold uppercase text-text-muted lg:grid"
+              >
+                <span
+                  aria-hidden
+                  data-checkbox-slot
+                  style={{ width: "24px" }}
+                />
+                <span>{t("col.file")}</span>
+                <span>{t("col.drive")}</span>
+                <span>{t("col.task")}</span>
+                <span>{t("col.provider")}</span>
+                <span>{t("col.error")}</span>
+                <span>{t("col.attempts")}</span>
+                <span>{t("col.attemptedAt")}</span>
+                <span>{t("col.actions")}</span>
+              </div>
+              <ul className={`space-y-2 ${loading ? "opacity-60" : ""}`}>
                 {items.map((row) => {
                   const task = jobKindToTask(row.job_kind);
                   const retryKey = `${row.file_id}:${task}`;
                   const isRetrying = retrying === retryKey;
                   return (
-                    <tr
+                    <li
                       key={`${row.file_id}:${row.job_kind}:${row.provider ?? "none"}`}
-                      className="border-b border-bg-border/50 align-top text-text-primary"
-                      role="row"
+                      className="grid grid-cols-[24px_minmax(0,1fr)] gap-x-3 gap-y-3 rounded-xl border border-bg-border bg-bg-card p-3 text-sm text-text-primary transition-colors hover:bg-bg-elevated/60 lg:grid-cols-[24px_minmax(112px,1.2fr)_minmax(66px,0.62fr)_minmax(78px,0.74fr)_minmax(92px,0.78fr)_minmax(144px,1.15fr)_minmax(46px,0.42fr)_minmax(112px,0.85fr)_minmax(86px,0.72fr)] lg:items-start lg:gap-x-2 lg:p-2 lg:text-xs"
                     >
-                      <td
-                        className="px-1 py-2"
+                      <span
+                        className="h-full"
                         data-checkbox-slot
                         style={{ width: "24px" }}
                       />
-                      <td className="px-2 py-2">
-                        <span
-                          className="block max-w-[220px] truncate font-medium"
-                          title={row.filename}
-                        >
-                          {row.filename}
+                      <span
+                        className="block min-w-0 truncate font-semibold text-text-primary"
+                        title={row.filename}
+                      >
+                        {row.filename}
+                      </span>
+                      <div className="col-start-2 min-w-0 text-text-muted lg:col-auto">
+                        <span className="inline-flex min-w-0 max-w-full rounded-lg bg-bg-elevated px-2 py-0.5 text-[11px] lg:block lg:bg-transparent lg:px-0 lg:py-0 lg:text-xs">
+                          <span className="block truncate">{row.drive}</span>
                         </span>
-                      </td>
-                      <td className="px-2 py-2 text-text-muted">{row.drive}</td>
-                      <td className="px-2 py-2">{row.job_kind}</td>
-                      <td className="px-2 py-2 text-text-muted">
-                        {row.provider ?? "-"}
-                      </td>
-                      <td className="px-2 py-2">
-                        <span className="block font-medium text-accent-amber">
+                      </div>
+                      <div className="col-start-2 min-w-0 font-medium lg:col-auto">
+                        <span className="inline-flex min-w-0 max-w-full rounded-lg bg-bg-elevated px-2 py-0.5 text-[11px] lg:block lg:bg-transparent lg:px-0 lg:py-0 lg:text-xs">
+                          <span className="block truncate">{row.job_kind}</span>
+                        </span>
+                      </div>
+                      <div className="col-start-2 min-w-0 text-text-muted lg:col-auto">
+                        <span className="inline-flex min-w-0 max-w-full rounded-lg bg-bg-elevated px-2 py-0.5 text-[11px] lg:block lg:bg-transparent lg:px-0 lg:py-0 lg:text-xs">
+                          <span className="block truncate">
+                            {row.provider ?? "-"}
+                          </span>
+                        </span>
+                      </div>
+                      <div className="col-start-2 min-w-0 lg:col-auto">
+                        <span className="inline-flex max-w-full items-center rounded-lg bg-danger/10 px-2 py-0.5 text-xs font-semibold text-danger">
                           {row.error_class ?? "-"}
                         </span>
                         <span
-                          className="block max-w-[260px] truncate text-text-muted"
+                          className="mt-1 block max-w-full truncate text-xs text-text-muted"
                           title={row.error_message_excerpt ?? ""}
                         >
                           {row.error_message_excerpt ?? ""}
                         </span>
-                      </td>
-                      <td className="px-2 py-2 text-text-muted">
-                        {row.attempts}
-                      </td>
-                      <td
-                        className="px-2 py-2 text-text-muted whitespace-nowrap"
+                      </div>
+                      <div className="col-start-2 flex items-center gap-2 text-xs text-text-muted lg:col-auto lg:block">
+                        <span className="lg:hidden">{t("col.attempts")}</span>
+                        <span className="font-medium tabular-nums text-text-primary">
+                          {row.attempts}
+                        </span>
+                      </div>
+                      <div
+                        className="col-start-2 min-w-0 text-xs text-text-muted lg:col-auto"
                         title={row.attempted_at}
                       >
-                        <span className="inline-flex items-center gap-1">
-                          <Clock size={12} aria-hidden />
-                          {formatAttempted(row.attempted_at)}
+                        <span className="inline-flex max-w-full items-center gap-1.5">
+                          <Clock size={13} className="shrink-0" aria-hidden />
+                          <span className="truncate">
+                            {formatAttempted(row.attempted_at)}
+                          </span>
                         </span>
-                      </td>
-                      <td className="px-2 py-2">
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => handleRetry(row)}
-                            disabled={isRetrying}
-                            className="inline-flex items-center gap-1 rounded-lg bg-bg-elevated px-2 py-1 text-xs font-medium text-text-primary transition-colors hover:bg-bg-border disabled:opacity-50"
-                            aria-label={t("retry")}
-                          >
-                            {isRetrying ? (
-                              <Loader2 size={12} className="animate-spin" />
-                            ) : (
-                              <RefreshCw size={12} />
-                            )}
-                            {t("retry")}
-                          </button>
-                          <Link
-                            href={`/drive/${encodeURIComponent(row.drive)}/file/${row.file_id}`}
-                            className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-accent hover:underline"
-                            aria-label={t("details")}
-                          >
-                            <ExternalLink size={12} />
-                            {t("details")}
-                          </Link>
-                        </div>
-                      </td>
-                    </tr>
+                      </div>
+                      <div className="col-start-2 flex flex-wrap items-center gap-2 lg:col-auto lg:flex-col lg:items-start lg:gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleRetry(row)}
+                          disabled={isRetrying}
+                          className="inline-flex h-7 items-center gap-1.5 rounded-xl bg-sand px-2.5 text-xs font-semibold text-text-primary transition-colors hover:bg-sand-hover disabled:opacity-50"
+                          aria-label={t("retry")}
+                        >
+                          {isRetrying ? (
+                            <Loader2
+                              size={13}
+                              className="animate-spin"
+                              aria-hidden
+                            />
+                          ) : (
+                            <RefreshCw size={13} aria-hidden />
+                          )}
+                          {t("retry")}
+                        </button>
+                        <Link
+                          href={`/drive/${encodeURIComponent(row.drive)}/file/${row.file_id}`}
+                          className="inline-flex h-7 items-center gap-1.5 rounded-xl px-2.5 text-xs font-semibold text-accent transition-colors hover:bg-accent/10"
+                          aria-label={t("details")}
+                        >
+                          <ExternalLink size={13} aria-hidden />
+                          {t("details")}
+                        </Link>
+                      </div>
+                    </li>
                   );
                 })}
-              </tbody>
-            </table>
+              </ul>
+            </div>
           )}
         </div>
 
         {total > PAGE_LIMIT && (
-          <div className="mt-3 flex items-center justify-between border-t border-bg-border pt-3 text-xs text-text-muted">
-            <span>
-              {t("pagination", { from: showingFrom, to: showingTo, total })}
-            </span>
+          <div className="flex items-center justify-between gap-3 border-t border-bg-border bg-bg-card px-4 py-3 text-xs text-text-muted sm:px-5">
+            <span>{pageSummary}</span>
             <div className="flex gap-2">
               <button
+                type="button"
                 onClick={handlePrev}
                 disabled={offset === 0 || loading}
-                className="rounded-lg bg-bg-elevated px-3 py-1 font-medium text-text-primary hover:bg-bg-border disabled:opacity-50"
+                className="rounded-xl bg-sand px-3 py-1.5 font-semibold text-text-primary transition-colors hover:bg-sand-hover disabled:opacity-50"
               >
                 {t("prev")}
               </button>
               <button
+                type="button"
                 onClick={handleNext}
                 disabled={offset + PAGE_LIMIT >= total || loading}
-                className="rounded-lg bg-bg-elevated px-3 py-1 font-medium text-text-primary hover:bg-bg-border disabled:opacity-50"
+                className="rounded-xl bg-sand px-3 py-1.5 font-semibold text-text-primary transition-colors hover:bg-sand-hover disabled:opacity-50"
               >
                 {t("next")}
               </button>
