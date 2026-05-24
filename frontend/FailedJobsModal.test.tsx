@@ -31,6 +31,7 @@ import {
 vi.mock("@/addons/intelligence/api", () => ({
   getFailedJobs: vi.fn(),
   reindexFile: vi.fn(),
+  resolveFailedJob: vi.fn(),
 }));
 
 // Capture next/link <Link> usage so the SPA-navigation rule is checked.
@@ -51,10 +52,15 @@ vi.mock("next/link", () => ({
 }));
 
 import FailedJobsModal from "@/addons/intelligence/FailedJobsModal";
-import { getFailedJobs, reindexFile } from "@/addons/intelligence/api";
+import {
+  getFailedJobs,
+  reindexFile,
+  resolveFailedJob,
+} from "@/addons/intelligence/api";
 
 const mockedFailedJobs = getFailedJobs as unknown as ReturnType<typeof vi.fn>;
 const mockedReindex = reindexFile as unknown as ReturnType<typeof vi.fn>;
+const mockedResolve = resolveFailedJob as unknown as ReturnType<typeof vi.fn>;
 
 function payload(overrides: Record<string, unknown> = {}) {
   return {
@@ -93,6 +99,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockedFailedJobs.mockResolvedValue(payload());
   mockedReindex.mockResolvedValue({ status: "accepted" });
+  mockedResolve.mockResolvedValue({ status: "resolved" });
 });
 
 afterEach(() => {
@@ -209,6 +216,30 @@ describe("FailedJobsModal — deep link (SPA navigation rule)", () => {
     // full reload.
     expect(href.startsWith("http")).toBe(false);
     expect(href.startsWith("javascript:")).toBe(false);
+  });
+});
+
+describe("FailedJobsModal — resolve button", () => {
+  it("calls resolveFailedJob with the row identity and removes the row", async () => {
+    render(<FailedJobsModal open onClose={() => {}} />);
+    await waitFor(() => expect(mockedFailedJobs).toHaveBeenCalled());
+
+    const row = screen.getByText("movie.mp4").closest("tr, li, [role='row'], div");
+    expect(row).not.toBeNull();
+    const resolveBtn = within(row as HTMLElement).getByRole("button", {
+      name: /exclude|対象外|semanticSearch\.failedJobs\.resolve/i,
+    });
+    fireEvent.click(resolveBtn);
+
+    await waitFor(() => expect(mockedResolve).toHaveBeenCalled());
+    expect(mockedResolve).toHaveBeenCalledWith({
+      file_id: "abc12345",
+      job_kind: "transcription",
+      provider: "whisper_local",
+    });
+    await waitFor(() =>
+      expect(screen.queryByText("movie.mp4")).not.toBeInTheDocument(),
+    );
   });
 });
 

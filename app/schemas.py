@@ -590,3 +590,9 @@ class FailedJobsResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class ResolveFailedJobResponse(BaseModel):
+    status: str
+    file_id: str
+    task: str

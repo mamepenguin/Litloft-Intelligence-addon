@@ -34,6 +34,7 @@
       "title": "失敗ジョブ",
       "countBadge": "{count}",
       "retry": "再試行",
+      "resolve": "対象外にする",
       "details": "詳細",
       "attemptsValue": "{count}回",
       "pagination": "{from}-{to} / {total}",

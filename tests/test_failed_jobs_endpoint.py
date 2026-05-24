@@ -15,10 +15,11 @@ Coverage:
   JOIN'd from ``IndexedFile``.
 * ``status='skipped'`` rows are excluded (retry-eligible filter).
 * Failed rows for purged files (no ``IndexedFile`` row) are excluded.
-* Rows older than 7 days are excluded (mirrors
-  ``_PROVIDER_STATS_WINDOW_DAYS``).
+* Rows older than 7 days are still shown until the latest terminal state
+  for that group is no longer ``failed``.
 * ``attempts`` counts consecutive failures since the last ``succeeded``
-  (history is not a lifetime total — UI relevance only).
+  or manual ``skipped`` close (history is not a lifetime total — UI
+  relevance only).
 * ``error_message_excerpt`` is truncated to 256 chars.
 * Aggregation: multiple failed rows for the same
   ``(file_id, job_kind, provider)`` collapse into one item carrying the
@@ -248,9 +249,9 @@ async def test_succeeded_status_is_excluded(search_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_records_older_than_7_days_are_excluded(search_db) -> None:
-    """The endpoint reuses ``_PROVIDER_STATS_WINDOW_DAYS = 7`` to keep
-    the modal focused on actionable recent failures."""
+async def test_records_older_than_7_days_are_included(search_db) -> None:
+    """Failures stay visible indefinitely so they cannot silently keep
+    index progress below 100% after the dashboard window expires."""
     from app.routers.admin import get_failed_jobs
 
     _add_job(search_db, days_ago=10, error_class="FatalError")
@@ -260,6 +261,29 @@ async def test_records_older_than_7_days_are_excluded(search_db) -> None:
     payload = response if isinstance(response, dict) else response.model_dump()
     assert payload["total"] == 1
     assert payload["items"][0]["error_class"] == "RateLimitError"
+
+
+@pytest.mark.asyncio
+async def test_failed_jobs_excludes_groups_newer_success_resolved(
+    search_db,
+) -> None:
+    """A historical failure must not remain visible after a later
+    succeeded/skipped row closes the same (file, kind, provider) group."""
+    from app.routers.admin import get_failed_jobs
+
+    _add_job(search_db, days_ago=20, error_class="FatalError")
+    _add_job(
+        search_db,
+        status="succeeded",
+        error_class=None,
+        error_message=None,
+        days_ago=1,
+    )
+
+    response = await get_failed_jobs()
+    payload = response if isinstance(response, dict) else response.model_dump()
+    assert payload["total"] == 0
+    assert payload["items"] == []
 
 
 @pytest.mark.asyncio
@@ -414,3 +438,67 @@ async def test_response_shape_includes_limit_offset(search_db) -> None:
     assert "offset" in payload
     assert payload["items"] == []
     assert payload["total"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Manual resolution
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_failed_job_marks_task_done_and_hides_group(
+    search_db,
+) -> None:
+    """Admins can close a permanently failing task so progress reaches
+    100% without deleting the file or rewriting failure history."""
+    from app.routers.admin import get_failed_jobs, resolve_failed_job
+
+    _add_job(search_db, days_ago=10, error_class="FatalError")
+
+    response = await resolve_failed_job({
+        "file_id": "f00000000001",
+        "job_kind": "transcription",
+        "provider": "whisper_local",
+    })
+    payload = response if isinstance(response, dict) else response.model_dump()
+    assert payload["status"] == "resolved"
+    assert payload["file_id"] == "f00000000001"
+    assert payload["task"] == "whisper"
+
+    s = search_db()
+    try:
+        indexed = s.query(IndexedFile).filter_by(file_id="f00000000001").one()
+        assert indexed.whisper_indexed is True
+        latest = (
+            s.query(JobRecord)
+            .filter_by(
+                file_id="f00000000001",
+                job_kind="transcription",
+                provider="whisper_local",
+            )
+            .order_by(JobRecord.attempted_at.desc())
+            .first()
+        )
+        assert latest is not None
+        assert latest.status == "skipped"
+        assert latest.error_class == "ManuallyResolved"
+    finally:
+        s.close()
+
+    after = await get_failed_jobs()
+    after_payload = after if isinstance(after, dict) else after.model_dump()
+    assert after_payload["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_resolve_failed_job_rejects_unknown_job_kind(search_db) -> None:
+    from app.routers.admin import resolve_failed_job
+
+    with pytest.raises(Exception) as exc:
+        await resolve_failed_job({
+            "file_id": "f00000000001",
+            "job_kind": "unknown",
+            "provider": "whisper_local",
+        })
+
+    assert getattr(exc.value, "status_code", None) == 422

@@ -1633,6 +1633,12 @@ export interface FailedJobsResponse {
   offset: number;
 }
 
+export interface ResolveFailedJobResponse {
+  status: "resolved";
+  file_id: string;
+  task: ReindexTask;
+}
+
 /**
  * Fetch the global failed-jobs queue for the admin dashboard.
  *
@@ -1649,5 +1655,18 @@ export async function getFailedJobs(
   });
   return fetchJSON<FailedJobsResponse>(
     `${API_BASE}/addons/intelligence/admin/failed-jobs?${params.toString()}`,
+  );
+}
+
+export async function resolveFailedJob(
+  row: Pick<FailedJobItem, "file_id" | "job_kind" | "provider">,
+): Promise<ResolveFailedJobResponse> {
+  return fetchJSON<ResolveFailedJobResponse>(
+    `${API_BASE}/addons/intelligence/admin/failed-jobs/resolve`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(row),
+    },
   );
 }

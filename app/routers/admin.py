@@ -31,10 +31,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel, Field
 
-from app.schemas import FailedJobItem, FailedJobsResponse
+from app.schemas import FailedJobItem, FailedJobsResponse, ResolveFailedJobResponse
 
 import app.config as config
 from app.transcription_overrides import (
@@ -872,10 +872,6 @@ async def _notify_core_restart_pending() -> str:
 # file would just be skipped again (UnsupportedMimeType is permanent
 # until the file's mime changes).
 
-# Reuse the 7-day cutoff from ``files._compute_provider_stats`` — the
-# modal is for "what's broken right now", not historical archaeology.
-_FAILED_JOBS_WINDOW_DAYS = 7
-
 # Cap per-call payload size. ``error_message`` for a stack-trace dump
 # can be multi-kilobyte; 256 chars is enough for the user to grok the
 # class of failure without inflating the JSON response.
@@ -883,6 +879,14 @@ _FAILED_JOB_MESSAGE_EXCERPT_CHARS = 256
 
 _FAILED_JOBS_DEFAULT_LIMIT = 50
 _FAILED_JOBS_MAX_LIMIT = 200
+
+_FAILED_JOB_TASK_FLAG_COLUMN: dict[str, str] = {
+    "metadata": "metadata_indexed",
+    "clip": "clip_indexed",
+    "text": "text_indexed",
+    "text_content": "text_indexed",
+    "transcription": "whisper_indexed",
+}
 
 
 _SENSITIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -939,15 +943,17 @@ async def get_failed_jobs(
 ) -> FailedJobsResponse:
     """Return failed indexing jobs, aggregated by (file, kind, provider).
 
-    Spec §2.2. Excludes ``status='skipped'`` (retry would be a no-op),
-    ``status='succeeded'`` / ``status='running'`` (not actionable), and
-    rows whose ``file_id`` has no ``IndexedFile`` row (purged files
-    have no filename / drive to link to). Rows older than 7 days fall
-    out via the window cutoff.
+    Spec §2.2. Excludes groups whose latest JobRecord is no longer
+    ``failed`` (later ``succeeded`` / ``skipped`` / ``running`` rows
+    close the failure), and rows whose ``file_id`` has no
+    ``IndexedFile`` row (purged files have no filename / drive to link
+    to). Failed groups are kept indefinitely so they cannot silently
+    keep index progress below 100% after a dashboard window expires.
 
     ``attempts`` counts consecutive ``failed`` rows since the latest
-    ``succeeded`` row for the same (file_id, job_kind, provider). A
-    file that has never succeeded reports its lifetime failure count.
+    closing row for the same (file_id, job_kind, provider). A file that
+    has never succeeded or been manually skipped reports its lifetime
+    failure count.
     """
     # Clamp manually rather than relying on FastAPI's ``Query(ge=,le=)``
     # so the handler stays callable from tests that bypass the proxy.
@@ -955,21 +961,17 @@ async def get_failed_jobs(
     offset = max(0, offset)
 
     import app.database as database_mod
-    from datetime import UTC, datetime, timedelta
-
-    from sqlalchemy import func
+    from sqlalchemy import and_, func, or_
 
     from app.models import IndexedFile, JobRecord
 
-    cutoff = datetime.now(UTC) - timedelta(days=_FAILED_JOBS_WINDOW_DAYS)
-
     with database_mod.get_search_db() as session:
         # Step 1: distinct groups (file_id, job_kind, provider) ordered
-        # by their latest attempted_at — with LIMIT/OFFSET pushed into
-        # SQL so the cheap badge poll (limit=1) and large windows alike
-        # don't pay for a full table scan + Python aggregation.
+        # by their latest attempted_at. The aggregate considers every
+        # status, then the outer query keeps only groups whose latest
+        # row is still failed.
         latest_attempted = func.max(JobRecord.attempted_at).label("latest")
-        groups_query = (
+        latest_by_group = (
             session.query(
                 JobRecord.file_id,
                 JobRecord.job_kind,
@@ -977,12 +979,34 @@ async def get_failed_jobs(
                 latest_attempted,
             )
             .join(IndexedFile, IndexedFile.file_id == JobRecord.file_id)
-            .filter(
-                JobRecord.status == "failed",
-                JobRecord.attempted_at >= cutoff,
-            )
             .group_by(JobRecord.file_id, JobRecord.job_kind, JobRecord.provider)
-            .order_by(latest_attempted.desc())
+            .subquery()
+        )
+        provider_matches = or_(
+            JobRecord.provider == latest_by_group.c.provider,
+            and_(
+                JobRecord.provider.is_(None),
+                latest_by_group.c.provider.is_(None),
+            ),
+        )
+        groups_query = (
+            session.query(
+                JobRecord.file_id,
+                JobRecord.job_kind,
+                JobRecord.provider,
+                JobRecord.attempted_at.label("latest"),
+            )
+            .join(
+                latest_by_group,
+                and_(
+                    JobRecord.file_id == latest_by_group.c.file_id,
+                    JobRecord.job_kind == latest_by_group.c.job_kind,
+                    provider_matches,
+                    JobRecord.attempted_at == latest_by_group.c.latest,
+                ),
+            )
+            .filter(JobRecord.status == "failed")
+            .order_by(JobRecord.attempted_at.desc())
         )
 
         # Total = number of distinct surfaced groups. Operators read
@@ -997,7 +1021,7 @@ async def get_failed_jobs(
 
         # Step 2: hydrate only the paged groups with filename / drive /
         # latest error_class / message, then count attempts since the
-        # latest success per group.
+        # latest closing row per group.
         paged_groups = groups_query.offset(offset).limit(limit).all()
 
         items: list[FailedJobItem] = []
@@ -1028,16 +1052,16 @@ async def get_failed_jobs(
                 continue
             record, filename, drive = latest_row
 
-            # Latest success (if any) for the group — used to clamp the
-            # attempts counter to "since last success" rather than
-            # lifetime.
-            last_success_row = (
+            # Latest closing row (if any) for the group — used to clamp
+            # the attempts counter to "since last success / manual
+            # resolution" rather than lifetime.
+            last_closed_row = (
                 session.query(JobRecord.attempted_at)
                 .filter(
                     JobRecord.file_id == file_id,
                     JobRecord.job_kind == job_kind,
                     provider_filter,
-                    JobRecord.status == "succeeded",
+                    JobRecord.status.in_(("succeeded", "skipped")),
                 )
                 .order_by(JobRecord.attempted_at.desc())
                 .first()
@@ -1048,9 +1072,9 @@ async def get_failed_jobs(
                 provider_filter,
                 JobRecord.status == "failed",
             )
-            if last_success_row is not None:
+            if last_closed_row is not None:
                 attempts_query = attempts_query.filter(
-                    JobRecord.attempted_at > last_success_row[0]
+                    JobRecord.attempted_at > last_closed_row[0]
                 )
             attempts = attempts_query.scalar() or 0
 
@@ -1076,4 +1100,89 @@ async def get_failed_jobs(
         total=total,
         limit=limit,
         offset=offset,
+    )
+
+
+def _job_kind_to_resolvable_task(job_kind: str) -> str:
+    if job_kind == "transcription":
+        return "whisper"
+    if job_kind == "clip":
+        return "clip"
+    if job_kind in {"text", "text_content"}:
+        return "text"
+    if job_kind == "metadata":
+        return "metadata"
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            f"Unknown job_kind: {job_kind!r}. "
+            "Allowed: metadata, clip, transcription, text, text_content"
+        ),
+    )
+
+
+@router.post("/failed-jobs/resolve", response_model=ResolveFailedJobResponse)
+async def resolve_failed_job(
+    body: dict[str, Any] = Body(...),
+) -> ResolveFailedJobResponse:
+    """Manually close a permanently failing failed-job group.
+
+    This is the operator escape hatch for files that cannot be indexed
+    after retry (corrupt audio, unreadable media, provider-incompatible
+    payload, etc.). It marks the corresponding IndexedFile flag as done
+    so progress can reach 100%, and appends a ``status='skipped'``
+    JobRecord row instead of rewriting historical failures.
+    """
+    file_id = body.get("file_id") if isinstance(body, dict) else None
+    job_kind = body.get("job_kind") if isinstance(body, dict) else None
+    provider = body.get("provider") if isinstance(body, dict) else None
+
+    if not isinstance(file_id, str) or not file_id:
+        raise HTTPException(status_code=422, detail="file_id is required")
+    if not isinstance(job_kind, str) or not job_kind:
+        raise HTTPException(status_code=422, detail="job_kind is required")
+    if provider is not None and not isinstance(provider, str):
+        raise HTTPException(status_code=422, detail="provider must be a string or null")
+
+    task = _job_kind_to_resolvable_task(job_kind)
+    flag_column = _FAILED_JOB_TASK_FLAG_COLUMN[job_kind]
+
+    import app.database as database_mod
+    from app.models import IndexedFile, JobRecord
+
+    now = datetime.now(UTC)
+
+    with database_mod.get_search_db() as session:
+        row = (
+            session.query(IndexedFile)
+            .filter(
+                IndexedFile.file_id == file_id,
+                IndexedFile.active.is_(True),
+            )
+            .first()
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="File not indexed")
+
+        setattr(row, flag_column, True)
+        if task == "clip":
+            row.clip_thumbnail_indexed = True
+        elif task == "whisper":
+            row.tfidf_keywords_indexed = True
+
+        session.add(JobRecord(
+            file_id=file_id,
+            job_kind=job_kind,
+            provider=provider,
+            status="skipped",
+            error_class="ManuallyResolved",
+            error_message="Marked resolved from the admin failed jobs modal",
+            attempted_at=now,
+            completed_at=now,
+        ))
+
+    return ResolveFailedJobResponse(
+        status="resolved",
+        file_id=file_id,
+        task=task,
     )

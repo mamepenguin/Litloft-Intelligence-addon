@@ -490,6 +490,13 @@
                 "drive_optional": true,
                 "pre_check": {"type": "admin"},
                 "response_filter": null
+            },
+            {
+                "path": "/admin/failed-jobs/resolve",
+                "methods": ["POST"],
+                "drive_optional": true,
+                "pre_check": {"type": "admin"},
+                "response_filter": null
             }
         ]
     }

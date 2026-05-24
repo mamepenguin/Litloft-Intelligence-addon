@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import {
   AlertTriangle,
+  CheckCircle2,
   Clock,
   ExternalLink,
   Loader2,
@@ -12,7 +13,7 @@ import {
   X,
 } from "lucide-react";
 
-import { getFailedJobs, reindexFile } from "./api";
+import { getFailedJobs, reindexFile, resolveFailedJob } from "./api";
 import type { FailedJobItem, ReindexTask } from "./api";
 
 const PAGE_LIMIT = 50;
@@ -47,13 +48,20 @@ function jobKindToTask(jobKind: string): ReindexTask {
   }
 }
 
-function formatAttempted(iso: string): string {
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function formatAttempted(iso: string): { date: string; time: string | null } {
   try {
     const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    return d.toLocaleString();
+    if (Number.isNaN(d.getTime())) return { date: iso, time: null };
+    return {
+      date: `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`,
+      time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`,
+    };
   } catch {
-    return iso;
+    return { date: iso, time: null };
   }
 }
 
@@ -65,6 +73,7 @@ export default function FailedJobsModal({ open, onClose }: FailedJobsModalProps)
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
   const [retrying, setRetrying] = useState<string | null>(null);
+  const [resolving, setResolving] = useState<string | null>(null);
   const mountedRef = useRef<boolean>(true);
 
   const load = useCallback(
@@ -101,6 +110,20 @@ export default function FailedJobsModal({ open, onClose }: FailedJobsModalProps)
     load(0);
   }, [open, load]);
 
+  const removeVisibleGroup = useCallback((row: FailedJobItem) => {
+    setItems((prev) =>
+      prev.filter(
+        (it) =>
+          !(
+            it.file_id === row.file_id &&
+            it.job_kind === row.job_kind &&
+            it.provider === row.provider
+          ),
+      ),
+    );
+    setTotal((prev) => Math.max(0, prev - 1));
+  }, []);
+
   const handleRetry = useCallback(
     async (row: FailedJobItem) => {
       const task = jobKindToTask(row.job_kind);
@@ -112,19 +135,34 @@ export default function FailedJobsModal({ open, onClose }: FailedJobsModalProps)
         // operator can see they actually retried it. The 10 s poll on
         // IndexStatusWidget refreshes the count summary in the
         // background.
-        setItems((prev) =>
-          prev.filter(
-            (it) =>
-              !(it.file_id === row.file_id && it.job_kind === row.job_kind),
-          ),
-        );
+        removeVisibleGroup(row);
       } catch {
         // Leave the row in place — next poll will re-fetch.
       } finally {
         setRetrying(null);
       }
     },
-    [],
+    [removeVisibleGroup],
+  );
+
+  const handleResolve = useCallback(
+    async (row: FailedJobItem) => {
+      const key = `${row.file_id}:${row.job_kind}:${row.provider ?? "none"}`;
+      setResolving(key);
+      try {
+        await resolveFailedJob({
+          file_id: row.file_id,
+          job_kind: row.job_kind,
+          provider: row.provider,
+        });
+        removeVisibleGroup(row);
+      } catch {
+        // Leave the row in place — next poll will re-fetch.
+      } finally {
+        setResolving(null);
+      }
+    },
+    [removeVisibleGroup],
   );
 
   const handlePrev = useCallback(() => {
@@ -212,7 +250,7 @@ export default function FailedJobsModal({ open, onClose }: FailedJobsModalProps)
           ) : (
             <div className="p-2 sm:p-3">
               <div
-                className="mb-2 hidden grid-cols-[24px_minmax(112px,1.2fr)_minmax(66px,0.62fr)_minmax(78px,0.74fr)_minmax(92px,0.78fr)_minmax(144px,1.15fr)_minmax(46px,0.42fr)_minmax(112px,0.85fr)_minmax(86px,0.72fr)] gap-2 px-2 text-[11px] font-semibold uppercase text-text-muted lg:grid"
+                className="mb-2 hidden grid-cols-[24px_minmax(112px,1.2fr)_minmax(66px,0.62fr)_minmax(78px,0.74fr)_minmax(92px,0.78fr)_minmax(136px,1.08fr)_minmax(46px,0.42fr)_minmax(108px,0.82fr)_minmax(104px,0.78fr)] gap-2 px-2 text-[11px] font-semibold uppercase text-text-muted lg:grid"
               >
                 <span
                   aria-hidden
@@ -232,11 +270,14 @@ export default function FailedJobsModal({ open, onClose }: FailedJobsModalProps)
                 {items.map((row) => {
                   const task = jobKindToTask(row.job_kind);
                   const retryKey = `${row.file_id}:${task}`;
+                  const resolveKey = `${row.file_id}:${row.job_kind}:${row.provider ?? "none"}`;
                   const isRetrying = retrying === retryKey;
+                  const isResolving = resolving === resolveKey;
+                  const attempted = formatAttempted(row.attempted_at);
                   return (
                     <li
                       key={`${row.file_id}:${row.job_kind}:${row.provider ?? "none"}`}
-                      className="grid grid-cols-[24px_minmax(0,1fr)] gap-x-3 gap-y-3 rounded-xl border border-bg-border bg-bg-card p-3 text-sm text-text-primary transition-colors hover:bg-bg-elevated/60 lg:grid-cols-[24px_minmax(112px,1.2fr)_minmax(66px,0.62fr)_minmax(78px,0.74fr)_minmax(92px,0.78fr)_minmax(144px,1.15fr)_minmax(46px,0.42fr)_minmax(112px,0.85fr)_minmax(86px,0.72fr)] lg:items-start lg:gap-x-2 lg:p-2 lg:text-xs"
+                      className="grid grid-cols-[24px_minmax(0,1fr)] gap-x-3 gap-y-3 rounded-xl border border-bg-border bg-bg-card p-3 text-sm text-text-primary transition-colors hover:bg-bg-elevated/60 lg:grid-cols-[24px_minmax(112px,1.2fr)_minmax(66px,0.62fr)_minmax(78px,0.74fr)_minmax(92px,0.78fr)_minmax(136px,1.08fr)_minmax(46px,0.42fr)_minmax(108px,0.82fr)_minmax(104px,0.78fr)] lg:items-start lg:gap-x-2 lg:p-2 lg:text-xs"
                     >
                       <span
                         className="h-full"
@@ -287,10 +328,21 @@ export default function FailedJobsModal({ open, onClose }: FailedJobsModalProps)
                         className="col-start-2 min-w-0 text-xs text-text-muted lg:col-auto"
                         title={row.attempted_at}
                       >
-                        <span className="inline-flex max-w-full items-center gap-1.5">
-                          <Clock size={13} className="shrink-0" aria-hidden />
-                          <span className="truncate">
-                            {formatAttempted(row.attempted_at)}
+                        <span className="inline-flex max-w-full items-start gap-1.5">
+                          <Clock
+                            size={13}
+                            className="mt-0.5 shrink-0"
+                            aria-hidden
+                          />
+                          <span className="leading-tight tabular-nums">
+                            <span className="block whitespace-nowrap">
+                              {attempted.date}
+                            </span>
+                            {attempted.time && (
+                              <span className="block whitespace-nowrap">
+                                {attempted.time}
+                              </span>
+                            )}
                           </span>
                         </span>
                       </div>
@@ -298,7 +350,7 @@ export default function FailedJobsModal({ open, onClose }: FailedJobsModalProps)
                         <button
                           type="button"
                           onClick={() => handleRetry(row)}
-                          disabled={isRetrying}
+                          disabled={isRetrying || isResolving}
                           className="inline-flex h-7 items-center gap-1.5 rounded-xl bg-sand px-2.5 text-xs font-semibold text-text-primary transition-colors hover:bg-sand-hover disabled:opacity-50"
                           aria-label={t("retry")}
                         >
@@ -312,6 +364,24 @@ export default function FailedJobsModal({ open, onClose }: FailedJobsModalProps)
                             <RefreshCw size={13} aria-hidden />
                           )}
                           {t("retry")}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleResolve(row)}
+                          disabled={isRetrying || isResolving}
+                          className="inline-flex h-7 items-center gap-1 whitespace-nowrap rounded-xl px-2 text-[11px] font-semibold text-accent-teal transition-colors hover:bg-accent-teal/10 disabled:opacity-50"
+                          aria-label={t("resolve")}
+                        >
+                          {isResolving ? (
+                            <Loader2
+                              size={13}
+                              className="animate-spin"
+                              aria-hidden
+                            />
+                          ) : (
+                            <CheckCircle2 size={13} aria-hidden />
+                          )}
+                          {t("resolve")}
                         </button>
                         <Link
                           href={`/drive/${encodeURIComponent(row.drive)}/file/${row.file_id}`}

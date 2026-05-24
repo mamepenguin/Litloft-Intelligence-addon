@@ -34,6 +34,7 @@
       "title": "Failed jobs",
       "countBadge": "{count}",
       "retry": "Retry",
+      "resolve": "Exclude",
       "details": "Details",
       "attemptsValue": "{count}x",
       "pagination": "{from}-{to} of {total}",
