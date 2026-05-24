@@ -32,7 +32,7 @@ from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.database import Base  # noqa: E402
-from app.models import IndexedFile  # noqa: E402,F401
+from app.models import IndexedFile, TranscriptChunk  # noqa: E402,F401
 
 
 @pytest.fixture()
@@ -292,3 +292,49 @@ class TestReconcileDriftDetection:
         assert row.active is False
         assert row.file_path == "/drives/drive1/旧/x.mp4"
         s.close()
+
+
+class TestLoftTempAudioReset:
+    def test_temp_audio_resets_even_when_loft_already_has_chunks(
+        self, patched, tmp_path
+    ):
+        SearchSession, _ = patched
+        loft = tmp_path / "movie.loft"
+        temp_audio = tmp_path / "movie.stt_temp.m4a"
+        loft.write_text("{}", encoding="utf-8")
+        temp_audio.write_bytes(b"audio")
+
+        _seed_indexed(
+            SearchSession,
+            file_id="loft1",
+            mime_type="application/vnd.litloft.loft+json",
+            file_path=str(loft),
+            whisper_indexed=True,
+        )
+        s = SearchSession()
+        try:
+            s.add(
+                TranscriptChunk(
+                    file_id="loft1",
+                    chunk_index=0,
+                    text="existing vtt chunk",
+                    language="ja",
+                    timestamp_start=0.0,
+                    timestamp_end=1.0,
+                )
+            )
+            s.commit()
+        finally:
+            s.close()
+
+        from app.indexer import IndexManager
+
+        manager = IndexManager.__new__(IndexManager)
+        manager._reset_loft_refs_with_new_vtt()
+
+        s = SearchSession()
+        try:
+            row = s.query(IndexedFile).filter_by(file_id="loft1").one()
+            assert row.whisper_indexed is False
+        finally:
+            s.close()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from contextlib import contextmanager
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -28,6 +28,7 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.database import Base  # noqa: E402
 from app.models import IndexedFile, JobRecord  # noqa: E402
+from app.workers.transcription import FatalError, ProviderCapabilities  # noqa: E402
 
 
 @pytest.fixture()
@@ -75,13 +76,19 @@ def patched_db(monkeypatch, search_engine):
     return Session
 
 
-def _seed_file(Session, *, file_id: str, mime_type: str) -> None:
+def _seed_file(
+    Session,
+    *,
+    file_id: str,
+    mime_type: str,
+    file_path: str | None = None,
+) -> None:
     s = Session()
     s.add(IndexedFile(
         file_id=file_id,
         drive="d1",
         filename=f"{file_id}.bin",
-        file_path=f"/drives/d1/{file_id}.bin",
+        file_path=file_path or f"/drives/d1/{file_id}.bin",
         file_type="other",
         mime_type=mime_type,
         file_size=1000,
@@ -197,3 +204,93 @@ async def test_audio_opus_is_transcribable(patched_db, monkeypatch) -> None:
         s.close()
     # Reached past the mime check: no skipped row written either.
     assert records == []
+
+
+@pytest.mark.asyncio
+async def test_loft_temp_audio_uses_provider_path_and_deletes_on_success(
+    patched_db, tmp_path, monkeypatch
+) -> None:
+    from app.workers import whisper as whisper_module
+
+    loft = tmp_path / "video.loft"
+    temp_audio = tmp_path / "video.stt_temp.m4a"
+    loft.write_text("{}", encoding="utf-8")
+    temp_audio.write_bytes(b"audio")
+    _seed_file(
+        patched_db,
+        file_id="f00000000013",
+        mime_type=whisper_module.LOFT_MIME,
+        file_path=str(loft),
+    )
+
+    provider = MagicMock()
+    provider.name = "fake"
+    provider.capabilities = ProviderCapabilities(
+        sends_audio_offhost=False,
+        supports_diarization=False,
+        supports_hotwords=False,
+        supports_word_timestamps=True,
+    )
+    provider.transcribe = AsyncMock(return_value=[])
+
+    with (
+        patch.object(whisper_module, "get_provider", return_value=provider),
+        patch.object(whisper_module, "validate_file_path", return_value=True),
+        patch(
+            "app.policy_client.is_feature_enabled",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        result = await whisper_module.index_whisper("f00000000013")
+
+    assert result is True
+    provider.transcribe.assert_awaited_once()
+    assert provider.transcribe.await_args.args[0] == str(temp_audio)
+    assert not temp_audio.exists()
+
+
+@pytest.mark.asyncio
+async def test_loft_temp_audio_deletes_on_provider_failure(
+    patched_db, tmp_path
+) -> None:
+    from app.workers import whisper as whisper_module
+
+    loft = tmp_path / "broken.loft"
+    temp_audio = tmp_path / "broken.stt_temp.m4a"
+    loft.write_text("{}", encoding="utf-8")
+    temp_audio.write_bytes(b"audio")
+    _seed_file(
+        patched_db,
+        file_id="f00000000014",
+        mime_type=whisper_module.LOFT_MIME,
+        file_path=str(loft),
+    )
+
+    provider = MagicMock()
+    provider.name = "fake"
+    provider.capabilities = ProviderCapabilities(
+        sends_audio_offhost=False,
+        supports_diarization=False,
+        supports_hotwords=False,
+        supports_word_timestamps=True,
+    )
+    provider.transcribe = AsyncMock(side_effect=FatalError("boom"))
+
+    with (
+        patch.object(whisper_module, "get_provider", return_value=provider),
+        patch.object(whisper_module, "validate_file_path", return_value=True),
+        patch(
+            "app.policy_client.is_feature_enabled",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        result = await whisper_module.index_whisper("f00000000014")
+
+    assert result is False
+    assert not temp_audio.exists()
+    s = patched_db()
+    try:
+        file = s.query(IndexedFile).filter_by(file_id="f00000000014").one()
+        assert file.whisper_indexed is True
+    finally:
+        s.close()

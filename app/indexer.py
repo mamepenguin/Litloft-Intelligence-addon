@@ -522,12 +522,15 @@ class IndexManager:
         return added
 
     def _reset_loft_refs_with_new_vtt(self) -> None:
-        """Reset whisper_indexed for loft refs that gained VTT since last index.
+        """Reset whisper_indexed for loft refs that gained VTT or temp audio.
 
         When caption download fails initially, the loft ref is marked
         whisper_indexed=True with no TranscriptChunks. If captions are
-        later downloaded (via retry or refresh), this resets the flag
-        so _resume_incomplete will re-queue them.
+        later downloaded (via retry or refresh), this resets the flag so
+        _resume_incomplete will re-queue them. Media Import can also place
+        an adjacent ``*.stt_temp.m4a`` after the loft has already been
+        indexed; that temp audio intentionally wins even if VTT chunks
+        already exist (manual/always STT).
         """
         with get_search_db() as session:
             loft_refs = (
@@ -542,6 +545,18 @@ class IndexManager:
 
             reset_count = 0
             for f in loft_refs:
+                # Temp STT audio is an explicit request from Media Import
+                # and must re-run even when the loft already has VTT chunks.
+                from pathlib import Path
+                loft_path = Path(f.file_path)
+                stem = loft_path.stem
+                parent = loft_path.parent
+                temp_audio = parent / f"{stem}.stt_temp.m4a"
+                if temp_audio.is_file():
+                    f.whisper_indexed = False
+                    reset_count += 1
+                    continue
+
                 has_chunks = (
                     session.query(TranscriptChunk)
                     .filter_by(file_id=f.file_id)
@@ -552,17 +567,13 @@ class IndexManager:
                     continue
 
                 # Check if VTT file now exists on disk
-                from pathlib import Path
-                loft_path = Path(f.file_path)
-                stem = loft_path.stem
-                parent = loft_path.parent
                 if any(parent.glob(f"{stem}*.vtt")):
                     f.whisper_indexed = False
                     reset_count += 1
 
             if reset_count:
                 logger.info(
-                    "Reset %d loft ref(s) with new VTT for re-indexing",
+                    "Reset %d loft ref(s) with new VTT/STT temp for re-indexing",
                     reset_count,
                 )
 

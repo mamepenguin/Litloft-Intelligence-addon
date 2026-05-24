@@ -109,6 +109,51 @@ TRANSCRIBABLE_TYPES = {
 
 # External source files (.loft) that use adjacent .vtt instead of Whisper
 LOFT_MIME = "application/vnd.litloft.loft+json"
+LOFT_STT_TEMP_SUFFIX = ".stt_temp.m4a"
+
+
+def _loft_stt_temp_path(file_path: str) -> str | None:
+    from pathlib import Path
+
+    loft_path = Path(file_path)
+    candidate = loft_path.parent / f"{loft_path.stem}{LOFT_STT_TEMP_SUFFIX}"
+    if candidate.is_file():
+        return str(candidate)
+    return None
+
+
+def _cleanup_loft_stt_temp(file_path: str | None) -> None:
+    if not file_path:
+        return
+    from pathlib import Path
+
+    try:
+        path = Path(file_path)
+        if path.is_file():
+            path.unlink()
+    except FileNotFoundError:
+        return
+    except Exception:
+        logger.warning("Failed to remove loft STT temp file: %s", file_path)
+
+
+def _mark_loft_stt_temp_consumed(file_id: str) -> None:
+    """Close a one-shot temp-audio attempt after provider failure.
+
+    Normal media files keep ``whisper_indexed=False`` after provider
+    failures because the source file remains available for retry. A
+    Media Import temp audio is deleted after the attempt by design; if we
+    left the flag false, the next resume pass would enqueue the .loft
+    again and the no-temp/no-VTT path would mark it indexed without the
+    failed JobRecord being the terminal state.
+    """
+    try:
+        with get_search_db() as session:
+            file = session.query(IndexedFile).filter_by(file_id=file_id).first()
+            if file is not None:
+                file.whisper_indexed = True
+    except Exception:
+        logger.exception("Failed to mark loft STT temp consumed for %s", file_id)
 
 
 def _ensure_loaded() -> tuple[object, object | None]:
@@ -754,11 +799,15 @@ async def index_whisper(file_id: str) -> bool:
             )
             return True
 
-    # External source carve-out (adjacent .vtt → not a provider call).
-    # Called outside the DB context to avoid self-deadlock on the
-    # internal write lock.
+    loft_temp_path: str | None = None
     if mime_type == LOFT_MIME:
-        return await asyncio.to_thread(_index_loft_vtt, file_id, file_path)
+        loft_temp_path = _loft_stt_temp_path(file_path)
+        if loft_temp_path is None:
+            # External source carve-out (adjacent .vtt → not a provider
+            # call). Called outside the DB context to avoid self-deadlock
+            # on the internal write lock.
+            return await asyncio.to_thread(_index_loft_vtt, file_id, file_path)
+        file_path = loft_temp_path
 
     if not validate_file_path(file_path):
         logger.error("File path validation failed for %s: %s", file_id, file_path)
@@ -846,7 +895,13 @@ async def index_whisper(file_id: str) -> bool:
             provider.name, file_id,
         )
 
-    return await _do_transcribe_and_index(file_id, file_path, drive, provider)
+    try:
+        success = await _do_transcribe_and_index(file_id, file_path, drive, provider)
+        if not success and loft_temp_path is not None:
+            await asyncio.to_thread(_mark_loft_stt_temp_consumed, file_id)
+        return success
+    finally:
+        _cleanup_loft_stt_temp(loft_temp_path)
 
 
 async def _record_failed_job(
