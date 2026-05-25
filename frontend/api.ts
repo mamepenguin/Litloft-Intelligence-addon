@@ -1578,20 +1578,19 @@ export async function getIndexDetails(
  * ``status: "already_queued"`` when every requested task was already in
  * the queue (HTTP 202 — no flag flip, no double enqueue).
  *
- * ``drive`` is optional because both callers reach this endpoint from
- * surfaces that already have the active drive — ``IndexDetailsSection``
- * runs inside a file-detail-sections slot with the drive injected, and
- * ``FailedJobsModal`` carries the row's drive. Passing it explicitly
- * keeps the X-Lit-Drive header in sync with the file's owning drive,
- * which the host proxy requires for the ``file_access`` pre-check.
+ * Both callers must pass the owning drive explicitly:
+ * ``IndexDetailsSection`` receives it from the file-detail slot, and
+ * ``FailedJobsModal`` receives it on each failed-job row. Keeping this
+ * required ensures the retry request carries ``X-Lit-Drive``, which the
+ * host proxy requires before forwarding drive-scoped addon routes.
  */
 export async function reindexFile(
   fileId: string,
   tasks: ReindexTask[] | string[],
-  drive?: string,
+  drive: string,
 ): Promise<ReindexResponse> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (drive) Object.assign(headers, driveHeaders(drive));
+  Object.assign(headers, driveHeaders(drive));
   return fetchJSON<ReindexResponse>(
     `${API_BASE}/addons/intelligence/files/${fileId}/reindex`,
     {

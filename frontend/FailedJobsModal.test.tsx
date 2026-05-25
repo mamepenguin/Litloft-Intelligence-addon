@@ -6,7 +6,7 @@
  *  1. Initial fetch of /admin/failed-jobs and rendering of every row's
  *     filename / drive / job_kind / provider / error_class.
  *  2. Per-row retry button: clicking it calls
- *     reindexFile(file_id, [<task derived from job_kind>]).
+ *     reindexFile(file_id, [<task derived from job_kind>], drive).
  *  3. Per-row "details" deep link: rendered as an SPA anchor (a real
  *     <a href>) targeting `/drive/{drive}/file/{file_id}`. The spec
  *     forbids `window.location.href` here — `<Link>` or `router.push`.
@@ -171,9 +171,10 @@ describe("FailedJobsModal — retry button", () => {
     // canonical task name. job_kind="transcription" maps to "whisper",
     // job_kind="clip" maps to "clip".
     await waitFor(() => expect(mockedReindex).toHaveBeenCalled());
-    const [calledFileId, calledTasks] = mockedReindex.mock.calls[0];
+    const [calledFileId, calledTasks, calledDrive] = mockedReindex.mock.calls[0];
     expect(calledFileId).toBe("abc12345");
     expect(calledTasks).toEqual(["whisper"]);
+    expect(calledDrive).toBe("drive1");
   });
 
   it("derives task=clip for job_kind=clip rows", async () => {
@@ -187,9 +188,10 @@ describe("FailedJobsModal — retry button", () => {
     fireEvent.click(retryBtn);
 
     await waitFor(() => expect(mockedReindex).toHaveBeenCalled());
-    const [calledFileId, calledTasks] = mockedReindex.mock.calls[0];
+    const [calledFileId, calledTasks, calledDrive] = mockedReindex.mock.calls[0];
     expect(calledFileId).toBe("def98765");
     expect(calledTasks).toEqual(["clip"]);
+    expect(calledDrive).toBe("drive2");
   });
 });
 
