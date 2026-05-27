@@ -1959,10 +1959,15 @@ def _find_similar_by_embedding(
         #    Only apply when there are enough candidates to compute
         #    a meaningful gap (>= 5); with few candidates, the absolute
         #    min_score threshold is sufficient.
+        #    Skip when top_score is very high — uniform-high scores then
+        #    mean "everything is genuinely similar" (e.g. long-running
+        #    anime series with many episodes), not a non-discriminating
+        #    embedding.
         scores = list(file_best_score.values())
         top_score = max(scores)
+        uniform_high_threshold = 0.85
 
-        if len(scores) >= 5:
+        if len(scores) >= 5 and top_score < uniform_high_threshold:
             mean_score = sum(scores) / len(scores)
             gap = top_score - mean_score
 
@@ -1988,9 +1993,10 @@ def _find_similar_by_embedding(
         #    bunched within a narrow band, the embedding doesn't
         #    meaningfully distinguish them. Use coefficient of
         #    variation (std/mean) which captures spread relative
-        #    to the score level.
+        #    to the score level. Same uniform-high carve-out as the
+        #    gap check above.
         scores = list(file_best_score.values())
-        if len(scores) >= 5:
+        if len(scores) >= 5 and top_score < uniform_high_threshold:
             s_mean = sum(scores) / len(scores)
             s_std = (sum((s - s_mean) ** 2 for s in scores) / len(scores)) ** 0.5
             cv = s_std / s_mean if s_mean > 0 else 0.0
