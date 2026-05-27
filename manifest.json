@@ -357,6 +357,7 @@
                 "path": "/find",
                 "methods": ["POST"],
                 "pre_check": {"type": "addon_feature", "feature": "rag"},
+                "timeout": 90,
                 "response_filter": null
             },
             {
