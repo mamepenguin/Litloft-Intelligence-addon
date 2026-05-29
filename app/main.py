@@ -324,8 +324,17 @@ app.include_router(admin.router)
 
 
 @app.get("/status", response_model=StatusResponse, tags=["status"])
-async def status_endpoint() -> StatusResponse:
-    """Get current service and indexing status."""
+def status_endpoint() -> StatusResponse:
+    """Get current service and indexing status.
+
+    Declared as a sync ``def`` (not ``async def``) on purpose: the body
+    issues a dozen synchronous SQLite ``COUNT`` queries via
+    ``IndexManager.get_index_status()`` plus a name-lookup query, which
+    would block the event loop and starve unrelated endpoints during
+    heavy indexing. FastAPI runs sync routes on its threadpool, so the
+    loop stays free to serve search / other addon traffic while /status
+    waits on disk.
+    """
     manager = dependencies.get_index_manager()
     index_status = manager.get_index_status()
     queue_status = manager.get_queue_status()
