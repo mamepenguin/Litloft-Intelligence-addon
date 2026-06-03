@@ -43,6 +43,13 @@ const TASK_SPECS: TaskSpec[] = [
   { task: "text", i18nKey: "text_content", icon: FileText },
 ];
 
+// .loft files are remote-URL wrappers (YouTube / Vimeo / Soundcloud).
+// Transcription uses an adjacent .vtt managed by media_import (not
+// manually retriggerable), and text extraction is auto-skipped by the
+// indexer because the mime is not in TEXT_MIMES. Neither task is
+// meaningful to show the user.
+const LOFT_MIME = "application/vnd.litloft.loft+json";
+
 /**
  * Decide whether a given task is applicable to the file's mime/type.
  *
@@ -52,9 +59,12 @@ const TASK_SPECS: TaskSpec[] = [
  * - ``metadata`` is universal (every file has metadata).
  * - ``clip`` covers image + video (CLIP can embed video frames).
  * - ``whisper`` covers audio + video (transcribable media).
+ *   .loft transcription is driven by media_import's adjacent .vtt,
+ *   not a user-facing reindex action — hidden here.
  * - ``text`` covers text/* mime types and the legacy ``text`` file_type
  *   (loft markdown, plain text, etc.). PDFs surface as
  *   ``application/pdf`` which the text pipeline also handles.
+ *   .loft is auto-skipped (mime not in TEXT_MIMES) — hidden here.
  */
 function isTaskApplicable(
   task: ReindexTask,
@@ -75,6 +85,9 @@ function isTaskApplicable(
         ft === "video"
       );
     case "whisper":
+      // .loft transcription is via adjacent .vtt (media_import), not
+      // a manually triggerable Whisper job.
+      if (mt === LOFT_MIME) return false;
       // Audio or video carries a transcribable track.
       return (
         mt.startsWith("audio/") ||
@@ -83,6 +96,9 @@ function isTaskApplicable(
         ft === "video"
       );
     case "text":
+      // .loft mime is not in TEXT_MIMES — the indexer auto-marks it
+      // done without extracting anything. Nothing to show the user.
+      if (mt === LOFT_MIME) return false;
       // text/* mime, application/pdf, video (subtitle / sidecar), audio
       // (transcript text), or the legacy "text" / "loft" file_type.
       // Hidden only for pure image files where there is no text

@@ -155,6 +155,42 @@ describe("IndexDetailsSection — render", () => {
       screen.queryByText(/CLIP|Image analysis|semanticSearch\.tasks\.clip/i),
     ).toBeNull();
   });
+
+  it("hides whisper and text for .loft files (remote URL wrappers)", async () => {
+    renderSection({
+      mimeType: "application/vnd.litloft.loft+json",
+      fileType: "video",
+    });
+    await waitFor(() => expect(mockedGet).toHaveBeenCalled());
+
+    expect(
+      screen.queryByText(
+        /Whisper|Transcription|semanticSearch\.tasks\.whisper/i,
+      ),
+    ).toBeNull();
+    expect(
+      screen.queryByText(/Text extraction|semanticSearch\.tasks\.text/i),
+    ).toBeNull();
+  });
+
+  it("still shows metadata and clip for .loft files", async () => {
+    renderSection({
+      mimeType: "application/vnd.litloft.loft+json",
+      fileType: "video",
+    });
+    await waitFor(() => expect(mockedGet).toHaveBeenCalled());
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /metadata|Metadata extraction|semanticSearch\.tasks\.metadata/i,
+        ),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(/CLIP|Image analysis|semanticSearch\.tasks\.clip/i),
+    ).toBeInTheDocument();
+  });
 });
 
 describe("IndexDetailsSection — regenerate button", () => {
