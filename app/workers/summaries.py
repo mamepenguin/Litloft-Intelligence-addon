@@ -111,8 +111,8 @@ async def _recalculate_citations(file_id: str, summary_text: str) -> None:
 _trim_to_sentence_boundary = trim_to_sentence_boundary
 
 _LANGUAGE_INSTRUCTIONS: dict[str, str] = {
-    "ja": "- Output must be in Japanese\n",
-    "en": "- Summaries must be in English\n",
+    "ja": "- Output must be in Japanese regardless of the source language\n",
+    "en": "- Summaries must be in English regardless of the source language\n",
 }
 
 # Language instructions for the detailed (Markdown long-form) summary.
@@ -120,11 +120,12 @@ _LANGUAGE_INSTRUCTIONS: dict[str, str] = {
 # style because the detailed output is user-facing prose, not a caption.
 _DETAILED_LANGUAGE_INSTRUCTIONS: dict[str, str] = {
     "ja": (
-        "- Write in Japanese with a natural, readable style. Use headings for each section\n"
+        "- Write in Japanese with a natural, readable style"
+        " regardless of the source language. Use headings for each section\n"
     ),
     "en": (
-        "- Write in English with a natural, readable style. "
-        "Use headings for each section\n"
+        "- Write in English with a natural, readable style"
+        " regardless of the source language. Use headings for each section\n"
     ),
 }
 
@@ -173,7 +174,9 @@ def _build_system_prompt() -> str:
     lang = settings.llm.output_language
     lang_line = _LANGUAGE_INSTRUCTIONS.get(
         lang,
-        f"- Output must be in {lang}\n" if lang and lang != "auto" else "",
+        f"- Output must be in {lang} regardless of the source language\n"
+        if lang and lang != "auto"
+        else "",
     )
     return render(
         "summaries/short_long_system.jinja2",
@@ -193,8 +196,8 @@ def _build_detailed_system_prompt() -> str:
     lang_line = _DETAILED_LANGUAGE_INSTRUCTIONS.get(
         lang,
         (
-            f"- Write in {lang} with a natural, readable style."
-            " Use headings for each section\n"
+            f"- Write in {lang} with a natural, readable style"
+            " regardless of the source language. Use headings for each section\n"
         )
         if lang and lang != "auto"
         else "",
