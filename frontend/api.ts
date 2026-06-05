@@ -68,7 +68,8 @@ export interface QueueTaskBreakdown {
 // Task kinds that may appear under queue.tasks. The four indexing
 // types (metadata, clip, whisper, text_content) are always present;
 // LLM-task entries (auto_tags, summaries, vision_describe,
-// transcript_refine) are only present when their worker is running.
+// transcript_refine, retrieval_keywords) are only present when their
+// worker is running.
 export type QueueTaskKind =
   | "metadata"
   | "clip"
@@ -77,7 +78,8 @@ export type QueueTaskKind =
   | "auto_tags"
   | "summaries"
   | "vision_describe"
-  | "transcript_refine";
+  | "transcript_refine"
+  | "retrieval_keywords";
 
 export interface SearchServiceStatus {
   available: boolean;

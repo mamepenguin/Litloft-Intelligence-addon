@@ -86,6 +86,9 @@
       },
       "transcript_refine": {
         "label": "AI文字起こし整形"
+      },
+      "retrieval_keywords": {
+        "label": "AI検索キーワード展開"
       }
     }
   },

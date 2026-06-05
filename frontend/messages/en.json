@@ -86,6 +86,9 @@
       },
       "transcript_refine": {
         "label": "AI transcript cleanup"
+      },
+      "retrieval_keywords": {
+        "label": "AI search keyword expansion"
       }
     }
   },
