@@ -5,6 +5,7 @@ Rules:
 - Return JSON only: {"tags": ["tag1", "tag2", ...]}
 - No duplicates with existing tags
 - Specific and useful for search
+- Avoid tags so specific to this one file that they would never apply to another file (e.g., prefer "cooking" over the specific dish name if that name won't recur elsewhere)
 - Include tags that summarize the file content
 - Tags should be short (1–3 words)
 - Output tags in Japanese
