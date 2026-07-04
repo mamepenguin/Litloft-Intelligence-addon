@@ -25,8 +25,8 @@ from collections import defaultdict
 import numpy as np
 from sqlalchemy import text as sql_text
 
-from app.database import get_litloft_db, get_search_db, get_search_engine
-from app.models import Embedding
+from app.database import get_litloft_db, get_search_engine
+from app.workers.clip_concepts import load_file_clip_vectors
 
 logger = logging.getLogger(__name__)
 
@@ -36,37 +36,26 @@ logger = logging.getLogger(__name__)
 _MIN_SUPPORT = 2
 
 
-def _average_clip_vector(file_id: str) -> np.ndarray | None:
+def _average_clip_vector(
+    file_id: str,
+    vectors: list[np.ndarray] | None = None,
+) -> np.ndarray | None:
     """Return the averaged+normalized CLIP vector for a file.
 
     Videos store one vector per extracted key frame; the average
     approximates "what does this video generally look like". Image
     files have a single vector so averaging is a no-op.
+
+    Args:
+        file_id: The file to load vectors for.
+        vectors: Optional pre-loaded CLIP vectors (see
+            ``clip_concepts.load_file_clip_vectors``). Pass this when
+            the caller already fetched the vectors for another
+            pipeline (e.g. CLIP concept scoring) to avoid a redundant
+            DB round trip; when None, this function loads them itself.
     """
-    with get_search_db() as session:
-        rows = (
-            session.query(Embedding.id)
-            .filter(
-                Embedding.file_id == file_id,
-                Embedding.embedding_type == "clip",
-            )
-            .all()
-        )
-        embedding_ids = [r.id for r in rows]
-
-    if not embedding_ids:
-        return None
-
-    vectors: list[np.ndarray] = []
-    with get_search_engine().connect() as conn:
-        for eid in embedding_ids:
-            row = conn.execute(
-                sql_text("SELECT vector FROM vec_clip WHERE embedding_id = :eid"),
-                {"eid": eid},
-            ).fetchone()
-            if row and row[0]:
-                vectors.append(np.frombuffer(row[0], dtype=np.float32))
-
+    if vectors is None:
+        vectors = load_file_clip_vectors(file_id)
     if not vectors:
         return None
 
@@ -169,6 +158,7 @@ def recommend_tags_by_similarity(
     k_neighbors: int = 20,
     top_tags: int = 10,
     min_support: int = _MIN_SUPPORT,
+    vectors: list[np.ndarray] | None = None,
 ) -> list[tuple[str, float]]:
     """Suggest tags by looking at already-tagged visually similar files.
 
@@ -183,11 +173,14 @@ def recommend_tags_by_similarity(
         top_tags: Max tag recommendations to return.
         min_support: Require at least this many neighbors to use a tag
             before it qualifies as a recommendation.
+        vectors: Optional pre-loaded CLIP vectors for this file, passed
+            through to ``_average_clip_vector`` to avoid a redundant
+            DB round trip when another pipeline already fetched them.
 
     Returns:
         List of (tag_name, confidence_score) sorted by score desc.
     """
-    query_vec = _average_clip_vector(file_id)
+    query_vec = _average_clip_vector(file_id, vectors)
     if query_vec is None:
         return []
 

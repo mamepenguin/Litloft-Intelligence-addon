@@ -25,6 +25,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+import numpy as np
 from sqlalchemy import text as sql_text
 
 from app.config import settings
@@ -33,7 +34,7 @@ from app.llm import LLMClient
 from app.models import Embedding, IndexedFile, TranscriptChunk
 from app.prompt_loader import render
 from app.tfidf import get_tfidf_keywords_for_file
-from app.workers.clip_concepts import score_file_concepts
+from app.workers.clip_concepts import load_file_clip_vectors, score_file_concepts
 from app.workers.tag_knn import recommend_tags_by_similarity
 
 logger = logging.getLogger(__name__)
@@ -347,9 +348,19 @@ def _generate_candidates(
     Failures in any single pipeline are logged and treated as empty
     signals rather than aborting the whole run — e.g. a document has
     no CLIP embeddings, which is not an error.
+
+    CLIP vectors are loaded once here and shared between the CLIP and
+    k-NN pipelines (both need the same file's vec_clip rows) instead
+    of each pipeline fetching them independently.
     """
+    clip_vectors = (
+        load_file_clip_vectors(file_id)
+        if context_type in ("image", "video")
+        else []
+    )
+
     t0 = time.perf_counter()
-    clip_tags = _safe_clip_candidates(file_id, context_type, existing_tags)
+    clip_tags = _safe_clip_candidates(file_id, context_type, existing_tags, clip_vectors)
     t_clip = time.perf_counter() - t0
 
     t0 = time.perf_counter()
@@ -357,7 +368,7 @@ def _generate_candidates(
     t_tfidf = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    knn_tags = _safe_knn_candidates(file_id, context_type, existing_tags)
+    knn_tags = _safe_knn_candidates(file_id, context_type, existing_tags, clip_vectors)
     t_knn = time.perf_counter() - t0
 
     logger.debug(
@@ -374,6 +385,7 @@ def _safe_clip_candidates(
     file_id: str,
     context_type: str,
     existing_tags: list[str],
+    vectors: list[np.ndarray] | None = None,
 ) -> list[str]:
     if context_type not in ("image", "video"):
         return []
@@ -382,6 +394,7 @@ def _safe_clip_candidates(
             file_id,
             threshold=_CLIP_THRESHOLD,
             top_k=_MAX_CLIP_CANDIDATES,
+            vectors=vectors,
         )
     except Exception as e:
         logger.warning("CLIP candidate scoring failed for %s: %s", file_id, e)
@@ -394,6 +407,7 @@ def _safe_knn_candidates(
     file_id: str,
     context_type: str,
     existing_tags: list[str],
+    vectors: list[np.ndarray] | None = None,
 ) -> list[str]:
     """Recommend tags from CLIP-similar already-tagged files.
 
@@ -409,6 +423,7 @@ def _safe_knn_candidates(
             file_id,
             k_neighbors=_KNN_NEIGHBORS,
             top_tags=_MAX_KNN_CANDIDATES,
+            vectors=vectors,
         )
     except Exception as e:
         logger.warning("k-NN tag recommendation failed for %s: %s", file_id, e)

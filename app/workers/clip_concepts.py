@@ -222,8 +222,14 @@ def check_idle_unload() -> None:
             _cached_model_key = None
 
 
-def _load_file_clip_vectors(file_id: str) -> list[np.ndarray]:
-    """Load all CLIP embeddings stored for a file from vec_clip."""
+def load_file_clip_vectors(file_id: str) -> list[np.ndarray]:
+    """Load all CLIP embeddings stored for a file from vec_clip.
+
+    Shared by both concept scoring (this module) and k-NN tag
+    recommendation (``app.workers.tag_knn``) so a file's vectors are
+    fetched from the DB once per candidate-generation pass rather than
+    once per pipeline.
+    """
     with get_search_db() as session:
         embeddings = (
             session.query(Embedding.id)
@@ -240,16 +246,19 @@ def _load_file_clip_vectors(file_id: str) -> list[np.ndarray]:
 
     from app.database import get_search_engine
 
+    placeholders = ",".join(f":id{i}" for i in range(len(embedding_ids)))
+    params = {f"id{i}": eid for i, eid in enumerate(embedding_ids)}
     vectors: list[np.ndarray] = []
     with get_search_engine().connect() as conn:
-        for eid in embedding_ids:
-            row = conn.execute(
-                sql_text("SELECT vector FROM vec_clip WHERE embedding_id = :eid"),
-                {"eid": eid},
-            ).fetchone()
-            if row and row[0]:
-                vec = np.frombuffer(row[0], dtype=np.float32)
-                vectors.append(vec)
+        rows = conn.execute(
+            sql_text(
+                f"SELECT vector FROM vec_clip WHERE embedding_id IN ({placeholders})"
+            ),
+            params,
+        ).fetchall()
+    for row in rows:
+        if row[0]:
+            vectors.append(np.frombuffer(row[0], dtype=np.float32))
     return vectors
 
 
@@ -322,6 +331,7 @@ def score_file_concepts(
     *,
     threshold: float = 0.25,
     top_k: int = 10,
+    vectors: list[np.ndarray] | None = None,
 ) -> list[tuple[str, float]]:
     """Score a file's CLIP embeddings against the concept vocabulary.
 
@@ -336,11 +346,17 @@ def score_file_concepts(
             uses the module-level cache.
         threshold: Minimum cosine similarity to consider a match.
         top_k: Max number of concepts to return.
+        vectors: Optional pre-loaded CLIP vectors for this file (see
+            ``load_file_clip_vectors``). Pass this when the caller
+            already fetched the vectors for another pipeline (e.g.
+            k-NN) to avoid a redundant DB round trip; when None, this
+            function loads them itself.
 
     Returns:
         Sorted list of (concept, max_score) tuples.
     """
-    vectors = _load_file_clip_vectors(file_id)
+    if vectors is None:
+        vectors = load_file_clip_vectors(file_id)
     if not vectors:
         return []
 

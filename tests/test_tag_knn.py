@@ -26,7 +26,7 @@ class TestRecommendTagsBySimilarity:
         neighbors = neighbors or []
         tags_by_file = tags_by_file or {}
         monkeypatch.setattr(
-            tag_knn, "_average_clip_vector", lambda fid: query_vec
+            tag_knn, "_average_clip_vector", lambda fid, vectors=None: query_vec
         )
         monkeypatch.setattr(
             tag_knn,
