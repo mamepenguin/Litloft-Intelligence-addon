@@ -226,8 +226,14 @@ class AutoTagsWorker:
         t_start = time.perf_counter()
 
         # Phase 1: always collect local candidates.
+        # CLIP/TF-IDF/k-NN scoring is CPU-bound and can take tens of
+        # seconds (e.g. TF-IDF corpus IDF rebuild across every active
+        # file). Offloaded to a thread so it doesn't block the event
+        # loop that also serves every other request in this process.
         t_cand_start = time.perf_counter()
-        candidates = _generate_candidates(file_id, context_type, existing_tags)
+        candidates = await asyncio.to_thread(
+            _generate_candidates, file_id, context_type, existing_tags
+        )
         t_cand = time.perf_counter() - t_cand_start
 
         # Phase 2: produce the final tag list.
