@@ -1558,7 +1558,8 @@ function EditTextarea({
         value={draft}
         onChange={(e) => onDraftChange(e.target.value)}
         rows={Math.max(4, draft.split("\n").length + 1)}
-        className="block w-full resize-y rounded-lg border border-bg-border bg-bg-card px-2 py-2 font-mono text-xs text-text-primary outline-none focus:border-focus-ring-teal"
+        spellCheck={false}
+        className="block w-full resize-y rounded-lg border border-bg-border bg-bg-card px-3 py-2.5 font-mono text-[13.5px] leading-relaxed text-text-primary outline-none focus:border-focus-ring-teal"
       />
       <div className="mt-2 flex items-center gap-2">
         <button
