@@ -158,7 +158,7 @@ async def get_file_detail(
     # Access gate: untrusted LLM input cannot reach the host's Internal
     # API for a file the viewer cannot see. Mirrors the 404-not-403
     # existence-hiding rule (design-decisions.md).
-    allowed = await ensure_access([file_id], lit_token=context.lit_token)
+    allowed = await ensure_access([file_id], credential=context.credential)
     if file_id not in allowed:
         return ToolResultEnvelope(
             payload={"file_id": file_id, "error": "not_found"},

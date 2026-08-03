@@ -61,7 +61,7 @@ async def get_related_files(
         )
 
     # Access gate on the **input** file_id.
-    allowed_in = await ensure_access([file_id], lit_token=context.lit_token)
+    allowed_in = await ensure_access([file_id], credential=context.credential)
     if file_id not in allowed_in:
         return ToolResultEnvelope(
             payload={"file_id": file_id, "relations": [], "error": "not_found"},
@@ -159,7 +159,7 @@ async def get_related_files(
     # (the same-drive constraint is enforced on create but not on read).
     # Without this filter the citation allow-list would leak cross-drive.
     allowed_out = await ensure_access(
-        candidate_ids, lit_token=context.lit_token
+        candidate_ids, credential=context.credential
     )
     relations = [r for r in raw_relations if r["file_id"] in allowed_out]
 

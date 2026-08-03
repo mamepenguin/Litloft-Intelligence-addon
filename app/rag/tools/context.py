@@ -4,7 +4,7 @@ The ``ToolContext`` is a mutable scratch area threaded through every
 tool call within a single ``run_agentic_loop`` invocation. It carries
 the inputs the loop needs to enforce invariants the LLM cannot:
 
-* ``drive`` / ``viewer_id`` / ``lit_token`` — request identity used by
+* ``drive`` / ``viewer_id`` / ``credential`` — request identity used by
   ``search_files`` and by access-control filtering.
 * ``tool_returned_file_ids`` — the running allow-list of file_ids the
   LLM is permitted to cite. Each tool appends to this set; the loop's
@@ -29,6 +29,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.credentials import CallerCredential
 from app.rag.tools._access import ALLOW_LIST_CAP
 
 
@@ -44,7 +45,7 @@ class ToolContext:
 
     drive: str | None = None
     viewer_id: str | None = None
-    lit_token: str | None = None
+    credential: CallerCredential | None = None
     tool_returned_file_ids: set[str] = field(default_factory=set)
     tool_calls: list[str] = field(default_factory=list)
     cumulative_tokens: int = 0

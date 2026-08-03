@@ -258,7 +258,7 @@ class TestCompositionActivation:
         events = await _collect(
             stream_answer(
                 query="先週観た映画の中で SF っぽいのどれ？",
-                lit_token="t",
+                credential="t",
                 drive="movies",
                 viewer_id="x" * 16,
             )
@@ -307,7 +307,7 @@ class TestCompositionActivation:
         await _collect(
             stream_answer(
                 query="q",
-                lit_token="t",
+                credential="t",
                 drive="movies",
                 viewer_id="x" * 16,
             )
@@ -364,7 +364,7 @@ class TestCompositionActivation:
         await _collect(
             stream_answer(
                 query="q",
-                lit_token="t",
+                credential="t",
                 drive="movies",
                 viewer_id="x" * 16,  # provided but feature off
             )
@@ -426,7 +426,7 @@ class TestIntersectionOrdering:
         await _collect(
             stream_answer(
                 query="q",
-                lit_token="t",
+                credential="t",
                 drive="movies",
                 viewer_id="x" * 16,
             )
@@ -494,7 +494,7 @@ class TestBypassFallback:
         events = await _collect(
             stream_answer(
                 query="q",
-                lit_token="t",
+                credential="t",
                 drive="movies",
                 viewer_id="x" * 16,
             )
@@ -546,7 +546,7 @@ class TestBypassFallback:
         await _collect(
             stream_answer(
                 query="q",
-                lit_token="t",
+                credential="t",
                 drive="movies",
                 viewer_id="x" * 16,
             )
@@ -603,7 +603,7 @@ class TestBypassFallback:
         events = await _collect(
             stream_answer(
                 query="q",
-                lit_token="t",
+                credential="t",
                 drive="movies",
                 viewer_id="x" * 16,
             )
@@ -660,7 +660,7 @@ class TestMinDriveFilesGuard:
         events = await _collect(
             stream_answer(
                 query="q",
-                lit_token="t",
+                credential="t",
                 drive="movies",
                 viewer_id="x" * 16,
             )
@@ -731,7 +731,7 @@ class TestStageCNotInvokedOnComposedPath:
         await _collect(
             stream_answer(
                 query="q",
-                lit_token="t",
+                credential="t",
                 drive="movies",
                 viewer_id="x" * 16,
             )
@@ -797,7 +797,7 @@ class TestComposedPathSSEOrder:
         events = await _collect(
             stream_answer(
                 query="先週観た映画",
-                lit_token="t",
+                credential="t",
                 drive="movies",
                 viewer_id="x" * 16,
             )
@@ -875,7 +875,7 @@ class TestFallbackFullSearchPreservesPreScope:
         await _collect(
             stream_answer(
                 query="q",
-                lit_token="t",
+                credential="t",
                 drive="movies",
                 viewer_id="x" * 16,
             )

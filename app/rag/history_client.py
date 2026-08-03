@@ -78,10 +78,10 @@ async def fetch_viewer_history(
     """Return file_ids the viewer has (or hasn't) touched in this drive.
 
     Args:
-        viewer_id: 16-char SHA-256 prefix produced by the host's
-            ``nickname_to_viewer_id``. The host re-validates the format
-            and 400s on a malformed value; we let that bubble back as
-            an empty result rather than retrying.
+        viewer_id: 16-char SHA-256 prefix produced by the host from
+            the caller's viewer nickname. The host re-validates the
+            format and 400s on a malformed value; we let that bubble
+            back as an empty result rather than retrying.
         drive: Canonical drive name. Same value the request's
             ``X-Lit-Drive`` carries.
         after / before: Half-open ``[after, before)`` window over

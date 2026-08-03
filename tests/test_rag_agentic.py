@@ -170,7 +170,7 @@ def test_compute_token_budget_floor() -> None:
 
 @pytest.fixture
 def _fake_tools(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_search(*, context, query, top_k=10, lit_token=None):
+    async def fake_search(*, context, query, top_k=10, credential=None):
         context.register_tool_call("search_files")
         context.register_file_ids(["FID1"])
         return ToolResultEnvelope(
@@ -386,7 +386,7 @@ async def test_loop_budget_exhausted_triggers_forced_answer(
     """Cumulative-token budget triggers forced answer before
     max_tool_calls."""
 
-    async def big_search(*, context, query, top_k=10, lit_token=None):
+    async def big_search(*, context, query, top_k=10, credential=None):
         context.register_tool_call("search_files")
         context.register_file_ids(["FID1"])
         # Crash through the budget on the first call.

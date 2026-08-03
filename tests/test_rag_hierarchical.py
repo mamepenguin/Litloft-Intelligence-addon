@@ -158,7 +158,7 @@ class TestHierarchicalDisabled:
         )
 
         events = await _collect(
-            stream_answer(query="q", lit_token="t", drive="Videos")
+            stream_answer(query="q", credential="t", drive="Videos")
         )
 
         coarse_spy.assert_not_awaited()
@@ -192,7 +192,7 @@ class TestHierarchicalNoDrive:
         )
 
         events = await _collect(
-            stream_answer(query="q", lit_token="t", drive=None)
+            stream_answer(query="q", credential="t", drive=None)
         )
 
         coarse_spy.assert_not_awaited()
@@ -239,7 +239,7 @@ class TestHierarchicalScoped:
         )
 
         events = await _collect(
-            stream_answer(query="q", lit_token="t", drive="Videos")
+            stream_answer(query="q", credential="t", drive="Videos")
         )
 
         retrieve_spy.assert_awaited_once()
@@ -301,7 +301,7 @@ class TestHierarchicalScoped:
         )
 
         events = await _collect(
-            stream_answer(query="q", lit_token="t", drive="Videos")
+            stream_answer(query="q", credential="t", drive="Videos")
         )
 
         # Scoped call carries only the accessible ids (order preserved).
@@ -359,7 +359,7 @@ class TestHierarchicalScoped:
         )
 
         events = await _collect(
-            stream_answer(query="q", lit_token="t", drive="Videos")
+            stream_answer(query="q", credential="t", drive="Videos")
         )
 
         # Fallback to unscoped retrieval (no file_id_scope kwarg).
@@ -403,7 +403,7 @@ class TestHierarchicalBypass:
         )
 
         events = await _collect(
-            stream_answer(query="q", lit_token="t", drive="Tiny")
+            stream_answer(query="q", credential="t", drive="Tiny")
         )
 
         kwargs = retrieve_spy.await_args.kwargs
@@ -437,7 +437,7 @@ class TestHierarchicalBypass:
         )
 
         events = await _collect(
-            stream_answer(query="q", lit_token="t", drive="Videos")
+            stream_answer(query="q", credential="t", drive="Videos")
         )
 
         kwargs = retrieve_spy.await_args.kwargs
@@ -471,7 +471,7 @@ class TestHierarchicalBypass:
         )
 
         events = await _collect(
-            stream_answer(query="q", lit_token="t", drive="Videos")
+            stream_answer(query="q", credential="t", drive="Videos")
         )
 
         kwargs = retrieve_spy.await_args.kwargs
@@ -518,7 +518,7 @@ class TestHierarchicalFallbackMerge:
         )
 
         events = await _collect(
-            stream_answer(query="q", lit_token="t", drive="Videos")
+            stream_answer(query="q", credential="t", drive="Videos")
         )
 
         assert retrieve_spy.await_count == 2
@@ -581,7 +581,7 @@ class TestHierarchicalClueGeneration:
         )
 
         events = await _collect(
-            stream_answer(query="q", lit_token="t", drive="Videos")
+            stream_answer(query="q", credential="t", drive="Videos")
         )
 
         kinds = [e.kind for e in events]
@@ -647,7 +647,7 @@ class TestHierarchicalClueGeneration:
         )
 
         await _collect(
-            stream_answer(query="q", lit_token="t", drive="Videos")
+            stream_answer(query="q", credential="t", drive="Videos")
         )
 
         # 3 scoped calls. Fallback unscoped pass MAY also fire because
@@ -717,7 +717,7 @@ class TestHierarchicalClueGeneration:
         )
 
         events = await _collect(
-            stream_answer(query="q", lit_token="t", drive="Videos")
+            stream_answer(query="q", credential="t", drive="Videos")
         )
 
         sources_event = next(e for e in events if e.kind == "sources")
@@ -766,7 +766,7 @@ class TestHierarchicalClueGeneration:
         )
 
         events = await _collect(
-            stream_answer(query="q", lit_token="t", drive="Videos")
+            stream_answer(query="q", credential="t", drive="Videos")
         )
 
         scoped_calls = [

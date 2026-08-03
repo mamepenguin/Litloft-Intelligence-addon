@@ -27,10 +27,11 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from app.config import settings
+from app.credentials import CallerCredential
 from app.dependencies import get_llm_client
 from app.drive_context import require_drive
 from app.rag.service import (
@@ -146,9 +147,19 @@ def _format_sse_event(event: AnswerEvent) -> str:
     return f"event: {event.kind}\ndata: {payload}\n\n"
 
 
+def _caller_credential(
+    request: Request | None, access_token: str | None
+) -> CallerCredential:
+    if request is not None:
+        return CallerCredential.from_request(request)
+    if access_token:
+        return CallerCredential(cookie=f"access_token={access_token}")
+    return CallerCredential()
+
+
 async def _sse_stream(
     query: str,
-    access_token: str | None,
+    credential: CallerCredential | None,
     top_k: int | None,
     file_type: str | None,
     drive: str | None,
@@ -172,7 +183,7 @@ async def _sse_stream(
     try:
         async for event in stream_answer(
             query=query,
-            lit_token=access_token,
+            credential=credential,
             top_k=top_k,
             file_type=file_type,
             drive=drive,
@@ -204,7 +215,8 @@ async def _sse_stream(
 @router.post("/ask")
 async def ask_endpoint(
     body: AskRequest,
-    access_token: Annotated[str | None, Cookie()] = None,
+    request: Request = None,
+    access_token: str | None = None,
     drive: str = Depends(require_drive),
     viewer_id: Annotated[
         str | None, Header(alias="X-Lit-Viewer-Id")
@@ -277,9 +289,10 @@ async def ask_endpoint(
     # block; any failure BEFORE the StreamingResponse is constructed
     # must release the slot manually.
     try:
+        credential = _caller_credential(request, access_token)
         generator = _sse_stream(
             query=body.query,
-            access_token=access_token,
+            credential=credential,
             top_k=body.top_k,
             file_type=body.file_type,
             drive=drive,
@@ -299,7 +312,8 @@ async def ask_endpoint(
 @router.post("/find")
 async def find_endpoint(
     body: FindRequest,
-    access_token: Annotated[str | None, Cookie()] = None,
+    request: Request = None,
+    access_token: str | None = None,
     drive: str = Depends(require_drive),
     viewer_id: Annotated[
         str | None, Header(alias="X-Lit-Viewer-Id")
@@ -352,10 +366,12 @@ async def find_endpoint(
         )
 
     try:
+        credential = _caller_credential(request, access_token)
         return await find_files(
             question=body.question,
             drive=drive,
             viewer_id=viewer_id,
+            credential=credential,
             overrides=body.overrides,
             limit=body.limit,
         )

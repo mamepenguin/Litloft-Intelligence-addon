@@ -274,7 +274,7 @@ class TestStreamAnswerPersonalHistoryEvents:
         events = []
         async for evt in service_mod.stream_answer(
             query="先週観た映画",
-            lit_token=None,
+            credential=None,
             viewer_id="x" * 16,
             drive="movies",
         ):
@@ -315,7 +315,7 @@ class TestStreamAnswerPersonalHistoryEvents:
         events = []
         async for evt in service_mod.stream_answer(
             query="先週観た映画",
-            lit_token=None,
+            credential=None,
             viewer_id="x" * 16,
             drive="movies",
         ):
@@ -365,7 +365,7 @@ class TestStreamAnswerPersonalHistoryEvents:
         events = []
         async for evt in service_mod.stream_answer(
             query="先週観た映画",
-            lit_token=None,
+            credential=None,
             viewer_id="x" * 16,
             drive="movies",
         ):

@@ -25,6 +25,7 @@ import asyncio
 import logging
 from typing import Any
 
+from app.credentials import CallerCredential
 from app.database import get_search_db_read
 from app.models import TranscriptChunk
 from app.rag.retriever import RetrievedFile, retrieve_with_keywords
@@ -68,7 +69,7 @@ async def search_files(
     context: ToolContext,
     query: str,
     top_k: int = 10,
-    lit_token: str | None = None,
+    credential: CallerCredential | None = None,
 ) -> ToolResultEnvelope:
     """Run hybrid retrieval and return up to ``top_k`` files.
 
@@ -88,7 +89,7 @@ async def search_files(
         top_k = 30
 
     drive = context.drive
-    token = lit_token if lit_token is not None else context.lit_token
+    token = credential if credential is not None else context.credential
 
     # Skip the LLM-driven query transform that ``retrieve_candidates``
     # would run upstream. The agentic loop's LLM has already chosen
@@ -101,7 +102,7 @@ async def search_files(
     candidates: list[RetrievedFile] = await retrieve_with_keywords(
         keywords=query,
         top_k=top_k,
-        lit_token=token,
+        credential=token,
         drive=drive,
         original_query=query,
     )

@@ -35,13 +35,13 @@ import pytest  # noqa: E402
 def _allow_all_access(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make the access gate a no-op for tests that don't override it.
 
-    The wrappers call ``ensure_access(file_ids, lit_token)`` which in
+    The wrappers call ``ensure_access(file_ids, credential)`` which in
     production hits the host's filter-file-ids endpoint. For unit
     tests we treat every requested ID as allowed; tests that exercise
     the denial path patch ``ensure_access`` explicitly.
     """
 
-    async def _allow(file_ids, lit_token=None):
+    async def _allow(file_ids, credential=None):
         return {fid for fid in file_ids if isinstance(fid, str)}
 
     monkeypatch.setattr(
@@ -360,7 +360,7 @@ async def test_get_file_chunks_access_denied_returns_not_found(
 ) -> None:
     """LLM-supplied file_id outside the viewer's access must 'not_found'."""
 
-    async def _deny(file_ids, lit_token=None):
+    async def _deny(file_ids, credential=None):
         return set()
 
     monkeypatch.setattr(
@@ -506,7 +506,7 @@ async def test_get_file_detail_access_denied_returns_not_found(
 ) -> None:
     from app.rag.tools.get_file_detail import get_file_detail
 
-    async def _deny(file_ids, lit_token=None):
+    async def _deny(file_ids, credential=None):
         return set()
 
     monkeypatch.setattr(
@@ -658,7 +658,7 @@ async def test_get_related_files_filters_cross_drive_output(
         {"id": 2, "file_id_a": "FORBIDDEN", "file_id_b": "F", "kind": "see"},
     ]
 
-    async def _access(file_ids, lit_token=None):
+    async def _access(file_ids, credential=None):
         # Input access (file_id='F') goes through; output filtered.
         ids = set(file_ids)
         return ids & {"F", "ALLOWED"}
@@ -704,7 +704,7 @@ async def test_get_related_files_access_denied(
 ) -> None:
     from app.rag.tools.get_related_files import get_related_files
 
-    async def _deny(file_ids, lit_token=None):
+    async def _deny(file_ids, credential=None):
         return set()
 
     monkeypatch.setattr(

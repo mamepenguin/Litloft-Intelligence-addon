@@ -18,6 +18,7 @@ import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from app.credentials import CallerCredential
 
 # Stub out heavy ML/image dependencies before importing app modules.
 # The retriever imports from app.search, which transitively pulls
@@ -168,7 +169,7 @@ class TestRetrieveCandidates:
         # All files accessible -> identity filter.
         monkeypatch.setattr(
             "app.rag.retriever._filter_file_ids_via_internal_api",
-            AsyncMock(side_effect=lambda file_ids, lit_token: set(file_ids)),
+            AsyncMock(side_effect=lambda file_ids, credential: set(file_ids)),
         )
         monkeypatch.setattr(
             "app.rag.retriever._get_indexed_files_meta",
@@ -178,7 +179,7 @@ class TestRetrieveCandidates:
         retrieved = await retrieve_candidates(
             query="test",
             top_k=5,
-            lit_token="token-abc",
+            credential="token-abc",
         )
 
         assert len(retrieved) == 5
@@ -200,7 +201,7 @@ class TestRetrieveCandidates:
         )
 
         await retrieve_candidates(
-            query="q", top_k=3, lit_token=None
+            query="q", top_k=3, credential=None
         )
 
         # search() was called with limit=top_k. Accept either kwarg or
@@ -231,7 +232,7 @@ class TestRetrieveCandidates:
         )
 
         await retrieve_candidates(
-            query="a natural question", top_k=5, lit_token=None
+            query="a natural question", top_k=5, credential=None
         )
 
         kwargs = search_spy.call_args.kwargs
@@ -271,7 +272,7 @@ class TestRetrieveCandidates:
         await retrieve_candidates(
             query="why does the 共通点 matter?",
             top_k=5,
-            lit_token=None,
+            credential=None,
         )
 
         # First positional arg to search() is the query string — we
@@ -306,7 +307,7 @@ class TestRetrieveCandidates:
         await retrieve_with_keywords(
             keywords="verbatim keywords",
             top_k=5,
-            lit_token=None,
+            credential=None,
         )
 
         # Transform never invoked.
@@ -332,7 +333,7 @@ class TestRetrieveCandidates:
         await retrieve_candidates(
             query="q",
             top_k=5,
-            lit_token=None,
+            credential=None,
             file_type="document",
             drive="Docs",
         )
@@ -367,7 +368,7 @@ class TestRetrieveCandidates:
         retrieved = await retrieve_candidates(
             query="test",
             top_k=10,
-            lit_token="valid-token",
+            credential="valid-token",
         )
 
         file_ids = [r.file_id for r in retrieved]
@@ -399,18 +400,19 @@ class TestRetrieveCandidates:
         await retrieve_candidates(
             query="test",
             top_k=5,
-            lit_token="my-secret-token",
+            credential=CallerCredential(cookie="access_token=my-secret-token"),
         )
 
-        # The lit_token kwarg (or positional) should match.
+        # The credential kwarg (or positional) should match.
+        expected = CallerCredential(cookie="access_token=my-secret-token")
         call_kwargs = filter_spy.call_args.kwargs
-        assert call_kwargs.get("lit_token") == "my-secret-token" or (
-            "my-secret-token" in filter_spy.call_args.args
+        assert call_kwargs.get("credential") == expected or (
+            expected in filter_spy.call_args.args
         )
 
     @pytest.mark.asyncio
-    async def test_handles_none_lit_token(self, monkeypatch):
-        """T3: lit_token=None must not crash; access filter still runs."""
+    async def test_handles_none_credential(self, monkeypatch):
+        """T3: credential=None must not crash; access filter still runs."""
         filter_spy = AsyncMock(return_value={"f1"})
         monkeypatch.setattr(
             "app.rag.retriever.search",
@@ -429,7 +431,7 @@ class TestRetrieveCandidates:
         retrieved = await retrieve_candidates(
             query="test",
             top_k=5,
-            lit_token=None,
+            credential=None,
         )
 
         # The filter function should be invoked exactly once even when
@@ -456,7 +458,7 @@ class TestRetrieveCandidates:
         )
 
         retrieved = await retrieve_candidates(
-            query="q", top_k=5, lit_token="token"
+            query="q", top_k=5, credential="token"
         )
 
         assert retrieved == []
@@ -486,7 +488,7 @@ class TestRetrieveCandidates:
         )
 
         retrieved = await retrieve_candidates(
-            query="test", top_k=5, lit_token="token"
+            query="test", top_k=5, credential="token"
         )
 
         assert len(retrieved) == 1
@@ -522,7 +524,7 @@ class TestRetrieveCandidates:
         )
 
         retrieved = await retrieve_candidates(
-            query="test", top_k=5, lit_token="token"
+            query="test", top_k=5, credential="token"
         )
 
         assert len(retrieved) == 1
@@ -611,7 +613,7 @@ class TestFilterFileIdsContract:
 
         class _FakeClient:
             def __init__(self, *args, **kwargs):
-                self.cookies_captured = kwargs.get("cookies", {})
+                self.headers_captured = kwargs.get("headers", {})
 
             async def __aenter__(self):
                 return self
@@ -634,7 +636,7 @@ class TestFilterFileIdsContract:
 
         result = await _filter_file_ids_via_internal_api(
             file_ids=["f1", "f2", "f3"],
-            lit_token="jwt-value",
+            credential=CallerCredential(cookie="access_token=jwt-value"),
         )
 
         assert result == {"f1", "f2"}
@@ -644,13 +646,12 @@ class TestFilterFileIdsContract:
         assert _FakeClient.last_json == {"file_ids": ["f1", "f2", "f3"]}
 
     @pytest.mark.asyncio
-    async def test_forwards_access_token_cookie(self, monkeypatch):
-        """Auth must be transmitted as an ``access_token`` cookie.
+    async def test_forwards_caller_credential_headers(self, monkeypatch):
+        """Auth must be transmitted in the caller credential shape.
 
-        The host's ``get_unlocked_groups`` dependency reads the
-        ``access_token`` cookie via ``request.cookies.get`` — NOT a
-        custom header. The retriever must configure httpx.AsyncClient
-        with ``cookies={"access_token": <jwt>}``.
+        Browser callers forward Cookie and non-browser callers forward
+        Authorization: Bearer. The retriever must not normalize Bearer
+        credentials to cookies.
         """
         from app.rag.retriever import _filter_file_ids_via_internal_api
 
@@ -663,7 +664,7 @@ class TestFilterFileIdsContract:
 
         class _FakeClient:
             def __init__(self, *args, **kwargs):
-                captured["cookies"] = kwargs.get("cookies")
+                captured["headers"] = kwargs.get("headers")
 
             async def __aenter__(self):
                 return self
@@ -680,14 +681,14 @@ class TestFilterFileIdsContract:
 
         await _filter_file_ids_via_internal_api(
             file_ids=["f1"],
-            lit_token="my-jwt",
+            credential=CallerCredential(bearer="my-jwt"),
         )
 
-        assert captured["cookies"] == {"access_token": "my-jwt"}
+        assert captured["headers"] == {"Authorization": "Bearer my-jwt"}
 
     @pytest.mark.asyncio
-    async def test_no_cookie_when_token_none(self, monkeypatch):
-        """When ``lit_token`` is None, the cookie dict must be empty.
+    async def test_no_headers_when_credential_none(self, monkeypatch):
+        """When ``credential`` is None, the headers dict must be empty.
 
         An empty cookies dict causes the host's ``get_unlocked_groups``
         dependency to return ``[]`` — i.e., the caller is treated as
@@ -702,7 +703,7 @@ class TestFilterFileIdsContract:
 
         class _FakeClient:
             def __init__(self, *args, **kwargs):
-                captured["cookies"] = kwargs.get("cookies")
+                captured["headers"] = kwargs.get("headers")
 
             async def __aenter__(self):
                 return self
@@ -719,10 +720,10 @@ class TestFilterFileIdsContract:
 
         result = await _filter_file_ids_via_internal_api(
             file_ids=["f1"],
-            lit_token=None,
+            credential=None,
         )
 
-        assert captured["cookies"] == {}
+        assert captured["headers"] == {}
         assert result == set()
 
     @pytest.mark.asyncio
@@ -764,7 +765,7 @@ class TestFilterFileIdsContract:
         with caplog.at_level(_logging.WARNING, logger="app.rag.retriever"):
             result = await _filter_file_ids_via_internal_api(
                 file_ids=["f1"],
-                lit_token="t",
+                credential=CallerCredential(cookie="access_token=t"),
             )
 
         assert result == {"f1"}
@@ -800,7 +801,7 @@ class TestFilterFileIdsContract:
 
         result = await _filter_file_ids_via_internal_api(
             file_ids=["f1"],
-            lit_token="t",
+            credential=CallerCredential(cookie="access_token=t"),
         )
 
         assert result == set()
@@ -829,7 +830,7 @@ class TestFileIdScopePropagation:
         await retrieve_with_keywords(
             keywords="kw",
             top_k=5,
-            lit_token=None,
+            credential=None,
             file_id_scope=["a", "b"],
         )
 
@@ -851,7 +852,7 @@ class TestFileIdScopePropagation:
         )
 
         await retrieve_with_keywords(
-            keywords="kw", top_k=5, lit_token=None,
+            keywords="kw", top_k=5, credential=None,
         )
 
         kwargs = search_spy.call_args.kwargs
@@ -880,7 +881,7 @@ class TestFileIdScopePropagation:
         )
 
         await retrieve_candidates(
-            query="q", top_k=5, lit_token=None, file_id_scope=["x"],
+            query="q", top_k=5, credential=None, file_id_scope=["x"],
         )
 
         kwargs = search_spy.call_args.kwargs
@@ -921,7 +922,7 @@ class TestRequiredKeywordWiring:
             "app.rag.retriever._get_indexed_files_meta", lambda fids: {}
         )
 
-        await retrieve_candidates(query="ViTの強み", top_k=5, lit_token=None)
+        await retrieve_candidates(query="ViTの強み", top_k=5, credential=None)
 
         # Tier 3 fallback also fires because empty results trigger a
         # second search() call. We expect the FIRST call to carry
@@ -965,7 +966,7 @@ class TestRequiredKeywordWiring:
         await retrieve_with_keywords(
             keywords="ViT 強み",
             top_k=5,
-            lit_token=None,
+            credential=None,
             required=(
                 RequiredTerm(canonical="ViT", script="latin",
                              aliases=("ViT", "vit")),
@@ -990,7 +991,7 @@ class TestRequiredKeywordWiring:
         await retrieve_with_keywords(
             keywords="anything",
             top_k=5,
-            lit_token=None,
+            credential=None,
             required=None,
         )
 

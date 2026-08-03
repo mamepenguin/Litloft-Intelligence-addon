@@ -96,7 +96,7 @@ async def test_stream_answer_uses_agentic_when_gate_open(
     )
 
     events = await _collect(
-        stream_answer(query="hello", lit_token=None, drive="d")
+        stream_answer(query="hello", credential=None, drive="d")
     )
 
     kinds = [e.kind for e in events]
@@ -168,7 +168,7 @@ async def test_stream_answer_skips_agentic_when_model_not_allowlisted(
         ),
     )
 
-    await _collect(stream_answer(query="x", lit_token=None))
+    await _collect(stream_answer(query="x", credential=None))
     loop_spy.assert_not_called()
 
 
@@ -214,7 +214,7 @@ async def test_stream_answer_skips_agentic_when_mode_off(
         ),
     )
 
-    await _collect(stream_answer(query="x", lit_token=None))
+    await _collect(stream_answer(query="x", credential=None))
     loop_spy.assert_not_called()
 
 
@@ -261,7 +261,7 @@ async def test_stream_answer_skips_agentic_without_chat_with_tools(
         ),
     )
 
-    await _collect(stream_answer(query="x", lit_token=None))
+    await _collect(stream_answer(query="x", credential=None))
     loop_spy.assert_not_called()
 
 
@@ -284,7 +284,7 @@ async def test_stream_answer_agentic_empty_citations(
     )
 
     events = await _collect(
-        stream_answer(query="hello", lit_token=None)
+        stream_answer(query="hello", credential=None)
     )
     kinds = [e.kind for e in events]
     # No ``citation`` events when the list is empty, but the

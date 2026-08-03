@@ -336,7 +336,9 @@ class TestAskEndpointStreaming:
         # Drain the body so the generator actually runs.
         await _collect_sse_body(result)
 
-        assert captured.get("lit_token") == "my-secret-token"
+        credential = captured.get("credential")
+        assert credential is not None
+        assert credential.headers() == {"Cookie": "access_token=my-secret-token"}
 
     @pytest.mark.asyncio
     async def test_forwards_optional_params(
@@ -367,7 +369,9 @@ class TestAskEndpointStreaming:
         assert captured.get("top_k") == 7
         assert captured.get("file_type") == "video"
         assert captured.get("drive") == "Videos"
-        assert captured.get("lit_token") is None
+        credential = captured.get("credential")
+        assert credential is not None
+        assert credential.headers() == {}
 
 
 # ---------------------------------------------------------------------------

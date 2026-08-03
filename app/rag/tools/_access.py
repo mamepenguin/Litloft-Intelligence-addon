@@ -23,6 +23,7 @@ import logging
 import re
 from typing import Iterable
 
+from app.credentials import CallerCredential
 from app.rag.retriever import _filter_file_ids_via_internal_api
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,7 @@ def is_valid_kind(kind: object) -> bool:
 
 
 async def ensure_access(
-    file_ids: Iterable[str], lit_token: str | None
+    file_ids: Iterable[str], credential: CallerCredential | None
 ) -> set[str]:
     """Return the subset of ``file_ids`` the caller is allowed to see.
 
@@ -64,7 +65,7 @@ async def ensure_access(
     if not ids:
         return set()
     return await _filter_file_ids_via_internal_api(
-        file_ids=ids, lit_token=lit_token
+        file_ids=ids, credential=credential
     )
 
 

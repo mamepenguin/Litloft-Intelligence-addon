@@ -3,8 +3,8 @@
 Wraps the existing ``app.search.search()`` pipeline in **recall mode**
 (channel-rebalanced RRF + relaxed cutoffs) and enforces drive-level
 access control by calling the host's Internal API
-(``/api/internal/filter-file-ids``) with the caller's ``access_token``
-cookie. Files the caller cannot see are dropped before they ever
+(``/api/internal/filter-file-ids``) with the caller's credential.
+Files the caller cannot see are dropped before they ever
 reach the LLM context builder — this is the primary access gate;
 the manifest's ``response_filter`` is a secondary belt-and-suspenders.
 
@@ -30,6 +30,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from app.credentials import CallerCredential
 from app.database import get_search_db
 from app.models import IndexedFile
 from app.rag.query_transform import (  # re-export
@@ -95,24 +96,22 @@ def _internal_api_base_url() -> str:
 
 async def _filter_file_ids_via_internal_api(
     file_ids: list[str],
-    lit_token: str | None,
+    credential: CallerCredential | None,
 ) -> set[str]:
     """Call the host's Internal API to filter file_ids by access.
 
-    The token is transmitted as the ``access_token`` cookie — that's the
-    name the host's ``get_unlocked_groups`` dependency reads from
-    ``request.cookies`` (see ``backend/app/auth.py``). The parameter is
-    still called ``lit_token`` for historical reasons; callers pass the
-    raw JWT string extracted from the incoming request's cookie.
+    The caller's browser Cookie or non-browser Authorization: Bearer
+    credential is forwarded unchanged to the host. The host remains the
+    single source of truth for drive access.
 
-    When ``lit_token`` is None the caller is unauthenticated — the host
+    When ``credential`` is None the caller is unauthenticated — the host
     returns the union of fully-public drives, which is the intended
     behaviour for "全公開モード" (all drives public). We still call the
     API so unauthenticated users cannot see protected drives.
 
     Args:
         file_ids: The candidate file_ids from the search pipeline.
-        lit_token: Optional ``access_token`` cookie value to forward.
+        credential: Optional caller credential to forward.
 
     Returns:
         The subset of ``file_ids`` the caller is allowed to see. On
@@ -123,14 +122,12 @@ async def _filter_file_ids_via_internal_api(
         return set()
 
     url = f"{_internal_api_base_url()}/filter-file-ids"
-    cookies: dict[str, str] = {}
-    if lit_token:
-        cookies["access_token"] = lit_token
+    headers = credential.headers() if credential is not None else {}
 
     try:
         async with httpx.AsyncClient(
             timeout=_INTERNAL_API_TIMEOUT_SECONDS,
-            cookies=cookies,
+            headers=headers,
         ) as client:
             response = await client.post(
                 url,
@@ -230,7 +227,7 @@ def _to_retrieved_file(
 async def retrieve_with_keywords(
     keywords: str,
     top_k: int,
-    lit_token: str | None,
+    credential: CallerCredential | None,
     file_type: str | None = None,
     drive: str | None = None,
     *,
@@ -257,7 +254,7 @@ async def retrieve_with_keywords(
        least the loose-recall ranking. The spec §3.5 calls this
        "Tier 3 demote required to semantic" — Tier 2 (drop one term
        at a time) is deferred to Phase 4.
-    3. Filter file_ids via the Internal API (forwarding access_token).
+    3. Filter file_ids via the Internal API (forwarding credential).
     4. Enrich the surviving results with IndexedFile title/description.
 
     Args:
@@ -265,8 +262,8 @@ async def retrieve_with_keywords(
             from the natural-language question). Passed straight into
             the hybrid search index.
         top_k: Max number of files to pull from the search pipeline.
-        lit_token: Optional ``access_token`` cookie to forward for
-            access control (None = unauthenticated caller).
+        credential: Optional caller credential to forward for access
+            control (None = unauthenticated caller).
         file_type: Optional file type filter (video / audio / ...).
         drive: Optional drive name filter.
         required: Optional tuple of ``RequiredTerm`` from the structured
@@ -336,7 +333,7 @@ async def retrieve_with_keywords(
     # None — the host decides what a token-less caller can see.
     allowed_ids = await _filter_file_ids_via_internal_api(
         file_ids=file_ids,
-        lit_token=lit_token,
+        credential=credential,
     )
 
     allowed_results = [r for r in results if r.file_id in allowed_ids]
@@ -356,7 +353,7 @@ async def retrieve_with_keywords(
 async def retrieve_candidates(
     query: str,
     top_k: int,
-    lit_token: str | None,
+    credential: CallerCredential | None,
     file_type: str | None = None,
     drive: str | None = None,
     *,
@@ -381,8 +378,8 @@ async def retrieve_candidates(
     Args:
         query: The user's natural-language question.
         top_k: Max number of files to pull from the search pipeline.
-        lit_token: Optional ``access_token`` cookie to forward for
-            access control.
+        credential: Optional caller credential to forward for access
+            control.
         file_type: Optional file type filter (video / audio / ...).
         drive: Optional drive name filter.
 
@@ -396,7 +393,7 @@ async def retrieve_candidates(
     return await retrieve_with_keywords(
         keywords=keywords,
         top_k=top_k,
-        lit_token=lit_token,
+        credential=credential,
         original_query=query,
         file_type=file_type,
         drive=drive,

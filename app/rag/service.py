@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from app.config import settings
+from app.credentials import CallerCredential
 from app.dependencies import get_llm_client
 from app.rag.agentic import (
     AgenticAnswer,
@@ -635,7 +636,7 @@ async def _run_hierarchical_retrieval(
     query: str,
     keywords: str,
     drive: str | None,
-    lit_token: str | None,
+    credential: CallerCredential | None,
     file_type: str | None,
     top_k: int,
     original_query: str | None = None,
@@ -722,7 +723,7 @@ async def _run_hierarchical_retrieval(
         candidates = await retrieve_with_keywords(
             keywords=keywords,
             top_k=top_k,
-            lit_token=lit_token,
+            credential=credential,
             file_type=file_type,
             drive=drive,
             original_query=semantic,
@@ -790,7 +791,7 @@ async def _run_hierarchical_retrieval(
         candidates = await retrieve_with_keywords(
             keywords=keywords,
             top_k=top_k,
-            lit_token=lit_token,
+            credential=credential,
             file_type=file_type,
             drive=drive,
             original_query=semantic,
@@ -808,7 +809,7 @@ async def _run_hierarchical_retrieval(
     # but the SSE event the streaming path emits is built from the
     # ShortlistResult and must reflect the same gate).
     accessible = await _filter_file_ids_via_internal_api(
-        list(shortlist.file_ids), lit_token
+        list(shortlist.file_ids), credential
     )
     if not accessible:
         # Whole shortlist is inaccessible (locked protected drive,
@@ -825,7 +826,7 @@ async def _run_hierarchical_retrieval(
         candidates = await retrieve_with_keywords(
             keywords=keywords,
             top_k=top_k,
-            lit_token=lit_token,
+            credential=credential,
             file_type=file_type,
             drive=drive,
             original_query=semantic,
@@ -883,7 +884,7 @@ async def _run_hierarchical_retrieval(
             retrieve_with_keywords(
                 keywords=clue,
                 top_k=top_k,
-                lit_token=lit_token,
+                credential=credential,
                 file_type=file_type,
                 drive=drive,
                 original_query=semantic,
@@ -917,7 +918,7 @@ async def _run_hierarchical_retrieval(
         unscoped = await retrieve_with_keywords(
             keywords=keywords,
             top_k=top_k,
-            lit_token=lit_token,
+            credential=credential,
             file_type=file_type,
             drive=drive,
             original_query=semantic,
@@ -982,7 +983,7 @@ def _agentic_gate_open(*, force_legacy_rag: bool) -> bool:
 async def _run_agentic(
     *,
     query: str,
-    lit_token: str | None,
+    credential: CallerCredential | None,
     drive: str | None,
     viewer_id: str | None,
     temperature: float | None,
@@ -1002,7 +1003,7 @@ async def _run_agentic(
         llm_client=llm_client,
         drive=drive,
         viewer_id=viewer_id,
-        lit_token=lit_token,
+        credential=credential,
         max_total_tokens=budget,
         language_instruction=_language_instruction(),
         temperature=temperature,
@@ -1012,7 +1013,7 @@ async def _run_agentic(
 async def _maybe_run_agentic(
     *,
     query: str,
-    lit_token: str | None,
+    credential: CallerCredential | None,
     drive: str | None,
     viewer_id: str | None,
     temperature: float | None,
@@ -1025,7 +1026,7 @@ async def _maybe_run_agentic(
 
     answer: AgenticAnswer = await _run_agentic(
         query=query,
-        lit_token=lit_token,
+        credential=credential,
         drive=drive,
         viewer_id=viewer_id,
         temperature=temperature,
@@ -1047,7 +1048,7 @@ async def _maybe_run_agentic(
 
 async def answer_question(
     query: str,
-    lit_token: str | None,
+    credential: CallerCredential | None,
     top_k: int | None = None,
     file_type: str | None = None,
     drive: str | None = None,
@@ -1080,7 +1081,7 @@ async def answer_question(
     # path one config edit away.
     agentic_response = await _maybe_run_agentic(
         query=query,
-        lit_token=lit_token,
+        credential=credential,
         drive=drive,
         viewer_id=viewer_id,
         temperature=temperature,
@@ -1132,7 +1133,7 @@ async def answer_question(
             query=query,
             keywords=keywords,
             drive=drive,
-            lit_token=lit_token,
+            credential=credential,
             file_type=file_type,
             top_k=effective_top_k,
             original_query=query,
@@ -1158,7 +1159,7 @@ async def answer_question(
                     retrieve_with_keywords(
                         keywords=term,
                         top_k=effective_top_k,
-                        lit_token=lit_token,
+                        credential=credential,
                         file_type=file_type,
                         drive=drive,
                         original_query=term,
@@ -1177,7 +1178,7 @@ async def answer_question(
             candidates = await retrieve_with_keywords(
                 keywords=keywords,
                 top_k=effective_top_k,
-                lit_token=lit_token,
+                credential=credential,
                 file_type=file_type,
                 drive=drive,
                 original_query=query,
@@ -1194,7 +1195,7 @@ async def answer_question(
             query=query,
             keywords=keywords,
             drive=drive,
-            lit_token=lit_token,
+            credential=credential,
             file_type=file_type,
             top_k=effective_top_k,
             original_query=query,
@@ -1204,7 +1205,7 @@ async def answer_question(
         candidates = await retrieve_candidates(
             query=query,
             top_k=effective_top_k,
-            lit_token=lit_token,
+            credential=credential,
             file_type=file_type,
             drive=drive,
             transform_temperature=temperature,
@@ -1357,7 +1358,7 @@ def _decomposed_to_event_payload(decomposed: DecomposedQuery) -> dict[str, Any]:
 async def _stream_agentic(
     *,
     query: str,
-    lit_token: str | None,
+    credential: CallerCredential | None,
     drive: str | None,
     viewer_id: str | None,
     start: float,
@@ -1388,7 +1389,7 @@ async def _stream_agentic(
 
     answer = await _run_agentic(
         query=query,
-        lit_token=lit_token,
+        credential=credential,
         drive=drive,
         viewer_id=viewer_id,
         temperature=None,
@@ -1428,7 +1429,7 @@ async def _stream_agentic(
 
 async def stream_answer(
     query: str,
-    lit_token: str | None,
+    credential: CallerCredential | None,
     top_k: int | None = None,
     file_type: str | None = None,
     drive: str | None = None,
@@ -1480,7 +1481,7 @@ async def stream_answer(
     if _agentic_gate_open(force_legacy_rag=False):
         async for event in _stream_agentic(
             query=query,
-            lit_token=lit_token,
+            credential=credential,
             drive=drive,
             viewer_id=viewer_id,
             start=start,
@@ -1557,7 +1558,7 @@ async def stream_answer(
             query=query,
             keywords=keywords,
             drive=drive,
-            lit_token=lit_token,
+            credential=credential,
             file_type=file_type,
             top_k=effective_top_k,
             original_query=query,
@@ -1592,7 +1593,7 @@ async def stream_answer(
                     retrieve_with_keywords(
                         keywords=term,
                         top_k=effective_top_k,
-                        lit_token=lit_token,
+                        credential=credential,
                         file_type=file_type,
                         drive=drive,
                         original_query=term,
@@ -1611,7 +1612,7 @@ async def stream_answer(
             candidates = await retrieve_with_keywords(
                 keywords=keywords,
                 top_k=effective_top_k,
-                lit_token=lit_token,
+                credential=credential,
                 file_type=file_type,
                 drive=drive,
                 original_query=query,
@@ -1625,7 +1626,7 @@ async def stream_answer(
             query=query,
             keywords=keywords,
             drive=drive,
-            lit_token=lit_token,
+            credential=credential,
             file_type=file_type,
             top_k=effective_top_k,
             original_query=query,
@@ -2057,6 +2058,7 @@ async def find_files(
     question: str,
     drive: str,
     viewer_id: str | None = None,
+    credential: CallerCredential | None = None,
     overrides: dict[str, Any] | None = None,
     limit: int = _FIND_DEFAULT_LIMIT,
 ) -> dict[str, Any]:
@@ -2072,6 +2074,7 @@ async def find_files(
         drive: Canonical drive name.
         viewer_id: Optional viewer hash. ``None`` skips Stage B
             entirely (graceful: spec §13.A).
+        credential: Caller credential forwarded to core access filtering.
         overrides: Chip-edited structured query. When present, Stage A
             (LLM decompose) is skipped and the dict is treated as the
             source of truth.
@@ -2189,7 +2192,7 @@ async def find_files(
                     retrieve_with_keywords(
                         keywords=term,
                         top_k=retrieve_top_k,
-                        lit_token=None,
+                        credential=credential,
                         file_type=file_type_filter,
                         drive=drive,
                         original_query=term,
@@ -2208,7 +2211,7 @@ async def find_files(
             retrieved = await retrieve_with_keywords(
                 keywords=decomposed.semantic_query or question,
                 top_k=retrieve_top_k,
-                lit_token=None,
+                credential=credential,
                 file_type=file_type_filter,
                 drive=drive,
                 original_query=question,

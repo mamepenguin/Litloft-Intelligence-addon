@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.config import AgenticModelEntry, LLMConfig
+from app.credentials import CallerCredential
 from app.llm import ChatTurnResult, LLMClient
 from app.prompt_loader import render
 from app.rag.agentic_types import AgenticTelemetry
@@ -251,7 +252,7 @@ async def run_agentic_loop(
     llm_client: LLMClient,
     drive: str | None = None,
     viewer_id: str | None = None,
-    lit_token: str | None = None,
+    credential: CallerCredential | None = None,
     max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
     max_total_tokens: int,
     language_instruction: str = "",
@@ -264,7 +265,7 @@ async def run_agentic_loop(
     telemetry reflects whatever progress was made.
     """
     context = ToolContext(
-        drive=drive, viewer_id=viewer_id, lit_token=lit_token
+        drive=drive, viewer_id=viewer_id, credential=credential
     )
 
     system_prompt = _build_system_prompt(
