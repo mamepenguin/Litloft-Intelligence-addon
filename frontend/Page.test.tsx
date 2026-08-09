@@ -19,7 +19,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act, waitFor } from "@testing-library/react";
+import { render, screen, act, waitFor, fireEvent } from "@testing-library/react";
 import React from "react";
 
 // --- Mock next/navigation (Ask page reads useSearchParams + usePathname). ----
@@ -113,6 +113,10 @@ import {
   type AskStreamEvent,
   type Citation,
 } from "@/addons/intelligence/api";
+import {
+  clearSourceCaptures,
+  getSourceCaptures,
+} from "@/lib/sourceCapture";
 
 const sampleCitation = (n: number): Citation => ({
   file_id: `file-${n}`,
@@ -168,6 +172,7 @@ describe("parseSseFrame — single-citation event", () => {
 describe("IntelligenceAskPage — progressive citations + thinking indicator", () => {
   beforeEach(() => {
     streamState.current = makeController();
+    clearSourceCaptures("family");
   });
 
   afterEach(() => {
@@ -245,6 +250,41 @@ describe("IntelligenceAskPage — progressive citations + thinking indicator", (
     });
     await act(async () => {
       streamState.current.push({ kind: "done", took_ms: 1234 });
+      streamState.current.end();
+    });
+  });
+
+  it("adds an Ask citation to the capture basket", async () => {
+    await mountAndStart();
+    await act(async () => {
+      streamState.current.push({ kind: "answer_chunk", delta: "Answer" });
+      streamState.current.push({
+        kind: "citation",
+        citation: {
+          ...sampleCitation(1),
+          file_type: "video",
+          segment_location: "1:05",
+        },
+        index: 1,
+      });
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "askSearch.addToCaptureBasket",
+      }),
+    );
+
+    expect(getSourceCaptures("family")).toEqual([
+      expect.objectContaining({
+        sourceFileId: "file-1",
+        kind: "ask_citation",
+        quote: "Quote for citation 1",
+        locator: expect.objectContaining({ seconds: 65, label: "1:05" }),
+      }),
+    ]);
+    await act(async () => {
+      streamState.current.push({ kind: "done", took_ms: 10 });
       streamState.current.end();
     });
   });
