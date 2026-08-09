@@ -40,10 +40,11 @@ import {
 import { flushSync } from "react-dom";
 import { useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
-import { AlertCircle, BookmarkPlus, Send, Sparkles, Square, X } from "lucide-react";
+import { AlertCircle, BookmarkPlus, Quote, Send, Sparkles, Square, X } from "lucide-react";
 
 import { useCurrentDrive } from "@/components/CurrentDriveProvider";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
+import { addSourceCapture } from "@/lib/sourceCapture";
 import ModeTabs from "./ModeTabs";
 import {
   askQuestionStream,
@@ -232,10 +233,13 @@ function buildCitationUrl(citation: Citation): string {
 function CitationCard({
   index,
   citation,
+  drive,
 }: {
   index: number;
   citation: Citation;
+  drive: string;
 }) {
+  const t = useTranslations("askSearch");
   const parsed = parseSegmentLocation(
     (citation as Citation & { segment_location?: string | null }).segment_location ?? null,
   );
@@ -244,55 +248,72 @@ function CitationCard({
   // image citations only because the user can verify them visually).
   // See `Wewd0UyArEW49kE3UCUY6` for the design rationale.
   const isImage = citation.file_type === "image";
+  const capture = () => {
+    addSourceCapture({
+      drive,
+      sourceFileId: citation.file_id,
+      filename: citation.filename,
+      fileType: citation.file_type,
+      kind: "ask_citation",
+      locator: parsed
+        ? {
+            seconds: parsed.seconds ?? undefined,
+            page: parsed.page ?? undefined,
+            label: parsed.label,
+          }
+        : undefined,
+      quote: parsed?.verbatim ?? citation.quote,
+    });
+  };
   return (
-    <a
+    <div
       id={`ask-citation-${index}`}
-      href={buildCitationUrl(citation)}
       className="group flex w-full items-start gap-2 rounded-lg border border-bg-border bg-bg-card px-3 py-2 text-left transition-colors hover:bg-bg-elevated focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
     >
-      <span className="mt-0.5 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-2xl px-1 text-[11px] font-semibold text-accent bg-accent/10">
-        {index}
-      </span>
-      {isImage && (
-        <img
-          data-testid={`ask-citation-thumbnail-${index}`}
-          src={`/api/files/${citation.file_id}/thumbnail`}
-          alt={citation.filename}
-          loading="lazy"
-          className="h-16 w-16 flex-shrink-0 rounded-lg object-cover"
-        />
-      )}
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <span className="truncate text-sm font-medium text-text-primary">
-            {citation.filename}
-          </span>
-          {parsed && !parsed.verbatim && (
-            // Only render the small accent badge for short formatted
-            // labels (m:ss / page N / chunk N). When the LLM put a
-            // verbatim sentence in `location`, it's far too long to
-            // render as a badge — we surface it as the quote line
-            // below instead, which is the natural place for prose.
-            <span className="flex-shrink-0 rounded-lg px-1 py-0.5 text-[10px] font-medium text-accent">
-              {parsed.label}
+      <a
+        href={buildCitationUrl(citation)}
+        className="flex min-w-0 flex-1 items-start gap-2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
+      >
+        <span className="mt-0.5 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-2xl bg-accent/10 px-1 text-[11px] font-semibold text-accent">
+          {index}
+        </span>
+        {isImage && (
+          <img
+            data-testid={`ask-citation-thumbnail-${index}`}
+            src={`/api/files/${citation.file_id}/thumbnail`}
+            alt={citation.filename}
+            loading="lazy"
+            className="h-16 w-16 flex-shrink-0 rounded-lg object-cover"
+          />
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-sm font-medium text-text-primary">
+              {citation.filename}
             </span>
+            {parsed && !parsed.verbatim && (
+              <span className="flex-shrink-0 rounded-lg px-1 py-0.5 text-[10px] font-medium text-accent">
+                {parsed.label}
+              </span>
+            )}
+          </div>
+          {(parsed?.verbatim || citation.quote) && (
+            <p className="mt-1 line-clamp-3 text-xs italic text-text-muted">
+              “{parsed?.verbatim ?? citation.quote}”
+            </p>
           )}
         </div>
-        {/*
-          Quote display priority: when the LLM provided a verbatim
-          sentence via `location`, prefer that — it matches the
-          source file character-for-character and is what the
-          highlight URL points to. Fall back to `citation.quote` (a
-          backend-populated chunk excerpt or summary) when no
-          verbatim is available.
-        */}
-        {(parsed?.verbatim || citation.quote) && (
-          <p className="mt-1 line-clamp-3 text-xs italic text-text-muted">
-            “{parsed?.verbatim ?? citation.quote}”
-          </p>
-        )}
-      </div>
-    </a>
+      </a>
+      <button
+        type="button"
+        onClick={capture}
+        title={t("addToCaptureBasket")}
+        aria-label={t("addToCaptureBasket")}
+        className="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-text-muted hover:bg-bg-primary hover:text-text-primary"
+      >
+        <Quote size={14} />
+      </button>
+    </div>
   );
 }
 
@@ -1092,7 +1113,11 @@ function IntelligenceAskPageInner() {
           <ul className="flex flex-col gap-2">
             {state.citations.map((citation, i) => (
               <li key={`${citation.file_id}-${i}`}>
-                <CitationCard index={i + 1} citation={citation} />
+                <CitationCard
+                  index={i + 1}
+                  citation={citation}
+                  drive={drive ?? citation.drive}
+                />
               </li>
             ))}
           </ul>

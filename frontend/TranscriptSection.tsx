@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FileText, Sparkles } from "lucide-react";
+import { FileText, Quote, Sparkles } from "lucide-react";
 import { useTranslations } from "next-intl";
 
 import {
@@ -14,10 +14,13 @@ import { getSubtitleUrl } from "@/lib/api";
 import type { SubtitleInfo } from "@/types";
 import { useAddonStatus } from "@/components/AddonSlotsProvider";
 import type { MediaController } from "@/lib/mediaController";
+import { addSourceCapture } from "@/lib/sourceCapture";
 
 interface TranscriptSectionProps {
   fileId: string;
   drive: string;
+  filename?: string;
+  fileType?: string;
   // Legacy native-video reference. Used for the timeupdate listener
   // (highlighting the active cue) and as the seek fallback.
   videoRef?: React.RefObject<HTMLVideoElement | null>;
@@ -77,7 +80,7 @@ function parseVttCues(vtt: string): TranscriptChunkItem[] {
 
 const EMPTY_SUBTITLES: SubtitleInfo[] = [];
 
-export default function TranscriptSection({ fileId, drive, videoRef, mediaController, subtitles = EMPTY_SUBTITLES }: TranscriptSectionProps) {
+export default function TranscriptSection({ fileId, drive, filename, fileType = "video", videoRef, mediaController, subtitles = EMPTY_SUBTITLES }: TranscriptSectionProps) {
   const t = useTranslations("searchIndex");
   const addonStatus = useAddonStatus("intelligence");
   const refineFeature = addonStatus.features?.transcript_refine;
@@ -204,6 +207,25 @@ export default function TranscriptSection({ fileId, drive, videoRef, mediaContro
     [videoRef, mediaController]
   );
 
+  const captureCue = useCallback(
+    (cue: TranscriptChunkItem) => {
+      addSourceCapture({
+        drive,
+        sourceFileId: fileId,
+        filename: filename || fileId,
+        fileType,
+        kind: "transcript",
+        locator: {
+          seconds: cue.start,
+          endSeconds: cue.end,
+          label: formatDuration(cue.start),
+        },
+        quote: cue.text,
+      });
+    },
+    [drive, fileId, fileType, filename],
+  );
+
   const handleRefine = useCallback(async () => {
     if (refining) return;
     setRefining(true);
@@ -277,26 +299,40 @@ export default function TranscriptSection({ fileId, drive, videoRef, mediaContro
         {cues.map((cue) => {
           const isRefined = Boolean(cue.refinedAt);
           return (
-            <button
+            <div
               key={cue.index}
-              ref={cue.index === activeIndex ? activeRef : undefined}
-              onClick={() => seekTo(cue.start)}
-              className={`flex w-full cursor-pointer gap-3 rounded-lg px-2 py-1.5 text-left text-sm transition-colors hover:bg-bg-primary ${
+              className={`flex w-full items-start rounded-lg text-sm transition-colors hover:bg-bg-primary ${
                 cue.index === activeIndex
                   ? "bg-accent/10 text-accent"
                   : "text-text-primary"
               }`}
             >
-              <span className="shrink-0 font-mono text-xs text-text-muted">
-                {formatDuration(cue.start)}
-              </span>
-              <span className="min-w-0 flex-1">{cue.text}</span>
-              {isRefined && (
-                <span className="shrink-0 rounded-lg bg-accent-teal/15 px-1.5 py-0.5 text-[10px] font-medium text-accent-teal">
-                  {t("transcriptRefinedBadge")}
+              <button
+                type="button"
+                ref={cue.index === activeIndex ? activeRef : undefined}
+                onClick={() => seekTo(cue.start)}
+                className="flex min-w-0 flex-1 cursor-pointer gap-3 px-2 py-1.5 text-left"
+              >
+                <span className="shrink-0 font-mono text-xs text-text-muted">
+                  {formatDuration(cue.start)}
                 </span>
-              )}
-            </button>
+                <span className="min-w-0 flex-1">{cue.text}</span>
+                {isRefined && (
+                  <span className="shrink-0 rounded-lg bg-accent-teal/15 px-1.5 py-0.5 text-[10px] font-medium text-accent-teal">
+                    {t("transcriptRefinedBadge")}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => captureCue(cue)}
+                title={t("addToCaptureBasket")}
+                aria-label={t("addToCaptureBasket")}
+                className="m-0.5 inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-text-muted hover:bg-bg-elevated hover:text-text-primary"
+              >
+                <Quote size={14} />
+              </button>
+            </div>
           );
         })}
       </div>

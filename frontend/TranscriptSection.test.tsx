@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import React from "react";
 
 // Mock global fetch (used by component for VTT endpoints)
@@ -76,6 +76,10 @@ vi.mock("@/components/AddonSlotsProvider", () => ({
 // Use the real TranscriptSection from the intelligence addon directory.
 // This is the same path used by the build-time symlink copy.
 import TranscriptSection from "@/addons/intelligence/TranscriptSection";
+import {
+  clearSourceCaptures,
+  getSourceCaptures,
+} from "@/lib/sourceCapture";
 
 function renderSection() {
   const videoRef = { current: null } as React.RefObject<HTMLVideoElement | null>;
@@ -88,6 +92,7 @@ describe("TranscriptSection — transcript refine UI", () => {
   beforeEach(() => {
     mockAddonStatus.features.transcript_refine = "manual";
     fetchMock.mockClear();
+    clearSourceCaptures("family");
   });
 
   afterEach(() => {
@@ -116,6 +121,34 @@ describe("TranscriptSection — transcript refine UI", () => {
     const badges = await screen.findAllByText(/AI cleaned/);
     // One badge per refined chunk (1 out of 2 in our fixture).
     expect(badges).toHaveLength(1);
+  });
+
+  it("adds a transcript cue with its time range to the capture basket", async () => {
+    const videoRef = { current: null } as React.RefObject<HTMLVideoElement | null>;
+    render(
+      <TranscriptSection
+        fileId="abc"
+        drive="family"
+        filename="meeting.mp4"
+        fileType="video"
+        videoRef={videoRef}
+      />,
+    );
+
+    const buttons = await screen.findAllByRole("button", {
+      name: "searchIndex.addToCaptureBasket",
+    });
+    fireEvent.click(buttons[0]);
+
+    expect(getSourceCaptures("family")).toEqual([
+      expect.objectContaining({
+        sourceFileId: "abc",
+        filename: "meeting.mp4",
+        kind: "transcript",
+        quote: "これは修正された文章です。",
+        locator: expect.objectContaining({ seconds: 0, endSeconds: 5 }),
+      }),
+    ]);
   });
 
   // RED phase: not yet implemented

@@ -99,6 +99,7 @@
     "transcriptSourceExternal": "External",
     "transcriptRefine": "Clean up with AI",
     "transcriptRefinedBadge": "AI cleaned",
+    "addToCaptureBasket": "Add transcript excerpt to capture basket",
     "indexTitle": "Index Details",
     "clipTitle": "CLIP Frames",
     "more": "more",
@@ -144,7 +145,8 @@
     },
     "saveToKnowledge": "Save as Markdown",
     "saveSuccess": "Markdown saved",
-    "openNote": "Open note"
+    "openNote": "Open note",
+    "addToCaptureBasket": "Add citation to capture basket"
   },
   "askSave": {
     "title": "Save as Markdown",
