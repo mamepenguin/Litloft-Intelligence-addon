@@ -144,6 +144,7 @@ def _store_embedding(
     content_preview: str = "",
     timestamp_start: float | None = None,
     timestamp_end: float | None = None,
+    page: int | None = None,
 ) -> None:
     """Store an embedding record and its vector in the vec table.
 
@@ -157,6 +158,7 @@ def _store_embedding(
         content_preview: Human-readable snippet for display.
         timestamp_start: Optional start timestamp.
         timestamp_end: Optional end timestamp.
+        page: Optional one-based document page.
     """
     embedding_record = Embedding(
         id=embedding_id,
@@ -166,6 +168,7 @@ def _store_embedding(
         content_preview=content_preview[:500],
         timestamp_start=timestamp_start,
         timestamp_end=timestamp_end,
+        page=page,
     )
     session.add(embedding_record)
     session.flush()
@@ -349,8 +352,6 @@ def index_text_content(file_id: str) -> bool:
         for idx, (chunk, vector) in enumerate(zip(chunks, vectors)):
             try:
                 embedding_id = f"txt_{file_id}_{idx}_{uuid.uuid4().hex[:8]}"
-                page_info = f" (page {chunk.page})" if chunk.page is not None else ""
-
                 _store_embedding(
                     session=session,
                     embedding_id=embedding_id,
@@ -358,7 +359,8 @@ def index_text_content(file_id: str) -> bool:
                     embedding_type="text_content",
                     vector_table="vec_text",
                     vector=vector,
-                    content_preview=f"{chunk.text[:200]}{page_info}",
+                    content_preview=chunk.text[:200],
+                    page=chunk.page,
                 )
             except Exception as e:
                 logger.error(

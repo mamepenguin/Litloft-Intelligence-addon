@@ -721,6 +721,22 @@ class TestCombineScoresCosine:
         expected = 0.7 * (0.9 * 1.3)
         assert result["f1"].combined_score == pytest.approx(expected)
 
+    def test_text_vector_match_keeps_pdf_page_with_excerpt(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._patch_search_settings(monkeypatch, alpha=0.7)
+        match = self._make_vmatch("f1", 0.9, "text_content")
+        match.page = 7
+        result = _combine_scores_cosine(
+            text_matches=[match],
+            clip_matches=[],
+            keyword_matches=[],
+            transcript_keyword_matches=[],
+        )
+
+        assert result["f1"].matches[0].text == "preview"
+        assert result["f1"].matches[0].page == 7
+
     def test_keyword_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """File matched only by keyword gets (1-alpha)-weighted score."""
         self._patch_search_settings(monkeypatch, alpha=0.7)
