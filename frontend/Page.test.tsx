@@ -271,7 +271,7 @@ describe("IntelligenceAskPage — progressive citations + thinking indicator", (
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "askSearch.addToCaptureBasket",
+        name: "Add citation to capture basket",
       }),
     );
 

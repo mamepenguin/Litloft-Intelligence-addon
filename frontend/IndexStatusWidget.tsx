@@ -178,7 +178,10 @@ function FailedJobsSummary({
       type="button"
       onClick={onOpen}
       className="mt-4 flex w-full items-center justify-between gap-2 rounded-lg bg-accent-amber/10 px-3 py-2 text-xs font-medium text-accent-amber transition-colors hover:bg-accent-amber/20"
-      aria-label={t("view")}
+      // WCAG 2.5.3 Label in Name: the accessible name has to contain the
+      // visible label. A bare "View" left screen-reader and voice-control
+      // users with a name that shares no words with what the button reads.
+      aria-label={t("summary", { count })}
     >
       <span className="flex items-center gap-2">
         <AlertTriangle size={14} />
