@@ -136,7 +136,7 @@ describe("TranscriptSection — transcript refine UI", () => {
     );
 
     const buttons = await screen.findAllByRole("button", {
-      name: "searchIndex.addToCaptureBasket",
+      name: "Add transcript excerpt to capture basket",
     });
     fireEvent.click(buttons[0]);
 

@@ -153,11 +153,13 @@ describe("IndexStatusWidget — failed-jobs summary (spec §3.1)", () => {
     });
     render(<IndexStatusWidget />);
 
-    // The widget renders the row as a button so the operator can
-    // open it with keyboard navigation too. The accessible name
-    // covers either the localised label or the raw i18n key.
+    // The widget renders the row as a button so the operator can open it
+    // with keyboard navigation too. Match the real label rather than
+    // allowing the raw i18n key: accepting the key means the test still
+    // passes when the translation is missing, which is how the capture
+    // basket assertions here silently rotted.
     const summary = await screen.findByRole("button", {
-      name: /failed jobs|semanticSearch\.failedJobs/i,
+      name: "1 failed jobs",
     });
     fireEvent.click(summary);
 
