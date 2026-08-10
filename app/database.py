@@ -108,6 +108,7 @@ def init_search_db() -> None:
     # Migrate indexed_files for thumbnail CLIP support (idempotent).
     with _search_engine.begin() as conn:
         _migrate_indexed_files_thumbnail_columns(conn)
+        _migrate_embeddings_page_column(conn)
     # Phase 4: rebrand legacy image clip embeddings as clip_thumbnail.
     # Spec 2026-05-02-thumbnail-clip-default-shallow-search.md.
     _migrate_image_clip_to_clip_thumbnail()
@@ -763,6 +764,46 @@ def _migrate_indexed_files_thumbnail_columns(conn: object) -> None:
                 "idx_indexed_files_clip_thumbnail_indexed "
                 "ON indexed_files(clip_thumbnail_indexed)"
             )
+        )
+
+
+def _migrate_embeddings_page_column(conn: object) -> None:
+    """Keep a document chunk's page beside its embedding result.
+
+    Older indexes encoded `` (page N)`` into ``content_preview``. Move that
+    suffix into the structured column so existing installations work without
+    a full reindex and the response text remains verbatim source content.
+    """
+    import re
+
+    cols = {
+        row[1]
+        for row in conn.execute(text("PRAGMA table_info(embeddings)")).fetchall()
+    }
+    if "page" in cols:
+        return
+    conn.execute(text("ALTER TABLE embeddings ADD COLUMN page INTEGER"))
+
+    rows = conn.execute(text(
+        "SELECT e.id, e.content_preview FROM embeddings AS e "
+        "JOIN indexed_files AS f ON f.file_id = e.file_id "
+        "WHERE e.embedding_type = 'text_content' AND e.page IS NULL "
+        "AND f.mime_type = 'application/pdf'"
+    )).fetchall()
+    for embedding_id, preview in rows:
+        match = re.search(r" \(page ([1-9][0-9]*)\)$", preview or "")
+        if not match:
+            continue
+        conn.execute(
+            text(
+                "UPDATE embeddings SET content_preview = :preview, page = :page "
+                "WHERE id = :embedding_id"
+            ),
+            {
+                "embedding_id": embedding_id,
+                "preview": preview[:match.start()],
+                "page": int(match.group(1)),
+            },
         )
 
 

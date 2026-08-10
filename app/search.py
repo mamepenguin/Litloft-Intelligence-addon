@@ -410,6 +410,7 @@ class _VectorMatch:
     content_preview: str
     timestamp_start: float | None
     timestamp_end: float | None
+    page: int | None = None
 
 
 def _vector_search_text(
@@ -525,6 +526,7 @@ def _vector_search_text(
                     content_preview=emb.content_preview,
                     timestamp_start=emb.timestamp_start,
                     timestamp_end=emb.timestamp_end,
+                    page=emb.page,
                 ),
             ]
 
@@ -672,6 +674,7 @@ def _vector_search_clip(
                     content_preview=emb.content_preview,
                     timestamp_start=emb.timestamp_start,
                     timestamp_end=emb.timestamp_end,
+                    page=emb.page,
                 ),
             ]
 
@@ -1201,6 +1204,7 @@ def _combine_scores_rrf(
             score=m.score,
             timestamp_start=m.timestamp_start,
             timestamp_end=m.timestamp_end,
+            page=m.page,
         ))
 
     for m in clip_matches:
@@ -1212,6 +1216,7 @@ def _combine_scores_rrf(
             score=m.score,
             timestamp_start=m.timestamp_start,
             timestamp_end=m.timestamp_end,
+            page=m.page,
         ))
 
     for m in keyword_matches:
@@ -2094,6 +2099,7 @@ def _combine_scores_cosine(
             score=m.score,
             timestamp_start=m.timestamp_start,
             timestamp_end=m.timestamp_end,
+            page=m.page,
         ))
         weight = getattr(search_config, _TYPE_WEIGHTS.get(m.embedding_type, ""), 1.0)
         weighted = m.score * weight
@@ -2112,6 +2118,7 @@ def _combine_scores_cosine(
             score=m.score,
             timestamp_start=m.timestamp_start,
             timestamp_end=m.timestamp_end,
+            page=m.page,
         ))
         weight = getattr(
             search_config,
