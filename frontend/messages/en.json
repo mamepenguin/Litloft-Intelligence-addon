@@ -94,6 +94,7 @@
   },
   "searchIndex": {
     "transcriptTitle": "Transcript",
+    "transcriptResumeFollowing": "Back to current position",
     "transcriptSourceChunks": "Text chunks",
     "transcriptSourceWords": "Words",
     "transcriptSourceExternal": "External",

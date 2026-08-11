@@ -107,6 +107,10 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
   const [loading, setLoading] = useState(true);
   const [source, setSource] = useState<Source>("chunks");
   const [activeIndex, setActiveIndex] = useState(-1);
+  // Whether the highlight is still allowed to drag the list around.
+  // Reading ahead has to win over following, or the reader is pulled
+  // back every few seconds.
+  const [following, setFollowing] = useState(true);
   const activeRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -187,7 +191,7 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
     return unsubscribe;
   }, [mediaController, cues]);
 
-  useEffect(() => {
+  const scrollActiveIntoView = useCallback(() => {
     const list = listRef.current;
     const target = activeRef.current;
     if (!list || !target) return;
@@ -201,11 +205,54 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
     const targetOffset = targetRect.top - listRect.top + list.scrollTop;
     const nextTop = targetOffset - (list.clientHeight - target.clientHeight) / 2;
     list.scrollTo({ top: nextTop, behavior: "smooth" });
-  }, [activeIndex]);
+  }, []);
+
+  useEffect(() => {
+    if (!following) return;
+    scrollActiveIntoView();
+  }, [activeIndex, following, scrollActiveIntoView]);
+
+  /**
+   * Stop following when the reader takes over.
+   *
+   * Deliberately driven by input events rather than `scroll`: the
+   * auto-scroll above emits scroll events of its own, and smooth
+   * scrolling emits a stream of them with no reliable end. Anything
+   * built on `scroll` has to guess which ones were its own doing.
+   * `wheel` and `touchmove` only ever come from the reader.
+   *
+   * `pointerdown` covers dragging the scrollbar, but only when it lands
+   * on the scroll container itself — on a row it is someone clicking a
+   * cue, which resumes following rather than suspending it.
+   */
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const suspend = () => setFollowing(false);
+    const suspendOnScrollbar = (event: PointerEvent) => {
+      if (event.target === list) setFollowing(false);
+    };
+    list.addEventListener("wheel", suspend, { passive: true });
+    list.addEventListener("touchmove", suspend, { passive: true });
+    list.addEventListener("pointerdown", suspendOnScrollbar);
+    return () => {
+      list.removeEventListener("wheel", suspend);
+      list.removeEventListener("touchmove", suspend);
+      list.removeEventListener("pointerdown", suspendOnScrollbar);
+    };
+  }, [cues.length]);
+
+  const resumeFollowing = useCallback(() => {
+    setFollowing(true);
+    scrollActiveIntoView();
+  }, [scrollActiveIntoView]);
 
   const seekTo = useCallback(
     (time: number) => {
       if (!mediaController) return;
+      // Jumping somewhere deliberately is a statement about where the
+      // reader wants to be, so it ends any suspension too.
+      setFollowing(true);
       mediaController.seek(time);
       mediaController.play();
     },
@@ -298,6 +345,20 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
         )}
       </div>
       <div
+        className={`relative ${fillHeight ? "flex min-h-0 flex-1 flex-col" : ""}`}
+      >
+        {/* Only offered when there is somewhere to go back to: with no
+            cue playing, "current position" means nothing. */}
+        {!following && activeIndex >= 0 && (
+          <button
+            type="button"
+            onClick={resumeFollowing}
+            className="absolute inset-x-0 top-1 z-10 mx-auto w-fit rounded-full bg-accent px-3 py-1 text-xs font-medium text-white shadow-card hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          >
+            {t("transcriptResumeFollowing")}
+          </button>
+        )}
+      <div
         ref={listRef}
         className={`space-y-0.5 overflow-y-auto rounded-lg bg-bg-card p-2 ${
           fillHeight ? "min-h-0 flex-1" : "max-h-80"
@@ -345,6 +406,7 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
             </div>
           );
         })}
+      </div>
       </div>
     </div>
   );

@@ -313,3 +313,213 @@ describe("TranscriptSection — rail vs stacked form", () => {
     expect(getSourceCaptures("family")).toHaveLength(1);
   });
 });
+
+// Spec 2026-08-11-transcript-following-playback.md §6. Auto-scroll that
+// always wins is worse than none: reading ahead in a tall rail would
+// mean being pulled back every few seconds.
+describe("TranscriptSection — following without fighting the reader", () => {
+  function stubController(state: { currentTime: number }) {
+    return {
+      seek: vi.fn(),
+      play: vi.fn(),
+      pause: vi.fn(),
+      togglePlay: vi.fn(),
+      toggleMute: vi.fn(),
+      toggleFullscreen: vi.fn(),
+      getCurrentTime: () => state.currentTime,
+      getDuration: () => 10,
+      isPaused: () => false,
+      isMuted: () => false,
+      getVolume: () => 1,
+      setVolume: vi.fn(),
+      getPlaybackRate: () => 1,
+      setPlaybackRate: vi.fn(),
+      getBufferedFraction: () => 0,
+    };
+  }
+
+  const CHIP = "Back to current position";
+
+  beforeEach(() => {
+    mockAddonStatus.features.transcript_refine = "manual";
+    fetchMock.mockClear();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  async function renderFollowing() {
+    const state = { currentTime: 1 };
+    const mc = stubController(state);
+    const utils = render(
+      <TranscriptSection fileId="abc" drive="family" mediaController={mc} fillHeight />,
+    );
+    await screen.findByText("未修正の文章。");
+    const list = utils.container.querySelector(".overflow-y-auto")!;
+    return { ...utils, mc, state, list };
+  }
+
+  it("offers no chip while it is still following", async () => {
+    await renderFollowing();
+    expect(screen.queryByRole("button", { name: CHIP })).toBeNull();
+  });
+
+  it("stops following when the reader scrolls the list", async () => {
+    const { list } = await renderFollowing();
+
+    fireEvent.wheel(list);
+
+    expect(
+      await screen.findByRole("button", { name: CHIP }),
+    ).toBeInTheDocument();
+  });
+
+  it("stops following on a touch drag", async () => {
+    const { list } = await renderFollowing();
+
+    fireEvent.touchMove(list);
+
+    expect(
+      await screen.findByRole("button", { name: CHIP }),
+    ).toBeInTheDocument();
+  });
+
+  it("treats a scrollbar drag as taking over, but not a click on a row", async () => {
+    const { list } = await renderFollowing();
+
+    // Landing on a row is someone clicking a cue, not grabbing the bar.
+    const row = await screen.findByText("未修正の文章。");
+    fireEvent.pointerDown(row);
+    expect(screen.queryByRole("button", { name: CHIP })).toBeNull();
+
+    fireEvent.pointerDown(list);
+    expect(
+      await screen.findByRole("button", { name: CHIP }),
+    ).toBeInTheDocument();
+  });
+
+  it("resumes when the chip is pressed", async () => {
+    const { list } = await renderFollowing();
+    fireEvent.wheel(list);
+    const chip = await screen.findByRole("button", { name: CHIP });
+
+    fireEvent.click(chip);
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: CHIP })).toBeNull(),
+    );
+  });
+
+  it("resumes when the reader jumps to a cue", async () => {
+    const { list } = await renderFollowing();
+    fireEvent.wheel(list);
+    await screen.findByRole("button", { name: CHIP });
+
+    const rows = await screen.findAllByRole("button");
+    const cue = rows.find((r) => r.textContent?.includes("未修正の文章。"));
+    fireEvent.click(cue!);
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: CHIP })).toBeNull(),
+    );
+  });
+
+  it("keeps the chip out of the way when no cue is playing", async () => {
+    // Nothing to go back to, so the offer would be meaningless.
+    const utils = render(<TranscriptSection fileId="abc" drive="family" fillHeight />);
+    await screen.findByText("未修正の文章。");
+    const list = utils.container.querySelector(".overflow-y-auto")!;
+
+    fireEvent.wheel(list);
+
+    expect(screen.queryByRole("button", { name: CHIP })).toBeNull();
+  });
+});
+
+describe("TranscriptSection — suspension actually stops the scrolling", () => {
+  beforeEach(() => {
+    mockAddonStatus.features.transcript_refine = "manual";
+    fetchMock.mockClear();
+  });
+
+  afterEach(() => {
+    // Deliberately not vi.restoreAllMocks(): that also unwinds the
+    // module-level getFileTranscript mock and leaves the next test
+    // with a function that returns undefined. The rect spies live on
+    // elements this cleanup throws away.
+    cleanup();
+  });
+
+  /**
+   * jsdom gives every element a zero rect, so the auto-scroll's
+   * "is the active cue out of view" check is never true and it never
+   * runs. Giving the list a rect below the cue's makes it run, which is
+   * the only way to observe that suspension stops it — without this the
+   * tests above would pass against an implementation that shows the
+   * chip and keeps yanking the reader back.
+   */
+  function makeAutoScrollReachable(list: Element) {
+    vi.spyOn(list, "getBoundingClientRect").mockReturnValue({
+      top: 50,
+      bottom: 60,
+      height: 10,
+    } as DOMRect);
+  }
+
+  async function setup() {
+    const state = { currentTime: 1 };
+    const mc = {
+      seek: vi.fn(),
+      play: vi.fn(),
+      pause: vi.fn(),
+      togglePlay: vi.fn(),
+      toggleMute: vi.fn(),
+      toggleFullscreen: vi.fn(),
+      getCurrentTime: () => state.currentTime,
+      getDuration: () => 10,
+      isPaused: () => false,
+      isMuted: () => false,
+      getVolume: () => 1,
+      setVolume: vi.fn(),
+      getPlaybackRate: () => 1,
+      setPlaybackRate: vi.fn(),
+      getBufferedFraction: () => 0,
+    };
+    const utils = render(
+      <TranscriptSection fileId="abc" drive="family" mediaController={mc} fillHeight />,
+    );
+    await screen.findByText("未修正の文章。");
+    const list = utils.container.querySelector(".overflow-y-auto")! as HTMLElement;
+    const scrollTo = vi.fn();
+    list.scrollTo = scrollTo;
+    makeAutoScrollReachable(list);
+    return { list, scrollTo, state };
+  }
+
+  it("scrolls the list while following", async () => {
+    const { scrollTo, state } = await setup();
+
+    state.currentTime = 8;
+    await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+  });
+
+  it("leaves the list alone once the reader has taken over", async () => {
+    const { list, scrollTo, state } = await setup();
+
+    fireEvent.wheel(list);
+    scrollTo.mockClear();
+
+    state.currentTime = 8;
+    // Wait for the highlight to actually move first. Asserting straight
+    // after the wheel event would pass against any implementation at
+    // all — nothing has happened yet at that point.
+    await waitFor(async () => {
+      const active = await screen.findByRole("button", { current: true });
+      expect(active).toHaveTextContent("未修正の文章。");
+    });
+
+    // The highlight moved on; the list did not.
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+});
