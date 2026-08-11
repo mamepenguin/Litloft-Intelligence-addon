@@ -94,6 +94,7 @@
   },
   "searchIndex": {
     "transcriptTitle": "文字起こし",
+    "transcriptResumeFollowing": "再生位置に戻る",
     "transcriptSourceChunks": "分割テキスト",
     "transcriptSourceWords": "単語",
     "transcriptSourceExternal": "外部字幕",

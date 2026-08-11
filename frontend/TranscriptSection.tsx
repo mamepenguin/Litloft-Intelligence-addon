@@ -14,6 +14,7 @@ import { getSubtitleUrl } from "@/lib/api";
 import type { SubtitleInfo } from "@/types";
 import { useAddonStatus } from "@/components/AddonSlotsProvider";
 import type { MediaController } from "@/lib/mediaController";
+import { getMediaClockSnapshot, subscribeMediaClock } from "@/lib/mediaClock";
 import { addSourceCapture } from "@/lib/sourceCapture";
 
 interface TranscriptSectionProps {
@@ -21,12 +22,20 @@ interface TranscriptSectionProps {
   drive: string;
   filename?: string;
   fileType?: string;
-  // Legacy native-video reference. Used for the timeupdate listener
-  // (highlighting the active cue) and as the seek fallback.
-  videoRef?: React.RefObject<HTMLVideoElement | null>;
-  // Preferred jump target — works for LoftRef (YouTube) too.
+  /**
+   * The playback handle. Drives both the active-cue highlight and
+   * click-to-seek, for every backend — a native element reference is
+   * no longer involved in either.
+   */
   mediaController?: MediaController | null;
   subtitles?: SubtitleInfo[];
+  /**
+   * Set by the host when this is rendered as the companion rail beside
+   * the player, where there is a real height to fill. In the stacked
+   * form — audio, narrow containers, mobile — it stays a bounded box,
+   * because filling the height there would mean filling the page.
+   */
+  fillHeight?: boolean;
 }
 
 type Source = "chunks" | "words" | "external";
@@ -80,7 +89,7 @@ function parseVttCues(vtt: string): TranscriptChunkItem[] {
 
 const EMPTY_SUBTITLES: SubtitleInfo[] = [];
 
-export default function TranscriptSection({ fileId, drive, filename, fileType = "video", videoRef, mediaController, subtitles = EMPTY_SUBTITLES }: TranscriptSectionProps) {
+export default function TranscriptSection({ fileId, drive, filename, fileType = "video", mediaController, subtitles = EMPTY_SUBTITLES, fillHeight = false }: TranscriptSectionProps) {
   const t = useTranslations("searchIndex");
   const addonStatus = useAddonStatus("intelligence");
   const refineFeature = addonStatus.features?.transcript_refine;
@@ -98,6 +107,10 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
   const [loading, setLoading] = useState(true);
   const [source, setSource] = useState<Source>("chunks");
   const [activeIndex, setActiveIndex] = useState(-1);
+  // Whether the highlight is still allowed to drag the list around.
+  // Reading ahead has to win over following, or the reader is pulled
+  // back every few seconds.
+  const [following, setFollowing] = useState(true);
   const activeRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -154,28 +167,31 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
     return { cues: whisperChunks, language: whisperLanguage };
   }, [source, externalCues, externalLanguage, whisperWordCues, whisperChunks, whisperLanguage]);
 
-  const handleTimeUpdate = useCallback(() => {
-    const video = videoRef?.current;
-    if (!video || cues.length === 0) return;
-    const currentTime = video.currentTime;
-    const idx = cues.findIndex(
-      (c) => currentTime >= c.start && currentTime < c.end
-    );
-    setActiveIndex(idx);
-  }, [cues, videoRef]);
-
   useEffect(() => {
-    // The active-cue highlight relies on `timeupdate` events from the
-    // underlying media element. YouTube IFrame Player doesn't dispatch
-    // those into the parent document, so the highlight remains a
-    // native-video-only nicety. Skip when no native ref is supplied.
-    const video = videoRef?.current;
-    if (!video) return;
-    video.addEventListener("timeupdate", handleTimeUpdate);
-    return () => video.removeEventListener("timeupdate", handleTimeUpdate);
-  }, [videoRef, handleTimeUpdate]);
+    // The highlight used to bind `timeupdate` on an HTMLVideoElement,
+    // which a YouTube IFrame player never dispatches into the parent
+    // document — so it was a native-video-only nicety and said so.
+    // The shared playback clock reports position for every backend, so
+    // native video, native audio and .loft now take one path.
+    if (!mediaController || cues.length === 0) {
+      setActiveIndex(-1);
+      return;
+    }
+    const sync = () => {
+      const { currentTime } = getMediaClockSnapshot(mediaController);
+      // Writing the same index back is a no-op in React, so the list
+      // only re-renders when the highlight actually moves — not four
+      // times a second for the duration of the video.
+      setActiveIndex(
+        cues.findIndex((c) => currentTime >= c.start && currentTime < c.end),
+      );
+    };
+    const unsubscribe = subscribeMediaClock(mediaController, sync);
+    sync();
+    return unsubscribe;
+  }, [mediaController, cues]);
 
-  useEffect(() => {
+  const scrollActiveIntoView = useCallback(() => {
     const list = listRef.current;
     const target = activeRef.current;
     if (!list || !target) return;
@@ -189,22 +205,58 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
     const targetOffset = targetRect.top - listRect.top + list.scrollTop;
     const nextTop = targetOffset - (list.clientHeight - target.clientHeight) / 2;
     list.scrollTo({ top: nextTop, behavior: "smooth" });
-  }, [activeIndex]);
+  }, []);
+
+  useEffect(() => {
+    if (!following) return;
+    scrollActiveIntoView();
+  }, [activeIndex, following, scrollActiveIntoView]);
+
+  /**
+   * Stop following when the reader takes over.
+   *
+   * Deliberately driven by input events rather than `scroll`: the
+   * auto-scroll above emits scroll events of its own, and smooth
+   * scrolling emits a stream of them with no reliable end. Anything
+   * built on `scroll` has to guess which ones were its own doing.
+   * `wheel` and `touchmove` only ever come from the reader.
+   *
+   * `pointerdown` covers dragging the scrollbar, but only when it lands
+   * on the scroll container itself — on a row it is someone clicking a
+   * cue, which resumes following rather than suspending it.
+   */
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const suspend = () => setFollowing(false);
+    const suspendOnScrollbar = (event: PointerEvent) => {
+      if (event.target === list) setFollowing(false);
+    };
+    list.addEventListener("wheel", suspend, { passive: true });
+    list.addEventListener("touchmove", suspend, { passive: true });
+    list.addEventListener("pointerdown", suspendOnScrollbar);
+    return () => {
+      list.removeEventListener("wheel", suspend);
+      list.removeEventListener("touchmove", suspend);
+      list.removeEventListener("pointerdown", suspendOnScrollbar);
+    };
+  }, [cues.length]);
+
+  const resumeFollowing = useCallback(() => {
+    setFollowing(true);
+    scrollActiveIntoView();
+  }, [scrollActiveIntoView]);
 
   const seekTo = useCallback(
     (time: number) => {
-      // Prefer the unified controller (LoftRef / native both supported).
-      if (mediaController) {
-        mediaController.seek(time);
-        mediaController.play();
-        return;
-      }
-      const video = videoRef?.current;
-      if (video) {
-        video.currentTime = time;
-      }
+      if (!mediaController) return;
+      // Jumping somewhere deliberately is a statement about where the
+      // reader wants to be, so it ends any suspension too.
+      setFollowing(true);
+      mediaController.seek(time);
+      mediaController.play();
     },
-    [videoRef, mediaController]
+    [mediaController]
   );
 
   const captureCue = useCallback(
@@ -254,7 +306,13 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
   const showToggle = visibleOptions.length >= 2;
 
   return (
-    <div>
+    <div
+      // Fills its column as a flex item, not with `h-full`. The rail's
+      // height comes from a max-height clamp rather than a set height,
+      // and a percentage height against that resolves to auto — the
+      // list then renders at full length and is silently clipped.
+      className={fillHeight ? "flex min-h-0 flex-1 flex-col" : undefined}
+    >
       <div className="mb-2 flex items-center gap-2 text-sm text-text-muted">
         <FileText size={14} />
         <span>{t("transcriptTitle")}</span>
@@ -293,8 +351,24 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
         )}
       </div>
       <div
+        className={`relative ${fillHeight ? "flex min-h-0 flex-1 flex-col" : ""}`}
+      >
+        {/* Only offered when there is somewhere to go back to: with no
+            cue playing, "current position" means nothing. */}
+        {!following && activeIndex >= 0 && (
+          <button
+            type="button"
+            onClick={resumeFollowing}
+            className="absolute inset-x-0 top-1 z-10 mx-auto w-fit rounded-full bg-accent px-3 py-1 text-xs font-medium text-white shadow-card hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          >
+            {t("transcriptResumeFollowing")}
+          </button>
+        )}
+      <div
         ref={listRef}
-        className="max-h-80 space-y-0.5 overflow-y-auto rounded-lg bg-bg-card p-2"
+        className={`space-y-0.5 overflow-y-auto rounded-lg bg-bg-card p-2 ${
+          fillHeight ? "min-h-0 flex-1" : "max-h-80"
+        }`}
       >
         {cues.map((cue) => {
           const isRefined = Boolean(cue.refinedAt);
@@ -310,6 +384,9 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
               <button
                 type="button"
                 ref={cue.index === activeIndex ? activeRef : undefined}
+                // Announces the row playback is currently on, and is
+                // the only handle a test has on the highlight.
+                aria-current={cue.index === activeIndex ? "true" : undefined}
                 onClick={() => seekTo(cue.start)}
                 className="flex min-w-0 flex-1 cursor-pointer gap-3 px-2 py-1.5 text-left"
               >
@@ -335,6 +412,7 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
             </div>
           );
         })}
+      </div>
       </div>
     </div>
   );
