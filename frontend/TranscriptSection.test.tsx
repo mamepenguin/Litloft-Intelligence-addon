@@ -260,3 +260,56 @@ describe("TranscriptSection — following playback", () => {
     expect(screen.queryByRole("button", { current: true })).toBeNull();
   });
 });
+
+describe("TranscriptSection — rail vs stacked form", () => {
+  beforeEach(() => {
+    mockAddonStatus.features.transcript_refine = "manual";
+    fetchMock.mockClear();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("keeps a bounded box in the stacked form", async () => {
+    const { container } = render(
+      <TranscriptSection fileId="abc" drive="family" />,
+    );
+    await screen.findByText("未修正の文章。");
+
+    // Filling the height here would mean filling the page.
+    const list = container.querySelector(".overflow-y-auto");
+    expect(list?.className).toContain("max-h-80");
+  });
+
+  it("fills the available height in the rail", async () => {
+    const { container } = render(
+      <TranscriptSection fileId="abc" drive="family" fillHeight />,
+    );
+    await screen.findByText("未修正の文章。");
+
+    const list = container.querySelector(".overflow-y-auto");
+    expect(list?.className).not.toContain("max-h-80");
+    expect(list?.className).toContain("flex-1");
+  });
+
+  it("stages a capture from a row in either form", async () => {
+    clearSourceCaptures("family");
+    render(
+      <TranscriptSection
+        fileId="abc"
+        drive="family"
+        filename="meeting.mp4"
+        fileType="video"
+        fillHeight
+      />,
+    );
+
+    const buttons = await screen.findAllByRole("button", {
+      name: "Add transcript excerpt to capture basket",
+    });
+    fireEvent.click(buttons[0]);
+
+    expect(getSourceCaptures("family")).toHaveLength(1);
+  });
+});

@@ -29,6 +29,13 @@ interface TranscriptSectionProps {
    */
   mediaController?: MediaController | null;
   subtitles?: SubtitleInfo[];
+  /**
+   * Set by the host when this is rendered as the companion rail beside
+   * the player, where there is a real height to fill. In the stacked
+   * form — audio, narrow containers, mobile — it stays a bounded box,
+   * because filling the height there would mean filling the page.
+   */
+  fillHeight?: boolean;
 }
 
 type Source = "chunks" | "words" | "external";
@@ -82,7 +89,7 @@ function parseVttCues(vtt: string): TranscriptChunkItem[] {
 
 const EMPTY_SUBTITLES: SubtitleInfo[] = [];
 
-export default function TranscriptSection({ fileId, drive, filename, fileType = "video", mediaController, subtitles = EMPTY_SUBTITLES }: TranscriptSectionProps) {
+export default function TranscriptSection({ fileId, drive, filename, fileType = "video", mediaController, subtitles = EMPTY_SUBTITLES, fillHeight = false }: TranscriptSectionProps) {
   const t = useTranslations("searchIndex");
   const addonStatus = useAddonStatus("intelligence");
   const refineFeature = addonStatus.features?.transcript_refine;
@@ -252,7 +259,7 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
   const showToggle = visibleOptions.length >= 2;
 
   return (
-    <div>
+    <div className={fillHeight ? "flex h-full min-h-0 flex-col" : undefined}>
       <div className="mb-2 flex items-center gap-2 text-sm text-text-muted">
         <FileText size={14} />
         <span>{t("transcriptTitle")}</span>
@@ -292,7 +299,9 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
       </div>
       <div
         ref={listRef}
-        className="max-h-80 space-y-0.5 overflow-y-auto rounded-lg bg-bg-card p-2"
+        className={`space-y-0.5 overflow-y-auto rounded-lg bg-bg-card p-2 ${
+          fillHeight ? "min-h-0 flex-1" : "max-h-80"
+        }`}
       >
         {cues.map((cue) => {
           const isRefined = Boolean(cue.refinedAt);
