@@ -306,7 +306,13 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
   const showToggle = visibleOptions.length >= 2;
 
   return (
-    <div className={fillHeight ? "flex h-full min-h-0 flex-col" : undefined}>
+    <div
+      // Fills its column as a flex item, not with `h-full`. The rail's
+      // height comes from a max-height clamp rather than a set height,
+      // and a percentage height against that resolves to auto — the
+      // list then renders at full length and is silently clipped.
+      className={fillHeight ? "flex min-h-0 flex-1 flex-col" : undefined}
+    >
       <div className="mb-2 flex items-center gap-2 text-sm text-text-muted">
         <FileText size={14} />
         <span>{t("transcriptTitle")}</span>
