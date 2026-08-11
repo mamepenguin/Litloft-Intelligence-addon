@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import React from "react";
 
 // Mock global fetch (used by component for VTT endpoints)
@@ -82,10 +82,7 @@ import {
 } from "@/lib/sourceCapture";
 
 function renderSection() {
-  const videoRef = { current: null } as React.RefObject<HTMLVideoElement | null>;
-  return render(
-    <TranscriptSection fileId="abc" drive="family" videoRef={videoRef} />
-  );
+  return render(<TranscriptSection fileId="abc" drive="family" />);
 }
 
 describe("TranscriptSection — transcript refine UI", () => {
@@ -124,14 +121,12 @@ describe("TranscriptSection — transcript refine UI", () => {
   });
 
   it("adds a transcript cue with its time range to the capture basket", async () => {
-    const videoRef = { current: null } as React.RefObject<HTMLVideoElement | null>;
     render(
       <TranscriptSection
         fileId="abc"
         drive="family"
         filename="meeting.mp4"
         fileType="video"
-        videoRef={videoRef}
       />,
     );
 
@@ -175,5 +170,93 @@ describe("TranscriptSection — transcript refine UI", () => {
     expect(
       screen.queryByRole("button", { name: /Undo AI refine/ })
     ).not.toBeInTheDocument();
+  });
+});
+
+// Spec 2026-08-11-transcript-following-playback.md §5. The highlight
+// used to bind `timeupdate` on an HTMLVideoElement, so it never worked
+// for a YouTube IFrame player. It now reads the shared playback clock,
+// which every backend feeds.
+describe("TranscriptSection — following playback", () => {
+  function stubController(state: { currentTime: number; paused: boolean }) {
+    return {
+      seek: vi.fn((s: number) => {
+        state.currentTime = s;
+      }),
+      play: vi.fn(),
+      pause: vi.fn(),
+      togglePlay: vi.fn(),
+      toggleMute: vi.fn(),
+      toggleFullscreen: vi.fn(),
+      getCurrentTime: () => state.currentTime,
+      getDuration: () => 10,
+      isPaused: () => state.paused,
+      isMuted: () => false,
+      getVolume: () => 1,
+      setVolume: vi.fn(),
+      getPlaybackRate: () => 1,
+      setPlaybackRate: vi.fn(),
+      getBufferedFraction: () => 0,
+    };
+  }
+
+  beforeEach(() => {
+    mockAddonStatus.features.transcript_refine = "manual";
+    fetchMock.mockClear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("highlights the cue playback is inside, with no media element involved", async () => {
+    const state = { currentTime: 7, paused: false };
+    const mc = stubController(state);
+    render(
+      <TranscriptSection fileId="abc" drive="family" mediaController={mc} />,
+    );
+
+    // Fixture: chunk 0 spans 0-5, chunk 1 spans 5-10.
+    const active = await screen.findByRole("button", { current: true });
+    expect(active).toHaveTextContent("未修正の文章。");
+  });
+
+  it("moves the highlight as playback advances", async () => {
+    const state = { currentTime: 1, paused: false };
+    const mc = stubController(state);
+    render(
+      <TranscriptSection fileId="abc" drive="family" mediaController={mc} />,
+    );
+
+    let active = await screen.findByRole("button", { current: true });
+    expect(active).toHaveTextContent("これは修正された文章です。");
+
+    state.currentTime = 8;
+    await waitFor(async () => {
+      active = await screen.findByRole("button", { current: true });
+      expect(active).toHaveTextContent("未修正の文章。");
+    });
+  });
+
+  it("seeks through the controller when a row is clicked", async () => {
+    const state = { currentTime: 0, paused: true };
+    const mc = stubController(state);
+    render(
+      <TranscriptSection fileId="abc" drive="family" mediaController={mc} />,
+    );
+
+    const rows = await screen.findAllByRole("button");
+    const secondCue = rows.find((r) => r.textContent?.includes("未修正の文章。"));
+    fireEvent.click(secondCue!);
+
+    expect(mc.seek).toHaveBeenCalledWith(5);
+    expect(mc.play).toHaveBeenCalled();
+  });
+
+  it("highlights nothing without a controller", async () => {
+    render(<TranscriptSection fileId="abc" drive="family" />);
+    await screen.findAllByText("これは修正された文章です。");
+    expect(screen.queryByRole("button", { current: true })).toBeNull();
   });
 });

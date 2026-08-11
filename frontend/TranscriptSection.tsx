@@ -14,6 +14,7 @@ import { getSubtitleUrl } from "@/lib/api";
 import type { SubtitleInfo } from "@/types";
 import { useAddonStatus } from "@/components/AddonSlotsProvider";
 import type { MediaController } from "@/lib/mediaController";
+import { getMediaClockSnapshot, subscribeMediaClock } from "@/lib/mediaClock";
 import { addSourceCapture } from "@/lib/sourceCapture";
 
 interface TranscriptSectionProps {
@@ -21,10 +22,11 @@ interface TranscriptSectionProps {
   drive: string;
   filename?: string;
   fileType?: string;
-  // Legacy native-video reference. Used for the timeupdate listener
-  // (highlighting the active cue) and as the seek fallback.
-  videoRef?: React.RefObject<HTMLVideoElement | null>;
-  // Preferred jump target — works for LoftRef (YouTube) too.
+  /**
+   * The playback handle. Drives both the active-cue highlight and
+   * click-to-seek, for every backend — a native element reference is
+   * no longer involved in either.
+   */
   mediaController?: MediaController | null;
   subtitles?: SubtitleInfo[];
 }
@@ -80,7 +82,7 @@ function parseVttCues(vtt: string): TranscriptChunkItem[] {
 
 const EMPTY_SUBTITLES: SubtitleInfo[] = [];
 
-export default function TranscriptSection({ fileId, drive, filename, fileType = "video", videoRef, mediaController, subtitles = EMPTY_SUBTITLES }: TranscriptSectionProps) {
+export default function TranscriptSection({ fileId, drive, filename, fileType = "video", mediaController, subtitles = EMPTY_SUBTITLES }: TranscriptSectionProps) {
   const t = useTranslations("searchIndex");
   const addonStatus = useAddonStatus("intelligence");
   const refineFeature = addonStatus.features?.transcript_refine;
@@ -154,26 +156,29 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
     return { cues: whisperChunks, language: whisperLanguage };
   }, [source, externalCues, externalLanguage, whisperWordCues, whisperChunks, whisperLanguage]);
 
-  const handleTimeUpdate = useCallback(() => {
-    const video = videoRef?.current;
-    if (!video || cues.length === 0) return;
-    const currentTime = video.currentTime;
-    const idx = cues.findIndex(
-      (c) => currentTime >= c.start && currentTime < c.end
-    );
-    setActiveIndex(idx);
-  }, [cues, videoRef]);
-
   useEffect(() => {
-    // The active-cue highlight relies on `timeupdate` events from the
-    // underlying media element. YouTube IFrame Player doesn't dispatch
-    // those into the parent document, so the highlight remains a
-    // native-video-only nicety. Skip when no native ref is supplied.
-    const video = videoRef?.current;
-    if (!video) return;
-    video.addEventListener("timeupdate", handleTimeUpdate);
-    return () => video.removeEventListener("timeupdate", handleTimeUpdate);
-  }, [videoRef, handleTimeUpdate]);
+    // The highlight used to bind `timeupdate` on an HTMLVideoElement,
+    // which a YouTube IFrame player never dispatches into the parent
+    // document — so it was a native-video-only nicety and said so.
+    // The shared playback clock reports position for every backend, so
+    // native video, native audio and .loft now take one path.
+    if (!mediaController || cues.length === 0) {
+      setActiveIndex(-1);
+      return;
+    }
+    const sync = () => {
+      const { currentTime } = getMediaClockSnapshot(mediaController);
+      // Writing the same index back is a no-op in React, so the list
+      // only re-renders when the highlight actually moves — not four
+      // times a second for the duration of the video.
+      setActiveIndex(
+        cues.findIndex((c) => currentTime >= c.start && currentTime < c.end),
+      );
+    };
+    const unsubscribe = subscribeMediaClock(mediaController, sync);
+    sync();
+    return unsubscribe;
+  }, [mediaController, cues]);
 
   useEffect(() => {
     const list = listRef.current;
@@ -193,18 +198,11 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
 
   const seekTo = useCallback(
     (time: number) => {
-      // Prefer the unified controller (LoftRef / native both supported).
-      if (mediaController) {
-        mediaController.seek(time);
-        mediaController.play();
-        return;
-      }
-      const video = videoRef?.current;
-      if (video) {
-        video.currentTime = time;
-      }
+      if (!mediaController) return;
+      mediaController.seek(time);
+      mediaController.play();
     },
-    [videoRef, mediaController]
+    [mediaController]
   );
 
   const captureCue = useCallback(
@@ -310,6 +308,9 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
               <button
                 type="button"
                 ref={cue.index === activeIndex ? activeRef : undefined}
+                // Announces the row playback is currently on, and is
+                // the only handle a test has on the highlight.
+                aria-current={cue.index === activeIndex ? "true" : undefined}
                 onClick={() => seekTo(cue.start)}
                 className="flex min-w-0 flex-1 cursor-pointer gap-3 px-2 py-1.5 text-left"
               >
