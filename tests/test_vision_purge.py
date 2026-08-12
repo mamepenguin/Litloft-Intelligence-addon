@@ -50,6 +50,7 @@ def _build_engine(tmp_path):
     from app.database import (
         Base,
         _create_file_summaries_table,
+        _create_suggested_chapters_table,
         _create_suggested_tags_table,
     )
 
@@ -61,6 +62,7 @@ def _build_engine(tmp_path):
     Base.metadata.create_all(engine)
     with engine.begin() as conn:
         _create_file_summaries_table(conn)
+        _create_suggested_chapters_table(conn)
         _create_suggested_tags_table(conn)
         # FTS mirrors (purge touches these).
         conn.execute(text(

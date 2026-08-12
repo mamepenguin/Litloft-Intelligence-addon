@@ -9,6 +9,7 @@ import {
   FileText,
   Image as ImageIcon,
   KeyRound,
+  ListVideo,
   Loader2,
   MessageSquareText,
   Mic,
@@ -51,6 +52,7 @@ const TASK_ORDER: QueueTaskKind[] = [
   "vision_describe",
   "transcript_refine",
   "retrieval_keywords",
+  "chapter_suggestions",
 ];
 
 const TASK_ICON: Record<QueueTaskKind, LucideIcon> = {
@@ -63,6 +65,7 @@ const TASK_ICON: Record<QueueTaskKind, LucideIcon> = {
   vision_describe: Sparkles,
   transcript_refine: WandSparkles,
   retrieval_keywords: KeyRound,
+  chapter_suggestions: ListVideo,
 };
 
 function ProgressBar({

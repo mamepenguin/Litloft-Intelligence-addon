@@ -123,10 +123,12 @@ class IndexManager:
         auto_tags_worker: object | None = None,
         summaries_worker: object | None = None,
         retrieval_keywords_worker: object | None = None,
+        chapter_suggestions_worker: object | None = None,
     ) -> None:
         self._auto_tags_worker = auto_tags_worker
         self._summaries_worker = summaries_worker
         self._retrieval_keywords_worker = retrieval_keywords_worker
+        self._chapter_suggestions_worker = chapter_suggestions_worker
         self._queues: dict[TaskType, asyncio.PriorityQueue[tuple[int, float, IndexTask]]] = {
             task_type: asyncio.PriorityQueue()
             for task_type in TaskType
@@ -902,6 +904,18 @@ class IndexManager:
                 ),
                 {"fid": file_id},
             ).fetchone() is None
+            no_chapters = False
+            if (
+                self._chapter_suggestions_worker is not None
+                and settings.features.chapter_suggestions == "on_index"
+            ):
+                no_chapters = session.execute(
+                    sql_text(
+                        "SELECT 1 FROM suggested_chapters "
+                        "WHERE file_id = :fid LIMIT 1"
+                    ),
+                    {"fid": file_id},
+                ).fetchone() is None
 
         # SummariesWorker.enqueue gates per-layer (short/long vs detailed)
         # internally — hand it the file when either layer is on_index.
@@ -922,6 +936,13 @@ class IndexManager:
             and settings.features.auto_tags == "on_index"
         ):
             await self._auto_tags_worker.enqueue(file_id)
+
+        if (
+            self._chapter_suggestions_worker is not None
+            and no_chapters
+            and settings.features.chapter_suggestions == "on_index"
+        ):
+            await self._chapter_suggestions_worker.enqueue(file_id)
 
     # ``reindex_all`` permanently removed per spec
     # ``2026-05-24-intelligence-reindex-controls.md`` §1. The single
@@ -1777,6 +1798,10 @@ def _purge_file(file_id: str) -> None:
         # otherwise synthesized content from deleted files survives in DB.
         session.execute(
             sql_text("DELETE FROM suggested_tags WHERE file_id = :fid"),
+            {"fid": file_id},
+        )
+        session.execute(
+            sql_text("DELETE FROM suggested_chapters WHERE file_id = :fid"),
             {"fid": file_id},
         )
         session.execute(

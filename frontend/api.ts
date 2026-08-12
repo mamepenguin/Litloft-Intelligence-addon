@@ -68,7 +68,7 @@ export interface QueueTaskBreakdown {
 // Task kinds that may appear under queue.tasks. The four indexing
 // types (metadata, clip, whisper, text_content) are always present;
 // LLM-task entries (auto_tags, summaries, vision_describe,
-// transcript_refine, retrieval_keywords) are only present when their
+// transcript_refine, retrieval_keywords, chapter_suggestions) are only present when their
 // worker is running.
 export type QueueTaskKind =
   | "metadata"
@@ -79,7 +79,8 @@ export type QueueTaskKind =
   | "summaries"
   | "vision_describe"
   | "transcript_refine"
-  | "retrieval_keywords";
+  | "retrieval_keywords"
+  | "chapter_suggestions";
 
 export interface SearchServiceStatus {
   available: boolean;
@@ -437,6 +438,67 @@ export async function batchSuggestedTags(
       body: JSON.stringify({ file_ids: fileIds }),
     }
   );
+}
+
+// LLM-derived chapter candidates. Candidates stay in the Intelligence
+// database until the user approves the whole set; approval promotes them
+// into core's curated chapters through the addon backend.
+export interface SuggestedChapterItem {
+  start_time: number;
+  end_time: number | null;
+  title: string;
+}
+
+export interface SuggestedChaptersResponse {
+  enabled: boolean;
+  available: boolean;
+  file_id?: string;
+  chapters: SuggestedChapterItem[];
+  model?: string;
+  status?: "pending" | "accepted" | "dismissed";
+  created_at?: string;
+}
+
+export async function getSuggestedChapters(
+  fileId: string,
+  drive: string,
+): Promise<SuggestedChaptersResponse> {
+  return fetchJSON<SuggestedChaptersResponse>(
+    `${API_BASE}/addons/intelligence/files/${fileId}/chapter-suggestions`,
+    { headers: driveHeaders(drive) },
+  );
+}
+
+async function postSuggestedChapterAction(
+  fileId: string,
+  drive: string,
+  action: "generate" | "approve" | "dismiss",
+): Promise<void> {
+  await fetchJSON(
+    `${API_BASE}/addons/intelligence/files/${fileId}/chapter-suggestions/${action}`,
+    { method: "POST", headers: driveHeaders(drive) },
+  );
+}
+
+export async function generateSuggestedChapters(
+  fileId: string,
+  drive: string,
+): Promise<void> {
+  await postSuggestedChapterAction(fileId, drive, "generate");
+}
+
+export async function approveSuggestedChapters(
+  fileId: string,
+  drive: string,
+): Promise<void> {
+  await postSuggestedChapterAction(fileId, drive, "approve");
+}
+
+export async function dismissSuggestedChapters(
+  fileId: string,
+  drive: string,
+): Promise<void> {
+  await postSuggestedChapterAction(fileId, drive, "dismiss");
 }
 
 // Summaries types and API

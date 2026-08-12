@@ -196,9 +196,13 @@ def test_purge_file_also_wipes_detailed_summary_columns(tmp_path, monkeypatch):
         # Phase 1: _purge_file now also wipes citations, so the table
         # must exist even for tests that never insert citations.
         _create_detailed_summary_citations_table(conn)
-        # suggested_tags is a raw-SQL table like file_summaries.
-        from app.database import _create_suggested_tags_table
+        # Suggested candidates use raw-SQL tables like file_summaries.
+        from app.database import (
+            _create_suggested_chapters_table,
+            _create_suggested_tags_table,
+        )
         _create_suggested_tags_table(conn)
+        _create_suggested_chapters_table(conn)
         # FTS mirrors touched by _purge_file. sqlite-vec is unavailable
         # in the vanilla test image, so create FTS5 tables directly
         # without going through _create_vec_tables (which also tries

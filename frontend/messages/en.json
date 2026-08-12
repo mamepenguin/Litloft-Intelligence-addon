@@ -5,6 +5,11 @@
         "label": "Allow cloud transcription",
         "help": "Sends audio to external services such as Deepgram / OpenAI / ElevenLabs Scribe. When OFF, this drive uses local Whisper only.",
         "warning": "Cloud transcription jobs already in progress will continue after you turn this OFF. Restart the container to apply the change immediately."
+      },
+      "chapterSuggestions": {
+        "label": "Allow AI chapter suggestions",
+        "help": "Sends media transcripts to the configured LLM to create chapter candidates. Candidates are never applied until you approve them.",
+        "warning": "Chapter suggestion jobs already in progress will continue after you turn this OFF. Restart the container to apply the change immediately."
       }
     }
   },
@@ -89,6 +94,9 @@
       },
       "retrieval_keywords": {
         "label": "AI search keyword expansion"
+      },
+      "chapter_suggestions": {
+        "label": "AI chapter candidates"
       }
     }
   },
@@ -204,6 +212,19 @@
     "regenerateTags": "Create again",
     "generateTags": "Create AI tag candidates",
     "regeneratingTags": "Creating...",
+    "suggestedChapters": "AI chapter candidates",
+    "generateChapters": "Create AI chapter candidates",
+    "generatingChapters": "Creating chapters...",
+    "approveChapters": "Approve all",
+    "approvingChapters": "Approving...",
+    "dismissChapters": "Dismiss",
+    "dismissingChapters": "Dismissing...",
+    "regenerateChapters": "Create again",
+    "chapterCandidatesAccepted": "Chapter candidates approved",
+    "chapterCandidatesDismissed": "Chapter candidates dismissed",
+    "chapterCandidatesLoadError": "Could not load chapter candidates. Try again.",
+    "chapterCandidatesActionError": "The chapter action failed. Try again.",
+    "chapterCandidatesGenerationFailed": "Chapter generation failed. Try creating them again.",
     "aiFolderActions": "AI",
     "generateFolderTags": "Create AI tag candidates for folder",
     "tagsBatchQueued": "Added {queued} files to the queue ({skipped} skipped)",
@@ -372,6 +393,10 @@
         "retrieval_keywords": {
           "label": "AI search keyword expansion",
           "help": "Creates helper keywords such as synonyms, abbreviations, and alternate names per file, then stores them in a dedicated search index. This helps cover proper nouns that speech recognition may misread. Transcript or document text (up to 8,000 characters) is sent to the LLM API."
+        },
+        "chapter_suggestions": {
+          "label": "AI chapter candidates",
+          "help": "Creates chapter candidates from media transcripts. Manual only creates them when requested; Auto creates them during indexing. Candidates are not applied until you approve the whole set."
         }
       }
     },

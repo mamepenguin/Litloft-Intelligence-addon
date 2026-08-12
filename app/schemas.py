@@ -1,7 +1,7 @@
 """Pydantic models for request/response schemas."""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -71,6 +71,23 @@ class FeaturesStatus(BaseModel):
     summaries: str
     rag: bool = False
     transcript_refine: str = "false"
+    chapter_suggestions: str = "false"
+
+
+class ChapterSuggestionItem(BaseModel):
+    start_time: float
+    end_time: float | None = None
+    title: str
+
+
+class ChapterSuggestionsResponse(BaseModel):
+    enabled: bool = True
+    available: bool
+    file_id: str | None = None
+    chapters: list[ChapterSuggestionItem] = Field(default_factory=list)
+    model: str | None = None
+    status: Literal["pending", "accepted", "dismissed"] | None = None
+    created_at: str | None = None
 
 
 class LLMStatus(BaseModel):

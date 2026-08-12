@@ -18,6 +18,7 @@ const TRISTATE_FIELDS = [
   "transcript_refine",
   "vision_describe",
   "retrieval_keywords",
+  "chapter_suggestions",
 ] as const;
 const BOOL_FIELDS = ["indexing", "search", "rag"] as const;
 
@@ -34,6 +35,7 @@ interface FeaturesPayload {
   transcript_refine: string;
   vision_describe: string;
   retrieval_keywords: string;
+  chapter_suggestions: string;
   tristate_values: string[];
   overrides_present: boolean;
 }
@@ -111,6 +113,7 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
     transcript_refine: "false",
     vision_describe: "false",
     retrieval_keywords: "false",
+    chapter_suggestions: "false",
   });
 
   const reload = useCallback(async () => {
@@ -128,6 +131,7 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
       transcript_refine: payload.transcript_refine,
       vision_describe: payload.vision_describe,
       retrieval_keywords: payload.retrieval_keywords,
+      chapter_suggestions: payload.chapter_suggestions,
     });
   }, []);
 

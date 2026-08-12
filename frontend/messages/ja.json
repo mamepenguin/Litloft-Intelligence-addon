@@ -5,6 +5,11 @@
         "label": "クラウド文字起こしを許可",
         "help": "Deepgram / OpenAI / ElevenLabs Scribeなどの外部サービスに音声を送信します。OFFにすると、このドライブではローカルWhisperだけを使います。",
         "warning": "OFFに切り替えた後も、進行中のクラウド文字起こしは継続されます。すぐに反映するにはコンテナの再起動が必要です。"
+      },
+      "chapterSuggestions": {
+        "label": "AIチャプター候補を許可",
+        "help": "メディアの文字起こしを設定済みのLLMへ送信し、チャプター候補を作成します。候補は承認するまで反映されません。",
+        "warning": "OFFに切り替えた後も、進行中のチャプター候補作成は継続されます。すぐに反映するにはコンテナの再起動が必要です。"
       }
     }
   },
@@ -89,6 +94,9 @@
       },
       "retrieval_keywords": {
         "label": "AI検索キーワード展開"
+      },
+      "chapter_suggestions": {
+        "label": "AIチャプター候補"
       }
     }
   },
@@ -204,6 +212,19 @@
     "regenerateTags": "作り直す",
     "generateTags": "AIタグ候補を作成",
     "regeneratingTags": "作成中...",
+    "suggestedChapters": "AIチャプター候補",
+    "generateChapters": "AIチャプター候補を作成",
+    "generatingChapters": "チャプターを作成中...",
+    "approveChapters": "すべて承認",
+    "approvingChapters": "承認中...",
+    "dismissChapters": "却下",
+    "dismissingChapters": "却下中...",
+    "regenerateChapters": "作り直す",
+    "chapterCandidatesAccepted": "チャプター候補を承認しました",
+    "chapterCandidatesDismissed": "チャプター候補を却下しました",
+    "chapterCandidatesLoadError": "チャプター候補を読み込めませんでした。もう一度お試しください。",
+    "chapterCandidatesActionError": "チャプターの操作に失敗しました。もう一度お試しください。",
+    "chapterCandidatesGenerationFailed": "チャプター生成に失敗しました。もう一度作成してください。",
     "aiFolderActions": "AI",
     "generateFolderTags": "フォルダのAIタグ候補を作成",
     "tagsBatchQueued": "{queued}件を処理待ちに追加しました（{skipped}件はスキップ）",
@@ -372,6 +393,10 @@
         "retrieval_keywords": {
           "label": "AI検索キーワード拡張",
           "help": "ファイルごとに同義語、略語、別名などの補助キーワードを作成し、専用の検索インデックスに保存します。音声認識で誤認識されやすい固有名詞を補うのに役立ちます。文字起こしまたは本文テキスト（最大8,000字）がLLM APIに送信されます。"
+        },
+        "chapter_suggestions": {
+          "label": "AIチャプター候補",
+          "help": "メディアの文字起こしからチャプター候補を作成します。「手動」はユーザー操作時のみ、「自動」はインデックス時に作成します。候補はセット全体を承認するまで反映されません。"
         }
       }
     },

@@ -47,6 +47,7 @@ from app.database import (  # noqa: E402
     _create_detailed_summary_citations_table,
     _create_file_insights_table,
     _create_file_summaries_table,
+    _create_suggested_chapters_table,
 )
 
 # Import models at module import-time so Base.metadata.create_all()
@@ -71,6 +72,7 @@ def search_db(tmp_path, monkeypatch):
         _create_file_summaries_table(conn)
         _create_detailed_summary_citations_table(conn)
         _create_file_insights_table(conn)
+        _create_suggested_chapters_table(conn)
         # FTS mirrors used by _purge_file — create minimal rooms so the
         # purge test can run the helper end-to-end without SQL errors.
         conn.execute(text(
