@@ -11,6 +11,7 @@ Tables emptied per drive:
 - ``embeddings`` and their vector-table backing rows (joined via file_id)
 - ``transcript_chunks`` and ``transcript_words`` (file_id)
 - ``suggested_tags`` (file_id)
+- ``suggested_chapters`` (file_id)
 - ``file_summaries`` (file_id)
 - ``file_insights`` (file_id, via ``_purge_file`` cascade)
 - FTS5 mirrors (``fts_files``, ``fts_transcripts``, ``fts_text_content``)

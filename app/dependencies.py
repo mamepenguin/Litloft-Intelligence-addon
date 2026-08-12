@@ -7,6 +7,7 @@ from fastapi import Header, HTTPException
 from app.indexer import IndexManager
 from app.llm import LLMClient
 from app.workers.auto_tags import AutoTagsWorker
+from app.workers.chapter_suggestions import ChapterSuggestionsWorker
 from app.workers.pickup import PickupWorker
 from app.workers.retrieval_keywords import RetrievalKeywordsWorker
 from app.workers.summaries import SummariesWorker
@@ -15,6 +16,7 @@ from app.workers.vision import VisionDescribeWorker
 # Module-level state (initialized during lifespan in main.py)
 _index_manager: IndexManager | None = None
 _auto_tags_worker: AutoTagsWorker | None = None
+_chapter_suggestions_worker: ChapterSuggestionsWorker | None = None
 _summaries_worker: SummariesWorker | None = None
 _vision_worker: VisionDescribeWorker | None = None
 _retrieval_keywords_worker: RetrievalKeywordsWorker | None = None
@@ -44,6 +46,12 @@ def get_auto_tags_worker() -> AutoTagsWorker:
     if _auto_tags_worker is None:
         raise RuntimeError("Auto-tags worker not initialized")
     return _auto_tags_worker
+
+
+def get_chapter_suggestions_worker() -> ChapterSuggestionsWorker:
+    if _chapter_suggestions_worker is None:
+        raise RuntimeError("Chapter suggestions worker not initialized")
+    return _chapter_suggestions_worker
 
 
 def get_summaries_worker() -> SummariesWorker:

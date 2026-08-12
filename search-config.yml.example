@@ -75,6 +75,13 @@ features:
                       # Per-drive opt-out via drives.json:
                       #   "intelligence": {"retrieval_keywords": false}
                       # Requires llm.provider != "disabled".
+  chapter_suggestions: "false"
+                      # "false" | "manual" | "on_index" — suggests a
+                      # complete chapter set from timestamped transcripts.
+                      # Candidates require explicit approval before core
+                      # chapters change. SECURITY: transcript content is sent
+                      # to the configured LLM provider; prefer a local model
+                      # for private drives.
 
 # LLM provider configuration (required for auto_tags and future LLM features)
 # Supported providers:

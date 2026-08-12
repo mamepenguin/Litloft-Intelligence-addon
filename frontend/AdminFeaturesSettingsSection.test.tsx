@@ -34,6 +34,7 @@ function defaultPayload(overrides: Record<string, unknown> = {}) {
     transcript_refine: "false",
     vision_describe: "manual",
     retrieval_keywords: "false",
+    chapter_suggestions: "manual",
     tristate_values: ["false", "manual", "on_index"],
     overrides_present: false,
     ...overrides,
@@ -48,7 +49,10 @@ describe("AdminFeaturesSettingsSection", () => {
       expect(screen.getByRole("button", { name: /save/i })).toBeInTheDocument(),
     );
     expect(screen.getAllByRole("checkbox").length).toBe(3);
-    expect(screen.getAllByRole("radio").length).toBe(18); // 6 enums × 3 values
+    expect(screen.getAllByRole("radio").length).toBe(21); // 7 enums × 3 values
+    expect(
+      screen.getByText(/AI chapter candidates|settings\.features\.fields\.chapter_suggestions\.label/),
+    ).toBeInTheDocument();
   });
 
   it("PUTs the form values on save", async () => {
@@ -70,6 +74,7 @@ describe("AdminFeaturesSettingsSection", () => {
       expect(putCall?.[0]).toBe(ENDPOINT);
       const body = JSON.parse(String(putCall?.[1]?.body ?? "{}"));
       expect(body.indexing).toBe(false);
+      expect(body.chapter_suggestions).toBe("manual");
     });
   });
 

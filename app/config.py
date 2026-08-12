@@ -307,6 +307,10 @@ class FeaturesConfig:
     # Default off — file content is sent to the LLM API. Spec:
     # docs/superpowers/specs/2026-05-14-sira-retrieval-keywords.md.
     retrieval_keywords: str = "false"
+    # LLM-derived media chapter candidates ("false" | "manual" |
+    # "on_index"). Default off because timestamped transcript content is
+    # sent to the configured LLM provider.
+    chapter_suggestions: str = "false"
 
 
 @dataclass(frozen=True)

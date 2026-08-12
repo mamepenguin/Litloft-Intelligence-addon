@@ -12,9 +12,10 @@
         ],
         "file-detail-sections": [
             {"id": "suggested-tags", "label": "Suggested Tags", "priority": 5},
-            {"id": "summary", "label": "AI Summary", "priority": 6},
-            {"id": "detailed-summary", "label": "AI Detailed Summary", "priority": 7},
-            {"id": "visual-description", "label": "AI Visual Description", "priority": 8},
+            {"id": "suggested-chapters", "label": "Suggested Chapters", "priority": 6},
+            {"id": "summary", "label": "AI Summary", "priority": 7},
+            {"id": "detailed-summary", "label": "AI Detailed Summary", "priority": 8},
+            {"id": "visual-description", "label": "AI Visual Description", "priority": 9},
             {"id": "clip-frames", "label": "CLIP Frames", "priority": 20},
             {"id": "index-details", "label": "Index Details", "priority": 30},
             {"id": "similar-files", "label": "Similar Files", "priority": 40}
@@ -45,6 +46,11 @@
             "name": "transcription_cloud",
             "default": true,
             "i18n_key": "intelligence.policyFeatures.transcriptionCloud"
+        },
+        {
+            "name": "chapter_suggestions",
+            "default": true,
+            "i18n_key": "intelligence.policyFeatures.chapterSuggestions"
         }
     ],
     "event_hooks": [
@@ -214,6 +220,38 @@
                     "type": "file_access",
                     "param": "file_id"
                 },
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/chapter-suggestions",
+                "methods": ["GET"],
+                "pre_check": {"type": "file_access", "param": "file_id"},
+                "addon_feature": "chapter_suggestions",
+                "require_drive": true,
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/chapter-suggestions/generate",
+                "methods": ["POST"],
+                "pre_check": {"type": "file_access", "param": "file_id"},
+                "addon_feature": "chapter_suggestions",
+                "require_drive": true,
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/chapter-suggestions/approve",
+                "methods": ["POST"],
+                "pre_check": {"type": "file_access", "param": "file_id"},
+                "addon_feature": "chapter_suggestions",
+                "require_drive": true,
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/chapter-suggestions/dismiss",
+                "methods": ["POST"],
+                "pre_check": {"type": "file_access", "param": "file_id"},
+                "addon_feature": "chapter_suggestions",
+                "require_drive": true,
                 "response_filter": null
             },
             {

@@ -19,6 +19,7 @@ from app.indexer import IndexManager
 from app.llm import create_llm_client
 from app.routers import (
     admin,
+    chapter_suggestions,
     files,
     pickup,
     queue,
@@ -32,6 +33,7 @@ from app.routers import (
 )
 from app.schemas import FeaturesStatus, LLMStatus, StatusResponse
 from app.workers.auto_tags import AutoTagsWorker
+from app.workers.chapter_suggestions import ChapterSuggestionsWorker
 from app.workers.pickup import PickupWorker
 from app.workers.retrieval_keywords import RetrievalKeywordsWorker
 from app.workers.summaries import SummariesWorker
@@ -157,6 +159,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             if pending > 0:
                 logger.info("Auto-tags: queued %d previously indexed files", pending)
 
+    chapter_worker = ChapterSuggestionsWorker(llm_client)
+    dependencies._chapter_suggestions_worker = chapter_worker
+    chapter_task: asyncio.Task | None = None
+    if settings.features.chapter_suggestions != "false" and llm_client.enabled:
+        chapter_task = asyncio.create_task(
+            chapter_worker.run(), name="chapter_suggestions_worker"
+        )
+        logger.info(
+            "Chapter suggestions worker started (mode=%s)",
+            settings.features.chapter_suggestions,
+        )
+        if settings.features.chapter_suggestions == "on_index":
+            pending = await chapter_worker.enqueue_unprocessed()
+            if pending:
+                logger.info("Chapter suggestions: queued %d files", pending)
+
     # Initialize summaries worker (shares the same LLM client)
     summaries_worker = SummariesWorker(llm_client)
     dependencies._summaries_worker = summaries_worker
@@ -258,6 +276,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         auto_tags_worker=auto_tags_worker,
         summaries_worker=summaries_worker,
         retrieval_keywords_worker=retrieval_keywords_worker,
+        chapter_suggestions_worker=chapter_worker,
     )
     dependencies._index_manager = index_manager
     try:
@@ -284,6 +303,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         summaries_task.cancel()
         try:
             await summaries_task
+        except asyncio.CancelledError:
+            pass
+    if chapter_task is not None:
+        chapter_task.cancel()
+        try:
+            await chapter_task
         except asyncio.CancelledError:
             pass
     if vision_task is not None:
@@ -317,6 +342,7 @@ app.include_router(similar.router)
 app.include_router(files.router)
 app.include_router(pickup.router)
 app.include_router(summaries.router)
+app.include_router(chapter_suggestions.router)
 app.include_router(rag.router)
 app.include_router(refine.router)
 app.include_router(vision.router)
@@ -356,6 +382,10 @@ def status_endpoint() -> StatusResponse:
     if dependencies._retrieval_keywords_worker is not None:
         tasks["retrieval_keywords"] = (
             dependencies._retrieval_keywords_worker.get_status()
+        )
+    if dependencies._chapter_suggestions_worker is not None:
+        tasks["chapter_suggestions"] = (
+            dependencies._chapter_suggestions_worker.get_status()
         )
     try:
         from app.workers.refine import get_refine_status
@@ -433,6 +463,7 @@ def status_endpoint() -> StatusResponse:
             summaries=settings.features.summaries,
             rag=settings.features.rag,
             transcript_refine=settings.features.transcript_refine,
+            chapter_suggestions=settings.features.chapter_suggestions,
         ),
         llm=LLMStatus(
             provider=settings.llm.provider,

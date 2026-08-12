@@ -170,6 +170,32 @@ describe("IndexStatusWidget — failed-jobs summary (spec §3.1)", () => {
 });
 
 describe("IndexStatusWidget — pause / resume regression guard", () => {
+  it("renders chapter suggestion queue activity", async () => {
+    mockedStatus.mockResolvedValue(
+      statusPayload({
+        queue: {
+          processing: 1,
+          waiting: 0,
+          paused: false,
+          tasks: {
+            chapter_suggestions: {
+              waiting: 0,
+              processing: [{ file_id: "chapter-file", filename: "talk.mp4" }],
+            },
+          },
+        },
+      }),
+    );
+    render(<IndexStatusWidget />);
+
+    expect(
+      await screen.findByText(
+        /AI chapter candidates|semanticSearch\.tasks\.chapter_suggestions\.label/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("talk.mp4")).toBeInTheDocument();
+  });
+
   it("still exposes the Pause button when running", async () => {
     mockedStatus.mockResolvedValue(
       statusPayload({ queue: { processing: 0, waiting: 0, paused: false, tasks: {} } }),

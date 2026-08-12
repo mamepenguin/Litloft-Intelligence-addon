@@ -134,6 +134,13 @@ def init_search_db() -> None:
         _create_suggested_tags_table(conn)
         conn.commit()
 
+    # LLM-generated media chapter candidates. Raw SQL is intentional:
+    # suggested output tables are addon-owned artefacts without ORM/FK
+    # coupling; file purge removes them explicitly.
+    with _search_engine.connect() as conn:
+        _create_suggested_chapters_table(conn)
+        conn.commit()
+
     # Create retrieval_keywords table for SIRA-style LLM keyword expansion.
     with _search_engine.connect() as conn:
         _create_retrieval_keywords_table(conn)
@@ -1114,6 +1121,19 @@ def _create_suggested_tags_table(conn: object) -> None:
         "  tags TEXT NOT NULL,"
         "  model TEXT NOT NULL,"
         "  context_type TEXT NOT NULL,"
+        "  created_at TEXT NOT NULL,"
+        "  status TEXT NOT NULL DEFAULT 'pending'"
+        ")"
+    ))
+
+
+def _create_suggested_chapters_table(conn: object) -> None:
+    """Create the staged media chapter candidates table."""
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS suggested_chapters ("
+        "  file_id TEXT PRIMARY KEY,"
+        "  chapters_json TEXT NOT NULL,"
+        "  model TEXT NOT NULL,"
         "  created_at TEXT NOT NULL,"
         "  status TEXT NOT NULL DEFAULT 'pending'"
         ")"
