@@ -311,6 +311,11 @@ class FeaturesConfig:
     # "on_index"). Default off because timestamped transcript content is
     # sent to the configured LLM provider.
     chapter_suggestions: str = "false"
+    # Video visual index: seekable list of Vision-described representative
+    # scenes ("false" | "manual" | "on_index"). Default off — frame bytes
+    # and nearby transcript text are sent to the configured Vision
+    # provider. Requires ``llm.vision_model`` (shared with vision_describe).
+    video_visual_index: str = "false"
 
 
 @dataclass(frozen=True)
@@ -1087,6 +1092,22 @@ def is_vision_describe_available(settings_obj: "Settings | None" = None) -> bool
     """
     source = settings_obj if settings_obj is not None else settings
     mode = getattr(source.features, "vision_describe", "false")
+    if mode == "false":
+        return False
+    model = getattr(source.llm, "vision_model", "") or ""
+    return bool(model.strip())
+
+
+def is_video_visual_index_available(settings_obj: "Settings | None" = None) -> bool:
+    """Return True iff the video_visual_index feature is usable right now.
+
+    Same two-gate shape as :func:`is_vision_describe_available`: the
+    feature mode must be non-``"false"`` AND ``llm.vision_model`` must be
+    a non-empty, non-whitespace string — the video-visual pipeline reuses
+    the same Vision-capable model as vision_describe.
+    """
+    source = settings_obj if settings_obj is not None else settings
+    mode = getattr(source.features, "video_visual_index", "false")
     if mode == "false":
         return False
     model = getattr(source.llm, "vision_model", "") or ""

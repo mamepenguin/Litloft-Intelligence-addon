@@ -17,8 +17,10 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     JSON,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -28,6 +30,11 @@ from app.database import Base
 def generate_insight_id() -> str:
     """12-char URL-safe ID for FileInsight rows (matches core File.id width)."""
     return secrets.token_urlsafe(9)[:12]
+
+
+def generate_video_visual_run_id() -> str:
+    """``vvr_`` + 16 URL-safe chars — one attempt at a file's visual index."""
+    return f"vvr_{secrets.token_urlsafe(12)[:16]}"
 
 
 class IndexedFile(Base):
@@ -436,4 +443,130 @@ class JobRecord(Base):
     __table_args__ = (
         Index("idx_job_records_file_kind", "file_id", "job_kind"),
         Index("idx_job_records_status", "status"),
+    )
+
+
+class VideoVisualRun(Base):
+    """One attempt to produce a complete visual index for a video file.
+
+    Owned entirely by the intelligence addon (Video Visual Index design,
+    2026-08-13). ``status`` lifecycle: ``queued`` -> ``running`` ->
+    ``succeeded`` | ``partial`` | ``failed``, and a previously-active run
+    additionally moves to ``superseded`` when a later run activates.
+    ``is_active`` marks the run whose scenes the UI currently reads; at
+    most one run per file may be active at a time (see the partial
+    unique index below). See :class:`VideoVisualScene` for per-scene rows
+    and the activation rules in ``app.workers.video_visual``.
+    """
+
+    __tablename__ = "video_visual_runs"
+
+    id: Mapped[str] = mapped_column(
+        String(20), primary_key=True, default=generate_video_visual_run_id
+    )
+    file_id: Mapped[str] = mapped_column(
+        String(12),
+        ForeignKey("indexed_files.file_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # "queued" | "running" | "succeeded" | "partial" | "failed" | "superseded"
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    # "manual" (priority 100) or "on_index" (priority 0) — execution
+    # provenance, not a user identity.
+    requested_by: Mapped[str] = mapped_column(String(16), nullable=False)
+    priority: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    vision_model: Mapped[str] = mapped_column(String, nullable=False)
+    pipeline_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Hash of the ordered candidate embedding IDs + timestamps this run
+    # selected from. Rebuilding scene CLIP changes it, making a stale
+    # visual result detectable without storing vectors twice.
+    candidate_fingerprint: Mapped[str] = mapped_column(String, nullable=False)
+    selected_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    completed_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    succeeded_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    failed_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    error_class: Mapped[str | None] = mapped_column(String, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("idx_video_visual_runs_file", "file_id", "created_at"),
+        # At most one active run per file. SQLite partial unique index —
+        # inactive/superseded runs are unconstrained so history accumulates
+        # freely while activation stays exclusive.
+        Index(
+            "uq_video_visual_active_file",
+            "file_id",
+            unique=True,
+            sqlite_where=text("is_active = 1"),
+        ),
+    )
+
+
+class VideoVisualScene(Base):
+    """One selected representative scene within a :class:`VideoVisualRun`.
+
+    ``clip_embedding_id`` traces back to the scene-CLIP ``Embedding`` row
+    the candidate was selected from (not a foreign key — CLIP embeddings
+    can be purged/rebuilt independently and a dangling reference here is
+    harmless, it just means the source frame vector is no longer
+    available for future re-selection). ``status`` lifecycle: ``pending``
+    -> ``running`` -> ``succeeded`` | ``failed``.
+    """
+
+    __tablename__ = "video_visual_scenes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(
+        String(20),
+        ForeignKey("video_visual_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    ordering: Mapped[int] = mapped_column(Integer, nullable=False)
+    clip_embedding_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    start_time: Mapped[float] = mapped_column(Float, nullable=False)
+    end_time: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # "pending" | "running" | "succeeded" | "failed"
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending"
+    )
+    # "slide" | "screen" | "person" | "demonstration" | "environment" |
+    # "object" | "action" | "other" — omitted by the model when uncertain.
+    scene_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    visual_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    visible_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Selected mechanically by timestamp overlap, never copied from model
+    # output (see design doc §7.1).
+    transcript_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    error_class: Mapped[str | None] = mapped_column(String, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id", "ordering", name="uq_video_visual_scenes_run_ordering"
+        ),
+        Index("idx_video_visual_scenes_run_order", "run_id", "ordering"),
     )

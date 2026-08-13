@@ -37,13 +37,37 @@ async def queue_prioritize(
     )
 
 
+def _pause_video_visual_worker() -> None:
+    """Best-effort: also pause the video-visual worker (design doc §9).
+
+    Not yet initialized (feature disabled, or very early startup) is a
+    normal state, not an error — silently no-op in that case.
+    """
+    try:
+        from app.dependencies import get_video_visual_worker
+
+        get_video_visual_worker().pause()
+    except Exception:
+        pass
+
+
+def _resume_video_visual_worker() -> None:
+    try:
+        from app.dependencies import get_video_visual_worker
+
+        get_video_visual_worker().resume()
+    except Exception:
+        pass
+
+
 @router.post("/queue/pause", response_model=MessageResponse)
 async def queue_pause(
     _: None = Depends(verify_webhook_secret),
 ) -> MessageResponse:
-    """Pause queue processing."""
+    """Pause queue processing (index manager + video-visual worker)."""
     manager = get_index_manager()
     manager.pause()
+    _pause_video_visual_worker()
     return MessageResponse(status="accepted", message="Queue paused")
 
 
@@ -51,7 +75,8 @@ async def queue_pause(
 async def queue_resume(
     _: None = Depends(verify_webhook_secret),
 ) -> MessageResponse:
-    """Resume queue processing."""
+    """Resume queue processing (index manager + video-visual worker)."""
     manager = get_index_manager()
     manager.resume()
+    _resume_video_visual_worker()
     return MessageResponse(status="accepted", message="Queue resumed")

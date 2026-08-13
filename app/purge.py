@@ -211,6 +211,125 @@ async def purge_disabled_vision_drives() -> dict[str, int]:
     return results
 
 
+def purge_video_visual_for_drive(drive: str) -> int:
+    """Clear video_visual_index artefacts for every file in ``drive``.
+
+    Used when per-drive policy flips ``video_visual_index`` off but the
+    umbrella index feature stays on. Deletes ``video_visual_runs`` rows
+    for the drive's files (``video_visual_scenes`` cascade via FK) and
+    their ``video_visual_scene`` embeddings. Unrelated CLIP, transcript,
+    summary, image-vision data, and the shared frame cache survive
+    untouched — the frame cache belongs to the base scene-CLIP lifecycle
+    (design doc §10).
+
+    Returns the number of files touched (had at least one run or
+    embedding removed).
+    """
+    from sqlalchemy import text as sql_text
+
+    from app.database import get_search_db
+    from app.models import Embedding, VideoVisualRun
+    from app.search import invalidate_similar_cache
+
+    touched = 0
+    with get_search_db() as session:
+        file_ids = [
+            row.file_id
+            for row in session.query(IndexedFile.file_id)
+            .filter(IndexedFile.drive == drive)
+            .all()
+        ]
+
+        for file_id in file_ids:
+            had_run = (
+                session.query(VideoVisualRun.id)
+                .filter(VideoVisualRun.file_id == file_id)
+                .first()
+                is not None
+            )
+            if had_run:
+                session.query(VideoVisualRun).filter(
+                    VideoVisualRun.file_id == file_id
+                ).delete(synchronize_session=False)
+
+            embeddings = (
+                session.query(Embedding)
+                .filter(
+                    Embedding.file_id == file_id,
+                    Embedding.embedding_type == "video_visual_scene",
+                )
+                .all()
+            )
+            had_embedding = False
+            for emb in embeddings:
+                table = emb.vector_table or ""
+                if table.startswith("vec_"):
+                    try:
+                        session.execute(
+                            sql_text(f"DELETE FROM {table} WHERE embedding_id = :id"),
+                            {"id": emb.id},
+                        )
+                    except OperationalError as e:
+                        logger.warning(
+                            "purge_video_visual_for_drive: vec delete failed "
+                            "for %s (%s)",
+                            table, type(e).__name__,
+                        )
+                session.delete(emb)
+                had_embedding = True
+
+            if had_run or had_embedding:
+                touched += 1
+
+    try:
+        invalidate_similar_cache()
+    except Exception as e:
+        logger.warning(
+            "purge_video_visual_for_drive: invalidate_similar_cache failed "
+            "(%s)", type(e).__name__,
+        )
+    return touched
+
+
+async def purge_disabled_video_visual_drives() -> dict[str, int]:
+    """Scan indexed drives and wipe video-visual artefacts on policy-off drives.
+
+    Mirrors :func:`purge_disabled_vision_drives`, scoped to the
+    ``video_visual_index`` feature. Policy lookup errors cause the drive
+    to be skipped (not purged) to avoid accidental data loss.
+    """
+    from app.database import get_search_db
+    from app.policy_client import is_feature_enabled
+
+    with get_search_db() as session:
+        drives = [
+            row.drive
+            for row in session.query(IndexedFile.drive)
+            .distinct()
+            .all()
+        ]
+
+    results: dict[str, int] = {}
+    for drive in drives:
+        if not drive:
+            continue
+        try:
+            allowed = await is_feature_enabled(drive, "video_visual_index")
+        except Exception:
+            logger.exception(
+                "purge_disabled_video_visual_drives: policy lookup failed "
+                "for %s (skipping to avoid accidental data loss)",
+                drive,
+            )
+            continue
+        if allowed:
+            continue
+        purged = purge_video_visual_for_drive(drive)
+        if purged:
+            results[drive] = purged
+    return results
+
+
 async def purge_disabled_drives() -> dict[str, int]:
     """Purge every drive whose intelligence.index policy is currently off.
 

@@ -457,36 +457,28 @@ class LLMClient:
             )
             return
 
-    async def generate_vision(
+    async def _vision_chat(
         self,
         image_bytes: bytes,
         mime_type: str,
-        prompt: str,
-        output_language: str = "auto",
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        response_format: dict | None = None,
     ) -> str | object | None:
-        """Generate a description for an image via a vision-capable LLM.
+        """Shared OpenAI-compatible vision transport.
 
-        Uses the OpenAI Chat Completions "image_url" content block with
-        a data-URL embedding. Returns:
+        Private generic-image-message helper factored out of
+        ``generate_vision`` (design doc "Video Visual Index" §4.2) so
+        the video-scene structured-output path can reuse the same
+        retry / unsupported-detection semantics without duplicating
+        them. The public ``generate_vision`` contract (input, prompt,
+        status handling, return values) is unchanged.
 
-        * the description text on success,
-        * :data:`VISION_UNSUPPORTED` when the provider answers 400/404
-          (model is not vision-capable),
-        * ``None`` on disabled state, empty response, or transient
-          failures (timeouts, 5xx).
-
-        The call uses ``self._config.vision_model`` (NOT ``model``) and
-        the vision-specific ``vision_max_tokens`` / ``vision_temperature``
-        so the operator can run a text model alongside a vision model.
-
-        Args:
-            image_bytes: Raw image bytes. Should be pre-processed
-                (resized, re-encoded) by the caller.
-            mime_type: MIME type for the data URL (e.g. ``image/jpeg``).
-            prompt: User-side instruction. Kept generic so the caller
-                decides phrasing.
-            output_language: Language tag threaded into the system
-                prompt. ``"auto"`` resolves to a filename-derived hint.
+        Returns the response text on success, :data:`VISION_UNSUPPORTED`
+        when the provider answers 400/404 (model is not vision-capable),
+        or ``None`` on disabled state, empty response, or exhausted
+        transient-failure retries.
         """
         if not self._enabled or not self._config.vision_model:
             return None
@@ -496,14 +488,12 @@ class LLMClient:
         b64 = base64.b64encode(image_bytes).decode("ascii")
         data_url = f"data:{mime_type};base64,{b64}"
 
-        system_prompt = _build_vision_system_prompt(output_language)
-
         messages = [
             {"role": "system", "content": system_prompt},
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": user_prompt},
                     {
                         "type": "image_url",
                         "image_url": {"url": data_url},
@@ -517,6 +507,8 @@ class LLMClient:
             extra_kwargs["max_completion_tokens"] = self._config.vision_max_tokens
         else:
             extra_kwargs["max_tokens"] = self._config.vision_max_tokens
+        if response_format is not None:
+            extra_kwargs["response_format"] = response_format
 
         max_attempts = max(1, self._config.retry_attempts + 1)
         for attempt in range(max_attempts):
@@ -579,6 +571,70 @@ class LLMClient:
             return text_out
 
         return None
+
+    async def generate_vision(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        prompt: str,
+        output_language: str = "auto",
+    ) -> str | object | None:
+        """Generate a description for an image via a vision-capable LLM.
+
+        Uses the OpenAI Chat Completions "image_url" content block with
+        a data-URL embedding. Returns:
+
+        * the description text on success,
+        * :data:`VISION_UNSUPPORTED` when the provider answers 400/404
+          (model is not vision-capable),
+        * ``None`` on disabled state, empty response, or transient
+          failures (timeouts, 5xx).
+
+        The call uses ``self._config.vision_model`` (NOT ``model``) and
+        the vision-specific ``vision_max_tokens`` / ``vision_temperature``
+        so the operator can run a text model alongside a vision model.
+
+        Args:
+            image_bytes: Raw image bytes. Should be pre-processed
+                (resized, re-encoded) by the caller.
+            mime_type: MIME type for the data URL (e.g. ``image/jpeg``).
+            prompt: User-side instruction. Kept generic so the caller
+                decides phrasing.
+            output_language: Language tag threaded into the system
+                prompt. ``"auto"`` resolves to a filename-derived hint.
+        """
+        system_prompt = _build_vision_system_prompt(output_language)
+        return await self._vision_chat(image_bytes, mime_type, system_prompt, prompt)
+
+    async def generate_video_scene_json(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> dict | list | object | None:
+        """Structured-output vision call for one video-visual-index scene.
+
+        Reuses :meth:`_vision_chat` (same transport, retry, and
+        unsupported-detection as ``generate_vision``) but requests JSON
+        object mode and parses the result via the same
+        ``_parse_json_response`` fallback used by ``generate_json``.
+        The video path uses a dedicated prompt/parser and never touches
+        ``generate_vision``'s own contract (design doc §4.2).
+
+        Returns the parsed JSON value, :data:`VISION_UNSUPPORTED`, or
+        ``None`` on failure / malformed / empty output. Retry/repair
+        policy for malformed JSON (design doc §12: one repair attempt
+        without resending a different frame) is the caller's
+        responsibility — this method makes exactly one provider call.
+        """
+        result = await self._vision_chat(
+            image_bytes, mime_type, system_prompt, user_prompt,
+            response_format={"type": "json_object"},
+        )
+        if result is VISION_UNSUPPORTED or result is None:
+            return result
+        return _parse_json_response(result)
 
     def _backoff_delay(self, attempt: int) -> float:
         """Compute exponential backoff delay for a given attempt.
@@ -1070,21 +1126,20 @@ class OllamaLLMClient:
             )
             return
 
-    async def generate_vision(
+    async def _vision_chat(
         self,
         image_bytes: bytes,
         mime_type: str,
-        prompt: str,
-        output_language: str = "auto",
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        response_format: dict | None = None,
     ) -> str | object | None:
-        """Generate an image description via ollama's native ``/api/chat``.
+        """Shared ollama-native vision transport.
 
-        Ollama's native protocol embeds images as a list of base64
-        strings on the message (no data-URL prefix), distinct from the
-        OpenAI-compatible ``image_url`` block. Response contract matches
-        :meth:`LLMClient.generate_vision`: text on success,
-        :data:`VISION_UNSUPPORTED` on 400/404, ``None`` otherwise.
-
+        Private generic-image-message helper factored out of
+        ``generate_vision`` (design doc "Video Visual Index" §4.2), used
+        by both ``generate_vision`` and ``generate_video_scene_json``.
         ``mime_type`` is accepted for API parity; ollama ignores it and
         sniffs from the bytes.
         """
@@ -1092,7 +1147,6 @@ class OllamaLLMClient:
             return None
 
         b64 = base64.b64encode(image_bytes).decode("ascii")
-        system_prompt = _build_vision_system_prompt(output_language)
 
         body: dict = {
             "model": self._config.vision_model,
@@ -1100,7 +1154,7 @@ class OllamaLLMClient:
                 {"role": "system", "content": system_prompt},
                 {
                     "role": "user",
-                    "content": prompt,
+                    "content": user_prompt,
                     "images": [b64],
                 },
             ],
@@ -1111,6 +1165,10 @@ class OllamaLLMClient:
                 "num_predict": self._config.vision_max_tokens,
             },
         }
+        if response_format is not None:
+            # OpenAI sends {"type": "json_object"}; ollama wants "json".
+            fmt = response_format.get("type", "json")
+            body["format"] = "json" if fmt in ("json_object", "json") else fmt
 
         max_attempts = max(1, self._config.retry_attempts + 1)
         for attempt in range(max_attempts):
@@ -1168,6 +1226,46 @@ class OllamaLLMClient:
             return text_out
 
         return None
+
+    async def generate_vision(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        prompt: str,
+        output_language: str = "auto",
+    ) -> str | object | None:
+        """Generate an image description via ollama's native ``/api/chat``.
+
+        Ollama's native protocol embeds images as a list of base64
+        strings on the message (no data-URL prefix), distinct from the
+        OpenAI-compatible ``image_url`` block. Response contract matches
+        :meth:`LLMClient.generate_vision`: text on success,
+        :data:`VISION_UNSUPPORTED` on 400/404, ``None`` otherwise.
+        """
+        system_prompt = _build_vision_system_prompt(output_language)
+        return await self._vision_chat(image_bytes, mime_type, system_prompt, prompt)
+
+    async def generate_video_scene_json(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> dict | list | object | None:
+        """Structured-output vision call for one video-visual-index scene.
+
+        Same contract as :meth:`LLMClient.generate_video_scene_json`:
+        one provider call, JSON-mode requested, parsed via
+        ``_parse_json_response``. Returns the parsed value,
+        :data:`VISION_UNSUPPORTED`, or ``None``.
+        """
+        result = await self._vision_chat(
+            image_bytes, mime_type, system_prompt, user_prompt,
+            response_format={"type": "json_object"},
+        )
+        if result is VISION_UNSUPPORTED or result is None:
+            return result
+        return _parse_json_response(result)
 
     async def generate_json(
         self,

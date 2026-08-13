@@ -72,6 +72,7 @@ class FeaturesStatus(BaseModel):
     rag: bool = False
     transcript_refine: str = "false"
     chapter_suggestions: str = "false"
+    video_visual_index: str = "false"
 
 
 class ChapterSuggestionItem(BaseModel):
@@ -280,6 +281,41 @@ class BatchSuggestedTagsRequest(BaseModel):
 class BatchSuggestedTagsResponse(BaseModel):
     queued: int
     skipped: int
+
+
+# --- Video visual index ---
+
+
+class VideoVisualSceneItem(BaseModel):
+    ordering: int
+    start_time: float
+    end_time: float | None = None
+    status: Literal["pending", "running", "succeeded", "failed"]
+    scene_type: str | None = None
+    visual_description: str | None = None
+    visible_text: str | None = None
+    transcript_excerpt: str | None = None
+
+
+class VideoVisualRunSummary(BaseModel):
+    run_id: str
+    status: Literal["queued", "running", "succeeded", "partial", "failed", "superseded"]
+    selected_count: int
+    completed_count: int
+    succeeded_count: int
+    failed_count: int
+    created_at: str | None = None
+    completed_at: str | None = None
+
+
+class VideoVisualIndexResponse(BaseModel):
+    eligible: bool = True
+    available: bool = True
+    file_id: str | None = None
+    active_run: VideoVisualRunSummary | None = None
+    scenes: list[VideoVisualSceneItem] = Field(default_factory=list)
+    staged_run: VideoVisualRunSummary | None = None
+    stale: bool = False
 
 
 # --- Summaries ---
