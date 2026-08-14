@@ -28,6 +28,7 @@ from app.routers import (
     search,
     similar,
     summaries,
+    video_visual,
     vision,
     webhooks,
 )
@@ -37,6 +38,7 @@ from app.workers.chapter_suggestions import ChapterSuggestionsWorker
 from app.workers.pickup import PickupWorker
 from app.workers.retrieval_keywords import RetrievalKeywordsWorker
 from app.workers.summaries import SummariesWorker
+from app.workers.video_visual import VideoVisualWorker
 from app.workers.vision import VisionDescribeWorker
 
 
@@ -77,6 +79,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     reset = reset_falsely_completed_clip()
     if reset > 0:
         logger.info("Reset %d falsely completed CLIP files for re-indexing", reset)
+
+    # Video visual index: stale "running" scenes/runs left by a container
+    # restart return to a resumable state (design doc §9).
+    try:
+        from app.workers.video_visual import recover_on_startup as recover_video_visual
+        recover_video_visual()
+    except Exception:
+        logger.exception("video_visual startup recovery failed; continuing startup")
 
     # Phase 1C of cloud-transcription-providers spec: a container
     # restart leaves "running" JobRecord rows orphaned (the worker that
@@ -124,6 +134,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 )
     except Exception:
         logger.exception("vision_describe purge failed; continuing startup")
+
+    # Per-feature policy: drop video_visual_index artefacts on drives whose
+    # video_visual_index policy flipped off (umbrella stays on).
+    try:
+        from app.purge import purge_disabled_video_visual_drives
+        video_visual_purged = await purge_disabled_video_visual_drives()
+        if video_visual_purged:
+            for drive, count in video_visual_purged.items():
+                logger.info(
+                    "Purged video_visual_index data for %d files on drive '%s' "
+                    "(video_visual_index disabled in drives.json)",
+                    count, drive,
+                )
+    except Exception:
+        logger.exception("video_visual_index purge failed; continuing startup")
 
     # Initialize LLM client and auto-tags worker
     llm_client = create_llm_client(settings.llm)
@@ -234,6 +259,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     "Vision: queued %d previously indexed files", pending
                 )
 
+    # Initialize video-visual-index worker. Shares the same LLM client and
+    # enable rule as vision_describe: needs vision_model configured AND the
+    # LLM client itself enabled.
+    video_visual_worker = VideoVisualWorker(llm_client)
+    dependencies._video_visual_worker = video_visual_worker
+    video_visual_task: asyncio.Task | None = None
+
+    from app.config import is_video_visual_index_available
+
+    if is_video_visual_index_available(settings) and llm_client.enabled:
+        video_visual_task = asyncio.create_task(
+            video_visual_worker.run(), name="video_visual_worker"
+        )
+        logger.info(
+            "Video visual index worker started (mode=%s, model=%s)",
+            settings.features.video_visual_index,
+            settings.llm.vision_model,
+        )
+
+        if settings.features.video_visual_index == "on_index":
+            pending = await video_visual_worker.enqueue_unprocessed()
+            if pending > 0:
+                logger.info(
+                    "Video visual index: queued %d previously indexed files", pending
+                )
+
     # Initialize retrieval_keywords worker (SIRA-style keyword expansion).
     # Same enable rule as auto_tags / summaries: needs LLM client AND a
     # non-false feature mode. opt-in by default.
@@ -317,6 +368,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await vision_task
         except asyncio.CancelledError:
             pass
+    if video_visual_task is not None:
+        video_visual_task.cancel()
+        try:
+            await video_visual_task
+        except asyncio.CancelledError:
+            pass
     if retrieval_keywords_task is not None:
         retrieval_keywords_task.cancel()
         try:
@@ -346,6 +403,7 @@ app.include_router(chapter_suggestions.router)
 app.include_router(rag.router)
 app.include_router(refine.router)
 app.include_router(vision.router)
+app.include_router(video_visual.router)
 app.include_router(admin.router)
 
 
@@ -379,6 +437,8 @@ def status_endpoint() -> StatusResponse:
         tasks["summaries"] = dependencies._summaries_worker.get_status()
     if dependencies._vision_worker is not None:
         tasks["vision_describe"] = dependencies._vision_worker.get_status()
+    if dependencies._video_visual_worker is not None:
+        tasks["video_visual"] = dependencies._video_visual_worker.get_status()
     if dependencies._retrieval_keywords_worker is not None:
         tasks["retrieval_keywords"] = (
             dependencies._retrieval_keywords_worker.get_status()
@@ -464,6 +524,7 @@ def status_endpoint() -> StatusResponse:
             rag=settings.features.rag,
             transcript_refine=settings.features.transcript_refine,
             chapter_suggestions=settings.features.chapter_suggestions,
+            video_visual_index=settings.features.video_visual_index,
         ),
         llm=LLMStatus(
             provider=settings.llm.provider,

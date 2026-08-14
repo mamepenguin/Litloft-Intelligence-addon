@@ -87,7 +87,7 @@ describe("ClipFramesSection", () => {
   });
 
   it("does NOT fetch timestamps on mount (closed by default)", async () => {
-    mocked.mockResolvedValue({ available: true, timestamps: makeTimestamps(3) });
+    mocked.mockResolvedValue({ file_id: "f1", drive: "drive1", timestamps: makeTimestamps(3) });
     renderSection();
 
     // Header is visible
@@ -100,7 +100,7 @@ describe("ClipFramesSection", () => {
   });
 
   it("fetches once when expanded; re-collapse + re-expand reuses cache", async () => {
-    mocked.mockResolvedValue({ available: true, timestamps: makeTimestamps(3) });
+    mocked.mockResolvedValue({ file_id: "f1", drive: "drive1", timestamps: makeTimestamps(3) });
     renderSection();
 
     const toggle = screen.getByRole("button", { name: /CLIP/i });
@@ -125,7 +125,7 @@ describe("ClipFramesSection", () => {
   });
 
   it("renders all frames inside a single horizontally-scrollable strip", async () => {
-    mocked.mockResolvedValue({ available: true, timestamps: makeTimestamps(5) });
+    mocked.mockResolvedValue({ file_id: "f1", drive: "drive1", timestamps: makeTimestamps(5) });
     renderSection();
 
     fireEvent.click(screen.getByRole("button", { name: /CLIP/i }));
@@ -146,7 +146,7 @@ describe("ClipFramesSection", () => {
   });
 
   it("hides the section entirely when there are no CLIP frames", async () => {
-    mocked.mockResolvedValue({ available: false });
+    mocked.mockResolvedValue({ file_id: "f1", drive: "drive1", timestamps: [] });
     const { container } = renderSection();
 
     // Pre-expand the section header is still visible (we don't yet know
@@ -161,7 +161,7 @@ describe("ClipFramesSection", () => {
   });
 
   it("renders nothing (no header, no fetch) for non-video files", async () => {
-    mocked.mockResolvedValue({ available: true, timestamps: makeTimestamps(3) });
+    mocked.mockResolvedValue({ file_id: "f1", drive: "drive1", timestamps: makeTimestamps(3) });
     const { container } = renderSection({ fileType: "image", mimeType: "image/jpeg" });
 
     expect(container.firstChild).toBeNull();
@@ -170,7 +170,7 @@ describe("ClipFramesSection", () => {
   });
 
   it("renders nothing (no header, no fetch) for .loft remote embeds", async () => {
-    mocked.mockResolvedValue({ available: true, timestamps: makeTimestamps(3) });
+    mocked.mockResolvedValue({ file_id: "f1", drive: "drive1", timestamps: makeTimestamps(3) });
     const { container } = renderSection({
       fileType: "video",
       mimeType: "application/vnd.litloft.loft+json",
@@ -182,7 +182,7 @@ describe("ClipFramesSection", () => {
   });
 
   it("renders the infinite-scroll sentinel when more frames than PAGE_SIZE", async () => {
-    mocked.mockResolvedValue({ available: true, timestamps: makeTimestamps(35) });
+    mocked.mockResolvedValue({ file_id: "f1", drive: "drive1", timestamps: makeTimestamps(35) });
     renderSection();
 
     fireEvent.click(screen.getByRole("button", { name: /CLIP/i }));

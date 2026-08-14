@@ -80,7 +80,8 @@ export type QueueTaskKind =
   | "vision_describe"
   | "transcript_refine"
   | "retrieval_keywords"
-  | "chapter_suggestions";
+  | "chapter_suggestions"
+  | "video_visual";
 
 export interface SearchServiceStatus {
   available: boolean;
@@ -178,10 +179,9 @@ export interface ClipTimestampItem {
 }
 
 export interface ClipTimestampsResponse {
-  available: boolean;
-  file_id?: string;
-  drive?: string;
-  timestamps?: ClipTimestampItem[];
+  file_id: string;
+  drive: string;
+  timestamps: ClipTimestampItem[];
 }
 
 // Semantic search
@@ -356,14 +356,14 @@ export async function refineFolderTranscripts(
 export async function getClipTimestamps(
   fileId: string,
   drive: string,
-): Promise<ClipTimestampsResponse> {
+): Promise<ClipTimestampsResponse | null> {
   try {
     return await fetchJSON<ClipTimestampsResponse>(
       `${API_BASE}/addons/intelligence/files/${fileId}/clip-timestamps`,
       { headers: driveHeaders(drive) },
     );
   } catch {
-    return { available: false };
+    return null;
   }
 }
 
@@ -1731,5 +1731,94 @@ export async function resolveFailedJob(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(row),
     },
+  );
+}
+
+// --- Video visual index ---
+
+export interface VideoVisualSceneItem {
+  ordering: number;
+  start_time: number;
+  end_time: number | null;
+  status: "pending" | "running" | "succeeded" | "failed";
+  scene_type: string | null;
+  scene_label: string | null;
+  visible_text: string | null;
+  transcript_excerpt: string | null;
+}
+
+export interface VideoVisualRunSummary {
+  run_id: string;
+  status:
+    | "queued"
+    | "running"
+    | "succeeded"
+    | "partial"
+    | "failed"
+    | "superseded";
+  selected_count: number;
+  completed_count: number;
+  succeeded_count: number;
+  failed_count: number;
+  created_at: string | null;
+  completed_at: string | null;
+}
+
+export interface VideoVisualIndexResponse {
+  eligible: boolean;
+  available: boolean;
+  file_id?: string;
+  active_run: VideoVisualRunSummary | null;
+  scenes: VideoVisualSceneItem[];
+  staged_run: VideoVisualRunSummary | null;
+  stale: boolean;
+}
+
+/**
+ * Fetch the visual-index state for a file: the active run's scenes
+ * (kept visible during a staged regeneration) plus any in-flight or
+ * failed-but-retryable staged run. Returns `null` on 404 (feature off
+ * globally/per-drive, or file not found) or a network failure — the
+ * UI treats null the same as `eligible: false` (render no section).
+ */
+export async function getVideoVisualIndex(
+  fileId: string,
+  drive: string,
+): Promise<VideoVisualIndexResponse | null> {
+  try {
+    return await fetchJSON<VideoVisualIndexResponse>(
+      `${API_BASE}/addons/intelligence/files/${fileId}/visual-index`,
+      { headers: driveHeaders(drive) },
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** Stage a new run (manual priority). Throws on non-2xx so the UI can
+ * surface a specific message (e.g. 409 "waiting on scene CLIP"). */
+export async function generateVideoVisualIndex(
+  fileId: string,
+  drive: string,
+): Promise<{ status: string; file_id: string; run_id?: string }> {
+  return fetchJSON(
+    `${API_BASE}/addons/intelligence/files/${fileId}/visual-index/generate`,
+    { method: "POST", headers: driveHeaders(drive) },
+  );
+}
+
+/** Re-queue only the failed scenes of the most recent retryable run. */
+export async function retryVideoVisualIndex(
+  fileId: string,
+  drive: string,
+): Promise<{
+  status: string;
+  file_id: string;
+  run_id?: string;
+  reset_count?: number;
+}> {
+  return fetchJSON(
+    `${API_BASE}/addons/intelligence/files/${fileId}/visual-index/retry`,
+    { method: "POST", headers: driveHeaders(drive) },
   );
 }

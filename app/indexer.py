@@ -1261,6 +1261,33 @@ class IndexManager:
                 file_id, type(e).__name__,
             )
 
+    async def _enqueue_video_visual_on_clip(self, file_id: str) -> None:
+        """Hand the file to the VideoVisualWorker after scene CLIP completes.
+
+        Mirrors ``_enqueue_vision_describe``. Only meaningful for
+        ``on_index`` mode — manual requests go through the router
+        directly. The worker's own ``enqueue`` re-checks eligibility
+        (mime, policy, CLIP readiness) and skips a pointless replacement
+        when the candidate fingerprint hasn't actually changed, so this
+        hook is safe to call unconditionally on every successful CLIP
+        pass (first-time indexing and later scene-CLIP rebuilds alike).
+        """
+        if settings.features.video_visual_index != "on_index":
+            return
+        try:
+            from app.dependencies import get_video_visual_worker
+
+            worker = get_video_visual_worker()
+        except Exception:
+            return
+        try:
+            await worker.enqueue(file_id, requested_by="on_index")
+        except Exception as e:
+            logger.warning(
+                "video_visual on_index enqueue failed for %s (%s)",
+                file_id, type(e).__name__,
+            )
+
     async def _clip_worker(self) -> None:
         """Process CLIP embedding tasks."""
         while True:
@@ -1280,6 +1307,7 @@ class IndexManager:
                     success = await index_clip(task.file_id)
                     if success:
                         logger.info("CLIP indexed: %s", task.file_id)
+                        await self._enqueue_video_visual_on_clip(task.file_id)
                     else:
                         logger.warning(
                             "CLIP indexing failed for %s, will retry on next reconciliation",
@@ -1866,7 +1894,7 @@ def _purge_file(file_id: str) -> None:
     # Drop the on-disk CLIP frame thumbnail cache. Done outside the DB
     # session so a filesystem hiccup doesn't roll back the index purge.
     try:
-        from app.routers.files import purge_frame_cache
+        from app.frame_cache import purge_frame_cache
 
         purge_frame_cache(file_id)
     except Exception as exc:  # noqa: BLE001 — best-effort cache cleanup

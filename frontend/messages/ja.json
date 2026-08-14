@@ -97,6 +97,9 @@
       },
       "chapter_suggestions": {
         "label": "AIチャプター候補"
+      },
+      "video_visual": {
+        "label": "ビジュアルインデックス"
       }
     }
   },
@@ -264,7 +267,22 @@
     "visionFolderConfirm": "このフォルダ内のすべての画像説明を作成しますか？LLMの利用料が発生する場合があります。",
     "visionFolderQueued": "{queued} 件の画像を処理待ちに追加しました",
     "visionFolderTooMany": "選択した画像が多すぎます（{requested} 件）。一度に処理できるのは {max} 件までです。",
-    "visionFolderError": "フォルダの処理を開始できませんでした。もう一度お試しください。"
+    "visionFolderError": "フォルダの処理を開始できませんでした。もう一度お試しください。",
+    "visualIndexTitle": "ビジュアルインデックス",
+    "visualIndexSceneCount": "{count} シーン",
+    "visualIndexProcessing": "処理中 {progress}",
+    "visualIndexUpdating": "更新中 {progress}",
+    "visualIndexPartial": "一部のみ",
+    "visualIndexEmpty": "まだビジュアルインデックスは生成されていません。",
+    "visualIndexStale": "このインデックス作成後にシーン情報が更新されています。",
+    "visualIndexGenerate": "生成",
+    "visualIndexGenerateAgain": "再生成",
+    "visualIndexGenerating": "開始しています…",
+    "visualIndexRetryFailed": "失敗したシーンを再試行",
+    "visualIndexSceneFailed": "失敗",
+    "visualIndexTranscriptExcerpt": "文字起こし",
+    "visualIndexWaitingPrerequisite": "シーンのインデックス作成の完了を待っています。",
+    "visualIndexActionError": "ビジュアルインデックスの生成を開始できませんでした。"
   },
   "detailedSummary": {
     "citations": {
@@ -397,6 +415,10 @@
         "chapter_suggestions": {
           "label": "AIチャプター候補",
           "help": "メディアの文字起こしからチャプター候補を作成します。「手動」はユーザー操作時のみ、「自動」はインデックス時に作成します。候補はセット全体を承認するまで反映されません。"
+        },
+        "video_visual_index": {
+          "label": "ビジュアルインデックス",
+          "help": "代表的な動画フレームをAIが説明文付きでシーク可能にインデックス化します。フレーム画像と付近の文字起こしが設定されたVisionモデルに送信されます。プライベートなライブラリでは「無効」かローカルのvisionモデルをおすすめします。利用するにはllm.vision_modelの設定が必要です。"
         }
       }
     },

@@ -418,6 +418,7 @@ def _vector_search_text(
     limit: int,
     *,
     mode: SearchMode = "precision",
+    include_video_visual_scene: bool = False,
 ) -> list[_VectorMatch]:
     """Search the text vector table for similar embeddings.
 
@@ -435,6 +436,14 @@ def _vector_search_text(
         query_vector: Query embedding vector.
         limit: Maximum results.
         mode: precision (default) or recall.
+        include_video_visual_scene: When ``False`` (default),
+            ``embedding_type="video_visual_scene"`` rows are excluded
+            from this channel (design doc "Video Visual Index" §8): a
+            long video must not rank as being "about" an object merely
+            because it appears in one incidental scene, so scene-level
+            evidence is excluded from default file search / shallow Ask
+            and reserved for explicit scene search / file-scoped
+            retrieval (a future caller opts in here).
 
     Returns:
         List of vector matches.
@@ -510,9 +519,14 @@ def _vector_search_text(
             .all()
         )
 
-        # Stage 1: absolute threshold filter
+        # Stage 1: type filter + absolute threshold filter
         candidates: list[_VectorMatch] = []
         for emb in embeddings:
+            if (
+                not include_video_visual_scene
+                and emb.embedding_type == "video_visual_scene"
+            ):
+                continue
             score = _l2_to_cosine_similarity(distances.get(emb.id, 2.0))
             if score < min_score:
                 continue

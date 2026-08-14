@@ -92,6 +92,12 @@ def init_search_db() -> None:
 
     Base.metadata.create_all(_search_engine)
 
+    # ``create_all`` does not add columns to an existing SQLite table.
+    # Keep legacy Visual Index rows intact while adding the concise
+    # pipeline-v2 label field.
+    with _search_engine.begin() as conn:
+        _migrate_video_visual_scenes_if_needed(conn)
+
     _SearchSession = sessionmaker(bind=_search_engine, expire_on_commit=False)
 
     # Migrate vec_clip if dimension changed (model swap), and vec_text
@@ -194,6 +200,22 @@ def init_search_db() -> None:
 
     with _search_engine.begin() as conn:
         _migrate_tfidf_keywords_indexed(conn)
+
+
+def _migrate_video_visual_scenes_if_needed(conn: object) -> None:
+    """Add the pipeline-v2 scene label without rewriting legacy results."""
+    cols = {
+        row[1]
+        for row in conn.execute(
+            text("PRAGMA table_info(video_visual_scenes)")
+        ).fetchall()
+    }
+    if not cols:
+        return
+    if "scene_label" not in cols:
+        conn.execute(
+            text("ALTER TABLE video_visual_scenes ADD COLUMN scene_label VARCHAR(80)")
+        )
 
 
 def _migrate_fts_retrieval_keywords_to_trigram() -> None:

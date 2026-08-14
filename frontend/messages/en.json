@@ -97,6 +97,9 @@
       },
       "chapter_suggestions": {
         "label": "AI chapter candidates"
+      },
+      "video_visual": {
+        "label": "Visual index"
       }
     }
   },
@@ -264,7 +267,22 @@
     "visionFolderConfirm": "Create descriptions for every image in this folder? LLM usage fees may apply.",
     "visionFolderQueued": "Added {queued} images to the queue",
     "visionFolderTooMany": "Too many images selected ({requested}). You can process up to {max} at once.",
-    "visionFolderError": "Could not start folder processing. Please try again."
+    "visionFolderError": "Could not start folder processing. Please try again.",
+    "visualIndexTitle": "Visual index",
+    "visualIndexSceneCount": "{count} scenes",
+    "visualIndexProcessing": "Processing {progress}",
+    "visualIndexUpdating": "Updating {progress}",
+    "visualIndexPartial": "Partial",
+    "visualIndexEmpty": "No visual index has been generated yet.",
+    "visualIndexStale": "The source scenes have changed since this index was built.",
+    "visualIndexGenerate": "Generate",
+    "visualIndexGenerateAgain": "Generate again",
+    "visualIndexGenerating": "Starting…",
+    "visualIndexRetryFailed": "Retry failed scenes",
+    "visualIndexSceneFailed": "Failed",
+    "visualIndexTranscriptExcerpt": "Transcript",
+    "visualIndexWaitingPrerequisite": "Waiting on scene indexing to finish before this can start.",
+    "visualIndexActionError": "Could not start visual index generation."
   },
   "detailedSummary": {
     "citations": {
@@ -397,6 +415,10 @@
         "chapter_suggestions": {
           "label": "AI chapter candidates",
           "help": "Creates chapter candidates from media transcripts. Manual only creates them when requested; Auto creates them during indexing. Candidates are not applied until you approve the whole set."
+        },
+        "video_visual_index": {
+          "label": "Visual index",
+          "help": "Builds a seekable index of representative video frames with AI-written descriptions. Frame images and nearby transcript text are sent to the configured Vision model. For private libraries, use Off or a local vision model. Requires llm.vision_model to be set."
         }
       }
     },

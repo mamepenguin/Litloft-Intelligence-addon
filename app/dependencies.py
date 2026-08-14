@@ -11,6 +11,7 @@ from app.workers.chapter_suggestions import ChapterSuggestionsWorker
 from app.workers.pickup import PickupWorker
 from app.workers.retrieval_keywords import RetrievalKeywordsWorker
 from app.workers.summaries import SummariesWorker
+from app.workers.video_visual import VideoVisualWorker
 from app.workers.vision import VisionDescribeWorker
 
 # Module-level state (initialized during lifespan in main.py)
@@ -19,6 +20,7 @@ _auto_tags_worker: AutoTagsWorker | None = None
 _chapter_suggestions_worker: ChapterSuggestionsWorker | None = None
 _summaries_worker: SummariesWorker | None = None
 _vision_worker: VisionDescribeWorker | None = None
+_video_visual_worker: VideoVisualWorker | None = None
 _retrieval_keywords_worker: RetrievalKeywordsWorker | None = None
 _pickup_worker: PickupWorker | None = None
 _llm_client: LLMClient | None = None
@@ -74,6 +76,17 @@ def get_vision_worker() -> VisionDescribeWorker:
     if _vision_worker is None:
         raise RuntimeError("Vision describe worker not initialized")
     return _vision_worker
+
+
+def get_video_visual_worker() -> VideoVisualWorker:
+    """Get the video-visual-index worker instance.
+
+    Raises:
+        RuntimeError: If the worker is not initialized.
+    """
+    if _video_visual_worker is None:
+        raise RuntimeError("Video visual worker not initialized")
+    return _video_visual_worker
 
 
 def get_retrieval_keywords_worker() -> RetrievalKeywordsWorker:

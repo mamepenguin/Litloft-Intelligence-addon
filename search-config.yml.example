@@ -82,6 +82,22 @@ features:
                       # chapters change. SECURITY: transcript content is sent
                       # to the configured LLM provider; prefer a local model
                       # for private drives.
+  video_visual_index: "false"
+                      # "false" | "manual" | "on_index" — builds a seekable
+                      # visual index (6-24 representative frames) for native
+                      # local videos, each with an AI-written description,
+                      # legible on-screen text, and scene type. Reuses the
+                      # existing scene-CLIP candidate pool and does not add
+                      # a core table or Internal API endpoint.
+                      # SECURITY: each selected frame image and a small
+                      # nearby transcript excerpt are sent to the configured
+                      # Vision model (llm.vision_model). Prefer a local
+                      # vision model (ollama llava, llama-vision) for drives
+                      # with private video content. "on_index" scales cost
+                      # linearly with new native-video minutes indexed —
+                      # enable with care on large libraries. Excludes
+                      # `.loft` remote-media pointers (no locally probeable
+                      # video bytes) and audio/image/document files.
 
 # LLM provider configuration (required for auto_tags and future LLM features)
 # Supported providers:
@@ -103,7 +119,7 @@ llm:
   model: ""                  # e.g. "gemma4:e4b", "gpt-4o-mini", "deepseek-chat"
   max_tokens: 2048
   temperature: 0.3
-  output_language: "auto"    # "auto" | "ja" | "en" — applies to auto_tags and summaries
+  output_language: "auto"    # "auto" or a BCP 47 tag — applies to user-visible LLM output
   # Retry behavior for transient failures (timeouts, 429, 5xx)
   retry_attempts: 3          # total attempts = 1 + retries
   retry_base_delay: 1.0      # seconds; doubled on each retry

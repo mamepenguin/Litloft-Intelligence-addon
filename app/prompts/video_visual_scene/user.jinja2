@@ -1,0 +1,8 @@
+{#- vars: filename, timestamp_seconds (float), transcript_context (string, may be empty) -#}
+Filename: {{ filename }}
+Frame timestamp: {{ "%.1f"|format(timestamp_seconds) }}s
+{% if transcript_context -%}
+Nearby transcript (context only, for disambiguation — do not restate as visible content):
+{{ transcript_context }}
+{% endif -%}
+Describe only what is visible in the attached frame.

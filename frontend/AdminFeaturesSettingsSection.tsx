@@ -19,6 +19,7 @@ const TRISTATE_FIELDS = [
   "vision_describe",
   "retrieval_keywords",
   "chapter_suggestions",
+  "video_visual_index",
 ] as const;
 const BOOL_FIELDS = ["indexing", "search", "rag"] as const;
 
@@ -36,6 +37,7 @@ interface FeaturesPayload {
   vision_describe: string;
   retrieval_keywords: string;
   chapter_suggestions: string;
+  video_visual_index: string;
   tristate_values: string[];
   overrides_present: boolean;
 }
@@ -114,6 +116,7 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
     vision_describe: "false",
     retrieval_keywords: "false",
     chapter_suggestions: "false",
+    video_visual_index: "false",
   });
 
   const reload = useCallback(async () => {
@@ -132,6 +135,7 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
       vision_describe: payload.vision_describe,
       retrieval_keywords: payload.retrieval_keywords,
       chapter_suggestions: payload.chapter_suggestions,
+      video_visual_index: payload.video_visual_index,
     });
   }, []);
 

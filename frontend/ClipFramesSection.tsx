@@ -91,7 +91,7 @@ export default function ClipFramesSection({
     setLoading(true);
     try {
       const res = await getClipTimestamps(fileId, drive);
-      setTimestamps(res.available && res.timestamps ? res.timestamps : []);
+      setTimestamps(res?.timestamps ?? []);
     } finally {
       setLoading(false);
     }

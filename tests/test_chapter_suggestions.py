@@ -14,6 +14,7 @@ from app.models import IndexedFile, TranscriptChunk
 from app.prompt_loader import render
 from app.workers.chapter_suggestions import (
     ChapterSuggestionsWorker,
+    _build_system_prompt,
     _build_windows,
     is_chapter_suggestions_enabled,
     normalise_chapter_candidates,
@@ -117,10 +118,7 @@ class FakeLLM:
 
 
 def test_chapter_prompts_define_semantic_navigation_granularity():
-    system = render(
-        "chapter_suggestions/system.jinja2",
-        output_language="en",
-    )
+    system = _build_system_prompt("en")
     editor = render(
         "chapter_suggestions/consolidate_user.jinja2",
         candidates_json="[]",

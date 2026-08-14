@@ -16,7 +16,8 @@
             {"id": "summary", "label": "AI Summary", "priority": 7},
             {"id": "detailed-summary", "label": "AI Detailed Summary", "priority": 8},
             {"id": "visual-description", "label": "AI Visual Description", "priority": 9},
-            {"id": "clip-frames", "label": "CLIP Frames", "priority": 20},
+            {"id": "visual-index", "label": "Visual Index", "priority": 20},
+            {"id": "clip-frames", "label": "CLIP Frames", "priority": 21},
             {"id": "index-details", "label": "Index Details", "priority": 30},
             {"id": "similar-files", "label": "Similar Files", "priority": 40}
         ],
@@ -212,6 +213,39 @@
                 },
                 "response_filter": null,
                 "stream": true
+            },
+            {
+                "path": "/files/{file_id}/visual-index",
+                "methods": ["GET"],
+                "pre_check": {
+                    "type": "file_access",
+                    "param": "file_id"
+                },
+                "addon_feature": "video_visual_index",
+                "require_drive": true,
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/visual-index/generate",
+                "methods": ["POST"],
+                "pre_check": {
+                    "type": "file_access",
+                    "param": "file_id"
+                },
+                "addon_feature": "video_visual_index",
+                "require_drive": true,
+                "response_filter": null
+            },
+            {
+                "path": "/files/{file_id}/visual-index/retry",
+                "methods": ["POST"],
+                "pre_check": {
+                    "type": "file_access",
+                    "param": "file_id"
+                },
+                "addon_feature": "video_visual_index",
+                "require_drive": true,
+                "response_filter": null
             },
             {
                 "path": "/files/{file_id}/suggested-tags",

@@ -1,12 +1,16 @@
 """Tests for the on-disk CLIP frame cache.
 
-Covers the pure helpers in :mod:`app.routers.files`:
+Covers the pure helpers in :mod:`app.frame_cache` (extracted from
+``app.routers.files`` so the video-visual worker can share the same
+cache implementation):
 
-* ``_frame_cache_path`` quantises the timestamp to milliseconds so two
+* ``frame_cache_path`` quantises the timestamp to milliseconds so two
   identical floats land on the same cache file.
-* ``_extract_frame_to_cache`` writes via a ``.tmp`` sibling and atomic
+* ``extract_frame_to_cache`` writes via a ``.tmp`` sibling and atomic
   rename, removes the temp file on ffmpeg failure / timeout, and
   surfaces an HTTPException on non-zero exit.
+* ``ensure_frame_cached`` short-circuits on a cache hit and delegates
+  to ``extract_frame_to_cache`` on a miss.
 * ``purge_frame_cache`` removes the per-file directory and tolerates
   a missing one.
 """
@@ -36,10 +40,11 @@ for _mod in (
 
 from fastapi import HTTPException  # noqa: E402
 
-from app.routers.files import (  # noqa: E402
-    _extract_frame_to_cache,
-    _frame_cache_dir,
-    _frame_cache_path,
+from app.frame_cache import (  # noqa: E402
+    ensure_frame_cached,
+    extract_frame_to_cache,
+    frame_cache_dir,
+    frame_cache_path,
     purge_frame_cache,
 )
 
@@ -49,7 +54,8 @@ def patched_data_dir(tmp_path, monkeypatch):
     """Point ``settings.intelligence_data_dir`` at a per-test tmp dir.
 
     The cache helpers read ``settings.intelligence_data_dir`` lazily on
-    every call, so monkeypatching the live module attribute is enough.
+    every call (fresh ``from app.config import settings`` inside the
+    function body), so monkeypatching the live module attribute is enough.
     """
     import app.config as config
 
@@ -58,36 +64,35 @@ def patched_data_dir(tmp_path, monkeypatch):
     object.__setattr__(new_settings, "__dict__", dict(original.__dict__))
     object.__setattr__(new_settings, "intelligence_data_dir", tmp_path)
     monkeypatch.setattr(config, "settings", new_settings)
-    monkeypatch.setattr("app.routers.files.settings", new_settings, raising=False)
     return tmp_path
 
 
 # ---------------------------------------------------------------------------
-# _frame_cache_path
+# frame_cache_path
 # ---------------------------------------------------------------------------
 
 
 class TestFrameCachePath:
     def test_path_is_per_file_dir_with_ms_filename(self, patched_data_dir):
-        path = _frame_cache_path("abc123", 12.345)
+        path = frame_cache_path("abc123", 12.345)
         assert path == patched_data_dir / "frames" / "abc123" / "12345.webp"
 
     def test_quantises_to_milliseconds(self, patched_data_dir):
         # Same millisecond → same file name. Defends against floating
         # point drift between repeated requests.
-        a = _frame_cache_path("f", 1.2349999)
-        b = _frame_cache_path("f", 1.235)
+        a = frame_cache_path("f", 1.2349999)
+        b = frame_cache_path("f", 1.235)
         assert a == b
 
     def test_different_files_get_separate_dirs(self, patched_data_dir):
-        a = _frame_cache_path("file_a", 5.0)
-        b = _frame_cache_path("file_b", 5.0)
+        a = frame_cache_path("file_a", 5.0)
+        b = frame_cache_path("file_b", 5.0)
         assert a.parent != b.parent
         assert a.name == b.name == "5000.webp"
 
 
 # ---------------------------------------------------------------------------
-# _extract_frame_to_cache
+# extract_frame_to_cache
 # ---------------------------------------------------------------------------
 
 
@@ -101,8 +106,8 @@ class TestExtractFrameToCache:
             target.write_bytes(b"FAKE_WEBP")
             return MagicMock(returncode=0)
 
-        with patch("app.routers.files.subprocess.run", side_effect=fake_run):
-            _extract_frame_to_cache("/tmp/video.mp4", cache_path, 1.0)
+        with patch("app.frame_cache.subprocess.run", side_effect=fake_run):
+            extract_frame_to_cache("/tmp/video.mp4", cache_path, 1.0)
 
         assert cache_path.exists()
         assert cache_path.read_bytes() == b"FAKE_WEBP"
@@ -116,8 +121,8 @@ class TestExtractFrameToCache:
             Path(cmd[-1]).write_bytes(b"X")
             return MagicMock(returncode=0)
 
-        with patch("app.routers.files.subprocess.run", side_effect=fake_run):
-            _extract_frame_to_cache("/tmp/video.mp4", cache_path, 0.001)
+        with patch("app.frame_cache.subprocess.run", side_effect=fake_run):
+            extract_frame_to_cache("/tmp/video.mp4", cache_path, 0.001)
 
         assert cache_path.exists()
 
@@ -129,9 +134,9 @@ class TestExtractFrameToCache:
             Path(cmd[-1]).write_bytes(b"PARTIAL")
             return MagicMock(returncode=1, stderr=b"boom")
 
-        with patch("app.routers.files.subprocess.run", side_effect=fake_run):
+        with patch("app.frame_cache.subprocess.run", side_effect=fake_run):
             with pytest.raises(HTTPException) as excinfo:
-                _extract_frame_to_cache("/tmp/video.mp4", cache_path, 1.0)
+                extract_frame_to_cache("/tmp/video.mp4", cache_path, 1.0)
 
         assert excinfo.value.status_code == 500
         assert not cache_path.exists()
@@ -146,9 +151,9 @@ class TestExtractFrameToCache:
             Path(cmd[-1]).write_bytes(b"")
             return MagicMock(returncode=0)
 
-        with patch("app.routers.files.subprocess.run", side_effect=fake_run):
+        with patch("app.frame_cache.subprocess.run", side_effect=fake_run):
             with pytest.raises(HTTPException) as excinfo:
-                _extract_frame_to_cache("/tmp/video.mp4", cache_path, 1.0)
+                extract_frame_to_cache("/tmp/video.mp4", cache_path, 1.0)
 
         assert excinfo.value.status_code == 500
 
@@ -162,12 +167,56 @@ class TestExtractFrameToCache:
             tmp_sibling.write_bytes(b"WIP")
             raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
 
-        with patch("app.routers.files.subprocess.run", side_effect=fake_run):
+        with patch("app.frame_cache.subprocess.run", side_effect=fake_run):
             with pytest.raises(HTTPException) as excinfo:
-                _extract_frame_to_cache("/tmp/video.mp4", cache_path, 1.0)
+                extract_frame_to_cache("/tmp/video.mp4", cache_path, 1.0)
 
         assert excinfo.value.status_code == 504
         assert not tmp_sibling.exists()
+
+
+# ---------------------------------------------------------------------------
+# ensure_frame_cached
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureFrameCached:
+    def test_cache_hit_skips_extraction(self, patched_data_dir):
+        cache_path = frame_cache_path("f_hit", 2.0)
+        cache_path.parent.mkdir(parents=True)
+        cache_path.write_bytes(b"CACHED")
+
+        with patch("app.frame_cache.extract_frame_to_cache") as extract:
+            result = ensure_frame_cached("f_hit", 2.0, "/tmp/video.mp4")
+
+        extract.assert_not_called()
+        assert result == cache_path
+
+    def test_cache_miss_extracts(self, patched_data_dir):
+        cache_path = frame_cache_path("f_miss", 3.0)
+
+        def fake_extract(abs_path, path, ts):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"NEW")
+
+        with patch(
+            "app.frame_cache.extract_frame_to_cache", side_effect=fake_extract
+        ) as extract:
+            result = ensure_frame_cached("f_miss", 3.0, "/tmp/video.mp4")
+
+        extract.assert_called_once_with("/tmp/video.mp4", cache_path, 3.0)
+        assert result == cache_path
+        assert result.read_bytes() == b"NEW"
+
+    def test_zero_byte_cache_file_is_treated_as_miss(self, patched_data_dir):
+        cache_path = frame_cache_path("f_empty", 4.0)
+        cache_path.parent.mkdir(parents=True)
+        cache_path.touch()  # 0 bytes — a prior failed/interrupted write
+
+        with patch("app.frame_cache.extract_frame_to_cache") as extract:
+            ensure_frame_cached("f_empty", 4.0, "/tmp/video.mp4")
+
+        extract.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +226,7 @@ class TestExtractFrameToCache:
 
 class TestPurgeFrameCache:
     def test_removes_per_file_directory(self, patched_data_dir):
-        cache_dir = _frame_cache_dir("file_x")
+        cache_dir = frame_cache_dir("file_x")
         cache_dir.mkdir(parents=True)
         (cache_dir / "1000.webp").write_bytes(b"X")
         (cache_dir / "5000.webp").write_bytes(b"Y")

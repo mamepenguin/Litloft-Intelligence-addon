@@ -7,6 +7,7 @@ import {
   Brain,
   CheckCircle2,
   FileText,
+  Film,
   Image as ImageIcon,
   KeyRound,
   ListVideo,
@@ -53,6 +54,7 @@ const TASK_ORDER: QueueTaskKind[] = [
   "transcript_refine",
   "retrieval_keywords",
   "chapter_suggestions",
+  "video_visual",
 ];
 
 const TASK_ICON: Record<QueueTaskKind, LucideIcon> = {
@@ -66,6 +68,7 @@ const TASK_ICON: Record<QueueTaskKind, LucideIcon> = {
   transcript_refine: WandSparkles,
   retrieval_keywords: KeyRound,
   chapter_suggestions: ListVideo,
+  video_visual: Film,
 };
 
 function ProgressBar({
