@@ -346,7 +346,7 @@ function SceneCard({
       >
         <img
           src={getFrameUrl(fileId, scene.start_time)}
-          alt={scene.visual_description ?? ""}
+          alt={scene.scene_label ?? ""}
           loading="lazy"
           className="aspect-video w-full object-cover"
         />
@@ -362,9 +362,9 @@ function SceneCard({
         </div>
       </button>
       <div className="space-y-1 px-2 pb-2">
-        {scene.visual_description && (
-          <p className="line-clamp-3 text-xs leading-relaxed text-text-primary">
-            {scene.visual_description}
+        {scene.scene_label && (
+          <p className="line-clamp-2 text-xs font-medium leading-snug text-text-primary">
+            {scene.scene_label}
           </p>
         )}
         {scene.visible_text && (

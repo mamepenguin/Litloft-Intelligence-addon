@@ -119,7 +119,7 @@ llm:
   model: ""                  # e.g. "gemma4:e4b", "gpt-4o-mini", "deepseek-chat"
   max_tokens: 2048
   temperature: 0.3
-  output_language: "auto"    # "auto" | "ja" | "en" — applies to auto_tags and summaries
+  output_language: "auto"    # "auto" or a BCP 47 tag — applies to user-visible LLM output
   # Retry behavior for transient failures (timeouts, 429, 5xx)
   retry_attempts: 3          # total attempts = 1 + retries
   retry_base_delay: 1.0      # seconds; doubled on each retry

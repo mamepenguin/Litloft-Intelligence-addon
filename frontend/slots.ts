@@ -11,6 +11,7 @@ export const slotComponents: Record<string, React.LazyExoticComponent<React.Comp
   "pickup": lazy(() => import("./PickupWidget")),
   "index-status": lazy(() => import("./IndexStatusWidget")),
   "visual-index": lazy(() => import("./VisualIndexSection")),
+  "clip-frames": lazy(() => import("./ClipFramesSection")),
   "index-details": lazy(() => import("./IndexDetailsSection")),
 "transcript": lazy(() => import("./TranscriptSection")),
   "suggested-tags": lazy(() => import("./SuggestedTagsSection")),

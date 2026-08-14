@@ -173,6 +173,17 @@ export interface TranscriptResponse {
   chunks?: TranscriptChunkItem[];
 }
 
+export interface ClipTimestampItem {
+  start: number;
+  content_preview: string;
+}
+
+export interface ClipTimestampsResponse {
+  file_id: string;
+  drive: string;
+  timestamps: ClipTimestampItem[];
+}
+
 // Semantic search
 export async function semanticSearch(
   query: string,
@@ -340,6 +351,20 @@ export async function refineFolderTranscripts(
       body: JSON.stringify({ drive, file_ids: fileIds }),
     },
   );
+}
+
+export async function getClipTimestamps(
+  fileId: string,
+  drive: string,
+): Promise<ClipTimestampsResponse | null> {
+  try {
+    return await fetchJSON<ClipTimestampsResponse>(
+      `${API_BASE}/addons/intelligence/files/${fileId}/clip-timestamps`,
+      { headers: driveHeaders(drive) },
+    );
+  } catch {
+    return null;
+  }
 }
 
 export function getFrameUrl(fileId: string, timestamp: number): string {
@@ -1717,7 +1742,7 @@ export interface VideoVisualSceneItem {
   end_time: number | null;
   status: "pending" | "running" | "succeeded" | "failed";
   scene_type: string | null;
-  visual_description: string | null;
+  scene_label: string | null;
   visible_text: string | null;
   transcript_excerpt: string | null;
 }

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sys
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -48,6 +49,8 @@ pytest.importorskip(
 
 from app.workers.video_visual import (  # noqa: E402
     VideoVisualWorker,
+    _load_frame_bytes,
+    _read_or_extract_frame,
     _validate_scene_output,
     recover_on_startup,
 )
@@ -162,11 +165,13 @@ def feature_manual(monkeypatch, make_settings):
 
 @pytest.fixture()
 def policy_allow_all(monkeypatch):
+    policy = AsyncMock(return_value=True)
     monkeypatch.setattr(
         "app.workers.video_visual.is_file_feature_enabled",
-        AsyncMock(return_value=True),
+        policy,
         raising=False,
     )
+    return policy
 
 
 @pytest.fixture()
@@ -186,19 +191,22 @@ def no_emit(monkeypatch):
 class TestValidateSceneOutput:
     def test_valid_full_object(self):
         result = _validate_scene_output(
-            {"visual_description": "A cat on a table.", "visible_text": "MENU", "scene_type": "object"}
+            {"scene_label": "Cat on a table", "visible_text": "MENU", "scene_type": "object"}
         )
         assert result == {
-            "visual_description": "A cat on a table.",
+            "scene_label": "Cat on a table",
             "visible_text": "MENU",
             "scene_type": "object",
         }
 
-    def test_blank_description_is_invalid(self):
-        assert _validate_scene_output({"visual_description": "   "}) is None
+    def test_blank_label_is_invalid(self):
+        assert _validate_scene_output({"scene_label": "   "}) is None
 
-    def test_missing_description_is_invalid(self):
+    def test_missing_label_is_invalid(self):
         assert _validate_scene_output({"visible_text": "x"}) is None
+
+    def test_legacy_visual_description_does_not_satisfy_new_contract(self):
+        assert _validate_scene_output({"visual_description": "A cat on a table."}) is None
 
     def test_non_dict_is_invalid(self):
         assert _validate_scene_output("not a dict") is None
@@ -207,26 +215,92 @@ class TestValidateSceneOutput:
 
     def test_unknown_scene_type_is_dropped_not_rejected(self):
         result = _validate_scene_output(
-            {"visual_description": "x", "scene_type": "spaceship"}
+            {"scene_label": "x", "scene_type": "spaceship"}
         )
         assert result is not None
         assert result["scene_type"] is None
 
     def test_missing_visible_text_defaults_to_empty(self):
-        result = _validate_scene_output({"visual_description": "x"})
+        result = _validate_scene_output({"scene_label": "x"})
         assert result["visible_text"] == ""
 
     def test_oversized_fields_are_truncated(self):
         from app.workers.video_visual import (
+            MAX_SCENE_LABEL_CHARS,
             MAX_VISIBLE_TEXT_CHARS,
-            MAX_VISUAL_DESCRIPTION_CHARS,
         )
 
         result = _validate_scene_output(
-            {"visual_description": "x" * 10_000, "visible_text": "y" * 10_000}
+            {"scene_label": "x" * 10_000, "visible_text": "y" * 10_000}
         )
-        assert len(result["visual_description"]) == MAX_VISUAL_DESCRIPTION_CHARS
+        assert len(result["scene_label"]) == MAX_SCENE_LABEL_CHARS
         assert len(result["visible_text"]) == MAX_VISIBLE_TEXT_CHARS
+
+
+# ---------------------------------------------------------------------------
+# _process_scene scene-label persistence
+# ---------------------------------------------------------------------------
+
+
+class TestProcessSceneLabel:
+    @pytest.mark.asyncio
+    async def test_persists_and_embeds_scene_label(
+        self, search_db, feature_manual, monkeypatch,
+    ):
+        _, Session = search_db
+        with Session() as s:
+            run = VideoVisualRun(
+                id="vvr_label", file_id="vid-ok", status="running",
+                is_active=False, requested_by="manual", priority=100,
+                vision_model="llava:13b", pipeline_version=2,
+                candidate_fingerprint="fp", selected_count=1,
+            )
+            scene = VideoVisualScene(
+                run_id="vvr_label", ordering=0, clip_embedding_id="c0",
+                start_time=5.0, status="pending",
+            )
+            s.add_all([run, scene])
+            s.commit()
+            scene_id = scene.id
+
+        monkeypatch.setattr(
+            "app.workers.video_visual.config.validate_file_path", lambda path: True,
+        )
+        monkeypatch.setattr(
+            "app.workers.video_visual._load_frame_bytes",
+            AsyncMock(return_value=b"raw-frame"),
+        )
+        monkeypatch.setattr(
+            "app.workers.vision._preprocess_image",
+            lambda data, mime: (b"processed-frame", "image/jpeg"),
+        )
+        monkeypatch.setattr(
+            "app.workers.video_visual._select_transcript_excerpt",
+            lambda *args: "nearby transcript",
+        )
+        embed_scene = MagicMock()
+        monkeypatch.setattr("app.workers.video_visual._embed_scene", embed_scene)
+
+        llm = MagicMock()
+        llm.generate_video_scene_json = AsyncMock(return_value={
+            "scene_label": "Chicken marinade added",
+            "visible_text": "",
+            "scene_type": "demonstration",
+        })
+
+        outcome = await VideoVisualWorker(llm)._process_scene(
+            scene_id, "vvr_label", "vid-ok", "/drives/family/clip.mp4", "clip.mp4"
+        )
+
+        assert outcome == "succeeded"
+        with Session() as s:
+            stored = s.query(VideoVisualScene).filter_by(id=scene_id).one()
+            assert stored.scene_label == "Chicken marinade added"
+            assert stored.visual_description is None
+            assert stored.transcript_excerpt == "nearby transcript"
+        embed_scene.assert_called_once_with(
+            "vid-ok", scene_id, "Chicken marinade added", "", 5.0, None,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +326,10 @@ class TestEnqueue:
             assert run.status == "queued"
             assert run.priority == 100  # manual
             assert run.requested_by == "manual"
+            assert run.pipeline_version == 2
+        policy_allow_all.assert_awaited_once_with(
+            "vid-ok", "video_visual_index", default_on_failure=False,
+        )
 
     @pytest.mark.asyncio
     async def test_on_index_uses_priority_zero(
@@ -334,6 +412,7 @@ class TestEnqueue:
         self, search_db, feature_manual, policy_allow_all, monkeypatch,
     ):
         index_manager = MagicMock()
+        index_manager.prioritize = AsyncMock(return_value=True)
         monkeypatch.setattr(
             "app.dependencies.get_index_manager", lambda: index_manager,
         )
@@ -341,7 +420,7 @@ class TestEnqueue:
         result = await worker.enqueue("vid-no-clip", requested_by="manual")
         assert result["accepted"] is False
         assert result["reason"] == "waiting_clip"
-        index_manager.prioritize.assert_called_once_with("vid-no-clip")
+        index_manager.prioritize.assert_awaited_once_with("vid-no-clip")
 
     @pytest.mark.asyncio
     async def test_no_clip_candidates_on_index_does_not_prioritize(
@@ -425,6 +504,8 @@ class TestEnqueue:
     async def test_on_index_skips_when_fingerprint_unchanged(
         self, search_db, feature_manual, policy_allow_all, monkeypatch,
     ):
+        from app.workers.video_visual import PIPELINE_VERSION
+
         _, Session = search_db
         with Session() as s:
             s.add(
@@ -436,7 +517,7 @@ class TestEnqueue:
                     requested_by="manual",
                     priority=100,
                     vision_model="llava:13b",
-                    pipeline_version=1,
+                    pipeline_version=PIPELINE_VERSION,
                     candidate_fingerprint="same-fp",
                 )
             )
@@ -455,6 +536,37 @@ class TestEnqueue:
         result = await worker.enqueue("vid-ok", requested_by="on_index")
         assert result["accepted"] is False
         assert result["reason"] == "up_to_date"
+
+    @pytest.mark.asyncio
+    async def test_on_index_regenerates_an_old_pipeline_contract(
+        self, search_db, feature_manual, policy_allow_all, monkeypatch,
+    ):
+        _, Session = search_db
+        with Session() as s:
+            s.add(
+                VideoVisualRun(
+                    id="vvr_active", file_id="vid-ok", status="succeeded",
+                    is_active=True, requested_by="manual", priority=100,
+                    vision_model="llava:13b", pipeline_version=1,
+                    candidate_fingerprint="same-fp",
+                )
+            )
+            s.commit()
+
+        monkeypatch.setattr(
+            "app.workers.video_visual._load_candidates",
+            lambda file_id: ([], None),
+        )
+        monkeypatch.setattr(
+            "app.workers.video_visual.compute_candidate_fingerprint",
+            lambda candidates: "same-fp",
+        )
+
+        result = await VideoVisualWorker(MagicMock()).enqueue(
+            "vid-ok", requested_by="on_index"
+        )
+
+        assert result["accepted"] is True
 
     @pytest.mark.asyncio
     async def test_manual_generate_again_ignores_fingerprint_match(
@@ -570,13 +682,55 @@ class TestRetry:
             assert scenes[1].error_class is None
             assert scenes[1].error_message is None
 
+    @pytest.mark.asyncio
+    async def test_obsolete_failed_run_older_than_active_is_not_retryable(
+        self, search_db, feature_manual, policy_allow_all,
+    ):
+        _, Session = search_db
+        with Session() as s:
+            s.add(
+                VideoVisualRun(
+                    id="vvr_old_failed", file_id="vid-ok", status="failed",
+                    is_active=False, requested_by="manual", priority=100,
+                    vision_model="llava:13b", pipeline_version=1,
+                    candidate_fingerprint="fp-old", selected_count=1,
+                    completed_count=1, succeeded_count=0, failed_count=1,
+                    created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                )
+            )
+            s.add(
+                VideoVisualScene(
+                    run_id="vvr_old_failed", ordering=0,
+                    clip_embedding_id="old-c0", start_time=1.0,
+                    status="failed",
+                )
+            )
+            s.add(
+                VideoVisualRun(
+                    id="vvr_active_new", file_id="vid-ok", status="succeeded",
+                    is_active=True, requested_by="manual", priority=100,
+                    vision_model="llava:13b", pipeline_version=1,
+                    candidate_fingerprint="fp-new", selected_count=1,
+                    completed_count=1, succeeded_count=1, failed_count=0,
+                    created_at=datetime(2026, 1, 2, tzinfo=UTC),
+                )
+            )
+            s.commit()
+
+        result = await VideoVisualWorker(MagicMock()).retry("vid-ok")
+
+        assert result == {"accepted": False, "reason": "no_run"}
+        with Session() as s:
+            old = s.query(VideoVisualRun).filter_by(id="vvr_old_failed").one()
+            assert old.status == "failed"
+
 
 # ---------------------------------------------------------------------------
 # _finalize_run activation rules (design doc §5.3)
 # ---------------------------------------------------------------------------
 
 
-class TestFinalizeRunActivation:
+class TestFinalizeRunSucceededActivation:
     @pytest.mark.asyncio
     async def test_succeeded_with_no_prior_active_becomes_active(
         self, search_db, feature_manual, no_emit,
@@ -638,6 +792,28 @@ class TestFinalizeRunActivation:
                     selected_count=1, completed_count=1, succeeded_count=1, failed_count=0,
                 )
             )
+            stale_run = VideoVisualRun(
+                id="vvr_stale_partial", file_id="vid-ok", status="partial",
+                is_active=False, requested_by="manual", priority=100,
+                vision_model="llava:13b", pipeline_version=1,
+                candidate_fingerprint="fp-stale", selected_count=1,
+                completed_count=1, succeeded_count=1, failed_count=0,
+            )
+            s.add(stale_run)
+            stale_scene = VideoVisualScene(
+                run_id="vvr_stale_partial", ordering=0,
+                clip_embedding_id="stale-c0", start_time=2.0,
+                status="succeeded",
+            )
+            s.add(stale_scene)
+            s.flush()
+            s.add(
+                Embedding(
+                    id=f"vvs_{stale_scene.id}_bbbbbbbb",
+                    file_id="vid-ok", embedding_type="video_visual_scene",
+                    content_preview="stale scene", vector_table="vec_text",
+                )
+            )
             s.commit()
 
         worker = VideoVisualWorker(MagicMock())
@@ -645,9 +821,12 @@ class TestFinalizeRunActivation:
 
         with Session() as s:
             old_run = s.query(VideoVisualRun).filter_by(id="vvr_old").first()
+            stale_run = s.query(VideoVisualRun).filter_by(id="vvr_stale_partial").first()
             new_run = s.query(VideoVisualRun).filter_by(id="vvr_new").first()
             assert old_run.status == "superseded"
             assert old_run.is_active is False
+            assert stale_run.status == "superseded"
+            assert stale_run.is_active is False
             assert new_run.status == "succeeded"
             assert new_run.is_active is True
 
@@ -658,6 +837,8 @@ class TestFinalizeRunActivation:
             )
             assert remaining_embeddings == 0
 
+
+class TestFinalizeRunPartialAndFailedActivation:
     @pytest.mark.asyncio
     async def test_first_partial_with_no_active_becomes_active(
         self, search_db, feature_manual, no_emit,
@@ -750,6 +931,59 @@ class TestFinalizeRunActivation:
             assert active.is_active is True
             assert staged.status == "failed"
             assert staged.is_active is False
+
+
+class TestInterruptedRunRecovery:
+    def test_requeues_run_and_resets_only_running_scenes(self, search_db):
+        _, Session = search_db
+        with Session() as s:
+            s.add(
+                VideoVisualRun(
+                    id="vvr_interrupted", file_id="vid-ok", status="running",
+                    is_active=False, requested_by="manual", priority=100,
+                    vision_model="llava:13b", pipeline_version=1,
+                    candidate_fingerprint="fp",
+                )
+            )
+            s.add_all([
+                VideoVisualScene(
+                    run_id="vvr_interrupted", ordering=0,
+                    clip_embedding_id="c0", start_time=1.0, status="running",
+                ),
+                VideoVisualScene(
+                    run_id="vvr_interrupted", ordering=1,
+                    clip_embedding_id="c1", start_time=2.0, status="succeeded",
+                ),
+            ])
+            s.commit()
+
+        VideoVisualWorker(MagicMock())._requeue_interrupted_run("vvr_interrupted")
+
+        with Session() as s:
+            run = s.query(VideoVisualRun).filter_by(id="vvr_interrupted").one()
+            statuses = {
+                scene.ordering: scene.status
+                for scene in s.query(VideoVisualScene)
+                .filter_by(run_id="vvr_interrupted")
+                .all()
+            }
+            assert run.status == "queued"
+            assert statuses == {0: "pending", 1: "succeeded"}
+
+    @pytest.mark.asyncio
+    async def test_frame_extraction_is_offloaded_from_event_loop(self, monkeypatch):
+        to_thread = AsyncMock(return_value=b"frame")
+        monkeypatch.setattr("app.workers.video_visual.asyncio.to_thread", to_thread)
+
+        result = await _load_frame_bytes("vid-ok", 3.5, "/drives/family/clip.mp4")
+
+        assert result == b"frame"
+        to_thread.assert_awaited_once_with(
+            _read_or_extract_frame,
+            "vid-ok",
+            3.5,
+            "/drives/family/clip.mp4",
+        )
 
 
 # ---------------------------------------------------------------------------

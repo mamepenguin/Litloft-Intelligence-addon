@@ -17,6 +17,7 @@ from sqlalchemy import text as sql_text
 
 from app.config import settings
 from app.llm import LLMClient
+from app.output_language import configured_language_requirement
 from app.prompt_loader import render
 from app.workers.transcription.errors import TransientError
 
@@ -29,6 +30,16 @@ _WINDOW_CHAR_BUDGET = 12_000
 _CORE_BASE_DEFAULT = "http://backend:8000"
 _READY_EVENT = "intelligence.chapter_suggestions.ready"
 _FAILED_EVENT = "intelligence.chapter_suggestions.failed"
+
+
+def _build_system_prompt(output_language: str | None) -> str:
+    return render(
+        "chapter_suggestions/system.jinja2",
+        language_requirement=configured_language_requirement(
+            output_language,
+            auto_requirement="Use the transcript language.",
+        ),
+    )
 
 
 async def is_chapter_suggestions_enabled(drive: str) -> bool:
@@ -326,10 +337,7 @@ class ChapterSuggestionsWorker:
         if not await is_chapter_suggestions_enabled(drive):
             return
 
-        system = render(
-            "chapter_suggestions/system.jinja2",
-            output_language=settings.llm.output_language,
-        )
+        system = _build_system_prompt(settings.llm.output_language)
         candidate_sets: list[list[dict[str, Any]]] = []
         windows = _build_windows(chunks)
         generation_started = time.monotonic()

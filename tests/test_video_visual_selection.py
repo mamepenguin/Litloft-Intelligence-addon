@@ -151,7 +151,7 @@ class TestNearDuplicateRemovalAndDiversityFill:
         # of the identical-vector cluster should survive dedup before
         # diversity fill pulls in distinct candidates.
         dup_count = sum(1 for i in ids if i.startswith("dup"))
-        assert dup_count < 20
+        assert dup_count == 1
 
     def test_stable_tie_break_by_timestamp_then_id(self):
         """Two candidates equidistant from the selected set: earliest
@@ -164,10 +164,10 @@ class TestNearDuplicateRemovalAndDiversityFill:
             Candidate("a_earlier", 5.0, v_b),
         ]
         result = select_candidates(candidates, duration_seconds=None)  # target=6, only 3 avail
-        # All three survive (fewer than target); just confirm no crash
-        # and stable ordering by timestamp then id.
+        # The identical v_b pair collapses, with timestamp/id providing
+        # the stable winner.
         assert [c.embedding_id for c in result] == [
-            "seed", "a_earlier", "z_later",
+            "seed", "a_earlier",
         ]
 
 

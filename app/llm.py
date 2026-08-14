@@ -35,6 +35,7 @@ from openai import (
 )
 
 from app.config import LLMConfig
+from app.output_language import configured_language_requirement
 from app.prompt_loader import render
 
 logger = logging.getLogger(__name__)
@@ -153,22 +154,20 @@ def _build_vision_system_prompt(output_language: str) -> str:
     """Construct the English system prompt for vision description.
 
     The prompt is English for stability across multi-language models
-    (matches the auto_tags / summaries convention). Only the output
-    language is parameterised via ``{output_language}`` substitution.
+    (matches the auto_tags / summaries convention). The configured
+    output-language tag controls only the generated description.
 
     Spec: docs/superpowers/specs/2026-04-23-intelligence-vision-describe.md
     """
-    lang = (output_language or "auto").strip() or "auto"
-    if lang == "auto":
-        lang_directive = (
-            "the same language as the filename and existing tags, "
-            "defaulting to English"
-        )
-    else:
-        lang_directive = lang
     return render(
         "vision/system.jinja2",
-        lang_directive=lang_directive,
+        language_requirement=configured_language_requirement(
+            output_language,
+            auto_requirement=(
+                "Use the same language as the filename and existing tags, "
+                "defaulting to English."
+            ),
+        ),
     )
 
 
@@ -623,15 +622,23 @@ class LLMClient:
         ``generate_vision``'s own contract (design doc §4.2).
 
         Returns the parsed JSON value, :data:`VISION_UNSUPPORTED`, or
-        ``None`` on failure / malformed / empty output. Retry/repair
-        policy for malformed JSON (design doc §12: one repair attempt
-        without resending a different frame) is the caller's
-        responsibility — this method makes exactly one provider call.
+        ``None`` on failure / malformed / empty output. A provider that
+        rejects JSON mode is retried once without ``response_format``
+        before it is classified as vision-unsupported. Retry/repair
+        policy for malformed JSON remains the caller's responsibility.
         """
         result = await self._vision_chat(
             image_bytes, mime_type, system_prompt, user_prompt,
             response_format={"type": "json_object"},
         )
+        if result is VISION_UNSUPPORTED:
+            logger.info(
+                "Vision request rejected with json_object mode; "
+                "retrying without response_format"
+            )
+            result = await self._vision_chat(
+                image_bytes, mime_type, system_prompt, user_prompt,
+            )
         if result is VISION_UNSUPPORTED or result is None:
             return result
         return _parse_json_response(result)
@@ -1255,14 +1262,22 @@ class OllamaLLMClient:
         """Structured-output vision call for one video-visual-index scene.
 
         Same contract as :meth:`LLMClient.generate_video_scene_json`:
-        one provider call, JSON-mode requested, parsed via
-        ``_parse_json_response``. Returns the parsed value,
-        :data:`VISION_UNSUPPORTED`, or ``None``.
+        JSON-mode requested and parsed via ``_parse_json_response``.
+        Providers that reject JSON mode are retried once without it.
+        Returns the parsed value, :data:`VISION_UNSUPPORTED`, or ``None``.
         """
         result = await self._vision_chat(
             image_bytes, mime_type, system_prompt, user_prompt,
             response_format={"type": "json_object"},
         )
+        if result is VISION_UNSUPPORTED:
+            logger.info(
+                "Ollama vision request rejected with format=json; "
+                "retrying without format"
+            )
+            result = await self._vision_chat(
+                image_bytes, mime_type, system_prompt, user_prompt,
+            )
         if result is VISION_UNSUPPORTED or result is None:
             return result
         return _parse_json_response(result)

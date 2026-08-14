@@ -15,7 +15,39 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
-import { NextIntlClientProvider } from "next-intl";
+import type { MediaController } from "@/lib/mediaController";
+
+const visualIndexMessages = vi.hoisted(() => ({
+  visualIndexTitle: "Visual index",
+  visualIndexSceneCount: "{count} scenes",
+  visualIndexProcessing: "Processing {progress}",
+  visualIndexUpdating: "Updating {progress}",
+  visualIndexPartial: "Partial",
+  visualIndexEmpty: "No visual index has been generated yet.",
+  visualIndexStale: "The source scenes have changed since this index was built.",
+  visualIndexGenerate: "Generate",
+  visualIndexGenerateAgain: "Generate again",
+  visualIndexGenerating: "Starting…",
+  visualIndexRetryFailed: "Retry failed scenes",
+  visualIndexSceneFailed: "Failed",
+  visualIndexTranscriptExcerpt: "Transcript",
+  visualIndexWaitingPrerequisite:
+    "Waiting on scene indexing to finish before this can start.",
+  visualIndexActionError: "Could not start visual index generation.",
+}));
+
+vi.mock("next-intl", () => ({
+  useTranslations: () => (
+    key: keyof typeof visualIndexMessages,
+    values?: Record<string, unknown>,
+  ) => {
+    const template = visualIndexMessages[key];
+    return Object.entries(values ?? {}).reduce(
+      (text, [name, value]) => text.replace(`{${name}}`, String(value)),
+      template,
+    );
+  },
+}));
 
 vi.mock("@/addons/intelligence/api", () => ({
   getVideoVisualIndex: vi.fn(),
@@ -83,7 +115,7 @@ const activeResult = {
       end_time: null,
       status: "succeeded" as const,
       scene_type: "slide",
-      visual_description: "A presenter points at a diagram.",
+      scene_label: "Architecture diagram",
       visible_text: "Browser -> Server",
       transcript_excerpt: "and here we see the request flow",
     },
@@ -93,7 +125,7 @@ const activeResult = {
       end_time: null,
       status: "succeeded" as const,
       scene_type: "person",
-      visual_description: "A person speaking to the camera.",
+      scene_label: "Presenter on camera",
       visible_text: null,
       transcript_excerpt: null,
     },
@@ -105,18 +137,32 @@ const activeResult = {
 function renderSection(
   props: Partial<React.ComponentProps<typeof VisualIndexSection>> = {},
 ) {
-  const mediaController = { seek: vi.fn(), play: vi.fn(), pause: vi.fn() };
+  const mediaController = {
+    seek: vi.fn(),
+    play: vi.fn(),
+    pause: vi.fn(),
+    togglePlay: vi.fn(),
+    toggleMute: vi.fn(),
+    toggleFullscreen: vi.fn(),
+    getCurrentTime: vi.fn(() => 0),
+    getDuration: vi.fn(() => 0),
+    isPaused: vi.fn(() => true),
+    isMuted: vi.fn(() => false),
+    getVolume: vi.fn(() => 1),
+    setVolume: vi.fn(),
+    getPlaybackRate: vi.fn(() => 1),
+    setPlaybackRate: vi.fn(),
+    getBufferedFraction: vi.fn(() => 0),
+  } satisfies MediaController;
   const result = render(
-    <NextIntlClientProvider locale="en" messages={{}}>
-      <VisualIndexSection
-        fileId="f1"
-        drive="family"
-        fileType="video"
-        mimeType="video/mp4"
-        mediaController={mediaController}
-        {...props}
-      />
-    </NextIntlClientProvider>,
+    <VisualIndexSection
+      fileId="f1"
+      drive="family"
+      fileType="video"
+      mimeType="video/mp4"
+      mediaController={mediaController}
+      {...props}
+    />,
   );
   return { ...result, mediaController };
 }
@@ -262,7 +308,7 @@ describe("VisualIndexSection", () => {
     fireEvent.click(await screen.findByText("Visual index · 2 scenes"));
     expect(await screen.findByText("Browser -> Server")).toBeInTheDocument();
     // Second scene has no visible_text.
-    expect(screen.queryByText("A person speaking to the camera.")).toBeInTheDocument();
+    expect(screen.queryByText("Presenter on camera")).toBeInTheDocument();
   });
 
   it("shows a transcript disclosure only when an excerpt exists", async () => {
@@ -352,7 +398,7 @@ describe("VisualIndexSection", () => {
       end_time: null,
       status: "succeeded" as const,
       scene_type: null,
-      visual_description: `Scene ${i}`,
+      scene_label: `Scene ${i}`,
       visible_text: null,
       transcript_excerpt: null,
     }));
@@ -381,9 +427,12 @@ describe("VisualIndexSection", () => {
       data: { file_id: "f1", run_id: "vvr_1" },
     };
     rerender(
-      <NextIntlClientProvider locale="en" messages={{}}>
-        <VisualIndexSection fileId="f1" drive="family" fileType="video" mimeType="video/mp4" />
-      </NextIntlClientProvider>,
+      <VisualIndexSection
+        fileId="f1"
+        drive="family"
+        fileType="video"
+        mimeType="video/mp4"
+      />,
     );
 
     expect(await screen.findByText("Visual index · 2 scenes")).toBeInTheDocument();
@@ -399,9 +448,12 @@ describe("VisualIndexSection", () => {
       data: { file_id: "other" },
     };
     rerender(
-      <NextIntlClientProvider locale="en" messages={{}}>
-        <VisualIndexSection fileId="f1" drive="family" fileType="video" mimeType="video/mp4" />
-      </NextIntlClientProvider>,
+      <VisualIndexSection
+        fileId="f1"
+        drive="family"
+        fileType="video"
+        mimeType="video/mp4"
+      />,
     );
 
     expect(getVideoVisualIndex).toHaveBeenCalledTimes(1);

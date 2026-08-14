@@ -2,7 +2,7 @@
 
 Turns a native video into a seekable visual index: a small set of
 representative frames, each carrying a timestamp, a short description
-of visible facts, legible on-screen text, and an optional transcript
+label for navigation, legible on-screen text, and an optional transcript
 excerpt. Owned entirely by the intelligence addon — no core table, no
 Internal API endpoint (design doc "Video Visual Index", 2026-08-13).
 
@@ -29,7 +29,7 @@ import uuid
 from datetime import UTC, datetime
 
 import httpx
-from sqlalchemy import text as sql_text
+from sqlalchemy import or_, text as sql_text
 from sqlalchemy.exc import OperationalError
 
 import app.config as config
@@ -38,6 +38,7 @@ from app.database import get_search_db, get_search_db_read, get_search_engine
 from app.frame_cache import ensure_frame_cached
 from app.llm import VISION_UNSUPPORTED
 from app.models import Embedding, IndexedFile, TranscriptChunk, VideoVisualRun, VideoVisualScene
+from app.output_language import configured_language_requirement
 from app.policy_client import is_file_feature_enabled
 from app.prompt_loader import render
 from app.workers.clip import VIDEO_TYPES
@@ -52,11 +53,11 @@ logger = logging.getLogger(__name__)
 # Bumped when the selection algorithm or scene contract changes in a way
 # that should be visible on run rows (audit trail only; no code branches
 # on this value today).
-PIPELINE_VERSION = 1
+PIPELINE_VERSION = 2
 
 # Size caps applied at validation/write time (design doc §5.2, §7.1).
 # External model output never reaches the DB unbounded.
-MAX_VISUAL_DESCRIPTION_CHARS = 500
+MAX_SCENE_LABEL_CHARS = 80
 MAX_VISIBLE_TEXT_CHARS = 800
 MAX_ERROR_MESSAGE_CHARS = 500
 
@@ -78,15 +79,21 @@ _READY_EVENTS = {
 
 
 # ---------------------------------------------------------------------------
-# Prompt language directive (mirrors app.llm._build_vision_system_prompt)
+# Scene prompt
 # ---------------------------------------------------------------------------
 
 
-def _lang_directive(output_language: str) -> str:
-    lang = (output_language or "auto").strip() or "auto"
-    if lang == "auto":
-        return "the same language as the filename and existing tags, defaulting to English"
-    return lang
+def _build_scene_system_prompt(output_language: str | None) -> str:
+    return render(
+        "video_visual_scene/system.jinja2",
+        language_requirement=configured_language_requirement(
+            output_language,
+            auto_requirement=(
+                "Use the language indicated by the filename and nearby transcript "
+                "context, defaulting to English."
+            ),
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +158,29 @@ def _clip_candidates_exist(file_id: str) -> bool:
         )
 
 
+def _read_or_extract_frame(
+    file_id: str,
+    start_time: float,
+    file_path: str,
+) -> bytes:
+    """Load one frame without exposing synchronous I/O to the event loop."""
+    cache_path = ensure_frame_cached(file_id, start_time, file_path)
+    return cache_path.read_bytes()
+
+
+async def _load_frame_bytes(
+    file_id: str,
+    start_time: float,
+    file_path: str,
+) -> bytes:
+    return await asyncio.to_thread(
+        _read_or_extract_frame,
+        file_id,
+        start_time,
+        file_path,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Transcript excerpt (mechanical, never model-generated — design doc §7.1)
 # ---------------------------------------------------------------------------
@@ -187,14 +217,14 @@ def _validate_scene_output(raw: object) -> dict | None:
 
     Returns ``None`` when ``raw`` is not a usable scene object — the
     caller treats that as "malformed" and drives the repair-retry /
-    scene-failure path. ``visual_description`` is required (non-blank);
+    scene-failure path. ``scene_label`` is required (non-blank);
     ``visible_text`` and ``scene_type`` are optional and omitted rather
     than guessed when uncertain.
     """
     if not isinstance(raw, dict):
         return None
-    desc = raw.get("visual_description")
-    if not isinstance(desc, str) or not desc.strip():
+    label = raw.get("scene_label")
+    if not isinstance(label, str) or not label.strip():
         return None
     visible_text_raw = raw.get("visible_text")
     visible_text = visible_text_raw.strip() if isinstance(visible_text_raw, str) else ""
@@ -202,7 +232,7 @@ def _validate_scene_output(raw: object) -> dict | None:
     if scene_type not in ALLOWED_SCENE_TYPES:
         scene_type = None
     return {
-        "visual_description": desc.strip()[:MAX_VISUAL_DESCRIPTION_CHARS],
+        "scene_label": label.strip()[:MAX_SCENE_LABEL_CHARS],
         "visible_text": visible_text[:MAX_VISIBLE_TEXT_CHARS],
         "scene_type": scene_type,
     }
@@ -220,7 +250,7 @@ def _scene_embedding_id(scene_id: int) -> str:
 def _embed_scene(
     file_id: str,
     scene_id: int,
-    visual_description: str,
+    scene_label: str,
     visible_text: str,
     start_time: float,
     end_time: float | None,
@@ -230,7 +260,7 @@ def _embed_scene(
     Excluded from default search/RAG at read time (design doc §8); the
     write side has no special-casing beyond the ``embedding_type`` tag.
     """
-    combined = " ".join(p for p in (visual_description, visible_text) if p).strip()
+    combined = " ".join(p for p in (scene_label, visible_text) if p).strip()
     if not combined:
         return
     try:
@@ -411,7 +441,11 @@ class VideoVisualWorker:
             return False, "disabled"
 
         try:
-            enabled = await is_file_feature_enabled(file_id, "video_visual_index")
+            enabled = await is_file_feature_enabled(
+                file_id,
+                "video_visual_index",
+                default_on_failure=False,
+            )
         except Exception as e:
             logger.warning(
                 "video_visual: policy lookup failed for %s (%s); refusing (fail-closed)",
@@ -479,7 +513,7 @@ class VideoVisualWorker:
                 try:
                     from app.dependencies import get_index_manager
 
-                    get_index_manager().prioritize(file_id)
+                    await get_index_manager().prioritize(file_id)
                 except Exception:
                     pass
             return {"accepted": False, "reason": reason}
@@ -497,7 +531,11 @@ class VideoVisualWorker:
                 )
             if active is not None:
                 candidates, _ = _load_candidates(file_id)
-                if compute_candidate_fingerprint(candidates) == active.candidate_fingerprint:
+                if (
+                    active.pipeline_version == PIPELINE_VERSION
+                    and compute_candidate_fingerprint(candidates)
+                    == active.candidate_fingerprint
+                ):
                     return {"accepted": False, "reason": "up_to_date"}
 
         priority = 100 if requested_by == "manual" else 0
@@ -524,12 +562,27 @@ class VideoVisualWorker:
         retryable run (§3.4, §9 "Retry operates on the same staged run
         and failed scene rows")."""
         with get_search_db() as session:
-            run = (
+            active = (
                 session.query(VideoVisualRun)
                 .filter(
                     VideoVisualRun.file_id == file_id,
-                    VideoVisualRun.status.in_(("partial", "failed")),
+                    VideoVisualRun.is_active.is_(True),
                 )
+                .first()
+            )
+            retryable = session.query(VideoVisualRun).filter(
+                VideoVisualRun.file_id == file_id,
+                VideoVisualRun.status.in_(("partial", "failed")),
+            )
+            if active is not None:
+                retryable = retryable.filter(
+                    or_(
+                        VideoVisualRun.id == active.id,
+                        VideoVisualRun.created_at > active.created_at,
+                    )
+                )
+            run = (
+                retryable
                 .order_by(VideoVisualRun.created_at.desc())
                 .first()
             )
@@ -618,6 +671,19 @@ class VideoVisualWorker:
                 self._current_file_id = run_row.file_id
                 try:
                     await self._process_run(run_row.id, run_row.file_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "video_visual run %s interrupted; re-queueing",
+                        run_row.id,
+                    )
+                    await asyncio.to_thread(
+                        self._requeue_interrupted_run,
+                        run_row.id,
+                    )
+                    self._wake.set()
+                    await asyncio.sleep(5)
                 finally:
                     self._current_run_id = None
                     self._current_file_id = None
@@ -626,6 +692,18 @@ class VideoVisualWorker:
             except Exception:
                 logger.exception("video_visual worker error")
                 await asyncio.sleep(5)
+
+    def _requeue_interrupted_run(self, run_id: str) -> None:
+        """Restore a claimed run after an unexpected in-process error."""
+        with get_search_db() as session:
+            session.query(VideoVisualScene).filter(
+                VideoVisualScene.run_id == run_id,
+                VideoVisualScene.status == "running",
+            ).update({"status": "pending"}, synchronize_session=False)
+            session.query(VideoVisualRun).filter(
+                VideoVisualRun.id == run_id,
+                VideoVisualRun.status == "running",
+            ).update({"status": "queued"}, synchronize_session=False)
 
     async def _process_run(self, run_id: str, file_id: str) -> None:
         with get_search_db_read() as session:
@@ -640,7 +718,11 @@ class VideoVisualWorker:
         drive, file_path, filename = file_row.drive, file_row.file_path, file_row.filename
 
         try:
-            enabled = await is_file_feature_enabled(file_id, "video_visual_index")
+            enabled = await is_file_feature_enabled(
+                file_id,
+                "video_visual_index",
+                default_on_failure=False,
+            )
         except Exception:
             enabled = False
         if not enabled:
@@ -755,8 +837,7 @@ class VideoVisualWorker:
             return self._fail_scene(scene_id, run_id, "InvalidPath", "file path failed validation")
 
         try:
-            cache_path = ensure_frame_cached(file_id, start_time, file_path)
-            raw_bytes = cache_path.read_bytes()
+            raw_bytes = await _load_frame_bytes(file_id, start_time, file_path)
         except Exception as e:
             return self._fail_scene(scene_id, run_id, "FrameExtraction", str(e)[:200])
 
@@ -772,10 +853,7 @@ class VideoVisualWorker:
 
         transcript_excerpt = _select_transcript_excerpt(file_id, start_time, end_time)
 
-        system_prompt = render(
-            "video_visual_scene/system.jinja2",
-            lang_directive=_lang_directive(settings.llm.output_language),
-        )
+        system_prompt = _build_scene_system_prompt(settings.llm.output_language)
         user_prompt = render(
             "video_visual_scene/user.jinja2",
             filename=filename,
@@ -824,7 +902,7 @@ class VideoVisualWorker:
             scene = session.query(VideoVisualScene).filter_by(id=scene_id).first()
             if scene is not None:
                 scene.status = "succeeded"
-                scene.visual_description = parsed["visual_description"]
+                scene.scene_label = parsed["scene_label"]
                 scene.visible_text = parsed["visible_text"] or None
                 scene.scene_type = parsed["scene_type"]
                 scene.transcript_excerpt = transcript_excerpt or None
@@ -837,7 +915,7 @@ class VideoVisualWorker:
         try:
             _embed_scene(
                 file_id, scene_id,
-                parsed["visual_description"], parsed["visible_text"],
+                parsed["scene_label"], parsed["visible_text"],
                 start_time, end_time,
             )
         except Exception as e:
@@ -882,8 +960,8 @@ class VideoVisualWorker:
                     session.query(VideoVisualRun)
                     .filter(
                         VideoVisualRun.file_id == file_id,
-                        VideoVisualRun.is_active.is_(True),
                         VideoVisualRun.id != run_id,
+                        VideoVisualRun.status.in_(("succeeded", "partial", "failed")),
                     )
                     .all()
                 )
@@ -934,8 +1012,8 @@ class VideoVisualWorker:
 __all__ = [
     "ALLOWED_SCENE_TYPES",
     "MAX_ERROR_MESSAGE_CHARS",
+    "MAX_SCENE_LABEL_CHARS",
     "MAX_VISIBLE_TEXT_CHARS",
-    "MAX_VISUAL_DESCRIPTION_CHARS",
     "PIPELINE_VERSION",
     "VideoVisualWorker",
     "emit_video_visual_event",

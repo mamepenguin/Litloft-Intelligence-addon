@@ -648,7 +648,7 @@ class LLMConfig:
     model: str = ""
     max_tokens: int = 2048
     temperature: float = 0.3
-    output_language: str = "auto"  # "auto" | "ja" | "en" | etc. — applies to auto_tags and summaries
+    output_language: str = "auto"  # "auto" or a BCP 47 tag; applies to user-visible LLM output
     # Agentic Ask (Phase 1.C). ``agentic_mode="off"`` is the kill
     # switch; ``"auto"`` activates the loop iff the active model name
     # appears in ``agentic_models``. Unknown models always fall back

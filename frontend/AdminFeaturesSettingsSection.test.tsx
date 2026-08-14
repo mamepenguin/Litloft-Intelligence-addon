@@ -49,7 +49,7 @@ describe("AdminFeaturesSettingsSection", () => {
       expect(screen.getByRole("button", { name: /save/i })).toBeInTheDocument(),
     );
     expect(screen.getAllByRole("checkbox").length).toBe(3);
-    expect(screen.getAllByRole("radio").length).toBe(21); // 7 enums × 3 values
+    expect(screen.getAllByRole("radio").length).toBe(24); // 8 enums × 3 values
     expect(
       screen.getByText(/AI chapter candidates|settings\.features\.fields\.chapter_suggestions\.label/),
     ).toBeInTheDocument();

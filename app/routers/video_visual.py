@@ -44,9 +44,13 @@ router = APIRouter(tags=["video_visual"])
 # per-drive policy can be stubbed without reaching into ``policy_client``.
 async def is_feature_enabled(drive: str, feature: str = "video_visual_index") -> bool:
     try:
-        return await _policy_is_feature_enabled(drive, feature)
+        return await _policy_is_feature_enabled(
+            drive,
+            feature,
+            default_on_failure=False,
+        )
     except Exception:
-        return True
+        return False
 
 
 def _fetch_indexed_file(file_id: str) -> Any | None:
@@ -73,7 +77,10 @@ def _require_feature_available() -> None:
 
 
 async def _require_drive_policy(drive: str) -> None:
-    enabled = await is_feature_enabled(drive, "video_visual_index")
+    try:
+        enabled = await is_feature_enabled(drive, "video_visual_index")
+    except Exception:
+        enabled = False
     if not enabled:
         raise HTTPException(status_code=404, detail="Feature disabled for drive")
 
@@ -98,7 +105,7 @@ def _scene_to_item(scene: VideoVisualScene) -> VideoVisualSceneItem:
         end_time=scene.end_time,
         status=scene.status,
         scene_type=scene.scene_type,
-        visual_description=scene.visual_description,
+        scene_label=scene.scene_label,
         visible_text=scene.visible_text,
         transcript_excerpt=scene.transcript_excerpt,
     )
@@ -138,7 +145,10 @@ async def get_visual_index(
             VideoVisualRun.status.in_(("queued", "running", "partial", "failed")),
         )
         if active is not None:
-            staged_query = staged_query.filter(VideoVisualRun.id != active.id)
+            staged_query = staged_query.filter(
+                VideoVisualRun.id != active.id,
+                VideoVisualRun.created_at > active.created_at,
+            )
         staged = staged_query.order_by(VideoVisualRun.created_at.desc()).first()
 
         scenes: list[VideoVisualSceneItem] = []
@@ -153,10 +163,13 @@ async def get_visual_index(
 
     stale = False
     if active is not None:
-        from app.workers.video_visual import _load_candidates
+        from app.workers.video_visual import PIPELINE_VERSION, _load_candidates
 
         candidates, _duration = _load_candidates(file_id)
-        stale = compute_candidate_fingerprint(candidates) != active.candidate_fingerprint
+        stale = (
+            active.pipeline_version != PIPELINE_VERSION
+            or compute_candidate_fingerprint(candidates) != active.candidate_fingerprint
+        )
 
     return VideoVisualIndexResponse(
         eligible=True,

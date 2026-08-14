@@ -168,7 +168,16 @@ def _farthest_point_fill(
     determinism given the same candidate set.
     """
     selected_ids = {c.embedding_id for c in selected}
-    remaining = [c for c in pool if c.embedding_id not in selected_ids]
+    remaining = [
+        c
+        for c in pool
+        if c.embedding_id not in selected_ids
+        and not any(
+            _cosine_similarity(c.vector, chosen.vector)
+            >= NEAR_DUPLICATE_COSINE_THRESHOLD
+            for chosen in selected
+        )
+    ]
     result = list(selected)
 
     if not result and remaining and budget > 0:
@@ -187,7 +196,13 @@ def _farthest_point_fill(
         tied = [c for c in remaining if distances[c.embedding_id] == max_dist]
         best = min(tied, key=lambda c: (c.timestamp, c.embedding_id))
         result.append(best)
-        remaining = [c for c in remaining if c.embedding_id != best.embedding_id]
+        remaining = [
+            c
+            for c in remaining
+            if c.embedding_id != best.embedding_id
+            and _cosine_similarity(c.vector, best.vector)
+            < NEAR_DUPLICATE_COSINE_THRESHOLD
+        ]
 
     return result
 

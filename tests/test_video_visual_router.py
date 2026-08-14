@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import sys
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -165,6 +166,18 @@ class TestGetVisualIndex:
         assert exc.value.status_code == 404
 
     @pytest.mark.asyncio
+    async def test_policy_lookup_failure_returns_404(
+        self, feature_manual, search_db, monkeypatch,
+    ):
+        monkeypatch.setattr(
+            "app.routers.video_visual.is_feature_enabled",
+            AsyncMock(side_effect=RuntimeError("policy unavailable")),
+        )
+        with pytest.raises(HTTPException) as exc:
+            await get_visual_index(file_id="vid-abc", drive="family")
+        assert exc.value.status_code == 404
+
+    @pytest.mark.asyncio
     async def test_unknown_file_returns_404(self, feature_manual, search_db):
         with pytest.raises(HTTPException) as exc:
             await get_visual_index(file_id="ghost", drive="family")
@@ -208,7 +221,8 @@ class TestGetVisualIndex:
                 VideoVisualScene(
                     run_id="vvr_active", ordering=0, clip_embedding_id="c0",
                     start_time=5.0, status="succeeded",
-                    visual_description="A cat.", visible_text=None, scene_type="object",
+                    scene_label="Cat on a table", visible_text=None, scene_type="object",
+                    visual_description="Legacy verbose description.",
                 )
             )
             s.commit()
@@ -217,7 +231,8 @@ class TestGetVisualIndex:
         assert result.active_run is not None
         assert result.active_run.status == "succeeded"
         assert len(result.scenes) == 1
-        assert result.scenes[0].visual_description == "A cat."
+        assert result.scenes[0].scene_label == "Cat on a table"
+        assert "visual_description" not in result.scenes[0].model_dump()
         assert result.staged_run is None
 
     @pytest.mark.asyncio
@@ -246,6 +261,56 @@ class TestGetVisualIndex:
         assert result.active_run.run_id == "vvr_active"
         assert result.staged_run.run_id == "vvr_staged"
         assert result.staged_run.status == "running"
+
+    @pytest.mark.asyncio
+    async def test_old_pipeline_result_is_stale(self, feature_manual, search_db):
+        _, Session = search_db
+        with Session() as s:
+            s.add(
+                VideoVisualRun(
+                    id="vvr_legacy", file_id="vid-abc", status="succeeded",
+                    is_active=True, requested_by="manual", priority=100,
+                    vision_model="llava:13b", pipeline_version=1,
+                    candidate_fingerprint="",
+                )
+            )
+            s.commit()
+
+        result = await get_visual_index(file_id="vid-abc", drive="family")
+
+        assert result.stale is True
+
+    @pytest.mark.asyncio
+    async def test_run_older_than_active_is_not_returned_as_staged(
+        self, feature_manual, search_db,
+    ):
+        _, Session = search_db
+        with Session() as s:
+            s.add(
+                VideoVisualRun(
+                    id="vvr_old_failed", file_id="vid-abc", status="failed",
+                    is_active=False, requested_by="manual", priority=100,
+                    vision_model="llava:13b", pipeline_version=1,
+                    candidate_fingerprint="fp-old", failed_count=1,
+                    created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                )
+            )
+            s.add(
+                VideoVisualRun(
+                    id="vvr_active", file_id="vid-abc", status="succeeded",
+                    is_active=True, requested_by="manual", priority=100,
+                    vision_model="llava:13b", pipeline_version=1,
+                    candidate_fingerprint="fp-new", selected_count=1,
+                    completed_count=1, succeeded_count=1,
+                    created_at=datetime(2026, 1, 2, tzinfo=UTC),
+                )
+            )
+            s.commit()
+
+        result = await get_visual_index(file_id="vid-abc", drive="family")
+
+        assert result.active_run.run_id == "vvr_active"
+        assert result.staged_run is None
 
 
 # ---------------------------------------------------------------------------

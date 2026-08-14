@@ -222,14 +222,18 @@ def _set_startup_for_tests(value: float) -> None:
     _observed_healthy = False
 
 
-async def is_file_feature_enabled(file_id: str, feature: str) -> bool:
+async def is_file_feature_enabled(
+    file_id: str,
+    feature: str,
+    *,
+    default_on_failure: bool = True,
+) -> bool:
     """Lookup the file's drive in the local index and apply policy.
 
     Convenience for worker enqueue paths that have a file_id but no
-    drive on hand. Returns ``True`` when the file is unknown so we
-    don't accidentally suppress legitimate work for a freshly indexed
-    file the cache hasn't seen yet — consistent with the fail-open
-    posture of ``is_feature_enabled``.
+    drive on hand. Database failures and unknown files resolve to
+    ``default_on_failure`` so callers can explicitly choose fail-open
+    or fail-closed behavior.
     """
     # Local import: keeps this module importable even if the search
     # DB hasn't initialised yet (e.g. very early startup, tests that
@@ -244,7 +248,11 @@ async def is_file_feature_enabled(file_id: str, feature: str) -> bool:
                 .first()
             )
     except Exception:
-        return True
+        return default_on_failure
     if row is None:
-        return True
-    return await is_feature_enabled(row.drive, feature)
+        return default_on_failure
+    return await is_feature_enabled(
+        row.drive,
+        feature,
+        default_on_failure=default_on_failure,
+    )

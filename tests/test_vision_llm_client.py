@@ -265,10 +265,11 @@ class TestOpenAICompatibleGenerateVision:
             system_text = "".join(
                 p.get("text", "") for p in system_text if p.get("type") == "text"
             )
-        # The configured output language must surface in the prompt body
-        # and the literal placeholder must not leak through unsubstituted.
-        assert "ja" in system_text
-        assert "{output_language}" not in system_text
+        # The configured value is interpreted as a standard language tag;
+        # no feature-specific Japanese/English hard-code is needed.
+        assert 'BCP 47 language tag "ja"' in system_text
+        assert "Do not choose a different output language" in system_text
+        assert "{language_requirement}" not in system_text
 
     @pytest.mark.asyncio
     async def test_returns_unsupported_sentinel_on_400(self):
@@ -344,6 +345,38 @@ class TestOpenAICompatibleGenerateVision:
             _TINY_JPEG, "image/jpeg", "Describe this image."
         )
         assert result is None
+
+
+class TestOpenAICompatibleGenerateVideoSceneJson:
+    @pytest.mark.asyncio
+    async def test_retries_without_json_mode_when_provider_rejects_it(self):
+        from openai import APIStatusError
+
+        client = _make_openai_client()
+        request = httpx.Request("POST", "http://test/chat/completions")
+        response = httpx.Response(
+            status_code=400,
+            request=request,
+            content=b'{"error": {"message": "response_format unsupported"}}',
+        )
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=[
+                APIStatusError(message="HTTP 400", response=response, body=None),
+                _make_response_obj(
+                    '{"scene_label":"Architecture diagram","visible_text":"","scene_type":"slide"}'
+                ),
+            ]
+        )
+
+        result = await client.generate_video_scene_json(
+            _TINY_JPEG, "image/jpeg", "system", "user",
+        )
+
+        assert result["scene_label"] == "Architecture diagram"
+        first, second = client._client.chat.completions.create.await_args_list
+        assert first.kwargs["response_format"] == {"type": "json_object"}
+        assert "response_format" not in second.kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -443,8 +476,9 @@ class TestOllamaGenerateVision:
 
         messages = captured["json"]["messages"]
         system_msg = next(m for m in messages if m["role"] == "system")
-        assert "en" in system_msg["content"]
-        assert "{output_language}" not in system_msg["content"]
+        assert 'BCP 47 language tag "en"' in system_msg["content"]
+        assert "Do not choose a different output language" in system_msg["content"]
+        assert "{language_requirement}" not in system_msg["content"]
 
     @pytest.mark.asyncio
     async def test_unsupported_sentinel_on_400(self):
@@ -524,3 +558,36 @@ class TestOllamaGenerateVision:
         # Temperature propagates; num_predict is Ollama's max_tokens analog.
         assert options.get("temperature") == pytest.approx(0.0)
         assert options.get("num_predict") == 256
+
+
+class TestOllamaGenerateVideoSceneJson:
+    @pytest.mark.asyncio
+    async def test_retries_without_json_format_when_provider_rejects_it(self):
+        client = _make_ollama_client()
+        bodies: list[dict] = []
+
+        async def fake_post(url, json):
+            bodies.append(json)
+            if len(bodies) == 1:
+                return httpx.Response(
+                    status_code=400,
+                    content=b'{"error": "format unsupported"}',
+                )
+            return httpx.Response(
+                status_code=200,
+                content=(
+                    b'{"message":{"content":"{\\"scene_label\\":'
+                    b'\\"Architecture diagram\\",\\"visible_text\\":\\"\\",'
+                    b'\\"scene_type\\":\\"slide\\"}"}}'
+                ),
+            )
+
+        client._http.post = fake_post
+
+        result = await client.generate_video_scene_json(
+            _TINY_JPEG, "image/jpeg", "system", "user",
+        )
+
+        assert result["scene_label"] == "Architecture diagram"
+        assert bodies[0]["format"] == "json"
+        assert "format" not in bodies[1]

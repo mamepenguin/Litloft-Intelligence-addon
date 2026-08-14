@@ -552,6 +552,10 @@ class VideoVisualScene(Base):
     # "slide" | "screen" | "person" | "demonstration" | "environment" |
     # "object" | "action" | "other" — omitted by the model when uncertain.
     scene_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    scene_label: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Legacy pipeline-v1 payload. Kept in storage so upgrades do not
+    # destroy existing results; new generation and API responses use
+    # ``scene_label`` instead.
     visual_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     visible_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Selected mechanically by timestamp overlap, never copied from model

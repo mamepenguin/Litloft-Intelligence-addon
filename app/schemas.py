@@ -292,7 +292,7 @@ class VideoVisualSceneItem(BaseModel):
     end_time: float | None = None
     status: Literal["pending", "running", "succeeded", "failed"]
     scene_type: str | None = None
-    visual_description: str | None = None
+    scene_label: str | None = None
     visible_text: str | None = None
     transcript_excerpt: str | None = None
 
