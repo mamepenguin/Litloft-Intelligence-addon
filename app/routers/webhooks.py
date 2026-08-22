@@ -1,11 +1,32 @@
-"""Webhook endpoints for Litloft event notifications."""
+"""Webhook endpoints for Litloft event notifications.
+
+These are reachable only from the Docker-internal network — core posts to
+them from ``event_hooks``, and nothing outside the compose network can
+route here. They carry no shared-secret check.
+
+There used to be one, gated on ``SEARCH_WEBHOOK_SECRET``, but it was never
+wired: nothing generated the value, no manifest declared ``secret_env`` for
+it, and the variable was empty in every deployment, so the check was a
+permanent no-op. Worse, the same dependency also guarded the ``/queue/*``
+admin routes, which core's proxy calls **from the browser** without that
+header — so setting the variable would have started returning 403 for the
+queue controls while appearing to secure the webhooks. A setting that
+breaks the application when you turn it on is worse than no setting.
+
+If the threat model changes (a shared Docker network with untrusted peers,
+or third-party addon containers), add the gate deliberately: a dependency
+applied to *these* routes only, an env var emitted by ``configure.py``, and
+``secret_env`` in the manifest so core sends the header. Do not reinstate
+the old shape. The knowledge addon's ``KNOWLEDGE_WEBHOOK_SECRET`` is the
+working reference for all three pieces.
+"""
 
 from fastapi import APIRouter, Depends
 
 import asyncio
 
 from app import dependencies
-from app.dependencies import get_index_manager, verify_webhook_secret
+from app.dependencies import get_index_manager
 from app.schemas import (
     MessageResponse,
     WebhookFilesDeleted,
@@ -39,7 +60,6 @@ router = APIRouter(tags=["webhooks"])
 @router.post("/webhook/scan-complete", response_model=MessageResponse)
 async def webhook_scan_complete(
     body: WebhookScanComplete,
-    _: None = Depends(verify_webhook_secret),
 ) -> MessageResponse:
     """Handle scan-complete webhook from Litloft."""
     manager = get_index_manager()
@@ -61,7 +81,6 @@ async def webhook_scan_complete(
 @router.post("/webhook/files-deleted", response_model=MessageResponse)
 async def webhook_files_deleted(
     body: WebhookFilesDeleted,
-    _: None = Depends(verify_webhook_secret),
 ) -> MessageResponse:
     """Handle files-deleted webhook from Litloft."""
     manager = get_index_manager()
@@ -75,7 +94,6 @@ async def webhook_files_deleted(
 @router.post("/webhook/files-restored", response_model=MessageResponse)
 async def webhook_files_restored(
     body: WebhookFilesRestored,
-    _: None = Depends(verify_webhook_secret),
 ) -> MessageResponse:
     """Handle files-restored webhook from Litloft."""
     manager = get_index_manager()
@@ -87,7 +105,6 @@ async def webhook_files_restored(
 @router.post("/webhook/files-purged", response_model=MessageResponse)
 async def webhook_files_purged(
     body: WebhookFilesPurged,
-    _: None = Depends(verify_webhook_secret),
 ) -> MessageResponse:
     """Handle files-purged webhook from Litloft."""
     manager = get_index_manager()
@@ -99,7 +116,6 @@ async def webhook_files_purged(
 @router.post("/webhook/files-missing", response_model=MessageResponse)
 async def webhook_files_missing(
     body: WebhookFilesMissing,
-    _: None = Depends(verify_webhook_secret),
 ) -> MessageResponse:
     """Handle files-missing webhook from Litloft."""
     manager = get_index_manager()
@@ -111,7 +127,6 @@ async def webhook_files_missing(
 @router.post("/webhook/files-recovered", response_model=MessageResponse)
 async def webhook_files_recovered(
     body: WebhookFilesRecovered,
-    _: None = Depends(verify_webhook_secret),
 ) -> MessageResponse:
     """Handle files-recovered webhook from Litloft."""
     manager = get_index_manager()
@@ -123,7 +138,6 @@ async def webhook_files_recovered(
 @router.post("/webhook/files-moved", response_model=MessageResponse)
 async def webhook_files_moved(
     body: WebhookFilesMoved,
-    _: None = Depends(verify_webhook_secret),
 ) -> MessageResponse:
     """Handle files-moved webhook from Litloft (rename / move / folder ops)."""
     manager = get_index_manager()

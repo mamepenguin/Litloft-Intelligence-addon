@@ -25,9 +25,6 @@ _retrieval_keywords_worker: RetrievalKeywordsWorker | None = None
 _pickup_worker: PickupWorker | None = None
 _llm_client: LLMClient | None = None
 
-_WEBHOOK_SECRET = os.environ.get("SEARCH_WEBHOOK_SECRET", "")
-
-
 def get_index_manager() -> IndexManager:
     """Get the index manager instance.
 
@@ -111,9 +108,3 @@ def get_llm_client() -> LLMClient:
     return _llm_client
 
 
-async def verify_webhook_secret(
-    x_webhook_secret: str = Header(default=""),
-) -> None:
-    """Verify webhook secret if configured."""
-    if _WEBHOOK_SECRET and x_webhook_secret != _WEBHOOK_SECRET:
-        raise HTTPException(status_code=403, detail="Invalid webhook secret")
