@@ -324,7 +324,7 @@ def test_regenerate_supersedes_active_even_without_file_summaries_row(
     from fastapi import BackgroundTasks
     import asyncio
 
-    asyncio.get_event_loop().run_until_complete(
+    asyncio.run(
         router_mod.regenerate_detailed_summary(
             "abc123", BackgroundTasks(), None, "drive1",
         )
