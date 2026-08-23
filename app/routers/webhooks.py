@@ -1,4 +1,26 @@
-"""Webhook endpoints for Litloft event notifications."""
+"""Webhook endpoints for Litloft event notifications.
+
+These are gated by ``verify_webhook_secret``, which compares
+``X-Webhook-Secret`` against ``SEARCH_WEBHOOK_SECRET``. The gate is opt-in:
+unset, it is a no-op, matching how core treats ``CORE_INTERNAL_SECRET`` on
+its own internal read endpoints.
+
+To turn it on, both ends have to agree. Core sends the header only when the
+listener in ``event-hooks.json`` declares ``"secret_env":
+"SEARCH_WEBHOOK_SECRET"`` (see ``_build_headers`` in core's
+``event_hooks.py``, and the example in that module's docstring). Neither
+``configure.py`` nor this addon's manifest emits that today, so a default
+install runs ungated — but a hand-written ``event-hooks.json`` plus the
+environment variable does work, and is a supported configuration.
+
+The gate deliberately does **not** cover ``/queue/*``. Those routes are
+called from the browser through core's addon proxy, which never attaches
+``X-Webhook-Secret``, so guarding them here meant that setting the variable
+returned 403 for the queue controls — a failure that looks like an addon
+bug and is hard to trace back to a config value. Their authorization comes
+from the proxy instead: the manifest marks all three with
+``pre_check: {"type": "admin"}``.
+"""
 
 from fastapi import APIRouter, Depends
 

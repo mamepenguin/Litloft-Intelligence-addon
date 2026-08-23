@@ -10,7 +10,7 @@ lives in ``app.routers.files.reindex_file``.
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.dependencies import get_index_manager, verify_webhook_secret
+from app.dependencies import get_index_manager
 from app.schemas import MessageResponse, QueuePrioritize
 
 router = APIRouter(tags=["queue"])
@@ -19,7 +19,6 @@ router = APIRouter(tags=["queue"])
 @router.post("/queue/prioritize", response_model=MessageResponse)
 async def queue_prioritize(
     body: QueuePrioritize,
-    _: None = Depends(verify_webhook_secret),
 ) -> MessageResponse:
     """Prioritize a specific file for immediate indexing."""
     manager = get_index_manager()
@@ -62,7 +61,6 @@ def _resume_video_visual_worker() -> None:
 
 @router.post("/queue/pause", response_model=MessageResponse)
 async def queue_pause(
-    _: None = Depends(verify_webhook_secret),
 ) -> MessageResponse:
     """Pause queue processing (index manager + video-visual worker)."""
     manager = get_index_manager()
@@ -73,7 +71,6 @@ async def queue_pause(
 
 @router.post("/queue/resume", response_model=MessageResponse)
 async def queue_resume(
-    _: None = Depends(verify_webhook_secret),
 ) -> MessageResponse:
     """Resume queue processing (index manager + video-visual worker)."""
     manager = get_index_manager()

@@ -55,13 +55,20 @@
         }
     ],
     "event_hooks": [
-        {"event": "scan.complete",   "url": "http://intelligence:8100/webhook/scan-complete",   "addon": "intelligence", "feature": "index"},
-        {"event": "files.deleted",   "url": "http://intelligence:8100/webhook/files-deleted",   "addon": "intelligence", "feature": "index"},
-        {"event": "files.restored",  "url": "http://intelligence:8100/webhook/files-restored",  "addon": "intelligence", "feature": "index"},
-        {"event": "files.missing",   "url": "http://intelligence:8100/webhook/files-missing",   "addon": "intelligence", "feature": "index"},
-        {"event": "files.recovered", "url": "http://intelligence:8100/webhook/files-recovered", "addon": "intelligence", "feature": "index"},
-        {"event": "files.purged",    "url": "http://intelligence:8100/webhook/files-purged",    "addon": "intelligence", "feature": "index"},
-        {"event": "files.moved",     "url": "http://intelligence:8100/webhook/files-moved",     "addon": "intelligence", "feature": "index"}
+        {"event": "scan.complete",   "url": "http://intelligence:8100/webhook/scan-complete",
+      "secret_env": "SEARCH_WEBHOOK_SECRET",   "addon": "intelligence", "feature": "index"},
+        {"event": "files.deleted",   "url": "http://intelligence:8100/webhook/files-deleted",
+      "secret_env": "SEARCH_WEBHOOK_SECRET",   "addon": "intelligence", "feature": "index"},
+        {"event": "files.restored",  "url": "http://intelligence:8100/webhook/files-restored",
+      "secret_env": "SEARCH_WEBHOOK_SECRET",  "addon": "intelligence", "feature": "index"},
+        {"event": "files.missing",   "url": "http://intelligence:8100/webhook/files-missing",
+      "secret_env": "SEARCH_WEBHOOK_SECRET",   "addon": "intelligence", "feature": "index"},
+        {"event": "files.recovered", "url": "http://intelligence:8100/webhook/files-recovered",
+      "secret_env": "SEARCH_WEBHOOK_SECRET", "addon": "intelligence", "feature": "index"},
+        {"event": "files.purged",    "url": "http://intelligence:8100/webhook/files-purged",
+      "secret_env": "SEARCH_WEBHOOK_SECRET",    "addon": "intelligence", "feature": "index"},
+        {"event": "files.moved",     "url": "http://intelligence:8100/webhook/files-moved",
+      "secret_env": "SEARCH_WEBHOOK_SECRET",     "addon": "intelligence", "feature": "index"}
     ],
     "proxy": {
         "target_env": "INTELLIGENCE_SERVICE_URL",

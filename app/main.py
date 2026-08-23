@@ -55,6 +55,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: initialize databases and start indexer."""
     logger.info("Semantic search service starting (v%s)", settings.service_version)
 
+    # The webhook gate fails closed once configured, and it needs the other
+    # end to agree: core only sends X-Webhook-Secret when the listener in
+    # event-hooks.json declares secret_env. If the secret is set here but
+    # not declared there, every webhook returns 403 and indexing stops with
+    # no other symptom — so say which mode we are in, out loud, once.
+    from app import dependencies as _deps
+
+    if _deps._WEBHOOK_SECRET:
+        logger.info(
+            "Webhook secret gate ACTIVE. Core must declare "
+            '"secret_env": "SEARCH_WEBHOOK_SECRET" for each intelligence '
+            "listener in event-hooks.json, or webhooks will 403."
+        )
+    else:
+        logger.info(
+            "Webhook secret gate inactive (SEARCH_WEBHOOK_SECRET unset); "
+            "webhook endpoints accept any Docker-network caller."
+        )
+
     # Initialize databases
     init_search_db()
     logger.info("Search database initialized")
