@@ -72,6 +72,25 @@ class TestQueueIsNotGated:
             )
 
 
+class TestManifestDeclaresTheSecret:
+    def test_every_listener_declares_secret_env(self):
+        """Core only sends the header when the listener asks for it.
+
+        Without this the gate cannot be switched on from the supported
+        path: `configure.py` would set the variable in the container while
+        core kept sending unauthenticated requests, and every webhook would
+        403 with indexing silently stopped.
+        """
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        hooks = manifest.get("event_hooks") or []
+        assert hooks, "no event_hooks declared"
+        for hook in hooks:
+            assert hook.get("secret_env") == "SEARCH_WEBHOOK_SECRET", (
+                f"{hook.get('event')} -> {hook.get('url')} does not declare "
+                "secret_env, so core will never send X-Webhook-Secret to it"
+            )
+
+
 class TestGateSemantics:
     @pytest.mark.asyncio
     async def test_unset_secret_accepts_anything(self, monkeypatch):
