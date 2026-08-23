@@ -210,7 +210,7 @@ def test_reader_returns_edited_body_with_ai_snapshot(
     from fastapi import BackgroundTasks
     import asyncio
 
-    asyncio.get_event_loop().run_until_complete(
+    asyncio.run(
         router_mod.edit_detailed_summary_section(
             file_id="file001",
             body=DetailedSummaryEditRequest(
@@ -293,7 +293,7 @@ def test_fetch_detailed_edit_state_after_edit_returns_original(
     from fastapi import BackgroundTasks
     import asyncio
 
-    asyncio.get_event_loop().run_until_complete(
+    asyncio.run(
         router_mod.edit_detailed_summary_section(
             file_id="file001",
             body=DetailedSummaryEditRequest(

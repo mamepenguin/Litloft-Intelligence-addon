@@ -324,7 +324,7 @@ def test_edit_detailed_summary_appends_manual_active(search_db, monkeypatch):
     from fastapi import BackgroundTasks
     import asyncio
 
-    asyncio.get_event_loop().run_until_complete(
+    asyncio.run(
         router_mod.edit_detailed_summary_section(
             file_id="file001",
             body=body,
@@ -382,7 +382,7 @@ def test_revert_detailed_summary_records_reverted_intelligence_row(
     from fastapi import BackgroundTasks
     import asyncio
 
-    asyncio.get_event_loop().run_until_complete(
+    asyncio.run(
         router_mod.edit_detailed_summary_section(
             file_id="file001",
             body=DetailedSummaryEditRequest(
@@ -396,7 +396,7 @@ def test_revert_detailed_summary_records_reverted_intelligence_row(
     )
 
     # Now revert.
-    asyncio.get_event_loop().run_until_complete(
+    asyncio.run(
         router_mod.revert_detailed_summary(
             file_id="file001",
             background_tasks=BackgroundTasks(),
