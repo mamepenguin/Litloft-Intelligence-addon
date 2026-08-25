@@ -784,6 +784,10 @@ class IndexManager:
         Returns:
             True if the file was found and prioritized.
         """
+        # Decide what to queue under the lock, then enqueue outside it:
+        # _enqueue() awaits Queue.put(), and suspending while holding the
+        # write lock deadlocks the event loop.
+        pending: list[IndexTask] = []
         with get_search_db() as session:
             file = session.query(IndexedFile).filter_by(
                 file_id=file_id, active=True
@@ -792,27 +796,30 @@ class IndexManager:
             if file is None:
                 return False
 
-            # Queue with high priority (force=True allows re-inserting even if
-            # already queued at normal priority — a duplicate entry is acceptable
-            # here since index_* functions are idempotent on the *_indexed flag)
             if not file.metadata_indexed:
-                await self._enqueue(IndexTask(
+                pending.append(IndexTask(
                     file_id=file_id, task_type=TaskType.METADATA, priority=100
-                ), force=True)
+                ))
             if not file.clip_indexed and file.mime_type in (IMAGE_TYPES | VIDEO_TYPES):
-                await self._enqueue(IndexTask(
+                pending.append(IndexTask(
                     file_id=file_id, task_type=TaskType.CLIP, priority=100
-                ), force=True)
+                ))
             if not file.whisper_indexed and (file.mime_type in TRANSCRIBABLE_TYPES or file.mime_type == LOFT_MIME):
-                await self._enqueue(IndexTask(
+                pending.append(IndexTask(
                     file_id=file_id, task_type=TaskType.WHISPER, priority=100
-                ), force=True)
+                ))
             if not file.text_indexed:
-                await self._enqueue(IndexTask(
+                pending.append(IndexTask(
                     file_id=file_id, task_type=TaskType.TEXT_CONTENT, priority=100
-                ), force=True)
+                ))
 
-            return True
+        # Queue with high priority (force=True allows re-inserting even if
+        # already queued at normal priority — a duplicate entry is acceptable
+        # here since index_* functions are idempotent on the *_indexed flag)
+        for task in pending:
+            await self._enqueue(task, force=True)
+
+        return True
 
     # ------------------------------------------------------------------
     # Per-file × per-task reindex hooks
@@ -1044,16 +1051,23 @@ class IndexManager:
         if not litloft_meta:
             return
 
+        # Per-drive policy gate (fail open). Workers also re-check so this
+        # is a worker-fast-path optimisation, not a security boundary.
+        # Resolved *before* the write lock is taken: is_feature_enabled()
+        # makes an HTTP round-trip to core, and suspending on it while
+        # holding the lock deadlocks the event loop.
+        indexing_drives: set[str] = set()
+        for drive in {meta["drive"] for meta in litloft_meta.values()}:
+            try:
+                if await is_feature_enabled(drive, "index"):
+                    indexing_drives.add(drive)
+            except Exception:
+                indexing_drives.add(drive)
+
         with get_search_db() as session:
             for file_id, meta in litloft_meta.items():
-                # Per-drive policy gate (fail open). Workers also re-check
-                # so this is a worker-fast-path optimisation, not a security
-                # boundary.
-                try:
-                    if not await is_feature_enabled(meta["drive"], "index"):
-                        continue
-                except Exception:
-                    pass
+                if meta["drive"] not in indexing_drives:
+                    continue
 
                 indexed = (
                     session.query(IndexedFile)

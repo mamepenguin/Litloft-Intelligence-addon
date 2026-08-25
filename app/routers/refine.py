@@ -120,7 +120,7 @@ async def refine_file(
             .filter(TranscriptChunk.file_id == file_id)
             .count()
         )
-        job_id = await start_refine_job(session, file_id)
+        job_id = start_refine_job(session, file_id)
 
     return {"job_id": job_id, "chunk_count": chunk_count}
 
@@ -179,7 +179,7 @@ async def refine_folder(
     async def _enqueue(fid: str) -> None:
         async with sem:
             with get_search_db() as session:
-                await start_refine_job(session, fid)
+                start_refine_job(session, fid)
             queued_ids.append(fid)
 
     if file_ids:
