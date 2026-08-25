@@ -13,8 +13,8 @@ Public surface (called by ``app.routers.refine`` and tested directly):
 * ``refine_chunks(session, llm, chunks) -> RefineResult``
 * ``realign_words_for_chunk(session, file_id, chunk_start, chunk_end,
   refined_text) -> int``
-* ``recompute_chunk_embeddings(session, chunk_ids)``
-* ``start_refine_job(session, file_id) -> str``
+* ``recompute_chunk_embeddings(chunk_ids)``
+* ``start_refine_job(session, file_id) -> str`` (sync)
 * ``filter_transcript_file_ids(session, drive, file_ids) -> list[str]``
 * ``is_feature_enabled(drive) -> bool``
 """
@@ -32,7 +32,7 @@ from typing import Any
 from sqlalchemy import text as sql_text
 
 import app.config as config
-from app.database import get_search_db
+from app.database import get_search_db, get_search_db_read
 from app.models import Embedding, IndexedFile, TranscriptChunk, TranscriptWord
 from app.prompt_loader import render
 from app.workers import aligner
@@ -405,9 +405,7 @@ def rechunk_from_words(session: Any, file_id: str) -> list[int]:
 # --- Embedding re-compute ---------------------------------------------------
 
 
-async def recompute_chunk_embeddings(
-    session: Any, chunk_ids: list[int]
-) -> None:
+async def recompute_chunk_embeddings(chunk_ids: list[int]) -> None:
     """Re-embed ``transcript_chunks`` in-place after refine.
 
     Deletes the prior ``embeddings`` + ``vec_text`` rows for each chunk
@@ -415,6 +413,11 @@ async def recompute_chunk_embeddings(
     inserts new vectors from the refined text. Isolated in a
     best-effort ``try`` so a broken ML path doesn't undo the refine —
     the chunks themselves have already been updated.
+
+    Owns its sessions rather than borrowing the caller's: embedding runs
+    off-thread, so it must happen between two short write blocks instead
+    of inside one. Call it *after* the block that persisted the refined
+    text, never from within one — the write lock is not reentrant.
     """
     if not chunk_ids:
         return
@@ -425,60 +428,83 @@ async def recompute_chunk_embeddings(
         logger.warning("refine: embedder unavailable (%s); skipping re-embed", e)
         return
 
-    rows = (
-        session.query(TranscriptChunk)
-        .filter(TranscriptChunk.id.in_(chunk_ids))
-        .all()
-    )
-    texts = [r.text or "" for r in rows]
+    # Snapshot under a read session: plain SELECTs need no write lock, and
+    # the ORM rows must not outlive it.
+    with get_search_db_read() as session:
+        rows = (
+            session.query(TranscriptChunk)
+            .filter(TranscriptChunk.id.in_(chunk_ids))
+            .all()
+        )
+        snapshots = [
+            {
+                "id": int(r.id),
+                "file_id": r.file_id,
+                "chunk_index": r.chunk_index,
+                "text": r.text or "",
+                "timestamp_start": r.timestamp_start,
+                "timestamp_end": r.timestamp_end,
+            }
+            for r in rows
+        ]
+
+    texts = [snap["text"] for snap in snapshots]
     if not any(t.strip() for t in texts):
         return
 
+    # Embedding is off-thread and slow; no lock is held across it.
     try:
         vectors = await asyncio.to_thread(embed_passages, texts)
     except Exception as e:
         logger.warning("refine: embed_passages failed (%s)", e)
         return
 
-    for row, vec in zip(rows, vectors, strict=False):
-        existing = (
-            session.query(Embedding)
-            .filter(
-                Embedding.file_id == row.file_id,
-                Embedding.embedding_type == "whisper",
-                Embedding.timestamp_start == row.timestamp_start,
-                Embedding.timestamp_end == row.timestamp_end,
+    with get_search_db() as session:
+        for snap, vec in zip(snapshots, vectors, strict=False):
+            existing = (
+                session.query(Embedding)
+                .filter(
+                    Embedding.file_id == snap["file_id"],
+                    Embedding.embedding_type == "whisper",
+                    Embedding.timestamp_start == snap["timestamp_start"],
+                    Embedding.timestamp_end == snap["timestamp_end"],
+                )
+                .all()
             )
-            .all()
-        )
-        for emb in existing:
-            session.execute(
-                sql_text("DELETE FROM vec_text WHERE embedding_id = :id"),
-                {"id": emb.id},
-            )
-            session.delete(emb)
+            for emb in existing:
+                session.execute(
+                    sql_text("DELETE FROM vec_text WHERE embedding_id = :id"),
+                    {"id": emb.id},
+                )
+                session.delete(emb)
 
-        embedding_id = f"wh_{row.file_id}_{row.chunk_index}_{uuid.uuid4().hex[:8]}"
-        embedding_record = Embedding(
-            id=embedding_id,
-            file_id=row.file_id,
-            embedding_type="whisper",
-            vector_table="vec_text",
-            content_preview=(row.text or "")[:200],
-            timestamp_start=row.timestamp_start,
-            timestamp_end=row.timestamp_end,
-        )
-        session.add(embedding_record)
-        session.flush()
-        try:
-            session.execute(
-                sql_text(
-                    "INSERT INTO vec_text(embedding_id, vector) VALUES(:id, :vec)"
-                ),
-                {"id": embedding_id, "vec": vec.tobytes()},
+            embedding_id = (
+                f"wh_{snap['file_id']}_{snap['chunk_index']}_"
+                f"{uuid.uuid4().hex[:8]}"
             )
-        except Exception as e:
-            logger.warning("refine: vec_text insert failed for %s: %s", row.id, e)
+            embedding_record = Embedding(
+                id=embedding_id,
+                file_id=snap["file_id"],
+                embedding_type="whisper",
+                vector_table="vec_text",
+                content_preview=snap["text"][:200],
+                timestamp_start=snap["timestamp_start"],
+                timestamp_end=snap["timestamp_end"],
+            )
+            session.add(embedding_record)
+            session.flush()
+            try:
+                session.execute(
+                    sql_text(
+                        "INSERT INTO vec_text(embedding_id, vector) "
+                        "VALUES(:id, :vec)"
+                    ),
+                    {"id": embedding_id, "vec": vec.tobytes()},
+                )
+            except Exception as e:
+                logger.warning(
+                    "refine: vec_text insert failed for %s: %s", snap["id"], e
+                )
 
 
 # --- Folder scan + policy ---------------------------------------------------
@@ -710,8 +736,9 @@ async def _run_refine_job(
 
                 refined_window = [s for s in window if s.text_refined_at is not None]
                 if refined_window:
-                    # Short-lived session per window: apply mutations, realign
-                    # words, recompute embeddings, release lock.
+                    # Short-lived session per window: apply mutations and
+                    # realign words, then release the lock before re-embedding.
+                    applied_ids = []
                     with get_search_db() as session:
                         fresh = (
                             session.query(TranscriptChunk)
@@ -723,7 +750,6 @@ async def _run_refine_job(
                             .all()
                         )
                         by_id = {int(c.id): c for c in fresh}
-                        applied_ids: list[int] = []
                         for snap in refined_window:
                             orm = by_id.get(snap.id)
                             if orm is None:
@@ -743,9 +769,10 @@ async def _run_refine_job(
                             else:
                                 aligner_skipped_total += 1
                             applied_ids.append(int(orm.id))
-                        if applied_ids:
-                            await recompute_chunk_embeddings(session, applied_ids)
-                            session.flush()
+
+                    # Outside the write block: recompute_chunk_embeddings()
+                    # embeds off-thread and takes the lock itself.
+                    await recompute_chunk_embeddings(applied_ids)
 
                 await _emit_ws_event(
                     "intelligence.refine.progress",
@@ -765,12 +792,12 @@ async def _run_refine_job(
             # would churn IDs for no RAG benefit.
             rechunked_count = 0
             if refined_total > 0:
+                new_ids: list[int] = []
                 with get_search_db() as session:
-                    new_ids = rechunk_from_words(session, file_id)
-                    if new_ids:
-                        await recompute_chunk_embeddings(session, new_ids)
-                        session.flush()
-                        rechunked_count = len(new_ids)
+                    new_ids = rechunk_from_words(session, file_id) or []
+                if new_ids:
+                    await recompute_chunk_embeddings(new_ids)
+                    rechunked_count = len(new_ids)
 
         await _emit_ws_event(
             "intelligence.refine.completed",
@@ -794,8 +821,14 @@ async def _run_refine_job(
         _active_refine_files.discard(file_id)
 
 
-async def start_refine_job(session: Any, file_id: str) -> str:
-    """Kick off an async refine job. Returns the generated job_id."""
+def start_refine_job(session: Any, file_id: str) -> str:
+    """Kick off an async refine job. Returns the generated job_id.
+
+    Deliberately synchronous: the body only reads chunk ids and spawns a
+    task, and callers hold the search-DB write lock while calling it.
+    Awaiting under that lock would risk wedging the event loop (see the
+    INVARIANT note on ``app.database._write_lock``).
+    """
     job_id = uuid.uuid4().hex
 
     chunk_ids: list[int] = []

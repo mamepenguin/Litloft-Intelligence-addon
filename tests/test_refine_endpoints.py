@@ -151,7 +151,7 @@ class TestRefineFileGating:
             "app.routers.refine.get_search_db", lambda: _Ctx()
         )
         # Stub the worker entry point so we don't spin up real asyncio tasks.
-        start_mock = AsyncMock(return_value="job-123")
+        start_mock = MagicMock(return_value="job-123")
         monkeypatch.setattr(
             "app.routers.refine.start_refine_job", start_mock
         )
@@ -181,7 +181,7 @@ class TestRefineFolder:
             "app.routers.refine.filter_transcript_file_ids",
             MagicMock(return_value=["f1", "f2"]),
         )
-        start_mock = AsyncMock(side_effect=["job-a", "job-b"])
+        start_mock = MagicMock(side_effect=["job-a", "job-b"])
         monkeypatch.setattr(
             "app.routers.refine.start_refine_job", start_mock
         )
@@ -205,7 +205,7 @@ class TestRefineFolder:
         )
 
         # Both files enqueued.
-        assert start_mock.await_count == 2
+        assert start_mock.call_count == 2
         # Response lists both queued file ids.
         queued = getattr(resp, "queued", None)
         if queued is None and isinstance(resp, dict):

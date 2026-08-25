@@ -7,6 +7,7 @@ Manages two SQLite connections:
 
 import json
 import logging
+import os
 import secrets
 import sqlite3
 import threading
@@ -27,7 +28,35 @@ Base = declarative_base()
 # All vector table mutations (INSERT/DELETE on vec_text, vec_clip) and
 # their accompanying ORM flushes MUST be wrapped with this lock to
 # prevent "database is locked" errors from concurrent worker threads.
+#
+# INVARIANT: never hold this lock across an ``await``. It is a plain
+# ``threading.Lock``, so acquiring it from the single uvicorn event-loop
+# thread is a *blocking* call. A coroutine that suspends while holding it
+# can only be resumed by that same event loop, so any other task that then
+# enters ``get_search_db()`` wedges the loop permanently and the whole
+# addon stops answering. ``tests/test_write_lock_discipline.py`` enforces
+# this statically; ``_WRITE_LOCK_TIMEOUT_SECONDS`` is the runtime backstop.
 _write_lock = threading.Lock()
+
+# Bounded wait so a lock-ordering bug surfaces as a loud exception with a
+# stack trace instead of an unbounded hang. The ceiling clears the slowest
+# legitimate write block by a wide margin — refine holds the lock across
+# WhisperX forced alignment for one window — so reaching it means a bug,
+# not slow I/O. Recovery is the container healthcheck's job; this is here
+# to name the culprit in the log.
+_WRITE_LOCK_TIMEOUT_SECONDS = float(
+    os.environ.get("INTELLIGENCE_WRITE_LOCK_TIMEOUT", "300")
+)
+
+
+class WriteLockTimeout(RuntimeError):
+    """The search-DB write lock could not be acquired in time.
+
+    Signals that another task is holding the lock far longer than any
+    legitimate write needs — in practice, that it suspended on an
+    ``await`` while holding it.
+    """
+
 
 # Search DB engine (read-write, with sqlite-vec)
 _search_engine: Engine | None = None
@@ -37,8 +66,6 @@ _SearchSession: sessionmaker | None = None
 _litloft_engine: Engine | None = None
 _HomevaultSession: sessionmaker | None = None
 
-
-import os
 
 _SQLITE_VEC_PATH = os.environ.get(
     "SQLITE_VEC_PATH", "/usr/local/lib/sqlite-vec/vec0"
@@ -1720,18 +1747,43 @@ def init_litloft_db() -> None:
 
 
 @contextmanager
+def _write_lock_held() -> Generator[None, None, None]:
+    """Hold :data:`_write_lock`, refusing to wait forever for it.
+
+    Raises:
+        WriteLockTimeout: if the lock is still held after
+            ``_WRITE_LOCK_TIMEOUT_SECONDS``.
+    """
+    if not _write_lock.acquire(timeout=_WRITE_LOCK_TIMEOUT_SECONDS):
+        raise WriteLockTimeout(
+            f"search-DB write lock not acquired within "
+            f"{_WRITE_LOCK_TIMEOUT_SECONDS}s — another task is very likely "
+            f"holding it across an await (see the INVARIANT note on "
+            f"_write_lock)"
+        )
+    try:
+        yield
+    finally:
+        _write_lock.release()
+
+
+@contextmanager
 def get_search_db() -> Generator[Session, None, None]:
     """Get a search database session.
 
     The write lock is acquired before yielding to serialize all writes
     (including flush() calls within workers) and held through commit.
     This prevents 'database is locked' errors from concurrent SQLite writers.
+
+    The body of a ``with get_search_db()`` block must not ``await``: see
+    the INVARIANT note on :data:`_write_lock`. Read-only work belongs in
+    :func:`get_search_db_read`, which takes no lock at all.
     """
     if _SearchSession is None:
         raise RuntimeError("Search database not initialized")
     session = _SearchSession()
     try:
-        with _write_lock:
+        with _write_lock_held():
             yield session
             session.commit()
     except Exception:

@@ -770,6 +770,7 @@ async def index_whisper(file_id: str) -> bool:
         future re-index can re-attempt.
     """
     # --- Resolve file_id → (path, drive, mime) ---
+    unsupported_mime = False
     with get_search_db() as session:
         file = session.query(IndexedFile).filter_by(
             file_id=file_id, active=True
@@ -792,12 +793,18 @@ async def index_whisper(file_id: str) -> bool:
                 "TRANSCRIBABLE_TYPES",
                 file_id, mime_type,
             )
-            await asyncio.to_thread(
-                _record_skipped_job,
-                file_id,
-                f"mime={mime_type}",
-            )
-            return True
+            unsupported_mime = True
+
+    # Recorded outside the block above: _record_skipped_job() opens its own
+    # write session, so running it on a worker thread while this coroutine
+    # still held the (non-reentrant) write lock deadlocked both.
+    if unsupported_mime:
+        await asyncio.to_thread(
+            _record_skipped_job,
+            file_id,
+            f"mime={mime_type}",
+        )
+        return True
 
     loft_temp_path: str | None = None
     if mime_type == LOFT_MIME:
