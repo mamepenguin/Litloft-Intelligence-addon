@@ -17,6 +17,7 @@ from app.config import settings
 from app.database import init_litloft_db, init_search_db
 from app.indexer import IndexManager
 from app.llm import create_llm_client
+from app.loop_watchdog import LoopWatchdog
 from app.routers import (
     admin,
     chapter_suggestions,
@@ -54,6 +55,11 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: initialize databases and start indexer."""
     logger.info("Semantic search service starting (v%s)", settings.service_version)
+
+    # Started first so it covers startup too: a stall during DB init or
+    # the first reconcile is exactly as invisible as one at steady state.
+    watchdog = LoopWatchdog(asyncio.get_running_loop())
+    watchdog.start()
 
     # The webhook gate fails closed once configured, and it needs the other
     # end to agree: core only sends X-Webhook-Secret when the listener in
@@ -401,6 +407,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             pass
     if dependencies._index_manager is not None:
         await dependencies._index_manager.stop()
+    watchdog.stop()
     logger.info("Semantic search service stopped")
 
 
