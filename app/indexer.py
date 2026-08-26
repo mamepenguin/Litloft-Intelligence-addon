@@ -154,6 +154,16 @@ class IndexManager:
             task_type: set() for task_type in TaskType
         }
         self._background_tasks: list[asyncio.Task] = []
+        # Lifecycle webhooks (deleted / restored / purged / missing /
+        # recovered) flip the same rows in opposite directions. While
+        # their DB work ran inline on the event loop they could not
+        # interleave; now that each hops to a worker thread they would
+        # race for the write lock, which is not FIFO — a later event
+        # could commit first and then be overwritten by an earlier one,
+        # leaving ``active`` inverted until the next reconcile. This
+        # asyncio lock restores the ordering without putting the DB work
+        # back on the loop (an asyncio.Lock suspends, it does not block).
+        self._lifecycle_lock = asyncio.Lock()
 
     async def start(self) -> None:
         """Start the background processing workers."""
@@ -826,31 +836,50 @@ class IndexManager:
         # Decide what to queue under the lock, then enqueue outside it:
         # _enqueue() awaits Queue.put(), and suspending while holding the
         # write lock deadlocks the event loop.
-        pending: list[IndexTask] = []
-        with get_search_db() as session:
-            file = session.query(IndexedFile).filter_by(
-                file_id=file_id, active=True
-            ).first()
+        def _collect_pending() -> list[IndexTask] | None:
+            """None means "no such active file"; a list means what to queue."""
+            pending: list[IndexTask] = []
+            with get_search_db() as session:
+                file = session.query(IndexedFile).filter_by(
+                    file_id=file_id, active=True
+                ).first()
 
-            if file is None:
-                return False
+                if file is None:
+                    return None
 
-            if not file.metadata_indexed:
-                pending.append(IndexTask(
-                    file_id=file_id, task_type=TaskType.METADATA, priority=100
-                ))
-            if not file.clip_indexed and file.mime_type in (IMAGE_TYPES | VIDEO_TYPES):
-                pending.append(IndexTask(
-                    file_id=file_id, task_type=TaskType.CLIP, priority=100
-                ))
-            if not file.whisper_indexed and (file.mime_type in TRANSCRIBABLE_TYPES or file.mime_type == LOFT_MIME):
-                pending.append(IndexTask(
-                    file_id=file_id, task_type=TaskType.WHISPER, priority=100
-                ))
-            if not file.text_indexed:
-                pending.append(IndexTask(
-                    file_id=file_id, task_type=TaskType.TEXT_CONTENT, priority=100
-                ))
+                if not file.metadata_indexed:
+                    pending.append(IndexTask(
+                        file_id=file_id, task_type=TaskType.METADATA,
+                        priority=100,
+                    ))
+                if (
+                    not file.clip_indexed
+                    and file.mime_type in (IMAGE_TYPES | VIDEO_TYPES)
+                ):
+                    pending.append(IndexTask(
+                        file_id=file_id, task_type=TaskType.CLIP, priority=100
+                    ))
+                if not file.whisper_indexed and (
+                    file.mime_type in TRANSCRIBABLE_TYPES
+                    or file.mime_type == LOFT_MIME
+                ):
+                    pending.append(IndexTask(
+                        file_id=file_id, task_type=TaskType.WHISPER,
+                        priority=100,
+                    ))
+                if not file.text_indexed:
+                    pending.append(IndexTask(
+                        file_id=file_id, task_type=TaskType.TEXT_CONTENT,
+                        priority=100,
+                    ))
+            return pending
+
+        # Off the loop: the row lookup is O(1), but taking the write lock
+        # is not — a bulk writer holding it would otherwise stall every
+        # endpoint while we wait.
+        pending = await asyncio.to_thread(_collect_pending)
+        if pending is None:
+            return False
 
         # Queue with high priority (force=True allows re-inserting even if
         # already queued at normal priority — a duplicate entry is acceptable
@@ -925,43 +954,53 @@ class IndexManager:
         user-deleted summaries / tags are not regenerated — only the
         silent-return trace is rescued.
         """
-        with get_search_db() as session:
-            row = session.execute(
-                sql_text(
-                    "SELECT metadata_indexed FROM indexed_files "
-                    "WHERE file_id = :fid AND active = 1"
-                ),
-                {"fid": file_id},
-            ).fetchone()
-            if row is None or not row[0]:
-                return
-
-            no_summary = session.execute(
-                sql_text(
-                    "SELECT 1 FROM file_summaries "
-                    "WHERE file_id = :fid LIMIT 1"
-                ),
-                {"fid": file_id},
-            ).fetchone() is None
-            no_tags = session.execute(
-                sql_text(
-                    "SELECT 1 FROM suggested_tags "
-                    "WHERE file_id = :fid LIMIT 1"
-                ),
-                {"fid": file_id},
-            ).fetchone() is None
-            no_chapters = False
-            if (
-                self._chapter_suggestions_worker is not None
-                and settings.features.chapter_suggestions == "on_index"
-            ):
-                no_chapters = session.execute(
+        def _what_is_missing() -> tuple[bool, bool, bool] | None:
+            """None means "not indexed yet"; else (summary, tags, chapters)."""
+            with get_search_db() as session:
+                row = session.execute(
                     sql_text(
-                        "SELECT 1 FROM suggested_chapters "
+                        "SELECT metadata_indexed FROM indexed_files "
+                        "WHERE file_id = :fid AND active = 1"
+                    ),
+                    {"fid": file_id},
+                ).fetchone()
+                if row is None or not row[0]:
+                    return None
+
+                no_summary = session.execute(
+                    sql_text(
+                        "SELECT 1 FROM file_summaries "
                         "WHERE file_id = :fid LIMIT 1"
                     ),
                     {"fid": file_id},
                 ).fetchone() is None
+                no_tags = session.execute(
+                    sql_text(
+                        "SELECT 1 FROM suggested_tags "
+                        "WHERE file_id = :fid LIMIT 1"
+                    ),
+                    {"fid": file_id},
+                ).fetchone() is None
+                no_chapters = False
+                if (
+                    self._chapter_suggestions_worker is not None
+                    and settings.features.chapter_suggestions == "on_index"
+                ):
+                    no_chapters = session.execute(
+                        sql_text(
+                            "SELECT 1 FROM suggested_chapters "
+                            "WHERE file_id = :fid LIMIT 1"
+                        ),
+                        {"fid": file_id},
+                    ).fetchone() is None
+            return no_summary, no_tags, no_chapters
+
+        # Off the loop for the same reason as prioritize(): the queries
+        # are cheap, but waiting on the write lock is not.
+        missing = await asyncio.to_thread(_what_is_missing)
+        if missing is None:
+            return
+        no_summary, no_tags, no_chapters = missing
 
         # SummariesWorker.enqueue gates per-layer (short/long vs detailed)
         # internally — hand it the file when either layer is on_index.
@@ -1023,11 +1062,13 @@ class IndexManager:
             file_ids: List of deleted file IDs.
             delete_type: "soft_delete" or "hard_delete".
         """
-        for file_id in file_ids:
+        async with self._lifecycle_lock:
             if delete_type == "soft_delete":
-                _set_file_active(file_id, active=False)
+                await asyncio.to_thread(
+                    _set_files_active_bulk, set(file_ids), active=False
+                )
             else:
-                _purge_file(file_id)
+                await asyncio.to_thread(_purge_files, file_ids)
 
     async def handle_files_restored(self, file_ids: list[str]) -> None:
         """Handle file restoration webhook.
@@ -1035,8 +1076,10 @@ class IndexManager:
         Args:
             file_ids: List of restored file IDs.
         """
-        for file_id in file_ids:
-            _set_file_active(file_id, active=True)
+        async with self._lifecycle_lock:
+            await asyncio.to_thread(
+                _set_files_active_bulk, set(file_ids), active=True
+            )
 
     async def handle_files_purged(self, file_ids: list[str]) -> None:
         """Handle file purge webhook (permanent deletion).
@@ -1044,8 +1087,8 @@ class IndexManager:
         Args:
             file_ids: List of purged file IDs.
         """
-        for file_id in file_ids:
-            _purge_file(file_id)
+        async with self._lifecycle_lock:
+            await asyncio.to_thread(_purge_files, file_ids)
 
     async def handle_files_missing(self, file_ids: list[str]) -> None:
         """Handle files-missing webhook.
@@ -1057,8 +1100,10 @@ class IndexManager:
         Args:
             file_ids: IDs of files that vanished from the Litloft filesystem.
         """
-        for file_id in file_ids:
-            _set_file_active(file_id, active=False)
+        async with self._lifecycle_lock:
+            await asyncio.to_thread(
+                _set_files_active_bulk, set(file_ids), active=False
+            )
 
     async def handle_files_recovered(self, file_ids: list[str]) -> None:
         """Handle files-recovered webhook.
@@ -1068,8 +1113,10 @@ class IndexManager:
         Args:
             file_ids: IDs of files that reappeared on the Litloft filesystem.
         """
-        for file_id in file_ids:
-            _set_file_active(file_id, active=True)
+        async with self._lifecycle_lock:
+            await asyncio.to_thread(
+                _set_files_active_bulk, set(file_ids), active=True
+            )
 
     async def handle_files_moved(self, file_ids: list[str]) -> None:
         """Sync IndexedFile snapshot after rename / move / folder ops in core.
@@ -1086,7 +1133,9 @@ class IndexManager:
 
         from app.policy_client import is_feature_enabled
 
-        litloft_meta = _get_litloft_files_by_ids(file_ids)
+        litloft_meta = await asyncio.to_thread(
+            _get_litloft_files_by_ids, file_ids
+        )
         if not litloft_meta:
             return
 
@@ -1103,56 +1152,62 @@ class IndexManager:
             except Exception:
                 indexing_drives.add(drive)
 
-        with get_search_db() as session:
-            for file_id, meta in litloft_meta.items():
-                if meta["drive"] not in indexing_drives:
-                    continue
+        def _apply_moves() -> None:
+            with get_search_db() as session:
+                for file_id, meta in litloft_meta.items():
+                    if meta["drive"] not in indexing_drives:
+                        continue
 
-                indexed = (
-                    session.query(IndexedFile)
-                    .filter_by(file_id=file_id)
-                    .first()
-                )
-                if indexed is None:
-                    # Not indexed yet; reconcile() will pick it up as a
-                    # new file when the drive's policy permits.
-                    continue
-
-                abs_path = resolve_file_path(meta["drive"], meta["file_path"])
-                if abs_path is None:
-                    logger.warning(
-                        "Cannot resolve path for %s after move (drive=%s)",
-                        file_id, meta["drive"],
+                    indexed = (
+                        session.query(IndexedFile)
+                        .filter_by(file_id=file_id)
+                        .first()
                     )
-                    continue
+                    if indexed is None:
+                        # Not indexed yet; reconcile() will pick it up as
+                        # a new file when the drive's policy permits.
+                        continue
 
-                title = meta.get("title") or ""
-                indexed.drive = meta["drive"]
-                indexed.file_path = abs_path
-                indexed.filename = meta["filename"]
-                indexed.title = title
-                # file_type / mime_type drift can come from a core
-                # ``classify()`` rule update (e.g. .loft promoted from
-                # ``other`` to ``video``). Sync them here so reconcile's
-                # drift repair fixes the search-time file_type filter.
-                core_file_type = meta.get("file_type")
-                core_mime_type = meta.get("mime_type")
-                if core_file_type is not None:
-                    indexed.file_type = core_file_type
-                if core_mime_type is not None:
-                    indexed.mime_type = core_mime_type
+                    abs_path = resolve_file_path(
+                        meta["drive"], meta["file_path"]
+                    )
+                    if abs_path is None:
+                        logger.warning(
+                            "Cannot resolve path for %s after move (drive=%s)",
+                            file_id, meta["drive"],
+                        )
+                        continue
 
-                # FTS5 has no UNIQUE on file_id, so ``INSERT OR REPLACE``
-                # would leave the old row alongside the new one. Delete
-                # first to keep the index single-rowed per file.
-                delete_fts_file(session, file_id)
-                upsert_fts_file(
-                    session, file_id,
-                    meta["filename"],
-                    title,
-                    indexed.description,
-                    indexed.tags_text,
-                )
+                    title = meta.get("title") or ""
+                    indexed.drive = meta["drive"]
+                    indexed.file_path = abs_path
+                    indexed.filename = meta["filename"]
+                    indexed.title = title
+                    # file_type / mime_type drift can come from a core
+                    # ``classify()`` rule update (e.g. .loft promoted from
+                    # ``other`` to ``video``). Sync them here so reconcile's
+                    # drift repair fixes the search-time file_type filter.
+                    core_file_type = meta.get("file_type")
+                    core_mime_type = meta.get("mime_type")
+                    if core_file_type is not None:
+                        indexed.file_type = core_file_type
+                    if core_mime_type is not None:
+                        indexed.mime_type = core_mime_type
+
+                    # FTS5 has no UNIQUE on file_id, so ``INSERT OR
+                    # REPLACE`` would leave the old row alongside the new
+                    # one. Delete first to keep the index single-rowed
+                    # per file.
+                    delete_fts_file(session, file_id)
+                    upsert_fts_file(
+                        session, file_id,
+                        meta["filename"],
+                        title,
+                        indexed.description,
+                        indexed.tags_text,
+                    )
+
+        await asyncio.to_thread(_apply_moves)
 
     # --- Background workers ---
 
@@ -1849,6 +1904,21 @@ def _set_file_active(file_id: str, *, active: bool) -> None:
         file = session.query(IndexedFile).filter_by(file_id=file_id).first()
         if file is not None:
             file.active = active
+
+
+def _purge_files(file_ids: list[str]) -> int:
+    """Purge many files, one transaction each.
+
+    Purging touches vec0 tables, FTS mirrors and several satellite
+    tables per file, so it stays per-file rather than becoming one
+    giant statement. Callers run it off the event loop.
+
+    Returns:
+        Number of files purged.
+    """
+    for file_id in file_ids:
+        _purge_file(file_id)
+    return len(file_ids)
 
 
 def _purge_file(file_id: str) -> None:

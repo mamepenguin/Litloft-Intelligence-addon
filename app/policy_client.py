@@ -34,6 +34,7 @@ least one HTTP 200 (proof of life). While the grace flag is active,
 back on the queue instead of recording a permanent failure.
 """
 
+import asyncio
 import logging
 import os
 import time
@@ -238,15 +239,21 @@ async def is_file_feature_enabled(
     # Local import: keeps this module importable even if the search
     # DB hasn't initialised yet (e.g. very early startup, tests that
     # don't spin up a session).
-    try:
+    def _lookup_drive():
         from app.database import get_search_db
         from app.models import IndexedFile
         with get_search_db() as session:
-            row = (
+            return (
                 session.query(IndexedFile.drive)
                 .filter(IndexedFile.file_id == file_id)
                 .first()
             )
+
+    try:
+        # Off the event loop: the query is a single indexed row, but
+        # taking the write lock is not free, and every endpoint stalls
+        # while a bulk writer holds it.
+        row = await asyncio.to_thread(_lookup_drive)
     except Exception:
         return default_on_failure
     if row is None:
