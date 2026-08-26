@@ -37,6 +37,14 @@ for _mod in (
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
 
+from contextlib import contextmanager as _contextmanager  # noqa: E402
+
+from sqlalchemy import create_engine  # noqa: E402
+from sqlalchemy import text as sql_text  # noqa: E402
+from sqlalchemy.orm import sessionmaker  # noqa: E402
+
+from app.database import Base, _create_retrieval_keywords_table  # noqa: E402
+from app.models import IndexedFile  # noqa: E402
 from app.workers import retrieval_keywords as rk_module  # noqa: E402
 from app.workers.retrieval_keywords import (  # noqa: E402
     RetrievalKeywordsWorker,
@@ -487,3 +495,186 @@ class TestProcessFilePersistence:
 
         worker._llm_client.generate_json.assert_called_once()
         assert recorded["upsert_calls"][0]["keywords"] == "a"
+
+
+# ---------------------------------------------------------------------------
+# RetrievalKeywordsWorker.enqueue_unprocessed
+# ---------------------------------------------------------------------------
+#
+# Regression coverage for the restart-reprocessing bug: files whose
+# file_type falls outside _HANDLED_CONTEXT_TYPES (e.g. images) are
+# silently skipped by _process_file without ever writing a
+# retrieval_keywords row (see _has_retrieval_keywords / the
+# "A skip never marks the file as tried" contract). Before this fix,
+# enqueue_unprocessed()'s SQL had no file_type filter, so such files
+# never left the "unprocessed" gap and were re-enqueued (and
+# re-skipped) on every process restart.
+
+
+@pytest.fixture()
+def search_db(tmp_path, monkeypatch):
+    """Real SQLite with indexed_files + retrieval_keywords tables."""
+    db_path = tmp_path / "search.db"
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False},
+    )
+
+    Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        _create_retrieval_keywords_table(conn)
+
+    Session = sessionmaker(bind=engine, expire_on_commit=False)
+    seed = Session()
+    try:
+        seed.add_all([
+            IndexedFile(
+                file_id="doc-ok",
+                drive="family",
+                filename="notes.md",
+                file_path="/drives/family/notes.md",
+                file_type="document",
+                mime_type="text/markdown",
+                file_size=1000,
+                active=True,
+                metadata_indexed=True,
+            ),
+            IndexedFile(
+                file_id="img-permanent-skip",
+                drive="family",
+                filename="cat.jpg",
+                file_path="/drives/family/cat.jpg",
+                file_type="image",
+                mime_type="image/jpeg",
+                file_size=10000,
+                active=True,
+                metadata_indexed=True,
+            ),
+            IndexedFile(
+                file_id="doc-already-done",
+                drive="family",
+                filename="done.md",
+                file_path="/drives/family/done.md",
+                file_type="document",
+                mime_type="text/markdown",
+                file_size=1000,
+                active=True,
+                metadata_indexed=True,
+            ),
+            IndexedFile(
+                file_id="doc-not-metadata-indexed",
+                drive="family",
+                filename="pending.md",
+                file_path="/drives/family/pending.md",
+                file_type="document",
+                mime_type="text/markdown",
+                file_size=1000,
+                active=True,
+                metadata_indexed=False,
+            ),
+            IndexedFile(
+                file_id="doc-inactive",
+                drive="family",
+                filename="trashed.md",
+                file_path="/drives/family/trashed.md",
+                file_type="document",
+                mime_type="text/markdown",
+                file_size=1000,
+                active=False,
+                metadata_indexed=True,
+            ),
+        ])
+        seed.commit()
+
+        from datetime import UTC, datetime
+
+        seed.execute(
+            sql_text(
+                "INSERT INTO retrieval_keywords "
+                "(file_id, keywords, model, context_type, status, created_at) "
+                "VALUES ('doc-already-done', 'a b', 'test-model', "
+                "'document', 'generated', :now)"
+            ),
+            {"now": datetime.now(UTC).isoformat()},
+        )
+        seed.commit()
+    finally:
+        seed.close()
+
+    @_contextmanager
+    def _get_search_db_read():
+        session = Session()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    monkeypatch.setattr(rk_module, "get_search_db_read", _get_search_db_read)
+    return engine, Session
+
+
+@pytest.fixture()
+def policy_allow_all(monkeypatch):
+    """app.policy_client.is_feature_enabled always returns True."""
+    monkeypatch.setattr(
+        "app.policy_client.is_feature_enabled",
+        AsyncMock(return_value=True),
+        raising=False,
+    )
+
+
+class TestEnqueueUnprocessed:
+    """Startup sweep should only pick up files _process_file can actually
+    handle, and must never re-offer files with a permanently unsupported
+    file_type — those are the ones that looped forever before the fix.
+    """
+
+    @pytest.mark.asyncio
+    async def test_skips_permanently_unsupported_file_type(
+        self, search_db, policy_allow_all, make_worker,
+    ):
+        worker = make_worker()
+        queued = await worker.enqueue_unprocessed()
+
+        queued_ids = []
+        while not worker._queue.empty():
+            queued_ids.append(worker._queue.get_nowait())
+        assert "img-permanent-skip" not in queued_ids
+        assert "doc-ok" in queued_ids
+        assert queued == 1
+
+    @pytest.mark.asyncio
+    async def test_skips_files_with_existing_row(
+        self, search_db, policy_allow_all, make_worker,
+    ):
+        worker = make_worker()
+        await worker.enqueue_unprocessed()
+
+        queued_ids = []
+        while not worker._queue.empty():
+            queued_ids.append(worker._queue.get_nowait())
+        assert "doc-already-done" not in queued_ids
+
+    @pytest.mark.asyncio
+    async def test_skips_files_not_yet_metadata_indexed(
+        self, search_db, policy_allow_all, make_worker,
+    ):
+        worker = make_worker()
+        await worker.enqueue_unprocessed()
+
+        queued_ids = []
+        while not worker._queue.empty():
+            queued_ids.append(worker._queue.get_nowait())
+        assert "doc-not-metadata-indexed" not in queued_ids
+
+    @pytest.mark.asyncio
+    async def test_skips_inactive_files(
+        self, search_db, policy_allow_all, make_worker,
+    ):
+        worker = make_worker()
+        await worker.enqueue_unprocessed()
+
+        queued_ids = []
+        while not worker._queue.empty():
+            queued_ids.append(worker._queue.get_nowait())
+        assert "doc-inactive" not in queued_ids

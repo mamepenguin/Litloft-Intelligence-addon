@@ -141,6 +141,15 @@ class RetrievalKeywordsWorker:
         ``AutoTagsWorker.enqueue_unprocessed`` (active + metadata
         indexed + no existing row, with per-drive policy lookup
         cached across files sharing a drive).
+
+        Restricted to ``file_type IN ('video', 'audio', 'document',
+        'text')`` — the same set ``SummariesWorker.enqueue_unprocessed``
+        filters to — because ``_process_file`` only handles
+        ``_HANDLED_CONTEXT_TYPES`` and returns without writing a
+        ``retrieval_keywords`` row for anything else (e.g. images).
+        Without this filter, files whose type is permanently
+        unsupported never leave the "unprocessed" gap and get
+        re-enqueued (and silently re-skipped) on every restart.
         """
         from app.policy_client import is_feature_enabled
 
@@ -149,6 +158,7 @@ class RetrievalKeywordsWorker:
                 sql_text(
                     "SELECT f.file_id, f.drive FROM indexed_files f "
                     "WHERE f.active = 1 AND f.metadata_indexed = 1 "
+                    "AND f.file_type IN ('video', 'audio', 'document', 'text') "
                     "AND f.file_id NOT IN "
                     "  (SELECT file_id FROM retrieval_keywords)"
                 )
