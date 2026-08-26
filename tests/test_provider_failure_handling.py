@@ -281,13 +281,19 @@ def patched_db(monkeypatch, search_engine):
     return Session
 
 
-def _seed_file(Session, *, file_id="f00000000001", drive="d1") -> None:
+def _seed_file(
+    Session,
+    *,
+    file_id="f00000000001",
+    drive="d1",
+    file_path="/drives/d1/x.mp4",
+) -> None:
     s = Session()
     s.add(IndexedFile(
         file_id=file_id,
         drive=drive,
         filename="x.mp4",
-        file_path="/drives/d1/x.mp4",
+        file_path=file_path,
         file_type="video",
         mime_type="video/mp4",
         file_size=1000,
@@ -702,3 +708,76 @@ async def test_emits_transcription_failed_on_provider_error(
     assert payload["file_id"] == "f00000000001"
     assert payload["provider"] == "deepgram"
     assert payload["error_class"] == "FatalError"
+
+
+@pytest.mark.asyncio
+async def test_under_cap_input_still_retries_through_dispatch(
+    patched_db, fake_sleep, tmp_path
+) -> None:
+    """A wrapped provider must keep retry on the non-splitting path.
+
+    ``SplittingTranscriber`` reports ``handles_own_retry=True``
+    unconditionally, so ``index_whisper`` skips its outer
+    ``transcribe_with_retry`` for every wrapped provider — including
+    calls the wrapper does not split. When the wrapper delegated raw
+    on that path, a normal-sized file got no retry and no circuit
+    breaker at all.
+
+    Drive the real dispatch path (not the wrapper in isolation) with
+    a file comfortably under the cap: first attempt raises
+    TransientError, second succeeds.
+    """
+    from app.models import IndexedFile, JobRecord
+    from app.workers import whisper as whisper_module
+    from app.workers.transcription.splitting_transcriber import (
+        SplittingTranscriber,
+    )
+
+    audio = tmp_path / "x.mp4"
+    audio.write_bytes(b"\0" * 512)
+    _seed_file(patched_db, file_path=str(audio))
+
+    inner = MagicMock()
+    inner.name = "deepgram"
+    inner.capabilities = ProviderCapabilities(
+        sends_audio_offhost=True,
+        supports_diarization=True,
+        supports_hotwords=False,
+        supports_word_timestamps=True,
+        max_input_bytes=None,       # the API declares no cap
+        accepts_initial_prompt=False,
+        handles_own_retry=False,
+    )
+    inner.transcribe = AsyncMock(
+        side_effect=[TransientError("502 upstream"), []]
+    )
+
+    # 64 KB cap, 512-byte file → the non-splitting branch.
+    provider = SplittingTranscriber(inner, cap_bytes=64 * 1024)
+    assert provider.capabilities.handles_own_retry is True
+
+    with (
+        patch.object(whisper_module, "get_provider", return_value=provider),
+        patch.object(whisper_module, "validate_file_path", return_value=True),
+        patch(
+            "app.policy_client.is_feature_enabled",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        result = await whisper_module.index_whisper("f00000000001")
+
+    assert inner.transcribe.await_count == 2, (
+        "the transient failure was not retried — the non-splitting "
+        "path delegated without transcribe_with_retry"
+    )
+    assert result is True
+
+    s = patched_db()
+    try:
+        file = s.query(IndexedFile).filter_by(file_id="f00000000001").one()
+        assert file.whisper_indexed is True
+        records = s.query(JobRecord).filter_by(file_id="f00000000001").all()
+    finally:
+        s.close()
+    assert len(records) == 1
+    assert records[0].status == "succeeded"

@@ -17,6 +17,11 @@ Lifecycle / retry semantics:
   ``transcribe_with_retry`` call against the inner provider, which
   preserves successfully transcribed chunks 0..N-1 when chunk N hits
   a transient error (R1 spec H-R1-2).
+* That capability is unconditional, so it also covers the calls this
+  wrapper does **not** split. Every path out of ``transcribe`` must
+  therefore go through ``transcribe_with_retry`` itself — delegating
+  raw would silently drop retry and circuit-breaker gating for
+  normal-sized inputs.
 * The inner provider's ``name`` is exposed verbatim on the wrapper so
   ``JobRecord.provider`` and WS event payloads do not see a
   transparent intermediary.
@@ -106,9 +111,11 @@ class SplittingTranscriber:
         cap = self._cap_bytes
         if cap is None:
             # No cap → always pass through. The wrapper would not
-            # have been built in this case (the factory only wraps
-            # when a cap is resolved), but be defensive anyway.
-            return await self._inner.transcribe(
+            # have been built in this case (the factory always
+            # resolves a cap), but be defensive anyway — and still
+            # run retry, for the reason given on the ``size <= cap``
+            # branch below.
+            return await self._delegate_with_retry(
                 file_path,
                 language_hint=language_hint,
                 hotwords=hotwords,
@@ -125,13 +132,14 @@ class SplittingTranscriber:
             ) from exc
 
         if size <= cap:
-            # File already fits — no splitting needed. Per-call retry
-            # is handled by the dispatch layer for non-splitting
-            # paths; we delegate without invoking transcribe_with_retry
-            # ourselves (we'd be wrapping it twice with the inner
-            # ``handles_own_retry=False``-tagged provider's outer
-            # retry).
-            return await self._inner.transcribe(
+            # File already fits — no splitting needed, but retry is
+            # still ours to run: we advertise
+            # ``handles_own_retry=True`` unconditionally, so the
+            # dispatch layer skips its outer ``transcribe_with_retry``
+            # for every call that reaches us, split or not. Delegating
+            # raw here would leave normal-sized inputs with no retry
+            # and no circuit breaker at all.
+            return await self._delegate_with_retry(
                 file_path,
                 language_hint=language_hint,
                 hotwords=hotwords,
@@ -188,3 +196,32 @@ class SplittingTranscriber:
         finally:
             with contextlib.suppress(OSError):
                 shutil.rmtree(tmpdir, ignore_errors=True)
+
+    async def _delegate_with_retry(
+        self,
+        file_path: str,
+        *,
+        language_hint: str | None,
+        hotwords: list[str] | None,
+        initial_prompt: str | None,
+        progress: Callable[[float], None] | None,
+    ) -> list[TranscriptionSegment]:
+        """Forward one whole file to the inner provider, with retry.
+
+        Used by both non-splitting paths. There is no double-wrap
+        risk: the dispatch layer keys off ``handles_own_retry``, which
+        this wrapper always reports as True, so it never applies a
+        retry of its own to anything we handle.
+        """
+        # Lazy import for the same circular-dependency reason as the
+        # splitting path.
+        from app.workers.transcription.retry import transcribe_with_retry
+
+        return await transcribe_with_retry(
+            self._inner,
+            file_path,
+            language_hint=language_hint,
+            hotwords=hotwords,
+            initial_prompt=initial_prompt,
+            progress=progress,
+        )
