@@ -8,7 +8,9 @@ net for missed webhooks.
 
 from __future__ import annotations
 
+import asyncio
 import sys
+import time
 from contextlib import contextmanager
 from unittest.mock import MagicMock
 
@@ -100,6 +102,14 @@ def patched(monkeypatch, engines):
             s.close()
 
     @contextmanager
+    def _get_search_db_read():
+        s = SearchSession()
+        try:
+            yield s
+        finally:
+            s.close()
+
+    @contextmanager
     def _get_litloft_db():
         s = LitloftSession()
         try:
@@ -109,6 +119,8 @@ def patched(monkeypatch, engines):
 
     monkeypatch.setattr("app.database.get_search_db", _get_search_db)
     monkeypatch.setattr("app.indexer.get_search_db", _get_search_db)
+    monkeypatch.setattr("app.database.get_search_db_read", _get_search_db_read)
+    monkeypatch.setattr("app.indexer.get_search_db_read", _get_search_db_read)
     monkeypatch.setattr("app.database.get_litloft_db", _get_litloft_db)
     monkeypatch.setattr("app.indexer.get_litloft_db", _get_litloft_db)
 
@@ -338,3 +350,51 @@ class TestLoftTempAudioReset:
             assert row.whisper_indexed is False
         finally:
             s.close()
+
+
+class TestReconcileKeepsEventLoopResponsive:
+    """reconcile()'s synchronous DB work must not run on the event loop.
+
+    A scan-complete webhook on a library of ~10k files used to hold the
+    loop long enough for the watchdog to fire at 121s, making every
+    endpoint unreachable and the container unhealthy.
+    """
+
+    @pytest.mark.asyncio
+    async def test_slow_db_work_does_not_starve_the_loop(
+        self, patched, make_manager, monkeypatch
+    ):
+        import app.indexer as indexer
+
+        SearchSession, LitloftSession = patched
+        _seed_litloft_active(LitloftSession)
+        _seed_indexed(SearchSession, file_path="/drives/drive1/新/移動先/x.mp4")
+
+        real = indexer._get_litloft_files
+
+        def slow_read():
+            time.sleep(0.3)
+            return real()
+
+        monkeypatch.setattr("app.indexer._get_litloft_files", slow_read)
+
+        ticks = 0
+        running = True
+
+        async def ticker():
+            nonlocal ticks
+            while running:
+                ticks += 1
+                await asyncio.sleep(0.01)
+
+        task = asyncio.create_task(ticker())
+        await asyncio.sleep(0)  # let the ticker reach its first await
+        await make_manager().reconcile()
+        running = False
+        await task
+
+        # Blocking inline would let through at most a tick or two.
+        assert ticks > 5, (
+            f"event loop advanced only {ticks} ticks during reconcile() — "
+            "synchronous DB work is running on the loop"
+        )

@@ -21,6 +21,7 @@ from app.database import (
     delete_fts_transcripts,
     get_litloft_db,
     get_search_db,
+    get_search_db_read,
     upsert_fts_file,
     validate_vector_table,
 )
@@ -339,8 +340,13 @@ class IndexManager:
         drift_repaired = 0
 
         try:
-            litloft_files = _get_litloft_files()
-            indexed_files = _get_indexed_file_ids()
+            # Every DB helper below is synchronous SQLAlchemy over tables
+            # that grow with the library (tens of thousands of rows). Run
+            # them off the event loop: a scan-complete webhook must never
+            # make the addon's endpoints unreachable while it reconciles.
+            litloft_files = await asyncio.to_thread(_get_litloft_files)
+            indexed_meta = await asyncio.to_thread(_get_indexed_metadata)
+            indexed_files = set(indexed_meta)
 
             litloft_ids = {f["id"] for f in litloft_files}
             # A file is "active" for indexing purposes only if it is neither
@@ -366,18 +372,28 @@ class IndexManager:
                     [f for f in litloft_files if f["id"] in new_ids]
                 )
 
-            # Inactive (trashed or missing): deactivate in the index
-            for file_id in litloft_inactive & indexed_files:
-                _set_file_active(file_id, active=False)
-                deactivated += 1
+            # Inactive (trashed or missing): deactivate in the index.
+            # Only rows whose flag actually differs are written — a full
+            # rewrite of every row on every scan is what used to stall
+            # the loop.
+            deactivated = await asyncio.to_thread(
+                _set_files_active_bulk,
+                {
+                    file_id
+                    for file_id in litloft_inactive & indexed_files
+                    if indexed_meta[file_id]["active"]
+                },
+                active=False,
+            )
 
             # Active: reactivate (covers "missing → recovered" and
             # "trash → restored" since both flow through this branch)
             # and self-heal IndexedFile snapshot drift (webhook fallback).
-            indexed_meta = _get_indexed_metadata()
+            reactivate: set[str] = set()
             drifted: list[str] = []
             for file_id in litloft_active & indexed_files:
-                _set_file_active(file_id, active=True)
+                if not indexed_meta[file_id]["active"]:
+                    reactivate.add(file_id)
 
                 core = litloft_by_id.get(file_id)
                 snap = indexed_meta.get(file_id)
@@ -397,6 +413,10 @@ class IndexManager:
                 ):
                     drifted.append(file_id)
 
+            await asyncio.to_thread(
+                _set_files_active_bulk, reactivate, active=True
+            )
+
             if drifted:
                 await self.handle_files_moved(drifted)
                 drift_repaired = len(drifted)
@@ -409,13 +429,17 @@ class IndexManager:
             # Purged: in index but not in Litloft DB at all
             # (user explicitly called DELETE /purge)
             orphaned = indexed_files - litloft_ids
-            for file_id in orphaned:
-                _purge_file(file_id)
-                purged += 1
+            if orphaned:
+                def _purge_orphans() -> int:
+                    for file_id in orphaned:
+                        _purge_file(file_id)
+                    return len(orphaned)
+
+                purged = await asyncio.to_thread(_purge_orphans)
 
             # Reset loft refs that were marked complete but have no transcript
             # (caption download may have failed initially and succeeded later)
-            self._reset_loft_refs_with_new_vtt()
+            await asyncio.to_thread(self._reset_loft_refs_with_new_vtt)
 
             # Resume incomplete: re-queue files that were interrupted mid-indexing
             resumed = await self._resume_incomplete()
@@ -469,57 +493,63 @@ class IndexManager:
                 permitted.append(f)
         files = permitted
 
-        added = 0
+        def _insert_rows() -> int:
+            added = 0
+            with get_search_db() as session:
+                for file_data in files:
+                    try:
+                        # Build tags text from Litloft DB
+                        tags_text = _get_file_tags(file_data["id"])
 
-        with get_search_db() as session:
-            for file_data in files:
-                try:
-                    # Build tags text from Litloft DB
-                    tags_text = _get_file_tags(file_data["id"])
-
-                    # Resolve relative file_path to absolute using drive mounts
-                    abs_path = resolve_file_path(
-                        file_data["drive"], file_data["file_path"]
-                    )
-                    if not abs_path:
-                        logger.warning(
-                            "No mount configured for drive %s, skipping %s",
-                            file_data["drive"], file_data["id"],
+                        # Resolve relative file_path to absolute using
+                        # drive mounts
+                        abs_path = resolve_file_path(
+                            file_data["drive"], file_data["file_path"]
                         )
-                        continue
+                        if not abs_path:
+                            logger.warning(
+                                "No mount configured for drive %s, skipping %s",
+                                file_data["drive"], file_data["id"],
+                            )
+                            continue
 
-                    filename = file_data["filename"]
-                    title = file_data.get("title", "")
-                    description = file_data.get("description", "")
+                        filename = file_data["filename"]
+                        title = file_data.get("title", "")
+                        description = file_data.get("description", "")
 
-                    indexed_file = IndexedFile(
-                        file_id=file_data["id"],
-                        drive=file_data["drive"],
-                        filename=filename,
-                        file_path=abs_path,
-                        file_type=file_data["file_type"],
-                        mime_type=file_data["mime_type"],
-                        file_size=file_data["file_size"],
-                        duration=file_data.get("duration"),
-                        thumbnail_path=file_data.get("thumbnail_path"),
-                        title=title,
-                        description=description,
-                        tags_text=tags_text,
-                    )
-                    session.add(indexed_file)
+                        indexed_file = IndexedFile(
+                            file_id=file_data["id"],
+                            drive=file_data["drive"],
+                            filename=filename,
+                            file_path=abs_path,
+                            file_type=file_data["file_type"],
+                            mime_type=file_data["mime_type"],
+                            file_size=file_data["file_size"],
+                            duration=file_data.get("duration"),
+                            thumbnail_path=file_data.get("thumbnail_path"),
+                            title=title,
+                            description=description,
+                            tags_text=tags_text,
+                        )
+                        session.add(indexed_file)
 
-                    # Keep FTS5 trigram index in sync
-                    upsert_fts_file(
-                        session, file_data["id"],
-                        filename, title, description, tags_text,
-                    )
+                        # Keep FTS5 trigram index in sync
+                        upsert_fts_file(
+                            session, file_data["id"],
+                            filename, title, description, tags_text,
+                        )
 
-                    added += 1
-                except Exception as e:
-                    logger.error(
-                        "Failed to add file %s to index: %s",
-                        file_data["id"], e,
-                    )
+                        added += 1
+                    except Exception as e:
+                        logger.error(
+                            "Failed to add file %s to index: %s",
+                            file_data["id"], e,
+                        )
+            return added
+
+        # One row per new file plus an N+1 tag lookup each: keep it off
+        # the event loop so a large import stays serviceable.
+        added = await asyncio.to_thread(_insert_rows)
 
         # Queue all new files for processing
         for file_data in files:
@@ -598,68 +628,77 @@ class IndexManager:
 
         clip_mimes = IMAGE_TYPES | VIDEO_TYPES | THUMBNAIL_FALLBACK_TYPES
 
-        with get_search_db() as session:
-            from sqlalchemy import or_
+        def _collect_incomplete() -> list[
+            tuple[str, str, bool, bool, bool, bool, bool, bool]
+        ]:
+            with get_search_db() as session:
+                from sqlalchemy import or_
 
-            incomplete = (
-                session.query(IndexedFile)
-                .filter(
-                    IndexedFile.active.is_(True),
-                    or_(
-                        IndexedFile.metadata_indexed.is_(False),
-                        IndexedFile.clip_indexed.is_(False),
-                        # Phase 4: existing files predating the
-                        # clip_thumbnail rollout (spec
-                        # 2026-05-02-thumbnail-clip-default-shallow-search.md)
-                        # surface here so the next CLIP pass will fill
-                        # the thumbnail leg.
-                        IndexedFile.clip_thumbnail_indexed.is_(False),
-                        IndexedFile.whisper_indexed.is_(False),
-                        IndexedFile.text_indexed.is_(False),
-                        IndexedFile.tfidf_keywords_indexed.is_(False),
-                    ),
+                incomplete = (
+                    session.query(IndexedFile)
+                    .filter(
+                        IndexedFile.active.is_(True),
+                        or_(
+                            IndexedFile.metadata_indexed.is_(False),
+                            IndexedFile.clip_indexed.is_(False),
+                            # Phase 4: existing files predating the
+                            # clip_thumbnail rollout (spec
+                            # 2026-05-02-thumbnail-clip-default-shallow-search.md)
+                            # surface here so the next CLIP pass will fill
+                            # the thumbnail leg.
+                            IndexedFile.clip_thumbnail_indexed.is_(False),
+                            IndexedFile.whisper_indexed.is_(False),
+                            IndexedFile.text_indexed.is_(False),
+                            IndexedFile.tfidf_keywords_indexed.is_(False),
+                        ),
+                    )
+                    .all()
                 )
-                .all()
-            )
 
-            # Mark inapplicable index types as done so they don't appear
-            # as permanently incomplete (e.g., clip_indexed for audio files)
-            for f in incomplete:
-                if not f.clip_indexed and f.mime_type not in clip_mimes:
-                    f.clip_indexed = True
-                if (
-                    not f.clip_thumbnail_indexed
-                    and f.mime_type not in clip_mimes
-                ):
-                    f.clip_thumbnail_indexed = True
-                if not f.whisper_indexed and f.mime_type not in TRANSCRIBABLE_TYPES and f.mime_type != LOFT_MIME:
-                    f.whisper_indexed = True
-                if not f.text_indexed and f.mime_type not in TEXT_MIMES:
-                    f.text_indexed = True
-                # tfidf_keywords: only video/loft files with completed whisper
-                if not f.tfidf_keywords_indexed and not f.whisper_indexed:
-                    f.tfidf_keywords_indexed = True
-                if (
-                    not f.tfidf_keywords_indexed
-                    and f.mime_type not in TRANSCRIBABLE_TYPES
-                    and f.mime_type != LOFT_MIME
-                ):
-                    f.tfidf_keywords_indexed = True
+                # Mark inapplicable index types as done so they don't appear
+                # as permanently incomplete (e.g., clip_indexed for audio)
+                for f in incomplete:
+                    if not f.clip_indexed and f.mime_type not in clip_mimes:
+                        f.clip_indexed = True
+                    if (
+                        not f.clip_thumbnail_indexed
+                        and f.mime_type not in clip_mimes
+                    ):
+                        f.clip_thumbnail_indexed = True
+                    if (
+                        not f.whisper_indexed
+                        and f.mime_type not in TRANSCRIBABLE_TYPES
+                        and f.mime_type != LOFT_MIME
+                    ):
+                        f.whisper_indexed = True
+                    if not f.text_indexed and f.mime_type not in TEXT_MIMES:
+                        f.text_indexed = True
+                    # tfidf_keywords: only video/loft files with whisper done
+                    if not f.tfidf_keywords_indexed and not f.whisper_indexed:
+                        f.tfidf_keywords_indexed = True
+                    if (
+                        not f.tfidf_keywords_indexed
+                        and f.mime_type not in TRANSCRIBABLE_TYPES
+                        and f.mime_type != LOFT_MIME
+                    ):
+                        f.tfidf_keywords_indexed = True
 
-            # Snapshot what we need for queuing
-            file_tasks: list[tuple[str, str, bool, bool, bool, bool, bool, bool]] = [
-                (
-                    f.file_id,
-                    f.mime_type,
-                    f.metadata_indexed,
-                    f.clip_indexed,
-                    f.clip_thumbnail_indexed,
-                    f.whisper_indexed,
-                    f.text_indexed,
-                    f.tfidf_keywords_indexed,
-                )
-                for f in incomplete
-            ]
+                # Snapshot what we need for queuing
+                return [
+                    (
+                        f.file_id,
+                        f.mime_type,
+                        f.metadata_indexed,
+                        f.clip_indexed,
+                        f.clip_thumbnail_indexed,
+                        f.whisper_indexed,
+                        f.text_indexed,
+                        f.tfidf_keywords_indexed,
+                    )
+                    for f in incomplete
+                ]
+
+        file_tasks = await asyncio.to_thread(_collect_incomplete)
 
         for (
             file_id, mime_type,
@@ -1739,15 +1778,28 @@ def _get_file_tags(file_id: str) -> str:
         return ""
 
 
-def _get_indexed_file_ids() -> set[str]:
-    """Get all file IDs currently in the search index.
+def _set_files_active_bulk(file_ids: set[str], *, active: bool) -> int:
+    """Flip ``active`` on many indexed files in as few statements as possible.
+
+    Chunked to stay under SQLite's bound-parameter limit.
 
     Returns:
-        Set of indexed file IDs.
+        Number of rows updated.
     """
+    if not file_ids:
+        return 0
+
+    ids = list(file_ids)
+    chunk_size = 500
+    updated = 0
     with get_search_db() as session:
-        rows = session.query(IndexedFile.file_id).all()
-        return {row[0] for row in rows}
+        for start in range(0, len(ids), chunk_size):
+            updated += (
+                session.query(IndexedFile)
+                .filter(IndexedFile.file_id.in_(ids[start:start + chunk_size]))
+                .update({IndexedFile.active: active}, synchronize_session=False)
+            )
+    return updated
 
 
 def _get_indexed_metadata() -> dict[str, dict]:
@@ -1757,9 +1809,13 @@ def _get_indexed_metadata() -> dict[str, dict]:
     IndexedFile so reconcile can repair both path-class drift
     (rename / move missed by webhook) and classification drift
     (core's ``classify()`` rule changed — e.g. a vendor wrapper mime
-    promoted from ``other`` to ``video``).
+    promoted from ``other`` to ``video``). ``active`` rides along so
+    reconcile can write only the rows whose flag actually changed.
+
+    Doubles as reconcile's "which files are indexed" lookup: the key
+    set is exactly that.
     """
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         rows = session.query(
             IndexedFile.file_id,
             IndexedFile.drive,
@@ -1767,6 +1823,7 @@ def _get_indexed_metadata() -> dict[str, dict]:
             IndexedFile.filename,
             IndexedFile.file_type,
             IndexedFile.mime_type,
+            IndexedFile.active,
         ).all()
         return {
             row[0]: {
@@ -1775,6 +1832,7 @@ def _get_indexed_metadata() -> dict[str, dict]:
                 "filename": row[3],
                 "file_type": row[4],
                 "mime_type": row[5],
+                "active": row[6],
             }
             for row in rows
         }
