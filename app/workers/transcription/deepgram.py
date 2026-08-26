@@ -56,7 +56,12 @@ class DeepgramProvider:
         supports_diarization=True,
         supports_hotwords=False,
         supports_word_timestamps=True,
-        max_input_bytes=None,           # Deepgram has no practical cap
+        # Deepgram itself has no practical cap. This is the API limit
+        # only — it is NOT what bounds a single call, because
+        # ``transcribe`` buffers the whole body in memory. The factory
+        # applies ``MAX_INPUT_MEMORY_BYTES`` on top; do not read None
+        # here as "any size is safe to pass in one piece".
+        max_input_bytes=None,
         accepts_initial_prompt=False,
         handles_own_retry=False,
     )

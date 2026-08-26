@@ -55,8 +55,27 @@ PRIOR_TAIL_MAX_CHARS = 150
 class SplittingTranscriber:
     """Wrap a TranscriptionProvider to split files exceeding its cap."""
 
-    def __init__(self, inner: TranscriptionProvider) -> None:
+    def __init__(
+        self,
+        inner: TranscriptionProvider,
+        *,
+        cap_bytes: int | None = None,
+    ) -> None:
+        """Wrap ``inner``, splitting anything larger than ``cap_bytes``.
+
+        ``cap_bytes`` defaults to the inner provider's own
+        ``max_input_bytes``. The factory passes an explicit value so
+        the split threshold can also account for how much of the file
+        we are willing to hold in memory, which is a stricter limit
+        than what the remote API accepts (see
+        :data:`app.workers.transcription.MAX_INPUT_MEMORY_BYTES`).
+        """
         self._inner = inner
+        self._cap_bytes = (
+            cap_bytes
+            if cap_bytes is not None
+            else inner.capabilities.max_input_bytes
+        )
 
     @property
     def capabilities(self) -> ProviderCapabilities:
@@ -84,11 +103,11 @@ class SplittingTranscriber:
         initial_prompt: str | None = None,
         progress: Callable[[float], None] | None = None,
     ) -> list[TranscriptionSegment]:
-        cap = self._inner.capabilities.max_input_bytes
+        cap = self._cap_bytes
         if cap is None:
             # No cap → always pass through. The wrapper would not
-            # have been built in this case (factory only wraps when
-            # ``max_input_bytes`` is set), but be defensive anyway.
+            # have been built in this case (the factory only wraps
+            # when a cap is resolved), but be defensive anyway.
             return await self._inner.transcribe(
                 file_path,
                 language_hint=language_hint,
