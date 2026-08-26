@@ -80,10 +80,14 @@ class ProviderCapabilities:
     supports_diarization: bool
     supports_hotwords: bool
     supports_word_timestamps: bool
-    # Phase 2B: hard byte cap enforced by the provider (None means no
-    # cap). Used by ``SplittingTranscriber`` to decide when to invoke
-    # ffmpeg-based chunking. Pre-existing per-provider pre-checks
-    # remain as a final defence line for malformed input.
+    # Phase 2B: hard byte cap enforced by the REMOTE API (None means
+    # the API documents no cap). This is not on its own the split
+    # threshold: the factory takes ``min()`` of this and
+    # ``MAX_INPUT_MEMORY_BYTES`` before handing the result to
+    # ``SplittingTranscriber``, because most upload paths buffer the
+    # body in memory and the API's limit can be far larger than this
+    # process can hold. Pre-existing per-provider pre-checks remain as
+    # a final defence line for malformed input.
     max_input_bytes: int | None = None
     # Phase 2B: provider can take a "previous text" string and use it
     # to seed the autoregressive decoder for the current call. Only
