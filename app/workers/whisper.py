@@ -770,30 +770,42 @@ async def index_whisper(file_id: str) -> bool:
         future re-index can re-attempt.
     """
     # --- Resolve file_id → (path, drive, mime) ---
-    unsupported_mime = False
-    with get_search_db() as session:
-        file = session.query(IndexedFile).filter_by(
-            file_id=file_id, active=True
-        ).first()
-        if file is None:
-            return False
-        mime_type = file.mime_type
-        file_path = file.file_path
-        drive = file.drive
+    def _resolve() -> tuple[str, str, str, bool] | None:
+        """None means "no such active file"; else (mime, path, drive, skip)."""
+        unsupported = False
+        with get_search_db() as session:
+            file = session.query(IndexedFile).filter_by(
+                file_id=file_id, active=True
+            ).first()
+            if file is None:
+                return None
+            mime_type = file.mime_type
+            file_path = file.file_path
+            drive = file.drive
 
-        # Unsupported MIME: mark indexed so reconcile won't re-enqueue
-        # the file, but record the skip in JobRecord + INFO log so
-        # operators can answer "why isn't this file transcribed?"
-        # without scraping logs (Phase 2F, hako A-gF1mK3kDjRjS_dfuq1B).
-        if mime_type not in TRANSCRIBABLE_TYPES and mime_type != LOFT_MIME:
-            file.whisper_indexed = True
-            session.commit()
-            logger.info(
-                "File %s skipped for transcription: mime=%s not in "
-                "TRANSCRIBABLE_TYPES",
-                file_id, mime_type,
-            )
-            unsupported_mime = True
+            # Unsupported MIME: mark indexed so reconcile won't re-enqueue
+            # the file, but record the skip in JobRecord + INFO log so
+            # operators can answer "why isn't this file transcribed?"
+            # without scraping logs (Phase 2F, hako A-gF1mK3kDjRjS_dfuq1B).
+            if mime_type not in TRANSCRIBABLE_TYPES and mime_type != LOFT_MIME:
+                file.whisper_indexed = True
+                session.commit()
+                logger.info(
+                    "File %s skipped for transcription: mime=%s not in "
+                    "TRANSCRIBABLE_TYPES",
+                    file_id, mime_type,
+                )
+                unsupported = True
+        return mime_type, file_path, drive, unsupported
+
+    # This coroutine is awaited straight from ``_whisper_worker``, so the
+    # lookup runs on the indexer's event loop unless it hops off. The
+    # query is one indexed row; waiting on the write lock is the part
+    # that stalls every endpoint.
+    resolved = await asyncio.to_thread(_resolve)
+    if resolved is None:
+        return False
+    mime_type, file_path, drive, unsupported_mime = resolved
 
     # Recorded outside the block above: _record_skipped_job() opens its own
     # write session, so running it on a worker thread while this coroutine
