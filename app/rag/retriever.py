@@ -87,6 +87,30 @@ class RetrievedFile:
     mime_type: str | None = None
 
 
+#: How much wider than ``top_k`` the search pool is drawn when a trust filter
+#: is active. The filter runs after ranking, so without a wider pool an
+#: unverified clip that outranks a verified source would consume the budget
+#: and then be discarded, leaving Ask with fewer sources than exist — or none.
+#: Four is a bounded compromise: enough headroom for a clip-heavy library,
+#: small enough that the extra ranking work stays cheap.
+_TRUST_OVERSAMPLE_FACTOR = 4
+
+#: Ceiling on the widened pool, so a large ``top_k`` cannot turn into a
+#: pathologically wide scan.
+_TRUST_OVERSAMPLE_MAX = 200
+
+
+def _search_pool_size(top_k: int, trust_tier: str | None) -> int:
+    """Rows to ask ``search`` for, before access and trust narrowing.
+
+    Identical to ``top_k`` when no trust filter is active, so Find and every
+    existing caller keep their exact current behaviour.
+    """
+    if trust_tier is None:
+        return top_k
+    return min(top_k * _TRUST_OVERSAMPLE_FACTOR, _TRUST_OVERSAMPLE_MAX)
+
+
 def _internal_api_base_url() -> str:
     """Resolve the Internal API base URL from env or fall back to default."""
     return os.environ.get(
@@ -97,6 +121,7 @@ def _internal_api_base_url() -> str:
 async def _filter_file_ids_via_internal_api(
     file_ids: list[str],
     credential: CallerCredential | None,
+    trust_tier: str | None = "verified",
 ) -> set[str]:
     """Call the host's Internal API to filter file_ids by access.
 
@@ -109,9 +134,20 @@ async def _filter_file_ids_via_internal_api(
     behaviour for "全公開モード" (all drives public). We still call the
     API so unauthenticated users cannot see protected drives.
 
+    The host also applies a trust filter here. Everything in this module
+    feeds grounding — answers that carry citations — and a source the viewer
+    has not vouched for must not be quotable back at them as evidence. The
+    default is therefore the strict value: a caller that forgets the argument
+    gets the safer behaviour, not the looser one. Pass ``None`` to disable it
+    deliberately.
+
+    Ordinary search does not come through here and is unaffected: unverified
+    files stay findable, they just stop acting as evidence.
+
     Args:
         file_ids: The candidate file_ids from the search pipeline.
         credential: Optional caller credential to forward.
+        trust_tier: Tier to narrow to, or None for no trust filtering.
 
     Returns:
         The subset of ``file_ids`` the caller is allowed to see. On
@@ -129,10 +165,10 @@ async def _filter_file_ids_via_internal_api(
             timeout=_INTERNAL_API_TIMEOUT_SECONDS,
             headers=headers,
         ) as client:
-            response = await client.post(
-                url,
-                json={"file_ids": file_ids},
-            )
+            payload: dict = {"file_ids": file_ids}
+            if trust_tier is not None:
+                payload["trust_tier"] = trust_tier
+            response = await client.post(url, json=payload)
     except httpx.HTTPError as e:
         # Network / timeout / connection error. Fail closed — returning
         # an empty set drops every candidate so no data leaks past the
@@ -169,6 +205,18 @@ async def _filter_file_ids_via_internal_api(
     if accessible is None:
         logger.error(
             "Internal API filter response missing 'accessible' list"
+        )
+        return set()
+
+    # A host too old to know about trust silently drops the field and answers
+    # with the full access-allowed list. Reading that back as "verified" would
+    # let Ask cite unvouched sources, so a requested filter that the host did
+    # not confirm applying fails closed like every other error on this path.
+    if trust_tier is not None and data.get("trust_filtered") is not True:
+        logger.error(
+            "Internal API did not apply the requested trust filter; "
+            "refusing to treat unfiltered results as verified. "
+            "Update the core backend."
         )
         return set()
 
@@ -235,6 +283,7 @@ async def retrieve_with_keywords(
     file_id_scope: list[str] | None = None,
     required: tuple[RequiredTerm, ...] | None = None,
     include_scene_clip: bool = False,
+    trust_tier: str | None = "verified",
 ) -> list[RetrievedFile]:
     """Retrieve top-k RAG candidates for a **pre-transformed** keyword query.
 
@@ -275,29 +324,35 @@ async def retrieve_with_keywords(
     """
     # app.search.search is a sync function — offload to a thread so we
     # don't block the event loop while it does DB / vector work.
-    response = await asyncio.to_thread(
-        search,
-        keywords,
-        limit=top_k,
-        file_type=file_type,
-        drive=drive,
-        mode="recall",
-        semantic_query=original_query,
-        file_id_scope=file_id_scope,
-        required=required,
-        include_scene_clip=include_scene_clip,
-    )
+    async def _run_search(limit: int, required_terms):
+        response = await asyncio.to_thread(
+            search,
+            keywords,
+            limit=limit,
+            file_type=file_type,
+            drive=drive,
+            mode="recall",
+            semantic_query=original_query,
+            file_id_scope=file_id_scope,
+            required=required_terms,
+            include_scene_clip=include_scene_clip,
+        )
+        return list(response.results)
 
-    results = list(response.results)
+    async def _search_with_fallback(limit: int):
+        """Search, stepping down the required-term ladder on zero hits.
 
-    # Phase 4: Tier 2 → Tier 3 fallback ladder. When the full required
-    # tuple yields zero hits we step through subsets dropping one
-    # term at a time (most-aliased first; ties broken by position so
-    # the user's leading term is preserved). The ladder terminates
-    # at the empty tuple which is equivalent to Tier 3 ("demote all
-    # required to semantic"). Surfacing the fallback step to the
-    # client (SSE event) is left to the streaming layer.
-    if not results and required:
+        Phase 4: Tier 2 → Tier 3 fallback ladder. When the full required
+        tuple yields zero hits we step through subsets dropping one term at
+        a time (most-aliased first; ties broken by position so the user's
+        leading term is preserved). The ladder terminates at the empty tuple
+        which is equivalent to Tier 3 ("demote all required to semantic").
+        Surfacing the fallback step to the client (SSE event) is left to the
+        streaming layer.
+        """
+        found = await _run_search(limit, required)
+        if found or not required:
+            return found
         for subset in iter_required_fallback_subsets(required):
             tier_label = (
                 "Tier 3 (no required filter)"
@@ -308,35 +363,45 @@ async def retrieve_with_keywords(
                 "Required-keyword hard filter empty; retrying with %s",
                 tier_label,
             )
-            response = await asyncio.to_thread(
-                search,
-                keywords,
-                limit=top_k,
-                file_type=file_type,
-                drive=drive,
-                mode="recall",
-                semantic_query=original_query,
-                file_id_scope=file_id_scope,
-                required=subset or None,
-                include_scene_clip=include_scene_clip,
-            )
-            results = list(response.results)
-            if results:
-                break
-
-    if not results:
+            found = await _run_search(limit, subset or None)
+            if found:
+                return found
         return []
 
-    file_ids = [r.file_id for r in results]
+    # Access and trust both narrow *after* ranking, so a pool of exactly
+    # top_k lets ineligible rows spend the budget and then be discarded.
+    # Widen until the budget is filled, the index is exhausted, or the cap is
+    # reached — a fixed multiplier alone still starves a query whose first
+    # eligible hit sits below it.
+    pool_size = _search_pool_size(top_k, trust_tier)
+    results: list = []
+    allowed_ids: set[str] = set()
+    while True:
+        results = await _search_with_fallback(pool_size)
+        if not results:
+            return []
 
-    # Access filter (primary gate). Always call, even when token is
-    # None — the host decides what a token-less caller can see.
-    allowed_ids = await _filter_file_ids_via_internal_api(
-        file_ids=file_ids,
-        credential=credential,
-    )
+        # Access filter (primary gate). Always call, even when token is
+        # None — the host decides what a token-less caller can see.
+        allowed_ids = await _filter_file_ids_via_internal_api(
+            file_ids=[r.file_id for r in results],
+            credential=credential,
+            trust_tier=trust_tier,
+        )
+        eligible = sum(1 for r in results if r.file_id in allowed_ids)
 
-    allowed_results = [r for r in results if r.file_id in allowed_ids]
+        if eligible >= top_k:
+            break
+        if len(results) < pool_size:
+            break  # the index had nothing more to give
+        if pool_size >= _TRUST_OVERSAMPLE_MAX:
+            break
+        pool_size = min(pool_size * 2, _TRUST_OVERSAMPLE_MAX)
+
+    # Truncate only now: ranking order is preserved, but the budget is spent
+    # on rows that survived access and trust rather than on rows about to be
+    # thrown away.
+    allowed_results = [r for r in results if r.file_id in allowed_ids][:top_k]
     if not allowed_results:
         return []
 
@@ -360,6 +425,7 @@ async def retrieve_candidates(
     transform_temperature: float | None = None,
     file_id_scope: list[str] | None = None,
     include_scene_clip: bool = False,
+    trust_tier: str | None = "verified",
 ) -> list[RetrievedFile]:
     """Transform a natural-language question and retrieve RAG candidates.
 
@@ -400,4 +466,5 @@ async def retrieve_candidates(
         file_id_scope=file_id_scope,
         required=structured.required or None,
         include_scene_clip=include_scene_clip,
+        trust_tier=trust_tier,
     )

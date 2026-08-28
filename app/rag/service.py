@@ -2198,6 +2198,10 @@ async def find_files(
                         original_query=term,
                         file_id_scope=file_id_scope,
                         required=effective_required,
+                        # Find presents files rather than grounding an
+                        # answer, so unverified sources stay visible
+                        # here — they are findable, just not evidence.
+                        trust_tier=None,
                     )
                     for term in category_expansion
                 ]
@@ -2217,6 +2221,9 @@ async def find_files(
                 original_query=question,
                 file_id_scope=file_id_scope,
                 required=required,
+                # See above: Find is a presentation surface, not a citation
+                # surface.
+                trust_tier=None,
             )
     except Exception as exc:  # noqa: BLE001 — graceful fallback
         logger.debug("Find Stage D retrieve failed: %s", type(exc).__name__)
