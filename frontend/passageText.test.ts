@@ -152,6 +152,17 @@ describe("passageWindow", () => {
       expect(text.startsWith("The claim")).toBe(true);
     });
 
+    it.each([
+      ['"The first claim." The supporting detail continues here.', "quoted"],
+      ["3 claims were made. The supporting detail continues here.", "numeric"],
+      ["Ärger kam auf. Der Rest des Absatzes folgt hier gleich.", "non-ascii"],
+    ])("keeps a whole opening sentence that starts %#", (text) => {
+      // Whatever a sentence opens with sits behind the quotes or
+      // brackets that open with it, and a capital is a capital in any
+      // cased script.
+      expect(passageWindow(text, []).text).toBe(text);
+    });
+
     it("keeps an opening sentence that is not a fragment", () => {
       const text =
         "The first claim. The supporting detail continues for a while yet.";

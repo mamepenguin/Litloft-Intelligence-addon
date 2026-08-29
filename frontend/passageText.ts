@@ -30,6 +30,9 @@ const ASCII_TERMINATORS = ".!?";
 /** Punctuation that trails a terminator and belongs to the sentence before it. */
 const TRAILING_MARKS = "」』）】〉》\"'";
 
+/** Punctuation a sentence can open with, before its first real character. */
+const OPENING_MARKS = "「『（【〈《\"'“‘([";
+
 export interface PassageWindow {
   text: string;
   /** True when the slice starts mid-passage and needs a leading ellipsis. */
@@ -141,15 +144,31 @@ export function passageWindow(text: string, terms: string[]): PassageWindow {
  *   wherever arithmetic put it, so it is mid-sentence by construction.
  * - **``from`` is the start of the chunk.** Here the passage may well
  *   begin on a real sentence, and snapping would throw a whole one
- *   away. A capital letter is the evidence that it does: a chunker
+ *   away. A capital or a digit is the evidence that it does: a chunker
  *   splitting on size lands inside a word — `ing chunks…` — and a
- *   severed word does not start with one. Japanese has no such signal
- *   and no spaces for a chunker to respect, so a fragment there is the
- *   common case and the snap stands.
+ *   severed word begins with neither. The test looks past any quote or
+ *   bracket the sentence opened with, and reads case through Unicode
+ *   rather than ASCII, so `"The claim."` and `Ärger` both count.
+ *   Japanese has no case to read and no spaces for a chunker to
+ *   respect, so a fragment there is the common case and the snap
+ *   stands.
  */
 function opensMidSentence(text: string, from: number): boolean {
   if (from > 0) return true;
-  return !/^[A-Z]/.test(text);
+
+  // Whatever a sentence opens with sits behind any quotes or brackets
+  // that open with it.
+  let i = 0;
+  while (i < text.length && OPENING_MARKS.includes(text[i])) i += 1;
+  const first = text[i];
+  if (!first) return false;
+
+  // A capital in any cased script, or a digit: neither is where a
+  // severed word begins. Japanese has no case, so this finds nothing
+  // and the snap stands — which is right, since a chunker with no
+  // spaces to respect is exactly what leaves fragments.
+  const isCapital = first !== first.toLowerCase() && first === first.toUpperCase();
+  return !isCapital && !/\d/.test(first);
 }
 
 /**
