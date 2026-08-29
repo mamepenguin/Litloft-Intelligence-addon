@@ -17,9 +17,9 @@ const translations = vi.hoisted(() => ({
   chapterCandidatesGenerationFailed:
     "Chapter generation failed. Try creating them again.",
   chapterCandidatesTokenBudget:
-    "The model used its whole output budget on thinking, so no chapters "
-    + "came back. Set llm.reasoning to disabled, or choose a model that "
-    + "does not think.",
+    "The model ran out of output budget before it finished, so no chapters "
+    + "came back. If it is a reasoning model, set llm.reasoning to disabled; "
+    + "otherwise raise llm.max_tokens.",
 }));
 const translate = vi.hoisted(
   () => (key: keyof typeof translations) => translations[key],
@@ -286,9 +286,9 @@ describe("SuggestedChaptersSection", () => {
 
     expect(
       await screen.findByText(
-        "The model used its whole output budget on thinking, so no chapters "
-        + "came back. Set llm.reasoning to disabled, or choose a model that "
-        + "does not think.",
+        "The model ran out of output budget before it finished, so no "
+        + "chapters came back. If it is a reasoning model, set llm.reasoning "
+        + "to disabled; otherwise raise llm.max_tokens.",
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create again" })).toBeEnabled();

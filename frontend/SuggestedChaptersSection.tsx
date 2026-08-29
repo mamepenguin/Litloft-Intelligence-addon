@@ -103,14 +103,14 @@ export default function SuggestedChaptersSection({
     if (failure.file_id !== fileId) return;
     setOperation(null);
     // Retrying is the right advice only when a retry could work. A model
-    // that spent its output budget thinking will do it again.
+    // that ran out of output budget will run out again.
     setError(
       failure.reason === "model_token_budget"
         ? t("chapterCandidatesTokenBudget", {
             defaultMessage:
-              "The model used its whole output budget on thinking, so no "
-              + "chapters came back. Set llm.reasoning to disabled, or "
-              + "choose a model that does not think.",
+              "The model ran out of output budget before it finished, so "
+              + "no chapters came back. If it is a reasoning model, set "
+              + "llm.reasoning to disabled; otherwise raise llm.max_tokens.",
           })
         : t("chapterCandidatesGenerationFailed", {
             defaultMessage: "Chapter generation failed. Try creating them again.",
