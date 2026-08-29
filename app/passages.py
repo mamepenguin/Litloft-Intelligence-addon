@@ -595,6 +595,24 @@ def _build_pairs(
                 other_page=other.page,
                 other_timestamp=other.timestamp_start,
                 score=score,
+                # The frequency lookup spans the whole index rather than
+                # this drive. Both passages are already inside the
+                # caller's drive — the KNN is scoped and the trust filter
+                # ran — so no other drive's content reaches the reader.
+                # What crosses is a count, used to decide whether a word
+                # the reader can already see in both passages is too
+                # ordinary to be worth naming. That is a noise threshold,
+                # not the cross-drive search / favourites / tag
+                # aggregation the drive rule forbids: nothing from
+                # another drive is surfaced, and the single observable is
+                # whether a chip appears.
+                #
+                # Scoping it per drive would also make it useless where
+                # it is needed. The 500 ceiling was measured against a
+                # 428k-chunk corpus; inside a fifty-file drive no term
+                # reaches it, so the junk this exists to remove would
+                # come straight back, and a per-drive *ratio* is the
+                # shape already measured not to work.
                 overlap=overlap_terms(
                     my_text, other_text, df=rarity_filter.document_frequency
                 ),
