@@ -52,24 +52,41 @@ _MIN_TOKEN_LEN = 2
 DEFAULT_THRESHOLD_RATIO = 0.5
 
 
+#: Above this code point a combining mark is not a Latin diacritic.
+#: ``remove_diacritics=2`` strips marks from Latin script only, so
+#: anything beyond the Latin blocks is left exactly as the tokenizer
+#: stored it.
+_LATIN_MAX = 0x0370
+
+
 def _normalize_token(token: str) -> str:
     """Approximate the ``unicode61 remove_diacritics 2`` tokenizer.
 
     The vocab tables store terms after the host FTS tokenizer has
-    normalised them. ``unicode61`` lowercases and strips combining
-    diacritics; Python's ``str.lower`` matches the lowercase pass, and
-    NFKD + filtering combining marks matches the diacritic pass. Both
-    are cheap pure-Python ops — no need to call into SQLite.
+    normalised them. ``unicode61`` lowercases and strips diacritics
+    **from Latin script**; ``str.lower`` matches the first pass and a
+    per-character NFKD matches the second.
 
-    Returns the empty string for unusable tokens (none / whitespace
-    only) so callers can branch on truthiness.
+    The decomposition has to be per character, and guarded. Applying it
+    to a whole token strips Japanese voiced sound marks as if they were
+    diacritics — ``ポケモン`` became ``ホケモン`` and ``データ`` became
+    ``テータ``, neither of which is in the vocab, so every voiced
+    katakana term reported a document frequency of 0 and read as
+    maximally rare. SQLite keeps those marks; so do we.
     """
     if not token:
         return ""
 
-    nfkd = unicodedata.normalize("NFKD", token)
-    stripped = "".join(ch for ch in nfkd if not unicodedata.combining(ch))
-    return stripped.lower().strip()
+    out: list[str] = []
+    for ch in token:
+        decomposed = unicodedata.normalize("NFKD", ch)
+        if decomposed and ord(decomposed[0]) < _LATIN_MAX:
+            out.append(
+                "".join(c for c in decomposed if not unicodedata.combining(c))
+            )
+        else:
+            out.append(ch)
+    return "".join(out).lower().strip()
 
 
 @lru_cache(maxsize=1)

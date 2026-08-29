@@ -362,3 +362,29 @@ class TestCacheReset:
 # Default threshold sanity — guards against an accidental constant move.
 def test_default_threshold_is_half():
     assert DEFAULT_THRESHOLD_RATIO == pytest.approx(0.5)
+
+
+class TestNormalizeToken:
+    """The vocab tables are the ground truth; this must agree with them."""
+
+    @pytest.mark.parametrize(
+        "token",
+        ["ポケモン", "データ", "ガラス", "ベース", "スリット"],
+    )
+    def test_japanese_voiced_marks_survive(self, token):
+        # `remove_diacritics=2` strips Latin diacritics only. Treating a
+        # dakuten as one turned ポケモン into ホケモン, which is in no
+        # vocab table, so every voiced katakana term reported DF 0 and
+        # passed any rarity check as if it were unique. Measured against
+        # the production index, ポケモン is stored verbatim with doc=7.
+        assert rarity_filter._normalize_token(token) == token
+
+    @pytest.mark.parametrize(
+        "token,expected",
+        [("Würfel", "wurfel"), ("Diagonal", "diagonal"), ("CAFÉ", "cafe")],
+    )
+    def test_latin_diacritics_are_still_removed(self, token, expected):
+        assert rarity_filter._normalize_token(token) == expected
+
+    def test_blank_is_unusable(self):
+        assert rarity_filter._normalize_token("   ") == ""
