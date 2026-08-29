@@ -142,6 +142,7 @@ def init_search_db() -> None:
     with _search_engine.begin() as conn:
         _migrate_indexed_files_thumbnail_columns(conn)
         _migrate_embeddings_page_column(conn)
+        _migrate_embeddings_chunk_index(conn)
     # Phase 4: rebrand legacy image clip embeddings as clip_thumbnail.
     # Spec 2026-05-02-thumbnail-clip-default-shallow-search.md.
     _migrate_image_clip_to_clip_thumbnail()
@@ -861,6 +862,72 @@ def _migrate_embeddings_page_column(conn: object) -> None:
                 "page": int(match.group(1)),
             },
         )
+
+
+def _migrate_embeddings_chunk_index(conn: object) -> None:
+    """Give a document embedding the key that finds its full text.
+
+    ``fts_text_content`` holds the whole chunk, keyed by
+    ``(file_id, chunk_index)``. The embedding row recorded its index
+    only inside its own id string (``txt_{file_id}_{idx}_{hex}``), which
+    is not a key to join on. Existing rows have no index to backfill
+    from, so ``text_content`` embeddings are purged with their vectors
+    and ``text_indexed`` is reset for the files that had them: the
+    indexer re-extracts and re-embeds those on the next reconciliation.
+
+    ``whisper`` rows are deliberately untouched. They already carry
+    ``timestamp_start`` / ``timestamp_end``, a natural key into
+    ``transcript_chunks``, and ``whisper_indexed`` drives
+    ``index_whisper`` — resetting it would re-run the transcription
+    provider over the whole library, not the embedding step.
+
+    Both FTS text tables are untouched as well, so keyword search keeps
+    working through the re-index window: ``upsert_fts_text_content``
+    replaces a file's rows as that file comes back around.
+
+    Idempotent. Atomicity comes from the caller's transaction, so keep
+    the call inside an ``engine.begin()`` block.
+
+    Spec ``2026-08-29-related-passages.md`` §5.2.
+    """
+    logger = logging.getLogger(__name__)
+
+    cols = {
+        row[1]
+        for row in conn.execute(text("PRAGMA table_info(embeddings)")).fetchall()
+    }
+    if "chunk_index" in cols:
+        return
+    conn.execute(text("ALTER TABLE embeddings ADD COLUMN chunk_index INTEGER"))
+
+    # The purge below assumes an indexer will rebuild what it removes.
+    # The eval harness points this same init at a frozen, checked-in
+    # snapshot and starts no indexer (``app/evals/__main__.py``:
+    # "we never copy or migrate"), so purging there would delete vectors
+    # nothing can restore and move the baseline every eval measures
+    # against. Add the column for schema parity; leave the rows alone.
+    if os.environ.get("INTELLIGENCE_SEARCH_DB_PATH", "").strip():
+        logger.info(
+            "Eval snapshot DB: added embeddings.chunk_index without "
+            "purging text_content rows (no indexer to rebuild them)."
+        )
+        return
+
+    # Runs first: the DELETE below is what tells these files apart from
+    # the ones that never had extractable text, and it is about to
+    # remove them.
+    conn.execute(text(
+        "UPDATE indexed_files SET text_indexed = 0 WHERE file_id IN ("
+        "SELECT DISTINCT file_id FROM embeddings "
+        "WHERE embedding_type = 'text_content')"
+    ))
+    conn.execute(text(
+        "DELETE FROM vec_text WHERE embedding_id IN ("
+        "SELECT id FROM embeddings WHERE embedding_type = 'text_content')"
+    ))
+    conn.execute(text(
+        "DELETE FROM embeddings WHERE embedding_type = 'text_content'"
+    ))
 
 
 def _migrate_tfidf_keywords_indexed(conn: object) -> None:

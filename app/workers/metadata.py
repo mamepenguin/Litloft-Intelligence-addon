@@ -145,6 +145,7 @@ def _store_embedding(
     timestamp_start: float | None = None,
     timestamp_end: float | None = None,
     page: int | None = None,
+    chunk_index: int | None = None,
 ) -> None:
     """Store an embedding record and its vector in the vec table.
 
@@ -159,6 +160,8 @@ def _store_embedding(
         timestamp_start: Optional start timestamp.
         timestamp_end: Optional end timestamp.
         page: Optional one-based document page.
+        chunk_index: Optional index of the chunk within the file, the
+            join key into ``fts_text_content``.
     """
     embedding_record = Embedding(
         id=embedding_id,
@@ -169,6 +172,7 @@ def _store_embedding(
         timestamp_start=timestamp_start,
         timestamp_end=timestamp_end,
         page=page,
+        chunk_index=chunk_index,
     )
     session.add(embedding_record)
     session.flush()
@@ -361,6 +365,7 @@ def index_text_content(file_id: str) -> bool:
                     vector=vector,
                     content_preview=chunk.text[:200],
                     page=chunk.page,
+                    chunk_index=idx,
                 )
             except Exception as e:
                 logger.error(
