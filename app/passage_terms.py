@@ -60,8 +60,8 @@ _TERM_RE = re.compile(
 #: non-empty at two characters.
 _MIN_TERM_LEN = 2
 
-#: Hiragana or katakana. See :func:`has_kana`.
-_KANA_RE = re.compile(r"[ぁ-ゖァ-ヴ]")
+#: Hiragana only. See :func:`has_kana`.
+_KANA_RE = re.compile(r"[ぁ-ゖ]")
 
 #: Terms in more documents than this are corpus-common, whatever else
 #: they are. Measured against the production library: the junk sits in
@@ -93,9 +93,19 @@ def has_kana(text: str) -> bool:
     and Russian yields a single preposition once inflection has removed
     every content word. A confident wrong chip is worse than none.
 
-    Katakana counts as well as hiragana. It cannot open the gate for any
-    of the scripts above, so admitting it only recovers Japanese
-    passages written without particles.
+    **Hiragana only.** Katakana was admitted at first on the reasoning
+    that it could not open the gate for any of the scripts above — which
+    is false. English prose quotes katakana freely, in names and
+    loanwords, so two unrelated English passages mentioning ``ポケモン``
+    and ``マリオ`` passed and were handed back
+    ``different · something · because · there``: the exact failure the
+    gate exists to prevent, through the gate. Hiragana is what carries
+    the grammar, so hiragana is the precondition, stated as itself.
+
+    A Japanese passage written without particles — a run of katakana
+    terms — is therefore refused. That is the conservative side: it
+    loses chips on a row that would have had good ones, rather than
+    inventing chips on a row that should have none.
     """
     return bool(_KANA_RE.search(text))
 

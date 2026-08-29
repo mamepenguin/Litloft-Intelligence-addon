@@ -60,6 +60,12 @@ class TestHasKana:
     def test_japanese_opens_the_gate(self):
         assert has_kana("対角線を軸として回転させると")
 
+    def test_katakana_alone_does_not_open_it(self):
+        # English prose quotes katakana freely. Admitting it let two
+        # unrelated English passages through the gate that exists to
+        # keep them out.
+        assert not has_kana("I played ポケモン and マリオ all weekend")
+
     @pytest.mark.parametrize(
         "text",
         [
@@ -181,6 +187,20 @@ class TestOverlapTerms:
         ],
     )
     def test_a_pair_the_tokeniser_cannot_read_yields_nothing(self, mine, theirs):
+        assert overlap_terms(mine, theirs, df=df_none) == []
+
+    def test_english_passages_that_mention_katakana_get_nothing(self):
+        mine = (
+            "the weather this morning was different from what they had "
+            "expected because there was something about ポケモン"
+        )
+        theirs = (
+            "there is something different about the way people talk about "
+            "this because it was never actually about マリオ"
+        )
+
+        # Four shared function words, and a confident chip row asserting
+        # a connection that is not there, is worse than no chips at all.
         assert overlap_terms(mine, theirs, df=df_none) == []
 
     def test_one_japanese_side_is_not_enough(self):
