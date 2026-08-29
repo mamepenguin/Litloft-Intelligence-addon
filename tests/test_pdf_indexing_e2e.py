@@ -476,3 +476,51 @@ def test_reindex_empty_extraction_clears_stale_pdf_markdown_row(
 
     # Stale row is gone; DB reflects current FS-derived state.
     assert _pdf_markdown_row(search_db, "pdf-empty") is None
+
+
+# ---------------------------------------------------------------------------
+# Every text embedding must be joinable to the full chunk text it was
+# built from — the display string and the matched string are one string.
+# Spec ``2026-08-29-related-passages.md`` §3.1 / §5.2.
+# ---------------------------------------------------------------------------
+
+
+def test_text_embeddings_record_the_fts_chunk_index_they_came_from(
+    search_db, fake_pdf, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_pymupdf4llm(
+        monkeypatch,
+        [
+            {"text": "Alpha body, the first chunk."},
+            {"text": "Beta body, the second chunk."},
+        ],
+    )
+    _stub_embed_passages(monkeypatch)
+    _seed_indexed_pdf(search_db, file_id="pdf-ci", file_path=fake_pdf)
+
+    metadata_worker.index_text_content("pdf-ci")
+
+    with search_db.connect() as conn:
+        embeddings = conn.execute(text(
+            "SELECT chunk_index, content_preview FROM embeddings "
+            "WHERE file_id = 'pdf-ci' AND embedding_type = 'text_content' "
+            "ORDER BY chunk_index"
+        )).fetchall()
+        # FTS5 stores every column as text, so the join casts.
+        joined = conn.execute(text(
+            "SELECT e.chunk_index, f.text FROM embeddings AS e "
+            "JOIN fts_text_content AS f ON f.file_id = e.file_id "
+            "  AND f.chunk_index = CAST(e.chunk_index AS TEXT) "
+            "WHERE e.file_id = 'pdf-ci' "
+            "  AND e.embedding_type = 'text_content' "
+            "ORDER BY e.chunk_index"
+        )).fetchall()
+
+    assert len(embeddings) == 2
+    assert [row[0] for row in embeddings] == [0, 1]
+
+    # Every embedding resolves to exactly one chunk, and that chunk is
+    # the one it was built from.
+    assert len(joined) == len(embeddings)
+    for (_, preview), (_, full_text) in zip(embeddings, joined):
+        assert full_text.startswith(preview)

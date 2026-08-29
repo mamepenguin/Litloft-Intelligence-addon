@@ -139,6 +139,11 @@ class Embedding(Base):
     timestamp_end: Mapped[float | None] = mapped_column(Float, nullable=True)
     page: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Which chunk of the file this covers, matching the chunk_index in
+    # fts_text_content. Populated for text_content; whisper rows are
+    # found by their timestamps instead.
+    chunk_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # Human-readable content snippet for search result display
     content_preview: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
