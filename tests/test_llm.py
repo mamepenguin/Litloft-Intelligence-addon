@@ -974,3 +974,139 @@ class TestCreateLLMClient:
         client = create_llm_client(config)
         assert isinstance(client, LLMClient)
         assert client.enabled is False
+
+
+# ---------------------------------------------------------------------------
+# llm.reasoning -> request body
+# ---------------------------------------------------------------------------
+
+
+def _reasoning_client(reasoning: str) -> LLMClient:
+    """An enabled client whose request kwargs can be inspected."""
+    client = LLMClient(
+        LLMConfig(
+            provider="openai_compatible",
+            base_url="http://localhost:11434/v1",
+            model="llama3",
+            vision_model="llava",
+            retry_attempts=0,
+            reasoning=reasoning,
+        )
+    )
+    client._client = MagicMock()
+    client._client.chat.completions.create = AsyncMock(
+        return_value=_make_response_obj("{}")
+    )
+    return client
+
+
+def _make_tool_response_obj() -> MagicMock:
+    """A tool-free assistant turn, enough for chat_with_tools to parse."""
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = "done"
+    response.choices[0].message.tool_calls = []
+    response.choices[0].finish_reason = "stop"
+    return response
+
+
+def _sent_kwargs(client: LLMClient) -> dict:
+    return client._client.chat.completions.create.await_args.kwargs
+
+
+_REASONING_OFF = {"reasoning": {"enabled": False}}
+
+
+class TestReasoningSuppression:
+    """`reasoning: "disabled"` reaches every OpenAI-compatible call."""
+
+    @pytest.mark.asyncio
+    async def test_generate_sends_extension_when_disabled(self):
+        client = _reasoning_client("disabled")
+
+        await client.generate("system", "user")
+
+        assert _sent_kwargs(client)["extra_body"] == _REASONING_OFF
+
+    @pytest.mark.asyncio
+    async def test_generate_omits_extension_under_auto(self):
+        client = _reasoning_client("auto")
+
+        await client.generate("system", "user")
+
+        assert "extra_body" not in _sent_kwargs(client)
+
+    @pytest.mark.asyncio
+    async def test_generate_json_sends_extension_when_disabled(self):
+        client = _reasoning_client("disabled")
+
+        await client.generate_json("system", "user")
+
+        assert _sent_kwargs(client)["extra_body"] == _REASONING_OFF
+
+    @pytest.mark.asyncio
+    async def test_chat_with_tools_sends_extension_when_disabled(self):
+        client = _reasoning_client("disabled")
+        client._client.chat.completions.create = AsyncMock(
+            return_value=_make_tool_response_obj()
+        )
+
+        await client.chat_with_tools([{"role": "user", "content": "hi"}])
+
+        assert _sent_kwargs(client)["extra_body"] == _REASONING_OFF
+
+    @pytest.mark.asyncio
+    async def test_stream_sends_extension_when_disabled(self):
+        client = _reasoning_client("disabled")
+        client._client.chat.completions.create = AsyncMock(
+            return_value=_async_iter([])
+        )
+
+        async for _ in client.generate_stream("system", "user"):
+            pass
+
+        assert _sent_kwargs(client)["extra_body"] == _REASONING_OFF
+
+    @pytest.mark.asyncio
+    async def test_stream_omits_extension_under_auto(self):
+        client = _reasoning_client("auto")
+        client._client.chat.completions.create = AsyncMock(
+            return_value=_async_iter([])
+        )
+
+        async for _ in client.generate_stream("system", "user"):
+            pass
+
+        assert "extra_body" not in _sent_kwargs(client)
+
+    @pytest.mark.asyncio
+    async def test_vision_sends_extension_when_disabled(self):
+        client = _reasoning_client("disabled")
+
+        await client.generate_vision(b"\x89PNG", "image/png", "system", "user")
+
+        assert _sent_kwargs(client)["extra_body"] == _REASONING_OFF
+
+    def test_ollama_body_is_unchanged_by_the_knob(self):
+        """Ollama always sends think: false; the extension is OpenAI-only."""
+        client = create_llm_client(
+            LLMConfig(
+                provider="ollama",
+                base_url="http://localhost:11434",
+                model="llama3",
+                reasoning="disabled",
+            )
+        )
+
+        body = client._build_body(
+            "sys",
+            "usr",
+            stream=False,
+            temperature=0.1,
+            max_tokens=128,
+            response_format=None,
+        )
+
+        assert body["think"] is False
+        assert "reasoning" not in body
+        assert "extra_body" not in body

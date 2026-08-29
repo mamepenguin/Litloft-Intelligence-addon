@@ -211,6 +211,19 @@ class LLMClient:
         self._rate_lock = asyncio.Lock()
         self._last_request_time: float | None = None
 
+    def _provider_extras(self) -> dict:
+        """Provider-specific body fields, empty unless opted into.
+
+        ``reasoning`` is an OpenRouter extension. OpenAI answers 400 to
+        an unrecognised body field, so an operator who has not asked for
+        suppression must see a request that looks exactly as it did
+        before. Callers merge the result into their request kwargs; an
+        empty dict adds nothing.
+        """
+        if self._config.reasoning != "disabled":
+            return {}
+        return {"extra_body": {"reasoning": {"enabled": False}}}
+
     @property
     def enabled(self) -> bool:
         """True if LLM is properly configured and not disabled."""
@@ -280,7 +293,7 @@ class LLMClient:
         # Only include response_format in the kwargs when specified, so
         # providers that 400 on unknown keys are not broken for non-JSON
         # callers like RAG streaming.
-        extra_kwargs: dict = {}
+        extra_kwargs: dict = self._provider_extras()
         if response_format is not None:
             extra_kwargs["response_format"] = response_format
 
@@ -402,6 +415,7 @@ class LLMClient:
             ],
             "temperature": effective_temperature,
             "stream": True,
+            **self._provider_extras(),
         }
         if _uses_max_completion_tokens(self._config.model):
             stream_kwargs["max_completion_tokens"] = effective_max_tokens
@@ -501,7 +515,7 @@ class LLMClient:
             },
         ]
 
-        extra_kwargs: dict = {}
+        extra_kwargs: dict = self._provider_extras()
         if _uses_max_completion_tokens(self._config.vision_model):
             extra_kwargs["max_completion_tokens"] = self._config.vision_max_tokens
         else:
@@ -751,7 +765,7 @@ class LLMClient:
             else self._config.temperature
         )
 
-        extra_kwargs: dict = {}
+        extra_kwargs: dict = self._provider_extras()
         if _uses_max_completion_tokens(self._config.model):
             extra_kwargs["max_completion_tokens"] = effective_max_tokens
         else:
