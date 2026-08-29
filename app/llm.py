@@ -135,6 +135,70 @@ def _parse_json_response(raw: str) -> list | dict | None:
     return None
 
 
+# Why a generation produced nothing usable. The distinction matters
+# because the remedies differ: a budget spent on chain-of-thought is
+# fixed by ``llm.reasoning`` or a larger ``max_tokens``, while malformed
+# output is a prompt or model-capability problem.
+FAILURE_TOKEN_BUDGET = "token_budget"
+FAILURE_MALFORMED = "malformed"
+FAILURE_EMPTY = "empty"
+FAILURE_REQUEST_FAILED = "request_failed"
+
+
+@dataclass(frozen=True)
+class TextGeneration:
+    """A completion plus why it is unusable, if it is.
+
+    ``text`` is whatever came back, truncation included — classification
+    observes the response, it never withholds it from callers who can
+    still make use of a partial answer.
+    """
+
+    text: str | None
+    failure: str | None
+
+
+@dataclass(frozen=True)
+class JsonGeneration:
+    """A parsed JSON payload plus why it is missing, if it is."""
+
+    value: list | dict | None
+    failure: str | None
+
+
+def _usage_reasoning_tokens(response: object) -> int | None:
+    """Reasoning-token count, or None when the provider omits it.
+
+    Every field here is optional in practice: OpenAI-compatible backends
+    differ on whether they report usage at all, and the SDK models leave
+    absent fields as None.
+    """
+    usage = getattr(response, "usage", None)
+    details = getattr(usage, "completion_tokens_details", None)
+    tokens = getattr(details, "reasoning_tokens", None)
+    return tokens if isinstance(tokens, int) else None
+
+
+def _classify_completion(
+    content: str | None,
+    finish_reason: object,
+    reasoning_tokens: int | None,
+) -> str | None:
+    """Name the reason a completion is unusable, or None if it is fine.
+
+    A response truncated by the token ceiling is reported as a budget
+    failure even when some content arrived, because the JSON it carries
+    is cut mid-structure and the fix is a budget change rather than a
+    prompt change.
+    """
+    truncated = finish_reason == "length"
+    if content is not None and content.strip():
+        return FAILURE_TOKEN_BUDGET if truncated else None
+    if truncated or (reasoning_tokens or 0) > 0:
+        return FAILURE_TOKEN_BUDGET
+    return FAILURE_EMPTY
+
+
 # Sentinel return value from ``generate_vision`` when the upstream model
 # signals it cannot handle image content (HTTP 400 / 404 after a vision
 # payload, "images not supported" errors). Callers use it to persist
@@ -243,7 +307,7 @@ class LLMClient:
                     await asyncio.sleep(wait)
             self._last_request_time = time.monotonic()
 
-    async def generate(
+    async def _generate_result(
         self,
         system_prompt: str,
         user_prompt: str,
@@ -251,8 +315,8 @@ class LLMClient:
         max_tokens_override: int | None = None,
         response_format: dict | None = None,
         temperature: float | None = None,
-    ) -> str | None:
-        """Generate a text completion with retry on transient failures.
+    ) -> TextGeneration:
+        """Generate a completion and say why it is unusable, if it is.
 
         Retries on timeouts, rate limits (429), and server errors
         (500-504) using exponential backoff. Permanent errors
@@ -273,10 +337,12 @@ class LLMClient:
                 that do will refuse to return malformed JSON.
 
         Returns:
-            Completion text, or None if disabled or on final failure.
+            The completion text (truncation included) paired with a
+            failure reason, or ``None`` text when the request itself
+            never produced a response.
         """
         if not self._enabled:
-            return None
+            return TextGeneration(None, FAILURE_REQUEST_FAILED)
 
         max_attempts = max(1, self._config.retry_attempts + 1)
         effective_max_tokens = (
@@ -320,14 +386,26 @@ class LLMClient:
                     temperature=effective_temperature,
                     **extra_kwargs,
                 )
-                return response.choices[0].message.content
+                choice = response.choices[0]
+                content = choice.message.content
+                finish_reason = getattr(choice, "finish_reason", None)
+                reasoning_tokens = _usage_reasoning_tokens(response)
+                failure = _classify_completion(
+                    content, finish_reason, reasoning_tokens
+                )
+                if failure is not None:
+                    self._log_unusable_completion(
+                        failure, content, finish_reason,
+                        response, reasoning_tokens,
+                    )
+                return TextGeneration(content, failure)
             except _RETRY_EXCEPTIONS as e:
                 if attempt + 1 >= max_attempts:
                     logger.error(
                         "LLM generation failed after %d attempts: %s",
                         max_attempts, e,
                     )
-                    return None
+                    return TextGeneration(None, FAILURE_REQUEST_FAILED)
                 delay = self._backoff_delay(attempt)
                 logger.warning(
                     "LLM generation attempt %d/%d failed (%s), "
@@ -341,13 +419,13 @@ class LLMClient:
                         "LLM generation failed with permanent error %d: %s",
                         e.status_code, e,
                     )
-                    return None
+                    return TextGeneration(None, FAILURE_REQUEST_FAILED)
                 if attempt + 1 >= max_attempts:
                     logger.error(
                         "LLM generation failed after %d attempts (status %d): %s",
                         max_attempts, e.status_code, e,
                     )
-                    return None
+                    return TextGeneration(None, FAILURE_REQUEST_FAILED)
                 delay = self._backoff_delay(attempt)
                 logger.warning(
                     "LLM generation attempt %d/%d failed with status %d, "
@@ -357,9 +435,58 @@ class LLMClient:
                 await asyncio.sleep(delay)
             except Exception as e:
                 logger.warning("LLM generation failed: %s", e)
-                return None
+                return TextGeneration(None, FAILURE_REQUEST_FAILED)
 
-        return None
+        return TextGeneration(None, FAILURE_REQUEST_FAILED)
+
+    async def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens_override: int | None = None,
+        response_format: dict | None = None,
+        temperature: float | None = None,
+    ) -> str | None:
+        """Generate a text completion; see ``_generate_result``.
+
+        Returns the text alone, so a caller that has no use for the
+        failure reason is unaffected by the classification.
+        """
+        result = await self._generate_result(
+            system_prompt,
+            user_prompt,
+            max_tokens_override=max_tokens_override,
+            response_format=response_format,
+            temperature=temperature,
+        )
+        return result.text
+
+    def _log_unusable_completion(
+        self,
+        failure: str,
+        content: str | None,
+        finish_reason: object,
+        response: object,
+        reasoning_tokens: int | None,
+    ) -> None:
+        """Say what came back, so the cause is not left to guesswork.
+
+        Without this the whole class of provider-side failures reaches
+        the caller as a bare ``None`` and leaves no trace in the log.
+        """
+        usage = getattr(response, "usage", None)
+        logger.warning(
+            "LLM produced no usable output (%s): finish_reason=%s, "
+            "completion_tokens=%s, reasoning_tokens=%s, content_len=%d, "
+            "model=%s",
+            failure,
+            finish_reason,
+            getattr(usage, "completion_tokens", None),
+            reasoning_tokens,
+            len(content or ""),
+            self._config.model,
+        )
 
     async def generate_stream(
         self,
@@ -697,15 +824,41 @@ class LLMClient:
         # ollama, vLLM, LM Studio) refuse to emit non-JSON output.
         # Providers that don't support the field typically ignore it,
         # so we still rely on the regex fallback below as a safety net.
-        raw = await self.generate(
+        return (
+            await self.generate_json_result(
+                system_prompt,
+                user_prompt,
+                max_tokens_override=max_tokens_override,
+                temperature=temperature,
+            )
+        ).value
+
+    async def generate_json_result(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens_override: int | None = None,
+        temperature: float | None = None,
+    ) -> JsonGeneration:
+        """Generate JSON and say why it is missing, if it is.
+
+        Callers that can act on the distinction — offering the operator
+        a budget remedy rather than a generic retry — use this; the rest
+        stay on ``generate_json``.
+        """
+        result = await self._generate_result(
             system_prompt,
             user_prompt,
             max_tokens_override=max_tokens_override,
             response_format={"type": "json_object"},
             temperature=temperature,
         )
+        raw = result.text
         if raw is None:
-            return None
+            return JsonGeneration(
+                None, result.failure or FAILURE_REQUEST_FAILED
+            )
 
         # Some OpenAI-compatible backends (certain ollama versions in
         # particular) accept response_format={"type": "json_object"} but
@@ -718,16 +871,25 @@ class LLMClient:
                 "LLM returned empty body with json_object mode; "
                 "retrying without response_format"
             )
-            raw = await self.generate(
+            result = await self._generate_result(
                 system_prompt,
                 user_prompt,
                 max_tokens_override=max_tokens_override,
                 temperature=temperature,
             )
+            raw = result.text
             if raw is None:
-                return None
+                return JsonGeneration(
+                    None, result.failure or FAILURE_REQUEST_FAILED
+                )
 
-        return _parse_json_response(raw)
+        parsed = _parse_json_response(raw)
+        if parsed is None:
+            # A body cut off by the token ceiling is unparseable for a
+            # reason the caller can act on, so the upstream cause wins
+            # over the parse symptom.
+            return JsonGeneration(None, result.failure or FAILURE_MALFORMED)
+        return JsonGeneration(parsed, None)
 
     async def chat_with_tools(
         self,
@@ -1305,6 +1467,29 @@ class OllamaLLMClient:
         temperature: float | None = None,
     ) -> list | dict | None:
         """Generate a completion and parse the result as JSON."""
+        return (
+            await self.generate_json_result(
+                system_prompt,
+                user_prompt,
+                max_tokens_override=max_tokens_override,
+                temperature=temperature,
+            )
+        ).value
+
+    async def generate_json_result(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens_override: int | None = None,
+        temperature: float | None = None,
+    ) -> JsonGeneration:
+        """Generate JSON and say why it is missing, if it is.
+
+        The native body always carries ``think: false``, so a budget
+        spent on chain-of-thought is not a failure mode here and this
+        client reports only what a bare completion reveals.
+        """
         raw = await self.generate(
             system_prompt,
             user_prompt,
@@ -1313,7 +1498,7 @@ class OllamaLLMClient:
             temperature=temperature,
         )
         if raw is None:
-            return None
+            return JsonGeneration(None, FAILURE_REQUEST_FAILED)
 
         if not raw.strip():
             logger.info(
@@ -1327,9 +1512,14 @@ class OllamaLLMClient:
                 temperature=temperature,
             )
             if raw is None:
-                return None
+                return JsonGeneration(None, FAILURE_REQUEST_FAILED)
+            if not raw.strip():
+                return JsonGeneration(None, FAILURE_EMPTY)
 
-        return _parse_json_response(raw)
+        parsed = _parse_json_response(raw)
+        if parsed is None:
+            return JsonGeneration(None, FAILURE_MALFORMED)
+        return JsonGeneration(parsed, None)
 
 
 # ---------------------------------------------------------------------------

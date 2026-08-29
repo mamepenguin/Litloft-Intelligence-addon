@@ -5,6 +5,7 @@ text generation with mocked AsyncOpenAI, JSON parsing with
 regex fallback, retry with exponential backoff, and rate limiting.
 """
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -72,6 +73,17 @@ def _make_internal_server_error() -> InternalServerError:
         response=response,
         body=None,
     )
+
+
+def _mock_completion(client: LLMClient, content: str | None) -> None:
+    """Answer at the transport seam, where a real request would go."""
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = content
+    response.choices[0].finish_reason = "stop"
+    response.usage = None
+    client._client = MagicMock()
+    client._client.chat.completions.create = AsyncMock(return_value=response)
 
 
 def _make_client(
@@ -229,7 +241,7 @@ class TestLLMClientGenerateJson:
             model="llama3",
         )
         client = LLMClient(config)
-        client.generate = AsyncMock(return_value='["tag1", "tag2", "tag3"]')
+        _mock_completion(client, '["tag1", "tag2", "tag3"]')
 
         result = await client.generate_json("system", "user")
 
@@ -243,7 +255,7 @@ class TestLLMClientGenerateJson:
             model="llama3",
         )
         client = LLMClient(config)
-        client.generate = AsyncMock(return_value='{"key": "value"}')
+        _mock_completion(client, '{"key": "value"}')
 
         result = await client.generate_json("system", "user")
 
@@ -258,8 +270,8 @@ class TestLLMClientGenerateJson:
         )
         client = LLMClient(config)
         # LLM returns array with surrounding text
-        client.generate = AsyncMock(
-            return_value='Here are some tags: ["tag1", "tag2"] hope that helps!'
+        _mock_completion(
+            client, 'Here are some tags: ["tag1", "tag2"] hope that helps!'
         )
 
         result = await client.generate_json("system", "user")
@@ -274,7 +286,7 @@ class TestLLMClientGenerateJson:
             model="llama3",
         )
         client = LLMClient(config)
-        client.generate = AsyncMock(return_value="This is not JSON at all")
+        _mock_completion(client, "This is not JSON at all")
 
         result = await client.generate_json("system", "user")
 
@@ -288,7 +300,7 @@ class TestLLMClientGenerateJson:
             model="llama3",
         )
         client = LLMClient(config)
-        client.generate = AsyncMock(return_value=None)
+        _mock_completion(client, None)
 
         result = await client.generate_json("system", "user")
 
@@ -302,9 +314,7 @@ class TestLLMClientGenerateJson:
             model="llama3",
         )
         client = LLMClient(config)
-        client.generate = AsyncMock(
-            return_value='Sure!\n[\n  "tag1",\n  "tag2"\n]\nDone.'
-        )
+        _mock_completion(client, 'Sure!\n[\n  "tag1",\n  "tag2"\n]\nDone.')
 
         result = await client.generate_json("system", "user")
 
@@ -1110,3 +1120,200 @@ class TestReasoningSuppression:
         assert body["think"] is False
         assert "reasoning" not in body
         assert "extra_body" not in body
+
+
+# ---------------------------------------------------------------------------
+# Failure classification
+# ---------------------------------------------------------------------------
+
+
+def _make_classified_response(
+    content: str | None,
+    *,
+    finish_reason: str = "stop",
+    completion_tokens: int = 10,
+    reasoning_tokens: int = 0,
+) -> MagicMock:
+    """A response carrying the fields the classifier reads."""
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = content
+    response.choices[0].finish_reason = finish_reason
+    response.usage.completion_tokens = completion_tokens
+    response.usage.completion_tokens_details.reasoning_tokens = reasoning_tokens
+    return response
+
+
+def _classifying_client(response: MagicMock) -> LLMClient:
+    client = _reasoning_client("auto")
+    client._client.chat.completions.create = AsyncMock(return_value=response)
+    return client
+
+
+class TestJsonFailureClassification:
+    """A silent None is the bug; every failure has to name itself."""
+
+    @pytest.mark.asyncio
+    async def test_budget_spent_on_reasoning_is_named(self, caplog):
+        client = _classifying_client(
+            _make_classified_response(
+                None,
+                finish_reason="length",
+                completion_tokens=2048,
+                reasoning_tokens=2250,
+            )
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = await client.generate_json_result("system", "user")
+
+        assert result.value is None
+        assert result.failure == "token_budget"
+        assert "length" in caplog.text
+        assert "2250" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_empty_content_without_length_is_empty(self):
+        client = _classifying_client(
+            _make_classified_response(None, finish_reason="stop")
+        )
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.failure == "empty"
+
+    @pytest.mark.asyncio
+    async def test_unparseable_content_is_malformed(self):
+        client = _classifying_client(
+            _make_classified_response("not json at all")
+        )
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value is None
+        assert result.failure == "malformed"
+
+    @pytest.mark.asyncio
+    async def test_truncated_json_reports_the_budget_not_the_syntax(self):
+        """The remedy is a budget change, so the cause outranks the symptom."""
+        client = _classifying_client(
+            _make_classified_response(
+                '{"chapters": [{"start_time": 0.24, "end_',
+                finish_reason="length",
+                completion_tokens=2048,
+                reasoning_tokens=1900,
+            )
+        )
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value is None
+        assert result.failure == "token_budget"
+
+    @pytest.mark.asyncio
+    async def test_good_response_carries_no_failure(self):
+        client = _classifying_client(
+            _make_classified_response('{"chapters": []}')
+        )
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value == {"chapters": []}
+        assert result.failure is None
+
+    @pytest.mark.asyncio
+    async def test_request_failure_is_named(self):
+        client = _reasoning_client("auto")
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=_make_status_error(401)
+        )
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value is None
+        assert result.failure == "request_failed"
+
+    @pytest.mark.asyncio
+    async def test_missing_usage_fields_do_not_crash_the_classifier(self):
+        """Providers omit usage details; absence must not raise."""
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = None
+        response.choices[0].finish_reason = "length"
+        response.usage = None
+        client = _classifying_client(response)
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.failure == "token_budget"
+
+
+class TestGenerateJsonDelegation:
+    """The existing entry points keep their shape."""
+
+    @pytest.mark.asyncio
+    async def test_generate_json_returns_the_value_only(self):
+        client = _classifying_client(
+            _make_classified_response('{"ok": true}')
+        )
+
+        assert await client.generate_json("system", "user") == {"ok": True}
+
+    @pytest.mark.asyncio
+    async def test_generate_json_returns_none_on_failure(self):
+        client = _classifying_client(
+            _make_classified_response(None, finish_reason="length")
+        )
+
+        assert await client.generate_json("system", "user") is None
+
+    @pytest.mark.asyncio
+    async def test_generate_still_returns_truncated_text(self):
+        """Classification observes; it does not withhold what came back."""
+        client = _classifying_client(
+            _make_classified_response("half an ans", finish_reason="length")
+        )
+
+        assert await client.generate("system", "user") == "half an ans"
+
+
+class TestOllamaJsonFailureClassification:
+    """The ollama client exposes the same result shape."""
+
+    def _client(self) -> OllamaLLMClient:
+        return create_llm_client(
+            LLMConfig(
+                provider="ollama",
+                base_url="http://localhost:11434",
+                model="llama3",
+                retry_attempts=0,
+            )
+        )
+
+    @pytest.mark.asyncio
+    async def test_unparseable_content_is_malformed(self):
+        client = self._client()
+        client.generate = AsyncMock(return_value="not json")
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.failure == "malformed"
+
+    @pytest.mark.asyncio
+    async def test_request_failure_is_named(self):
+        client = self._client()
+        client.generate = AsyncMock(return_value=None)
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.failure == "request_failed"
+
+    @pytest.mark.asyncio
+    async def test_good_response_carries_no_failure(self):
+        client = self._client()
+        client.generate = AsyncMock(return_value='{"ok": true}')
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value == {"ok": True}
+        assert result.failure is None
