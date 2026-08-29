@@ -73,9 +73,23 @@ def _normalize_token(token: str) -> str:
     ``テータ``, neither of which is in the vocab, so every voiced
     katakana term reported a document frequency of 0 and read as
     maximally rare. SQLite keeps those marks; so do we.
+
+    Text that reaches the index *already* decomposed is a different
+    matter and not one normalisation can repair: ``unicode61`` treats a
+    standalone U+309A as a separator, so the vocab ends up holding
+    ``ホ`` and ``ケモン`` as two terms and no spelling of the query
+    matches. That lookup returns 0 and the caller fails open, which is
+    this module's stance throughout.
     """
     if not token:
         return ""
+
+    # Compose first. A caller's term may arrive decomposed — macOS
+    # filenames are NFD — and the vocab holds the composed spelling, so
+    # ``ホ`` + U+309A has to become ``ポ`` before anything else looks at
+    # it. Stripping the mark instead yields ``ホケモン``, which is in no
+    # vocab table either.
+    token = unicodedata.normalize("NFC", token)
 
     out: list[str] = []
     for ch in token:

@@ -14,6 +14,7 @@ that we read the right columns from it.
 from __future__ import annotations
 
 import sys
+import unicodedata
 from contextlib import contextmanager
 from unittest.mock import MagicMock
 
@@ -385,6 +386,16 @@ class TestNormalizeToken:
     )
     def test_latin_diacritics_are_still_removed(self, token, expected):
         assert rarity_filter._normalize_token(token) == expected
+
+    @pytest.mark.parametrize("token", ["ポケモン", "データ", "ベース"])
+    def test_a_decomposed_term_is_composed_before_lookup(self, token):
+        # macOS filenames are NFD, so a term can reach here decomposed
+        # while the vocab holds the composed spelling. Verified against
+        # SQLite: stripping the mark instead would produce ホケモン,
+        # which no vocab table contains either.
+        assert rarity_filter._normalize_token(
+            unicodedata.normalize("NFD", token)
+        ) == token
 
     def test_blank_is_unusable(self):
         assert rarity_filter._normalize_token("   ") == ""
