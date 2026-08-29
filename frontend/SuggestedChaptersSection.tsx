@@ -99,11 +99,23 @@ export default function SuggestedChaptersSection({
 
   useEffect(() => {
     if (!failedEvent || operation !== "generate") return;
-    if ((failedEvent.data as { file_id?: string }).file_id !== fileId) return;
+    const failure = failedEvent.data as { file_id?: string; reason?: string };
+    if (failure.file_id !== fileId) return;
     setOperation(null);
-    setError(t("chapterCandidatesGenerationFailed", {
-      defaultMessage: "Chapter generation failed. Try creating them again.",
-    }));
+    // Retrying is the right advice only when a retry could work. A model
+    // that spent its output budget thinking will do it again.
+    setError(
+      failure.reason === "model_token_budget"
+        ? t("chapterCandidatesTokenBudget", {
+            defaultMessage:
+              "The model used its whole output budget on thinking, so no "
+              + "chapters came back. Set llm.reasoning to disabled, or "
+              + "choose a model that does not think.",
+          })
+        : t("chapterCandidatesGenerationFailed", {
+            defaultMessage: "Chapter generation failed. Try creating them again.",
+          }),
+    );
   }, [failedEvent, fileId, operation, t]);
 
   const handleGenerate = useCallback(async () => {
