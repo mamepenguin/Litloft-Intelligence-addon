@@ -65,6 +65,11 @@
         "priority": 30
       },
       {
+        "id": "related-passages",
+        "label": "Related Passages",
+        "priority": 35
+      },
+      {
         "id": "similar-files",
         "label": "Similar Files",
         "priority": 40

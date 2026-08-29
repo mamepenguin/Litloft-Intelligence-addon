@@ -136,6 +136,32 @@ export interface SimilarFilesResponse {
   source_keywords: KeywordScore[];
 }
 
+/** One passage, reproduced verbatim, and where to find it. */
+export interface PassageRef {
+  text: string;
+  page: number | null;
+  timestamp: number | null;
+}
+
+/**
+ * A passage of the file being read, beside the one it echoes.
+ *
+ * ``file_id`` / ``drive`` / ``filename`` describe the *other* file — the
+ * one being pointed at.
+ */
+export interface RelatedPassageItem {
+  source: PassageRef;
+  match: PassageRef;
+  file_id: string;
+  drive: string;
+  filename: string;
+  score: number;
+}
+
+export interface RelatedPassagesResponse {
+  results: RelatedPassageItem[];
+}
+
 export interface SearchSourceCounts {
   text_vector: number;
   clip_vector: number;
@@ -267,6 +293,26 @@ export async function getSimilarFiles(
     results: response.results ?? [],
     source_keywords: response.source_keywords ?? [],
   };
+}
+
+/**
+ * Fetch passage-level links between this file and verified files.
+ *
+ * An empty ``results`` is an ordinary answer — the file may not be
+ * indexed yet, or nothing vouched for may resemble it. Transport
+ * failures throw so the caller can tell that apart from "nothing
+ * matched".
+ */
+export async function getRelatedPassages(
+  fileId: string,
+  drive: string,
+  limit: number = 5
+): Promise<RelatedPassagesResponse> {
+  const response = await fetchJSON<RelatedPassagesResponse>(
+    `${API_BASE}/addons/intelligence/files/${fileId}/related-passages?limit=${limit}`,
+    { headers: driveHeaders(drive) },
+  );
+  return { results: response.results ?? [] };
 }
 
 // Queue control. The queue is a process-global resource owned by the

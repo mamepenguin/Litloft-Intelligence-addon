@@ -15,7 +15,6 @@
     "unverifiedSource": {
       "title": "Do you trust this source?",
       "explanation": "This file is findable in search, but it is not yet used as evidence in answers. Once you have read it and decided it holds up, it can be cited.",
-      "relatedHeading": "Related files",
       "trust": "Trust as a source",
       "dismiss": "Not for now",
       "distilHint": "To keep just one passage, select it in the document and add it to the quotation basket."
@@ -216,6 +215,11 @@
     "similarFilesEmpty": "No similar files found",
     "similarFilesUnavailable": "Similar file detection unavailable",
     "similarFilesRetry": "Search again",
+    "relatedPassages": "Related passages",
+    "relatedPassagesFind": "Find connections",
+    "relatedPassagesSearching": "Searching...",
+    "relatedPassagesEmpty": "No connections to your trusted sources",
+    "relatedPassagesUnavailable": "Passage matching unavailable",
     "suggestedTags": "AI tag candidates",
     "acceptTag": "Add tag {tag}",
     "acceptAllTags": "Add all",
