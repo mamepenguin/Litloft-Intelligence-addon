@@ -165,13 +165,13 @@ export default function UnverifiedSourceSection({
                   reaches Knowledge's quotation basket. */}
               <blockquote
                 data-testid="source-excerpt"
-                className="border-l-2 border-bg-border pl-3 text-text-primary"
+                className="border-l-2 border-bg-border pl-3 text-text-primary break-words"
               >
                 {pointer.excerpt}
               </blockquote>
               <Link
                 href={`/files/${pointer.noteFileId}`}
-                className="mt-1 inline-block text-text-muted underline-offset-2 hover:underline"
+                className="mt-1 inline-block break-all text-text-muted underline-offset-2 hover:underline"
               >
                 {pointer.noteFilename}
               </Link>
