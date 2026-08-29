@@ -22,6 +22,7 @@ from app.routers import (
     admin,
     chapter_suggestions,
     files,
+    passages,
     pickup,
     queue,
     rag,
@@ -422,6 +423,7 @@ app.include_router(search.router)
 app.include_router(webhooks.router)
 app.include_router(queue.router)
 app.include_router(similar.router)
+app.include_router(passages.router)
 app.include_router(files.router)
 app.include_router(pickup.router)
 app.include_router(summaries.router)
