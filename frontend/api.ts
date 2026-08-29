@@ -156,6 +156,13 @@ export interface RelatedPassageItem {
   drive: string;
   filename: string;
   score: number;
+  /**
+   * Words appearing verbatim in both passages, longest first. Empty
+   * whenever the pair shares nothing a reader could act on — the normal
+   * case outside Japanese text, where the tokeniser cannot tell content
+   * words from grammar. Optional so an older addon build still parses.
+   */
+  overlap?: string[];
 }
 
 export interface RelatedPassagesResponse {
@@ -214,7 +221,7 @@ export interface ClipTimestampsResponse {
 export async function semanticSearch(
   query: string,
   drive: string,
-  params?: { limit?: number; type?: FileType }
+  params?: { limit?: number; type?: FileType },
 ): Promise<SemanticSearchResponse> {
   const searchParams = new URLSearchParams({ q: query });
   if (params?.limit) searchParams.set("limit", String(params.limit));
@@ -232,7 +239,7 @@ export async function semanticSearch(
 export async function searchCompare(
   query: string,
   drive: string,
-  params?: { limit?: number; type?: FileType }
+  params?: { limit?: number; type?: FileType },
 ): Promise<SearchCompareResponse> {
   const searchParams = new URLSearchParams({ q: query });
   if (params?.limit) searchParams.set("limit", String(params.limit));
@@ -249,7 +256,12 @@ export async function searchCompare(
       cosine: { available: false, results: [], total: 0 },
       rrf_no_cutoff: { available: false, results: [], total: 0 },
       cosine_no_cutoff: { available: false, results: [], total: 0 },
-      source_counts: { text_vector: 0, clip_vector: 0, keyword: 0, transcript_keyword: 0 },
+      source_counts: {
+        text_vector: 0,
+        clip_vector: 0,
+        keyword: 0,
+        transcript_keyword: 0,
+      },
     };
   }
 }
@@ -282,7 +294,7 @@ export async function getSearchStatus(
 export async function getSimilarFiles(
   fileId: string,
   drive: string,
-  limit: number = 6
+  limit: number = 6,
 ): Promise<SimilarFilesResponse> {
   const response = await fetchJSON<Omit<SimilarFilesResponse, "available">>(
     `${API_BASE}/addons/intelligence/similar/${fileId}?limit=${limit}`,
@@ -306,7 +318,7 @@ export async function getSimilarFiles(
 export async function getRelatedPassages(
   fileId: string,
   drive: string,
-  limit: number = 5
+  limit: number = 5,
 ): Promise<RelatedPassagesResponse> {
   const response = await fetchJSON<RelatedPassagesResponse>(
     `${API_BASE}/addons/intelligence/files/${fileId}/related-passages?limit=${limit}`,
@@ -339,7 +351,9 @@ export async function searchQueuePrioritize(
   fileId: string,
   drive?: string,
 ): Promise<void> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
   if (drive) Object.assign(headers, driveHeaders(drive));
   await fetchJSON(`${API_BASE}/addons/intelligence/queue/prioritize`, {
     method: "POST",
@@ -482,7 +496,7 @@ export async function batchSuggestedTags(
       method: "POST",
       headers: { "Content-Type": "application/json", ...driveHeaders(drive) },
       body: JSON.stringify({ file_ids: fileIds }),
-    }
+    },
   );
 }
 
@@ -636,17 +650,14 @@ export async function batchSummaries(
       method: "POST",
       headers: { "Content-Type": "application/json", ...driveHeaders(drive) },
       body: JSON.stringify({ file_ids: fileIds }),
-    }
+    },
   );
 }
 
 // --- Detailed (long-form Markdown) summary ---
 
 export type DetailedSummaryStatus =
-  | "generating"
-  | "generated"
-  | "failed"
-  | string;
+  "generating" | "generated" | "failed" | string;
 
 export interface DetailedSummaryResponse {
   available: boolean;
@@ -923,9 +934,9 @@ export async function downloadDetailedSummary(
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = extractFilenameFromDisposition(
-    res.headers.get("content-disposition"),
-  ) ?? `${fileId}_summary.md`;
+  a.download =
+    extractFilenameFromDisposition(res.headers.get("content-disposition")) ??
+    `${fileId}_summary.md`;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -965,11 +976,7 @@ function extractFilenameFromDisposition(
 // --- Vision description (image LLM description) ---
 
 export type VisualDescriptionStatus =
-  | "pending"
-  | "success"
-  | "failed"
-  | "unsupported"
-  | null;
+  "pending" | "success" | "failed" | "unsupported" | null;
 
 export interface VisualDescriptionResponse {
   file_id: string;
@@ -1384,7 +1391,9 @@ export function parseSseFrame(frame: string): AskStreamEvent | null {
       // Spec allows multi-line data; concatenate subsequent data lines
       // with newlines. In practice the backend only emits single-line
       // JSON, but the spec-correct behavior is cheap.
-      dataLine = dataLine ? `${dataLine}\n${line.slice(5).trim()}` : line.slice(5).trim();
+      dataLine = dataLine
+        ? `${dataLine}\n${line.slice(5).trim()}`
+        : line.slice(5).trim();
     }
   }
   if (!eventName) return null;
@@ -1429,9 +1438,7 @@ export function parseSseFrame(frame: string): AskStreamEvent | null {
               ? fileType
               : "none",
           semantic_query:
-            typeof data.semantic_query === "string"
-              ? data.semantic_query
-              : "",
+            typeof data.semantic_query === "string" ? data.semantic_query : "",
         },
       };
     }
@@ -1457,9 +1464,7 @@ export function parseSseFrame(frame: string): AskStreamEvent | null {
       return {
         kind: "category_expanded",
         semantic_query:
-          typeof data.semantic_query === "string"
-            ? data.semantic_query
-            : "",
+          typeof data.semantic_query === "string" ? data.semantic_query : "",
         expanded,
       };
     }
@@ -1517,9 +1522,10 @@ export function parseSseFrame(frame: string): AskStreamEvent | null {
       return {
         kind: "done",
         retrieved_count:
-          typeof data.retrieved_count === "number" ? data.retrieved_count : undefined,
-        took_ms:
-          typeof data.took_ms === "number" ? data.took_ms : undefined,
+          typeof data.retrieved_count === "number"
+            ? data.retrieved_count
+            : undefined,
+        took_ms: typeof data.took_ms === "number" ? data.took_ms : undefined,
         error: typeof data.error === "string" ? data.error : undefined,
       };
     default:
@@ -1699,7 +1705,9 @@ export async function reindexFile(
   tasks: ReindexTask[] | string[],
   drive: string,
 ): Promise<ReindexResponse> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
   Object.assign(headers, driveHeaders(drive));
   return fetchJSON<ReindexResponse>(
     `${API_BASE}/addons/intelligence/files/${fileId}/reindex`,
@@ -1796,12 +1804,7 @@ export interface VideoVisualSceneItem {
 export interface VideoVisualRunSummary {
   run_id: string;
   status:
-    | "queued"
-    | "running"
-    | "succeeded"
-    | "partial"
-    | "failed"
-    | "superseded";
+    "queued" | "running" | "succeeded" | "partial" | "failed" | "superseded";
   selected_count: number;
   completed_count: number;
   succeeded_count: number;

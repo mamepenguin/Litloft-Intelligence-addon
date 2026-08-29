@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { passageWindow } from "./passageText";
+import { highlightSegments, passageWindow } from "./passageText";
 
 // The two pairs from the shipped screenshot that started this redesign.
 // A chunk begins wherever the chunker cut, which is routinely mid-word:
@@ -156,5 +156,53 @@ describe("passageWindow", () => {
       // after the period leaves the severed prefix on screen.
       expect(text.startsWith("The next sentence")).toBe(true);
     });
+  });
+});
+
+
+describe("highlightSegments", () => {
+  it("marks every occurrence of a term", () => {
+    const out = highlightSegments("回転と対角線と回転の話", ["回転"]);
+
+    expect(out.filter((s) => s.marked).map((s) => s.text)).toEqual([
+      "回転",
+      "回転",
+    ]);
+    expect(out.map((s) => s.text).join("")).toBe("回転と対角線と回転の話");
+  });
+
+  it("never lets a short term split a longer one", () => {
+    // `回転` is inside `回転対称`. Marking the short one first would cut
+    // the long one in half and leave `対称` unmarked beside it.
+    const out = highlightSegments("回転対称の話", ["回転", "回転対称"]);
+
+    expect(out.filter((s) => s.marked).map((s) => s.text)).toEqual(["回転対称"]);
+  });
+
+  it("returns the passage untouched when there are no terms", () => {
+    const out = highlightSegments("対角線の話", []);
+
+    expect(out).toEqual([{ text: "対角線の話", marked: false }]);
+  });
+
+  it("ignores a term that is not present", () => {
+    const out = highlightSegments("対角線の話", ["立方体"]);
+
+    expect(out.some((s) => s.marked)).toBe(false);
+  });
+
+  it("preserves the passage byte for byte", () => {
+    // The row's whole guarantee: highlighting is a display choice, not
+    // an edit.
+    const text = "同じ性質を持つ8つの回転が立方体にもあり対角線について";
+    const out = highlightSegments(text, ["対角線", "回転", "立方体"]);
+
+    expect(out.map((s) => s.text).join("")).toBe(text);
+  });
+
+  it("matches case-insensitively but shows the passage's own casing", () => {
+    const out = highlightSegments("これは Diagonal の話", ["diagonal"]);
+
+    expect(out.filter((s) => s.marked).map((s) => s.text)).toEqual(["Diagonal"]);
   });
 });

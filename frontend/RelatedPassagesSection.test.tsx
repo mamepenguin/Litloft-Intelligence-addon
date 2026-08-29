@@ -351,6 +351,117 @@ describe("RelatedPassagesSection", () => {
     });
   });
 
+  describe("the shared terms", () => {
+    const TAIL =
+      "除きますこれは3つの要素を順に入れ替えるようなものですねそして同じ性質を" +
+      "持つ8つの回転が立方体にもありますそれぞれの対角線について";
+
+    function withTerms(overlap: string[], text = TAIL) {
+      return pair({
+        overlap,
+        match: { text, page: 3, timestamp: null },
+      });
+    }
+
+    it("names what the pair has in common", async () => {
+      getRelatedPassages.mockResolvedValue({
+        results: [withTerms(["対角線", "回転"])],
+      });
+
+      render(<RelatedPassagesSection fileId="f1" drive="main" />);
+
+      const chips = await screen.findAllByTestId("overlap-term");
+      expect(chips.map((c) => c.textContent)).toEqual(["対角線", "回転"]);
+    });
+
+    it("marks those words inside the passage", async () => {
+      getRelatedPassages.mockResolvedValue({
+        results: [withTerms(["対角線", "回転"])],
+      });
+
+      render(<RelatedPassagesSection fileId="f1" drive="main" />);
+
+      const shown = await screen.findByTestId("match-passage");
+      const marks = Array.from(shown.querySelectorAll("mark"));
+      // Highlighting is what turns an unpunctuated chunk into something
+      // the eye can land in.
+      expect(marks.length).toBeGreaterThan(0);
+      expect(
+        marks.every((m) => ["対角線", "回転"].includes(m.textContent ?? "")),
+      ).toBe(true);
+    });
+
+    it("opens the excerpt on a term buried at the end", async () => {
+      getRelatedPassages.mockResolvedValue({
+        results: [withTerms(["対角線"])],
+      });
+
+      render(<RelatedPassagesSection fileId="f1" drive="main" />);
+
+      const shown = await screen.findByTestId("match-passage");
+      // Without the window this term is past where two clamped lines
+      // reach, and the marks would be off screen.
+      expect(shown.textContent).toContain("対角線");
+      expect(shown.textContent!.length).toBeLessThan(TAIL.length);
+    });
+
+    it("does not alter the passage by marking it", async () => {
+      getRelatedPassages.mockResolvedValue({
+        results: [withTerms(["対角線", "回転"])],
+      });
+
+      render(<RelatedPassagesSection fileId="f1" drive="main" />);
+
+      const shown = await screen.findByTestId("match-passage");
+      // Splitting the text across <mark> elements must leave a
+      // selection — the quotation-basket path — byte for byte intact.
+      expect(TAIL).toContain(shown.textContent);
+    });
+
+    it("shows no chip row at all when the pair shares nothing", async () => {
+      getRelatedPassages.mockResolvedValue({
+        results: [withTerms([])],
+      });
+
+      render(<RelatedPassagesSection fileId="f1" drive="main" />);
+      await screen.findByTestId("match-passage");
+
+      // Every non-Japanese pair lands here, so it is the ordinary shape,
+      // not a degraded one: absent, not empty, with no placeholder.
+      expect(screen.queryByTestId("overlap-term")).toBeNull();
+      expect(screen.queryByTestId("source-anchor")).toBeNull();
+    });
+
+    it("keeps the chip row when only the terms are present", async () => {
+      getRelatedPassages.mockResolvedValue({
+        results: [withTerms(["対角線"])],
+      });
+
+      render(<RelatedPassagesSection fileId="f1" drive="main" />);
+
+      // No locator on this pair, so the row exists for the chips alone.
+      expect(await screen.findByTestId("overlap-term")).toBeTruthy();
+      expect(screen.queryByTestId("source-anchor")).toBeNull();
+    });
+
+    it("marks the expanded passages too", async () => {
+      getRelatedPassages.mockResolvedValue({
+        results: [withTerms(["対角線"])],
+      });
+
+      render(<RelatedPassagesSection fileId="f1" drive="main" />);
+      fireEvent.click(
+        await screen.findByLabelText(
+          "relatedPassagesExpand:rag-design-notes.md",
+        ),
+      );
+
+      const shown = await screen.findByTestId("match-passage");
+      expect(shown.textContent).toBe(TAIL);
+      expect(shown.querySelectorAll("mark").length).toBeGreaterThan(0);
+    });
+  });
+
   describe("passageHref", () => {
     it("lands on the passage, not merely on the file", () => {
       expect(

@@ -36,6 +36,63 @@ export interface PassageWindow {
   truncatedStart: boolean;
 }
 
+export interface PassageSegment {
+  text: string;
+  /** Whether this run is one of the terms both passages share. */
+  marked: boolean;
+}
+
+/**
+ * Split a passage around the terms it shares with the other one.
+ *
+ * The point is not decoration: an unpunctuated transcript chunk is a
+ * wall, and marks are what turn it into something the eye can land in.
+ * Concatenating every segment reproduces the input exactly — the row
+ * promises the words are the passage's own, so this may only choose
+ * where to draw, never what to show.
+ *
+ * Longest term first, because a short term inside a longer one would
+ * otherwise cut it in half and leave the remainder unmarked beside it.
+ */
+export function highlightSegments(
+  text: string,
+  terms: string[],
+): PassageSegment[] {
+  const wanted = terms
+    .filter(Boolean)
+    .slice()
+    .sort((a, b) => b.length - a.length);
+  if (wanted.length === 0) return [{ text, marked: false }];
+
+  const haystack = text.toLowerCase();
+  const segments: PassageSegment[] = [];
+  let plainFrom = 0;
+  let i = 0;
+
+  while (i < text.length) {
+    const hit = wanted.find(
+      (term) => haystack.startsWith(term.toLowerCase(), i), // case-folded, like the backend's intersection
+    );
+    if (!hit) {
+      i += 1;
+      continue;
+    }
+    if (i > plainFrom) {
+      segments.push({ text: text.slice(plainFrom, i), marked: false });
+    }
+    // Sliced from the passage, not from the term: the mark shows the
+    // casing the author used.
+    segments.push({ text: text.slice(i, i + hit.length), marked: true });
+    i += hit.length;
+    plainFrom = i;
+  }
+
+  if (plainFrom < text.length) {
+    segments.push({ text: text.slice(plainFrom), marked: false });
+  }
+  return segments;
+}
+
 /**
  * Where a passage should start being shown.
  *

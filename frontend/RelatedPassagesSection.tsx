@@ -15,7 +15,7 @@ import type { MediaController } from "@/lib/mediaController";
 
 import { getRelatedPassages } from "./api";
 import type { PassageRef, RelatedPassageItem } from "./api";
-import { passageWindow } from "./passageText";
+import { highlightSegments, passageWindow } from "./passageText";
 
 interface RelatedPassagesSectionProps {
   fileId: string;
@@ -185,17 +185,42 @@ function PassageCard({
 }) {
   const t = useTranslations("file");
   const locator = locatorLabel(item.match);
-  // No terms yet — the excerpt is still moved off the severed word a
-  // chunk boundary leaves behind, which is the half of the windowing
-  // that does not need to know what the words mean.
+  const terms = useMemo(() => item.overlap ?? [], [item.overlap]);
   const excerpt = useMemo(
-    () => passageWindow(item.match.text, []),
-    [item.match.text],
+    () => passageWindow(item.match.text, terms),
+    [item.match.text, terms],
   );
+  const hasAnchor =
+    item.source.timestamp !== null && item.source.timestamp !== undefined
+      ? true
+      : item.source.page !== null && item.source.page !== undefined;
 
   return (
     <article className="rounded-xl bg-bg-card p-3">
-      <SourceAnchor source={item.source} mediaController={mediaController} />
+      {/* Absent, never empty: a pair with neither a locator nor a shared
+          word gets a shorter row, not a placeholder. Outside Japanese
+          text the terms are always absent, so this is the ordinary
+          shape rather than a degraded one. */}
+      {(hasAnchor || terms.length > 0) && (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <SourceAnchor
+            source={item.source}
+            mediaController={mediaController}
+          />
+          {terms.map((term) => (
+            <span
+              key={term}
+              data-testid="overlap-term"
+              // Sand and a squarer corner: the file's own tags are teal
+              // pills, and these are not tags — they are the words this
+              // pair happens to share.
+              className="rounded-lg bg-sand px-1.5 py-0.5 text-[11px] leading-tight text-text-primary"
+            >
+              {term}
+            </span>
+          ))}
+        </div>
+      )}
 
       <Link
         href={passageHref(item.file_id, item.match)}
@@ -212,11 +237,13 @@ function PassageCard({
           <FullPassage
             label={t("relatedPassagesThisFile")}
             text={item.source.text}
+            terms={terms}
             testId="source-passage"
           />
           <FullPassage
             label={t("relatedPassagesMatch")}
             text={item.match.text}
+            terms={terms}
             testId="match-passage"
           />
         </dl>
@@ -233,7 +260,9 @@ function PassageCard({
           {/* Selectable on purpose, and never a click target: selecting a
               passage is how it reaches Knowledge's quotation basket, so the
               toggle below owns expansion instead. */}
-          <span data-testid="match-passage">{excerpt.text}</span>
+          <span data-testid="match-passage">
+            <Highlighted text={excerpt.text} terms={terms} />
+          </span>
         </p>
       )}
 
@@ -341,10 +370,12 @@ function SourceAnchor({
 function FullPassage({
   label,
   text,
+  terms,
   testId,
 }: {
   label: string;
   text: string;
+  terms: string[];
   testId: string;
 }) {
   return (
@@ -354,9 +385,37 @@ function FullPassage({
         data-testid={testId}
         className="m-0 mt-0.5 text-sm leading-relaxed text-text-primary"
       >
-        {text}
+        <Highlighted text={text} terms={terms} />
       </dd>
     </div>
+  );
+}
+
+/**
+ * The passage, with the words it shares with the other one marked.
+ *
+ * `<mark>`'s browser default is reset outside `.markdown-body`
+ * (DESIGN.md §2.2), so the token is applied here as a utility. The
+ * segments concatenate back to `text` exactly — this draws, it does not
+ * edit.
+ */
+function Highlighted({ text, terms }: { text: string; terms: string[] }) {
+  if (terms.length === 0) return <>{text}</>;
+  return (
+    <>
+      {highlightSegments(text, terms).map((segment, index) =>
+        segment.marked ? (
+          <mark
+            key={index}
+            className="rounded-[3px] bg-highlight-bg px-[0.15em] text-inherit"
+          >
+            {segment.text}
+          </mark>
+        ) : (
+          <span key={index}>{segment.text}</span>
+        ),
+      )}
+    </>
   );
 }
 
