@@ -277,6 +277,8 @@ class LLMClient:
         # Rate-limiting state (None = no previous request yet)
         self._rate_lock = asyncio.Lock()
         self._last_request_time: float | None = None
+        # Latched once a provider answers 400 to our opt-in body fields.
+        self._extras_rejected = False
 
     def _provider_extras(self) -> dict:
         """Provider-specific body fields, empty unless opted into.
@@ -287,9 +289,32 @@ class LLMClient:
         before. Callers merge the result into their request kwargs; an
         empty dict adds nothing.
         """
-        if self._config.reasoning != "disabled":
+        if self._config.reasoning != "disabled" or self._extras_rejected:
             return {}
         return {"extra_body": {"reasoning": {"enabled": False}}}
+
+    def _drop_rejected_extras(
+        self, error: APIStatusError, request_kwargs: dict
+    ) -> bool:
+        """Give up the opt-in extras once a provider refuses them.
+
+        Reasoning is suppressed by default because thinking buys nothing
+        here, but OpenAI answers 400 to a body field it does not know.
+        Rather than leave every operator to discover that, read the first
+        such 400 as the provider saying it does not speak this field,
+        remember that for the life of the client, and carry on without
+        it. Returns whether the caller should send the request again.
+        """
+        if error.status_code != 400 or "extra_body" not in request_kwargs:
+            return False
+        request_kwargs.pop("extra_body")
+        self._extras_rejected = True
+        logger.info(
+            "Provider rejected the reasoning body field (400); continuing "
+            "without it (model=%s)",
+            self._config.model,
+        )
+        return True
 
     @property
     def enabled(self) -> bool:
@@ -376,7 +401,8 @@ class LLMClient:
         else:
             extra_kwargs["max_tokens"] = effective_max_tokens
 
-        for attempt in range(max_attempts):
+        attempt = 0
+        while attempt < max_attempts:
             await self._wait_for_rate_limit()
 
             try:
@@ -414,7 +440,14 @@ class LLMClient:
                     attempt + 1, max_attempts, type(e).__name__, delay,
                 )
                 await asyncio.sleep(delay)
+                attempt += 1
             except APIStatusError as e:
+                if self._drop_rejected_extras(e, extra_kwargs):
+                    # The provider does not know the field; the request
+                    # itself was fine. Send it as it would have looked
+                    # without the opt-in, and do not spend a retry on
+                    # our own doing.
+                    continue
                 if e.status_code in _PERMANENT_STATUS_CODES:
                     logger.warning(
                         "LLM generation failed with permanent error %d: %s",
@@ -434,6 +467,7 @@ class LLMClient:
                     attempt + 1, max_attempts, e.status_code, delay,
                 )
                 await asyncio.sleep(delay)
+                attempt += 1
             except Exception as e:
                 logger.warning("LLM generation failed: %s", e)
                 return TextGeneration(None, FAILURE_REQUEST_FAILED)
@@ -565,11 +599,23 @@ class LLMClient:
             )
             return
         except APIStatusError as e:
-            logger.warning(
-                "LLM stream open failed with status %d; yielding nothing",
-                e.status_code,
-            )
-            return
+            if not self._drop_rejected_extras(e, stream_kwargs):
+                logger.warning(
+                    "LLM stream open failed with status %d; yielding nothing",
+                    e.status_code,
+                )
+                return
+            try:
+                stream = await self._client.chat.completions.create(
+                    **stream_kwargs
+                )
+            except Exception as retry_error:
+                logger.warning(
+                    "LLM stream open failed after dropping the reasoning "
+                    "field: %s",
+                    retry_error,
+                )
+                return
         except Exception as e:
             logger.warning("LLM stream open failed: %s", e)
             return
@@ -658,7 +704,8 @@ class LLMClient:
             extra_kwargs["response_format"] = response_format
 
         max_attempts = max(1, self._config.retry_attempts + 1)
-        for attempt in range(max_attempts):
+        attempt = 0
+        while attempt < max_attempts:
             await self._wait_for_rate_limit()
 
             try:
@@ -682,8 +729,14 @@ class LLMClient:
                     attempt + 1, max_attempts, type(e).__name__, delay,
                 )
                 await asyncio.sleep(delay)
+                attempt += 1
                 continue
             except APIStatusError as e:
+                # Before concluding the model cannot see, rule out our
+                # own body field: a 400 from that would otherwise mark a
+                # perfectly capable model unsupported for good.
+                if self._drop_rejected_extras(e, extra_kwargs):
+                    continue
                 if e.status_code in _VISION_UNSUPPORTED_STATUS_CODES:
                     logger.info(
                         "Vision generation rejected by provider (status %d); "
@@ -701,6 +754,7 @@ class LLMClient:
                     return None
                 delay = self._backoff_delay(attempt)
                 await asyncio.sleep(delay)
+                attempt += 1
                 continue
             except Exception as e:
                 logger.warning("Vision generation failed: %s", type(e).__name__)
@@ -945,7 +999,8 @@ class LLMClient:
         if response_format is not None:
             extra_kwargs["response_format"] = response_format
 
-        for attempt in range(max_attempts):
+        attempt = 0
+        while attempt < max_attempts:
             await self._wait_for_rate_limit()
             try:
                 response = await self._client.chat.completions.create(
@@ -982,7 +1037,10 @@ class LLMClient:
                     )
                     return None
                 await asyncio.sleep(self._backoff_delay(attempt))
+                attempt += 1
             except APIStatusError as e:
+                if self._drop_rejected_extras(e, extra_kwargs):
+                    continue
                 if e.status_code in _PERMANENT_STATUS_CODES:
                     logger.warning(
                         "chat_with_tools permanent error %d: %s",
@@ -992,6 +1050,7 @@ class LLMClient:
                 if attempt + 1 >= max_attempts:
                     return None
                 await asyncio.sleep(self._backoff_delay(attempt))
+                attempt += 1
             except Exception as e:  # noqa: BLE001
                 logger.warning("chat_with_tools failed: %s", e)
                 return None

@@ -415,7 +415,12 @@ class TestLLMClientRetry:
 
     @pytest.mark.asyncio
     async def test_no_retry_on_bad_request(self):
-        """400 Bad Request is permanent — no retry."""
+        """400 is permanent once our own body field is ruled out.
+
+        Reasoning suppression is on by default, so the first 400 buys one
+        re-send without that field. A 400 that survives it is the
+        provider rejecting the request itself, and is not retried.
+        """
         client = _make_client(retry_attempts=3)
         client._client = MagicMock()
         client._client.chat.completions.create = AsyncMock(
@@ -424,8 +429,11 @@ class TestLLMClientRetry:
 
         result = await client.generate("system", "user")
 
+        calls = client._client.chat.completions.create.await_args_list
         assert result is None
-        assert client._client.chat.completions.create.await_count == 1
+        assert len(calls) == 2
+        assert "extra_body" in calls[0].kwargs
+        assert "extra_body" not in calls[1].kwargs
 
     @pytest.mark.asyncio
     async def test_no_retry_on_unauthorized(self):
@@ -1040,6 +1048,7 @@ class TestReasoningSuppression:
 
     @pytest.mark.asyncio
     async def test_generate_omits_extension_under_auto(self):
+        """"auto" is the escape hatch for providers that reject it."""
         client = _reasoning_client("auto")
 
         await client.generate("system", "user")
@@ -1096,6 +1105,36 @@ class TestReasoningSuppression:
         await client.generate_vision(b"\x89PNG", "image/png", "system", "user")
 
         assert _sent_kwargs(client)["extra_body"] == _REASONING_OFF
+
+    @pytest.mark.asyncio
+    async def test_a_rejecting_provider_is_retried_without_the_extension(self):
+        """OpenAI 400s on an unknown body field; that must not kill it."""
+        client = _reasoning_client("disabled")
+        good = _make_classified_response("done")
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=[_make_status_error(400), good, good]
+        )
+
+        first = await client.generate("system", "user")
+        await client.generate("system", "user")
+
+        calls = client._client.chat.completions.create.await_args_list
+        assert first == "done"
+        assert "extra_body" in calls[0].kwargs
+        assert "extra_body" not in calls[1].kwargs
+        # The rejection is remembered, so the cost is one request total.
+        assert "extra_body" not in calls[2].kwargs
+
+    @pytest.mark.asyncio
+    async def test_a_400_without_the_extension_still_fails(self):
+        """The retry is for the field, not a way to ignore real 400s."""
+        client = _reasoning_client("auto")
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=_make_status_error(400)
+        )
+
+        assert await client.generate("system", "user") is None
+        assert client._client.chat.completions.create.await_count == 1
 
     def test_ollama_body_is_unchanged_by_the_knob(self):
         """Ollama always sends think: false; the extension is OpenAI-only."""

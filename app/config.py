@@ -13,7 +13,7 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-LLM_REASONING_ENUM = ("auto", "disabled")
+LLM_REASONING_ENUM = ("disabled", "auto")
 
 # Deprecation date for the legacy ``indexing.whisper.*`` keys. After
 # this date the shim is removed and the keys raise a ConfigError.
@@ -693,12 +693,14 @@ class LLMConfig:
     # A reasoning model spends ``max_tokens`` on its chain of thought
     # before it emits a single character of the answer, so a budget that
     # is ample for the answer alone comes back empty with
-    # ``finish_reason="length"``. ``"disabled"`` asks the provider to
-    # skip thinking; it is an OpenRouter body extension, so it is sent
-    # only when explicitly selected — OpenAI rejects unknown fields with
-    # a 400. Suppression is a request, not a guarantee: an upstream that
-    # doesn't honour it still reasons.
-    reasoning: str = "auto"  # "auto" | "disabled"
+    # ``finish_reason="length"``. None of this addon's tasks are better
+    # for the thinking, so it is suppressed by default. The field is an
+    # OpenRouter extension and OpenAI answers 400 to fields it does not
+    # know; the client drops it for the rest of the run on the first such
+    # rejection, so the default costs those providers one request rather
+    # than breaking them. ``"auto"`` never sends it. Suppression is a
+    # request, not a guarantee: an upstream that ignores it still reasons.
+    reasoning: str = "disabled"  # "disabled" | "auto"
 
 
 @dataclass(frozen=True)
@@ -1079,12 +1081,13 @@ def load_settings() -> Settings:
     # the baseline that sends nothing.
     raw_reasoning = llm_merged.get("reasoning")
     if raw_reasoning is not None and raw_reasoning not in LLM_REASONING_ENUM:
+        default = LLMConfig.reasoning
         logger.warning(
             "Unknown llm.reasoning value %r; falling back to %r "
             "(expected one of %s)",
-            raw_reasoning, "auto", ", ".join(LLM_REASONING_ENUM),
+            raw_reasoning, default, ", ".join(LLM_REASONING_ENUM),
         )
-        llm_merged["reasoning"] = "auto"
+        llm_merged["reasoning"] = default
 
     llm_config = LLMConfig(
         **{

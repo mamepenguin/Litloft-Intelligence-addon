@@ -284,10 +284,18 @@ class TestOpenAICompatibleGenerateVision:
         from openai import APIStatusError
 
         client._client = MagicMock()
+        # Reasoning suppression is on by default, so the first 400 is
+        # read as the provider refusing that field and costs one re-send.
+        # A 400 that survives without it is about the image.
         client._client.chat.completions.create = AsyncMock(
-            side_effect=APIStatusError(
-                message="HTTP 400", response=response, body=None,
-            )
+            side_effect=[
+                APIStatusError(
+                    message="HTTP 400", response=response, body=None,
+                ),
+                APIStatusError(
+                    message="HTTP 400", response=response, body=None,
+                ),
+            ]
         )
 
         result = await client.generate_vision(
@@ -297,6 +305,9 @@ class TestOpenAICompatibleGenerateVision:
         # The caller persists status = "unsupported" to avoid wasteful
         # retries. Don't collapse to None (which would invite retry).
         assert result == VISION_UNSUPPORTED
+        first, second = client._client.chat.completions.create.await_args_list
+        assert "extra_body" in first.kwargs
+        assert "extra_body" not in second.kwargs
 
     @pytest.mark.asyncio
     async def test_returns_unsupported_sentinel_on_404(self):
@@ -360,8 +371,11 @@ class TestOpenAICompatibleGenerateVideoSceneJson:
             content=b'{"error": {"message": "response_format unsupported"}}',
         )
         client._client = MagicMock()
+        # The first 400 is spent ruling out our own reasoning field; the
+        # provider then rejects json mode on its own merits.
         client._client.chat.completions.create = AsyncMock(
             side_effect=[
+                APIStatusError(message="HTTP 400", response=response, body=None),
                 APIStatusError(message="HTTP 400", response=response, body=None),
                 _make_response_obj(
                     '{"scene_label":"Architecture diagram","visible_text":"","scene_type":"slide"}'
@@ -374,9 +388,11 @@ class TestOpenAICompatibleGenerateVideoSceneJson:
         )
 
         assert result["scene_label"] == "Architecture diagram"
-        first, second = client._client.chat.completions.create.await_args_list
-        assert first.kwargs["response_format"] == {"type": "json_object"}
-        assert "response_format" not in second.kwargs
+        calls = client._client.chat.completions.create.await_args_list
+        assert calls[0].kwargs["response_format"] == {"type": "json_object"}
+        assert "extra_body" in calls[0].kwargs
+        assert "extra_body" not in calls[1].kwargs
+        assert "response_format" not in calls[2].kwargs
 
 
 # ---------------------------------------------------------------------------

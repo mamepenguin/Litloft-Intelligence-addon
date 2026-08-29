@@ -134,15 +134,18 @@ llm:
   # lower. The host addon proxy times the browser side out at 15s anyway.
   request_timeout_seconds: 90.0
   request_connect_timeout_seconds: 10.0
-  # Chain-of-thought suppression. A reasoning model spends max_tokens on
-  # thinking before it writes any answer, so a budget that fits the answer
-  # comes back empty with finish_reason="length" — long inputs such as
-  # chapter generation hit this first. "disabled" asks the provider to skip
-  # thinking. It is an OpenRouter body extension and is sent only when set
-  # here, because OpenAI rejects unknown fields with a 400. An upstream that
-  # ignores the request still reasons; the log says so when that happens.
-  # Ignored by provider: "ollama", which always skips thinking.
-  reasoning: "auto"                   # "auto" | "disabled"
+  # Chain-of-thought suppression, on by default. A reasoning model spends
+  # max_tokens on thinking before it writes any answer, so a budget that
+  # fits the answer comes back empty with finish_reason="length" — long
+  # inputs such as chapter generation hit this first — and none of this
+  # addon's tasks are better for the thinking. The field is an OpenRouter
+  # extension; a provider that answers 400 to it (OpenAI does) has the
+  # field dropped for the rest of the run, so leaving this alone costs
+  # such a provider one request rather than breaking it. Set "auto" to
+  # never send it. An upstream that ignores the request still reasons;
+  # the log says so when that happens. The native ollama client is
+  # unaffected either way — its requests always carry think: false.
+  reasoning: "disabled"               # "disabled" | "auto"
   # Vision-LLM configuration (used when features.vision_describe != "false").
   # vision_model is a separate knob from "model" so operators can pair a
   # text model (e.g. gemma2) with a vision model (e.g. llava). When left

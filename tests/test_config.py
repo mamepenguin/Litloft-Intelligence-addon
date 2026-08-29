@@ -350,26 +350,49 @@ class TestLLMReasoning:
         monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
         return load_settings()
 
-    def test_defaults_to_auto(self, tmp_path, monkeypatch):
+    def test_defaults_to_disabled(self, tmp_path, monkeypatch):
+        """Thinking buys nothing here, so it is off unless asked for."""
         result = self._load(tmp_path, monkeypatch, "")
-
-        assert result.llm.reasoning == "auto"
-
-    def test_accepts_disabled(self, tmp_path, monkeypatch):
-        result = self._load(tmp_path, monkeypatch, '  reasoning: "disabled"\n')
 
         assert result.llm.reasoning == "disabled"
 
-    def test_unknown_value_falls_back_to_auto(
+    def test_accepts_auto(self, tmp_path, monkeypatch):
+        result = self._load(tmp_path, monkeypatch, '  reasoning: "auto"\n')
+
+        assert result.llm.reasoning == "auto"
+
+    def test_unknown_value_falls_back_to_the_default(
         self, tmp_path, monkeypatch, caplog
     ):
         with caplog.at_level(logging.WARNING):
             result = self._load(tmp_path, monkeypatch, '  reasoning: "off"\n')
 
-        assert result.llm.reasoning == "auto"
+        assert result.llm.reasoning == "disabled"
         assert "reasoning" in caplog.text
 
-    def test_non_string_value_falls_back_to_auto(self, tmp_path, monkeypatch):
+    def test_non_string_value_falls_back_to_the_default(
+        self, tmp_path, monkeypatch
+    ):
         result = self._load(tmp_path, monkeypatch, "  reasoning: false\n")
 
+        assert result.llm.reasoning == "disabled"
+
+    def test_gui_overrides_do_not_touch_the_file_only_knob(
+        self, tmp_path, monkeypatch
+    ):
+        """The GUI owns which LLM is used, not how it is asked."""
+        import json
+
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / "llm-overrides.json").write_text(json.dumps({
+            "schema_version": 1,
+            "provider": "openai_compatible",
+            "base_url": "https://openrouter.ai/api/v1",
+            "model": "some/other-model",
+        }))
+
+        result = self._load(tmp_path, monkeypatch, '  reasoning: "auto"\n')
+
+        assert result.llm.model == "some/other-model"
         assert result.llm.reasoning == "auto"
