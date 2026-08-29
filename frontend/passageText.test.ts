@@ -120,6 +120,19 @@ describe("passageWindow", () => {
       );
     });
 
+    it("centres on a term the passages spell with different casing", () => {
+      // The chip carries the source passage's casing; the window is
+      // applied to the match. The backend folds case when intersecting
+      // and the highlighter folds when marking, so this must too — or a
+      // term gets a chip and a mark while sitting outside the excerpt.
+      const text =
+        "ここでは前置きが少し続きます。それからようやく Diagonal の話に入ります。";
+      const out = passageWindow(text, ["diagonal"]);
+
+      expect(out.text.toLowerCase()).toContain("diagonal");
+      expect(out.truncatedStart).toBe(true);
+    });
+
     it("prefers the earliest term, not the first one listed", () => {
       const text = "立方体の話からはじめて、あとのほうで対角線の話をします。";
       const out = passageWindow(text, ["対角線", "立方体"]);
@@ -137,6 +150,16 @@ describe("passageWindow", () => {
       );
 
       expect(text.startsWith("The claim")).toBe(true);
+    });
+
+    it("keeps an opening sentence that is not a fragment", () => {
+      const text =
+        "The first claim. The supporting detail continues for a while yet.";
+
+      // A chunker splitting on size lands inside a word; a severed word
+      // does not begin with a capital. Snapping here would throw away a
+      // whole sentence that was never damaged.
+      expect(passageWindow(text, []).text).toBe(text);
     });
 
     it("does not break on a decimal point", () => {
@@ -159,7 +182,6 @@ describe("passageWindow", () => {
   });
 });
 
-
 describe("highlightSegments", () => {
   it("marks every occurrence of a term", () => {
     const out = highlightSegments("回転と対角線と回転の話", ["回転"]);
@@ -176,7 +198,9 @@ describe("highlightSegments", () => {
     // the long one in half and leave `対称` unmarked beside it.
     const out = highlightSegments("回転対称の話", ["回転", "回転対称"]);
 
-    expect(out.filter((s) => s.marked).map((s) => s.text)).toEqual(["回転対称"]);
+    expect(out.filter((s) => s.marked).map((s) => s.text)).toEqual([
+      "回転対称",
+    ]);
   });
 
   it("returns the passage untouched when there are no terms", () => {
@@ -203,6 +227,8 @@ describe("highlightSegments", () => {
   it("matches case-insensitively but shows the passage's own casing", () => {
     const out = highlightSegments("これは Diagonal の話", ["diagonal"]);
 
-    expect(out.filter((s) => s.marked).map((s) => s.text)).toEqual(["Diagonal"]);
+    expect(out.filter((s) => s.marked).map((s) => s.text)).toEqual([
+      "Diagonal",
+    ]);
   });
 });

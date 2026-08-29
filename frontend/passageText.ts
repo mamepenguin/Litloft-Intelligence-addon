@@ -114,7 +114,9 @@ export function passageWindow(text: string, terms: string[]): PassageWindow {
 
   const matchAt = earliestMatch(text, terms);
   const base = matchAt >= 0 ? Math.max(0, matchAt - LEAD_CHARS) : 0;
-  const snapped = sentenceStartFrom(text, base);
+  const snapped = opensMidSentence(text, base)
+    ? sentenceStartFrom(text, base)
+    : null;
 
   let start = base;
   if (
@@ -129,12 +131,42 @@ export function passageWindow(text: string, terms: string[]): PassageWindow {
   return { text: text.slice(start), truncatedStart: start > 0 };
 }
 
-/** Index of the earliest occurrence of any term, or -1. */
+/**
+ * Whether the text at ``from`` looks like the middle of a sentence.
+ *
+ * Snapping forward discards whatever precedes the boundary, so it is
+ * only justified where that text is a remnant. Two cases:
+ *
+ * - **``from`` is an offset we chose** (a term's run-up). It lands
+ *   wherever arithmetic put it, so it is mid-sentence by construction.
+ * - **``from`` is the start of the chunk.** Here the passage may well
+ *   begin on a real sentence, and snapping would throw a whole one
+ *   away. A capital letter is the evidence that it does: a chunker
+ *   splitting on size lands inside a word — `ing chunks…` — and a
+ *   severed word does not start with one. Japanese has no such signal
+ *   and no spaces for a chunker to respect, so a fragment there is the
+ *   common case and the snap stands.
+ */
+function opensMidSentence(text: string, from: number): boolean {
+  if (from > 0) return true;
+  return !/^[A-Z]/.test(text);
+}
+
+/**
+ * Index of the earliest occurrence of any term, or -1.
+ *
+ * Case-folded, because the terms are the words the *source* passage
+ * used and the window is applied to the *match* — the two may spell a
+ * shared latin word differently, and the backend's intersection and the
+ * highlighter both already fold. Comparing exactly here would leave a
+ * term chipped and marked yet outside the two visible lines.
+ */
 function earliestMatch(text: string, terms: string[]): number {
+  const haystack = text.toLowerCase();
   let best = -1;
   for (const term of terms) {
     if (!term) continue;
-    const at = text.indexOf(term);
+    const at = haystack.indexOf(term.toLowerCase());
     if (at >= 0 && (best < 0 || at < best)) best = at;
   }
   return best;
