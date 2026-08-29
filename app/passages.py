@@ -73,11 +73,19 @@ _CANDIDATE_POOL = _CANDIDATE_FILES * 4
 _MAX_SOURCE_CHUNKS = 400
 _MAX_CANDIDATE_CHUNKS = 200
 
-#: Cosine floor for a pair. Provisional: a floor set too low is worse
-#: than an empty section, because a reader who is shown spurious links
-#: learns to ignore the real ones. Tuned against real files before this
-#: ships, and moved into ``search-config.yml`` there.
-_MIN_SCORE = 0.80
+#: Cosine floor for a pair, from measurement rather than intuition.
+#: Sampling 800 passage vectors from a real drive and scoring all
+#: 320k pairs between them gives a median of 0.770 for **unrelated**
+#: text, p90 0.813, p99 0.852. Absolute cosine sits high because the
+#: model separates by direction, not distance, so a floor has to live
+#: in the far tail to mean anything: 0.80 admits 18.5% of random pairs,
+#: 0.90 admits 0.03%, 0.95 admits 0.001%.
+#:
+#: A floor set too low is worse than an empty section — a reader shown
+#: spurious links learns to ignore the real ones — so this sits at the
+#: strict end. It moves into ``search-config.yml`` with the rest of the
+#: retrieval thresholds.
+_MIN_SCORE = 0.95
 
 #: Rows returned when the caller does not say.
 _DEFAULT_LIMIT = 5
@@ -267,7 +275,12 @@ def _nearest_files(
                 sql_text(
                     "SELECT e.file_id, MIN(v.distance) AS d "
                     "FROM vec_text v "
-                    "JOIN embeddings e ON CAST(e.id AS TEXT) = v.embedding_id "
+                    # No CAST on e.id. Both sides are already TEXT, and
+                    # wrapping the column disables the primary-key index:
+                    # SQLite falls back to scanning all of ``embeddings``
+                    # once per vector row. Measured on a 54k-vector index,
+                    # that is 12.6s versus 0.16s, and it grows with k.
+                    "JOIN embeddings e ON e.id = v.embedding_id "
                     "JOIN indexed_files f ON f.file_id = e.file_id "
                     "WHERE v.vector MATCH :vec AND k = :k "
                     f"  AND e.embedding_type IN ({types}) "
@@ -287,7 +300,12 @@ def _nearest_files(
                 },
             ).fetchall()
             found = [row[0] for row in rows]
-            if len(found) >= limit:
+            # Only a completely empty result means the budget was eaten
+            # by the post-fetch filters. Fewer files than the pool wants
+            # is the ordinary state of a small drive, and re-running the
+            # widest possible query on every request to rediscover that
+            # would be pure waste.
+            if found:
                 break
 
     return found
