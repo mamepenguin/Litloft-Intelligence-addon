@@ -15,7 +15,6 @@
     "unverifiedSource": {
       "title": "この出典を信用しますか",
       "explanation": "このファイルは検索では見つかりますが、まだ回答の根拠には使われません。読んで信用できると判断したら、出典として使えるようになります。",
-      "relatedHeading": "関連するファイル",
       "trust": "出典として信用する",
       "dismiss": "今は信用しない",
       "distilHint": "一部分だけ使いたいときは、本文で該当箇所を選択して引用バスケットに追加してください。"
@@ -216,6 +215,12 @@
     "similarFilesEmpty": "似たファイルは見つかりませんでした",
     "similarFilesUnavailable": "似たファイル検出は利用できません",
     "similarFilesRetry": "再検出",
+    "relatedPassages": "関連する箇所",
+    "relatedPassagesUnavailable": "箇所の照合を利用できません",
+    "relatedPassagesThisFile": "このファイル",
+    "relatedPassagesMatch": "リンク先",
+    "relatedPassagesExpand": "{filename} の全文を表示",
+    "relatedPassagesCollapse": "{filename} を折りたたむ",
     "suggestedTags": "AIタグ候補",
     "acceptTag": "タグ「{tag}」を追加",
     "acceptAllTags": "すべて追加",

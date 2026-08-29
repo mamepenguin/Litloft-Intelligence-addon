@@ -691,6 +691,50 @@ class LLMConfig:
 
 
 @dataclass(frozen=True)
+class RelatedPassagesConfig:
+    """Gating for the passage-level connections section.
+
+    Absolute cosine says much less than it appears to. Sampling
+    unrelated passages from a real drive puts their median at 0.77 and
+    their p99 at 0.85, while a genuinely related pair scored 0.93 — the
+    bands touch, so no fixed floor separates them.
+
+    What does separate them is how far a pair sits into **its own
+    request's** distribution. Measured across three files, the real
+    matches land at z = 5.5-6.2 while the best unrelated pairs stop at
+    4.1-4.5, and that holds even though the raw scores overlap. This is
+    ``search._find_similar_by_embedding``'s gap check (top vs mean) with
+    the spread divided out, which it needs because passage scores are
+    packed far more tightly than file-level ones.
+    """
+
+    #: Sanity floor. Below this a pair is not worth ranking at all.
+    min_score: float = 0.70
+    #: At or above this the two passages are the same text — a duplicate
+    #: rather than a connection.
+    near_duplicate_score: float = 0.999
+    #: Standard deviations above the request's own mean a pair must sit.
+    #: 5.0 keeps the measured true matches and drops the noise tail.
+    min_z: float = 5.0
+    #: With few pairs the mean and spread are themselves noisy, so a
+    #: small drive uses a lower bar. It is clamped further when even
+    #: this is unreachable: a population of n values cannot exceed a z
+    #: of (n-1)/sqrt(n), and an unreachable bar rejects every pair
+    #: however good it is.
+    small_sample_z: float = 3.0
+    min_pairs_for_z: int = 400
+    #: Passages shorter than this are fragments — an ellipsis, a stray
+    #: caption line — and match everything. Same reasoning as the
+    #: too-short-transcript skip in ``find_similar``.
+    min_passage_chars: int = 40
+    #: Files carried into the pairwise stage.
+    candidate_files: int = 20
+    #: Chunks scored per file on either side.
+    max_source_chunks: int = 400
+    max_candidate_chunks: int = 200
+
+
+@dataclass(frozen=True)
 class Settings:
     intelligence_data_dir: Path
     litloft_db_path: Path
@@ -700,6 +744,9 @@ class Settings:
     drive_mounts: dict[str, str] = field(default_factory=dict)
     models: ModelConfig = field(default_factory=ModelConfig)
     search: SearchConfig = field(default_factory=SearchConfig)
+    related_passages: RelatedPassagesConfig = field(
+        default_factory=RelatedPassagesConfig
+    )
     indexing: IndexingConfig = field(default_factory=IndexingConfig)
     workers: WorkerConfig = field(default_factory=WorkerConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
@@ -1048,6 +1095,9 @@ def load_settings() -> Settings:
         drive_mounts=drive_mounts,
         models=models_config,
         search=_parse_nested(config_data, "search", SearchConfig),
+        related_passages=_parse_nested(
+            config_data, "related_passages", RelatedPassagesConfig
+        ),
         indexing=_parse_indexing(config_data),
         workers=_parse_nested(config_data, "workers", WorkerConfig),
         memory=_parse_nested(config_data, "memory", MemoryConfig),

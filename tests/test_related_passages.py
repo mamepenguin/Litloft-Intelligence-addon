@@ -51,6 +51,24 @@ def _unit(*values: float) -> np.ndarray:
     return vec / np.linalg.norm(vec)
 
 
+def _axis(i: int) -> np.ndarray:
+    return _unit(*[1.0 if j == i else 0.0 for j in range(_DIM)])
+
+
+def _near(i: int, tilt: float = 0.2) -> np.ndarray:
+    """A vector ~0.98 from ``_axis(i)``: related, not the same text.
+
+    Fixtures must not use identical vectors. A cosine of 1.0 now means
+    "the same passage twice", which the near-duplicate guard drops on
+    purpose — boilerplate shared between two files would otherwise set
+    the bar every real pair is measured against.
+    """
+    values = [0.0] * _DIM
+    values[i] = 1.0
+    values[(i + 1) % _DIM] = tilt
+    return _unit(*values)
+
+
 def _vec_extension_loads(db_path: str) -> bool:
     """sqlite-vec is present in the Docker test image, not on every host."""
     try:
@@ -222,6 +240,36 @@ def _verified(*file_ids: str):
     return handler
 
 
+def _settings_with(**overrides):
+    """A settings stand-in with the related-passages knobs overridden.
+
+    The config dataclasses are frozen, so a test tunes them by swapping
+    the whole object rather than mutating a field.
+    """
+    import dataclasses
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        related_passages=dataclasses.replace(
+            passages.settings.related_passages, **overrides
+        )
+    )
+
+
+def _permissive(monkeypatch):
+    """Turn the outlier gate off for tests that are not about the gate.
+
+    The gate compares a pair against the spread of the whole request, so
+    it needs a realistic field of noise to mean anything. Fixtures that
+    exercise plumbing — dedupe, limits, text resolution, trust — hold
+    two or three vectors, where z is undefined or unreachable. Those
+    tests pin behaviour that must hold whatever the gate decides.
+    """
+    monkeypatch.setattr(
+        passages, "settings", _settings_with(min_z=0.0, small_sample_z=0.0)
+    )
+
+
 def _nearest(monkeypatch, *file_ids: str):
     """Pin stage 1 so the logic tests do not need sqlite-vec."""
     monkeypatch.setattr(
@@ -237,15 +285,15 @@ def _nearest(monkeypatch, *file_ids: str):
 @pytest.mark.asyncio
 async def test_pairs_the_two_passages_verbatim(search_db, monkeypatch):
     """What is displayed is the text whose vector produced the score."""
-    shared = _unit(1, 0, 0, 0)
     source_body = "A chunk about chunk sizes, long enough to be prose. " * 3
     other_body = "At 400 characters a paragraph gets split across two. " * 3
 
     _add_file(search_db, "src")
     _add_file(search_db, "note", filename="rag-design-notes.md")
-    _add_text_chunk(search_db, "src", 0, source_body, shared)
-    _add_text_chunk(search_db, "note", 7, other_body, shared, page=3)
+    _add_text_chunk(search_db, "src", 0, source_body, _axis(0))
+    _add_text_chunk(search_db, "note", 7, other_body, _near(0), page=3)
 
+    _permissive(monkeypatch)
     _nearest(monkeypatch, "note")
     with _internal_api(monkeypatch, _verified("note")):
         pairs = await passages.find_related_passages(
@@ -259,20 +307,20 @@ async def test_pairs_the_two_passages_verbatim(search_db, monkeypatch):
     assert pair.other_file_id == "note"
     assert pair.other_filename == "rag-design-notes.md"
     assert pair.other_page == 3
-    assert pair.score == pytest.approx(1.0, abs=1e-5)
+    assert pair.score == pytest.approx(0.98, abs=0.01)
 
 
 @pytest.mark.asyncio
 async def test_transcript_passages_carry_their_timestamp(search_db, monkeypatch):
-    shared = _unit(0, 1, 0, 0)
     _add_file(search_db, "src")
     _add_file(search_db, "talk", filename="asr-workshop.mp4")
-    _add_text_chunk(search_db, "src", 0, "Forced alignment rebuilds words. " * 4, shared)
+    _add_text_chunk(search_db, "src", 0, "Forced alignment rebuilds words. " * 4, _axis(1))
     _add_transcript_chunk(
         search_db, "talk", 2, "so the words are realigned, not interpolated. " * 3,
-        shared, start=724.0, end=751.5,
+        _near(1), start=724.0, end=751.5,
     )
 
+    _permissive(monkeypatch)
     _nearest(monkeypatch, "talk")
     with _internal_api(monkeypatch, _verified("talk")):
         pairs = await passages.find_related_passages(
@@ -396,14 +444,14 @@ async def test_unindexed_file_asks_core_nothing(search_db, monkeypatch):
 @pytest.mark.asyncio
 async def test_one_row_per_source_passage_and_per_other_file(search_db, monkeypatch):
     """Five rows about the same paragraph would crowd out everything else."""
-    near = _unit(1, 0.02, 0, 0)
     _add_file(search_db, "src")
     _add_file(search_db, "note")
-    _add_text_chunk(search_db, "src", 0, "First source paragraph. " * 4, _unit(1, 0, 0, 0))
-    _add_text_chunk(search_db, "src", 1, "Second source paragraph. " * 4, _unit(0, 1, 0, 0))
-    _add_text_chunk(search_db, "note", 0, "First note paragraph. " * 4, near)
-    _add_text_chunk(search_db, "note", 1, "Second note paragraph. " * 4, _unit(1, 0.03, 0, 0))
+    _add_text_chunk(search_db, "src", 0, "First source paragraph. " * 4, _axis(0))
+    _add_text_chunk(search_db, "src", 1, "Second source paragraph. " * 4, _axis(1))
+    _add_text_chunk(search_db, "note", 0, "First note paragraph. " * 4, _near(0))
+    _add_text_chunk(search_db, "note", 1, "Second note paragraph. " * 4, _near(0, 0.22))
 
+    _permissive(monkeypatch)
     _nearest(monkeypatch, "note")
     with _internal_api(monkeypatch, _verified("note")):
         pairs = await passages.find_related_passages(
@@ -419,16 +467,15 @@ async def test_limit_caps_the_rows(search_db, monkeypatch):
     _add_file(search_db, "src")
     for i in range(4):
         _add_text_chunk(
-            search_db, "src", i, f"Source paragraph {i}. " * 4,
-            _unit(*[1.0 if j == i else 0.0 for j in range(_DIM)]),
+            search_db, "src", i, f"Source paragraph {i}. " * 4, _axis(i),
         )
         _add_file(search_db, f"note{i}")
         _add_text_chunk(
-            search_db, f"note{i}", 0, f"Note paragraph {i}. " * 4,
-            _unit(*[1.0 if j == i else 0.0 for j in range(_DIM)]),
+            search_db, f"note{i}", 0, f"Note paragraph {i}. " * 4, _near(i),
         )
 
     notes = [f"note{i}" for i in range(4)]
+    _permissive(monkeypatch)
     _nearest(monkeypatch, *notes)
     with _internal_api(monkeypatch, _verified(*notes)):
         pairs = await passages.find_related_passages(
@@ -600,20 +647,20 @@ async def test_a_verified_file_below_a_run_of_unverified_ones_survives(
     Capping first lets a run of unverified neighbours at the top empty
     the list while verified files sit just below the cut.
     """
-    shared = _unit(1, 0, 0, 0)
     _add_file(search_db, "src")
-    _add_text_chunk(search_db, "src", 0, "Body about a topic. " * 4, shared)
+    _add_text_chunk(search_db, "src", 0, "Body about a topic. " * 4, _axis(0))
 
     nearest = []
-    for i in range(passages._CANDIDATE_FILES + 5):
+    for i in range(passages.settings.related_passages.candidate_files + 5):
         name = f"clip{i}"
         _add_file(search_db, name)
-        _add_text_chunk(search_db, name, 0, f"Clip prose {i}. " * 4, shared)
+        _add_text_chunk(search_db, name, 0, f"Clip prose {i}. " * 4, _near(0))
         nearest.append(name)
     _add_file(search_db, "note", filename="notes.md")
-    _add_text_chunk(search_db, "note", 0, "The vouched-for passage. " * 4, shared)
+    _add_text_chunk(search_db, "note", 0, "The vouched-for passage. " * 4, _near(0))
     nearest.append("note")
 
+    _permissive(monkeypatch)
     _nearest(monkeypatch, *nearest)
     with _internal_api(monkeypatch, _verified("note")):
         pairs = await passages.find_related_passages(
@@ -626,22 +673,24 @@ async def test_a_verified_file_below_a_run_of_unverified_ones_survives(
 @pytest.mark.asyncio
 async def test_a_late_source_passage_can_still_match(search_db, monkeypatch):
     """Sampling spreads across the file; it never keeps only the opening."""
-    monkeypatch.setattr(passages, "_MAX_SOURCE_CHUNKS", 2)
+    monkeypatch.setattr(
+        passages, "settings",
+        _settings_with(max_source_chunks=2),
+    )
 
     _add_file(search_db, "src")
     for i in range(4):
         _add_text_chunk(
-            search_db, "src", i, f"Source paragraph {i}. " * 4,
-            _unit(*[1.0 if j == i else 0.0 for j in range(_DIM)]),
+            search_db, "src", i, f"Source paragraph {i}. " * 4, _axis(i),
         )
     _add_file(search_db, "note", filename="notes.md")
     # Matches source paragraph 2 only — a paragraph a prefix cap of two
     # would never have looked at.
     _add_text_chunk(
-        search_db, "note", 0, "The passage the middle echoes. " * 4,
-        _unit(0, 0, 1, 0),
+        search_db, "note", 0, "The passage the middle echoes. " * 4, _near(2),
     )
 
+    _permissive(monkeypatch)
     _nearest(monkeypatch, "note")
     with _internal_api(monkeypatch, _verified("note")):
         pairs = await passages.find_related_passages(
@@ -687,3 +736,215 @@ def test_knn_budget_covers_the_source_own_chunks(search_db, monkeypatch):
     # the test is that the budgeted one finds the neighbour regardless.
     assert budgeted == ["note"]
     assert len(starved) <= len(budgeted)
+
+
+# ---------------------------------------------------------------------------
+# Gating (Phase 4): absolute cosine is a weak signal, so the gate is the
+# one search._find_similar_by_embedding already arrived at.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_same_text_twice_is_a_duplicate_not_a_connection(
+    search_db, monkeypatch
+):
+    """Boilerplate shared between two files would set the bar for everything.
+
+    Two passages at cosine ~1.0 are the same text. Kept, it becomes the
+    top score, and the margin cutoff then measures every real pair
+    against it — which is how a frontmatter block came to be the only
+    row a whole drive produced.
+    """
+    same = _axis(0)
+    _add_file(search_db, "src")
+    _add_file(search_db, "note")
+    _add_text_chunk(search_db, "src", 0, "A shared boilerplate header. " * 4, same)
+    _add_text_chunk(search_db, "note", 0, "A shared boilerplate header. " * 4, same)
+
+    _nearest(monkeypatch, "note")
+    with _internal_api(monkeypatch, _verified("note")):
+        pairs = await passages.find_related_passages(
+            file_id="src", drive="d1", credential=None
+        )
+
+    assert pairs == []
+
+
+@pytest.mark.asyncio
+async def test_frontmatter_is_not_a_passage(search_db, monkeypatch):
+    """Two files' YAML blocks resemble each other far more than their prose."""
+    _add_file(search_db, "src")
+    _add_file(search_db, "note")
+    _add_text_chunk(
+        search_db, "src", 0,
+        "---\norigin: source_capture\nsource_file_ids:\n- hh_45I_sgMVC\ntags: []\n",
+        _axis(0),
+    )
+    _add_text_chunk(
+        search_db, "note", 0,
+        "---\norigin: source_capture\nsource_file_ids:\n- QQ_18B_qwPLZ\ntags: []\n",
+        _near(0),
+    )
+
+    _nearest(monkeypatch, "note")
+    with _internal_api(monkeypatch, _verified("note")):
+        pairs = await passages.find_related_passages(
+            file_id="src", drive="d1", credential=None
+        )
+
+    assert pairs == []
+
+
+@pytest.mark.asyncio
+async def test_fragments_match_everything_so_they_are_not_passages(
+    search_db, monkeypatch
+):
+    """An ellipsis has no content to be similar *about*."""
+    _add_file(search_db, "src")
+    _add_file(search_db, "note")
+    _add_text_chunk(search_db, "src", 0, "A real paragraph of prose. " * 4, _axis(0))
+    _add_text_chunk(search_db, "note", 0, "……", _near(0))
+
+    _nearest(monkeypatch, "note")
+    with _internal_api(monkeypatch, _verified("note")):
+        pairs = await passages.find_related_passages(
+            file_id="src", drive="d1", credential=None
+        )
+
+    assert pairs == []
+
+
+def _chunk(vector: np.ndarray, file_id: str) -> "passages._Chunk":
+    return passages._Chunk(
+        embedding_id=f"e_{file_id}",
+        file_id=file_id,
+        embedding_type="text_content",
+        chunk_index=0,
+        timestamp_start=None,
+        page=None,
+        preview="A paragraph long enough not to count as a fragment. " * 2,
+        vector=vector,
+    )
+
+
+def _field(*cosines: float) -> tuple[list, list]:
+    """One source passage and candidates at exactly the given cosines.
+
+    ``c_k = cos(t)·e0 + sin(t)·e_k`` dots with ``e0`` to exactly cos(t),
+    so a test can state the score distribution it means to describe
+    instead of hoping vectors land near it.
+    """
+    dim = len(cosines) + 1
+    source = [_chunk(_basis(0, dim), "src")]
+    candidates = []
+    for k, cos in enumerate(cosines):
+        vec = np.zeros(dim, dtype=np.float32)
+        vec[0] = cos
+        vec[k + 1] = float(np.sqrt(max(0.0, 1.0 - cos * cos)))
+        candidates.append(_chunk(vec, f"other{k}"))
+    return source, candidates
+
+
+def _basis(i: int, dim: int) -> np.ndarray:
+    vec = np.zeros(dim, dtype=np.float32)
+    vec[i] = 1.0
+    return vec
+
+
+def test_an_outlier_survives_a_field_of_noise():
+    """Real matches stand out from the request; near misses do not.
+
+    The numbers are the measured shape of a real request: unrelated
+    passages bunched around 0.78-0.86, one genuine match at 0.93.
+    """
+    noise = [0.78 + (i % 9) * 0.01 for i in range(49)]
+    source, candidates = _field(0.93, *noise)
+
+    pairs = passages._rank_pairs(source, candidates, limit=5)
+
+    assert [c.file_id for _, _, c in pairs] == ["other0"]
+
+
+def test_a_field_with_no_standout_yields_nothing():
+    """Everything equally close means the embedding cannot discriminate.
+
+    This is also the honest answer when a whole candidate set genuinely
+    is uniformly related — an empty section beats five arbitrary rows,
+    because a reader shown spurious links learns to ignore the real ones.
+    """
+    source, candidates = _field(*[0.80 + (i % 7) * 0.01 for i in range(50)])
+
+    assert passages._rank_pairs(source, candidates, limit=5) == []
+
+
+def test_the_floor_still_applies_when_there_is_no_distribution():
+    """A single pair has no spread to be an outlier against."""
+    source, candidates = _field(0.93)
+    assert len(passages._rank_pairs(source, candidates, limit=5)) == 1
+
+    source, candidates = _field(0.42)
+    assert passages._rank_pairs(source, candidates, limit=5) == []
+
+
+@pytest.mark.asyncio
+async def test_a_flat_field_of_candidates_yields_nothing(search_db, monkeypatch):
+    """No standout means the embedding is not discriminating here."""
+    _add_file(search_db, "src")
+    _add_text_chunk(search_db, "src", 0, "The source paragraph. " * 4, _axis(0))
+
+    names = []
+    for i in range(6):
+        name = f"flat{i}"
+        _add_file(search_db, name)
+        # All ~0.80, within a hair of each other.
+        _add_text_chunk(
+            search_db, name, 0, f"Loosely related prose {i}. " * 4,
+            _unit(1, 0.75 + i * 0.0001, 0, 0),
+        )
+        names.append(name)
+
+    _nearest(monkeypatch, *names)
+    with _internal_api(monkeypatch, _verified(*names)):
+        pairs = await passages.find_related_passages(
+            file_id="src", drive="d1", credential=None
+        )
+
+    assert pairs == []
+
+
+def test_a_duplicate_does_not_drag_the_bar_over_a_real_match():
+    """The distribution has to describe the noise, not include the outlier.
+
+    A pair at 1.0 is excluded from the results, but if it is left in the
+    statistics first it lifts the mean and the spread — and the raised
+    bar then rejects the genuine match it was supposed to be measured
+    against.
+    """
+    noise = [0.78 + (i % 9) * 0.01 for i in range(48)]
+    source, candidates = _field(1.0, 0.93, *noise)
+
+    pairs = passages._rank_pairs(source, candidates, limit=5)
+
+    # other0 is the duplicate (dropped), other1 the real match.
+    assert [c.file_id for _, _, c in pairs] == ["other1"]
+
+
+def test_a_small_field_can_still_produce_a_match():
+    """A drive too small for a z of 3 must not be permanently empty.
+
+    With n values the largest possible z is (n-1)/sqrt(n), so on a
+    handful of pairs the configured bar is unreachable and every pair
+    would be rejected however good it is.
+    """
+    source, candidates = _field(0.93, 0.78, 0.79, 0.80, 0.81)
+
+    pairs = passages._rank_pairs(source, candidates, limit=5)
+
+    assert [c.file_id for _, _, c in pairs] == ["other0"]
+
+
+def test_a_small_flat_field_still_produces_nothing():
+    """Reachability is not a licence to return the merely-largest value."""
+    source, candidates = _field(0.80, 0.81, 0.82, 0.83, 0.84, 0.85)
+
+    assert passages._rank_pairs(source, candidates, limit=5) == []

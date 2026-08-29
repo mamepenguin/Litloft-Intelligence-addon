@@ -7,6 +7,7 @@ export const slotComponents: Record<string, React.LazyExoticComponent<React.Comp
   // "ask" slot removed in the RAG redesign: the Ask UI lives on a
   // dedicated page at /addons/intelligence. See manifest.json (href)
   // and frontend/Page.tsx.
+  "related-passages": lazy(() => import("./RelatedPassagesSection")),
   "similar-files": lazy(() => import("./SimilarFilesSection")),
   "pickup": lazy(() => import("./PickupWidget")),
   "index-status": lazy(() => import("./IndexStatusWidget")),
