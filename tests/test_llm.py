@@ -1248,6 +1248,42 @@ class TestJsonFailureClassification:
         assert result.failure == "token_budget"
 
 
+class TestClassificationHonesty:
+    """A classification that overstates its evidence misdirects the fix."""
+
+    @pytest.mark.asyncio
+    async def test_truncated_text_is_not_reported_as_absent(self, caplog):
+        """generate() hands the text back, so the log must not deny it."""
+        client = _classifying_client(
+            _make_classified_response(
+                "A summary that ran out of ro", finish_reason="length"
+            )
+        )
+
+        with caplog.at_level(logging.WARNING):
+            text = await client.generate("system", "user")
+
+        assert text == "A summary that ran out of ro"
+        assert "truncated" in caplog.text.lower()
+        assert "no usable output" not in caplog.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_reasoning_without_truncation_is_merely_empty(self):
+        """Thinking is not proof the budget ran out; finish_reason is."""
+        client = _classifying_client(
+            _make_classified_response(
+                None,
+                finish_reason="stop",
+                completion_tokens=500,
+                reasoning_tokens=500,
+            )
+        )
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.failure == "empty"
+
+
 class TestGenerateJsonDelegation:
     """The existing entry points keep their shape."""
 

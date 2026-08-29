@@ -182,20 +182,23 @@ def _usage_reasoning_tokens(response: object) -> int | None:
 def _classify_completion(
     content: str | None,
     finish_reason: object,
-    reasoning_tokens: int | None,
 ) -> str | None:
     """Name the reason a completion is unusable, or None if it is fine.
 
-    A response truncated by the token ceiling is reported as a budget
-    failure even when some content arrived, because the JSON it carries
-    is cut mid-structure and the fix is a budget change rather than a
-    prompt change.
+    ``finish_reason == "length"`` is the only evidence that the budget
+    ran out. Reasoning tokens say where the budget went, not that it was
+    exhausted, so a clean stop with no content is an empty answer rather
+    than a budget failure — the two have different remedies.
+
+    A response truncated by the ceiling is a budget failure even when
+    some content arrived, because a structured answer cut mid-value is
+    unusable to the caller that asked for one. Callers wanting prose can
+    still use the partial text; ``TextGeneration`` hands it to them.
     """
-    truncated = finish_reason == "length"
-    if content is not None and content.strip():
-        return FAILURE_TOKEN_BUDGET if truncated else None
-    if truncated or (reasoning_tokens or 0) > 0:
+    if finish_reason == "length":
         return FAILURE_TOKEN_BUDGET
+    if content is not None and content.strip():
+        return None
     return FAILURE_EMPTY
 
 
@@ -390,9 +393,7 @@ class LLMClient:
                 content = choice.message.content
                 finish_reason = getattr(choice, "finish_reason", None)
                 reasoning_tokens = _usage_reasoning_tokens(response)
-                failure = _classify_completion(
-                    content, finish_reason, reasoning_tokens
-                )
+                failure = _classify_completion(content, finish_reason)
                 if failure is not None:
                     self._log_unusable_completion(
                         failure, content, finish_reason,
@@ -476,10 +477,16 @@ class LLMClient:
         the caller as a bare ``None`` and leaves no trace in the log.
         """
         usage = getattr(response, "usage", None)
+        # Truncated output is still handed back, so saying it is absent
+        # would send a reader looking for the wrong problem.
+        headline = (
+            "LLM output was truncated (%s)"
+            if content and content.strip()
+            else "LLM produced no usable output (%s)"
+        )
         logger.warning(
-            "LLM produced no usable output (%s): finish_reason=%s, "
-            "completion_tokens=%s, reasoning_tokens=%s, content_len=%d, "
-            "model=%s",
+            headline + ": finish_reason=%s, completion_tokens=%s, "
+            "reasoning_tokens=%s, content_len=%d, model=%s",
             failure,
             finish_reason,
             getattr(usage, "completion_tokens", None),
@@ -1226,11 +1233,15 @@ class OllamaLLMClient:
 
             content = data.get("message", {}).get("content", "")
             done_reason = data.get("done_reason")
-            failure = _classify_completion(content, done_reason, None)
+            failure = _classify_completion(content, done_reason)
             if failure is not None:
+                headline = (
+                    "Ollama output was truncated (%s)"
+                    if content and content.strip()
+                    else "Ollama produced no usable output (%s)"
+                )
                 logger.warning(
-                    "Ollama produced no usable output (%s): done_reason=%s, "
-                    "content_len=%d, model=%s",
+                    headline + ": done_reason=%s, content_len=%d, model=%s",
                     failure, done_reason, len(content or ""),
                     self._config.model,
                 )
