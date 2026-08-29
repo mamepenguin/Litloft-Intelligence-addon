@@ -36,6 +36,17 @@ from typing import Callable
 #: up whole by the katakana-run alternative instead; the number becomes
 #: its own term and is dropped by the ceiling, bare numbers being among
 #: the most corpus-common tokens there are.
+#:
+#: **A multi-character kanji unit is still cut**: ``10周年`` yields
+#: ``10周`` (and ``年`` alone is too short to survive), which was seen on
+#: a real row. It is left alone deliberately — every fix available
+#: without a lexicon of units trades it for something worse. Making the
+#: unit greedy swallows the following word (``120度回転`` → one token);
+#: refusing a unit that is followed by more kanji turns the same phrase
+#: into ``120`` + ``度回転``; dropping digit-leading terms entirely would
+#: have cost ``21日`` and ``8月``, which were the two most telling chips
+#: on the row that surfaced this. A truncated term is a display blemish
+#: on a word both passages share; the alternatives are wrong tokens.
 _TERM_RE = re.compile(
     r"\d+(?:\.\d+)?[一-龥%]"  # 3日, 30% — a unit too short to survive alone
     r"|[一-龥々]+"  # kanji run (nouns, technical terms)
