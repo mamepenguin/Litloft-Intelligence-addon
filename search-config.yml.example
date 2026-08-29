@@ -459,6 +459,15 @@ related_passages:
   # Passages shorter than this are fragments that match everything.
   min_passage_chars: 40
 
+  # How many different files one passage may pair with before it counts
+  # as boilerplate rather than content. A channel sign-off ("subscribe,
+  # links in the description") recurs almost word for word across every
+  # video that carries it and scores higher than real subject matter
+  # does, so no threshold separates them — but it turns up in many files
+  # at once, and real content does not. Raise it if a series covering
+  # the same ground across several files is being silenced.
+  max_passage_files: 2
+
   # Cost knobs. The pairwise stage is a matrix product of both sides.
   candidate_files: 20
   max_source_chunks: 400

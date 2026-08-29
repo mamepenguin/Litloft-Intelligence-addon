@@ -403,6 +403,50 @@ def _z_ceiling(n: int) -> float:
     return (n - 1) / math.sqrt(n) if n > 1 else 0.0
 
 
+def _drop_recurring(
+    keep: np.ndarray,
+    recurrence: np.ndarray,
+    candidates: list[_Chunk],
+    cap: int,
+) -> None:
+    """Silence source passages that pair with too many different files.
+
+    A channel sign-off — "subscribe, links in the description" — is
+    prose of ordinary length, so the fragment guard lets it through, and
+    it recurs near-verbatim across every video that carries it, so it
+    scores *higher* than real subject matter: 0.98 against 0.93 on a
+    measured library. No threshold separates them, because the boilerplate
+    is on the wrong side of it.
+
+    Recurrence does separate them. A passage that appears in many files
+    is not about any of them — the same reasoning that gives a common
+    word a low IDF. Measured over a sample, source passages matched one
+    file (50 of them) or two (2), and every passage that matched three
+    was a sign-off.
+
+    Only the source side is checked. Both halves of such a pair are the
+    same boilerplate, so dropping the row here removes it whichever end
+    it was noticed from.
+
+    Counting happens over ``recurrence``, which still holds the
+    near-duplicates that ``keep`` has already dropped. A scripted
+    sign-off is the most likely thing in the library to appear *word for
+    word* in several files, and those copies are the strongest evidence
+    that it is boilerplate — counting only the inexact ones would let
+    two verbatim copies hide, leaving the third to pass the cap alone.
+
+    Modifies ``keep`` in place.
+    """
+    index: dict[str, int] = {}
+    file_of = np.array(
+        [index.setdefault(c.file_id, len(index)) for c in candidates]
+    )
+    for i in np.flatnonzero(keep.any(axis=1)):
+        columns = np.flatnonzero(recurrence[i])
+        if np.unique(file_of[columns]).size > cap:
+            keep[i] = False
+
+
 def _rank_pairs(
     source: list[_Chunk],
     candidates: list[_Chunk],
@@ -476,9 +520,15 @@ def _rank_pairs(
     else:
         threshold = max(cfg.min_score, mean + z_floor * std)
 
-    hits = np.argwhere(
-        (matrix >= threshold) & (matrix < cfg.near_duplicate_score)
-    )
+    # Two masks: one for what may be shown, one for what counts as
+    # evidence of recurrence. They differ by the near-duplicates, which
+    # are never shown but are the loudest signal that a passage is
+    # boilerplate.
+    recurrence = matrix >= threshold
+    keep = recurrence & (matrix < cfg.near_duplicate_score)
+    _drop_recurring(keep, recurrence, candidates, cfg.max_passage_files)
+
+    hits = np.argwhere(keep)
     if hits.size == 0:
         return []
 

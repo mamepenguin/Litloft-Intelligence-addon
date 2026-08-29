@@ -723,6 +723,17 @@ class RelatedPassagesConfig:
     #: however good it is.
     small_sample_z: float = 3.0
     min_pairs_for_z: int = 400
+    #: How many different files one passage of the source may pair with
+    #: before it is treated as boilerplate rather than content. A
+    #: channel's sign-off — "subscribe, links in the description" —
+    #: recurs almost verbatim across every video it appears in, and
+    #: scores *higher* than real subject matter does (0.98 against 0.93
+    #: measured on a real library), so no threshold separates the two.
+    #: What separates them is recurrence: a passage that turns up in
+    #: many files is not about any of them. Measured on a sample, real
+    #: passages matched one file (50 of them) or two (2), and every
+    #: passage matching three was a sign-off.
+    max_passage_files: int = 2
     #: Passages shorter than this are fragments — an ellipsis, a stray
     #: caption line — and match everything. Same reasoning as the
     #: too-short-transcript skip in ``find_similar``.
