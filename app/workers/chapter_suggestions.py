@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
@@ -16,7 +17,7 @@ import httpx
 from sqlalchemy import text as sql_text
 
 from app.config import settings
-from app.llm import LLMClient
+from app.llm import FAILURE_TOKEN_BUDGET, LLMClient
 from app.output_language import configured_language_requirement
 from app.prompt_loader import render
 from app.workers.transcription.errors import TransientError
@@ -30,6 +31,8 @@ _WINDOW_CHAR_BUDGET = 12_000
 _CORE_BASE_DEFAULT = "http://backend:8000"
 _READY_EVENT = "intelligence.chapter_suggestions.ready"
 _FAILED_EVENT = "intelligence.chapter_suggestions.failed"
+_INVALID_OUTPUT_REASON = "invalid_model_output"
+_TOKEN_BUDGET_REASON = "model_token_budget"
 
 
 def _build_system_prompt(output_language: str | None) -> str:
@@ -161,26 +164,46 @@ def _group_candidate_sets(
     return groups
 
 
+@dataclass(frozen=True)
+class CandidateAttempt:
+    """Candidates from one generation, or why there are none.
+
+    ``reason`` is the event vocabulary, not the client's: the panel tells
+    a viewer what to change, and "the model spent its output budget
+    thinking" and "the model wrote something that is not JSON" call for
+    different changes.
+    """
+
+    candidates: list[dict[str, Any]]
+    reason: str
+
+
 async def _generate_usable_candidates(
     llm_client: LLMClient,
     system_prompt: str,
     user_prompt: str,
-) -> list[dict[str, Any]]:
+) -> CandidateAttempt:
     """Request complete JSON once, then retry with a coarser repair prompt."""
+    reason = _INVALID_OUTPUT_REASON
     for attempt in range(2):
         prompt = user_prompt if attempt == 0 else render(
             "chapter_suggestions/retry_user.jinja2",
             original_prompt=user_prompt,
         )
-        raw = await llm_client.generate_json(
+        result = await llm_client.generate_json_result(
             system_prompt,
             prompt,
             temperature=0.1,
         )
-        candidates = normalise_chapter_candidates(raw)
+        candidates = normalise_chapter_candidates(result.value)
         if candidates:
-            return candidates
-    return []
+            return CandidateAttempt(candidates, "")
+        if result.failure == FAILURE_TOKEN_BUDGET:
+            # The retry prompt asks for a broader outline, which is no
+            # help when the answer never got written; report the budget
+            # even if a later attempt fails some other way.
+            reason = _TOKEN_BUDGET_REASON
+    return CandidateAttempt([], reason)
 
 
 async def promote_chapters_to_core(
@@ -348,7 +371,7 @@ class ChapterSuggestionsWorker:
         )
         try:
             for window_index, window in enumerate(windows):
-                window_candidates = await _generate_usable_candidates(
+                attempt = await _generate_usable_candidates(
                     self._llm_client,
                     system,
                     render(
@@ -357,10 +380,11 @@ class ChapterSuggestionsWorker:
                         transcript=window,
                     ),
                 )
-                if not window_candidates:
+                if not attempt.candidates:
                     logger.warning(
-                        "Chapter suggestions: no usable model output for %s "
-                        "window %d/%d after %.2fs",
+                        "Chapter suggestions: no usable model output (%s) "
+                        "for %s window %d/%d after %.2fs",
+                        attempt.reason,
                         file_id,
                         window_index + 1,
                         len(windows),
@@ -371,11 +395,11 @@ class ChapterSuggestionsWorker:
                         {
                             "file_id": file_id,
                             "drive": drive,
-                            "reason": "invalid_model_output",
+                            "reason": attempt.reason,
                         },
                     )
                     return
-                candidate_sets.append(window_candidates)
+                candidate_sets.append(attempt.candidates)
 
             # Every result receives an editorial pass. Long inputs consolidate
             # hierarchically; a single window is still edited so transcript
@@ -400,10 +424,11 @@ class ChapterSuggestionsWorker:
                             ),
                         ),
                     )
-                    if not merged:
+                    if not merged.candidates:
                         logger.warning(
                             "Chapter suggestions: editorial output invalid "
-                            "for %s after %.2fs",
+                            "(%s) for %s after %.2fs",
+                            merged.reason,
                             file_id,
                             time.monotonic() - generation_started,
                         )
@@ -412,11 +437,11 @@ class ChapterSuggestionsWorker:
                             {
                                 "file_id": file_id,
                                 "drive": drive,
-                                "reason": "invalid_model_output",
+                                "reason": merged.reason,
                             },
                         )
                         return
-                    merged_sets.append(merged)
+                    merged_sets.append(merged.candidates)
                 candidate_sets = merged_sets
                 if len(candidate_sets) == 1:
                     break

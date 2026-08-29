@@ -241,6 +241,7 @@
     "chapterCandidatesLoadError": "チャプター候補を読み込めませんでした。もう一度お試しください。",
     "chapterCandidatesActionError": "チャプターの操作に失敗しました。もう一度お試しください。",
     "chapterCandidatesGenerationFailed": "チャプター生成に失敗しました。もう一度作成してください。",
+    "chapterCandidatesTokenBudget": "モデルが出力枠を使い切り、チャプターが返りませんでした。設定の llm.max_tokens を増やすか、思考に枠を使われている場合は llm.reasoning を disabled にしてください。",
     "aiFolderActions": "AI",
     "generateFolderTags": "フォルダのAIタグ候補を作成",
     "tagsBatchQueued": "{queued}件を処理待ちに追加しました（{skipped}件はスキップ）",

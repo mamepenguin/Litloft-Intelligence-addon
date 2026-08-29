@@ -5,6 +5,7 @@ text generation with mocked AsyncOpenAI, JSON parsing with
 regex fallback, retry with exponential backoff, and rate limiting.
 """
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -72,6 +73,17 @@ def _make_internal_server_error() -> InternalServerError:
         response=response,
         body=None,
     )
+
+
+def _mock_completion(client: LLMClient, content: str | None) -> None:
+    """Answer at the transport seam, where a real request would go."""
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = content
+    response.choices[0].finish_reason = "stop"
+    response.usage = None
+    client._client = MagicMock()
+    client._client.chat.completions.create = AsyncMock(return_value=response)
 
 
 def _make_client(
@@ -229,7 +241,7 @@ class TestLLMClientGenerateJson:
             model="llama3",
         )
         client = LLMClient(config)
-        client.generate = AsyncMock(return_value='["tag1", "tag2", "tag3"]')
+        _mock_completion(client, '["tag1", "tag2", "tag3"]')
 
         result = await client.generate_json("system", "user")
 
@@ -243,7 +255,7 @@ class TestLLMClientGenerateJson:
             model="llama3",
         )
         client = LLMClient(config)
-        client.generate = AsyncMock(return_value='{"key": "value"}')
+        _mock_completion(client, '{"key": "value"}')
 
         result = await client.generate_json("system", "user")
 
@@ -258,8 +270,8 @@ class TestLLMClientGenerateJson:
         )
         client = LLMClient(config)
         # LLM returns array with surrounding text
-        client.generate = AsyncMock(
-            return_value='Here are some tags: ["tag1", "tag2"] hope that helps!'
+        _mock_completion(
+            client, 'Here are some tags: ["tag1", "tag2"] hope that helps!'
         )
 
         result = await client.generate_json("system", "user")
@@ -274,7 +286,7 @@ class TestLLMClientGenerateJson:
             model="llama3",
         )
         client = LLMClient(config)
-        client.generate = AsyncMock(return_value="This is not JSON at all")
+        _mock_completion(client, "This is not JSON at all")
 
         result = await client.generate_json("system", "user")
 
@@ -288,7 +300,7 @@ class TestLLMClientGenerateJson:
             model="llama3",
         )
         client = LLMClient(config)
-        client.generate = AsyncMock(return_value=None)
+        _mock_completion(client, None)
 
         result = await client.generate_json("system", "user")
 
@@ -302,9 +314,7 @@ class TestLLMClientGenerateJson:
             model="llama3",
         )
         client = LLMClient(config)
-        client.generate = AsyncMock(
-            return_value='Sure!\n[\n  "tag1",\n  "tag2"\n]\nDone.'
-        )
+        _mock_completion(client, 'Sure!\n[\n  "tag1",\n  "tag2"\n]\nDone.')
 
         result = await client.generate_json("system", "user")
 
@@ -405,7 +415,12 @@ class TestLLMClientRetry:
 
     @pytest.mark.asyncio
     async def test_no_retry_on_bad_request(self):
-        """400 Bad Request is permanent — no retry."""
+        """400 is permanent once our own body field is ruled out.
+
+        Reasoning suppression is on by default, so the first 400 buys one
+        re-send without that field. A 400 that survives it is the
+        provider rejecting the request itself, and is not retried.
+        """
         client = _make_client(retry_attempts=3)
         client._client = MagicMock()
         client._client.chat.completions.create = AsyncMock(
@@ -414,8 +429,11 @@ class TestLLMClientRetry:
 
         result = await client.generate("system", "user")
 
+        calls = client._client.chat.completions.create.await_args_list
         assert result is None
-        assert client._client.chat.completions.create.await_count == 1
+        assert len(calls) == 2
+        assert "extra_body" in calls[0].kwargs
+        assert "extra_body" not in calls[1].kwargs
 
     @pytest.mark.asyncio
     async def test_no_retry_on_unauthorized(self):
@@ -974,3 +992,497 @@ class TestCreateLLMClient:
         client = create_llm_client(config)
         assert isinstance(client, LLMClient)
         assert client.enabled is False
+
+
+# ---------------------------------------------------------------------------
+# llm.reasoning -> request body
+# ---------------------------------------------------------------------------
+
+
+def _reasoning_client(reasoning: str) -> LLMClient:
+    """An enabled client whose request kwargs can be inspected."""
+    client = LLMClient(
+        LLMConfig(
+            provider="openai_compatible",
+            base_url="http://localhost:11434/v1",
+            model="llama3",
+            vision_model="llava",
+            retry_attempts=0,
+            reasoning=reasoning,
+        )
+    )
+    client._client = MagicMock()
+    client._client.chat.completions.create = AsyncMock(
+        return_value=_make_response_obj("{}")
+    )
+    return client
+
+
+def _make_tool_response_obj() -> MagicMock:
+    """A tool-free assistant turn, enough for chat_with_tools to parse."""
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = "done"
+    response.choices[0].message.tool_calls = []
+    response.choices[0].finish_reason = "stop"
+    return response
+
+
+def _sent_kwargs(client: LLMClient) -> dict:
+    return client._client.chat.completions.create.await_args.kwargs
+
+
+_REASONING_OFF = {"reasoning": {"enabled": False}}
+
+
+class TestReasoningSuppression:
+    """`reasoning: "disabled"` reaches every OpenAI-compatible call."""
+
+    @pytest.mark.asyncio
+    async def test_generate_sends_extension_when_disabled(self):
+        client = _reasoning_client("disabled")
+
+        await client.generate("system", "user")
+
+        assert _sent_kwargs(client)["extra_body"] == _REASONING_OFF
+
+    @pytest.mark.asyncio
+    async def test_generate_omits_extension_under_auto(self):
+        """"auto" is the escape hatch for providers that reject it."""
+        client = _reasoning_client("auto")
+
+        await client.generate("system", "user")
+
+        assert "extra_body" not in _sent_kwargs(client)
+
+    @pytest.mark.asyncio
+    async def test_generate_json_sends_extension_when_disabled(self):
+        client = _reasoning_client("disabled")
+
+        await client.generate_json("system", "user")
+
+        assert _sent_kwargs(client)["extra_body"] == _REASONING_OFF
+
+    @pytest.mark.asyncio
+    async def test_chat_with_tools_sends_extension_when_disabled(self):
+        client = _reasoning_client("disabled")
+        client._client.chat.completions.create = AsyncMock(
+            return_value=_make_tool_response_obj()
+        )
+
+        await client.chat_with_tools([{"role": "user", "content": "hi"}])
+
+        assert _sent_kwargs(client)["extra_body"] == _REASONING_OFF
+
+    @pytest.mark.asyncio
+    async def test_stream_sends_extension_when_disabled(self):
+        client = _reasoning_client("disabled")
+        client._client.chat.completions.create = AsyncMock(
+            return_value=_async_iter([])
+        )
+
+        async for _ in client.generate_stream("system", "user"):
+            pass
+
+        assert _sent_kwargs(client)["extra_body"] == _REASONING_OFF
+
+    @pytest.mark.asyncio
+    async def test_stream_omits_extension_under_auto(self):
+        client = _reasoning_client("auto")
+        client._client.chat.completions.create = AsyncMock(
+            return_value=_async_iter([])
+        )
+
+        async for _ in client.generate_stream("system", "user"):
+            pass
+
+        assert "extra_body" not in _sent_kwargs(client)
+
+    @pytest.mark.asyncio
+    async def test_vision_sends_extension_when_disabled(self):
+        client = _reasoning_client("disabled")
+
+        await client.generate_vision(b"\x89PNG", "image/png", "system", "user")
+
+        assert _sent_kwargs(client)["extra_body"] == _REASONING_OFF
+
+    @pytest.mark.asyncio
+    async def test_a_rejecting_provider_is_retried_without_the_extension(self):
+        """OpenAI 400s on an unknown body field; that must not kill it."""
+        client = _reasoning_client("disabled")
+        good = _make_classified_response("done")
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=[_make_status_error(400), good, good]
+        )
+
+        first = await client.generate("system", "user")
+        await client.generate("system", "user")
+
+        calls = client._client.chat.completions.create.await_args_list
+        assert first == "done"
+        assert "extra_body" in calls[0].kwargs
+        assert "extra_body" not in calls[1].kwargs
+        # The rejection is remembered, so the cost is one request total.
+        assert "extra_body" not in calls[2].kwargs
+
+    @pytest.mark.asyncio
+    async def test_a_400_without_the_extension_still_fails(self):
+        """The retry is for the field, not a way to ignore real 400s."""
+        client = _reasoning_client("auto")
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=_make_status_error(400)
+        )
+
+        assert await client.generate("system", "user") is None
+        assert client._client.chat.completions.create.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_rejected_stream_is_reopened_without_the_extension(self):
+        client = _reasoning_client("disabled")
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=[
+                _make_status_error(400),
+                _async_iter([_make_stream_chunk("hello")]),
+            ]
+        )
+
+        deltas = [d async for d in client.generate_stream("system", "user")]
+
+        calls = client._client.chat.completions.create.await_args_list
+        assert deltas == ["hello"]
+        assert "extra_body" in calls[0].kwargs
+        assert "extra_body" not in calls[1].kwargs
+
+    @pytest.mark.asyncio
+    async def test_a_stream_400_without_the_extension_yields_nothing(self):
+        client = _reasoning_client("auto")
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=_make_status_error(400)
+        )
+
+        deltas = [d async for d in client.generate_stream("system", "user")]
+
+        assert deltas == []
+        assert client._client.chat.completions.create.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_tool_calls_survive_a_rejected_extension(self):
+        client = _reasoning_client("disabled")
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=[_make_status_error(400), _make_tool_response_obj()]
+        )
+
+        result = await client.chat_with_tools(
+            [{"role": "user", "content": "hi"}]
+        )
+
+        calls = client._client.chat.completions.create.await_args_list
+        assert result is not None
+        assert result.content == "done"
+        assert "extra_body" in calls[0].kwargs
+        assert "extra_body" not in calls[1].kwargs
+
+    @pytest.mark.asyncio
+    async def test_the_request_the_provider_sent_is_left_alone(self):
+        """Dropping the field builds a new body; it does not edit one."""
+        client = _reasoning_client("disabled")
+        sent: list[dict] = []
+
+        async def capture(**kwargs):
+            sent.append(kwargs)
+            if len(sent) == 1:
+                raise _make_status_error(400)
+            return _make_classified_response("done")
+
+        client._client.chat.completions.create = AsyncMock(side_effect=capture)
+
+        await client.generate("system", "user")
+
+        # The first dict is the one handed to the provider; a helper that
+        # mutated its argument would have emptied it retroactively.
+        assert sent[0]["extra_body"] == {"reasoning": {"enabled": False}}
+        assert "extra_body" not in sent[1]
+
+    def test_ollama_body_is_unchanged_by_the_knob(self):
+        """Ollama always sends think: false; the extension is OpenAI-only."""
+        client = create_llm_client(
+            LLMConfig(
+                provider="ollama",
+                base_url="http://localhost:11434",
+                model="llama3",
+                reasoning="disabled",
+            )
+        )
+
+        body = client._build_body(
+            "sys",
+            "usr",
+            stream=False,
+            temperature=0.1,
+            max_tokens=128,
+            response_format=None,
+        )
+
+        assert body["think"] is False
+        assert "reasoning" not in body
+        assert "extra_body" not in body
+
+
+# ---------------------------------------------------------------------------
+# Failure classification
+# ---------------------------------------------------------------------------
+
+
+def _make_classified_response(
+    content: str | None,
+    *,
+    finish_reason: str = "stop",
+    completion_tokens: int = 10,
+    reasoning_tokens: int = 0,
+) -> MagicMock:
+    """A response carrying the fields the classifier reads."""
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = content
+    response.choices[0].finish_reason = finish_reason
+    response.usage.completion_tokens = completion_tokens
+    response.usage.completion_tokens_details.reasoning_tokens = reasoning_tokens
+    return response
+
+
+def _classifying_client(response: MagicMock) -> LLMClient:
+    client = _reasoning_client("auto")
+    client._client.chat.completions.create = AsyncMock(return_value=response)
+    return client
+
+
+class TestJsonFailureClassification:
+    """A silent None is the bug; every failure has to name itself."""
+
+    @pytest.mark.asyncio
+    async def test_budget_spent_on_reasoning_is_named(self, caplog):
+        client = _classifying_client(
+            _make_classified_response(
+                None,
+                finish_reason="length",
+                completion_tokens=2048,
+                reasoning_tokens=2250,
+            )
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = await client.generate_json_result("system", "user")
+
+        assert result.value is None
+        assert result.failure == "token_budget"
+        assert "length" in caplog.text
+        assert "2250" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_empty_content_without_length_is_empty(self):
+        client = _classifying_client(
+            _make_classified_response(None, finish_reason="stop")
+        )
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.failure == "empty"
+
+    @pytest.mark.asyncio
+    async def test_unparseable_content_is_malformed(self):
+        client = _classifying_client(
+            _make_classified_response("not json at all")
+        )
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value is None
+        assert result.failure == "malformed"
+
+    @pytest.mark.asyncio
+    async def test_truncated_json_reports_the_budget_not_the_syntax(self):
+        """The remedy is a budget change, so the cause outranks the symptom."""
+        client = _classifying_client(
+            _make_classified_response(
+                '{"chapters": [{"start_time": 0.24, "end_',
+                finish_reason="length",
+                completion_tokens=2048,
+                reasoning_tokens=1900,
+            )
+        )
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value is None
+        assert result.failure == "token_budget"
+
+    @pytest.mark.asyncio
+    async def test_good_response_carries_no_failure(self):
+        client = _classifying_client(
+            _make_classified_response('{"chapters": []}')
+        )
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value == {"chapters": []}
+        assert result.failure is None
+
+    @pytest.mark.asyncio
+    async def test_request_failure_is_named(self):
+        client = _reasoning_client("auto")
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=_make_status_error(401)
+        )
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value is None
+        assert result.failure == "request_failed"
+
+    @pytest.mark.asyncio
+    async def test_missing_usage_fields_do_not_crash_the_classifier(self):
+        """Providers omit usage details; absence must not raise."""
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = None
+        response.choices[0].finish_reason = "length"
+        response.usage = None
+        client = _classifying_client(response)
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.failure == "token_budget"
+
+
+class TestClassificationHonesty:
+    """A classification that overstates its evidence misdirects the fix."""
+
+    @pytest.mark.asyncio
+    async def test_truncated_text_is_not_reported_as_absent(self, caplog):
+        """generate() hands the text back, so the log must not deny it."""
+        client = _classifying_client(
+            _make_classified_response(
+                "A summary that ran out of ro", finish_reason="length"
+            )
+        )
+
+        with caplog.at_level(logging.WARNING):
+            text = await client.generate("system", "user")
+
+        assert text == "A summary that ran out of ro"
+        assert "truncated" in caplog.text.lower()
+        assert "no usable output" not in caplog.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_reasoning_without_truncation_is_merely_empty(self):
+        """Thinking is not proof the budget ran out; finish_reason is."""
+        client = _classifying_client(
+            _make_classified_response(
+                None,
+                finish_reason="stop",
+                completion_tokens=500,
+                reasoning_tokens=500,
+            )
+        )
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.failure == "empty"
+
+
+class TestGenerateJsonDelegation:
+    """The existing entry points keep their shape."""
+
+    @pytest.mark.asyncio
+    async def test_generate_json_returns_the_value_only(self):
+        client = _classifying_client(
+            _make_classified_response('{"ok": true}')
+        )
+
+        assert await client.generate_json("system", "user") == {"ok": True}
+
+    @pytest.mark.asyncio
+    async def test_generate_json_returns_none_on_failure(self):
+        client = _classifying_client(
+            _make_classified_response(None, finish_reason="length")
+        )
+
+        assert await client.generate_json("system", "user") is None
+
+    @pytest.mark.asyncio
+    async def test_generate_still_returns_truncated_text(self):
+        """Classification observes; it does not withhold what came back."""
+        client = _classifying_client(
+            _make_classified_response("half an ans", finish_reason="length")
+        )
+
+        assert await client.generate("system", "user") == "half an ans"
+
+
+class TestOllamaJsonFailureClassification:
+    """The ollama client exposes the same result shape."""
+
+    def _client(self, handler) -> OllamaLLMClient:
+        client = create_llm_client(
+            LLMConfig(
+                provider="ollama",
+                base_url="http://localhost:11434",
+                model="llama3",
+                retry_attempts=0,
+            )
+        )
+        client._http = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        )
+        return client
+
+    def _responds(self, content: str, done_reason: str = "stop"):
+        return lambda request: httpx.Response(
+            200,
+            json={
+                "message": {"content": content},
+                "done_reason": done_reason,
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_unparseable_content_is_malformed(self):
+        client = self._client(self._responds("not json"))
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value is None
+        assert result.failure == "malformed"
+
+    @pytest.mark.asyncio
+    async def test_request_failure_is_named(self):
+        def refuse(request):
+            raise httpx.ConnectError("refused", request=request)
+
+        client = self._client(refuse)
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value is None
+        assert result.failure == "request_failed"
+
+    @pytest.mark.asyncio
+    async def test_num_predict_truncation_is_a_budget_failure(self):
+        """think: false stops reasoning, not an over-long answer."""
+        client = self._client(
+            self._responds('{"chapters": [{"start_', done_reason="length")
+        )
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value is None
+        assert result.failure == "token_budget"
+
+    @pytest.mark.asyncio
+    async def test_complete_response_carries_no_failure(self):
+        client = self._client(self._responds('{"ok": true}'))
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value == {"ok": True}
+        assert result.failure is None

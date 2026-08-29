@@ -16,6 +16,10 @@ const translations = vi.hoisted(() => ({
   chapterCandidatesActionError: "The chapter action failed. Try again.",
   chapterCandidatesGenerationFailed:
     "Chapter generation failed. Try creating them again.",
+  chapterCandidatesTokenBudget:
+    "The model ran out of output budget before it finished, so no chapters "
+    + "came back. Raise llm.max_tokens, or set llm.reasoning to disabled if "
+    + "the provider is spending the budget on thinking.",
 }));
 const translate = vi.hoisted(
   () => (key: keyof typeof translations) => translations[key],
@@ -262,6 +266,32 @@ describe("SuggestedChaptersSection", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create again" })).toBeEnabled();
     expect(getSuggestedChapters).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the token budget when that is what failed", async () => {
+    const { rerender } = renderSection();
+    expect(await screen.findByText("Opening")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Create again" }));
+    expect(
+      await screen.findByRole("button", { name: "Creating chapters..." }),
+    ).toBeDisabled();
+
+    wsEvent.value = {
+      event: "intelligence.chapter_suggestions.failed",
+      data: { file_id: "f1", reason: "model_token_budget" },
+    };
+    rerender(
+      <SuggestedChaptersSection fileId="f1" drive="media" fileType="video" />,
+    );
+
+    expect(
+      await screen.findByText(
+        "The model ran out of output budget before it finished, so no "
+        + "chapters came back. Raise llm.max_tokens, or set llm.reasoning to "
+        + "disabled if the provider is spending the budget on thinking.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create again" })).toBeEnabled();
   });
 
   it("shows an actionable error when an operation fails", async () => {

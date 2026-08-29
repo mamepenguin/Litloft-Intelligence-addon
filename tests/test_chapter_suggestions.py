@@ -10,6 +10,11 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base, _create_suggested_chapters_table
+from app.llm import (
+    FAILURE_MALFORMED,
+    FAILURE_TOKEN_BUDGET,
+    JsonGeneration,
+)
 from app.models import IndexedFile, TranscriptChunk
 from app.prompt_loader import render
 from app.workers.chapter_suggestions import (
@@ -106,15 +111,17 @@ class FakeLLM:
     def __init__(self):
         self.calls: list[str] = []
 
-    async def generate_json(self, _system: str, user: str, **_kwargs):
+    async def generate_json_result(self, _system: str, user: str, **_kwargs):
         self.calls.append(user)
         if "CANDIDATES" in user:
-            return {"chapters": [
+            return JsonGeneration({"chapters": [
                 {"start_time": 0, "end_time": 10, "title": "Opening"},
                 {"start_time": 10, "end_time": None, "title": "Discussion"},
-            ]}
+            ]}, None)
         first = float(user.split("[")[1].split("-")[0])
-        return {"chapters": [{"start_time": first, "end_time": first + 10, "title": f"At {first:g}"}]}
+        return JsonGeneration({"chapters": [
+            {"start_time": first, "end_time": first + 10, "title": f"At {first:g}"}
+        ]}, None)
 
 
 def test_chapter_prompts_define_semantic_navigation_granularity():
@@ -140,22 +147,22 @@ class GranularSingleWindowLLM:
     def __init__(self):
         self.calls: list[tuple[str, dict]] = []
 
-    async def generate_json(self, _system: str, user: str, **kwargs):
+    async def generate_json_result(self, _system: str, user: str, **kwargs):
         self.calls.append((user, kwargs))
         if "PROVISIONAL CANDIDATES" in user:
             assert "Late ending" in user
-            return {"chapters": [
+            return JsonGeneration({"chapters": [
                 {"start_time": 0, "end_time": 120, "title": "Main subject"},
                 {"start_time": 120, "end_time": None, "title": "Late ending"},
-            ]}
-        return {"chapters": [
+            ]}, None)
+        return JsonGeneration({"chapters": [
             {
                 "start_time": float(index * 10),
                 "end_time": float(index * 10 + 10),
                 "title": "Late ending" if index == 13 else f"Micro topic {index}",
             }
             for index in range(14)
-        ]}
+        ]}, None)
 
 
 @pytest.mark.asyncio
@@ -196,15 +203,28 @@ async def test_single_window_editor_receives_all_candidates_without_head_truncat
     ]
 
 
+class TokenBudgetLLM:
+    """Every attempt loses its budget to the provider's own thinking."""
+
+    enabled = True
+
+    def __init__(self):
+        self.calls: list[str] = []
+
+    async def generate_json_result(self, _system: str, user: str, **_kwargs):
+        self.calls.append(user)
+        return JsonGeneration(None, FAILURE_TOKEN_BUDGET)
+
+
 class InvalidJsonLLM:
     enabled = True
 
     def __init__(self):
         self.calls: list[str] = []
 
-    async def generate_json(self, _system: str, user: str, **_kwargs):
+    async def generate_json_result(self, _system: str, user: str, **_kwargs):
         self.calls.append(user)
-        return None
+        return JsonGeneration(None, FAILURE_MALFORMED)
 
 
 @pytest.mark.asyncio
@@ -684,3 +704,46 @@ async def test_per_drive_policy_off_is_hidden(chapter_db, monkeypatch):
     with pytest.raises(Exception) as exc:
         await get_chapter_suggestions("file00000001", "Media")
     assert getattr(exc.value, "status_code", None) == 404
+
+
+@pytest.mark.asyncio
+async def test_token_budget_failure_names_its_own_reason(
+    chapter_db, monkeypatch
+):
+    """A budget spent on reasoning has a different remedy than bad JSON."""
+    _seed_transcript(chapter_db)
+    emitted: list[tuple[str, dict]] = []
+
+    async def record_event(event: str, data: dict):
+        emitted.append((event, data))
+
+    monkeypatch.setattr(
+        "app.workers.chapter_suggestions.settings",
+        SimpleNamespace(
+            features=SimpleNamespace(chapter_suggestions="manual"),
+            llm=SimpleNamespace(output_language="en", model="test-model"),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.workers.chapter_suggestions.is_chapter_suggestions_enabled",
+        lambda _drive: _async_true(),
+    )
+    monkeypatch.setattr(
+        "app.workers.chapter_suggestions.emit_chapter_suggestions_event",
+        record_event,
+    )
+    llm = TokenBudgetLLM()
+
+    await ChapterSuggestionsWorker(llm)._process_file(
+        "file00000001", force=True
+    )
+
+    assert len(llm.calls) == 2
+    assert emitted == [(
+        "intelligence.chapter_suggestions.failed",
+        {
+            "file_id": "file00000001",
+            "drive": "Media",
+            "reason": "model_token_budget",
+        },
+    )]
