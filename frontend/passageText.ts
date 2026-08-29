@@ -1,0 +1,111 @@
+/**
+ * Display-layer transforms for a passage.
+ *
+ * A passage arrives as a whole chunk — up to 400 characters, cut where
+ * the chunker cut, which is routinely mid-word. Nothing here rewrites
+ * the string: the section's guarantee is that what it shows is
+ * byte-identical to the text whose vector produced the score, so these
+ * functions only choose *which* slice to show.
+ *
+ * Spec ``2026-08-30-related-passages-recognition-ui.md`` §7.5.
+ */
+
+/** Run-up kept in front of the term the window is centred on. */
+const LEAD_CHARS = 30;
+
+/**
+ * How far forward to look for a sentence boundary.
+ *
+ * Only the *first* terminator is a candidate. Everything after it is a
+ * complete sentence and therefore real content — snapping past those
+ * would discard the passage rather than tidy its opening.
+ */
+const SNAP_LOOKAHEAD = 60;
+
+/** Below this many characters left, snapping would leave a stub. */
+const MIN_REMAINDER = 12;
+
+const CJK_TERMINATORS = "。．！？…\n";
+const ASCII_TERMINATORS = ".!?";
+/** Punctuation that trails a terminator and belongs to the sentence before it. */
+const TRAILING_MARKS = "」』）】〉》\"'";
+
+export interface PassageWindow {
+  text: string;
+  /** True when the slice starts mid-passage and needs a leading ellipsis. */
+  truncatedStart: boolean;
+}
+
+/**
+ * Where a passage should start being shown.
+ *
+ * `line-clamp` still decides where it ends; this only moves the left
+ * edge. Two things move it:
+ *
+ * 1. **The first matched term**, so a term buried at the end of a chunk
+ *    is on screen at all. Measured on real pairs, that happens often
+ *    enough that highlighting without windowing would leave rows
+ *    unchanged.
+ * 2. **The nearest sentence boundary**, which is what stops a row
+ *    opening on the severed word a chunk boundary left behind. This one
+ *    is punctuation-based and so works in any language — and it is the
+ *    only one of the two that applies when there are no terms, which is
+ *    every non-Japanese row (§8) and 14% of Japanese ones.
+ */
+export function passageWindow(text: string, terms: string[]): PassageWindow {
+  if (!text) return { text: "", truncatedStart: false };
+
+  const matchAt = earliestMatch(text, terms);
+  const base = matchAt >= 0 ? Math.max(0, matchAt - LEAD_CHARS) : 0;
+  const snapped = sentenceStartFrom(text, base);
+
+  let start = base;
+  if (
+    snapped !== null &&
+    // Never step past the term the window exists to show.
+    (matchAt < 0 || snapped <= matchAt) &&
+    text.length - snapped >= MIN_REMAINDER
+  ) {
+    start = snapped;
+  }
+
+  return { text: text.slice(start), truncatedStart: start > 0 };
+}
+
+/** Index of the earliest occurrence of any term, or -1. */
+function earliestMatch(text: string, terms: string[]): number {
+  let best = -1;
+  for (const term of terms) {
+    if (!term) continue;
+    const at = text.indexOf(term);
+    if (at >= 0 && (best < 0 || at < best)) best = at;
+  }
+  return best;
+}
+
+/**
+ * Start of the first whole sentence at or after ``from``, or null.
+ *
+ * An ASCII terminator counts only when whitespace follows it, so a
+ * decimal point or an abbreviation does not split the line.
+ */
+function sentenceStartFrom(text: string, from: number): number | null {
+  const limit = Math.min(from + SNAP_LOOKAHEAD, text.length - 1);
+  for (let i = from; i <= limit; i += 1) {
+    const ch = text[i];
+    const isTerminator =
+      CJK_TERMINATORS.includes(ch) ||
+      (ASCII_TERMINATORS.includes(ch) && /\s/.test(text[i + 1] ?? " "));
+    if (!isTerminator) continue;
+
+    let start = i + 1;
+    while (
+      start < text.length &&
+      (/\s/.test(text[start]) || TRAILING_MARKS.includes(text[start]))
+    ) {
+      start += 1;
+    }
+    return start;
+  }
+  return null;
+}
