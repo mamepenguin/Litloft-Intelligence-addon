@@ -11,6 +11,14 @@
         "help": "Sends media transcripts to the configured LLM to create chapter candidates. Candidates are never applied until you approve them.",
         "warning": "Chapter suggestion jobs already in progress will continue after you turn this OFF. Restart the container to apply the change immediately."
       }
+    },
+    "unverifiedSource": {
+      "title": "Do you trust this source?",
+      "explanation": "This file is findable in search, but it is not yet used as evidence in answers. Once you have read it and decided it holds up, it can be cited.",
+      "relatedHeading": "Related files",
+      "trust": "Trust as a source",
+      "dismiss": "Not for now",
+      "distilHint": "To keep just one passage, select it in the document and add it to the quotation basket."
     }
   },
   "semanticSearch": {

@@ -1,585 +1,919 @@
 {
-    "label": "Intelligence",
-    "description": "Semantic search, AI summaries, tag suggestions, transcription, and Ask over your files.",
-    "icon": "brain",
-    "type": "external_service",
-    "scope": "drive",
-    "href": "/drive/{drive}/addons/intelligence",
-    "slots": {
-        "search-modes": [
-            {"id": "semantic-search", "label": "Semantic Search", "priority": 10},
-            {"id": "find-mode", "label": "Find", "priority": 15}
-        ],
-        "file-detail-sections": [
-            {"id": "suggested-tags", "label": "Suggested Tags", "priority": 5},
-            {"id": "suggested-chapters", "label": "Suggested Chapters", "priority": 6},
-            {"id": "summary", "label": "AI Summary", "priority": 7},
-            {"id": "detailed-summary", "label": "AI Detailed Summary", "priority": 8},
-            {"id": "visual-description", "label": "AI Visual Description", "priority": 9},
-            {"id": "visual-index", "label": "Visual Index", "priority": 20},
-            {"id": "clip-frames", "label": "CLIP Frames", "priority": 21},
-            {"id": "index-details", "label": "Index Details", "priority": 30},
-            {"id": "similar-files", "label": "Similar Files", "priority": 40}
-        ],
-        "player-side": [
-            {"id": "transcript", "label": "Transcript", "priority": 10}
-        ],
-        "drive-home-sections": [
-            {"id": "pickup", "label": "Pickup", "priority": 5}
-        ],
-        "dashboard-widgets": [
-            {"id": "index-status", "label": "Index Status", "priority": 10}
-        ],
-        "folder-actions": [
-            {"id": "folder-ai-actions", "label": "AI", "priority": 10}
-        ],
-        "admin-settings-sections": [],
-        "admin-intelligence-sections": [
-            {"id": "admin-features", "label": "Features", "priority": 5},
-            {"id": "admin-llm", "label": "LLM Provider", "priority": 7},
-            {"id": "admin-embedding", "label": "Text Embedding", "priority": 8},
-            {"id": "admin-transcription", "label": "Transcription Settings", "priority": 10},
-            {"id": "admin-rag", "label": "RAG Behaviour", "priority": 15}
-        ]
+  "label": "Intelligence",
+  "description": "Semantic search, AI summaries, tag suggestions, transcription, and Ask over your files.",
+  "icon": "brain",
+  "type": "external_service",
+  "scope": "drive",
+  "href": "/drive/{drive}/addons/intelligence",
+  "slots": {
+    "search-modes": [
+      {
+        "id": "semantic-search",
+        "label": "Semantic Search",
+        "priority": 10
+      },
+      {
+        "id": "find-mode",
+        "label": "Find",
+        "priority": 15
+      }
+    ],
+    "file-detail-sections": [
+      {
+        "id": "unverified-source",
+        "label": "Unverified Source",
+        "priority": 1
+      },
+      {
+        "id": "suggested-tags",
+        "label": "Suggested Tags",
+        "priority": 5
+      },
+      {
+        "id": "suggested-chapters",
+        "label": "Suggested Chapters",
+        "priority": 6
+      },
+      {
+        "id": "summary",
+        "label": "AI Summary",
+        "priority": 7
+      },
+      {
+        "id": "detailed-summary",
+        "label": "AI Detailed Summary",
+        "priority": 8
+      },
+      {
+        "id": "visual-description",
+        "label": "AI Visual Description",
+        "priority": 9
+      },
+      {
+        "id": "visual-index",
+        "label": "Visual Index",
+        "priority": 20
+      },
+      {
+        "id": "clip-frames",
+        "label": "CLIP Frames",
+        "priority": 21
+      },
+      {
+        "id": "index-details",
+        "label": "Index Details",
+        "priority": 30
+      },
+      {
+        "id": "similar-files",
+        "label": "Similar Files",
+        "priority": 40
+      }
+    ],
+    "player-side": [
+      {
+        "id": "transcript",
+        "label": "Transcript",
+        "priority": 10
+      }
+    ],
+    "drive-home-sections": [
+      {
+        "id": "pickup",
+        "label": "Pickup",
+        "priority": 5
+      }
+    ],
+    "dashboard-widgets": [
+      {
+        "id": "index-status",
+        "label": "Index Status",
+        "priority": 10
+      }
+    ],
+    "folder-actions": [
+      {
+        "id": "folder-ai-actions",
+        "label": "AI",
+        "priority": 10
+      }
+    ],
+    "admin-settings-sections": [],
+    "admin-intelligence-sections": [
+      {
+        "id": "admin-features",
+        "label": "Features",
+        "priority": 5
+      },
+      {
+        "id": "admin-llm",
+        "label": "LLM Provider",
+        "priority": 7
+      },
+      {
+        "id": "admin-embedding",
+        "label": "Text Embedding",
+        "priority": 8
+      },
+      {
+        "id": "admin-transcription",
+        "label": "Transcription Settings",
+        "priority": 10
+      },
+      {
+        "id": "admin-rag",
+        "label": "RAG Behaviour",
+        "priority": 15
+      }
+    ]
+  },
+  "policy_features": [
+    {
+      "name": "transcription_cloud",
+      "default": true,
+      "i18n_key": "intelligence.policyFeatures.transcriptionCloud"
     },
-    "policy_features": [
-        {
-            "name": "transcription_cloud",
-            "default": true,
-            "i18n_key": "intelligence.policyFeatures.transcriptionCloud"
-        },
-        {
-            "name": "chapter_suggestions",
-            "default": true,
-            "i18n_key": "intelligence.policyFeatures.chapterSuggestions"
-        }
-    ],
-    "event_hooks": [
-        {"event": "scan.complete",   "url": "http://intelligence:8100/webhook/scan-complete",
-      "secret_env": "SEARCH_WEBHOOK_SECRET",   "addon": "intelligence", "feature": "index"},
-        {"event": "files.deleted",   "url": "http://intelligence:8100/webhook/files-deleted",
-      "secret_env": "SEARCH_WEBHOOK_SECRET",   "addon": "intelligence", "feature": "index"},
-        {"event": "files.restored",  "url": "http://intelligence:8100/webhook/files-restored",
-      "secret_env": "SEARCH_WEBHOOK_SECRET",  "addon": "intelligence", "feature": "index"},
-        {"event": "files.missing",   "url": "http://intelligence:8100/webhook/files-missing",
-      "secret_env": "SEARCH_WEBHOOK_SECRET",   "addon": "intelligence", "feature": "index"},
-        {"event": "files.recovered", "url": "http://intelligence:8100/webhook/files-recovered",
-      "secret_env": "SEARCH_WEBHOOK_SECRET", "addon": "intelligence", "feature": "index"},
-        {"event": "files.purged",    "url": "http://intelligence:8100/webhook/files-purged",
-      "secret_env": "SEARCH_WEBHOOK_SECRET",    "addon": "intelligence", "feature": "index"},
-        {"event": "files.moved",     "url": "http://intelligence:8100/webhook/files-moved",
-      "secret_env": "SEARCH_WEBHOOK_SECRET",     "addon": "intelligence", "feature": "index"}
-    ],
-    "proxy": {
-        "target_env": "INTELLIGENCE_SERVICE_URL",
-        "target_default": "http://intelligence:8100",
-        "health_check": "/health",
-        "routes": [
-            {
-                "path": "/pickup",
-                "methods": ["GET"],
-                "pre_check": {"type": "addon_feature", "feature": "index"},
-                "response_filter": null
-            },
-            {
-                "path": "/search",
-                "methods": ["GET"],
-                "pre_check": {"type": "addon_feature", "feature": "search"},
-                "response_filter": {
-                    "type": "current_drive_only",
-                    "array_path": "results",
-                    "drive_field": "drive"
-                }
-            },
-            {
-                "path": "/search/compare",
-                "methods": ["GET"],
-                "pre_check": {"type": "addon_feature", "feature": "search"},
-                "response_filter": {
-                    "type": "current_drive_only_nested",
-                    "paths": {
-                        "rrf.results": "drive",
-                        "cosine.results": "drive",
-                        "rrf_no_cutoff.results": "drive",
-                        "cosine_no_cutoff.results": "drive"
-                    }
-                }
-            },
-            {
-                "path": "/status",
-                "methods": ["GET"],
-                "drive_optional": true,
-                "pre_check": {"type": "admin"},
-                "response_filter": null
-            },
-            {
-                "path": "/index-details",
-                "methods": ["GET"],
-                "drive_optional": true,
-                "pre_check": {"type": "admin"},
-                "response_filter": null
-            },
-            {
-                "path": "/similar/{file_id}",
-                "methods": ["GET"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "response_filter": {
-                    "type": "current_drive_only",
-                    "array_path": "results",
-                    "drive_field": "drive"
-                }
-            },
-            {
-                "path": "/debug/similar/{file_id}",
-                "methods": ["GET"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "response_filter": null
-            },
-            {
-                "path": "/debug/search",
-                "methods": ["GET"],
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/transcript",
-                "methods": ["GET"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/subtitles.vtt",
-                "methods": ["GET"],
-                "drive_optional": true,
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/index-details",
-                "methods": ["GET"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/reindex",
-                "methods": ["POST"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/clip-timestamps",
-                "methods": ["GET"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/clip-analysis",
-                "methods": ["GET"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/pdf-markdown",
-                "methods": ["GET"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/frame",
-                "methods": ["GET"],
-                "drive_optional": true,
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "response_filter": null,
-                "stream": true
-            },
-            {
-                "path": "/files/{file_id}/visual-index",
-                "methods": ["GET"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "addon_feature": "video_visual_index",
-                "require_drive": true,
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/visual-index/generate",
-                "methods": ["POST"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "addon_feature": "video_visual_index",
-                "require_drive": true,
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/visual-index/retry",
-                "methods": ["POST"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "addon_feature": "video_visual_index",
-                "require_drive": true,
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/suggested-tags",
-                "methods": ["GET"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/chapter-suggestions",
-                "methods": ["GET"],
-                "pre_check": {"type": "file_access", "param": "file_id"},
-                "addon_feature": "chapter_suggestions",
-                "require_drive": true,
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/chapter-suggestions/generate",
-                "methods": ["POST"],
-                "pre_check": {"type": "file_access", "param": "file_id"},
-                "addon_feature": "chapter_suggestions",
-                "require_drive": true,
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/chapter-suggestions/approve",
-                "methods": ["POST"],
-                "pre_check": {"type": "file_access", "param": "file_id"},
-                "addon_feature": "chapter_suggestions",
-                "require_drive": true,
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/chapter-suggestions/dismiss",
-                "methods": ["POST"],
-                "pre_check": {"type": "file_access", "param": "file_id"},
-                "addon_feature": "chapter_suggestions",
-                "require_drive": true,
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/suggested-tags/dismiss",
-                "methods": ["POST"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/suggested-tags/regenerate",
-                "methods": ["POST"],
-                "pre_check": {"type": "addon_feature", "feature": "auto_tags"},
-                "response_filter": null
-            },
-            {
-                "path": "/batch/suggested-tags",
-                "methods": ["POST"],
-                "pre_check": {"type": "addon_feature", "feature": "auto_tags"},
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/summary",
-                "methods": ["GET"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/summary/regenerate",
-                "methods": ["POST"],
-                "pre_check": {"type": "addon_feature", "feature": "summaries"},
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/summary/edit",
-                "methods": ["POST"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/summary/revert",
-                "methods": ["POST"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "response_filter": null
-            },
-            {
-                "path": "/batch/summaries",
-                "methods": ["POST"],
-                "pre_check": {"type": "addon_feature", "feature": "summaries"},
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/summary/detailed",
-                "methods": ["GET"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/summary/detailed",
-                "methods": ["POST"],
-                "pre_check": {"type": "addon_feature", "feature": "detailed_summaries"},
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/summary/detailed",
-                "methods": ["DELETE"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/summary/detailed.md",
-                "methods": ["GET"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/summary/detailed/citations",
-                "methods": ["GET"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/chunks/{chunk_id}/excerpt",
-                "methods": ["GET"],
-                "pre_check": {"type": "file_access", "param": "file_id"},
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/summary/detailed/section",
-                "methods": ["PUT"],
-                "pre_check": {"type": "file_access", "param": "file_id"},
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/summary/detailed/revert",
-                "methods": ["POST"],
-                "pre_check": {"type": "file_access", "param": "file_id"},
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/summary/detailed/regenerate",
-                "methods": ["POST"],
-                "pre_check": {"type": "file_access", "param": "file_id"},
-                "response_filter": null
-            },
-            {
-                "path": "/ask",
-                "methods": ["POST"],
-                "pre_check": {"type": "addon_feature", "feature": "rag"},
-                "stream": true,
-                "response_filter": {
-                    "type": "current_drive_only_nested",
-                    "paths": {
-                        "citations": "drive",
-                        "sources": "drive"
-                    }
-                }
-            },
-            {
-                "path": "/find",
-                "methods": ["POST"],
-                "pre_check": {"type": "addon_feature", "feature": "rag"},
-                "timeout": 90,
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/visual_description",
-                "methods": ["GET"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "addon_feature": "vision_describe",
-                "require_drive": true,
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/visual_description",
-                "methods": ["DELETE"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "addon_feature": "vision_describe",
-                "require_drive": true,
-                "response_filter": null
-            },
-            {
-                "path": "/files/{file_id}/visual_description/generate",
-                "methods": ["POST"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "addon_feature": "vision_describe",
-                "require_drive": true,
-                "response_filter": null
-            },
-            {
-                "path": "/folders/visual_description/generate",
-                "methods": ["POST"],
-                "pre_check": {"type": "addon_feature", "feature": "vision_describe"},
-                "require_drive": true,
-                "response_filter": null
-            },
-            {
-                "path": "/refine/files/{file_id}",
-                "methods": ["POST"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "addon_feature": "transcript_refine",
-                "require_drive": true,
-                "response_filter": null
-            },
-            {
-                "path": "/refine/files/{file_id}/revert",
-                "methods": ["POST"],
-                "pre_check": {
-                    "type": "file_access",
-                    "param": "file_id"
-                },
-                "addon_feature": "transcript_refine",
-                "require_drive": true,
-                "response_filter": null
-            },
-            {
-                "path": "/refine/folders",
-                "methods": ["POST"],
-                "pre_check": {"type": "addon_feature", "feature": "transcript_refine"},
-                "require_drive": true,
-                "response_filter": null
-            },
-            {
-                "path": "/queue/pause",
-                "methods": ["POST"],
-                "drive_optional": true,
-                "pre_check": {"type": "admin"},
-                "response_filter": null
-            },
-            {
-                "path": "/queue/resume",
-                "methods": ["POST"],
-                "drive_optional": true,
-                "pre_check": {"type": "admin"},
-                "response_filter": null
-            },
-            {
-                "path": "/queue/prioritize",
-                "methods": ["POST"],
-                "drive_optional": true,
-                "pre_check": {"type": "admin"},
-                "response_filter": null
-            },
-            {
-                "path": "/admin/transcription",
-                "methods": ["GET", "PUT", "DELETE"],
-                "drive_optional": true,
-                "pre_check": {"type": "admin"},
-                "response_filter": null
-            },
-            {
-                "path": "/admin/features",
-                "methods": ["GET", "PUT", "DELETE"],
-                "drive_optional": true,
-                "pre_check": {"type": "admin"},
-                "response_filter": null
-            },
-            {
-                "path": "/admin/llm",
-                "methods": ["GET", "PUT", "DELETE"],
-                "drive_optional": true,
-                "pre_check": {"type": "admin"},
-                "response_filter": null
-            },
-            {
-                "path": "/admin/rag",
-                "methods": ["GET", "PUT", "DELETE"],
-                "drive_optional": true,
-                "pre_check": {"type": "admin"},
-                "response_filter": null
-            },
-            {
-                "path": "/admin/embedding",
-                "methods": ["GET", "PUT", "DELETE"],
-                "drive_optional": true,
-                "pre_check": {"type": "admin"},
-                "response_filter": null
-            },
-            {
-                "path": "/admin/failed-jobs",
-                "methods": ["GET"],
-                "drive_optional": true,
-                "pre_check": {"type": "admin"},
-                "response_filter": null
-            },
-            {
-                "path": "/admin/failed-jobs/resolve",
-                "methods": ["POST"],
-                "drive_optional": true,
-                "pre_check": {"type": "admin"},
-                "response_filter": null
-            }
-        ]
+    {
+      "name": "chapter_suggestions",
+      "default": true,
+      "i18n_key": "intelligence.policyFeatures.chapterSuggestions"
     }
+  ],
+  "event_hooks": [
+    {
+      "event": "scan.complete",
+      "url": "http://intelligence:8100/webhook/scan-complete",
+      "secret_env": "SEARCH_WEBHOOK_SECRET",
+      "addon": "intelligence",
+      "feature": "index"
+    },
+    {
+      "event": "files.deleted",
+      "url": "http://intelligence:8100/webhook/files-deleted",
+      "secret_env": "SEARCH_WEBHOOK_SECRET",
+      "addon": "intelligence",
+      "feature": "index"
+    },
+    {
+      "event": "files.restored",
+      "url": "http://intelligence:8100/webhook/files-restored",
+      "secret_env": "SEARCH_WEBHOOK_SECRET",
+      "addon": "intelligence",
+      "feature": "index"
+    },
+    {
+      "event": "files.missing",
+      "url": "http://intelligence:8100/webhook/files-missing",
+      "secret_env": "SEARCH_WEBHOOK_SECRET",
+      "addon": "intelligence",
+      "feature": "index"
+    },
+    {
+      "event": "files.recovered",
+      "url": "http://intelligence:8100/webhook/files-recovered",
+      "secret_env": "SEARCH_WEBHOOK_SECRET",
+      "addon": "intelligence",
+      "feature": "index"
+    },
+    {
+      "event": "files.purged",
+      "url": "http://intelligence:8100/webhook/files-purged",
+      "secret_env": "SEARCH_WEBHOOK_SECRET",
+      "addon": "intelligence",
+      "feature": "index"
+    },
+    {
+      "event": "files.moved",
+      "url": "http://intelligence:8100/webhook/files-moved",
+      "secret_env": "SEARCH_WEBHOOK_SECRET",
+      "addon": "intelligence",
+      "feature": "index"
+    }
+  ],
+  "proxy": {
+    "target_env": "INTELLIGENCE_SERVICE_URL",
+    "target_default": "http://intelligence:8100",
+    "health_check": "/health",
+    "routes": [
+      {
+        "path": "/pickup",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "index"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/search",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "search"
+        },
+        "response_filter": {
+          "type": "current_drive_only",
+          "array_path": "results",
+          "drive_field": "drive"
+        }
+      },
+      {
+        "path": "/search/compare",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "search"
+        },
+        "response_filter": {
+          "type": "current_drive_only_nested",
+          "paths": {
+            "rrf.results": "drive",
+            "cosine.results": "drive",
+            "rrf_no_cutoff.results": "drive",
+            "cosine_no_cutoff.results": "drive"
+          }
+        }
+      },
+      {
+        "path": "/status",
+        "methods": [
+          "GET"
+        ],
+        "drive_optional": true,
+        "pre_check": {
+          "type": "admin"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/index-details",
+        "methods": [
+          "GET"
+        ],
+        "drive_optional": true,
+        "pre_check": {
+          "type": "admin"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/similar/{file_id}",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": {
+          "type": "current_drive_only",
+          "array_path": "results",
+          "drive_field": "drive"
+        }
+      },
+      {
+        "path": "/debug/similar/{file_id}",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/debug/search",
+        "methods": [
+          "GET"
+        ],
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/transcript",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/subtitles.vtt",
+        "methods": [
+          "GET"
+        ],
+        "drive_optional": true,
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/index-details",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/reindex",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/clip-timestamps",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/clip-analysis",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/pdf-markdown",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/frame",
+        "methods": [
+          "GET"
+        ],
+        "drive_optional": true,
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null,
+        "stream": true
+      },
+      {
+        "path": "/files/{file_id}/visual-index",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "addon_feature": "video_visual_index",
+        "require_drive": true,
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/visual-index/generate",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "addon_feature": "video_visual_index",
+        "require_drive": true,
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/visual-index/retry",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "addon_feature": "video_visual_index",
+        "require_drive": true,
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/suggested-tags",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/chapter-suggestions",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "addon_feature": "chapter_suggestions",
+        "require_drive": true,
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/chapter-suggestions/generate",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "addon_feature": "chapter_suggestions",
+        "require_drive": true,
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/chapter-suggestions/approve",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "addon_feature": "chapter_suggestions",
+        "require_drive": true,
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/chapter-suggestions/dismiss",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "addon_feature": "chapter_suggestions",
+        "require_drive": true,
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/suggested-tags/dismiss",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/suggested-tags/regenerate",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "auto_tags"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/batch/suggested-tags",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "auto_tags"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/summary",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/summary/regenerate",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "summaries"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/summary/edit",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/summary/revert",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/batch/summaries",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "summaries"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/summary/detailed",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/summary/detailed",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "detailed_summaries"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/summary/detailed",
+        "methods": [
+          "DELETE"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/summary/detailed.md",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/summary/detailed/citations",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/chunks/{chunk_id}/excerpt",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/summary/detailed/section",
+        "methods": [
+          "PUT"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/summary/detailed/revert",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/summary/detailed/regenerate",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/ask",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "rag"
+        },
+        "stream": true,
+        "response_filter": {
+          "type": "current_drive_only_nested",
+          "paths": {
+            "citations": "drive",
+            "sources": "drive"
+          }
+        }
+      },
+      {
+        "path": "/find",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "rag"
+        },
+        "timeout": 90,
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/visual_description",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "addon_feature": "vision_describe",
+        "require_drive": true,
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/visual_description",
+        "methods": [
+          "DELETE"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "addon_feature": "vision_describe",
+        "require_drive": true,
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/visual_description/generate",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "addon_feature": "vision_describe",
+        "require_drive": true,
+        "response_filter": null
+      },
+      {
+        "path": "/folders/visual_description/generate",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "vision_describe"
+        },
+        "require_drive": true,
+        "response_filter": null
+      },
+      {
+        "path": "/refine/files/{file_id}",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "addon_feature": "transcript_refine",
+        "require_drive": true,
+        "response_filter": null
+      },
+      {
+        "path": "/refine/files/{file_id}/revert",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "addon_feature": "transcript_refine",
+        "require_drive": true,
+        "response_filter": null
+      },
+      {
+        "path": "/refine/folders",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "transcript_refine"
+        },
+        "require_drive": true,
+        "response_filter": null
+      },
+      {
+        "path": "/queue/pause",
+        "methods": [
+          "POST"
+        ],
+        "drive_optional": true,
+        "pre_check": {
+          "type": "admin"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/queue/resume",
+        "methods": [
+          "POST"
+        ],
+        "drive_optional": true,
+        "pre_check": {
+          "type": "admin"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/queue/prioritize",
+        "methods": [
+          "POST"
+        ],
+        "drive_optional": true,
+        "pre_check": {
+          "type": "admin"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/admin/transcription",
+        "methods": [
+          "GET",
+          "PUT",
+          "DELETE"
+        ],
+        "drive_optional": true,
+        "pre_check": {
+          "type": "admin"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/admin/features",
+        "methods": [
+          "GET",
+          "PUT",
+          "DELETE"
+        ],
+        "drive_optional": true,
+        "pre_check": {
+          "type": "admin"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/admin/llm",
+        "methods": [
+          "GET",
+          "PUT",
+          "DELETE"
+        ],
+        "drive_optional": true,
+        "pre_check": {
+          "type": "admin"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/admin/rag",
+        "methods": [
+          "GET",
+          "PUT",
+          "DELETE"
+        ],
+        "drive_optional": true,
+        "pre_check": {
+          "type": "admin"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/admin/embedding",
+        "methods": [
+          "GET",
+          "PUT",
+          "DELETE"
+        ],
+        "drive_optional": true,
+        "pre_check": {
+          "type": "admin"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/admin/failed-jobs",
+        "methods": [
+          "GET"
+        ],
+        "drive_optional": true,
+        "pre_check": {
+          "type": "admin"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/admin/failed-jobs/resolve",
+        "methods": [
+          "POST"
+        ],
+        "drive_optional": true,
+        "pre_check": {
+          "type": "admin"
+        },
+        "response_filter": null
+      }
+    ]
+  }
 }

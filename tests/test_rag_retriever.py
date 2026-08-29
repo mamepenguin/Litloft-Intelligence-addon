@@ -169,7 +169,7 @@ class TestRetrieveCandidates:
         # All files accessible -> identity filter.
         monkeypatch.setattr(
             "app.rag.retriever._filter_file_ids_via_internal_api",
-            AsyncMock(side_effect=lambda file_ids, credential: set(file_ids)),
+            AsyncMock(side_effect=lambda file_ids, credential, **kw: set(file_ids)),
         )
         monkeypatch.setattr(
             "app.rag.retriever._get_indexed_files_meta",
@@ -188,7 +188,14 @@ class TestRetrieveCandidates:
 
     @pytest.mark.asyncio
     async def test_forwards_top_k_to_search(self, monkeypatch):
-        """The top_k argument must be passed into app.search.search() as limit."""
+        """top_k reaches app.search.search() as the pool limit.
+
+        Grounding draws a wider pool than ``top_k`` because the trust filter
+        runs after ranking; the final list is truncated to ``top_k`` once
+        access and trust have been applied (spec
+        2026-08-29-web-clip-promotion §6). Passing ``trust_tier=None`` here
+        pins the un-widened relationship.
+        """
         search_spy = MagicMock(return_value=_make_search_response([]))
         monkeypatch.setattr("app.rag.retriever.search", search_spy)
         monkeypatch.setattr(
@@ -201,7 +208,7 @@ class TestRetrieveCandidates:
         )
 
         await retrieve_candidates(
-            query="q", top_k=3, credential=None
+            query="q", top_k=3, credential=None, trust_tier=None
         )
 
         # search() was called with limit=top_k. Accept either kwarg or
@@ -608,7 +615,7 @@ class TestFilterFileIdsContract:
         fake_response = MagicMock()
         fake_response.status_code = 200
         fake_response.json = MagicMock(
-            return_value={"accessible": ["f1", "f2"]}
+            return_value={"accessible": ["f1", "f2"], "trust_filtered": True}
         )
 
         class _FakeClient:
@@ -643,7 +650,13 @@ class TestFilterFileIdsContract:
         assert _FakeClient.last_url == (
             "http://backend:8000/api/internal/filter-file-ids"
         )
-        assert _FakeClient.last_json == {"file_ids": ["f1", "f2", "f3"]}
+        # Grounding narrows to vouched-for sources by default, so the trust
+        # filter rides along on this same call rather than opening a second
+        # path into core's schema (spec 2026-08-29-web-clip-promotion §6).
+        assert _FakeClient.last_json == {
+            "file_ids": ["f1", "f2", "f3"],
+            "trust_tier": "verified",
+        }
 
     @pytest.mark.asyncio
     async def test_forwards_caller_credential_headers(self, monkeypatch):
@@ -762,16 +775,53 @@ class TestFilterFileIdsContract:
             "app.rag.retriever.httpx.AsyncClient", _FakeClient
         )
 
+        # Legacy-key parsing is orthogonal to trust, so this asks for no
+        # trust filter. A host old enough to answer with ``allowed`` is also
+        # too old to apply one — the case below.
         with caplog.at_level(_logging.WARNING, logger="app.rag.retriever"):
             result = await _filter_file_ids_via_internal_api(
                 file_ids=["f1"],
                 credential=CallerCredential(cookie="access_token=t"),
+                trust_tier=None,
             )
 
         assert result == {"f1"}
         assert any(
             "legacy 'allowed'" in rec.message for rec in caplog.records
         )
+
+    @pytest.mark.asyncio
+    async def test_legacy_host_cannot_satisfy_a_trust_filter(self, monkeypatch):
+        """A host too old to apply the filter must not ground an answer."""
+        from app.rag.retriever import _filter_file_ids_via_internal_api
+
+        fake_response = MagicMock()
+        fake_response.status_code = 200
+        fake_response.json = MagicMock(return_value={"allowed": ["f1"]})
+
+        class _FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return None
+
+            async def post(self, url, json=None):
+                return fake_response
+
+        monkeypatch.setattr(
+            "app.rag.retriever.httpx.AsyncClient", _FakeClient
+        )
+
+        result = await _filter_file_ids_via_internal_api(
+            file_ids=["f1"],
+            credential=CallerCredential(cookie="access_token=t"),
+        )
+
+        assert result == set()
 
     @pytest.mark.asyncio
     async def test_unknown_response_shape_fails_closed(self, monkeypatch):
