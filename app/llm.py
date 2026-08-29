@@ -1106,7 +1106,7 @@ class OllamaLLMClient:
             body["format"] = "json" if fmt in ("json_object", "json") else fmt
         return body
 
-    async def generate(
+    async def _generate_result(
         self,
         system_prompt: str,
         user_prompt: str,
@@ -1114,10 +1114,16 @@ class OllamaLLMClient:
         max_tokens_override: int | None = None,
         response_format: dict | None = None,
         temperature: float | None = None,
-    ) -> str | None:
-        """Generate a non-streamed completion via /api/chat."""
+    ) -> TextGeneration:
+        """Generate via /api/chat and say why the output is unusable.
+
+        ``done_reason: "length"`` means the answer hit
+        ``options.num_predict``. ``think: false`` keeps chain-of-thought
+        out of that budget, but an over-long answer still runs into it,
+        and the remedy is a budget change rather than a prompt change.
+        """
         if not self._enabled:
-            return None
+            return TextGeneration(None, FAILURE_REQUEST_FAILED)
 
         max_attempts = max(1, self._config.retry_attempts + 1)
         effective_max_tokens = (
@@ -1154,7 +1160,7 @@ class OllamaLLMClient:
                         "Ollama generation timed out after %d attempts: %s",
                         max_attempts, e,
                     )
-                    return None
+                    return TextGeneration(None, FAILURE_REQUEST_FAILED)
                 delay = self._backoff_delay(attempt)
                 logger.warning(
                     "Ollama generation attempt %d/%d timed out, "
@@ -1169,7 +1175,7 @@ class OllamaLLMClient:
                         "Ollama generation failed after %d attempts: %s",
                         max_attempts, e,
                     )
-                    return None
+                    return TextGeneration(None, FAILURE_REQUEST_FAILED)
                 delay = self._backoff_delay(attempt)
                 logger.warning(
                     "Ollama generation attempt %d/%d failed (%s), "
@@ -1184,7 +1190,7 @@ class OllamaLLMClient:
                     "Ollama generation failed with permanent error %d",
                     resp.status_code,
                 )
-                return None
+                return TextGeneration(None, FAILURE_REQUEST_FAILED)
 
             if resp.status_code in _OLLAMA_RETRY_STATUSES:
                 if attempt + 1 >= max_attempts:
@@ -1192,7 +1198,7 @@ class OllamaLLMClient:
                         "Ollama generation failed after %d attempts (status %d)",
                         max_attempts, resp.status_code,
                     )
-                    return None
+                    return TextGeneration(None, FAILURE_REQUEST_FAILED)
                 delay = self._backoff_delay(attempt)
                 logger.warning(
                     "Ollama generation attempt %d/%d got status %d, "
@@ -1207,7 +1213,7 @@ class OllamaLLMClient:
                     "Ollama generation got unexpected status %d",
                     resp.status_code,
                 )
-                return None
+                return TextGeneration(None, FAILURE_REQUEST_FAILED)
 
             try:
                 data = resp.json()
@@ -1216,11 +1222,40 @@ class OllamaLLMClient:
                     "Ollama returned non-JSON response (status %d)",
                     resp.status_code,
                 )
-                return None
+                return TextGeneration(None, FAILURE_REQUEST_FAILED)
 
-            return data.get("message", {}).get("content", "")
+            content = data.get("message", {}).get("content", "")
+            done_reason = data.get("done_reason")
+            failure = _classify_completion(content, done_reason, None)
+            if failure is not None:
+                logger.warning(
+                    "Ollama produced no usable output (%s): done_reason=%s, "
+                    "content_len=%d, model=%s",
+                    failure, done_reason, len(content or ""),
+                    self._config.model,
+                )
+            return TextGeneration(content, failure)
 
-        return None
+        return TextGeneration(None, FAILURE_REQUEST_FAILED)
+
+    async def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens_override: int | None = None,
+        response_format: dict | None = None,
+        temperature: float | None = None,
+    ) -> str | None:
+        """Generate a non-streamed completion; see ``_generate_result``."""
+        result = await self._generate_result(
+            system_prompt,
+            user_prompt,
+            max_tokens_override=max_tokens_override,
+            response_format=response_format,
+            temperature=temperature,
+        )
+        return result.text
 
     async def generate_stream(
         self,
@@ -1486,39 +1521,46 @@ class OllamaLLMClient:
     ) -> JsonGeneration:
         """Generate JSON and say why it is missing, if it is.
 
-        The native body always carries ``think: false``, so a budget
-        spent on chain-of-thought is not a failure mode here and this
-        client reports only what a bare completion reveals.
+        The native body always carries ``think: false``, so chain-of-
+        thought never consumes the budget here — but an answer that runs
+        past ``options.num_predict`` still does, and that arrives as
+        ``done_reason: "length"`` rather than as a parse error.
         """
-        raw = await self.generate(
+        result = await self._generate_result(
             system_prompt,
             user_prompt,
             max_tokens_override=max_tokens_override,
             response_format={"type": "json_object"},
             temperature=temperature,
         )
+        raw = result.text
         if raw is None:
-            return JsonGeneration(None, FAILURE_REQUEST_FAILED)
+            return JsonGeneration(
+                None, result.failure or FAILURE_REQUEST_FAILED
+            )
 
         if not raw.strip():
             logger.info(
                 "Ollama returned empty body with format=json; "
                 "retrying without format"
             )
-            raw = await self.generate(
+            result = await self._generate_result(
                 system_prompt,
                 user_prompt,
                 max_tokens_override=max_tokens_override,
                 temperature=temperature,
             )
+            raw = result.text
             if raw is None:
-                return JsonGeneration(None, FAILURE_REQUEST_FAILED)
+                return JsonGeneration(
+                    None, result.failure or FAILURE_REQUEST_FAILED
+                )
             if not raw.strip():
-                return JsonGeneration(None, FAILURE_EMPTY)
+                return JsonGeneration(None, result.failure or FAILURE_EMPTY)
 
         parsed = _parse_json_response(raw)
         if parsed is None:
-            return JsonGeneration(None, FAILURE_MALFORMED)
+            return JsonGeneration(None, result.failure or FAILURE_MALFORMED)
         return JsonGeneration(parsed, None)
 
 

@@ -1280,8 +1280,8 @@ class TestGenerateJsonDelegation:
 class TestOllamaJsonFailureClassification:
     """The ollama client exposes the same result shape."""
 
-    def _client(self) -> OllamaLLMClient:
-        return create_llm_client(
+    def _client(self, handler) -> OllamaLLMClient:
+        client = create_llm_client(
             LLMConfig(
                 provider="ollama",
                 base_url="http://localhost:11434",
@@ -1289,29 +1289,56 @@ class TestOllamaJsonFailureClassification:
                 retry_attempts=0,
             )
         )
+        client._http = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        )
+        return client
+
+    def _responds(self, content: str, done_reason: str = "stop"):
+        return lambda request: httpx.Response(
+            200,
+            json={
+                "message": {"content": content},
+                "done_reason": done_reason,
+            },
+        )
 
     @pytest.mark.asyncio
     async def test_unparseable_content_is_malformed(self):
-        client = self._client()
-        client.generate = AsyncMock(return_value="not json")
+        client = self._client(self._responds("not json"))
 
         result = await client.generate_json_result("system", "user")
 
+        assert result.value is None
         assert result.failure == "malformed"
 
     @pytest.mark.asyncio
     async def test_request_failure_is_named(self):
-        client = self._client()
-        client.generate = AsyncMock(return_value=None)
+        def refuse(request):
+            raise httpx.ConnectError("refused", request=request)
+
+        client = self._client(refuse)
 
         result = await client.generate_json_result("system", "user")
 
+        assert result.value is None
         assert result.failure == "request_failed"
 
     @pytest.mark.asyncio
-    async def test_good_response_carries_no_failure(self):
-        client = self._client()
-        client.generate = AsyncMock(return_value='{"ok": true}')
+    async def test_num_predict_truncation_is_a_budget_failure(self):
+        """think: false stops reasoning, not an over-long answer."""
+        client = self._client(
+            self._responds('{"chapters": [{"start_', done_reason="length")
+        )
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value is None
+        assert result.failure == "token_budget"
+
+    @pytest.mark.asyncio
+    async def test_complete_response_carries_no_failure(self):
+        client = self._client(self._responds('{"ok": true}'))
 
         result = await client.generate_json_result("system", "user")
 
