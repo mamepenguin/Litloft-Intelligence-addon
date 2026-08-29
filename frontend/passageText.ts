@@ -85,18 +85,12 @@ function earliestMatch(text: string, terms: string[]): number {
 
 /**
  * Start of the first whole sentence at or after ``from``, or null.
- *
- * An ASCII terminator counts only when whitespace follows it, so a
- * decimal point or an abbreviation does not split the line.
  */
 function sentenceStartFrom(text: string, from: number): number | null {
   const limit = Math.min(from + SNAP_LOOKAHEAD, text.length - 1);
   for (let i = from; i <= limit; i += 1) {
     const ch = text[i];
-    const isTerminator =
-      CJK_TERMINATORS.includes(ch) ||
-      (ASCII_TERMINATORS.includes(ch) && /\s/.test(text[i + 1] ?? " "));
-    if (!isTerminator) continue;
+    if (!CJK_TERMINATORS.includes(ch) && !isAsciiSentenceEnd(text, i)) continue;
 
     let start = i + 1;
     while (
@@ -108,4 +102,27 @@ function sentenceStartFrom(text: string, from: number): number | null {
     return start;
   }
   return null;
+}
+
+/**
+ * Whether the ASCII terminator at ``i`` really ends a sentence.
+ *
+ * Whitespace must follow, so a decimal point does not split the line —
+ * but a closing quote or bracket may sit between the two, and a period
+ * is no less final for being inside the quotation it ends.
+ *
+ * `Dr. Smith` is knowingly accepted here. Excluding it needs a list of
+ * abbreviations, which is per-language data of the kind this feature
+ * declines to carry, and any list-free heuristic ("short word before
+ * the period") would also suppress real boundaries. The cost of being
+ * wrong is one word missing from the front of an excerpt whose full
+ * text is one press away.
+ */
+function isAsciiSentenceEnd(text: string, i: number): boolean {
+  if (!ASCII_TERMINATORS.includes(text[i])) return false;
+  let after = i + 1;
+  while (after < text.length && TRAILING_MARKS.includes(text[after])) {
+    after += 1;
+  }
+  return after >= text.length || /\s/.test(text[after]);
 }

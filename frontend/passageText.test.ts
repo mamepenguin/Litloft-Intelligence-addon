@@ -144,5 +144,17 @@ describe("passageWindow", () => {
 
       expect(passageWindow(text, []).text).toBe(text);
     });
+
+    it("sees a sentence that ends inside a quotation mark", () => {
+      const { text } = passageWindow(
+        'was part of." The next sentence carries the claim it belonged to.',
+        [],
+      );
+
+      // The terminator is not the last character of the sentence when a
+      // closer follows it, so testing only the character immediately
+      // after the period leaves the severed prefix on screen.
+      expect(text.startsWith("The next sentence")).toBe(true);
+    });
   });
 });
