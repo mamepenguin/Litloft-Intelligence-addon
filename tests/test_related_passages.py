@@ -948,3 +948,87 @@ def test_a_small_flat_field_still_produces_nothing():
     source, candidates = _field(0.80, 0.81, 0.82, 0.83, 0.84, 0.85)
 
     assert passages._rank_pairs(source, candidates, limit=5) == []
+
+
+def _recurring_field(boilerplate_files: int) -> tuple[list, list]:
+    """Two source passages: one that recurs across files, one that does not.
+
+    The recurring passage scores *higher* than the real one, which is
+    what makes it a threshold-proof problem — the boilerplate on a real
+    library measured 0.98 against genuine subject matter at 0.93.
+    """
+    noise = 40
+    dim = 2 + boilerplate_files + 1 + noise
+    source = [
+        _chunk(_basis(0, dim), "src"),  # the sign-off
+        _chunk(_basis(1, dim), "src"),  # actual subject matter
+    ]
+
+    candidates = []
+    axis = 2
+    for k in range(boilerplate_files):
+        vec = np.zeros(dim, dtype=np.float32)
+        vec[0] = 0.97
+        vec[axis] = float(np.sqrt(1 - 0.97**2))
+        candidates.append(_chunk(vec, f"boiler{k}"))
+        axis += 1
+
+    real = np.zeros(dim, dtype=np.float32)
+    real[1] = 0.93
+    real[axis] = float(np.sqrt(1 - 0.93**2))
+    candidates.append(_chunk(real, "real-note"))
+    axis += 1
+
+    for k in range(noise):
+        vec = np.zeros(dim, dtype=np.float32)
+        vec[0] = 0.1
+        vec[axis] = float(np.sqrt(1 - 0.01))
+        candidates.append(_chunk(vec, f"noise{k}"))
+        axis += 1
+
+    return source, candidates
+
+
+def test_a_passage_that_recurs_across_files_is_boilerplate():
+    """A sign-off is not what the file is about, however well it scores."""
+    source, candidates = _recurring_field(boilerplate_files=3)
+
+    pairs = passages._rank_pairs(source, candidates, limit=5)
+
+    assert [c.file_id for _, _, c in pairs] == ["real-note"]
+
+
+def test_a_passage_shared_with_one_other_file_is_kept():
+    """Two episodes of a series legitimately cover the same ground.
+
+    The cap has to sit above that: on a measured sample every passage
+    matching two files was real content, and every passage matching
+    three was a sign-off.
+    """
+    source, candidates = _recurring_field(boilerplate_files=2)
+
+    pairs = passages._rank_pairs(source, candidates, limit=5)
+
+    found = {c.file_id for _, _, c in pairs}
+    assert "real-note" in found
+    assert found & {"boiler0", "boiler1"}
+
+
+def test_verbatim_copies_still_count_as_recurrence():
+    """The copies that are never shown are the strongest evidence.
+
+    A scripted sign-off is the likeliest thing in a library to appear
+    word for word in several files. Those copies are dropped from the
+    results as duplicates — but if they were also dropped from the
+    count, two of them could hide and let the third pass the cap alone.
+    """
+    source, candidates = _recurring_field(boilerplate_files=3)
+    # Two of the three are now verbatim rather than merely close.
+    for k in (0, 1):
+        exact = np.zeros(len(candidates[k].vector), dtype=np.float32)
+        exact[0] = 1.0
+        candidates[k] = _chunk(exact, f"boiler{k}")
+
+    pairs = passages._rank_pairs(source, candidates, limit=5)
+
+    assert [c.file_id for _, _, c in pairs] == ["real-note"]
