@@ -11,8 +11,6 @@ import type { PassageRef, RelatedPassageItem } from "./api";
 interface RelatedPassagesSectionProps {
   fileId: string;
   drive: string;
-  trustTier?: "verified" | "unverified";
-  trustReviewedAt?: string | null;
 }
 
 type Status = "idle" | "loading" | "loaded" | "unavailable";
@@ -31,20 +29,22 @@ type Status = "idle" | "loading" | "loaded" | "unavailable";
  * so they are their own section now, and the panel keeps only the
  * question it asks.
  *
- * Matching is deliberate rather than automatic: the work is a KNN plus a
- * matrix product, and most file opens will not consult it. The exception
- * is a source nobody has ruled on yet, where the promotion panel is also
- * on screen — making a viewer press a button to see their own evidence
- * would put friction exactly where the trust design cannot afford it
- * (spec ``2026-08-29-web-clip-promotion.md`` §11 risk 3).
+ * It runs on open and **renders nothing at all unless it found
+ * something**, which is what makes it worth having on the page: the
+ * section being there is itself the signal. Measured on a real drive,
+ * about half of files produce no pair, and a viewer who scrolls down to
+ * a "no connections" line has been made to work for nothing. The
+ * earlier shape — a button, and a message when it came back empty — put
+ * that cost on every file.
+ *
+ * A failed lookup still says so. It is rare, it is actionable, and a
+ * silent failure here once hid a 15-second timeout.
  *
  * Spec ``2026-08-29-related-passages.md`` §5.4.
  */
 export default function RelatedPassagesSection({
   fileId,
   drive,
-  trustTier,
-  trustReviewedAt,
 }: RelatedPassagesSectionProps) {
   const t = useTranslations("file");
   const [results, setResults] = useState<RelatedPassageItem[]>([]);
@@ -60,8 +60,6 @@ export default function RelatedPassagesSection({
       return next;
     });
   }, []);
-
-  const awaitingRuling = trustTier === "unverified" && !trustReviewedAt;
 
   const fetchPassages = useCallback(async () => {
     const reqId = ++requestIdRef.current;
@@ -89,10 +87,9 @@ export default function RelatedPassagesSection({
 
   useEffect(() => {
     if (!drive) return;
-    if (!awaitingRuling) return;
     if (status !== "idle") return;
     void fetchPassages();
-  }, [drive, awaitingRuling, status, fetchPassages]);
+  }, [drive, status, fetchPassages]);
 
   // The `/files/{id}` route renders this before it knows the drive
   // (`drive={file?.drive ?? ""}` while its own getFile is in flight).
@@ -101,15 +98,14 @@ export default function RelatedPassagesSection({
   // the reset above re-arms the auto-fetch once the drive lands.
   if (!drive) return null;
 
-  // Nothing to say and nobody asked: an empty shell would be noise on
-  // every file that has no connections, which is most of them.
-  if (awaitingRuling && status !== "loaded") return null;
-  if (awaitingRuling && results.length === 0) return null;
+  // Present only when it has something. See the note on the component.
+  if (status === "idle" || status === "loading") return null;
+  if (status === "loaded" && results.length === 0) return null;
 
   return (
     <div>
       <div className="mb-3 flex items-center justify-between gap-2">
-        {status === "loaded" && results.length > 0 ? (
+        {results.length > 0 ? (
           <button
             type="button"
             onClick={() => setIsOpen((v) => !v)}
@@ -126,20 +122,6 @@ export default function RelatedPassagesSection({
             {t("relatedPassages")}
           </h2>
         )}
-        {status === "idle" && (
-          <button
-            type="button"
-            onClick={fetchPassages}
-            className="rounded-lg bg-bg-elevated px-2.5 py-1 text-xs text-text-primary transition-colors hover:bg-bg-card"
-          >
-            {t("relatedPassagesFind")}
-          </button>
-        )}
-        {status === "loading" && (
-          <span className="text-xs text-text-muted">
-            {t("relatedPassagesSearching")}
-          </span>
-        )}
       </div>
 
       {status === "unavailable" && (
@@ -148,11 +130,7 @@ export default function RelatedPassagesSection({
         </p>
       )}
 
-      {status === "loaded" && results.length === 0 && (
-        <p className="text-xs text-text-muted">{t("relatedPassagesEmpty")}</p>
-      )}
-
-      {status === "loaded" && isOpen && results.length > 0 && (
+      {isOpen && results.length > 0 && (
         <div className="space-y-2">
           {results.map((item) => (
             // One row per other file, so the file id is a stable key.

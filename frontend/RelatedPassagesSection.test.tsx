@@ -46,30 +46,34 @@ describe("RelatedPassagesSection", () => {
     getRelatedPassages.mockResolvedValue({ results: [] });
   });
 
-  it("does not search until asked, on a file nobody is being asked about", async () => {
-    render(
-      <RelatedPassagesSection
-        fileId="f1" drive="main" trustTier="verified" trustReviewedAt={null}
-      />,
+  it("runs on open, without being asked", async () => {
+    getRelatedPassages.mockResolvedValue({ results: [pair()] });
+
+    render(<RelatedPassagesSection fileId="f1" drive="main" />);
+
+    expect(await screen.findByTestId("source-passage")).toBeTruthy();
+    expect(getRelatedPassages).toHaveBeenCalledWith("f1", "main");
+  });
+
+  it("renders nothing at all when there is no connection", async () => {
+    const { container } = render(
+      <RelatedPassagesSection fileId="f1" drive="main" />,
     );
 
-    expect(await screen.findByText("relatedPassages")).toBeTruthy();
-    expect(getRelatedPassages).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByText("relatedPassagesFind"));
-    await waitFor(() => expect(getRelatedPassages).toHaveBeenCalledWith("f1", "main"));
+    await waitFor(() => expect(getRelatedPassages).toHaveBeenCalled());
+    // The section being on the page is the signal that it found
+    // something. Half of files produce no pair, and a viewer who
+    // scrolls to a "nothing found" line has worked for nothing.
+    await waitFor(() => expect(container.firstChild).toBeNull());
   });
 
   it("shows both passages verbatim, and links to the other one's page", async () => {
     getRelatedPassages.mockResolvedValue({ results: [pair()] });
 
-    render(
-      <RelatedPassagesSection fileId="f1" drive="main" trustTier="verified" />,
-    );
-    fireEvent.click(await screen.findByText("relatedPassagesFind"));
+    render(<RelatedPassagesSection fileId="f1" drive="main" />);
 
     const mine = await screen.findByTestId("source-passage");
-    const theirs = await screen.findByTestId("match-passage");
+    const theirs = screen.getByTestId("match-passage");
     // Byte-for-byte: nothing was summarised on either side.
     expect(mine.textContent).toBe(MINE);
     expect(theirs.textContent).toBe(THEIRS);
@@ -78,73 +82,31 @@ describe("RelatedPassagesSection", () => {
     expect(link.closest("a")?.getAttribute("href")).toBe("/files/n1?page=3");
   });
 
-  it("expands itself while the viewer is being asked to rule", async () => {
-    getRelatedPassages.mockResolvedValue({ results: [pair()] });
-
-    render(
-      <RelatedPassagesSection
-        fileId="f1" drive="main" trustTier="unverified" trustReviewedAt={null}
-      />,
-    );
-
-    // No button press: the promotion panel is on screen and the evidence
-    // has to be there with it.
-    expect(await screen.findByTestId("source-passage")).toBeTruthy();
-    expect(getRelatedPassages).toHaveBeenCalledWith("f1", "main");
-  });
-
-  it("hides itself entirely when an unruled file has no connections", async () => {
-    const { container } = render(
-      <RelatedPassagesSection
-        fileId="f1" drive="main" trustTier="unverified" trustReviewedAt={null}
-      />,
-    );
-
-    await waitFor(() => expect(getRelatedPassages).toHaveBeenCalled());
-    // An empty shell above the promotion panel would be noise on every
-    // clip that happens to match nothing.
-    await waitFor(() => expect(container.firstChild).toBeNull());
-  });
-
-  it("says so when the viewer asked and nothing matched", async () => {
-    render(
-      <RelatedPassagesSection fileId="f1" drive="main" trustTier="verified" />,
-    );
-    fireEvent.click(await screen.findByText("relatedPassagesFind"));
-
-    // Silence after a deliberate press reads as a broken button.
-    expect(await screen.findByText("relatedPassagesEmpty")).toBeTruthy();
-  });
-
-  it("reports a failed lookup instead of pretending nothing matched", async () => {
+  it("reports a failed lookup instead of vanishing", async () => {
     getRelatedPassages.mockRejectedValue(new Error("proxy timeout"));
 
-    render(
-      <RelatedPassagesSection fileId="f1" drive="main" trustTier="verified" />,
-    );
-    fireEvent.click(await screen.findByText("relatedPassagesFind"));
+    render(<RelatedPassagesSection fileId="f1" drive="main" />);
 
+    // Silence would have hidden a 15-second timeout once already.
     expect(await screen.findByText("relatedPassagesUnavailable")).toBeTruthy();
   });
 
-  it("resets when the viewer navigates to another file", async () => {
+  it("re-runs when the viewer navigates to another file", async () => {
     getRelatedPassages.mockResolvedValue({ results: [pair()] });
 
     const { rerender } = render(
-      <RelatedPassagesSection fileId="f1" drive="main" trustTier="verified" />,
+      <RelatedPassagesSection fileId="f1" drive="main" />,
     );
-    fireEvent.click(await screen.findByText("relatedPassagesFind"));
     await screen.findByTestId("source-passage");
 
-    rerender(
-      <RelatedPassagesSection fileId="f2" drive="main" trustTier="verified" />,
-    );
+    getRelatedPassages.mockResolvedValue({
+      results: [pair({ file_id: "n9", filename: "other-note.md" })],
+    });
+    rerender(<RelatedPassagesSection fileId="f2" drive="main" />);
 
     // The previous file's passages must not linger under the new file.
-    await waitFor(() =>
-      expect(screen.queryByTestId("source-passage")).toBeNull(),
-    );
-    expect(screen.getByText("relatedPassagesFind")).toBeTruthy();
+    await waitFor(() => expect(getRelatedPassages).toHaveBeenCalledWith("f2", "main"));
+    expect(await screen.findByText(/other-note\.md/)).toBeTruthy();
   });
 
   it("waits for the drive before asking, and asks once it lands", async () => {
@@ -155,17 +117,11 @@ describe("RelatedPassagesSection", () => {
     // proxy without X-Lit-Drive and be rejected — and the failure would
     // stick, because the drive arriving is not a new file.
     const { rerender } = render(
-      <RelatedPassagesSection
-        fileId="f1" drive="" trustTier="unverified" trustReviewedAt={null}
-      />,
+      <RelatedPassagesSection fileId="f1" drive="" />,
     );
     expect(getRelatedPassages).not.toHaveBeenCalled();
 
-    rerender(
-      <RelatedPassagesSection
-        fileId="f1" drive="main" trustTier="unverified" trustReviewedAt={null}
-      />,
-    );
+    rerender(<RelatedPassagesSection fileId="f1" drive="main" />);
 
     expect(await screen.findByTestId("source-passage")).toBeTruthy();
     expect(getRelatedPassages).toHaveBeenCalledWith("f1", "main");
@@ -174,16 +130,14 @@ describe("RelatedPassagesSection", () => {
   it("clamps both passages until the chevron is pressed", async () => {
     getRelatedPassages.mockResolvedValue({ results: [pair()] });
 
-    render(
-      <RelatedPassagesSection fileId="f1" drive="main" trustTier="verified" />,
-    );
-    fireEvent.click(await screen.findByText("relatedPassagesFind"));
+    render(<RelatedPassagesSection fileId="f1" drive="main" />);
 
     const mine = await screen.findByTestId("source-passage");
-    const theirs = screen.getByTestId("match-passage");
     // Five pairs of full transcript chunks is four thousand characters.
     expect(mine.className).toContain("line-clamp-2");
-    expect(theirs.className).toContain("line-clamp-2");
+    expect(screen.getByTestId("match-passage").className).toContain(
+      "line-clamp-2",
+    );
 
     fireEvent.click(
       screen.getByLabelText("relatedPassagesExpand:rag-design-notes.md"),
@@ -202,10 +156,7 @@ describe("RelatedPassagesSection", () => {
   it("does not expand when the passage itself is clicked", async () => {
     getRelatedPassages.mockResolvedValue({ results: [pair()] });
 
-    render(
-      <RelatedPassagesSection fileId="f1" drive="main" trustTier="verified" />,
-    );
-    fireEvent.click(await screen.findByText("relatedPassagesFind"));
+    render(<RelatedPassagesSection fileId="f1" drive="main" />);
 
     fireEvent.click(await screen.findByTestId("source-passage"));
 
@@ -226,10 +177,7 @@ describe("RelatedPassagesSection", () => {
       ],
     });
 
-    render(
-      <RelatedPassagesSection fileId="f1" drive="main" trustTier="verified" />,
-    );
-    fireEvent.click(await screen.findByText("relatedPassagesFind"));
+    render(<RelatedPassagesSection fileId="f1" drive="main" />);
 
     // The filename may be cut; where the link goes may not.
     const locator = await screen.findByText(/3:15/);
@@ -240,16 +188,10 @@ describe("RelatedPassagesSection", () => {
 
   it("names each toggle after the file it opens", async () => {
     getRelatedPassages.mockResolvedValue({
-      results: [
-        pair(),
-        pair({ file_id: "n2", filename: "second-note.md" }),
-      ],
+      results: [pair(), pair({ file_id: "n2", filename: "second-note.md" })],
     });
 
-    render(
-      <RelatedPassagesSection fileId="f1" drive="main" trustTier="verified" />,
-    );
-    fireEvent.click(await screen.findByText("relatedPassagesFind"));
+    render(<RelatedPassagesSection fileId="f1" drive="main" />);
 
     // Several of these buttons sit in one list; "expand" on its own
     // tells a screen-reader user nothing about which card it opens.

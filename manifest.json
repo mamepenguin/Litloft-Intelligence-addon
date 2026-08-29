@@ -50,6 +50,11 @@
         "priority": 9
       },
       {
+        "id": "related-passages",
+        "label": "Related Passages",
+        "priority": 10
+      },
+      {
         "id": "visual-index",
         "label": "Visual Index",
         "priority": 20
@@ -63,11 +68,6 @@
         "id": "index-details",
         "label": "Index Details",
         "priority": 30
-      },
-      {
-        "id": "related-passages",
-        "label": "Related Passages",
-        "priority": 35
       },
       {
         "id": "similar-files",
