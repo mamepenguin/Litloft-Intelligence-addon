@@ -28,11 +28,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+import re
 from dataclasses import dataclass
 
 import numpy as np
 from sqlalchemy import text as sql_text
 
+from app.config import settings
 from app.credentials import CallerCredential
 from app.database import get_search_engine
 # Reused rather than reimplemented: this function's fail-closed handling
@@ -57,38 +60,25 @@ _KNN_POOL = 400
 #: Ceiling sqlite-vec puts on ``k``.
 _KNN_K_MAX = 4096
 
-#: Files carried into stage 2.
-_CANDIDATE_FILES = 20
-
-#: Files asked of the KNN, before trust and access drop rows. The filters
-#: run after ranking, so without headroom a run of unverified neighbours
-#: at the top empties the list while verified files sit just below the
-#: cut — the reason ``retriever._search_pool_size`` exists.
-_CANDIDATE_POOL = _CANDIDATE_FILES * 4
-
-#: Chunks scored per file. A book runs to thousands of chunks and the
-#: matrix is the product of both sides, so both are capped — by
-#: sampling across the whole file, never by taking its opening (see
-#: ``_sample``).
-_MAX_SOURCE_CHUNKS = 400
-_MAX_CANDIDATE_CHUNKS = 200
-
-#: Cosine floor for a pair, from measurement rather than intuition.
-#: Sampling 800 passage vectors from a real drive and scoring all
-#: 320k pairs between them gives a median of 0.770 for **unrelated**
-#: text, p90 0.813, p99 0.852. Absolute cosine sits high because the
-#: model separates by direction, not distance, so a floor has to live
-#: in the far tail to mean anything: 0.80 admits 18.5% of random pairs,
-#: 0.90 admits 0.03%, 0.95 admits 0.001%.
-#:
-#: A floor set too low is worse than an empty section — a reader shown
-#: spurious links learns to ignore the real ones — so this sits at the
-#: strict end. It moves into ``search-config.yml`` with the rest of the
-#: retrieval thresholds.
-_MIN_SCORE = 0.95
+#: How much wider than the candidate count the KNN is asked for, before
+#: trust and access drop rows. Those filters run after ranking, so
+#: without headroom a run of unverified neighbours at the top empties
+#: the list while verified files sit just below the cut — the reason
+#: ``retriever._search_pool_size`` exists.
+_CANDIDATE_OVERSAMPLE = 4
 
 #: Rows returned when the caller does not say.
 _DEFAULT_LIMIT = 5
+
+#: How much of the reachable z range the bar may occupy on a small
+#: field. Below 1.0 so that passing still means standing out rather than
+#: merely being the maximum.
+_Z_CEILING_HEADROOM = 0.9
+
+#: A YAML key on the line after an opening ``---``. Frontmatter is
+#: metadata that happens to sit in the text stream; two files' frontmatter
+#: blocks resemble each other far more than their prose does.
+_YAML_KEY = re.compile(r"\s*[A-Za-z_][\w .-]*:(\s|$)")
 
 
 @dataclass(frozen=True)
@@ -101,6 +91,10 @@ class _Chunk:
     chunk_index: int | None
     timestamp_start: float | None
     page: int | None
+    #: First 200 characters of the chunk, stored at index time. Used
+    #: only to recognise fragments and metadata blocks — never to
+    #: display, because it is truncated.
+    preview: str
     vector: np.ndarray
 
 
@@ -118,6 +112,32 @@ class PassagePair:
     other_page: int | None
     other_timestamp: float | None
     score: float
+
+
+def _is_degenerate(preview: str) -> bool:
+    """Whether a chunk is a fragment or a metadata block.
+
+    Both match everything. An ellipsis, a stray caption line, or a
+    two-word transcript fragment has no content to be similar *about*,
+    and two files' YAML frontmatter blocks resemble each other far more
+    than their prose does — one such pair scored 0.995 against a video
+    it had nothing to do with.
+
+    ``find_similar`` guards the same way when it skips whisper
+    similarity for transcripts under 20 characters: "BGM-only files
+    often produce a single spurious word whose embedding matches
+    everything".
+    """
+    stripped = preview.strip()
+    if len(stripped) < settings.related_passages.min_passage_chars:
+        return True
+    if not stripped.startswith("---"):
+        return False
+    for line in stripped.splitlines()[1:6]:
+        if line.strip() in ("", "---"):
+            continue
+        return bool(_YAML_KEY.match(line))
+    return False
 
 
 def _sample(rows: list, cap: int) -> list:
@@ -174,7 +194,7 @@ def _load_chunks(file_ids: list[str], cap: int) -> dict[str, list[_Chunk]]:
         rows = conn.execute(
             sql_text(
                 "SELECT id, file_id, embedding_type, chunk_index, "
-                "       timestamp_start, page "
+                "       timestamp_start, page, content_preview "
                 "FROM embeddings "
                 f"WHERE file_id IN ({placeholders}) "
                 f"  AND embedding_type IN ({types}) "
@@ -185,6 +205,10 @@ def _load_chunks(file_ids: list[str], cap: int) -> dict[str, list[_Chunk]]:
 
         by_file: dict[str, list[tuple]] = {}
         for row in rows:
+            # Dropped before sampling, so the cap counts usable
+            # passages rather than being spent on fragments.
+            if _is_degenerate(row[6] or ""):
+                continue
             by_file.setdefault(row[1], []).append(row)
 
         kept = [
@@ -226,6 +250,7 @@ def _load_chunks(file_ids: list[str], cap: int) -> dict[str, list[_Chunk]]:
                 chunk_index=row[3],
                 timestamp_start=row[4],
                 page=row[5],
+                preview=row[6] or "",
                 vector=vector,
             )
         )
@@ -256,7 +281,7 @@ def _nearest_files(
     *,
     file_id: str,
     drive: str,
-    limit: int = _CANDIDATE_POOL,
+    limit: int | None = None,
     source_rows: int = 0,
 ) -> list[str]:
     """Files whose passages sit closest to this file's centre of mass.
@@ -267,6 +292,8 @@ def _nearest_files(
     """
     engine = get_search_engine()
     types = ",".join(f"'{t}'" for t in _PASSAGE_TYPES)
+    if limit is None:
+        limit = settings.related_passages.candidate_files * _CANDIDATE_OVERSAMPLE
 
     found: list[str] = []
     with engine.connect() as conn:
@@ -366,28 +393,97 @@ def _resolve_text(chunk: _Chunk) -> str | None:
     return row[0] if row else None
 
 
+def _z_ceiling(n: int) -> float:
+    """The largest z a population of ``n`` values can produce.
+
+    One value sitting above ``n - 1`` identical others gives
+    ``(n - 1) / sqrt(n)``, so a request comparing a handful of passages
+    cannot reach a z of 3 no matter how good its best pair is.
+    """
+    return (n - 1) / math.sqrt(n) if n > 1 else 0.0
+
+
 def _rank_pairs(
     source: list[_Chunk],
     candidates: list[_Chunk],
     limit: int,
 ) -> list[tuple[float, _Chunk, _Chunk]]:
-    """Best pairs by cosine similarity, spread across the material.
+    """Best pairs, gated by how far they stand out from this request.
 
     Vectors are L2-normalised at write time, so the matrix product is
-    already cosine similarity.
+    already cosine similarity — but its **absolute** value does not
+    separate related passages from unrelated ones. Measured on a real
+    drive: unrelated passages have a median of 0.770 and a p99 of 0.852,
+    while a genuinely related pair scored 0.928 and the best unrelated
+    pairs in the same request reached 0.896. The bands touch, so no
+    fixed floor works. A floor at 0.80 admitted a fifth of all random
+    pairs; a floor at 0.95 returned one frontmatter block and no prose.
 
-    At most one row per source passage and one per other file. Without
-    that, a single paragraph with several close matches fills the whole
-    list and everything else in the document goes unmentioned.
+    What separates them is position within the request's own
+    distribution. The matrix is overwhelmingly made of unrelated pairs,
+    so its mean and spread describe the noise, and a real match is an
+    outlier against it. Across three measured files the true matches sat
+    at z = 5.5-6.2 while the noise stopped at 4.5.
+
+    This is the gap check ``search._find_similar_by_embedding`` already
+    applies — does the best score stand out from the average? — with the
+    spread divided out, which is necessary here because passage scores
+    are packed far more tightly than the file-level scores it works on.
+
+    At most one row per other file, always. And at most one row per
+    source passage *while the document has enough passages to fill the
+    list* — otherwise one paragraph with several close matches would
+    crowd out the rest of a long document. A short note has nothing else
+    to spread across, and capping it at one row would hide every
+    connection but the strongest.
     """
+    cfg = settings.related_passages
+
     matrix = np.stack([c.vector for c in source]) @ np.stack(
         [c.vector for c in candidates]
     ).T
-    hits = np.argwhere(matrix >= _MIN_SCORE)
+
+    # The distribution has to describe the noise, so duplicates are taken
+    # out of it before it is measured — not merely excluded from the
+    # results afterwards. A single pair at 1.0 drags the mean and the
+    # spread up with it, and the raised bar then suppresses the genuine
+    # match it was supposed to be measured against.
+    field = matrix[matrix < cfg.near_duplicate_score]
+    if field.size == 0:
+        return []
+
+    mean = float(field.mean())
+    std = float(field.std())
+    z_floor = (
+        cfg.min_z if field.size >= cfg.min_pairs_for_z else cfg.small_sample_z
+    )
+    # A population of n values cannot produce a z above (n-1)/sqrt(n),
+    # so on a small field the configured bar can be unreachable — the
+    # test would then reject every pair however good it is, which reads
+    # as a confident "no connections" when the truth is "too little to
+    # judge". Clamp below the ceiling so the comparison stays possible,
+    # keeping headroom so passing still means standing out.
+    z_floor = min(z_floor, _z_ceiling(field.size) * _Z_CEILING_HEADROOM)
+
+    if std <= 0.0:
+        # No spread to measure against. Across a wide field that means
+        # every pair is equally (un)related and there is no outlier to
+        # find; across a handful it means there was never a distribution
+        # in the first place, and the sanity floor is all we have.
+        if field.size >= cfg.min_pairs_for_z:
+            return []
+        threshold = cfg.min_score
+    else:
+        threshold = max(cfg.min_score, mean + z_floor * std)
+
+    hits = np.argwhere(
+        (matrix >= threshold) & (matrix < cfg.near_duplicate_score)
+    )
     if hits.size == 0:
         return []
 
     order = np.argsort(-matrix[hits[:, 0], hits[:, 1]])
+    spread_across_source = len(source) >= limit
     used_source: set[int] = set()
     used_file: set[str] = set()
     pairs: list[tuple[float, _Chunk, _Chunk]] = []
@@ -395,7 +491,9 @@ def _rank_pairs(
     for idx in order:
         i, j = int(hits[idx][0]), int(hits[idx][1])
         other = candidates[j]
-        if i in used_source or other.file_id in used_file:
+        if other.file_id in used_file:
+            continue
+        if spread_across_source and i in used_source:
             continue
         used_source.add(i)
         used_file.add(other.file_id)
@@ -410,7 +508,8 @@ def _build_pairs(
     source: list[_Chunk], candidate_ids: list[str], limit: int
 ) -> list[PassagePair]:
     """Stage 2, plus text resolution. Runs off the event loop."""
-    by_file = _load_chunks(candidate_ids, _MAX_CANDIDATE_CHUNKS)
+    cfg = settings.related_passages
+    by_file = _load_chunks(candidate_ids, cfg.max_candidate_chunks)
     candidates = [c for fid in candidate_ids for c in by_file.get(fid, [])]
     if not candidates:
         return []
@@ -447,7 +546,7 @@ def _build_pairs(
 
 def _source_and_candidates(file_id: str, drive: str) -> tuple[list[_Chunk], list[str]]:
     """Stage 1. Runs off the event loop."""
-    source = _load_chunks([file_id], _MAX_SOURCE_CHUNKS).get(file_id, [])
+    source = _load_chunks([file_id], settings.related_passages.max_source_chunks).get(file_id, [])
     if not source:
         return [], []
 
@@ -489,7 +588,7 @@ async def find_related_passages(
     # The cap lands here, not on the KNN: a verified file just below a
     # run of unverified neighbours has to survive long enough to be
     # asked about.
-    verified = [fid for fid in candidate_ids if fid in allowed][:_CANDIDATE_FILES]
+    verified = [fid for fid in candidate_ids if fid in allowed][: settings.related_passages.candidate_files]
     if not verified:
         return []
 

@@ -426,6 +426,44 @@ search:
   min_score_clip: 0.05
   min_score_clip_thumbnail: 0.05
 
+# Passage-level connections shown on the file detail page
+# ("Related passages"). Pairs one passage of the file being read with a
+# passage of a file you have marked as a trusted source.
+#
+# Absolute cosine does not separate related passages from unrelated
+# ones. Measured on a real drive: unrelated passages have a median of
+# 0.77 and a p99 of 0.85, while a genuinely related pair scored 0.93 and
+# the best unrelated pairs in the same request reached 0.90 — the bands
+# touch. What separates them is how far a pair sits into its own
+# request's distribution, so the gate is a z-score, not a floor.
+related_passages:
+  # Standard deviations above the request's own mean a pair must sit.
+  # Measured true matches land at 5.5-6.2; the noise tail stops at 4.5.
+  # Lower it to see more (and more spurious) connections.
+  min_z: 5.0
+
+  # A small drive uses a lower bar. It is clamped further when even that
+  # is unreachable — a population of n values cannot exceed a z of
+  # (n-1)/sqrt(n), and an unreachable bar rejects every pair however
+  # good it is.
+  small_sample_z: 3.0
+  min_pairs_for_z: 400
+
+  # Sanity floor. The z gate is what actually discriminates.
+  min_score: 0.70
+
+  # At or above this the two passages are the same text — a duplicate
+  # rather than a connection.
+  near_duplicate_score: 0.999
+
+  # Passages shorter than this are fragments that match everything.
+  min_passage_chars: 40
+
+  # Cost knobs. The pairwise stage is a matrix product of both sides.
+  candidate_files: 20
+  max_source_chunks: 400
+  max_candidate_chunks: 200
+
 # Transcription provider configuration. Selects the Speech-to-Text engine
 # used for audio/video transcription. See docs/PROVIDERS.md for the full
 # matrix (capabilities, env vars, caveats).
