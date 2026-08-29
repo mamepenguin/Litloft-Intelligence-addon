@@ -38,6 +38,8 @@ from sqlalchemy import text as sql_text
 from app.config import settings
 from app.credentials import CallerCredential
 from app.database import get_search_engine
+from app.passage_terms import overlap_terms
+from app.rag import rarity_filter
 # Reused rather than reimplemented: this function's fail-closed handling
 # (network error, non-200, and above all a response that does not confirm
 # the trust filter) is exactly the part that must never drift between
@@ -112,6 +114,10 @@ class PassagePair:
     other_page: int | None
     other_timestamp: float | None
     score: float
+    #: Words present, word for word, in both passages. Empty whenever
+    #: the tokeniser's premise does not hold (``passage_terms.has_kana``)
+    #: or the two share nothing but corpus-common words.
+    overlap: list[str]
 
 
 def _is_degenerate(preview: str) -> bool:
@@ -589,6 +595,9 @@ def _build_pairs(
                 other_page=other.page,
                 other_timestamp=other.timestamp_start,
                 score=score,
+                overlap=overlap_terms(
+                    my_text, other_text, df=rarity_filter.document_frequency
+                ),
             )
         )
     return pairs

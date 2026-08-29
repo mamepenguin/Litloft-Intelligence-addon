@@ -606,6 +606,7 @@ async def test_endpoint_maps_a_pair_to_both_sides(monkeypatch):
                 other_page=4,
                 other_timestamp=None,
                 score=0.912345,
+                overlap=["対角線", "回転"],
             )
         ]
 
@@ -623,6 +624,7 @@ async def test_endpoint_maps_a_pair_to_both_sides(monkeypatch):
     assert item.drive == "d1"
     assert item.filename == "notes.md"
     assert item.score == pytest.approx(0.9123)
+    assert item.overlap == ["対角線", "回転"]
 
 
 async def related_passages_endpoint_call():
