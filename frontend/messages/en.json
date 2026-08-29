@@ -241,7 +241,7 @@
     "chapterCandidatesLoadError": "Could not load chapter candidates. Try again.",
     "chapterCandidatesActionError": "The chapter action failed. Try again.",
     "chapterCandidatesGenerationFailed": "Chapter generation failed. Try creating them again.",
-    "chapterCandidatesTokenBudget": "The model ran out of output budget before it finished, so no chapters came back. If it is a reasoning model, set llm.reasoning to disabled; otherwise raise llm.max_tokens.",
+    "chapterCandidatesTokenBudget": "The model ran out of output budget before it finished, so no chapters came back. Raise llm.max_tokens, or set llm.reasoning to disabled if the provider is spending the budget on thinking.",
     "aiFolderActions": "AI",
     "generateFolderTags": "Create AI tag candidates for folder",
     "tagsBatchQueued": "Added {queued} files to the queue ({skipped} skipped)",

@@ -109,8 +109,9 @@ export default function SuggestedChaptersSection({
         ? t("chapterCandidatesTokenBudget", {
             defaultMessage:
               "The model ran out of output budget before it finished, so "
-              + "no chapters came back. If it is a reasoning model, set "
-              + "llm.reasoning to disabled; otherwise raise llm.max_tokens.",
+              + "no chapters came back. Raise llm.max_tokens, or set "
+              + "llm.reasoning to disabled if the provider is spending the "
+              + "budget on thinking.",
           })
         : t("chapterCandidatesGenerationFailed", {
             defaultMessage: "Chapter generation failed. Try creating them again.",
