@@ -296,6 +296,21 @@
         "response_filter": null
       },
       {
+        "path": "/files/{file_id}/related-passages",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": {
+          "type": "current_drive_only",
+          "array_path": "results",
+          "drive_field": "drive"
+        }
+      },
+      {
         "path": "/files/{file_id}/transcript",
         "methods": [
           "GET"
