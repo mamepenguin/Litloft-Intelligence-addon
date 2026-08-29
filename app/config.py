@@ -13,6 +13,8 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
+LLM_REASONING_ENUM = ("auto", "disabled")
+
 # Deprecation date for the legacy ``indexing.whisper.*`` keys. After
 # this date the shim is removed and the keys raise a ConfigError.
 # Spec: 2026-05-07-cloud-transcription-providers.md "Deprecation
@@ -688,6 +690,15 @@ class LLMConfig:
     vision_model: str = ""
     vision_max_tokens: int = 1024
     vision_temperature: float = 0.1
+    # A reasoning model spends ``max_tokens`` on its chain of thought
+    # before it emits a single character of the answer, so a budget that
+    # is ample for the answer alone comes back empty with
+    # ``finish_reason="length"``. ``"disabled"`` asks the provider to
+    # skip thinking; it is an OpenRouter body extension, so it is sent
+    # only when explicitly selected — OpenAI rejects unknown fields with
+    # a 400. Suppression is a request, not a guarantee: an upstream that
+    # doesn't honour it still reasons.
+    reasoning: str = "auto"  # "auto" | "disabled"
 
 
 @dataclass(frozen=True)
@@ -1062,6 +1073,18 @@ def load_settings() -> Settings:
                 )
             )
         llm_merged["agentic_models"] = tuple(coerced)
+    # An unrecognised value must not reach the request body: sending a
+    # provider extension the operator never asked for can 400 every LLM
+    # feature at once, so anything but the two known values degrades to
+    # the baseline that sends nothing.
+    raw_reasoning = llm_merged.get("reasoning")
+    if raw_reasoning is not None and raw_reasoning not in LLM_REASONING_ENUM:
+        logger.warning(
+            "Unknown llm.reasoning value %r; falling back to %r "
+            "(expected one of %s)",
+            raw_reasoning, "auto", ", ".join(LLM_REASONING_ENUM),
+        )
+        llm_merged["reasoning"] = "auto"
 
     llm_config = LLMConfig(
         **{

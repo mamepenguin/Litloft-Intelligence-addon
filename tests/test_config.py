@@ -4,6 +4,7 @@ Covers YAML loading, settings construction, nested dataclass parsing,
 file path resolution, and path traversal validation.
 """
 
+import logging
 import os
 from pathlib import Path
 
@@ -325,3 +326,50 @@ class TestValidateFilePath:
         result = validate_file_path("/drives/file.mp4")
 
         assert result is False
+
+
+# ---------------------------------------------------------------------------
+# llm.reasoning
+# ---------------------------------------------------------------------------
+
+
+class TestLLMReasoning:
+    """The opt-in knob that suppresses provider-side chain-of-thought."""
+
+    def _load(self, tmp_path, monkeypatch, reasoning_line):
+        config_file = tmp_path / "search-config.yml"
+        config_file.write_text(
+            "llm:\n"
+            "  provider: openai_compatible\n"
+            "  base_url: http://localhost:11434/v1\n"
+            "  model: llama3\n"
+            + reasoning_line
+        )
+        monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("HOMEVAULT_DB_PATH", str(tmp_path / "hv.db"))
+        monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
+        return load_settings()
+
+    def test_defaults_to_auto(self, tmp_path, monkeypatch):
+        result = self._load(tmp_path, monkeypatch, "")
+
+        assert result.llm.reasoning == "auto"
+
+    def test_accepts_disabled(self, tmp_path, monkeypatch):
+        result = self._load(tmp_path, monkeypatch, '  reasoning: "disabled"\n')
+
+        assert result.llm.reasoning == "disabled"
+
+    def test_unknown_value_falls_back_to_auto(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        with caplog.at_level(logging.WARNING):
+            result = self._load(tmp_path, monkeypatch, '  reasoning: "off"\n')
+
+        assert result.llm.reasoning == "auto"
+        assert "reasoning" in caplog.text
+
+    def test_non_string_value_falls_back_to_auto(self, tmp_path, monkeypatch):
+        result = self._load(tmp_path, monkeypatch, "  reasoning: false\n")
+
+        assert result.llm.reasoning == "auto"
