@@ -281,13 +281,13 @@ class LLMClient:
         self._extras_rejected = False
 
     def _provider_extras(self) -> dict:
-        """Provider-specific body fields, empty unless opted into.
+        """Provider-specific body fields for this request.
 
-        ``reasoning`` is an OpenRouter extension. OpenAI answers 400 to
-        an unrecognised body field, so an operator who has not asked for
-        suppression must see a request that looks exactly as it did
-        before. Callers merge the result into their request kwargs; an
-        empty dict adds nothing.
+        Empty in two cases: the operator chose ``"auto"``, or a provider
+        already answered 400 to the field and the client latched that.
+        Either way the request goes out looking exactly as it did before
+        this knob existed. Callers merge the result into their request
+        kwargs; an empty dict adds nothing.
         """
         if self._config.reasoning != "disabled" or self._extras_rejected:
             return {}

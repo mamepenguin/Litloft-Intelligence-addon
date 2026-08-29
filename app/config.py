@@ -1075,10 +1075,10 @@ def load_settings() -> Settings:
                 )
             )
         llm_merged["agentic_models"] = tuple(coerced)
-    # An unrecognised value must not reach the request body: sending a
-    # provider extension the operator never asked for can 400 every LLM
-    # feature at once, so anything but the two known values degrades to
-    # the baseline that sends nothing.
+    # A typo should behave like an absent key rather than like a third
+    # mode, so an unrecognised value takes the same default the field
+    # declares. Providers that refuse the resulting body field are
+    # handled where the request is made, not here.
     raw_reasoning = llm_merged.get("reasoning")
     if raw_reasoning is not None and raw_reasoning not in LLM_REASONING_ENUM:
         default = LLMConfig.reasoning
