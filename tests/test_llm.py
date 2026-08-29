@@ -1136,6 +1136,73 @@ class TestReasoningSuppression:
         assert await client.generate("system", "user") is None
         assert client._client.chat.completions.create.await_count == 1
 
+    @pytest.mark.asyncio
+    async def test_a_rejected_stream_is_reopened_without_the_extension(self):
+        client = _reasoning_client("disabled")
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=[
+                _make_status_error(400),
+                _async_iter([_make_stream_chunk("hello")]),
+            ]
+        )
+
+        deltas = [d async for d in client.generate_stream("system", "user")]
+
+        calls = client._client.chat.completions.create.await_args_list
+        assert deltas == ["hello"]
+        assert "extra_body" in calls[0].kwargs
+        assert "extra_body" not in calls[1].kwargs
+
+    @pytest.mark.asyncio
+    async def test_a_stream_400_without_the_extension_yields_nothing(self):
+        client = _reasoning_client("auto")
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=_make_status_error(400)
+        )
+
+        deltas = [d async for d in client.generate_stream("system", "user")]
+
+        assert deltas == []
+        assert client._client.chat.completions.create.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_tool_calls_survive_a_rejected_extension(self):
+        client = _reasoning_client("disabled")
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=[_make_status_error(400), _make_tool_response_obj()]
+        )
+
+        result = await client.chat_with_tools(
+            [{"role": "user", "content": "hi"}]
+        )
+
+        calls = client._client.chat.completions.create.await_args_list
+        assert result is not None
+        assert result.content == "done"
+        assert "extra_body" in calls[0].kwargs
+        assert "extra_body" not in calls[1].kwargs
+
+    @pytest.mark.asyncio
+    async def test_the_request_the_provider_sent_is_left_alone(self):
+        """Dropping the field builds a new body; it does not edit one."""
+        client = _reasoning_client("disabled")
+        sent: list[dict] = []
+
+        async def capture(**kwargs):
+            sent.append(kwargs)
+            if len(sent) == 1:
+                raise _make_status_error(400)
+            return _make_classified_response("done")
+
+        client._client.chat.completions.create = AsyncMock(side_effect=capture)
+
+        await client.generate("system", "user")
+
+        # The first dict is the one handed to the provider; a helper that
+        # mutated its argument would have emptied it retroactively.
+        assert sent[0]["extra_body"] == {"reasoning": {"enabled": False}}
+        assert "extra_body" not in sent[1]
+
     def test_ollama_body_is_unchanged_by_the_knob(self):
         """Ollama always sends think: false; the extension is OpenAI-only."""
         client = create_llm_client(
