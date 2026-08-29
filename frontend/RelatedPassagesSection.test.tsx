@@ -7,7 +7,10 @@ vi.mock("./api", () => ({
 }));
 
 vi.mock("next-intl", () => ({
-  useTranslations: () => (key: string) => key,
+  // Params are echoed so a test can assert an accessible name actually
+  // varies per card.
+  useTranslations: () => (key: string, params?: Record<string, string>) =>
+    params ? `${key}:${Object.values(params).join(",")}` : key,
 }));
 
 vi.mock("next/link", () => ({
@@ -166,6 +169,96 @@ describe("RelatedPassagesSection", () => {
 
     expect(await screen.findByTestId("source-passage")).toBeTruthy();
     expect(getRelatedPassages).toHaveBeenCalledWith("f1", "main");
+  });
+
+  it("clamps both passages until the chevron is pressed", async () => {
+    getRelatedPassages.mockResolvedValue({ results: [pair()] });
+
+    render(
+      <RelatedPassagesSection fileId="f1" drive="main" trustTier="verified" />,
+    );
+    fireEvent.click(await screen.findByText("relatedPassagesFind"));
+
+    const mine = await screen.findByTestId("source-passage");
+    const theirs = screen.getByTestId("match-passage");
+    // Five pairs of full transcript chunks is four thousand characters.
+    expect(mine.className).toContain("line-clamp-2");
+    expect(theirs.className).toContain("line-clamp-2");
+
+    fireEvent.click(
+      screen.getByLabelText("relatedPassagesExpand:rag-design-notes.md"),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("source-passage").className).not.toContain(
+        "line-clamp-2",
+      ),
+    );
+    expect(screen.getByTestId("match-passage").className).not.toContain(
+      "line-clamp-2",
+    );
+  });
+
+  it("does not expand when the passage itself is clicked", async () => {
+    getRelatedPassages.mockResolvedValue({ results: [pair()] });
+
+    render(
+      <RelatedPassagesSection fileId="f1" drive="main" trustTier="verified" />,
+    );
+    fireEvent.click(await screen.findByText("relatedPassagesFind"));
+
+    fireEvent.click(await screen.findByTestId("source-passage"));
+
+    // Selecting a passage is how it reaches the quotation basket, so the
+    // text must not double as a toggle.
+    expect(screen.getByTestId("source-passage").className).toContain(
+      "line-clamp-2",
+    );
+  });
+
+  it("keeps the locator out of the truncated filename", async () => {
+    getRelatedPassages.mockResolvedValue({
+      results: [
+        pair({
+          filename: "a-very-long-filename-that-will-be-truncated-somewhere.md",
+          match: { text: THEIRS, page: null, timestamp: 195 },
+        }),
+      ],
+    });
+
+    render(
+      <RelatedPassagesSection fileId="f1" drive="main" trustTier="verified" />,
+    );
+    fireEvent.click(await screen.findByText("relatedPassagesFind"));
+
+    // The filename may be cut; where the link goes may not.
+    const locator = await screen.findByText(/3:15/);
+    expect(locator.className).toContain("shrink-0");
+    expect(locator.className).not.toContain("truncate");
+    expect(locator.closest("a")?.getAttribute("href")).toBe("/files/n1?t=195");
+  });
+
+  it("names each toggle after the file it opens", async () => {
+    getRelatedPassages.mockResolvedValue({
+      results: [
+        pair(),
+        pair({ file_id: "n2", filename: "second-note.md" }),
+      ],
+    });
+
+    render(
+      <RelatedPassagesSection fileId="f1" drive="main" trustTier="verified" />,
+    );
+    fireEvent.click(await screen.findByText("relatedPassagesFind"));
+
+    // Several of these buttons sit in one list; "expand" on its own
+    // tells a screen-reader user nothing about which card it opens.
+    expect(
+      await screen.findByLabelText("relatedPassagesExpand:rag-design-notes.md"),
+    ).toBeTruthy();
+    expect(
+      screen.getByLabelText("relatedPassagesExpand:second-note.md"),
+    ).toBeTruthy();
   });
 
   describe("passageHref", () => {

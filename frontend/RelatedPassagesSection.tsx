@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useTranslations } from "next-intl";
 
 import { getRelatedPassages } from "./api";
@@ -50,7 +50,16 @@ export default function RelatedPassagesSection({
   const [results, setResults] = useState<RelatedPassageItem[]>([]);
   const [status, setStatus] = useState<Status>("idle");
   const [isOpen, setIsOpen] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const requestIdRef = useRef(0);
+
+  const toggle = useCallback((fileId: string) => {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (!next.delete(fileId)) next.add(fileId);
+      return next;
+    });
+  }, []);
 
   const awaitingRuling = trustTier === "unverified" && !trustReviewedAt;
 
@@ -75,6 +84,7 @@ export default function RelatedPassagesSection({
     setResults([]);
     setStatus("idle");
     setIsOpen(false);
+    setExpanded(new Set());
   }, [fileId, drive]);
 
   useEffect(() => {
@@ -143,35 +153,131 @@ export default function RelatedPassagesSection({
       )}
 
       {status === "loaded" && isOpen && results.length > 0 && (
-        <div className="space-y-4">
+        <div className="space-y-2">
           {results.map((item) => (
             // One row per other file, so the file id is a stable key.
-            <div key={item.file_id}>
-              {/* Selectable on purpose: selecting a passage is how it
-                  reaches Knowledge's quotation basket. */}
-              <blockquote
-                data-testid="source-passage"
-                className="border-l-2 border-bg-border pl-3 text-sm text-text-primary break-words"
-              >
-                {item.source.text}
-              </blockquote>
-              <Link
-                href={passageHref(item.file_id, item.match)}
-                className="mt-1.5 inline-block break-all text-xs text-text-muted underline-offset-2 hover:underline"
-              >
-                {item.filename}
-                {locatorLabel(item.match)}
-              </Link>
-              <blockquote
-                data-testid="match-passage"
-                className="mt-1 border-l-2 border-bg-border pl-3 text-sm text-text-muted break-words"
-              >
-                {item.match.text}
-              </blockquote>
-            </div>
+            <PassageCard
+              key={item.file_id}
+              item={item}
+              expanded={expanded.has(item.file_id)}
+              onToggle={() => toggle(item.file_id)}
+            />
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * One pair: the other file as the card's heading, the two passages below it.
+ *
+ * The card is what tells one row from the next — the two passages used to
+ * be distinguished only by text colour, which is nearly invisible in dark
+ * mode, and the filename sat between them so it read as a caption for
+ * whichever one you looked at first. A fixed label column settles which
+ * side is which without asking anyone to compare shades.
+ *
+ * Both passages are clamped to two lines. Five pairs of full transcript
+ * chunks is four thousand characters of unpunctuated prose, which buries
+ * the rest of the page.
+ */
+function PassageCard({
+  item,
+  expanded,
+  onToggle,
+}: {
+  item: RelatedPassageItem;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const t = useTranslations("file");
+  const locator = locatorLabel(item.match);
+
+  return (
+    <article className="rounded-xl bg-bg-card p-3">
+      <div className="flex items-start justify-between gap-2">
+        <Link
+          href={passageHref(item.file_id, item.match)}
+          className="flex min-w-0 flex-1 items-baseline gap-1 text-xs text-text-muted underline-offset-2 hover:underline"
+        >
+          <span className="truncate">{item.filename}</span>
+          {/* Never truncated: the locator is where the link goes. */}
+          {locator && <span className="shrink-0">{locator}</span>}
+        </Link>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={expanded}
+          // The name carries the filename because a result set holds
+          // several of these buttons, and "expand" alone tells a screen
+          // reader or a voice-control user nothing about which one.
+          aria-label={
+            expanded
+              ? t("relatedPassagesCollapse", { filename: item.filename })
+              : t("relatedPassagesExpand", { filename: item.filename })
+          }
+          // The passages are deliberately not clickable, so this is the
+          // only way to expand — the negative margin buys a real touch
+          // target without moving the icon or growing the card.
+          className="-m-2 shrink-0 rounded-full p-2 text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
+        >
+          <ChevronDown
+            size={14}
+            className={`transition-transform ${expanded ? "rotate-180" : ""}`}
+          />
+        </button>
+      </div>
+
+      <dl className="mt-2 space-y-1.5">
+        <PassageRow
+          label={t("relatedPassagesThisFile")}
+          text={item.source.text}
+          expanded={expanded}
+          testId="source-passage"
+        />
+        <PassageRow
+          label={t("relatedPassagesMatch")}
+          text={item.match.text}
+          expanded={expanded}
+          testId="match-passage"
+          muted
+        />
+      </dl>
+    </article>
+  );
+}
+
+function PassageRow({
+  label,
+  text,
+  expanded,
+  testId,
+  muted = false,
+}: {
+  label: string;
+  text: string;
+  expanded: boolean;
+  testId: string;
+  muted?: boolean;
+}) {
+  return (
+    <div className="flex gap-3">
+      <dt className="w-20 shrink-0 text-xs leading-relaxed text-text-muted">
+        {label}
+      </dt>
+      {/* Selectable on purpose, and never a click target: selecting a
+          passage is how it reaches Knowledge's quotation basket, so the
+          chevron owns expansion instead. */}
+      <dd
+        data-testid={testId}
+        data-expanded={expanded ? "true" : "false"}
+        className={`m-0 min-w-0 text-sm leading-relaxed ${
+          muted ? "text-text-muted" : "text-text-primary"
+        } ${expanded ? "" : "line-clamp-2"}`}
+      >
+        {text}
+      </dd>
     </div>
   );
 }
