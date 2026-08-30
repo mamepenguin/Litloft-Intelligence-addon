@@ -1224,6 +1224,12 @@ class IndexManager:
 
         await asyncio.to_thread(_apply_moves)
 
+        # A move can hand a file the first usable thumbnail path it has
+        # ever had. Reconcile's sync cannot notice — the path it would
+        # compare against was just written here — so the leg has to be
+        # reopened at the point the path changes.
+        await asyncio.to_thread(reset_falsely_completed_clip_thumbnail)
+
     # --- Background workers ---
 
     async def _metadata_worker(self) -> None:

@@ -250,3 +250,55 @@ def test_a_present_thumbnail_mount_is_silent(monkeypatch, caplog, tmp_path):
         assert clip_worker.warn_if_thumbnails_unreachable() is True
 
     assert not caplog.records
+
+
+# ---------------------------------------------------------------------------
+# Review findings (codex, PR #24)
+# ---------------------------------------------------------------------------
+
+def test_a_new_thumbnail_embedding_drops_the_similar_cache(Session, monkeypatch):
+    """The cache has no TTL, and recovery writes arrive outside webhooks."""
+    from app import search as search_mod
+
+    _seed(Session, "vid8", thumbnail_path="d/vid8.jpg", clip_indexed=True)
+    search_mod._similar_cache["vid8:6:default"] = object()
+
+    assert clip_worker._index_clip_thumbnail(
+        "vid8", "/data/thumbnails/d/vid8.jpg", "vid8.bin",
+    ) is True
+
+    assert search_mod._similar_cache == {}
+
+
+@pytest.mark.asyncio
+async def test_a_move_that_grants_a_thumbnail_path_reopens_the_leg(
+    Session, monkeypatch,
+):
+    """Reconcile cannot notice: the path it would compare was just written."""
+    _seed(
+        Session, "vid9", thumbnail_path=None,
+        clip_indexed=True, clip_thumbnail_indexed=True,
+    )
+
+    monkeypatch.setattr(
+        indexer_mod, "_get_litloft_files_by_ids",
+        lambda ids: {"vid9": {
+            "drive": "default", "file_path": "moved/vid9.mp4",
+            "filename": "vid9.mp4", "title": "",
+            "thumbnail_path": "default/moved/vid9.jpg",
+            "file_type": "video", "mime_type": VIDEO_MIME,
+        }},
+    )
+    monkeypatch.setattr(indexer_mod, "resolve_file_path", lambda d, p: f"/drives/{p}")
+    monkeypatch.setattr(indexer_mod, "delete_fts_file", lambda *a, **k: None)
+    monkeypatch.setattr(indexer_mod, "upsert_fts_file", lambda *a, **k: None)
+
+    import app.policy_client as policy
+    async def _enabled(drive, feature):
+        return True
+    monkeypatch.setattr(policy, "is_feature_enabled", _enabled)
+
+    manager = indexer_mod.IndexManager.__new__(indexer_mod.IndexManager)
+    await indexer_mod.IndexManager.handle_files_moved(manager, ["vid9"])
+
+    assert _thumb_flag(Session, "vid9") is False

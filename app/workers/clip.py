@@ -919,6 +919,14 @@ def _index_clip_thumbnail(
             if source_label == "Image":
                 file.clip_indexed = True
 
+    # This file can now appear in — and reorder — any other file's
+    # similar-files answer, and that cache has no TTL. Recovery writes do
+    # not arrive through a webhook, so without this a video queried
+    # before its thumbnail existed keeps its text-only answer for the
+    # life of the process.
+    from app.search import invalidate_similar_cache
+    invalidate_similar_cache()
+
     # BLIP caption applies to the visible representative frame, which is
     # what the user-facing detail page surfaces. Reusing the already-loaded
     # PIL image is the lightweight path.
