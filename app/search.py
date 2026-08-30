@@ -1597,6 +1597,76 @@ def invalidate_similar_cache() -> int:
     return count
 
 
+# Keyword bags are stored by ``_index_tfidf_keywords`` as a space-joined
+# string in ``Embedding.content_preview``, whose column is capped at this
+# many characters. A bag that reaches the cap may have lost the tail of
+# its final word, so that word is dropped rather than matched as if whole.
+_KEYWORD_PREVIEW_MAX = 200
+
+# How many shared words a single result carries. The UI shows the first
+# few; the rest are there for callers that want the whole overlap.
+_SHARED_KEYWORDS_MAX = 10
+
+
+def _parse_keyword_preview(preview: str | None) -> list[str]:
+    """Split a stored keyword bag back into words, TF-IDF order intact."""
+    if not preview:
+        return []
+    words = preview.split()
+    if len(preview) >= _KEYWORD_PREVIEW_MAX and words:
+        words.pop()
+    return words
+
+
+def _load_keyword_bags(file_ids: list[str]) -> dict[str, list[str]]:
+    """Read the TF-IDF keyword bag of each given file, in one query."""
+    if not file_ids:
+        return {}
+    with get_search_db_read() as session:
+        rows = (
+            session.query(Embedding.file_id, Embedding.content_preview)
+            .filter(
+                Embedding.file_id.in_(file_ids),
+                Embedding.embedding_type == "tfidf_keywords",
+            )
+            .all()
+        )
+    return {
+        row.file_id: _parse_keyword_preview(row.content_preview)
+        for row in rows
+    }
+
+
+def _shared_keyword_map(
+    source_id: str,
+    bags: dict[str, list[str]],
+) -> dict[str, list[dict]]:
+    """Words the source and each candidate both carry.
+
+    The overlap is a property of the pair, not of the leg that found it,
+    so a result reached by the visual leg alone still reports the words
+    it shares — and reports none when it shares none.
+
+    Order follows the source's own TF-IDF ranking, which is the order
+    the bag was stored in. The per-word scores are not stored, so none
+    are reported.
+    """
+    source_words = list(dict.fromkeys(bags.get(source_id, [])))
+    if not source_words:
+        return {}
+    shared: dict[str, list[dict]] = {}
+    for file_id, words in bags.items():
+        if file_id == source_id or not words:
+            continue
+        candidate_words = set(words)
+        overlap = [
+            {"word": w} for w in source_words if w in candidate_words
+        ][:_SHARED_KEYWORDS_MAX]
+        if overlap:
+            shared[file_id] = overlap
+    return shared
+
+
 def find_similar(
     file_id: str,
     limit: int = 6,
@@ -1618,6 +1688,9 @@ def find_similar(
         file_id: The source file ID.
         limit: Maximum number of similar files to return.
         drive: Optional drive filter (restricts results to this drive).
+
+    Each result also carries the keywords it shares with the source,
+    read from the bags both files were indexed with.
 
     Returns:
         List of similar files sorted by similarity score.
@@ -1651,7 +1724,6 @@ def find_similar(
 
     # For video files, also search by pre-computed TF-IDF keyword embeddings
     secondary_results: list[dict] = []
-    source_keywords: list[str] = []
     if secondary_type and secondary_type != primary_type:
         secondary_results = _find_similar_by_embedding(
             file_id, secondary_type, limit * 2, drive,
@@ -1662,19 +1734,16 @@ def find_similar(
     else:
         merged = primary_results[:limit]
 
-    # For tfidf_keywords secondary, read source keywords from the stored
-    # content_preview (keyword string saved at index time) — O(1) DB lookup,
-    # no Janome or IDF rebuild needed at query time.
-    if secondary_type == "tfidf_keywords" and not source_keywords:
-        with get_search_db_read() as _kw_session:
-            _kw_emb = (
-                _kw_session.query(Embedding.content_preview)
-                .filter_by(file_id=file_id, embedding_type="tfidf_keywords")
-                .first()
-            )
-        if _kw_emb and _kw_emb.content_preview:
-            _words = _kw_emb.content_preview.split()
-            source_keywords = [{"word": w, "score": 1.0} for w in _words]
+    # The words a result shares with the source come from the keyword
+    # bags stored at index time (content_preview of each file's
+    # tfidf_keywords row), so answering costs one indexed lookup and no
+    # Janome or IDF rebuild. Only transcribed files carry a bag; for
+    # everything else this is empty and no words are reported.
+    keyword_bags = _load_keyword_bags(
+        [file_id] + [r["file_id"] for r in merged],
+    )
+    source_keywords = [{"word": w} for w in keyword_bags.get(file_id, [])]
+    shared_by_id = _shared_keyword_map(file_id, keyword_bags)
 
     # Build lookup maps for score breakdown and keywords
     primary_by_id = {r["file_id"]: r["score"] for r in primary_results}
@@ -1701,11 +1770,7 @@ def find_similar(
                     if r["file_id"] in secondary_by_id
                     else None
                 ),
-                shared_keywords=tuple(
-                    secondary_by_id[r["file_id"]].get("shared_keywords", [])
-                    if r["file_id"] in secondary_by_id
-                    else []
-                ),
+                shared_keywords=tuple(shared_by_id.get(r["file_id"], ())),
             )
             for r in merged
         ],

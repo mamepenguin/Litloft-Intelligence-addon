@@ -139,7 +139,7 @@ export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSecti
                     {item.shared_keywords.slice(0, 3).map((kw) => (
                       <span
                         key={kw.word}
-                        className="rounded-lg bg-bg-elevated px-1 py-px text-[9px] text-text-muted"
+                        className="rounded-lg bg-bg-elevated px-1.5 py-px text-[11px] text-text-muted"
                       >
                         {kw.word}
                       </span>
