@@ -190,6 +190,15 @@ describe("passageWindow", () => {
       expect(text.startsWith("The next sentence")).toBe(true);
     });
 
+    it("closes a sentence that ends inside ascii brackets", () => {
+      const { text } = passageWindow(
+        "was part of.) The next sentence carries the claim instead.",
+        [],
+      );
+
+      expect(text.startsWith("The next sentence")).toBe(true);
+    });
+
     it("does not break on a decimal point", () => {
       const text = "3.14 is the ratio we keep coming back to";
 

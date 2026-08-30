@@ -63,9 +63,16 @@ def _normalize_token(token: str) -> str:
     """Approximate the ``unicode61 remove_diacritics 2`` tokenizer.
 
     The vocab tables store terms after the host FTS tokenizer has
-    normalised them. ``unicode61`` lowercases and strips diacritics
-    **from Latin script**; ``str.lower`` matches the first pass and a
-    per-character NFKD matches the second.
+    normalised them. ``unicode61`` lowercases, applies a set of
+    compatibility mappings (``µ``→``μ``, ``ϕ``→``φ``), and strips
+    diacritics **from Latin script**. Verified against SQLite: of ten
+    probe words this agrees on nine.
+
+    The tenth is a ligature. ``ﬁ`` is left alone by the tokenizer and
+    decomposed to ``fi`` here, because NFKD carries ligature splitting
+    along with the mappings we do want. Matching that exactly would mean
+    enumerating the tokenizer's own table; the lookup fails open, so the
+    cost is a term kept that might have been dropped.
 
     The decomposition has to be per character, and guarded. Applying it
     to a whole token strips Japanese voiced sound marks as if they were
@@ -84,23 +91,27 @@ def _normalize_token(token: str) -> str:
     if not token:
         return ""
 
-    # Compose first. A caller's term may arrive decomposed — macOS
-    # filenames are NFD — and the vocab holds the composed spelling, so
-    # ``ホ`` + U+309A has to become ``ポ`` before anything else looks at
-    # it. Stripping the mark instead yields ``ホケモン``, which is in no
-    # vocab table either.
-    token = unicodedata.normalize("NFC", token)
-
+    # Decompose first, so compatibility mappings still happen: SQLite
+    # stores µ as μ and ϕ as φ, and skipping the mapping to protect kana
+    # traded one mismatch for another.
     out: list[str] = []
-    for ch in token:
-        decomposed = unicodedata.normalize("NFKD", ch)
-        if decomposed and ord(decomposed[0]) < _LATIN_MAX:
-            out.append(
-                "".join(c for c in decomposed if not unicodedata.combining(c))
-            )
-        else:
+    base = ""
+    for ch in unicodedata.normalize("NFKD", token):
+        if unicodedata.combining(ch):
+            # Drop the mark only where it is a Latin diacritic. On a kana
+            # base it is a voiced sound mark and part of the word —
+            # dropping it turned ポケモン into ホケモン, which is in no
+            # vocab table, so every voiced katakana term reported a
+            # frequency of 0 and read as maximally rare.
+            if base and ord(base) < _LATIN_MAX:
+                continue
             out.append(ch)
-    return "".join(out).lower().strip()
+        else:
+            base = ch
+            out.append(ch)
+
+    # Recompose, because the vocab holds ポ as one character.
+    return unicodedata.normalize("NFC", "".join(out)).lower().strip()
 
 
 @lru_cache(maxsize=1)

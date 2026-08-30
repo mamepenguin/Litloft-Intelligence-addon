@@ -397,5 +397,14 @@ class TestNormalizeToken:
             unicodedata.normalize("NFD", token)
         ) == token
 
+    @pytest.mark.parametrize(
+        "token,expected", [("µ", "μ"), ("ϕ", "φ"), ("ϑ", "θ")]
+    )
+    def test_compatibility_mappings_still_apply(self, token, expected):
+        # unicode61 stores these mapped. Guarding the kana by skipping
+        # decomposition altogether traded one mismatch for another;
+        # verified against SQLite directly.
+        assert rarity_filter._normalize_token(token) == expected
+
     def test_blank_is_unusable(self):
         assert rarity_filter._normalize_token("   ") == ""

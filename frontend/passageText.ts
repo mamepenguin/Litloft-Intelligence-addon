@@ -28,10 +28,10 @@ const MIN_REMAINDER = 12;
 const CJK_TERMINATORS = "。．！？…\n";
 const ASCII_TERMINATORS = ".!?";
 /** Punctuation that trails a terminator and belongs to the sentence before it. */
-const TRAILING_MARKS = "」』）】〉》\"'”’";
+const TRAILING_MARKS = "」』）】〉》\"'”’)]}";
 
 /** Punctuation a sentence can open with, before its first real character. */
-const OPENING_MARKS = "「『（【〈《\"'“‘([";
+const OPENING_MARKS = "「『（【〈《\"'“‘([{";
 
 export interface PassageWindow {
   text: string;
