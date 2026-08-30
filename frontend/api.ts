@@ -1580,7 +1580,7 @@ export async function* askQuestionStream(
  *
  * Each flag is True when the corresponding embedding/index slice exists
  * for the file. They drive the per-row "Regenerate" buttons in
- * ``IndexDetailsSection`` — when False the section can offer to kick
+ * ``IndexDetailsDialog`` — when False the dialog can offer to kick
  * off the missing task without forcing a full reindex.
  */
 export interface IndexDetailsStatus {
@@ -1597,7 +1597,7 @@ export interface IndexDetailsResponse {
   status: IndexDetailsStatus;
   indexed_at: string;
   // The embeddings + provider_stats payload is opaque to the
-  // IndexDetailsSection UI today — declared as ``unknown`` so callers
+  // IndexDetailsDialog UI today — declared as ``unknown`` so callers
   // that introspect deeper can narrow it locally without forcing the
   // shared type to grow ahead of the consumer.
   embeddings?: Record<string, unknown>;
@@ -1615,7 +1615,7 @@ export interface ReindexResponse {
 /**
  * Fetch the per-task indexing status (and provider stats) for a file.
  *
- * Used by ``IndexDetailsSection`` to render the per-task table with
+ * Used by ``IndexDetailsDialog`` to render the per-task table with
  * Regenerate buttons. 404s and network failures are propagated so the
  * caller can hide the section gracefully.
  */
@@ -1642,7 +1642,7 @@ export async function getIndexDetails(
  * the queue (HTTP 202 — no flag flip, no double enqueue).
  *
  * Both callers must pass the owning drive explicitly:
- * ``IndexDetailsSection`` receives it from the file-detail slot, and
+ * ``IndexDetailsMenuItem`` receives it from the file-actions-menu slot, and
  * ``FailedJobsModal`` receives it on each failed-job row. Keeping this
  * required ensures the retry request carries ``X-Lit-Drive``, which the
  * host proxy requires before forwarding drive-scoped addon routes.
