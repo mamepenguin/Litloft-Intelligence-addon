@@ -8,8 +8,11 @@
  * a section on the file detail page. `IndexDetailsMenuItem` owns the
  * entry that opens it.
  *
- * Portalled to `document.body`: the menu that hosts the entry is `z-30`
- * and clips its overflow, so a dialog rendered in place would be cut off.
+ * Portalled out of the menu that hosts the entry: it is `z-30` and clips
+ * its overflow, so a dialog rendered in place would be cut off. The
+ * target comes from core's `useDialogPortalTarget` rather than being
+ * `document.body` outright — inside the mobile Bottom Sheet a body
+ * portal is rendered but inert.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -32,6 +35,7 @@ import { getIndexDetails, reindexFile } from "./api";
 import type { IndexDetailsResponse, ReindexTask } from "./api";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useShortcuts } from "@/hooks/useShortcuts";
+import { useDialogPortalTarget } from "@/components/DialogPortal";
 
 export interface IndexDetailsDialogProps {
   open: boolean;
@@ -137,6 +141,9 @@ export default function IndexDetailsDialog({
   const t = useTranslations("semanticSearch");
   const tDetails = useTranslations("semanticSearch.indexDetails");
   const tc = useTranslations("common");
+  // document.body everywhere except inside the mobile Bottom Sheet, which
+  // hands out a host in its own subtree — a body portal is inert there.
+  const dialogHost = useDialogPortalTarget();
   const [details, setDetails] = useState<IndexDetailsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingTask, setPendingTask] = useState<ReindexTask | null>(null);
@@ -231,7 +238,7 @@ export default function IndexDetailsDialog({
     }
   }, [pendingTask, fileId, drive]);
 
-  if (!open) return null;
+  if (!open || !dialogHost) return null;
 
   // Only render rows whose task applies to this file's mime/type.
   const visibleTasks = TASK_SPECS.filter((spec) =>
@@ -343,6 +350,6 @@ export default function IndexDetailsDialog({
         onCancel={handleCancel}
       />
     </>,
-    document.body,
+    dialogHost,
   );
 }
