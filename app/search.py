@@ -1547,6 +1547,15 @@ class SimilarSearchResult:
 # wholesale-invalidate + per-request-rewrite churn pattern. Since these
 # results are pure derivations of indexed data and cheap to rebuild,
 # memory-only is the right durability tier.
+#: How far past the plain "source rows + answer + slack" budget the
+#: neighbour fetch may widen. Both vector tables mix embedding types and
+#: MATCH ranks across all of them, so the requested type can be a small
+#: minority of what comes back — measured at 15% for tfidf_keywords.
+_NEIGHBOUR_FETCH_FACTORS = (1, 4, 16)
+#: Ceiling on a single KNN, so a pathological index cannot turn one
+#: similar-files call into a table scan.
+_NEIGHBOUR_FETCH_MAX = 4096
+
 _SIMILAR_CACHE_MAX = 2048
 _similar_cache: "OrderedDict[str, SimilarSearchResult]" = OrderedDict()
 _similar_cache_lock = threading.Lock()
@@ -1811,7 +1820,12 @@ def _select_embedding_types(
     type_map: dict[str, tuple[str, str | None]] = {
         "image": ("clip_thumbnail", None),
         "video": ("clip_thumbnail", "tfidf_keywords"),
-        "audio": ("whisper", None),
+        # Audio gets the same lexical second opinion as video, and needs
+        # it more: it has no visual route at all, and an averaged whisper
+        # vector carries so little topic that unrelated speech matches at
+        # ~0.90 — a music track's nearest neighbours were gameplay
+        # commentary. TF-IDF keywords are what actually name a subject.
+        "audio": ("whisper", "tfidf_keywords"),
         "document": ("text_content", None),
     }
     return type_map.get(file_type, ("metadata", None))
@@ -1910,31 +1924,61 @@ def _find_similar_by_embedding(
     # Query for nearest neighbors.
     # Must fetch enough to look past the source file's own embeddings
     # (e.g. a video with 89 CLIP frames will occupy the top ~89 slots).
+    #
+    # Both vector tables are shared between embedding types — vec_text
+    # holds whisper, text_content, metadata and tfidf_keywords; vec_clip
+    # holds scene frames beside representative ones — and MATCH is a
+    # global KNN that knows nothing about the type. Measured on a real
+    # index, a tfidf_keywords query came back 85% whisper, and a
+    # clip_thumbnail query 38% scene frames, each scored as though it
+    # were the requested channel. So the type filter is applied here,
+    # and the fetch is widened until enough rows survive it.
     source_count = len(embedding_ids)
-    fetch_limit = source_count + limit + 20
-    with engine.connect() as conn:
-        rows = conn.execute(
-            sql_text(
-                f"SELECT embedding_id, distance "
-                f"FROM {vec_table} "
-                f"WHERE vector MATCH :vec "
-                f"ORDER BY distance "
-                f"LIMIT :limit"
-            ),
-            {"vec": avg_vector.tobytes(), "limit": fetch_limit},
-        ).fetchall()
+    base_limit = source_count + limit + 20
+    distances: dict[str, float] = {}
 
-    if not rows:
-        return []
+    for factor in _NEIGHBOUR_FETCH_FACTORS:
+        asked = min(base_limit * factor, _NEIGHBOUR_FETCH_MAX)
+        with engine.connect() as conn:
+            rows = conn.execute(
+                sql_text(
+                    f"SELECT embedding_id, distance "
+                    f"FROM {vec_table} "
+                    f"WHERE vector MATCH :vec "
+                    f"ORDER BY distance "
+                    f"LIMIT :limit"
+                ),
+                {"vec": avg_vector.tobytes(), "limit": asked},
+            ).fetchall()
 
-    neighbor_ids = [row[0] for row in rows]
-    distances = {row[0]: row[1] for row in rows}
+        if not rows:
+            return []
+
+        distances = {row[0]: row[1] for row in rows}
+        if asked >= _NEIGHBOUR_FETCH_MAX or len(rows) < asked:
+            # The table has nothing further to give.
+            break
+        with get_search_db_read() as session:
+            usable = {
+                fid for (fid,) in session.query(Embedding.file_id)
+                .filter(
+                    Embedding.id.in_(list(distances)),
+                    Embedding.embedding_type == embedding_type,
+                )
+                .distinct()
+                .all()
+            }
+        if len(usable - {file_id}) >= limit:
+            break
 
     # Look up file info for neighbor embeddings
     with get_search_db_read() as session:
         neighbor_embeddings = (
             session.query(Embedding)
-            .filter(Embedding.id.in_(neighbor_ids))
+            .filter(
+                Embedding.id.in_(list(distances)),
+                Embedding.embedding_type == embedding_type,
+            )
             .all()
         )
 

@@ -591,6 +591,7 @@ def _index_clip_sync(file_id: str) -> bool:
         mime_type = file.mime_type
         filename = file.filename
         duration = file.duration
+        scene_done = file.clip_indexed
 
     # Re-read so we can pull thumbnail_path. Done in a fresh session so
     # the session above can be released before any heavy CPU work.
@@ -673,7 +674,14 @@ def _index_clip_sync(file_id: str) -> bool:
                 f.clip_thumbnail_indexed = True
         return False
 
-    scene_ok = _index_clip_video(file_id, file_path, duration)
+    # The two legs are independent. A pass that exists only to fill the
+    # thumbnail leg must not re-extract and re-embed every frame of a
+    # video whose scenes are already indexed — that is the whole cost of
+    # the job, and ``reset_falsely_completed_clip`` has already cleared
+    # ``clip_indexed`` for any file whose scene rows are actually absent.
+    scene_ok = True if scene_done else _index_clip_video(
+        file_id, file_path, duration,
+    )
     # Best-effort thumbnail: if core has not generated/synced the JPEG
     # yet, skip the thumbnail route silently — scanner will re-index
     # later when the projection populates.
@@ -714,6 +722,46 @@ def _index_clip_sync(file_id: str) -> bool:
             if f is not None:
                 f.clip_thumbnail_indexed = True
     return scene_ok
+
+
+def thumbnails_dir() -> Path:
+    """Where core's rendered thumbnails are mounted in this container."""
+    return Path(os.environ.get("HOMEVAULT_THUMBNAILS_DIR", "/data/thumbnails"))
+
+
+def warn_if_thumbnails_unreachable() -> bool:
+    """Say so at startup when the thumbnail route cannot possibly work.
+
+    Every non-image thumbnail embedding reads this directory, and the
+    failure when it is absent is silent by design: the route is
+    best-effort, so a missing JPEG only closes that file's leg. A
+    *missing mount* closes every video's leg the same quiet way, and the
+    only visible symptom is that similar-files stops offering visual
+    matches for video — which reads as "the model is weak", not as
+    "the container cannot see the files".
+
+    An override written before the data directory was mounted as a
+    directory (``./data:/data:ro``) produces exactly this state.
+
+    Returns:
+        Whether the directory is readable.
+    """
+    base = thumbnails_dir()
+    if base.is_dir():
+        return True
+    logger.warning(
+        "Thumbnail directory %s is not readable — thumbnail CLIP will be "
+        "skipped for every video, .loft and HEIC file, and similar-files "
+        "will fall back to text signals alone. Mount the core data "
+        "directory read-only rather than the DB file, as a pair:\n"
+        "    - ./data:/data:ro\n"
+        "    - /dev/null:/data/.jwt_secret:ro\n"
+        "The second line is not optional: data/.jwt_secret is core's "
+        "token signing key, and an addon that can read it can mint a "
+        "token for any drive.",
+        base,
+    )
+    return False
 
 
 def _resolve_thumbnail_abspath(thumbnail_path: str) -> str:
@@ -875,6 +923,14 @@ def _index_clip_thumbnail(
             # CLIP queue does not re-pick the file.
             if source_label == "Image":
                 file.clip_indexed = True
+
+    # This file can now appear in — and reorder — any other file's
+    # similar-files answer, and that cache has no TTL. Recovery writes do
+    # not arrive through a webhook, so without this a video queried
+    # before its thumbnail existed keeps its text-only answer for the
+    # life of the process.
+    from app.search import invalidate_similar_cache
+    invalidate_similar_cache()
 
     # BLIP caption applies to the visible representative frame, which is
     # what the user-facing detail page surfaces. Reusing the already-loaded

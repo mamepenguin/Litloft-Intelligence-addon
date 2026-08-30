@@ -1245,6 +1245,12 @@ def _index_tfidf_keywords(file_id: str, chunk_texts: list[str]) -> None:
             {"fid": file_id},
         )
 
+    # Same reasoning as the thumbnail route: this is the secondary signal
+    # behind every video and audio similar-files answer, the cache has no
+    # TTL, and a backfill write reaches it outside any webhook.
+    from app.search import invalidate_similar_cache
+    invalidate_similar_cache()
+
     logger.debug(
         "TF-IDF keyword embedding indexed for %s (%d keywords)",
         file_id, len(keywords),

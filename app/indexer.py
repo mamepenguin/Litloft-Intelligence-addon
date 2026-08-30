@@ -7,6 +7,7 @@ files through the indexing pipeline.
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -30,6 +31,8 @@ from app.workers.blip import check_idle_unload as check_blip_idle_unload
 from app.workers.clip_concepts import check_idle_unload as check_clip_concepts_idle_unload
 from app.workers.clip import (
     index_clip,
+    thumbnails_dir,
+    _resolve_thumbnail_abspath,
     IMAGE_TYPES,
     THUMBNAIL_FALLBACK_TYPES,
     VIDEO_TYPES,
@@ -348,6 +351,7 @@ class IndexManager:
         deactivated = 0
         purged = 0
         drift_repaired = 0
+        thumbnails_synced = 0
 
         try:
             # Every DB helper below is synchronous SQLAlchemy over tables
@@ -451,13 +455,25 @@ class IndexManager:
             # (caption download may have failed initially and succeeded later)
             await asyncio.to_thread(self._reset_loft_refs_with_new_vtt)
 
+            # A thumbnail rendered after the file was indexed reaches the
+            # addon here, and reopening the leg in the same pass lets
+            # _resume_incomplete() below queue it without a restart.
+            thumbnails_synced = await asyncio.to_thread(
+                _sync_thumbnail_paths, litloft_by_id, indexed_meta
+            )
+            # Unconditional: a CLIP job in flight during the sync read
+            # the old path and closes its leg after it, and the next
+            # reconcile sees no path change to trigger on.
+            await asyncio.to_thread(reset_falsely_completed_clip_thumbnail)
+
             # Resume incomplete: re-queue files that were interrupted mid-indexing
             resumed = await self._resume_incomplete()
 
             logger.info(
                 "Reconciliation complete: added=%d, deactivated=%d, purged=%d, "
-                "drift_repaired=%d, resumed=%d",
-                added, deactivated, purged, drift_repaired, resumed,
+                "drift_repaired=%d, thumbnails_synced=%d, resumed=%d",
+                added, deactivated, purged, drift_repaired,
+                thumbnails_synced, resumed,
             )
 
         except Exception as e:
@@ -1193,6 +1209,10 @@ class IndexManager:
                         indexed.file_type = core_file_type
                     if core_mime_type is not None:
                         indexed.mime_type = core_mime_type
+                    # Core derives the thumbnail's own path from the file
+                    # path, so a move invalidates it in exactly the same
+                    # way it invalidates ``file_path``.
+                    indexed.thumbnail_path = meta.get("thumbnail_path")
 
                     # FTS5 has no UNIQUE on file_id, so ``INSERT OR
                     # REPLACE`` would leave the old row alongside the new
@@ -1208,6 +1228,19 @@ class IndexManager:
                     )
 
         await asyncio.to_thread(_apply_moves)
+
+        # A move can hand a file the first usable thumbnail path it has
+        # ever had. Reconcile's sync cannot notice — the path it would
+        # compare against was just written here — so the leg has to be
+        # reopened at the point the path changes, and queued here too:
+        # the next reconcile is an hour away by default.
+        reopened = await asyncio.to_thread(
+            reset_falsely_completed_clip_thumbnail, list(litloft_meta)
+        )
+        for file_id in reopened:
+            await self._enqueue(IndexTask(
+                file_id=file_id, task_type=TaskType.CLIP
+            ))
 
     # --- Background workers ---
 
@@ -1656,6 +1689,125 @@ def reset_falsely_completed_clip() -> int:
     return reset
 
 
+def _thumbnail_source_reachable(
+    mime_type: str, file_path: str, thumbnail_path: str | None
+) -> bool:
+    """Whether the image this file's thumbnail leg would read exists.
+
+    Separates "not rendered yet" from "tried and failed for good". The
+    dispatcher closes the leg for both, so without this check a JPEG
+    that is gone, or a path that escapes the mount root, is reopened on
+    every startup, fails, and closes again forever.
+
+    A file that is present but unreadable still churns once per restart.
+    Telling that apart needs somewhere to record the attempt, and one
+    wasted decode per restart is not worth a column.
+    """
+    if mime_type in IMAGE_TYPES:
+        return os.path.exists(file_path)
+    if not thumbnail_path:
+        return False
+    try:
+        return os.path.exists(_resolve_thumbnail_abspath(thumbnail_path))
+    except ValueError:
+        # Escapes the mount root — the dispatcher rejects it too.
+        return False
+
+
+def reset_falsely_completed_clip_thumbnail(
+    file_ids: list[str] | None = None,
+) -> list[str]:
+    """Reopen the thumbnail leg for files that closed it without a vector.
+
+    ``_index_clip_sync`` closes ``clip_thumbnail_indexed`` whenever the
+    representative JPEG cannot be reached — the thumbnail had not been
+    rendered yet, or ``data/thumbnails`` was not mounted — so the CLIP
+    queue stops re-picking a file it cannot finish. Nothing reopens it
+    once the JPEG does arrive, and ``reset_falsely_completed_clip``
+    cannot: it accepts ``clip`` **or** ``clip_thumbnail`` as proof of
+    completion, and a video's scene rows satisfy that while its
+    thumbnail leg is still empty.
+
+    Two gates keep the reset from looping, because a file reopened into
+    work that cannot succeed is queued, fails, closes again, and comes
+    back on the next restart. A row needs a projected path to stand a
+    chance (images are exempt: they embed their own file), and the
+    directory those paths resolve under has to be mounted at all — a
+    stale ``docker-compose.override.yml`` leaves every video holding a
+    perfectly good path to a directory the container cannot see.
+
+    Args:
+        file_ids: Restrict the check to these files. Used by the
+            files-moved path, which knows exactly which rows it touched.
+
+    Returns:
+        The file IDs whose thumbnail leg was reopened. Callers that can
+        queue work immediately should; otherwise the next reconcile
+        picks them up.
+    """
+    image_mimes = list(IMAGE_TYPES)
+    thumb_mimes = list(IMAGE_TYPES | VIDEO_TYPES | THUMBNAIL_FALLBACK_TYPES)
+    if not thumbnails_dir().is_dir():
+        # Only the image route can still work; everything else resolves
+        # under the directory that is not there.
+        thumb_mimes = image_mimes
+
+    with get_search_db() as session:
+        thumb_ph = ", ".join(f":t{i}" for i in range(len(thumb_mimes)))
+        image_ph = ", ".join(f":i{i}" for i in range(len(image_mimes)))
+        params = {f"t{i}": m for i, m in enumerate(thumb_mimes)}
+        params.update({f"i{i}": m for i, m in enumerate(image_mimes)})
+
+        only = ""
+        if file_ids is not None:
+            if not file_ids:
+                return []
+            only_ph = ", ".join(f":o{i}" for i in range(len(file_ids)))
+            params.update({f"o{i}": fid for i, fid in enumerate(file_ids)})
+            only = f"AND f.file_id IN ({only_ph}) "
+
+        stranded = session.execute(
+            sql_text(
+                "SELECT f.file_id, f.filename, f.mime_type, f.file_path, "
+                "       f.thumbnail_path "
+                "FROM indexed_files f "
+                "WHERE f.clip_thumbnail_indexed = 1 AND f.active = 1 "
+                f"AND f.mime_type IN ({thumb_ph}) "
+                f"{only}"
+                f"AND (f.mime_type IN ({image_ph}) OR ("
+                "  f.thumbnail_path IS NOT NULL AND f.thumbnail_path != ''"
+                ")) "
+                "AND f.file_id NOT IN ("
+                "  SELECT DISTINCT e.file_id FROM embeddings e "
+                "  WHERE e.embedding_type = 'clip_thumbnail'"
+                ")"
+            ),
+            params,
+        ).fetchall()
+
+        stranded = [
+            row for row in stranded
+            if _thumbnail_source_reachable(row[2], row[3], row[4])
+        ]
+
+        for file_id, filename, *_ in stranded:
+            logger.warning(
+                "reset_falsely_completed_clip_thumbnail: reopening %s (%s) "
+                "— clip_thumbnail_indexed=True but no thumbnail embedding "
+                "found; will retry on next reconcile",
+                file_id, filename,
+            )
+            session.execute(
+                sql_text(
+                    "UPDATE indexed_files SET clip_thumbnail_indexed = 0 "
+                    "WHERE file_id = :file_id"
+                ),
+                {"file_id": file_id},
+            )
+
+    return [row[0] for row in stranded]
+
+
 def cleanup_orphaned_embeddings() -> int:
     """Remove embeddings whose vectors are missing from vec tables.
 
@@ -1879,6 +2031,7 @@ def _get_indexed_metadata() -> dict[str, dict]:
             IndexedFile.file_type,
             IndexedFile.mime_type,
             IndexedFile.active,
+            IndexedFile.thumbnail_path,
         ).all()
         return {
             row[0]: {
@@ -1888,9 +2041,50 @@ def _get_indexed_metadata() -> dict[str, dict]:
                 "file_type": row[4],
                 "mime_type": row[5],
                 "active": row[6],
+                "thumbnail_path": row[7],
             }
             for row in rows
         }
+
+
+def _sync_thumbnail_paths(
+    litloft_by_id: dict[str, dict], indexed_meta: dict[str, dict]
+) -> int:
+    """Copy core's ``thumbnail_path`` onto rows whose copy is stale.
+
+    A file indexed before core rendered its thumbnail is stored with no
+    path, and nothing ever revisits that: reconcile's drift check
+    compares path, name and classification, none of which changed. The
+    thumbnail CLIP route then has nothing to open, so the whole visual
+    leg of similar-files stays empty for the file's lifetime.
+
+    Deliberately not folded into the drift check. Drift means "a webhook
+    was missed" and logs a warning saying so; a thumbnail that simply
+    did not exist yet at index time is the ordinary order of events.
+
+    Returns:
+        Number of rows updated.
+    """
+    stale = {
+        file_id: core.get("thumbnail_path")
+        for file_id, core in litloft_by_id.items()
+        if file_id in indexed_meta
+        and core.get("thumbnail_path") != indexed_meta[file_id].get("thumbnail_path")
+    }
+    if not stale:
+        return 0
+
+    with get_search_db() as session:
+        for file_id, thumbnail_path in stale.items():
+            session.execute(
+                sql_text(
+                    "UPDATE indexed_files SET thumbnail_path = :tp "
+                    "WHERE file_id = :file_id"
+                ),
+                {"tp": thumbnail_path, "file_id": file_id},
+            )
+
+    return len(stale)
 
 
 def _set_file_active(file_id: str, *, active: bool) -> None:
