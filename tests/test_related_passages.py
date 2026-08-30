@@ -673,6 +673,84 @@ async def test_a_verified_file_below_a_run_of_unverified_ones_survives(
 
 
 @pytest.mark.asyncio
+async def test_a_signoff_that_recurs_across_the_drive_is_dropped(
+    search_db, monkeypatch
+):
+    """The bar is recurrence, and the population is the drive.
+
+    ``_drop_recurring`` counts over the candidates that survived into
+    this request, which is far smaller than the drive: measured on a
+    real library, a sign-off carried by fifteen files reached a viewer
+    while that filter saw one. Genuine subject matter recurred in zero
+    or one other file and the sign-off in fifteen, with the band between
+    them empty.
+    """
+    _add_file(search_db, "src")
+    _add_text_chunk(search_db, "src", 0, "Subscribe and hit like. " * 4, _axis(0))
+    _add_file(search_db, "note", filename="notes.md")
+    _add_text_chunk(search_db, "note", 0, "Subscribe and hit like. " * 4, _near(0))
+
+    _permissive(monkeypatch)
+    _nearest(monkeypatch, "note")
+    monkeypatch.setattr(passages, "_recurs_across_drive", lambda *a, **kw: 15)
+
+    with _internal_api(monkeypatch, _verified("note")):
+        pairs = await passages.find_related_passages(
+            file_id="src", drive="d1", credential=None
+        )
+
+    assert pairs == []
+
+
+@pytest.mark.asyncio
+async def test_a_passage_only_one_other_file_shares_is_kept(
+    search_db, monkeypatch
+):
+    _add_file(search_db, "src")
+    _add_text_chunk(search_db, "src", 0, "The diagonal is the axis. " * 4, _axis(0))
+    _add_file(search_db, "note", filename="notes.md")
+    _add_text_chunk(search_db, "note", 0, "About that same diagonal. " * 4, _near(0))
+
+    _permissive(monkeypatch)
+    _nearest(monkeypatch, "note")
+    monkeypatch.setattr(passages, "_recurs_across_drive", lambda *a, **kw: 1)
+
+    with _internal_api(monkeypatch, _verified("note")):
+        pairs = await passages.find_related_passages(
+            file_id="src", drive="d1", credential=None
+        )
+
+    assert len(pairs) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_unanswerable_recurrence_check_keeps_the_row(
+    search_db, monkeypatch
+):
+    """Fail open: a vector table that cannot answer costs a boilerplate
+    row, not the whole section."""
+    _add_file(search_db, "src")
+    _add_text_chunk(search_db, "src", 0, "The diagonal is the axis. " * 4, _axis(0))
+    _add_file(search_db, "note", filename="notes.md")
+    _add_text_chunk(search_db, "note", 0, "About that same diagonal. " * 4, _near(0))
+
+    _permissive(monkeypatch)
+    _nearest(monkeypatch, "note")
+
+    def _boom(*a, **kw):
+        raise RuntimeError("no such column: k")
+
+    monkeypatch.setattr(passages, "_recurrence_rows", _boom)
+
+    with _internal_api(monkeypatch, _verified("note")):
+        pairs = await passages.find_related_passages(
+            file_id="src", drive="d1", credential=None
+        )
+
+    assert len(pairs) == 1
+
+
+@pytest.mark.asyncio
 async def test_a_late_source_passage_can_still_match(search_db, monkeypatch):
     """Sampling spreads across the file; it never keeps only the opening."""
     monkeypatch.setattr(

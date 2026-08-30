@@ -747,6 +747,19 @@ class RelatedPassagesConfig:
     #: passages matched one file (50 of them) or two (2), and every
     #: passage matching three was a sign-off.
     max_passage_files: int = 2
+    #: Cosine at which two chunks are the same passage said again, for
+    #: the library-wide recurrence check. Well below
+    #: ``near_duplicate_score``: a sign-off is re-read, not copied, so
+    #: its takes differ in filler and pacing. Measured on a real drive,
+    #: source passages of genuine subject matter recur in 0-1 other
+    #: files and a channel sign-off recurred in 15, with nothing in
+    #: between — the band this separates is empty, so the exact value
+    #: is not delicate.
+    recurrence_score: float = 0.95
+    #: Neighbours fetched for that check. A passage that recurs is
+    #: near-identical to its own copies, so they arrive together at the
+    #: top; this only has to be wider than ``max_passage_files``.
+    recurrence_k: int = 64
     #: Passages shorter than this are fragments — an ellipsis, a stray
     #: caption line — and match everything. Same reasoning as the
     #: too-short-transcript skip in ``find_similar``.
