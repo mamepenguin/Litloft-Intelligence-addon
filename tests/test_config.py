@@ -333,6 +333,14 @@ class TestValidateFilePath:
 # ---------------------------------------------------------------------------
 
 
+class TestLLMTokenCeiling:
+    """max_tokens is a safety ceiling, and a low one is not free."""
+
+    def test_default_leaves_room_for_a_long_structured_answer(self):
+        """Chapter consolidation on a long transcript outgrew 2048."""
+        assert LLMConfig().max_tokens >= 8192
+
+
 class TestLLMReasoning:
     """The opt-in knob that suppresses provider-side chain-of-thought."""
 
