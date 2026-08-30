@@ -7,6 +7,7 @@ files through the indexing pipeline.
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -31,6 +32,7 @@ from app.workers.clip_concepts import check_idle_unload as check_clip_concepts_i
 from app.workers.clip import (
     index_clip,
     thumbnails_dir,
+    _resolve_thumbnail_abspath,
     IMAGE_TYPES,
     THUMBNAIL_FALLBACK_TYPES,
     VIDEO_TYPES,
@@ -459,8 +461,10 @@ class IndexManager:
             thumbnails_synced = await asyncio.to_thread(
                 _sync_thumbnail_paths, litloft_by_id, indexed_meta
             )
-            if thumbnails_synced:
-                await asyncio.to_thread(reset_falsely_completed_clip_thumbnail)
+            # Unconditional: a CLIP job in flight during the sync read
+            # the old path and closes its leg after it, and the next
+            # reconcile sees no path change to trigger on.
+            await asyncio.to_thread(reset_falsely_completed_clip_thumbnail)
 
             # Resume incomplete: re-queue files that were interrupted mid-indexing
             resumed = await self._resume_incomplete()
@@ -1685,6 +1689,31 @@ def reset_falsely_completed_clip() -> int:
     return reset
 
 
+def _thumbnail_source_reachable(
+    mime_type: str, file_path: str, thumbnail_path: str | None
+) -> bool:
+    """Whether the image this file's thumbnail leg would read exists.
+
+    Separates "not rendered yet" from "tried and failed for good". The
+    dispatcher closes the leg for both, so without this check a JPEG
+    that is gone, or a path that escapes the mount root, is reopened on
+    every startup, fails, and closes again forever.
+
+    A file that is present but unreadable still churns once per restart.
+    Telling that apart needs somewhere to record the attempt, and one
+    wasted decode per restart is not worth a column.
+    """
+    if mime_type in IMAGE_TYPES:
+        return os.path.exists(file_path)
+    if not thumbnail_path:
+        return False
+    try:
+        return os.path.exists(_resolve_thumbnail_abspath(thumbnail_path))
+    except ValueError:
+        # Escapes the mount root — the dispatcher rejects it too.
+        return False
+
+
 def reset_falsely_completed_clip_thumbnail(
     file_ids: list[str] | None = None,
 ) -> list[str]:
@@ -1739,7 +1768,9 @@ def reset_falsely_completed_clip_thumbnail(
 
         stranded = session.execute(
             sql_text(
-                "SELECT f.file_id, f.filename FROM indexed_files f "
+                "SELECT f.file_id, f.filename, f.mime_type, f.file_path, "
+                "       f.thumbnail_path "
+                "FROM indexed_files f "
                 "WHERE f.clip_thumbnail_indexed = 1 AND f.active = 1 "
                 f"AND f.mime_type IN ({thumb_ph}) "
                 f"{only}"
@@ -1754,7 +1785,12 @@ def reset_falsely_completed_clip_thumbnail(
             params,
         ).fetchall()
 
-        for file_id, filename in stranded:
+        stranded = [
+            row for row in stranded
+            if _thumbnail_source_reachable(row[2], row[3], row[4])
+        ]
+
+        for file_id, filename, *_ in stranded:
             logger.warning(
                 "reset_falsely_completed_clip_thumbnail: reopening %s (%s) "
                 "— clip_thumbnail_indexed=True but no thumbnail embedding "

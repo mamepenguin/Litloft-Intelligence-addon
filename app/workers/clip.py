@@ -753,7 +753,12 @@ def warn_if_thumbnails_unreachable() -> bool:
         "Thumbnail directory %s is not readable — thumbnail CLIP will be "
         "skipped for every video, .loft and HEIC file, and similar-files "
         "will fall back to text signals alone. Mount the core data "
-        "directory read-only (./data:/data:ro), not the DB file.",
+        "directory read-only rather than the DB file, as a pair:\n"
+        "    - ./data:/data:ro\n"
+        "    - /dev/null:/data/.jwt_secret:ro\n"
+        "The second line is not optional: data/.jwt_secret is core's "
+        "token signing key, and an addon that can read it can mint a "
+        "token for any drive.",
         base,
     )
     return False

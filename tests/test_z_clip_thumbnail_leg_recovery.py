@@ -35,6 +35,9 @@ from app.workers import clip as clip_worker  # noqa: E402
 VIDEO_MIME = "video/mp4"
 IMAGE_MIME = "image/jpeg"
 
+#: Filled by the autouse fixture; ``_seed`` writes its sources under it.
+_MOUNT: list = []
+
 
 @pytest.fixture()
 def search_engine(tmp_path):
@@ -73,8 +76,9 @@ def _stub_embed(monkeypatch, tmp_path):
     # The reset gates on this directory existing, so give the default
     # case a real one. Tests about the missing mount override it.
     mount = tmp_path / "thumbs"
-    mount.mkdir()
+    (mount / "d").mkdir(parents=True)
     monkeypatch.setenv("HOMEVAULT_THUMBNAILS_DIR", str(mount))
+    _MOUNT.append(mount)
     monkeypatch.setattr(
         clip_worker, "embed_image", lambda image: np.zeros(512, dtype=np.float32),
     )
@@ -95,13 +99,22 @@ def _seed(
     clip_indexed=False, clip_thumbnail_indexed=False, active=True,
     with_thumb_embedding=False,
 ):
+    mount = _MOUNT[-1] if _MOUNT else None
+    if mount is not None and thumbnail_path:
+        target = mount / thumbnail_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"jpeg")
+    if mount is not None and mime_type in ("image/jpeg", "image/png"):
+        source = mount / f"{file_id}.bin"
+        source.write_bytes(b"jpeg")
+
     s = Session()
     try:
         s.add(IndexedFile(
             file_id=file_id,
             drive="default",
             filename=f"{file_id}.bin",
-            file_path=f"/drives/{file_id}.bin",
+            file_path=str(mount / f"{file_id}.bin") if mount else f"/drives/{file_id}.bin",
             file_type="video" if mime_type.startswith("video/") else "image",
             mime_type=mime_type,
             file_size=64,
@@ -294,6 +307,12 @@ async def test_a_move_that_grants_a_thumbnail_path_reopens_the_leg(
             "file_type": "video", "mime_type": VIDEO_MIME,
         }},
     )
+    # The move's thumbnail is on disk; that is what makes the leg
+    # reopenable rather than a terminal failure.
+    moved = _MOUNT[-1] / "default" / "moved"
+    moved.mkdir(parents=True, exist_ok=True)
+    (moved / "vid9.jpg").write_bytes(b"jpeg")
+
     monkeypatch.setattr(indexer_mod, "resolve_file_path", lambda d, p: f"/drives/{p}")
     monkeypatch.setattr(indexer_mod, "delete_fts_file", lambda *a, **k: None)
     monkeypatch.setattr(indexer_mod, "upsert_fts_file", lambda *a, **k: None)
@@ -347,3 +366,26 @@ def test_the_reopen_can_be_scoped_to_named_files(Session):
     assert indexer_mod.reset_falsely_completed_clip_thumbnail(["vid11"]) == ["vid11"]
     assert _thumb_flag(Session, "vid12") is True
     assert indexer_mod.reset_falsely_completed_clip_thumbnail([]) == []
+
+
+def test_a_thumbnail_that_is_gone_stays_closed(Session, tmp_path):
+    """Closed-and-failed must not be read as closed-and-not-yet-rendered."""
+    _seed(
+        Session, "vid13", thumbnail_path="d/vid13.jpg",
+        clip_indexed=True, clip_thumbnail_indexed=True,
+    )
+    (_MOUNT[-1] / "d" / "vid13.jpg").unlink()
+
+    assert indexer_mod.reset_falsely_completed_clip_thumbnail() == []
+    assert _thumb_flag(Session, "vid13") is True
+
+
+def test_a_path_escaping_the_mount_stays_closed(Session):
+    """The dispatcher rejects it too, so reopening only repeats the failure."""
+    _seed(
+        Session, "vid14", thumbnail_path="../../etc/passwd",
+        clip_indexed=True, clip_thumbnail_indexed=True,
+    )
+
+    assert indexer_mod.reset_falsely_completed_clip_thumbnail() == []
+    assert _thumb_flag(Session, "vid14") is True
