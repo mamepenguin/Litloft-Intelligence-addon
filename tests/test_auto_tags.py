@@ -520,6 +520,7 @@ class TestProcessFileBranches:
             "_get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "main",
                 "filename": "sample.mp4",
                 "file_type": "video",
                 "mime_type": "video/mp4",

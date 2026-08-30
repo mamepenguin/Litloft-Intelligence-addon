@@ -18,7 +18,7 @@ import threading
 import time
 from collections import Counter
 
-from app.database import get_search_db
+from app.database import get_search_db, get_search_db_read
 from app.models import IndexedFile, TranscriptChunk
 
 logger = logging.getLogger(__name__)
@@ -32,9 +32,11 @@ logger = logging.getLogger(__name__)
 _IDF_CACHE_TTL_SECONDS = 600
 
 _corpus_cache_lock = threading.Lock()
-_corpus_idf: dict[str, float] | None = None
-_corpus_idf_n_docs: int = 0
-_corpus_idf_built_at: float = 0.0
+#: drive -> (idf, n_docs, built_at). Document frequency is a corpus
+#: statistic, and a drive is a security boundary, so one drive's
+#: contents must never decide which words survive in another. The
+#: cache is keyed by drive for the same reason the counts are.
+_corpus_idf_by_drive: dict[str, tuple[dict[str, float], int, float]] = {}
 
 # Keep only nouns — topic-relevant words are predominantly nouns.
 # Verbs/adjectives/adverbs describe actions/states, not topics.
@@ -380,7 +382,7 @@ def _shared_keywords_with_scores(
 def find_similar_by_tfidf(
     file_id: str,
     limit: int,
-    drive: str | None,
+    drive: str,
 ) -> tuple[list[dict], list[dict]]:
     """Find similar files using TF-IDF cosine similarity on transcripts + filenames.
 
@@ -393,7 +395,7 @@ def find_similar_by_tfidf(
     Args:
         file_id: Source file ID.
         limit: Max results to return.
-        drive: Optional drive filter.
+        drive: Only this drive's files are candidates.
 
     Returns:
         Tuple of (results, source_keywords).
@@ -423,16 +425,16 @@ def find_similar_by_tfidf(
             )
             return empty
 
-        # Get all video files in the same drive (or all)
-        query = session.query(IndexedFile).filter(
-            IndexedFile.active.is_(True),
-            IndexedFile.file_type == "video",
-            IndexedFile.file_id != file_id,
+        candidate_files = (
+            session.query(IndexedFile)
+            .filter(
+                IndexedFile.active.is_(True),
+                IndexedFile.file_type == "video",
+                IndexedFile.file_id != file_id,
+                IndexedFile.drive == drive,
+            )
+            .all()
         )
-        if drive:
-            query = query.filter(IndexedFile.drive == drive)
-
-        candidate_files = query.all()
         if not candidate_files:
             return empty
 
@@ -532,7 +534,7 @@ def _tokenize_file(
     Mirrors the token construction used inside find_similar_by_tfidf
     so keyword extraction sees the same vocabulary distribution.
     """
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         transcript = _get_transcript_text(session, file_id)
 
     fn_tokens = _tokenize_filename(filename, tokenizer)
@@ -542,25 +544,31 @@ def _tokenize_file(
     return transcript_tokens + fn_tokens * _FILENAME_BOOST
 
 
-def _build_corpus_idf() -> tuple[dict[str, float], int]:
-    """Build IDF over all active indexed files' transcripts + filenames.
+def _build_corpus_idf(drive: str) -> tuple[dict[str, float], int]:
+    """Build IDF over one drive's active files (transcripts + filenames).
 
     Covers every indexable file type (video/audio/document), not just
     video, so the resulting IDF is meaningful for any caller. Janome
     is loaded once and released at the end — the tokenizer is ~100MB
     and keeping it alive between auto-tag runs would dwarf the savings.
 
+    Args:
+        drive: Only this drive's files contribute to the counts.
+
     Returns:
         Tuple of (idf dict, number of documents that contributed
         tokens). The document count is needed downstream to convert
         a minimum-document-frequency filter into an IDF upper bound.
     """
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         files = (
             session.query(
                 IndexedFile.file_id, IndexedFile.filename
             )
-            .filter(IndexedFile.active.is_(True))
+            .filter(
+                IndexedFile.active.is_(True),
+                IndexedFile.drive == drive,
+            )
             .all()
         )
 
@@ -582,8 +590,11 @@ def _build_corpus_idf() -> tuple[dict[str, float], int]:
     return _compute_idf(corpus_tokens), len(corpus_tokens)
 
 
-def _get_corpus_idf(force_reload: bool = False) -> tuple[dict[str, float], int]:
-    """Return a cached corpus-wide IDF + doc count, rebuilding if stale.
+def _get_corpus_idf(
+    drive: str,
+    force_reload: bool = False,
+) -> tuple[dict[str, float], int]:
+    """Return a cached per-drive IDF + doc count, rebuilding if stale.
 
     Rebuilding tokenizes every active file with Janome and can take
     tens of seconds on large libraries. We deliberately build
@@ -593,35 +604,30 @@ def _get_corpus_idf(force_reload: bool = False) -> tuple[dict[str, float], int]:
     redundant computation (a few concurrent rebuilds), which is far
     cheaper than a multi-minute stall for every waiting worker.
     """
-    global _corpus_idf, _corpus_idf_n_docs, _corpus_idf_built_at
-
     now = time.monotonic()
     with _corpus_cache_lock:
-        fresh = (
-            not force_reload
-            and _corpus_idf is not None
-            and (now - _corpus_idf_built_at) < _IDF_CACHE_TTL_SECONDS
-        )
-        if fresh:
-            return _corpus_idf, _corpus_idf_n_docs  # type: ignore[return-value]
+        cached = _corpus_idf_by_drive.get(drive)
+        if (
+            cached is not None
+            and not force_reload
+            and (now - cached[2]) < _IDF_CACHE_TTL_SECONDS
+        ):
+            return cached[0], cached[1]
 
-    logger.info("Rebuilding corpus IDF for TF-IDF keyword extraction")
-    new_idf, new_n_docs = _build_corpus_idf()
+    logger.info(
+        "Rebuilding corpus IDF for TF-IDF keyword extraction (drive=%s)", drive
+    )
+    new_idf, new_n_docs = _build_corpus_idf(drive)
 
     with _corpus_cache_lock:
-        _corpus_idf = new_idf
-        _corpus_idf_n_docs = new_n_docs
-        _corpus_idf_built_at = time.monotonic()
-        return _corpus_idf, _corpus_idf_n_docs
+        _corpus_idf_by_drive[drive] = (new_idf, new_n_docs, time.monotonic())
+        return new_idf, new_n_docs
 
 
 def reset_corpus_idf_cache() -> None:
-    """Reset the cached IDF (primarily for tests)."""
-    global _corpus_idf, _corpus_idf_n_docs, _corpus_idf_built_at
+    """Reset the cached IDF for every drive (primarily for tests)."""
     with _corpus_cache_lock:
-        _corpus_idf = None
-        _corpus_idf_n_docs = 0
-        _corpus_idf_built_at = 0.0
+        _corpus_idf_by_drive.clear()
 
 
 def _idf_upper_bound_from_min_df(n_docs: int, min_doc_freq: int) -> float | None:
@@ -647,6 +653,8 @@ def _idf_upper_bound_from_min_df(n_docs: int, min_doc_freq: int) -> float | None
 def extract_top_keywords(
     text: str,
     filename: str,
+    *,
+    drive: str,
     k: int = 30,
 ) -> list[str]:
     """Extract top-k TF-IDF keywords from text + filename without a DB fetch.
@@ -656,11 +664,14 @@ def extract_top_keywords(
     directly so the caller does not need to re-fetch from DB.
 
     Falls back to raw TF (log-normalised term frequency) when the
-    corpus IDF cache is not yet populated (e.g. first few files).
+    drive's IDF cache is not yet populated (e.g. first few files).
 
     Args:
         text: Full transcript text.
         filename: File's display name (used for topic-keyword boost).
+        drive: The file's drive, whose IDF weights the terms. The
+            keywords end up in that drive's search index, so the
+            statistics behind them stay inside it too.
         k: Maximum number of keywords to return.
 
     Returns:
@@ -682,7 +693,7 @@ def extract_top_keywords(
     if not tokens:
         return []
 
-    idf, _ = _get_corpus_idf()
+    idf, _ = _get_corpus_idf(drive)
 
     if idf:
         vec = _tfidf_vector(tokens, idf)
@@ -705,6 +716,7 @@ def extract_top_keywords(
 def get_tfidf_keywords_for_file(
     file_id: str,
     *,
+    drive: str,
     k: int = 10,
     min_word_length: int = 2,
     idf_min: float = 0.0,
@@ -714,16 +726,16 @@ def get_tfidf_keywords_for_file(
     """Extract top TF-IDF keywords for a single file as tag candidates.
 
     Uses the same tokenization pipeline as similar-file search (Janome
-    + filename boost + stopwords + gibberish filter) and a cached
-    corpus-wide IDF. Additional filters tame the Whisper noise
-    problem:
+    + filename boost + stopwords + gibberish filter) and the cached
+    IDF of the file's own drive. Additional filters tame the Whisper
+    noise problem:
 
     - ``min_word_length``: drop tokens shorter than this.
     - ``idf_min``: drop words whose IDF is below this value (too
       common to be useful — usually stopwords the explicit list
       missed). Default 0.0 keeps every surviving token.
     - ``min_doc_freq``: drop words that appear in fewer than this
-      many documents corpus-wide. A classic Whisper mis-transcription
+      many documents within the drive. A classic Whisper mis-transcription
       like "フジヤシフ" shows up in exactly one file, so requiring
       ``min_doc_freq=2`` kills most of that noise without needing to
       tune raw IDF thresholds by hand. Automatically disabled for
@@ -734,6 +746,9 @@ def get_tfidf_keywords_for_file(
 
     Args:
         file_id: The file ID to extract keywords from.
+        drive: The file's drive. Both the corpus statistics and the
+            file lookup are confined to it, so keyword selection never
+            depends on what another drive happens to contain.
         k: Max number of keywords to return.
         min_word_length: Drop tokens shorter than this.
         idf_min: Minimum IDF score to keep a token.
@@ -745,12 +760,13 @@ def get_tfidf_keywords_for_file(
     Returns:
         List of {"word": str, "score": float} dicts, highest first.
     """
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         file = (
             session.query(IndexedFile)
             .filter(
                 IndexedFile.file_id == file_id,
                 IndexedFile.active.is_(True),
+                IndexedFile.drive == drive,
             )
             .first()
         )
@@ -758,7 +774,7 @@ def get_tfidf_keywords_for_file(
             return []
         filename = file.filename
 
-    idf, n_docs = _get_corpus_idf()
+    idf, n_docs = _get_corpus_idf(drive)
     if not idf:
         return []
 

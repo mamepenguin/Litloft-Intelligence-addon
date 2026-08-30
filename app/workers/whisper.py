@@ -1185,14 +1185,17 @@ def _index_tfidf_keywords(file_id: str, chunk_texts: list[str]) -> None:
 
     with get_search_db_read() as session:
         row = (
-            session.query(IndexedFile.filename)
+            session.query(IndexedFile.filename, IndexedFile.drive)
             .filter_by(file_id=file_id)
             .first()
         )
-    filename = row.filename if row else ""
+    if row is None:
+        _mark_done()
+        return
+    filename = row.filename
 
     from app.tfidf import extract_top_keywords
-    keywords = extract_top_keywords(text, filename)
+    keywords = extract_top_keywords(text, filename, drive=row.drive)
     if not keywords:
         _mark_done()
         return

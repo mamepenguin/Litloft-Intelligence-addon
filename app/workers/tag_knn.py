@@ -14,7 +14,8 @@ The quality of the suggestions depends on:
 
 Unlike the CLIP zero-shot concept scorer, this doesn't require a
 curated vocabulary; the "vocabulary" is whatever tags the user has
-already applied.
+already applied *in the drive being tagged*. Neighbors and their tags
+stop at the drive boundary.
 """
 
 from __future__ import annotations
@@ -25,7 +26,8 @@ from collections import defaultdict
 import numpy as np
 from sqlalchemy import text as sql_text
 
-from app.database import get_litloft_db, get_search_engine
+from app.database import get_litloft_db, get_search_db_read, get_search_engine
+from app.models import Embedding, IndexedFile
 from app.workers.clip_concepts import load_file_clip_vectors
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,21 @@ logger = logging.getLogger(__name__)
 # co-occurrence could just mean the user made an ad-hoc tag once.
 # Two files is the "this tag is used like a category" threshold.
 _MIN_SUPPORT = 2
+
+# vec_clip is a single global index: MATCH ranks across every drive and
+# knows nothing about the boundary between them, so the drive filter is
+# applied to what comes back and the fetch is widened until enough
+# in-drive neighbors survive it. Same shape as the neighbour fetch in
+# ``app.search``.
+_FETCH_FACTORS = (1, 4, 16)
+# Ceiling on a single KNN, so a library where the current drive is a
+# small minority cannot turn one recommendation into a table scan.
+_FETCH_MAX = 4096
+
+# Drives already reported for tag/file drive drift. The condition is a
+# property of the library, not of one file, so reporting it per tagged
+# file would bury the log during an on_index sweep.
+_drift_reported: set[str] = set()
 
 
 def _average_clip_vector(
@@ -64,66 +81,116 @@ def _average_clip_vector(
     return avg / norm if norm > 0 else avg
 
 
+def _in_drive_file_ids(
+    embedding_ids: list[str],
+    source_file_id: str,
+    drive: str,
+) -> dict[str, str]:
+    """Map embedding id → file id, keeping only this drive's active files.
+
+    Resolved in a second statement rather than a join: ``vec_clip``
+    stores no drive, and sqlite-vec's KNN planner requires the LIMIT
+    (or ``k = ?``) to apply directly to the virtual table — joining
+    anything into that statement moves the LIMIT out of the
+    optimizer's reach and raises "A LIMIT or 'k = ?' constraint is
+    required".
+    """
+    if not embedding_ids:
+        return {}
+
+    with get_search_db_read() as session:
+        rows = (
+            session.query(Embedding.id, Embedding.file_id)
+            .join(IndexedFile, IndexedFile.file_id == Embedding.file_id)
+            .filter(
+                Embedding.id.in_(embedding_ids),
+                Embedding.file_id != source_file_id,
+                IndexedFile.drive == drive,
+                IndexedFile.active.is_(True),
+            )
+            .all()
+        )
+    return {embedding_id: file_id for embedding_id, file_id in rows}
+
+
 def _query_nearest_file_ids(
     query_vector: np.ndarray,
     source_file_id: str,
     k: int,
+    drive: str,
 ) -> list[tuple[str, float]]:
-    """Return the k nearest *distinct* file IDs by CLIP similarity.
+    """Return the k nearest *distinct* in-drive file IDs by CLIP similarity.
 
     vec_clip stores per-frame embeddings so a single similar video
     can occupy several top results; we dedupe to one entry per file,
     keeping the best (lowest-distance) frame's similarity as the
-    file's score. Fetches extra rows up front to absorb both the
-    source file's own frames and the dedup churn.
+    file's score. Fetches extra rows up front to absorb the source
+    file's own frames, the dedup churn, and every neighbor that
+    belongs to another drive.
     """
     # Heuristic fetch size: source frames could be hundreds for long
     # videos, and each candidate can contribute several frames too.
     # Pulling k * 10 + 50 keeps things manageable even on large libraries.
-    fetch_limit = max(k * 10 + 50, 100)
+    base_limit = max(k * 10 + 50, 100)
 
-    # sqlite-vec's KNN planner requires LIMIT (or `k = ?`) to apply
-    # directly to the virtual vec_clip table. Joining to embeddings in
-    # the same statement moves the LIMIT outside the optimizer's reach
-    # and raises "A LIMIT or 'k = ?' constraint is required". Do the
-    # KNN first in a subquery, then JOIN + filter on the result — same
-    # pattern app.search uses for its CLIP similarity lookups.
     scores: dict[str, float] = {}
-    with get_search_engine().connect() as conn:
-        rows = conn.execute(
-            sql_text(
-                "SELECT e.file_id, v.distance FROM ("
-                "  SELECT embedding_id, distance FROM vec_clip "
-                "  WHERE vector MATCH :vec "
-                "  ORDER BY distance "
-                "  LIMIT :limit"
-                ") v "
-                "JOIN embeddings e ON v.embedding_id = e.id "
-                "WHERE e.file_id != :src "
-                "ORDER BY v.distance"
-            ),
-            {
-                "vec": query_vector.astype(np.float32).tobytes(),
-                "src": source_file_id,
-                "limit": fetch_limit,
-            },
-        ).fetchall()
+    engine = get_search_engine()
+    for factor in _FETCH_FACTORS:
+        asked = min(base_limit * factor, _FETCH_MAX)
+        with engine.connect() as conn:
+            rows = conn.execute(
+                sql_text(
+                    "SELECT embedding_id, distance FROM vec_clip "
+                    "WHERE vector MATCH :vec "
+                    "ORDER BY distance "
+                    "LIMIT :limit"
+                ),
+                {
+                    "vec": query_vector.astype(np.float32).tobytes(),
+                    "limit": asked,
+                },
+            ).fetchall()
 
-    for file_id, distance in rows:
-        # Convert L2 distance on normalized vectors to cosine similarity:
-        # for unit vectors, ||a-b||² = 2 - 2·cos(a,b), so cos = 1 - d²/2.
-        sim = 1.0 - (float(distance) ** 2) / 2.0
-        # Keep the best score we've seen for each file.
-        if sim > scores.get(file_id, -1.0):
-            scores[file_id] = sim
-        if len(scores) >= k:
+        if not rows:
+            return []
+
+        distances = {row[0]: float(row[1]) for row in rows}
+        file_ids = _in_drive_file_ids(list(distances), source_file_id, drive)
+
+        scores = {}
+        for embedding_id, file_id in file_ids.items():
+            # Convert L2 distance on normalized vectors to cosine similarity:
+            # for unit vectors, ||a-b||² = 2 - 2·cos(a,b), so cos = 1 - d²/2.
+            sim = 1.0 - (distances[embedding_id] ** 2) / 2.0
+            # Keep the best score we've seen for each file.
+            if sim > scores.get(file_id, -1.0):
+                scores[file_id] = sim
+
+        if len(scores) >= k or asked >= _FETCH_MAX or len(rows) < asked:
+            # Enough in-drive neighbors, or the index has nothing further
+            # to give.
             break
 
     return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:k]
 
 
-def _load_tags_for_files(file_ids: list[str]) -> dict[str, list[str]]:
-    """Fetch the Litloft tags applied to each given file ID."""
+def _load_tags_for_files(
+    file_ids: list[str],
+    drive: str,
+) -> dict[str, list[str]]:
+    """Fetch the Litloft tags applied to each given file ID.
+
+    The neighbors are already drive-scoped; the tag-side drive check is
+    the second layer, so a tag row mis-attributed to another drive
+    still cannot reach this drive's suggestions.
+
+    A dropped row means the tag rows and the files they hang off
+    disagree about which drive they are in — core's tags-table
+    migration stamps every pre-existing tag with a single drive name,
+    so a library that was tagged before drives were partitioned has
+    exactly that disagreement. Suggestions then go quiet with nothing
+    to explain why, hence the count in the log.
+    """
     if not file_ids:
         return {}
 
@@ -132,10 +199,12 @@ def _load_tags_for_files(file_ids: list[str]) -> dict[str, list[str]]:
             # Parameterize every id explicitly so SQLite receives
             # literals it can cache (no IN-list reuse headaches).
             placeholders = ",".join(f":id{i}" for i in range(len(file_ids)))
-            params = {f"id{i}": fid for i, fid in enumerate(file_ids)}
+            params: dict[str, str] = {
+                f"id{i}": fid for i, fid in enumerate(file_ids)
+            }
             rows = session.execute(
                 sql_text(
-                    "SELECT ft.file_id, t.name "
+                    "SELECT ft.file_id, t.name, t.drive "
                     "FROM file_tags ft "
                     "JOIN tags t ON t.id = ft.tag_id "
                     f"WHERE ft.file_id IN ({placeholders})"
@@ -147,14 +216,29 @@ def _load_tags_for_files(file_ids: list[str]) -> dict[str, list[str]]:
         return {}
 
     grouped: dict[str, list[str]] = defaultdict(list)
-    for file_id, tag_name in rows:
+    dropped = 0
+    for file_id, tag_name, tag_drive in rows:
+        if tag_drive != drive:
+            dropped += 1
+            continue
         grouped[file_id].append(tag_name)
+
+    if dropped and drive not in _drift_reported:
+        _drift_reported.add(drive)
+        logger.warning(
+            "Drive %s has tag rows labelled for another drive (%d ignored "
+            "while recommending tags). Tag suggestions from similar files "
+            "stay quiet until those rows carry the right drive. Reported "
+            "once per drive.",
+            drive, dropped,
+        )
     return dict(grouped)
 
 
 def recommend_tags_by_similarity(
     file_id: str,
     *,
+    drive: str,
     k_neighbors: int = 20,
     top_tags: int = 10,
     min_support: int = _MIN_SUPPORT,
@@ -163,12 +247,15 @@ def recommend_tags_by_similarity(
     """Suggest tags by looking at already-tagged visually similar files.
 
     Returns an empty list when there are no CLIP embeddings for the
-    source file (e.g. documents) or when no neighbor has any tags
-    (cold start). Scores are in ``[0, k_neighbors]`` range —
+    source file (e.g. documents) or when no neighbor in the same drive
+    has any tags (cold start). Scores are in ``[0, k_neighbors]`` range —
     roughly the weighted neighbor count, higher is better.
 
     Args:
         file_id: The file to recommend tags for.
+        drive: Only this drive's files and tags may be consulted — a
+            drive is a security boundary, so a neighbor outside it is
+            not a neighbor at all.
         k_neighbors: How many similar files to consider.
         top_tags: Max tag recommendations to return.
         min_support: Require at least this many neighbors to use a tag
@@ -184,12 +271,12 @@ def recommend_tags_by_similarity(
     if query_vec is None:
         return []
 
-    neighbors = _query_nearest_file_ids(query_vec, file_id, k_neighbors)
+    neighbors = _query_nearest_file_ids(query_vec, file_id, k_neighbors, drive)
     if not neighbors:
         return []
 
     neighbor_ids = [fid for fid, _ in neighbors]
-    tags_by_file = _load_tags_for_files(neighbor_ids)
+    tags_by_file = _load_tags_for_files(neighbor_ids, drive)
     if not tags_by_file:
         return []
 

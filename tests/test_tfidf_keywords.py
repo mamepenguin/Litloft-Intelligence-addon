@@ -72,7 +72,7 @@ class TestGetTfidfKeywordsForFile:
         def fake_db():
             yield session
 
-        monkeypatch.setattr(tfidf, "get_search_db", fake_db)
+        monkeypatch.setattr(tfidf, "get_search_db_read", fake_db)
 
         # Stub out the tokenization helper
         monkeypatch.setattr(
@@ -91,12 +91,12 @@ class TestGetTfidfKeywordsForFile:
 
     def test_returns_empty_when_file_missing(self, monkeypatch):
         self._setup(monkeypatch, file_exists=False)
-        result = tfidf.get_tfidf_keywords_for_file("nope")
+        result = tfidf.get_tfidf_keywords_for_file("nope", drive="d")
         assert result == []
 
     def test_returns_empty_when_no_idf_cache(self, monkeypatch):
         self._setup(monkeypatch, tokens=["a", "b"], idf={})
-        result = tfidf.get_tfidf_keywords_for_file("f1")
+        result = tfidf.get_tfidf_keywords_for_file("f1", drive="d")
         assert result == []
 
     def test_min_doc_freq_drops_likely_whisper_noise(self, monkeypatch):
@@ -116,7 +116,7 @@ class TestGetTfidfKeywordsForFile:
         monkeypatch.setattr(
             tfidf, "_get_corpus_idf", lambda *a, **kw: (idf, n_docs)
         )
-        result = tfidf.get_tfidf_keywords_for_file("f1", min_doc_freq=2)
+        result = tfidf.get_tfidf_keywords_for_file("f1", drive="d", min_doc_freq=2)
         words = [r["word"] for r in result]
         assert "料理" in words
         assert "フジヤシフ" not in words
@@ -131,7 +131,7 @@ class TestGetTfidfKeywordsForFile:
         monkeypatch.setattr(
             tfidf, "_get_corpus_idf", lambda *a, **kw: (idf, n_docs)
         )
-        result = tfidf.get_tfidf_keywords_for_file("f1", min_doc_freq=2)
+        result = tfidf.get_tfidf_keywords_for_file("f1", drive="d", min_doc_freq=2)
         # With a 5-doc corpus, the filter is off — every word survives.
         assert any(r["word"] == "フジヤシフ" for r in result)
 
@@ -148,13 +148,13 @@ class TestGetTfidfKeywordsForFile:
         # Large idf_max passes the word through even though
         # min_doc_freq=2 would otherwise reject it.
         result = tfidf.get_tfidf_keywords_for_file(
-            "f1", min_doc_freq=2, idf_max=float("inf")
+            "f1", drive="d", min_doc_freq=2, idf_max=float("inf")
         )
         assert any(r["word"] == "フジヤシフ" for r in result)
 
     def test_returns_empty_when_no_tokens(self, monkeypatch):
         self._setup(monkeypatch, tokens=[], idf={"x": 1.0})
-        result = tfidf.get_tfidf_keywords_for_file("f1")
+        result = tfidf.get_tfidf_keywords_for_file("f1", drive="d")
         assert result == []
 
     def test_basic_top_keywords(self, monkeypatch):
@@ -162,14 +162,14 @@ class TestGetTfidfKeywordsForFile:
         # Equal IDF across words → ranking follows TF
         idf = {"料理": 1.0, "パスタ": 1.0, "トマト": 1.0}
         self._setup(monkeypatch, tokens=tokens, idf=idf)
-        result = tfidf.get_tfidf_keywords_for_file("f1", k=3)
+        result = tfidf.get_tfidf_keywords_for_file("f1", drive="d", k=3)
         assert [r["word"] for r in result] == ["料理", "パスタ", "トマト"]
 
     def test_min_word_length_drops_short_tokens(self, monkeypatch):
         tokens = ["a", "bb", "ccc"]
         idf = {"a": 1.0, "bb": 1.0, "ccc": 1.0}
         self._setup(monkeypatch, tokens=tokens, idf=idf)
-        result = tfidf.get_tfidf_keywords_for_file("f1", min_word_length=2)
+        result = tfidf.get_tfidf_keywords_for_file("f1", drive="d", min_word_length=2)
         words = [r["word"] for r in result]
         assert "a" not in words
         assert set(words) == {"bb", "ccc"}
@@ -180,7 +180,7 @@ class TestGetTfidfKeywordsForFile:
         tokens = ["料理", "料理", "フジヤシフ"]
         idf = {"料理": 1.5, "フジヤシフ": 7.0}
         self._setup(monkeypatch, tokens=tokens, idf=idf)
-        result = tfidf.get_tfidf_keywords_for_file("f1", idf_max=5.0)
+        result = tfidf.get_tfidf_keywords_for_file("f1", drive="d", idf_max=5.0)
         words = [r["word"] for r in result]
         assert "料理" in words
         assert "フジヤシフ" not in words
@@ -190,7 +190,7 @@ class TestGetTfidfKeywordsForFile:
         tokens = ["料理", "料理", "こと", "こと", "こと"]
         idf = {"料理": 2.0, "こと": 1.0}
         self._setup(monkeypatch, tokens=tokens, idf=idf)
-        result = tfidf.get_tfidf_keywords_for_file("f1", idf_min=1.5)
+        result = tfidf.get_tfidf_keywords_for_file("f1", drive="d", idf_min=1.5)
         words = [r["word"] for r in result]
         assert "料理" in words
         assert "こと" not in words
@@ -199,7 +199,7 @@ class TestGetTfidfKeywordsForFile:
         tokens = [f"w{i}" for i in range(20) for _ in range(i + 1)]
         idf = {f"w{i}": 1.0 for i in range(20)}
         self._setup(monkeypatch, tokens=tokens, idf=idf)
-        result = tfidf.get_tfidf_keywords_for_file("f1", k=5)
+        result = tfidf.get_tfidf_keywords_for_file("f1", drive="d", k=5)
         assert len(result) == 5
 
 
@@ -216,29 +216,49 @@ class TestCorpusIdfCache:
         tfidf.reset_corpus_idf_cache()
         build_calls = []
 
-        def fake_build():
-            build_calls.append(1)
+        def fake_build(drive):
+            build_calls.append(drive)
             return {"料理": 1.5}, 42
 
         monkeypatch.setattr(tfidf, "_build_corpus_idf", fake_build)
 
-        tfidf._get_corpus_idf()
-        tfidf._get_corpus_idf()
-        tfidf._get_corpus_idf()
-        assert len(build_calls) == 1
+        tfidf._get_corpus_idf("d")
+        tfidf._get_corpus_idf("d")
+        tfidf._get_corpus_idf("d")
+        assert build_calls == ["d"]
+        tfidf.reset_corpus_idf_cache()
+
+    def test_each_drive_gets_its_own_idf(self, monkeypatch):
+        """A drive is a security boundary, so the counts cannot be shared."""
+        tfidf.reset_corpus_idf_cache()
+        build_calls = []
+
+        def fake_build(drive):
+            build_calls.append(drive)
+            return {drive: 1.5}, 42
+
+        monkeypatch.setattr(tfidf, "_build_corpus_idf", fake_build)
+
+        idf_a, _ = tfidf._get_corpus_idf("a")
+        idf_b, _ = tfidf._get_corpus_idf("b")
+        tfidf._get_corpus_idf("a")
+
+        assert build_calls == ["a", "b"]
+        assert idf_a == {"a": 1.5}
+        assert idf_b == {"b": 1.5}
         tfidf.reset_corpus_idf_cache()
 
     def test_force_reload_rebuilds(self, monkeypatch):
         tfidf.reset_corpus_idf_cache()
         build_calls = []
 
-        def fake_build():
-            build_calls.append(1)
+        def fake_build(drive):
+            build_calls.append(drive)
             return {"料理": 1.5}, 42
 
         monkeypatch.setattr(tfidf, "_build_corpus_idf", fake_build)
 
-        tfidf._get_corpus_idf()
-        tfidf._get_corpus_idf(force_reload=True)
+        tfidf._get_corpus_idf("d")
+        tfidf._get_corpus_idf("d", force_reload=True)
         assert len(build_calls) == 2
         tfidf.reset_corpus_idf_cache()
