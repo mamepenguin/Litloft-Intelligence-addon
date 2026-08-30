@@ -37,6 +37,14 @@ describe("passageWindow", () => {
       expect(text.startsWith("なのでこの点では")).toBe(true);
     });
 
+    it("counts a full-width digit as a sentence opening", () => {
+      // Japanese writes 3 as ３, which /\d/ does not match — so the
+      // opening read as a fragment and its sentence was thrown away.
+      const text = "３つの要素を順に説明します。次の説明はこのあとに続きます。";
+
+      expect(passageWindow(text, []).text).toBe(text);
+    });
+
     it("starts at zero when there is no terminator to snap to", () => {
       const { text, truncatedStart } = passageWindow(UNPUNCTUATED, []);
 
@@ -171,6 +179,15 @@ describe("passageWindow", () => {
       // does not begin with a capital. Snapping here would throw away a
       // whole sentence that was never damaged.
       expect(passageWindow(text, []).text).toBe(text);
+    });
+
+    it("closes a sentence that ends on a typographic quote", () => {
+      const { text } = passageWindow(
+        "was part of.\u201d The next sentence carries the claim instead.",
+        [],
+      );
+
+      expect(text.startsWith("The next sentence")).toBe(true);
     });
 
     it("does not break on a decimal point", () => {

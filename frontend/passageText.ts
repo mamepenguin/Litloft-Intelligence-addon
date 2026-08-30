@@ -28,7 +28,7 @@ const MIN_REMAINDER = 12;
 const CJK_TERMINATORS = "。．！？…\n";
 const ASCII_TERMINATORS = ".!?";
 /** Punctuation that trails a terminator and belongs to the sentence before it. */
-const TRAILING_MARKS = "」』）】〉》\"'";
+const TRAILING_MARKS = "」』）】〉》\"'”’";
 
 /** Punctuation a sentence can open with, before its first real character. */
 const OPENING_MARKS = "「『（【〈《\"'“‘([";
@@ -167,8 +167,10 @@ function opensMidSentence(text: string, from: number): boolean {
   // severed word begins. Japanese has no case, so this finds nothing
   // and the snap stands — which is right, since a chunker with no
   // spaces to respect is exactly what leaves fragments.
-  const isCapital = first !== first.toLowerCase() && first === first.toUpperCase();
-  return !isCapital && !/\d/.test(first);
+  const isCapital =
+    first !== first.toLowerCase() && first === first.toUpperCase();
+  // \p{Nd}, not \d: Japanese writes ３つ with a full-width digit.
+  return !isCapital && !/\p{Nd}/u.test(first);
 }
 
 /**
