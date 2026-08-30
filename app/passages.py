@@ -38,6 +38,7 @@ from sqlalchemy import text as sql_text
 from app.config import settings
 from app.credentials import CallerCredential
 from app.database import get_search_engine
+from app.passage_terms import overlap_terms
 # Reused rather than reimplemented: this function's fail-closed handling
 # (network error, non-200, and above all a response that does not confirm
 # the trust filter) is exactly the part that must never drift between
@@ -69,6 +70,13 @@ _CANDIDATE_OVERSAMPLE = 4
 
 #: Rows returned when the caller does not say.
 _DEFAULT_LIMIT = 5
+
+#: How much wider than ``limit`` to rank, so the recurrence check has
+#: something to fall back on. Measured over sixty channel videos it
+#: rejects 53% of ranked rows; four times the ask covers that with
+#: room to spare, and costs only the text resolution of rows that are
+#: never reached.
+_BOILERPLATE_HEADROOM = 4
 
 #: How much of the reachable z range the bar may occupy on a small
 #: field. Below 1.0 so that passing still means standing out rather than
@@ -112,6 +120,10 @@ class PassagePair:
     other_page: int | None
     other_timestamp: float | None
     score: float
+    #: Words present, word for word, in both passages, longest first.
+    #: Empty whenever the two share nothing, or the tokeniser's premise
+    #: does not hold (``passage_terms.has_kana``).
+    overlap: list[str]
 
 
 def _is_degenerate(preview: str) -> bool:
@@ -554,8 +566,74 @@ def _rank_pairs(
     return pairs
 
 
+def _recurs_across_drive(chunk: _Chunk, drive: str) -> int:
+    """How many *other* files in ``drive`` say this passage too.
+
+    ``_drop_recurring`` already knows that recurrence is what separates a
+    channel sign-off from subject matter, and that the bar is two files.
+    It counts over the candidates that survived into this request,
+    though, which is a much smaller population than the drive: a sign-off
+    carried by two hundred videos still shows up here if only one of them
+    reached the ranking. Measured on a real drive, a sign-off recurring
+    in fifteen files was displayed to a viewer while the filter saw one.
+
+    Counting against the drive is what the filter meant. It costs one
+    KNN per pair that survived ranking — at most five in a request — and
+    stays inside the caller's drive, so nothing crosses the boundary.
+    """
+    engine = get_search_engine()
+    cfg = settings.related_passages
+    types = ",".join(f"'{t}'" for t in _PASSAGE_TYPES)
+    try:
+        rows = _recurrence_rows(engine, chunk, drive, cfg, types)
+    except Exception as exc:
+        # Fail open, as every optional narrowing in this module does. A
+        # vector table that cannot answer should cost a boilerplate row,
+        # not the whole section.
+        logger.debug("Recurrence check unavailable for %s: %s", chunk.file_id, exc)
+        return 0
+    return len(rows)
+
+
+def _recurrence_rows(engine, chunk: _Chunk, drive: str, cfg, types: str):
+    with engine.connect() as conn:
+        return conn.execute(
+            sql_text(
+                "SELECT DISTINCT e.file_id "
+                "FROM vec_text v "
+                "JOIN embeddings e ON e.id = v.embedding_id "
+                "JOIN indexed_files f ON f.file_id = e.file_id "
+                "WHERE v.vector MATCH :vec AND k = :k "
+                f"  AND e.embedding_type IN ({types}) "
+                "  AND f.drive = :drive "
+                "  AND f.active = 1 "
+                "  AND e.file_id != :self "
+                "  AND v.distance <= :max_distance"
+            ),
+            {
+                "vec": chunk.vector.astype(np.float32).tobytes(),
+                # ``MATCH`` is a global KNN and every predicate below
+                # is applied after it, so budget for what they discard —
+                # the same reasoning as ``_knn_budgets``. The source's
+                # own chunks are the nearest things to one of its own,
+                # and other drives sit in the same table.
+                "k": min(
+                    _KNN_K_MAX,
+                    _passage_count(chunk.file_id) + cfg.recurrence_k,
+                ),
+                "drive": drive,
+                "self": chunk.file_id,
+                # sqlite-vec reports plain L2, not its square: search.py
+                # inverts it as cos = 1 - d²/2, so the bound is the root.
+                "max_distance": math.sqrt(
+                    max(0.0, 2.0 - 2.0 * cfg.recurrence_score)
+                ),
+            },
+        ).fetchall()
+
+
 def _build_pairs(
-    source: list[_Chunk], candidate_ids: list[str], limit: int
+    source: list[_Chunk], candidate_ids: list[str], limit: int, drive: str = ""
 ) -> list[PassagePair]:
     """Stage 2, plus text resolution. Runs off the event loop."""
     cfg = settings.related_passages
@@ -564,17 +642,24 @@ def _build_pairs(
     if not candidates:
         return []
 
-    ranked = _rank_pairs(source, candidates, limit)
+    # Rank a wider pool than the caller asked for: the recurrence check
+    # below rejects rows *after* ranking, and on a channel's output it
+    # rejects half of them. Truncating first would answer with two rows
+    # while four good ones sat just under the cut.
+    ranked = _rank_pairs(source, candidates, limit * _BOILERPLATE_HEADROOM)
     if not ranked:
         return []
 
     meta = _file_meta([other.file_id for _, _, other in ranked])
 
+    cfg = settings.related_passages
     pairs: list[PassagePair] = []
     for score, mine, other in ranked:
         my_text = _resolve_text(mine)
         other_text = _resolve_text(other)
         if my_text is None or other_text is None:
+            continue
+        if drive and _recurs_across_drive(mine, drive) > cfg.max_passage_files:
             continue
         drive, filename = meta.get(other.file_id, ("", ""))
         pairs.append(
@@ -589,8 +674,11 @@ def _build_pairs(
                 other_page=other.page,
                 other_timestamp=other.timestamp_start,
                 score=score,
+                overlap=overlap_terms(my_text, other_text),
             )
         )
+        if len(pairs) >= limit:
+            break
     return pairs
 
 
@@ -642,4 +730,4 @@ async def find_related_passages(
     if not verified:
         return []
 
-    return await asyncio.to_thread(_build_pairs, source, verified, limit)
+    return await asyncio.to_thread(_build_pairs, source, verified, limit, drive)

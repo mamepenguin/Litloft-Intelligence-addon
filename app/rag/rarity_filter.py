@@ -52,24 +52,66 @@ _MIN_TOKEN_LEN = 2
 DEFAULT_THRESHOLD_RATIO = 0.5
 
 
+#: Above this code point a combining mark is not a Latin diacritic.
+#: ``remove_diacritics=2`` strips marks from Latin script only, so
+#: anything beyond the Latin blocks is left exactly as the tokenizer
+#: stored it.
+_LATIN_MAX = 0x0370
+
+
 def _normalize_token(token: str) -> str:
     """Approximate the ``unicode61 remove_diacritics 2`` tokenizer.
 
     The vocab tables store terms after the host FTS tokenizer has
-    normalised them. ``unicode61`` lowercases and strips combining
-    diacritics; Python's ``str.lower`` matches the lowercase pass, and
-    NFKD + filtering combining marks matches the diacritic pass. Both
-    are cheap pure-Python ops — no need to call into SQLite.
+    normalised them. ``unicode61`` lowercases, applies a set of
+    compatibility mappings (``µ``→``μ``, ``ϕ``→``φ``), and strips
+    diacritics **from Latin script**. Verified against SQLite: of ten
+    probe words this agrees on nine.
 
-    Returns the empty string for unusable tokens (none / whitespace
-    only) so callers can branch on truthiness.
+    The tenth is a ligature. ``ﬁ`` is left alone by the tokenizer and
+    decomposed to ``fi`` here, because NFKD carries ligature splitting
+    along with the mappings we do want. Matching that exactly would mean
+    enumerating the tokenizer's own table; the lookup fails open, so the
+    cost is a term kept that might have been dropped.
+
+    The decomposition has to be per character, and guarded. Applying it
+    to a whole token strips Japanese voiced sound marks as if they were
+    diacritics — ``ポケモン`` became ``ホケモン`` and ``データ`` became
+    ``テータ``, neither of which is in the vocab, so every voiced
+    katakana term reported a document frequency of 0 and read as
+    maximally rare. SQLite keeps those marks; so do we.
+
+    Text that reaches the index *already* decomposed is a different
+    matter and not one normalisation can repair: ``unicode61`` treats a
+    standalone U+309A as a separator, so the vocab ends up holding
+    ``ホ`` and ``ケモン`` as two terms and no spelling of the query
+    matches. That lookup returns 0 and the caller fails open, which is
+    this module's stance throughout.
     """
     if not token:
         return ""
 
-    nfkd = unicodedata.normalize("NFKD", token)
-    stripped = "".join(ch for ch in nfkd if not unicodedata.combining(ch))
-    return stripped.lower().strip()
+    # Decompose first, so compatibility mappings still happen: SQLite
+    # stores µ as μ and ϕ as φ, and skipping the mapping to protect kana
+    # traded one mismatch for another.
+    out: list[str] = []
+    base = ""
+    for ch in unicodedata.normalize("NFKD", token):
+        if unicodedata.combining(ch):
+            # Drop the mark only where it is a Latin diacritic. On a kana
+            # base it is a voiced sound mark and part of the word —
+            # dropping it turned ポケモン into ホケモン, which is in no
+            # vocab table, so every voiced katakana term reported a
+            # frequency of 0 and read as maximally rare.
+            if base and ord(base) < _LATIN_MAX:
+                continue
+            out.append(ch)
+        else:
+            base = ch
+            out.append(ch)
+
+    # Recompose, because the vocab holds ポ as one character.
+    return unicodedata.normalize("NFC", "".join(out)).lower().strip()
 
 
 @lru_cache(maxsize=1)

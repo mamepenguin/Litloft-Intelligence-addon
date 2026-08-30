@@ -217,6 +217,11 @@ class RelatedPassageItem(BaseModel):
     drive: str
     filename: str
     score: float
+    #: Words appearing verbatim in both passages, longest first. Empty
+    #: when the pair shares nothing a reader could act on — which is the
+    #: normal case outside Japanese text, where the tokeniser cannot
+    #: separate content words from grammar.
+    overlap: list[str] = Field(default_factory=list)
 
 
 class RelatedPassagesResponse(BaseModel):

@@ -94,6 +94,7 @@ async def related_passages_endpoint(
                 drive=pair.other_drive,
                 filename=pair.other_filename,
                 score=round(pair.score, 4),
+                overlap=pair.overlap,
             )
             for pair in pairs
         ]
