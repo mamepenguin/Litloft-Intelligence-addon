@@ -1818,3 +1818,66 @@ export async function retryVideoVisualIndex(
     { method: "POST", headers: driveHeaders(drive) },
   );
 }
+
+// ---------------------------------------------------------------------------
+// Pickup
+// ---------------------------------------------------------------------------
+
+export interface PickupPage {
+  /** File ids in feed order, or the day's window when `daily` is set. */
+  file_ids: string[];
+  /** Rows held for this viewer, so at most the worker's feed depth. */
+  total: number;
+}
+
+/**
+ * Read a page of the Pickup feed.
+ *
+ * `daily` asks for the carousel's window instead of a page: twelve of
+ * the top forty, shuffled from a seed that changes at the viewer's own
+ * midnight. The head of the feed is deliberately not what the carousel
+ * shows — a lane at the weight floor places its first item around
+ * `sum(weights) / min(weight)`, so the first dozen rows over-represent
+ * the heaviest lanes. Sampling past that point is what makes the twelve
+ * cards proportional.
+ *
+ * The date is computed here rather than on the server so the day turns
+ * over where the viewer is. It only seeds a shuffle.
+ *
+ * Returns an empty page rather than throwing: the carousel and the feed
+ * both render nothing when there is nothing, and a recommendation
+ * surface is not worth an error banner.
+ */
+export async function fetchPickup(
+  drive: string,
+  options: { limit?: number; offset?: number; daily?: boolean } = {},
+): Promise<PickupPage> {
+  const params = new URLSearchParams();
+  if (options.limit !== undefined) params.set("limit", String(options.limit));
+  if (options.offset !== undefined) params.set("offset", String(options.offset));
+  if (options.daily) {
+    params.set("window", "daily");
+    params.set("date", localDateStamp());
+  }
+
+  try {
+    const res = await fetch(
+      `/api/addons/intelligence/pickup?${params.toString()}`,
+      { credentials: "include", headers: driveHeaders(drive) },
+    );
+    if (!res.ok) return { file_ids: [], total: 0 };
+    const data = await res.json();
+    return {
+      file_ids: Array.isArray(data.file_ids) ? data.file_ids : [],
+      total: typeof data.total === "number" ? data.total : 0,
+    };
+  } catch {
+    return { file_ids: [], total: 0 };
+  }
+}
+
+/** The viewer's local date as `YYYY-MM-DD`. */
+export function localDateStamp(now: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
