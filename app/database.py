@@ -228,6 +228,7 @@ def init_search_db() -> None:
 
     with _search_engine.begin() as conn:
         _migrate_tfidf_keywords_indexed(conn)
+        _migrate_pickup_to_rows(conn)
 
 
 def _migrate_video_visual_scenes_if_needed(conn: object) -> None:
@@ -929,6 +930,31 @@ def _migrate_embeddings_chunk_index(conn: object) -> None:
     conn.execute(text(
         "DELETE FROM embeddings WHERE embedding_type = 'text_content'"
     ))
+
+
+def _migrate_pickup_to_rows(conn: object) -> None:
+    """Retire ``pickup_cache`` in favour of ``pickup_profile``/``pickup_item``.
+
+    The old table stored the feed as a JSON array in one column,
+    documented as holding "up to 12 items". The feed is now a few
+    hundred rows and is paged, which that shape cannot serve.
+
+    Nothing is carried across. Every value in it — the ids, the ordering,
+    the checkpoint — was produced by a ranking that no longer exists, and
+    the worker rebuilds a viewer's feed on its next sweep anyway. Keeping
+    the rows would only mean serving one stale page until then.
+
+    Idempotent: the create is guarded and the drop is conditional.
+    """
+    tables = {
+        row[0]
+        for row in conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table'")
+        ).fetchall()
+    }
+    if "pickup_cache" in tables:
+        conn.execute(text("DROP TABLE pickup_cache"))
+        logger.info("Dropped pickup_cache; the pickup worker rebuilds the feed")
 
 
 def _migrate_tfidf_keywords_indexed(conn: object) -> None:

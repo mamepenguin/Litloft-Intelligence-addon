@@ -82,6 +82,37 @@ HALF_LIFE_DAYS = 60.0
 #: harder and buries old interests faster.
 W_MIN = 0.25
 
+#: There is deliberately no pass that folds near-identical lanes back
+#: together, and the absence is measured rather than assumed.
+#:
+#: K comes from how many files the history holds, not how many subjects
+#: are in it, so k-means splits a binge — a dense blob — into several
+#: lanes, and those lanes then take several lanes' worth of turns. The
+#: obvious repair is to merge clusters whose centroids are close. It
+#: does not work, at any threshold. Against the production index, using
+#: folder membership as ground truth:
+#:
+#:   same subject, sub-cluster centroids   p5 0.602  p25 0.668  p50 0.797
+#:   different subjects, centroids                   p50 0.713  p90 0.859  max 0.942
+#:
+#: The two populations overlap almost entirely, and mean-centring does
+#: not separate them. At 0.90 such a pass folds about a quarter of
+#: same-subject splits while already merging distinct subjects at the
+#: top of their range.
+#:
+#: Choosing K from the data instead — by silhouette — was measured too,
+#: and keeps a binge whole in 3 of 12 production cases. The reason is
+#: not a bad criterion: a 680-episode series has real internal structure
+#: (eras, openings, formats), so the split is genuine. "Sub-structure of
+#: one interest" and "two interests" are a semantic distinction, not a
+#: geometric one, and no clustering parameter recovers it.
+#:
+#: So the profile does not pretend to. A binge is reported as several
+#: lanes because that is what the history looks like, the weight floor
+#: keeps quieter interests present, and narrowing a subject the viewer
+#: is tired of is left to an explicit control, where the person supplies
+#: the meaning the vectors do not carry.
+
 #: Below this a history is too small to have distinguishable interests.
 _MIN_FILES_FOR_CLUSTERING = 12
 _K_MIN = 2
@@ -89,21 +120,6 @@ _K_MAX = 8
 
 _KMEANS_ITERATIONS = 25
 
-#: Cosine similarity above which two clusters are one interest.
-#:
-#: K is chosen from how many files the history holds, not from how many
-#: subjects are in it, so k-means will happily split one dense blob —
-#: exactly what a binge is — into several clusters. Left alone that
-#: inverts the containment the lanes exist to provide: forty episodes
-#: split four ways take four lanes' worth of turns instead of one.
-#:
-#: The justification for folding them back is retrieval, not taste.
-#: Centroids this close return overlapping candidate sets, and the
-#: interleave assigns each file to a single lane, so the second lane
-#: spends its turns on the same neighbourhood the first is already
-#: drawing from. Separate lanes over one pool are one lane with extra
-#: turns.
-_LANE_MERGE_SIMILARITY = 0.90
 
 
 @dataclass(frozen=True)
@@ -436,39 +452,6 @@ def _centroid(matrix: np.ndarray) -> np.ndarray | None:
     return (mean / norm).astype(np.float32)
 
 
-def _merge_similar(
-    groups: list[list[int]],
-    matrix: np.ndarray,
-) -> list[list[int]]:
-    """Fold clusters whose centroids sit in the same neighbourhood.
-
-    Repeatedly merges the closest pair until none exceeds
-    ``_LANE_MERGE_SIMILARITY``. K is at most 8, so the quadratic scan is
-    negligible.
-
-    Only ever called within one channel: centroids from ``vec_clip`` and
-    ``vec_text`` live in different spaces and a similarity between them
-    would be a number without a meaning.
-    """
-    groups = [list(g) for g in groups]
-    while len(groups) > 1:
-        directions = [_centroid(matrix[g]) for g in groups]
-        if any(d is None for d in directions):
-            break
-        centroids = np.stack(directions)
-        similarity = centroids @ centroids.T
-        np.fill_diagonal(similarity, -1.0)
-        first, second = np.unravel_index(
-            int(np.argmax(similarity)), similarity.shape,
-        )
-        if similarity[first, second] < _LANE_MERGE_SIMILARITY:
-            break
-        low, high = sorted((int(first), int(second)))
-        groups[low] = groups[low] + groups[high]
-        del groups[high]
-    return groups
-
-
 def _merge_singletons(
     groups: list[list[int]],
     matrix: np.ndarray,
@@ -588,8 +571,7 @@ def build_lanes(history: Sequence[WatchedFile], *, key: str) -> list[Lane]:
             [i for i in range(len(members)) if labels[i] == index]
             for index in range(int(labels.max()) + 1)
         ]
-        groups = _merge_similar([g for g in groups if g], matrix)
-        groups = _merge_singletons(groups, matrix)
+        groups = _merge_singletons([g for g in groups if g], matrix)
 
         for index, group in enumerate(groups):
             centroid = _centroid(matrix[group])

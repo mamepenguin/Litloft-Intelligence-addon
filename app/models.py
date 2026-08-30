@@ -309,31 +309,59 @@ class FileInsight(Base):
     )
 
 
-class PickupCache(Base):
-    """Precomputed recommendation cache for the pickup dashboard widget.
+class PickupProfile(Base):
+    """Bookkeeping for one viewer's Pickup feed in one drive.
 
-    One row per (drive_id, viewer_id) pair. The background worker refreshes
-    the row whenever WatchHistory changes (detected via checkpoint hash).
-    File IDs are stored as a JSON array; the pickup endpoint returns them
-    directly without additional DB lookups.
+    Paired with the ``PickupItem`` rows that hold the feed itself. Kept
+    separate so ``total`` and the checkpoint can be read without
+    touching the items, which is what the endpoint does on every call.
     """
 
-    __tablename__ = "pickup_cache"
+    __tablename__ = "pickup_profile"
 
     drive_id: Mapped[str] = mapped_column(String, primary_key=True)
     viewer_id: Mapped[str] = mapped_column(String(16), primary_key=True)
 
-    # JSON array of file_id strings (up to 12 items, ordered by relevance)
-    file_ids: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    #: Rows held for this viewer, so callers never count eligible files
+    #: themselves — that would mean scanning every unopened file.
+    total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     computed_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=lambda: datetime.now(UTC)
     )
 
-    # MD5 of the last-N watched file_ids — used to skip recomputation when
-    # the viewer's history has not changed since the previous run.
+    #: Hash of this viewer's own watched file_ids — used to skip
+    #: recomputation when their history has not moved.
     watch_history_checkpoint: Mapped[str | None] = mapped_column(
         String(32), nullable=True
+    )
+
+
+class PickupItem(Base):
+    """One row of a viewer's Pickup feed, in emission order.
+
+    Replaces a JSON array documented as holding "up to 12 items": the
+    feed is a few hundred rows and is paged, which an array in one
+    column cannot serve.
+
+    ``cluster_id`` and ``channel`` are not read by the UI. They are what
+    lets "why did this appear?" be answered later without recomputing
+    the profile, which the previous shape could not do at all.
+    """
+
+    __tablename__ = "pickup_item"
+
+    drive_id: Mapped[str] = mapped_column(String, primary_key=True)
+    viewer_id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    rank: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    file_id: Mapped[str] = mapped_column(String(12), nullable=False)
+    cluster_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    channel: Mapped[str] = mapped_column(String(20), nullable=False)
+    score: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        Index("idx_pickup_item_viewer", "drive_id", "viewer_id", "rank"),
     )
 
 

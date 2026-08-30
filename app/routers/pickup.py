@@ -1,52 +1,92 @@
-"""Pickup (recommendation) endpoint for the dashboard widget."""
+"""Pickup feed endpoint.
 
-import json
+Reads precomputed rows. No scoring happens in the request path.
+"""
+
+import hashlib
 import logging
+import random
+from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Header, Query
 
 from app.database import get_search_db
 from app.drive_context import require_drive
-from app.models import PickupCache
+from app.models import PickupItem, PickupProfile
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["pickup"])
+
+#: Rows the carousel draws its daily window from.
+_WINDOW_POOL = 40
+
+_MAX_LIMIT = 60
+
+
+def _daily_seed(viewer_id: str, drive: str, date: str) -> int:
+    key = f"{viewer_id}\x1f{drive}\x1f{date}"
+    return int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], "big")
 
 
 @router.get("/pickup")
 async def pickup_endpoint(
     drive: str = Depends(require_drive),
     viewer_id: Annotated[str | None, Header(alias="X-Lit-Viewer-Id")] = None,
+    limit: int = Query(12, ge=1, le=_MAX_LIMIT),
+    offset: int = Query(0, ge=0),
+    window: str | None = Query(None),
+    date: str | None = Query(None),
 ) -> dict:
-    """Return precomputed recommendation file_ids for the dashboard pickup widget.
+    """Return this viewer's precomputed feed for one drive.
 
-    Returns an empty list when:
-    - No viewer profile is set (viewer_id is None).
-    - No cached recommendations exist for this viewer × drive yet.
+    Args:
+        limit: Page size.
+        offset: Position in the feed. Ignored for ``window=daily``.
+        window: ``"daily"`` selects ``limit`` items from the top
+            ``min(_WINDOW_POOL, total)`` using a date-seeded shuffle.
+            For the carousel only — reshuffling a paged list produces
+            duplicates and gaps on the second page.
+        date: The viewer's local ``YYYY-MM-DD``, so the day turns over
+            at their midnight rather than the server's. Falls back to
+            the server's UTC date. It only seeds a shuffle, so a
+            malformed value can do nothing worse than reorder cards.
 
-    The response is always fast — this endpoint only reads from a precomputed
-    cache row; no KNN computation happens in the request path.
+    Returns:
+        ``file_ids`` in order, and ``total`` rows held. Callers use
+        ``total`` as the stock figure; counting eligible files directly
+        would mean scanning every unopened file in the drive.
     """
     if not viewer_id:
-        return {"file_ids": []}
+        return {"file_ids": [], "total": 0}
 
     with get_search_db() as session:
-        cache = (
-            session.query(PickupCache)
+        header = (
+            session.query(PickupProfile)
             .filter_by(drive_id=drive, viewer_id=viewer_id)
             .first()
         )
+        if header is None or header.total == 0:
+            return {"file_ids": [], "total": 0}
+        total = header.total
 
-    if not cache:
-        return {"file_ids": []}
+        query = (
+            session.query(PickupItem.file_id)
+            .filter_by(drive_id=drive, viewer_id=viewer_id)
+            .order_by(PickupItem.rank)
+        )
+        if window == "daily":
+            pool = [row[0] for row in query.limit(min(_WINDOW_POOL, total)).all()]
+        else:
+            pool = [
+                row[0] for row in query.offset(offset).limit(limit).all()
+            ]
 
-    try:
-        file_ids = json.loads(cache.file_ids)
-    except (ValueError, TypeError):
-        return {"file_ids": []}
+    if window == "daily":
+        stamp = date or datetime.now(UTC).strftime("%Y-%m-%d")
+        rng = random.Random(_daily_seed(viewer_id, drive, stamp))
+        rng.shuffle(pool)
+        pool = pool[:limit]
 
-    if not isinstance(file_ids, list):
-        return {"file_ids": []}
-    return {"file_ids": [x for x in file_ids if isinstance(x, str)]}
+    return {"file_ids": pool, "total": total}
