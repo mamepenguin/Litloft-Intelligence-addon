@@ -59,6 +59,7 @@ vi.mock("@/components/ConfirmDialog", () => ({
 }));
 
 import IndexDetailsMenuItem from "@/addons/intelligence/IndexDetailsMenuItem";
+import { ShortcutsProvider } from "@/components/ShortcutsProvider";
 import { getIndexDetails, reindexFile } from "@/addons/intelligence/api";
 
 const mockedGet = getIndexDetails as unknown as ReturnType<typeof vi.fn>;
@@ -104,16 +105,22 @@ interface RenderOpts {
   onDialogOpenChange?: (open: boolean) => void;
 }
 
+// Wrapped in the real ShortcutsProvider: the dialog registers Escape
+// through the shortcut stack rather than binding window directly, so a
+// bare render would exercise the no-op default context instead of the
+// dispatch path that actually ships.
 function renderEntry(props: RenderOpts = {}) {
   return render(
-    <IndexDetailsMenuItem
-      fileId={props.fileId ?? "abc12345"}
-      drive={props.drive ?? "drive1"}
-      mimeType={props.mimeType ?? "video/mp4"}
-      fileType={props.fileType ?? "video"}
-      onRequestClose={props.onRequestClose}
-      onDialogOpenChange={props.onDialogOpenChange}
-    />,
+    <ShortcutsProvider>
+      <IndexDetailsMenuItem
+        fileId={props.fileId ?? "abc12345"}
+        drive={props.drive ?? "drive1"}
+        mimeType={props.mimeType ?? "video/mp4"}
+        fileType={props.fileType ?? "video"}
+        onRequestClose={props.onRequestClose}
+        onDialogOpenChange={props.onDialogOpenChange}
+      />
+    </ShortcutsProvider>,
   );
 }
 
@@ -165,10 +172,68 @@ describe("IndexDetailsMenuItem — the entry", () => {
     const onRequestClose = vi.fn();
     await openDialog({ onRequestClose });
 
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(document, { key: "Escape" });
 
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(onRequestClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the dialog closed on the Escape path too", async () => {
+    const onDialogOpenChange = vi.fn();
+    await openDialog({ onDialogOpenChange });
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    // Skipping this would leave the host's guard latched on.
+    expect(onDialogOpenChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("closes on a backdrop click", async () => {
+    const onRequestClose = vi.fn();
+    const { container } = await openDialog({ onRequestClose });
+
+    // The backdrop lives in the portal, not in the render container.
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    const backdrop = document.body.querySelector(".fixed.inset-0 > .absolute");
+    fireEvent.click(backdrop as Element);
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(onRequestClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("refetches on reopen and ignores the response the first open left in flight", async () => {
+    // Closing invalidates whatever is in flight. Without that, a slow
+    // first response lands after the second and silently overwrites it —
+    // and would undo an optimistic Regenerate flip made in between.
+    let resolveFirst!: (v: unknown) => void;
+    mockedGet
+      .mockImplementationOnce(
+        () => new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
+      )
+      .mockResolvedValueOnce(
+        defaultDetails({ status: { metadata: false, clip: false, whisper: false, text: false } }),
+      );
+
+    renderEntry();
+    const entry = screen.getByRole("menuitem", { name: ENTRY_LABEL });
+
+    fireEvent.click(entry);
+    await waitFor(() => expect(mockedGet).toHaveBeenCalledTimes(1));
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    fireEvent.click(entry);
+    await waitFor(() => expect(mockedGet).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getAllByText(/Pending|未処理|statusPending/i).length).toBeGreaterThan(0),
+    );
+
+    // The first open's response arrives last and must be discarded.
+    resolveFirst(defaultDetails());
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(screen.queryByText(/Indexed|インデックス済|statusDone/i)).toBeNull();
   });
 
   it("leaves Escape to the confirmation while it is up", async () => {
@@ -182,7 +247,7 @@ describe("IndexDetailsMenuItem — the entry", () => {
       }),
     );
 
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(document, { key: "Escape" });
 
     // One press must not dismiss both layers.
     expect(screen.getByRole("dialog")).toBeInTheDocument();

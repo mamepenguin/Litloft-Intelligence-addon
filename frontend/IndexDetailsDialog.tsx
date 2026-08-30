@@ -31,6 +31,7 @@ import type { LucideIcon } from "lucide-react";
 import { getIndexDetails, reindexFile } from "./api";
 import type { IndexDetailsResponse, ReindexTask } from "./api";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { useShortcuts } from "@/hooks/useShortcuts";
 
 export interface IndexDetailsDialogProps {
   open: boolean;
@@ -82,7 +83,7 @@ const LOFT_MIME = "application/vnd.litloft.loft+json";
  *   ``application/pdf`` which the text pipeline also handles.
  *   .loft is auto-skipped (mime not in TEXT_MIMES) — hidden here.
  */
-export function isTaskApplicable(
+function isTaskApplicable(
   task: ReindexTask,
   mimeType: string | undefined,
   fileType: string | undefined,
@@ -140,19 +141,25 @@ export default function IndexDetailsDialog({
   const [loading, setLoading] = useState(true);
   const [pendingTask, setPendingTask] = useState<ReindexTask | null>(null);
   const [regenerating, setRegenerating] = useState<ReindexTask | null>(null);
-  const mountedRef = useRef<boolean>(true);
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Generation counter, not an is-mounted flag. Closing the dialog bumps
+  // it, so a response that lands afterwards is discarded rather than
+  // written into state a later open would show — and, worse, rather than
+  // undoing the optimistic flip a Regenerate made in between.
+  const requestIdRef = useRef(0);
 
   const fetchDetails = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     try {
       const res = await getIndexDetails(fileId, drive);
-      if (!mountedRef.current) return;
+      if (requestId !== requestIdRef.current) return;
       setDetails(res);
     } catch {
-      if (!mountedRef.current) return;
+      if (requestId !== requestIdRef.current) return;
       setDetails(null);
     } finally {
-      if (mountedRef.current) {
+      if (requestId === requestIdRef.current) {
         setLoading(false);
       }
     }
@@ -161,24 +168,30 @@ export default function IndexDetailsDialog({
   // Gated on `open` so merely having the menu entry in the DOM costs no
   // request — the details are only fetched once someone asks for them.
   useEffect(() => {
-    if (!open) return;
-    mountedRef.current = true;
+    if (!open) {
+      // Invalidate anything still in flight from the previous open.
+      requestIdRef.current++;
+      return;
+    }
     fetchDetails();
-    return () => {
-      mountedRef.current = false;
-    };
   }, [open, fetchDetails]);
 
-  // Escape belongs to the confirmation while it is up, otherwise both
-  // would close on one press.
+  // The menu entry behind this dialog still holds focus, so move it here
+  // or the dialog is never announced and Tab walks the page behind it.
   useEffect(() => {
-    if (!open || pendingTask !== null) return;
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open, pendingTask, onClose]);
+    if (open) panelRef.current?.focus();
+  }, [open]);
+
+  // Registered rather than bound to window so the shortcut stack decides
+  // precedence: the confirmation pushes later and wins, and the cheat
+  // sheet suppresses us entirely. Disabled while the confirmation is up
+  // so one press cannot dismiss both layers.
+  useShortcuts(
+    "intelligence-index-details",
+    "Index details",
+    [{ key: "escape", label: "Close", handler: onClose, hidden: true }],
+    open && pendingTask === null,
+  );
 
   const handleRequestRegenerate = useCallback((task: ReindexTask) => {
     setPendingTask(task);
@@ -193,8 +206,12 @@ export default function IndexDetailsDialog({
     const task = pendingTask;
     setPendingTask(null);
     setRegenerating(task);
+    // Closing the dialog mid-flight invalidates the write, the same way
+    // it invalidates a fetch.
+    const requestId = requestIdRef.current;
     try {
       await reindexFile(fileId, [task], drive);
+      if (requestId !== requestIdRef.current) return;
       // Optimistic flip — the *_indexed flag is False until the worker
       // produces a fresh embedding. The next poll / fetch will catch
       // up; we update the local state so the row immediately shows
@@ -207,7 +224,9 @@ export default function IndexDetailsDialog({
     } catch {
       // ignore — leave the existing badge in place
     } finally {
-      setRegenerating(null);
+      if (requestId === requestIdRef.current) {
+        setRegenerating(null);
+      }
     }
   }, [pendingTask, fileId, drive]);
 
@@ -226,10 +245,12 @@ export default function IndexDetailsDialog({
           onClick={onClose}
         />
         <div
+          ref={panelRef}
           role="dialog"
           aria-modal="true"
           aria-label={tDetails("title")}
-          className="relative mx-4 w-full max-w-md rounded-2xl bg-bg-card p-6 shadow-lg animate-fade-in-scale"
+          tabIndex={-1}
+          className="relative mx-4 w-full max-w-md rounded-2xl bg-bg-card p-6 shadow-lg outline-none animate-fade-in-scale"
         >
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-text-primary">
