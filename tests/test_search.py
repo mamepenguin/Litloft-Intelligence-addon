@@ -521,7 +521,10 @@ class TestSelectEmbeddingTypes:
         assert _select_embedding_types("video") == ("clip_thumbnail", "tfidf_keywords")
 
     def test_audio(self) -> None:
-        assert _select_embedding_types("audio") == ("whisper", None)
+        # Audio has no visual route, so the lexical signal is the only
+        # thing that can name a subject: an averaged whisper vector
+        # matches unrelated speech at ~0.90.
+        assert _select_embedding_types("audio") == ("whisper", "tfidf_keywords")
 
     def test_document(self) -> None:
         assert _select_embedding_types("document") == ("text_content", None)

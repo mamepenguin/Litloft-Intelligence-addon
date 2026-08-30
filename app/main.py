@@ -96,7 +96,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
 
     # Clean up orphaned data from potential crash during previous run
-    from app.indexer import cleanup_orphaned_embeddings, reset_falsely_completed_clip
+    from app.indexer import (
+        cleanup_orphaned_embeddings,
+        reset_falsely_completed_clip,
+        reset_falsely_completed_clip_thumbnail,
+    )
     cleaned = cleanup_orphaned_embeddings()
     if cleaned > 0:
         logger.info("Cleaned up %d orphaned embeddings from previous run", cleaned)
@@ -105,6 +109,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     reset = reset_falsely_completed_clip()
     if reset > 0:
         logger.info("Reset %d falsely completed CLIP files for re-indexing", reset)
+
+    # The thumbnail leg is tracked separately and a video's scene rows
+    # hide its absence from the check above.
+    reset_thumb = reset_falsely_completed_clip_thumbnail()
+    if reset_thumb > 0:
+        logger.info(
+            "Reopened %d thumbnail CLIP legs for re-indexing", reset_thumb
+        )
+
+    from app.workers.clip import warn_if_thumbnails_unreachable
+    warn_if_thumbnails_unreachable()
 
     # Video visual index: stale "running" scenes/runs left by a container
     # restart return to a resumable state (design doc §9).

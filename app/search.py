@@ -1811,7 +1811,12 @@ def _select_embedding_types(
     type_map: dict[str, tuple[str, str | None]] = {
         "image": ("clip_thumbnail", None),
         "video": ("clip_thumbnail", "tfidf_keywords"),
-        "audio": ("whisper", None),
+        # Audio gets the same lexical second opinion as video, and needs
+        # it more: it has no visual route at all, and an averaged whisper
+        # vector carries so little topic that unrelated speech matches at
+        # ~0.90 — a music track's nearest neighbours were gameplay
+        # commentary. TF-IDF keywords are what actually name a subject.
+        "audio": ("whisper", "tfidf_keywords"),
         "document": ("text_content", None),
     }
     return type_map.get(file_type, ("metadata", None))
