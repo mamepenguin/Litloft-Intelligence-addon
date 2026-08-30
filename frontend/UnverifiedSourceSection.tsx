@@ -14,20 +14,15 @@ interface UnverifiedSourceSectionProps {
 /**
  * Asks the viewer to rule on a source they are reading.
  *
- * The panel is the question and nothing else. It used to carry the
- * evidence too — paragraphs of the clip beside notes they echoed — but
- * that evidence disappeared the instant anyone answered, and applied
- * only to files nobody had ruled on. Connections are worth knowing
- * whatever a file's trust state, so they live in their own permanent
- * section now (``RelatedPassagesSection``), which expands itself while
- * this panel is on screen.
+ * The panel is the question and nothing else. Evidence for answering it
+ * comes from *Similar files*, which is permanent and applies whatever a
+ * file's trust state — unlike a panel that disappears the instant
+ * anyone answers.
  *
  * To distil one paragraph rather than trust the whole page, select it in
  * the document and use Knowledge's quotation basket. That affordance is
  * owned by Knowledge and is deliberately not duplicated here —
  * Intelligence must not depend on another addon.
- *
- * Spec `2026-08-29-related-passages.md` §5.3.
  */
 export default function UnverifiedSourceSection({
   fileId,

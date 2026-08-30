@@ -888,7 +888,8 @@ def _migrate_embeddings_chunk_index(conn: object) -> None:
     Idempotent. Atomicity comes from the caller's transaction, so keep
     the call inside an ``engine.begin()`` block.
 
-    Spec ``2026-08-29-related-passages.md`` §5.2.
+    The column stays a general key into ``fts_text_content``: it is
+    what turns an embedding row back into the text it was built from.
     """
     logger = logging.getLogger(__name__)
 

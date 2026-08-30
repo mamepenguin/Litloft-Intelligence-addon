@@ -92,7 +92,7 @@ describe("UnverifiedSourceSection", () => {
     await screen.findByText("title");
 
     // The panel is the question and nothing else. Evidence-gathering
-    // moved to RelatedPassagesSection, which owns its own request.
+    // the panel no longer fetches evidence of its own.
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
   });
 });
