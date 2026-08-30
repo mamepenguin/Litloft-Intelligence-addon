@@ -188,7 +188,8 @@ export default function IndexDetailsDialog({
   // so one press cannot dismiss both layers.
   useShortcuts(
     "intelligence-index-details",
-    "Index details",
+    // "Dialog" is the group label every core dialog registers under.
+    "Dialog",
     [{ key: "escape", label: "Close", handler: onClose, hidden: true }],
     open && pendingTask === null,
   );
