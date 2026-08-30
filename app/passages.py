@@ -607,9 +607,11 @@ def _recurrence_rows(engine, chunk: _Chunk, drive: str, cfg, types: str):
                 "k": cfg.recurrence_k,
                 "drive": drive,
                 "self": chunk.file_id,
-                # sqlite-vec reports squared L2 on unit vectors, which is
-                # 2 - 2*cosine.
-                "max_distance": 2.0 - 2.0 * cfg.recurrence_score,
+                # sqlite-vec reports plain L2, not its square: search.py
+                # inverts it as cos = 1 - d²/2, so the bound is the root.
+                "max_distance": math.sqrt(
+                    max(0.0, 2.0 - 2.0 * cfg.recurrence_score)
+                ),
             },
         ).fetchall()
 
