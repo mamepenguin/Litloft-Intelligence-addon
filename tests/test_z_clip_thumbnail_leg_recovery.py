@@ -69,7 +69,12 @@ def Session(monkeypatch, search_engine):
 
 
 @pytest.fixture(autouse=True)
-def _stub_embed(monkeypatch):
+def _stub_embed(monkeypatch, tmp_path):
+    # The reset gates on this directory existing, so give the default
+    # case a real one. Tests about the missing mount override it.
+    mount = tmp_path / "thumbs"
+    mount.mkdir()
+    monkeypatch.setenv("HOMEVAULT_THUMBNAILS_DIR", str(mount))
     monkeypatch.setattr(
         clip_worker, "embed_image", lambda image: np.zeros(512, dtype=np.float32),
     )
@@ -165,7 +170,7 @@ def test_video_with_thumbnail_but_no_embedding_is_reopened(Session):
         Session, "vid3", thumbnail_path="d/vid3.jpg",
         clip_indexed=True, clip_thumbnail_indexed=True,
     )
-    assert indexer_mod.reset_falsely_completed_clip_thumbnail() == 1
+    assert indexer_mod.reset_falsely_completed_clip_thumbnail() == ["vid3"]
     assert _thumb_flag(Session, "vid3") is False
 
 
@@ -175,7 +180,7 @@ def test_video_without_thumbnail_path_is_left_closed(Session):
         Session, "vid4", thumbnail_path=None,
         clip_indexed=True, clip_thumbnail_indexed=True,
     )
-    assert indexer_mod.reset_falsely_completed_clip_thumbnail() == 0
+    assert indexer_mod.reset_falsely_completed_clip_thumbnail() == []
     assert _thumb_flag(Session, "vid4") is True
 
 
@@ -185,7 +190,7 @@ def test_image_is_reopened_without_a_thumbnail_path(Session):
         Session, "img1", mime_type=IMAGE_MIME, thumbnail_path=None,
         clip_indexed=True, clip_thumbnail_indexed=True,
     )
-    assert indexer_mod.reset_falsely_completed_clip_thumbnail() == 1
+    assert indexer_mod.reset_falsely_completed_clip_thumbnail() == ["img1"]
     assert _thumb_flag(Session, "img1") is False
 
 
@@ -195,7 +200,7 @@ def test_existing_thumbnail_embedding_is_left_alone(Session):
         clip_indexed=True, clip_thumbnail_indexed=True,
         with_thumb_embedding=True,
     )
-    assert indexer_mod.reset_falsely_completed_clip_thumbnail() == 0
+    assert indexer_mod.reset_falsely_completed_clip_thumbnail() == []
     assert _thumb_flag(Session, "vid5") is True
 
 
@@ -204,7 +209,7 @@ def test_inactive_file_is_left_alone(Session):
         Session, "vid6", thumbnail_path="d/vid6.jpg",
         clip_indexed=True, clip_thumbnail_indexed=True, active=False,
     )
-    assert indexer_mod.reset_falsely_completed_clip_thumbnail() == 0
+    assert indexer_mod.reset_falsely_completed_clip_thumbnail() == []
 
 
 def test_scene_rows_do_not_hide_an_empty_thumbnail_leg(Session):
@@ -223,7 +228,7 @@ def test_scene_rows_do_not_hide_an_empty_thumbnail_leg(Session):
     finally:
         s.close()
 
-    assert indexer_mod.reset_falsely_completed_clip_thumbnail() == 1
+    assert indexer_mod.reset_falsely_completed_clip_thumbnail() == ["vid7"]
     assert _thumb_flag(Session, "vid7") is False
 
 
@@ -298,7 +303,47 @@ async def test_a_move_that_grants_a_thumbnail_path_reopens_the_leg(
         return True
     monkeypatch.setattr(policy, "is_feature_enabled", _enabled)
 
+    queued = []
+    async def _enqueue(task):
+        queued.append(task.file_id)
+
     manager = indexer_mod.IndexManager.__new__(indexer_mod.IndexManager)
+    manager._enqueue = _enqueue
     await indexer_mod.IndexManager.handle_files_moved(manager, ["vid9"])
 
     assert _thumb_flag(Session, "vid9") is False
+    # The next reconcile is an hour away by default.
+    assert queued == ["vid9"]
+
+
+def test_a_missing_mount_stops_the_reopen_churn(Session, monkeypatch, tmp_path):
+    """Reopening what cannot succeed queues, fails, and closes — every restart."""
+    monkeypatch.setenv("HOMEVAULT_THUMBNAILS_DIR", str(tmp_path / "absent"))
+    _seed(
+        Session, "vid10", thumbnail_path="d/vid10.jpg",
+        clip_indexed=True, clip_thumbnail_indexed=True,
+    )
+    _seed(
+        Session, "img2", mime_type=IMAGE_MIME,
+        clip_indexed=True, clip_thumbnail_indexed=True,
+    )
+
+    # The image route reads the file itself, so it is unaffected.
+    assert indexer_mod.reset_falsely_completed_clip_thumbnail() == ["img2"]
+    assert _thumb_flag(Session, "vid10") is True
+
+
+def test_the_reopen_can_be_scoped_to_named_files(Session):
+    """files-moved knows exactly which rows it touched."""
+    _seed(
+        Session, "vid11", thumbnail_path="d/vid11.jpg",
+        clip_indexed=True, clip_thumbnail_indexed=True,
+    )
+    _seed(
+        Session, "vid12", thumbnail_path="d/vid12.jpg",
+        clip_indexed=True, clip_thumbnail_indexed=True,
+    )
+
+    assert indexer_mod.reset_falsely_completed_clip_thumbnail(["vid11"]) == ["vid11"]
+    assert _thumb_flag(Session, "vid12") is True
+    assert indexer_mod.reset_falsely_completed_clip_thumbnail([]) == []

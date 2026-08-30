@@ -113,9 +113,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # The thumbnail leg is tracked separately and a video's scene rows
     # hide its absence from the check above.
     reset_thumb = reset_falsely_completed_clip_thumbnail()
-    if reset_thumb > 0:
+    if reset_thumb:
         logger.info(
-            "Reopened %d thumbnail CLIP legs for re-indexing", reset_thumb
+            "Reopened %d thumbnail CLIP legs for re-indexing",
+            len(reset_thumb),
         )
 
     from app.workers.clip import warn_if_thumbnails_unreachable

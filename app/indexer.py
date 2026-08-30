@@ -30,6 +30,7 @@ from app.workers.blip import check_idle_unload as check_blip_idle_unload
 from app.workers.clip_concepts import check_idle_unload as check_clip_concepts_idle_unload
 from app.workers.clip import (
     index_clip,
+    thumbnails_dir,
     IMAGE_TYPES,
     THUMBNAIL_FALLBACK_TYPES,
     VIDEO_TYPES,
@@ -1227,8 +1228,15 @@ class IndexManager:
         # A move can hand a file the first usable thumbnail path it has
         # ever had. Reconcile's sync cannot notice — the path it would
         # compare against was just written here — so the leg has to be
-        # reopened at the point the path changes.
-        await asyncio.to_thread(reset_falsely_completed_clip_thumbnail)
+        # reopened at the point the path changes, and queued here too:
+        # the next reconcile is an hour away by default.
+        reopened = await asyncio.to_thread(
+            reset_falsely_completed_clip_thumbnail, list(litloft_meta)
+        )
+        for file_id in reopened:
+            await self._enqueue(IndexTask(
+                file_id=file_id, task_type=TaskType.CLIP
+            ))
 
     # --- Background workers ---
 
@@ -1677,7 +1685,9 @@ def reset_falsely_completed_clip() -> int:
     return reset
 
 
-def reset_falsely_completed_clip_thumbnail() -> int:
+def reset_falsely_completed_clip_thumbnail(
+    file_ids: list[str] | None = None,
+) -> list[str]:
     """Reopen the thumbnail leg for files that closed it without a vector.
 
     ``_index_clip_sync`` closes ``clip_thumbnail_indexed`` whenever the
@@ -1689,17 +1699,29 @@ def reset_falsely_completed_clip_thumbnail() -> int:
     completion, and a video's scene rows satisfy that while its
     thumbnail leg is still empty.
 
-    The mime gate keeps the reset from looping. A video whose
-    ``thumbnail_path`` is still unset would close the leg again on the
-    very next pass, so only files that can actually succeed now are
-    reopened: images embed their own file, everything else needs the
-    projected path to be present.
+    Two gates keep the reset from looping, because a file reopened into
+    work that cannot succeed is queued, fails, closes again, and comes
+    back on the next restart. A row needs a projected path to stand a
+    chance (images are exempt: they embed their own file), and the
+    directory those paths resolve under has to be mounted at all — a
+    stale ``docker-compose.override.yml`` leaves every video holding a
+    perfectly good path to a directory the container cannot see.
+
+    Args:
+        file_ids: Restrict the check to these files. Used by the
+            files-moved path, which knows exactly which rows it touched.
 
     Returns:
-        Number of files whose thumbnail leg was reopened.
+        The file IDs whose thumbnail leg was reopened. Callers that can
+        queue work immediately should; otherwise the next reconcile
+        picks them up.
     """
-    thumb_mimes = list(IMAGE_TYPES | VIDEO_TYPES | THUMBNAIL_FALLBACK_TYPES)
     image_mimes = list(IMAGE_TYPES)
+    thumb_mimes = list(IMAGE_TYPES | VIDEO_TYPES | THUMBNAIL_FALLBACK_TYPES)
+    if not thumbnails_dir().is_dir():
+        # Only the image route can still work; everything else resolves
+        # under the directory that is not there.
+        thumb_mimes = image_mimes
 
     with get_search_db() as session:
         thumb_ph = ", ".join(f":t{i}" for i in range(len(thumb_mimes)))
@@ -1707,11 +1729,20 @@ def reset_falsely_completed_clip_thumbnail() -> int:
         params = {f"t{i}": m for i, m in enumerate(thumb_mimes)}
         params.update({f"i{i}": m for i, m in enumerate(image_mimes)})
 
+        only = ""
+        if file_ids is not None:
+            if not file_ids:
+                return []
+            only_ph = ", ".join(f":o{i}" for i in range(len(file_ids)))
+            params.update({f"o{i}": fid for i, fid in enumerate(file_ids)})
+            only = f"AND f.file_id IN ({only_ph}) "
+
         stranded = session.execute(
             sql_text(
                 "SELECT f.file_id, f.filename FROM indexed_files f "
                 "WHERE f.clip_thumbnail_indexed = 1 AND f.active = 1 "
                 f"AND f.mime_type IN ({thumb_ph}) "
+                f"{only}"
                 f"AND (f.mime_type IN ({image_ph}) OR ("
                 "  f.thumbnail_path IS NOT NULL AND f.thumbnail_path != ''"
                 ")) "
@@ -1738,7 +1769,7 @@ def reset_falsely_completed_clip_thumbnail() -> int:
                 {"file_id": file_id},
             )
 
-    return len(stranded)
+    return [row[0] for row in stranded]
 
 
 def cleanup_orphaned_embeddings() -> int:
