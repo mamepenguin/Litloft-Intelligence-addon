@@ -60,11 +60,6 @@
         "priority": 21
       },
       {
-        "id": "index-details",
-        "label": "Index Details",
-        "priority": 30
-      },
-      {
         "id": "similar-files",
         "label": "Similar Files",
         "priority": 40
@@ -124,6 +119,13 @@
         "id": "admin-rag",
         "label": "RAG Behaviour",
         "priority": 15
+      }
+    ],
+    "file-actions-menu": [
+      {
+        "id": "index-details",
+        "label": "Index Details",
+        "priority": 30
       }
     ]
   },

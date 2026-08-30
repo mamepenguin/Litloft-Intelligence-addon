@@ -1,10 +1,15 @@
 /**
- * Tests for IndexDetailsSection — spec
- * 2026-05-24-intelligence-reindex-controls §3.3.
+ * Tests for the Index Details menu entry and its dialog.
+ *
+ * Originally `IndexDetailsSection.test.tsx` (spec
+ * 2026-05-24-intelligence-reindex-controls §3.3); the surface moved into
+ * the core `[...]` menu's `file-actions-menu` slot per spec
+ * 2026-08-30-file-actions-menu-addon-slot, and these cases moved with it.
  *
  * Covers:
- *  1. Initial render fetches /files/{id}/index-details and renders
- *     one row per task (metadata / clip / whisper / text).
+ *  1. The entry renders without fetching; opening it fetches
+ *     /files/{id}/index-details and renders one row per task
+ *     (metadata / clip / whisper / text).
  *  2. Each row carries a "Regenerate" button. Clicking it confirms
  *     via the ConfirmDialog and then POSTs to /files/{id}/reindex
  *     with body { tasks: [<that task>] }.
@@ -12,10 +17,9 @@
  *     files; whisper only renders for transcribable types
  *     (audio/video).
  *  4. Cancelling the confirm dialog does NOT issue the POST.
- *  5. No emoji.
- *
- * RED-phase: the component does not exist yet. The dynamic import in
- * each test fails, which is the RED signal for this TDD step.
+ *  5. The host-slot contract: the menu is left open while the dialog is
+ *     up, and asked to close only once it is dismissed.
+ *  6. No emoji.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -47,18 +51,21 @@ vi.mock("@/components/ConfirmDialog", () => ({
     onCancel: () => void;
   }) =>
     open ? (
-      <div role="dialog" data-testid="confirm-dialog">
+      <div data-testid="confirm-dialog">
         <button onClick={onConfirm}>dialog-confirm</button>
         <button onClick={onCancel}>dialog-cancel</button>
       </div>
     ) : null,
 }));
 
-import IndexDetailsSection from "@/addons/intelligence/IndexDetailsSection";
+import IndexDetailsMenuItem from "@/addons/intelligence/IndexDetailsMenuItem";
 import { getIndexDetails, reindexFile } from "@/addons/intelligence/api";
 
 const mockedGet = getIndexDetails as unknown as ReturnType<typeof vi.fn>;
 const mockedReindex = reindexFile as unknown as ReturnType<typeof vi.fn>;
+
+const ENTRY_LABEL =
+  /index details|インデックス詳細|semanticSearch\.indexDetails\.title/i;
 
 function defaultDetails(overrides: Record<string, unknown> = {}) {
   return {
@@ -88,29 +95,103 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function renderSection(
-  props: { fileId?: string; drive?: string; mimeType?: string; fileType?: string } = {},
-) {
+interface RenderOpts {
+  fileId?: string;
+  drive?: string;
+  mimeType?: string;
+  fileType?: string;
+  onRequestClose?: () => void;
+  onDialogOpenChange?: (open: boolean) => void;
+}
+
+function renderEntry(props: RenderOpts = {}) {
   return render(
-    <IndexDetailsSection
+    <IndexDetailsMenuItem
       fileId={props.fileId ?? "abc12345"}
       drive={props.drive ?? "drive1"}
       mimeType={props.mimeType ?? "video/mp4"}
       fileType={props.fileType ?? "video"}
+      onRequestClose={props.onRequestClose}
+      onDialogOpenChange={props.onDialogOpenChange}
     />,
   );
 }
 
-describe("IndexDetailsSection — render", () => {
-  it("fetches /files/{id}/index-details on mount", async () => {
-    renderSection();
-    await waitFor(() => expect(mockedGet).toHaveBeenCalledTimes(1));
+/** Render the entry and open its dialog, as a user would. */
+async function openDialog(props: RenderOpts = {}) {
+  const result = renderEntry(props);
+  fireEvent.click(screen.getByRole("menuitem", { name: ENTRY_LABEL }));
+  await waitFor(() => expect(mockedGet).toHaveBeenCalled());
+  return result;
+}
+
+describe("IndexDetailsMenuItem — the entry", () => {
+  it("renders a menu row and fetches nothing until it is opened", () => {
+    renderEntry();
+
+    expect(
+      screen.getByRole("menuitem", { name: ENTRY_LABEL }),
+    ).toBeInTheDocument();
+    // Every file detail page mounts this entry; only the ones where
+    // someone actually asks should cost a request.
+    expect(mockedGet).not.toHaveBeenCalled();
+  });
+
+  it("fetches /files/{id}/index-details when opened", async () => {
+    await openDialog();
+
+    expect(mockedGet).toHaveBeenCalledTimes(1);
     expect(mockedGet).toHaveBeenCalledWith("abc12345", "drive1");
   });
 
+  it("tells the host a dialog is open, and asks it to close only on dismiss", async () => {
+    // The host must not close its menu while the dialog is up: that
+    // would unmount this component and take the dialog with it.
+    const onRequestClose = vi.fn();
+    const onDialogOpenChange = vi.fn();
+    await openDialog({ onRequestClose, onDialogOpenChange });
+
+    expect(onDialogOpenChange).toHaveBeenCalledWith(true);
+    expect(onRequestClose).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /close|閉じる/i }));
+
+    expect(onDialogOpenChange).toHaveBeenLastCalledWith(false);
+    expect(onRequestClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("closes on Escape", async () => {
+    const onRequestClose = vi.fn();
+    await openDialog({ onRequestClose });
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(onRequestClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves Escape to the confirmation while it is up", async () => {
+    await openDialog();
+    const row = await findTaskRow(
+      /Whisper|Transcription|semanticSearch\.tasks\.whisper/i,
+    );
+    fireEvent.click(
+      within(row).getByRole("button", {
+        name: /regenerate|再生成|semanticSearch\.indexDetails\.regenerate/i,
+      }),
+    );
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    // One press must not dismiss both layers.
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+});
+
+describe("IndexDetailsMenuItem — rows", () => {
   it("renders one row per applicable task for a video file", async () => {
-    renderSection({ mimeType: "video/mp4", fileType: "video" });
-    await waitFor(() => expect(mockedGet).toHaveBeenCalled());
+    await openDialog({ mimeType: "video/mp4", fileType: "video" });
 
     // Video supports every task. Locale-tolerant matching against
     // either the localised label or the raw next-intl key path.
@@ -135,8 +216,7 @@ describe("IndexDetailsSection — render", () => {
   });
 
   it("hides whisper for image-only files (no audio track)", async () => {
-    renderSection({ mimeType: "image/png", fileType: "image" });
-    await waitFor(() => expect(mockedGet).toHaveBeenCalled());
+    await openDialog({ mimeType: "image/png", fileType: "image" });
 
     // Image rows: metadata + clip exist, whisper should be hidden
     // because the file has no audio.
@@ -148,8 +228,7 @@ describe("IndexDetailsSection — render", () => {
   });
 
   it("hides clip for plain text files (no visual content)", async () => {
-    renderSection({ mimeType: "text/markdown", fileType: "text" });
-    await waitFor(() => expect(mockedGet).toHaveBeenCalled());
+    await openDialog({ mimeType: "text/markdown", fileType: "text" });
 
     expect(
       screen.queryByText(/CLIP|Image analysis|semanticSearch\.tasks\.clip/i),
@@ -157,11 +236,10 @@ describe("IndexDetailsSection — render", () => {
   });
 
   it("hides whisper and text for .loft files (remote URL wrappers)", async () => {
-    renderSection({
+    await openDialog({
       mimeType: "application/vnd.litloft.loft+json",
       fileType: "video",
     });
-    await waitFor(() => expect(mockedGet).toHaveBeenCalled());
 
     expect(
       screen.queryByText(
@@ -174,11 +252,10 @@ describe("IndexDetailsSection — render", () => {
   });
 
   it("still shows metadata and clip for .loft files", async () => {
-    renderSection({
+    await openDialog({
       mimeType: "application/vnd.litloft.loft+json",
       fileType: "video",
     });
-    await waitFor(() => expect(mockedGet).toHaveBeenCalled());
 
     await waitFor(() => {
       expect(
@@ -191,32 +268,55 @@ describe("IndexDetailsSection — render", () => {
       screen.getByText(/CLIP|Image analysis|semanticSearch\.tasks\.clip/i),
     ).toBeInTheDocument();
   });
+
+  it("shows metadata and text for an HTML file", async () => {
+    // text/html is in the indexer's TEXT_MIMES (spec
+    // 2026-05-12-html-indexing), so these rows describe real state.
+    await openDialog({ mimeType: "text/html", fileType: "text" });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /metadata|Metadata extraction|semanticSearch\.tasks\.metadata/i,
+        ),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(/Text extraction|semanticSearch\.tasks\.text/i),
+    ).toBeInTheDocument();
+  });
 });
 
-describe("IndexDetailsSection — regenerate button", () => {
-  async function openTaskDialog(taskRegex: RegExp) {
-    renderSection();
-    await waitFor(() => expect(mockedGet).toHaveBeenCalled());
+/** Locate a task's row by its label. */
+async function findTaskRow(taskRegex: RegExp): Promise<HTMLElement> {
+  const taskLabel = await screen.findByText(taskRegex);
+  const row =
+    taskLabel.closest("li, tr, [role='row'], [data-task-row]") ??
+    (taskLabel.parentElement as HTMLElement);
+  expect(row).not.toBeNull();
+  return row as HTMLElement;
+}
+
+describe("IndexDetailsMenuItem — regenerate button", () => {
+  async function openTaskConfirm(taskRegex: RegExp) {
+    await openDialog();
 
     // The "Regenerate" button is per-task. Find the row by task name
     // first, then locate the button within it.
-    const taskLabel = await screen.findByText(taskRegex);
-    const row =
-      taskLabel.closest("li, tr, [role='row'], [data-task-row]") ??
-      (taskLabel.parentElement as HTMLElement);
-    expect(row).not.toBeNull();
-    const regenBtn = within(row as HTMLElement).getByRole("button", {
-      name: /regenerate|再生成|semanticSearch\.indexDetails\.regenerate/i,
-    });
-    fireEvent.click(regenBtn);
-    return await screen.findByRole("dialog");
+    const row = await findTaskRow(taskRegex);
+    fireEvent.click(
+      within(row).getByRole("button", {
+        name: /regenerate|再生成|semanticSearch\.indexDetails\.regenerate/i,
+      }),
+    );
+    return await screen.findByTestId("confirm-dialog");
   }
 
   it("opens a confirm dialog for whisper and POSTs reindexFile on confirm", async () => {
-    const dialog = await openTaskDialog(
+    const confirm = await openTaskConfirm(
       /Whisper|Transcription|semanticSearch\.tasks\.whisper/i,
     );
-    fireEvent.click(within(dialog).getByText("dialog-confirm"));
+    fireEvent.click(within(confirm).getByText("dialog-confirm"));
 
     await waitFor(() => expect(mockedReindex).toHaveBeenCalled());
     const [fileId, tasks] = mockedReindex.mock.calls[0];
@@ -225,10 +325,10 @@ describe("IndexDetailsSection — regenerate button", () => {
   });
 
   it("sends task=clip when the CLIP row is regenerated", async () => {
-    const dialog = await openTaskDialog(
+    const confirm = await openTaskConfirm(
       /CLIP|Image analysis|semanticSearch\.tasks\.clip/i,
     );
-    fireEvent.click(within(dialog).getByText("dialog-confirm"));
+    fireEvent.click(within(confirm).getByText("dialog-confirm"));
 
     await waitFor(() => expect(mockedReindex).toHaveBeenCalled());
     const [, tasks] = mockedReindex.mock.calls[0];
@@ -236,10 +336,10 @@ describe("IndexDetailsSection — regenerate button", () => {
   });
 
   it("does NOT call reindexFile when the dialog is cancelled", async () => {
-    const dialog = await openTaskDialog(
+    const confirm = await openTaskConfirm(
       /Whisper|Transcription|semanticSearch\.tasks\.whisper/i,
     );
-    fireEvent.click(within(dialog).getByText("dialog-cancel"));
+    fireEvent.click(within(confirm).getByText("dialog-cancel"));
 
     // Allow microtasks to drain.
     await new Promise((r) => setTimeout(r, 10));
@@ -247,10 +347,9 @@ describe("IndexDetailsSection — regenerate button", () => {
   });
 });
 
-describe("IndexDetailsSection — UI rules", () => {
+describe("IndexDetailsMenuItem — UI rules", () => {
   it("renders no emoji", async () => {
-    renderSection();
-    await waitFor(() => expect(mockedGet).toHaveBeenCalled());
+    await openDialog();
 
     expect(document.body.textContent ?? "").not.toMatch(
       /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u,
