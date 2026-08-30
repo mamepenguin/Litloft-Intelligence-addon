@@ -31,19 +31,19 @@ class TestRecommendTagsBySimilarity:
         monkeypatch.setattr(
             tag_knn,
             "_query_nearest_file_ids",
-            lambda q, src, k: neighbors,
+            lambda q, src, k, drive: neighbors,
         )
         monkeypatch.setattr(
-            tag_knn, "_load_tags_for_files", lambda ids: tags_by_file
+            tag_knn, "_load_tags_for_files", lambda ids, drive: tags_by_file
         )
 
     def test_cold_start_returns_empty(self, monkeypatch):
         self._setup(monkeypatch, query_vec=None)
-        assert tag_knn.recommend_tags_by_similarity("f1") == []
+        assert tag_knn.recommend_tags_by_similarity("f1", drive="d") == []
 
     def test_no_neighbors_returns_empty(self, monkeypatch):
         self._setup(monkeypatch, neighbors=[])
-        assert tag_knn.recommend_tags_by_similarity("f1") == []
+        assert tag_knn.recommend_tags_by_similarity("f1", drive="d") == []
 
     def test_no_tagged_neighbors_returns_empty(self, monkeypatch):
         self._setup(
@@ -51,7 +51,7 @@ class TestRecommendTagsBySimilarity:
             neighbors=[("f2", 0.9), ("f3", 0.8)],
             tags_by_file={},
         )
-        assert tag_knn.recommend_tags_by_similarity("f1") == []
+        assert tag_knn.recommend_tags_by_similarity("f1", drive="d") == []
 
     def test_basic_aggregation_weights_by_similarity(self, monkeypatch):
         self._setup(
@@ -62,7 +62,7 @@ class TestRecommendTagsBySimilarity:
                 "f3": ["料理", "レシピ"],
             },
         )
-        result = tag_knn.recommend_tags_by_similarity("f1", min_support=1)
+        result = tag_knn.recommend_tags_by_similarity("f1", drive="d", min_support=1)
         # 料理 scored from both neighbors → highest
         assert result[0][0] == "料理"
         assert result[0][1] == pytest.approx(1.4, abs=1e-5)
@@ -76,7 +76,7 @@ class TestRecommendTagsBySimilarity:
                 "f3": ["料理", "レシピ"],  # unique: 和食 and レシピ
             },
         )
-        result = tag_knn.recommend_tags_by_similarity("f1", min_support=2)
+        result = tag_knn.recommend_tags_by_similarity("f1", drive="d", min_support=2)
         words = [r[0] for r in result]
         # 和食 and レシピ each appear in only 1 file — dropped
         assert "料理" in words
@@ -92,7 +92,7 @@ class TestRecommendTagsBySimilarity:
         }
         self._setup(monkeypatch, neighbors=neighbors, tags_by_file=tags_by_file)
         result = tag_knn.recommend_tags_by_similarity(
-            "f1", top_tags=5, min_support=2
+            "f1", drive="d", top_tags=5, min_support=2
         )
         assert len(result) == 5
 
@@ -114,6 +114,6 @@ class TestRecommendTagsBySimilarity:
         )
         # A gets 0.95; B gets 0.1 + 0.1 = 0.2 → A wins despite fewer neighbors
         result = tag_knn.recommend_tags_by_similarity(
-            "f1", min_support=1
+            "f1", drive="d", min_support=1
         )
         assert result[0][0] == "A"

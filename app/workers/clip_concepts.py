@@ -1,7 +1,7 @@
 """CLIP zero-shot concept scoring for auto-tag candidate generation.
 
-Loads a curated concept vocabulary (clip_concepts.json) plus any
-user-defined tags fetched from the Litloft DB, encodes each concept
+Loads a curated concept vocabulary (clip_concepts.json) plus the tags
+the user defined *in the drive being tagged*, encodes each concept
 into a CLIP text embedding once (cached at module level), and scores
 file CLIP embeddings against the concept set via cosine similarity.
 
@@ -35,8 +35,14 @@ logger = logging.getLogger(__name__)
 _CONCEPTS_JSON = Path(__file__).parent.parent / "data" / "clip_concepts.json"
 
 # Module-level caches, guarded by _lock.
+#
+# The preset vocabulary carries no user data, so it is encoded once and
+# shared. Tag vocabulary is per drive — a drive is a security boundary,
+# so another drive's tag names must never enter this drive's candidate
+# vocabulary — and is therefore cached under the drive it came from.
 _lock = threading.Lock()
-_cached_concepts: dict[str, np.ndarray] | None = None
+_cached_preset: dict[str, np.ndarray] | None = None
+_cached_drive_tags: dict[str, dict[str, np.ndarray]] = {}
 _cached_model_key: str | None = None
 _last_used: float = 0.0
 
@@ -82,13 +88,16 @@ def load_preset_concepts(path: Path | None = None) -> list[str]:
     return concepts
 
 
-def load_user_tags() -> list[str]:
-    """Fetch distinct tag names from the Litloft DB.
+def load_user_tags(drive: str) -> list[str]:
+    """Fetch one drive's distinct tag names from the Litloft DB.
 
     Best-effort: returns an empty list if the DB is unavailable (e.g.
     under tests) rather than propagating the error. User tags enrich
     the concept pool so the model can suggest vocabulary the user
-    already uses.
+    already uses — but only vocabulary from the drive being tagged.
+
+    Args:
+        drive: The drive whose tags may enter the vocabulary.
 
     Returns:
         List of tag name strings, deduplicated by the DB query.
@@ -96,40 +105,16 @@ def load_user_tags() -> list[str]:
     try:
         with get_litloft_db() as session:
             rows = session.execute(
-                sql_text("SELECT DISTINCT name FROM tags ORDER BY name")
+                sql_text(
+                    "SELECT DISTINCT name FROM tags "
+                    "WHERE drive = :drive ORDER BY name"
+                ),
+                {"drive": drive},
             ).fetchall()
             return [row[0] for row in rows if row[0]]
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("Could not load user tags for concepts: %s", e)
         return []
-
-
-def build_concept_pool(
-    *,
-    preset_path: Path | None = None,
-    include_user_tags: bool = True,
-) -> list[str]:
-    """Merge preset concepts with user tags into the final vocabulary.
-
-    Args:
-        preset_path: Optional override for the preset JSON path.
-        include_user_tags: When True, fetches tags from Litloft DB.
-
-    Returns:
-        Merged, deduplicated list of concept strings.
-    """
-    preset = load_preset_concepts(preset_path)
-    if not include_user_tags:
-        return preset
-
-    user_tags = load_user_tags()
-    seen = {c for c in preset}
-    merged = list(preset)
-    for tag in user_tags:
-        if tag not in seen:
-            seen.add(tag)
-            merged.append(tag)
-    return merged
 
 
 def _encode_concepts(concepts: list[str]) -> dict[str, np.ndarray]:
@@ -151,54 +136,67 @@ def _encode_concepts(concepts: list[str]) -> dict[str, np.ndarray]:
 
 def get_concept_embeddings(
     *,
+    drive: str | None,
     preset_path: Path | None = None,
     include_user_tags: bool = True,
     force_reload: bool = False,
 ) -> dict[str, np.ndarray]:
-    """Return the concept → embedding map, computing on first call.
+    """Return the concept → embedding map for one drive, computing on first call.
 
-    The cache is keyed by CLIP model name so switching models
+    The preset half of the vocabulary is encoded once and reused; the
+    tag half is encoded per drive and never crosses between drives.
+    Both caches are keyed by CLIP model name so switching models
     automatically triggers recomputation. Thread-safe via the module
     lock; concurrent first-calls will cooperate rather than double-
     compute.
 
     Args:
+        drive: The drive being tagged. ``None`` yields the preset
+            vocabulary alone — no drive, no tag vocabulary.
         preset_path: Optional override (mostly for tests).
-        include_user_tags: Include Litloft user tags in the pool.
+        include_user_tags: Include the drive's Litloft tags in the pool.
         force_reload: Discard cache and rebuild from scratch.
 
     Returns:
         Map of concept string → normalized CLIP text embedding.
     """
-    global _cached_concepts, _cached_model_key, _last_used
+    global _cached_preset, _cached_drive_tags, _cached_model_key, _last_used
 
     model_key = settings.models.clip
     with _lock:
-        cache_valid = (
-            not force_reload
-            and _cached_concepts is not None
-            and _cached_model_key == model_key
-        )
-        if cache_valid:
-            _last_used = time.monotonic()
-            return _cached_concepts  # type: ignore[return-value]
-
-        concepts = build_concept_pool(
-            preset_path=preset_path,
-            include_user_tags=include_user_tags,
-        )
-        if not concepts:
-            _cached_concepts = {}
+        if force_reload or _cached_model_key != model_key:
+            _cached_preset = None
+            _cached_drive_tags = {}
             _cached_model_key = model_key
-            return {}
 
-        logger.info(
-            "Encoding %d concepts with CLIP model %s", len(concepts), model_key
-        )
-        _cached_concepts = _encode_concepts(concepts)
-        _cached_model_key = model_key
+        if _cached_preset is None:
+            preset_names = load_preset_concepts(preset_path)
+            logger.info(
+                "Encoding %d preset concepts with CLIP model %s",
+                len(preset_names), model_key,
+            )
+            _cached_preset = _encode_concepts(preset_names)
+        preset = _cached_preset
+
+        tags: dict[str, np.ndarray] = {}
+        if include_user_tags and drive:
+            cached_tags = _cached_drive_tags.get(drive)
+            if cached_tags is None:
+                # Tags already covered by the preset need no second
+                # encoding — the embedding would be identical.
+                names = [t for t in load_user_tags(drive) if t not in preset]
+                if names:
+                    logger.info(
+                        "Encoding %d tag concepts for drive %s", len(names), drive
+                    )
+                cached_tags = _encode_concepts(names) if names else {}
+                _cached_drive_tags[drive] = cached_tags
+            tags = cached_tags
+
         _last_used = time.monotonic()
-        return _cached_concepts
+        if not tags:
+            return preset
+        return {**preset, **tags}
 
 
 def check_idle_unload() -> None:
@@ -207,18 +205,19 @@ def check_idle_unload() -> None:
     Respects settings.memory.clip_concepts_idle_unload (0 = never unload).
     The cache rebuilds automatically on the next auto-tag request.
     """
-    global _cached_concepts, _cached_model_key, _last_used
+    global _cached_preset, _cached_drive_tags, _cached_model_key, _last_used
 
     idle_timeout = settings.memory.clip_concepts_idle_unload
     if idle_timeout <= 0:
         return
 
     with _lock:
-        if _cached_concepts is None:
+        if _cached_preset is None and not _cached_drive_tags:
             return
         if time.monotonic() - _last_used > idle_timeout:
             logger.info("Releasing CLIP concept embeddings (idle timeout)")
-            _cached_concepts = None
+            _cached_preset = None
+            _cached_drive_tags = {}
             _cached_model_key = None
 
 
@@ -329,6 +328,7 @@ def score_file_concepts(
     file_id: str,
     concept_embeddings: dict[str, np.ndarray] | None = None,
     *,
+    drive: str | None,
     threshold: float = 0.25,
     top_k: int = 10,
     vectors: list[np.ndarray] | None = None,
@@ -344,6 +344,9 @@ def score_file_concepts(
         file_id: The file ID to score.
         concept_embeddings: Optional injection for tests; when None,
             uses the module-level cache.
+        drive: The file's drive, deciding whose tag vocabulary joins
+            the preset concepts. Ignored when ``concept_embeddings``
+            is injected.
         threshold: Minimum cosine similarity to consider a match.
         top_k: Max number of concepts to return.
         vectors: Optional pre-loaded CLIP vectors for this file (see
@@ -361,7 +364,7 @@ def score_file_concepts(
         return []
 
     if concept_embeddings is None:
-        concept_embeddings = get_concept_embeddings()
+        concept_embeddings = get_concept_embeddings(drive=drive)
     if not concept_embeddings:
         return []
 
@@ -374,8 +377,9 @@ def score_file_concepts(
 
 
 def reset_cache() -> None:
-    """Clear the module-level concept cache (primarily for tests)."""
-    global _cached_concepts, _cached_model_key
+    """Clear the module-level concept caches (primarily for tests)."""
+    global _cached_preset, _cached_drive_tags, _cached_model_key
     with _lock:
-        _cached_concepts = None
+        _cached_preset = None
+        _cached_drive_tags = {}
         _cached_model_key = None

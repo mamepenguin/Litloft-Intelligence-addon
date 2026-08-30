@@ -175,41 +175,110 @@ class TestScoreVectorsAgainstConcepts:
 
 
 # ---------------------------------------------------------------------------
-# build_concept_pool
+# Vocabulary assembly
 # ---------------------------------------------------------------------------
 
 
-class TestBuildConceptPool:
-    """Tests for build_concept_pool: preset + user tags merging."""
+class TestVocabularyAssembly:
+    """The pool handed to CLIP is preset concepts + the drive's tags."""
 
-    def test_excludes_user_tags_when_flag_off(self, tmp_path, monkeypatch):
+    def _fake_encode(self, calls):
+        def _encode(concepts):
+            calls.append(list(concepts))
+            return {c: np.array([1.0, 0.0], dtype=np.float32) for c in concepts}
+
+        return _encode
+
+    def test_excludes_user_tags_when_flag_off(
+        self, tmp_path, monkeypatch, make_settings
+    ):
         path = tmp_path / "c.json"
         path.write_text(json.dumps({"x": ["a", "b"]}), encoding="utf-8")
+        clip_concepts.reset_cache()
+        monkeypatch.setattr(clip_concepts, "settings", make_settings())
         monkeypatch.setattr(
-            clip_concepts, "load_user_tags", lambda: ["user_only"]
+            clip_concepts, "_encode_concepts", self._fake_encode([])
         )
-        result = clip_concepts.build_concept_pool(
-            preset_path=path, include_user_tags=False
+        monkeypatch.setattr(
+            clip_concepts, "load_user_tags", lambda drive: ["user_only"]
         )
-        assert result == ["a", "b"]
 
-    def test_merges_preset_and_user_tags(self, tmp_path, monkeypatch):
+        result = clip_concepts.get_concept_embeddings(
+            drive="main", preset_path=path, include_user_tags=False
+        )
+
+        assert sorted(result) == ["a", "b"]
+        clip_concepts.reset_cache()
+
+    def test_merges_preset_and_user_tags(
+        self, tmp_path, monkeypatch, make_settings
+    ):
         path = tmp_path / "c.json"
-        path.write_text(json.dumps({"x": ["preset1", "preset2"]}), encoding="utf-8")
-        monkeypatch.setattr(
-            clip_concepts, "load_user_tags", lambda: ["user1", "user2"]
+        path.write_text(
+            json.dumps({"x": ["preset1", "preset2"]}), encoding="utf-8"
         )
-        result = clip_concepts.build_concept_pool(preset_path=path)
-        assert result == ["preset1", "preset2", "user1", "user2"]
+        clip_concepts.reset_cache()
+        monkeypatch.setattr(clip_concepts, "settings", make_settings())
+        monkeypatch.setattr(
+            clip_concepts, "_encode_concepts", self._fake_encode([])
+        )
+        monkeypatch.setattr(
+            clip_concepts, "load_user_tags", lambda drive: ["user1", "user2"]
+        )
 
-    def test_user_tag_duplicating_preset_is_dropped(self, tmp_path, monkeypatch):
+        result = clip_concepts.get_concept_embeddings(
+            drive="main", preset_path=path
+        )
+
+        assert sorted(result) == ["preset1", "preset2", "user1", "user2"]
+        clip_concepts.reset_cache()
+
+    def test_user_tag_duplicating_preset_is_encoded_once(
+        self, tmp_path, monkeypatch, make_settings
+    ):
         path = tmp_path / "c.json"
         path.write_text(json.dumps({"x": ["料理"]}), encoding="utf-8")
+        clip_concepts.reset_cache()
+        encode_calls: list[list[str]] = []
+        monkeypatch.setattr(clip_concepts, "settings", make_settings())
         monkeypatch.setattr(
-            clip_concepts, "load_user_tags", lambda: ["料理", "独自タグ"]
+            clip_concepts, "_encode_concepts", self._fake_encode(encode_calls)
         )
-        result = clip_concepts.build_concept_pool(preset_path=path)
-        assert result == ["料理", "独自タグ"]
+        monkeypatch.setattr(
+            clip_concepts, "load_user_tags", lambda drive: ["料理", "独自タグ"]
+        )
+
+        result = clip_concepts.get_concept_embeddings(
+            drive="main", preset_path=path
+        )
+
+        assert sorted(result) == sorted(["料理", "独自タグ"])
+        assert encode_calls == [["料理"], ["独自タグ"]]
+        clip_concepts.reset_cache()
+
+    def test_no_drive_means_no_tag_vocabulary(
+        self, tmp_path, monkeypatch, make_settings
+    ):
+        """A caller without a drive gets presets only, never every drive's tags."""
+        path = tmp_path / "c.json"
+        path.write_text(json.dumps({"x": ["preset1"]}), encoding="utf-8")
+        clip_concepts.reset_cache()
+        monkeypatch.setattr(clip_concepts, "settings", make_settings())
+        monkeypatch.setattr(
+            clip_concepts, "_encode_concepts", self._fake_encode([])
+        )
+
+        def _explode(drive):
+            raise AssertionError("tags must not be loaded without a drive")
+
+        monkeypatch.setattr(clip_concepts, "load_user_tags", _explode)
+
+        result = clip_concepts.get_concept_embeddings(
+            drive=None, preset_path=path
+        )
+
+        assert sorted(result) == ["preset1"]
+        clip_concepts.reset_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -235,23 +304,23 @@ class TestConceptEmbeddingCache:
             return {c: np.array([1.0, 0.0], dtype=np.float32) for c in concepts}
 
         monkeypatch.setattr(clip_concepts, "_encode_concepts", fake_encode)
-        monkeypatch.setattr(clip_concepts, "load_user_tags", lambda: [])
+        monkeypatch.setattr(clip_concepts, "load_user_tags", lambda drive: [])
 
         # First model
         from app.config import ModelConfig
         settings_a = make_settings(models=ModelConfig(clip="model-a"))
         monkeypatch.setattr(clip_concepts, "settings", settings_a)
-        clip_concepts.get_concept_embeddings(preset_path=path)
+        clip_concepts.get_concept_embeddings(drive="main", preset_path=path)
         assert len(encode_calls) == 1
 
         # Same model, second call → cached
-        clip_concepts.get_concept_embeddings(preset_path=path)
+        clip_concepts.get_concept_embeddings(drive="main", preset_path=path)
         assert len(encode_calls) == 1
 
         # Different model → re-encodes
         settings_b = make_settings(models=ModelConfig(clip="model-b"))
         monkeypatch.setattr(clip_concepts, "settings", settings_b)
-        clip_concepts.get_concept_embeddings(preset_path=path)
+        clip_concepts.get_concept_embeddings(drive="main", preset_path=path)
         assert len(encode_calls) == 2
 
         clip_concepts.reset_cache()
@@ -270,11 +339,13 @@ class TestConceptEmbeddingCache:
             return {c: np.array([1.0, 0.0], dtype=np.float32) for c in concepts}
 
         monkeypatch.setattr(clip_concepts, "_encode_concepts", fake_encode)
-        monkeypatch.setattr(clip_concepts, "load_user_tags", lambda: [])
+        monkeypatch.setattr(clip_concepts, "load_user_tags", lambda drive: [])
         monkeypatch.setattr(clip_concepts, "settings", make_settings())
 
-        clip_concepts.get_concept_embeddings(preset_path=path)
-        clip_concepts.get_concept_embeddings(preset_path=path, force_reload=True)
+        clip_concepts.get_concept_embeddings(drive="main", preset_path=path)
+        clip_concepts.get_concept_embeddings(
+            drive="main", preset_path=path, force_reload=True
+        )
         assert len(encode_calls) == 2
 
         clip_concepts.reset_cache()

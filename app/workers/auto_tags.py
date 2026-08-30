@@ -3,7 +3,7 @@
 Generates tag suggestions through a layered pipeline:
 
 1. Always: CLIP zero-shot scoring against a curated concept vocabulary
-   (plus the user's own tag history) and TF-IDF keyword extraction
+   (plus the drive's own tag history) and TF-IDF keyword extraction
    from transcript + filename.
 
 2. If an LLM is configured: the CLIP/TF-IDF candidates are fed to the
@@ -233,7 +233,11 @@ class AutoTagsWorker:
         # loop that also serves every other request in this process.
         t_cand_start = time.perf_counter()
         candidates = await asyncio.to_thread(
-            _generate_candidates, file_id, context_type, existing_tags
+            _generate_candidates,
+            file_id,
+            context_type,
+            existing_tags,
+            indexed_file["drive"],
         )
         t_cand = time.perf_counter() - t_cand_start
 
@@ -337,13 +341,20 @@ def _generate_candidates(
     file_id: str,
     context_type: str,
     existing_tags: list[str],
+    drive: str,
 ) -> TagCandidates:
-    """Collect tag candidates from all local signals.
+    """Collect tag candidates from all local signals within one drive.
 
     Runs three pipelines independently:
       - CLIP zero-shot against the curated concept vocabulary
       - TF-IDF keyword extraction from transcript + filename
       - k-NN recommendation from already-tagged similar files
+
+    Every pipeline that consults other files — the tag vocabulary, the
+    neighbor search, the corpus statistics behind TF-IDF — is confined
+    to ``drive``, because a drive is a security boundary and a
+    suggestion must never be shaped by a library the viewer may not
+    even be able to see.
 
     Failures in any single pipeline are logged and treated as empty
     signals rather than aborting the whole run — e.g. a document has
@@ -360,15 +371,19 @@ def _generate_candidates(
     )
 
     t0 = time.perf_counter()
-    clip_tags = _safe_clip_candidates(file_id, context_type, existing_tags, clip_vectors)
+    clip_tags = _safe_clip_candidates(
+        file_id, context_type, existing_tags, drive, clip_vectors
+    )
     t_clip = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    tfidf_tags = _safe_tfidf_candidates(file_id, existing_tags)
+    tfidf_tags = _safe_tfidf_candidates(file_id, existing_tags, drive)
     t_tfidf = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    knn_tags = _safe_knn_candidates(file_id, context_type, existing_tags, clip_vectors)
+    knn_tags = _safe_knn_candidates(
+        file_id, context_type, existing_tags, drive, clip_vectors
+    )
     t_knn = time.perf_counter() - t0
 
     logger.debug(
@@ -385,6 +400,7 @@ def _safe_clip_candidates(
     file_id: str,
     context_type: str,
     existing_tags: list[str],
+    drive: str,
     vectors: list[np.ndarray] | None = None,
 ) -> list[str]:
     if context_type not in ("image", "video"):
@@ -392,6 +408,7 @@ def _safe_clip_candidates(
     try:
         scored = score_file_concepts(
             file_id,
+            drive=drive,
             threshold=_CLIP_THRESHOLD,
             top_k=_MAX_CLIP_CANDIDATES,
             vectors=vectors,
@@ -407,9 +424,10 @@ def _safe_knn_candidates(
     file_id: str,
     context_type: str,
     existing_tags: list[str],
+    drive: str,
     vectors: list[np.ndarray] | None = None,
 ) -> list[str]:
-    """Recommend tags from CLIP-similar already-tagged files.
+    """Recommend tags from CLIP-similar already-tagged files in this drive.
 
     Silently returns an empty list for file types without CLIP
     embeddings (documents, audio) since k-NN has nothing to compare
@@ -421,6 +439,7 @@ def _safe_knn_candidates(
     try:
         scored = recommend_tags_by_similarity(
             file_id,
+            drive=drive,
             k_neighbors=_KNN_NEIGHBORS,
             top_tags=_MAX_KNN_CANDIDATES,
             vectors=vectors,
@@ -435,10 +454,12 @@ def _safe_knn_candidates(
 def _safe_tfidf_candidates(
     file_id: str,
     existing_tags: list[str],
+    drive: str,
 ) -> list[str]:
     try:
         rows = get_tfidf_keywords_for_file(
             file_id,
+            drive=drive,
             k=_MAX_TFIDF_CANDIDATES,
             # Drop words that appear in only one file — almost always
             # a Whisper mis-transcription rather than a real topic.
@@ -508,6 +529,7 @@ def _get_indexed_file(file_id: str) -> dict | None:
             return None
         return {
             "file_id": f.file_id,
+            "drive": f.drive,
             "filename": f.filename,
             "file_type": f.file_type,
             "mime_type": f.mime_type,
