@@ -3,35 +3,57 @@
 Deliberately not built on ``app.search.find_similar``. That function
 serves the file-detail "similar files" section, where saying nothing is
 better than saying something thin, and it carries five filters that make
-it honest about weak evidence: a hard 0.70 floor, a gap check and a
-coefficient-of-variation check that each discard *every* candidate, and
-a margin cutoff that keeps only what scores within 0.05 of the best
-match.
+it honest about weak evidence: a 0.70 floor, a gap check and a
+coefficient-of-variation check that each discard *every* candidate, a
+margin cutoff keeping only what scores within 0.05 of the best, and an
+exclusion of near-identical matches. Four of the five are wrong for a
+feed, which exists to produce quantity — a cluster's neighbourhood is
+flat by definition, so both non-discrimination guards read normal input
+as a fault, and the margin cutoff caps a lane's contribution at whatever
+lands in one narrow band.
 
-The feed needs the opposite. It exists to produce quantity, and the
-neighbourhood around a cluster centroid is legitimately flat — files
-that resemble each other is what a cluster *is* — so the two
-non-discrimination guards read normal input as a fault. The margin
-cutoff is worse still: it caps a lane's contribution at however many
-files happen to land in one narrow band, which is why the seed-based
-Pickup could not fill twelve slots.
+It is also not built on a k-nearest-neighbour query at all.
 
-Only the near-identical exclusion is worth keeping, and one low floor
-takes the place of the rest.
+sqlite-vec caps ``k`` at 4096 rows, and that is a compile-time constant
+in the extension, not a number we chose:
 
-The other reason for a separate path is ordering. ``find_similar``
-resolves ``IndexedFile.drive`` last, after all five filters have already
-scored and pruned a cross-drive candidate pool, so a file whose nearest
-neighbours live in another drive can come back empty while good in-drive
-candidates sat further down. A drive is a security boundary: the
-restriction is a scope, not a quality judgement, and the two must not be
-interleaved.
+    k=4096  OK
+    k=4097  OperationalError: k value in knn query too large,
+            provided 4097 and the limit is 4096
+
+Measured against the real index, ``vec_text`` holds 56,422 rows of which
+65.7% are ``whisper`` — discarded by the type filter — and 33.2% are
+``text_content``, at 53.3 chunks per file. A 4096-row window is 7.3% of
+the table and resolves to roughly twenty-five documents before the drive
+filter and before removing what the viewer has already read. The
+exclusion set here *is* the viewer's history, and the query vector is
+built out of that same history, so the nearest rows are overwhelmingly
+rows we must drop. A KNN cannot be widened far enough to survive that.
+
+So the shape is inverted. Scope and channel are settled in one indexed
+join, the vectors for exactly those rows are read, and a single matmul
+scores every lane at once. There is no ceiling, no widening loop, and no
+page at which the search gives up.
+
+Two consequences worth naming:
+
+- The drive boundary becomes structural. Rows outside the drive never
+  enter the matrix, so there is no ordering in which a quality filter
+  could run ahead of the scope restriction — the defect this replaces,
+  where ``find_similar`` scored and pruned a cross-drive pool and only
+  then cut the survivors down to the requested drive.
+- Scoring stays per chunk and reduces per file by ``max``. A document is
+  a candidate because *some part of it* is about the lane's subject; its
+  mean over 53 chunks is a blur of 53 topics that scores mediocre
+  everywhere. The profile takes the mean, because there the question is
+  what a document is about as a whole. The asymmetry is deliberate.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
+from dataclasses import dataclass
 
 import numpy as np
 from sqlalchemy import text as sql_text
@@ -56,24 +78,23 @@ _CHANNEL_TABLES = {
 }
 
 #: Below this cosine similarity a candidate is not about anything the
-#: cluster is about, and the tail turns into arbitrary rows. Far below
-#: ``find_similar``'s 0.70, which exists to answer a different question.
+#: lane is about, and the tail turns into arbitrary rows. Far below
+#: ``find_similar``'s 0.70, which answers a different question.
 _FEED_MIN_SCORE = 0.45
 
 #: A score this high means the vectors are effectively identical, which
 #: in practice means a duplicate or a trivial embedding (Whisper
 #: emitting one word over a music track) rather than a real match.
+#:
+#: Applied to a file's reduced best score, not to individual chunks.
+#: Per chunk it would only skip one row of a duplicated document and let
+#: the file through on its next-best chunk.
 _NEAR_IDENTICAL_SCORE = 0.999
 
-#: Both vector tables are global indexes: MATCH ranks across every drive
-#: and every embedding type, and knows about neither. The filters are
-#: applied to what comes back and the fetch widens until enough rows
-#: survive them. Same shape as the neighbour fetch in ``app.search`` and
-#: ``app.workers.tag_knn``.
-_FETCH_FACTORS = (1, 4, 16)
-#: Ceiling on a single KNN, so a drive that is a small minority of the
-#: library cannot turn one lane into a table scan.
-_FETCH_MAX = 4096
+#: Rows per ``IN`` clause when reading vectors. Measured on the real
+#: index, a selective read of 2,000 ids takes 0.080s against 0.726s for
+#: a full scan of the same table, so scoping the read is worth it.
+_VECTOR_READ_BATCH = 500
 
 
 def vector_table_for(channel: str) -> str:
@@ -84,158 +105,193 @@ def vector_table_for(channel: str) -> str:
         raise ValueError(f"Not a pickup channel: {channel}") from None
 
 
-def _fetch_schedule(base_limit: int) -> list[int]:
-    """Ascending KNN fetch sizes, always ending at the ceiling.
+@dataclass(frozen=True)
+class CandidateSet:
+    """Every scorable row of one drive and channel.
 
-    A neighbour search seeded from one file discards only that file's
-    own embeddings, so its first page is nearly all usable and the
-    widening factors are generous. This search discards every file the
-    viewer has ever opened — which, since the query vector is built out
-    of exactly those files, is most of what sits nearest it. Paging
-    through thousands of already-watched rows is the expected path here,
-    not an edge case.
-
-    So the schedule cannot be left to bottom out at ``base_limit * 16``:
-    with a small base that is well under ``_FETCH_MAX``, and the loop
-    would give up while the index still had rows to give. The ceiling is
-    appended explicitly.
+    One row per embedding, so a document appears once per chunk. The
+    ``file_ids`` tuple is parallel to ``matrix``'s rows.
     """
-    sizes: list[int] = []
-    for factor in _FETCH_FACTORS:
-        size = min(base_limit * factor, _FETCH_MAX)
-        if size not in sizes:
-            sizes.append(size)
-    if sizes[-1] < _FETCH_MAX:
-        sizes.append(_FETCH_MAX)
-    return sizes
+
+    channel: str
+    drive: str
+    file_ids: tuple[str, ...]
+    matrix: np.ndarray
+
+    def __len__(self) -> int:
+        return len(self.file_ids)
 
 
-def _surviving_file_ids(
-    embedding_ids: list[str],
-    *,
-    channel: str,
-    drive: str,
-) -> dict[str, str]:
-    """Map embedding id -> file id for rows that clear scope and type.
+def _row_identity(drive: str, channel: str) -> list[tuple[str, str]]:
+    """(embedding_id, file_id) for one drive and channel.
 
-    Resolved in a second statement rather than joined into the KNN:
-    the vector tables store neither drive nor embedding type, and
-    sqlite-vec's planner requires the LIMIT to apply directly to the
-    virtual table — joining anything into that statement moves the LIMIT
-    out of its reach and raises "A LIMIT or 'k = ?' constraint is
-    required".
+    Scope and channel are settled here, in one indexed join, before any
+    vector is read or any score computed. Nothing outside the drive
+    reaches the matrix, so no later filter can be ordered ahead of the
+    boundary.
     """
-    if not embedding_ids:
-        return {}
-
     with get_search_db_read() as session:
         rows = (
             session.query(Embedding.id, Embedding.file_id)
             .join(IndexedFile, IndexedFile.file_id == Embedding.file_id)
             .filter(
-                Embedding.id.in_(embedding_ids),
                 Embedding.embedding_type == channel,
                 IndexedFile.drive == drive,
                 IndexedFile.active.is_(True),
             )
             .all()
         )
-    return {embedding_id: file_id for embedding_id, file_id in rows}
+    return [(embedding_id, file_id) for embedding_id, file_id in rows]
 
 
-def centroid_neighbours(
-    centroid: np.ndarray,
-    *,
-    channel: str,
-    drive: str,
-    exclude_file_ids: Collection[str],
-    limit: int,
-) -> list[tuple[str, float]]:
-    """Return up to ``limit`` (file_id, score) nearest ``centroid``.
+def _read_vectors(embedding_ids: Sequence[str], table: str) -> dict[str, bytes]:
+    """Fetch raw vector blobs by embedding id, in batches."""
+    if not embedding_ids:
+        return {}
 
-    Every result belongs to ``drive``, is active, carries an embedding of
-    ``channel``, and is absent from ``exclude_file_ids``.
-
-    ``drive`` is keyword-only with no default so that a missed call site
-    is a ``TypeError`` rather than a silent read of the whole library.
-
-    Args:
-        centroid: A normalized query vector — a cluster centre, not a
-            file's own embedding.
-        channel: The embedding type to profile on. See
-            ``_CHANNEL_TABLES``.
-        drive: Only this drive's files are candidates.
-        exclude_file_ids: Files the viewer has already opened. This is
-            the viewer's *whole* history and is never truncated; the
-            2000-file cap on the profile's vector load must not be
-            shared with it, or a viewer past the cap starts being
-            recommended what they have already seen.
-        limit: Maximum candidates to return.
-
-    Returns:
-        (file_id, cosine similarity), best first.
-    """
-    table = vector_table_for(channel)
-    if limit <= 0:
-        return []
-
-    query = np.asarray(centroid, dtype=np.float32)
-    excluded = frozenset(exclude_file_ids)
-
-    # A file can hold several embeddings of one channel (``text_content``
-    # is per chunk), the excluded set can be most of the drive, and the
-    # other drives share the index — so ask for well over ``limit``.
-    base_limit = max(limit * 10 + 50, 100)
-
-    scores: dict[str, float] = {}
+    out: dict[str, bytes] = {}
     engine = get_search_engine()
-
-    for asked in _fetch_schedule(base_limit):
-        with engine.connect() as conn:
+    with engine.connect() as conn:
+        for start in range(0, len(embedding_ids), _VECTOR_READ_BATCH):
+            batch = embedding_ids[start:start + _VECTOR_READ_BATCH]
+            placeholders = ", ".join(f":e{i}" for i in range(len(batch)))
             rows = conn.execute(
                 sql_text(
-                    f"SELECT embedding_id, distance FROM {table} "
-                    "WHERE vector MATCH :vec "
-                    "ORDER BY distance "
-                    "LIMIT :limit"
+                    f"SELECT embedding_id, vector FROM {table} "
+                    f"WHERE embedding_id IN ({placeholders})"
                 ),
-                {"vec": query.tobytes(), "limit": asked},
+                {f"e{i}": value for i, value in enumerate(batch)},
             ).fetchall()
+            for embedding_id, blob in rows:
+                if blob:
+                    out[embedding_id] = blob
+    return out
 
-        if not rows:
-            return []
 
-        distances = {row[0]: float(row[1]) for row in rows}
-        file_ids = _surviving_file_ids(
-            list(distances), channel=channel, drive=drive,
+def load_candidates(*, drive: str, channel: str) -> CandidateSet:
+    """Load every scorable row for one drive and channel.
+
+    Keyword-only with no defaults, so a missed call site is a
+    ``TypeError`` rather than a silent read of the whole library.
+
+    The result is independent of the viewer, so one sweep can build it
+    once per (drive, channel) and score every viewer's lanes against it.
+    """
+    table = vector_table_for(channel)
+    identity = _row_identity(drive, channel)
+    if not identity:
+        return CandidateSet(
+            channel=channel, drive=drive, file_ids=(),
+            matrix=np.zeros((0, 0), dtype=np.float32),
         )
 
-        scores = {}
-        for embedding_id, file_id in file_ids.items():
-            if file_id in excluded:
-                continue
-            # L2 distance on normalized vectors: ||a-b||² = 2 - 2·cos,
-            # so cos = 1 - d²/2.
-            distance = distances[embedding_id]
-            similarity = 1.0 - (distance * distance) / 2.0
-            if similarity >= _NEAR_IDENTICAL_SCORE:
-                continue
-            if similarity < _FEED_MIN_SCORE:
-                continue
-            # Several chunks of one file: keep its best.
-            if similarity > scores.get(file_id, -1.0):
-                scores[file_id] = similarity
+    blobs = _read_vectors([embedding_id for embedding_id, _ in identity], table)
 
-        # Widen only while there is more to find. The count tested here
-        # is of candidates that already cleared every filter, so a lane
-        # whose in-drive neighbours all sit below the floor exhausts the
-        # index rather than stopping at a page that looked full.
-        if len(scores) >= limit or asked >= _FETCH_MAX or len(rows) < asked:
-            break
+    file_ids: list[str] = []
+    vectors: list[np.ndarray] = []
+    dimension: int | None = None
+    for embedding_id, file_id in identity:
+        blob = blobs.get(embedding_id)
+        if blob is None:
+            continue
+        vector = np.frombuffer(blob, dtype=np.float32)
+        # sqlite-vec validated width on the way in; reading the blobs
+        # directly means we validate it on the way out, or np.stack
+        # would fail later with nothing pointing at the bad row.
+        if dimension is None:
+            dimension = vector.shape[0]
+        elif vector.shape[0] != dimension:
+            raise ValueError(
+                f"{table} row {embedding_id} has width {vector.shape[0]}, "
+                f"expected {dimension}"
+            )
+        norm = float(np.linalg.norm(vector))
+        if norm == 0.0:
+            continue
+        file_ids.append(file_id)
+        vectors.append(vector / norm)
 
-    if not scores:
-        logger.debug(
-            "Pickup: no candidates for channel=%s drive=%s", channel, drive,
+    if not vectors:
+        return CandidateSet(
+            channel=channel, drive=drive, file_ids=(),
+            matrix=np.zeros((0, 0), dtype=np.float32),
         )
 
-    return sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:limit]
+    return CandidateSet(
+        channel=channel,
+        drive=drive,
+        file_ids=tuple(file_ids),
+        matrix=np.stack(vectors).astype(np.float32),
+    )
+
+
+def score_lanes(
+    candidates: CandidateSet,
+    centroids: Sequence[np.ndarray],
+    *,
+    exclude_file_ids: Collection[str],
+    limit: int,
+) -> list[list[tuple[str, float]]]:
+    """Score every lane against ``candidates`` in one pass.
+
+    Args:
+        candidates: Rows for one drive and channel.
+        centroids: One normalized query vector per lane.
+        exclude_file_ids: Files the viewer has opened. The whole
+            history, never truncated — a cap here would start
+            recommending watched files to anyone past it.
+        limit: Maximum candidates to return per lane.
+
+    Returns:
+        Per lane, ``(file_id, score)`` best first.
+    """
+    if not centroids or limit <= 0 or len(candidates) == 0:
+        return [[] for _ in centroids]
+
+    query = np.stack([np.asarray(c, dtype=np.float32) for c in centroids])
+    if query.shape[1] != candidates.matrix.shape[1]:
+        raise ValueError(
+            f"lane centroids are {query.shape[1]}-wide but "
+            f"{candidates.channel} rows are {candidates.matrix.shape[1]}-wide"
+        )
+
+    similarity = candidates.matrix @ query.T
+
+    # Reduce chunks to files by ``max``: a document is a candidate
+    # because some part of it is about the subject.
+    unique_files: list[str] = []
+    index_of: dict[str, int] = {}
+    row_index = np.empty(len(candidates), dtype=np.intp)
+    for position, file_id in enumerate(candidates.file_ids):
+        index = index_of.get(file_id)
+        if index is None:
+            index = len(unique_files)
+            index_of[file_id] = index
+            unique_files.append(file_id)
+        row_index[position] = index
+
+    best = np.full((len(unique_files), query.shape[0]), -np.inf, dtype=np.float32)
+    np.maximum.at(best, row_index, similarity)
+
+    excluded = np.fromiter(
+        (file_id in exclude_file_ids for file_id in unique_files),
+        dtype=bool,
+        count=len(unique_files),
+    )
+    keep = ~excluded
+
+    results: list[list[tuple[str, float]]] = []
+    for lane in range(query.shape[0]):
+        scores = best[:, lane]
+        usable = (
+            keep
+            & (scores >= _FEED_MIN_SCORE)
+            & (scores < _NEAR_IDENTICAL_SCORE)
+        )
+        positions = np.flatnonzero(usable)
+        if positions.size == 0:
+            results.append([])
+            continue
+        order = positions[np.argsort(-scores[positions], kind="stable")][:limit]
+        results.append([(unique_files[i], float(scores[i])) for i in order])
+    return results

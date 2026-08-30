@@ -43,8 +43,22 @@ logger = logging.getLogger(__name__)
 #: nothing, and a feed has no user in the loop to catch it.
 CHANNELS = ("clip_thumbnail", "tfidf_keywords", "text_content")
 
-#: Vectors loaded per viewer for clustering. Not a bound on the
-#: exclusion set — see the module docstring.
+#: How far back the profile looks.
+#:
+#: An earlier draft claimed the profile read the whole history with no
+#: recency cut-off, and that claim was false the moment a cap was put on
+#: the read: ``ORDER BY last_played_at DESC LIMIT`` is a recency filter
+#: wearing a sanity bound's clothes, and past the cap an old interest
+#: does not go quiet, it disappears. The claim is withdrawn rather than
+#: the bound removed — a year is enough to describe what someone is
+#: interested in, and saying so is honest where the previous wording was
+#: not.
+#:
+#: The exclusion set is a separate read and has neither bound.
+PROFILE_WINDOW_DAYS = 365
+
+#: Belt to the window's braces: a viewer who opened thousands of files
+#: inside the window still clusters in bounded time.
 PROFILE_VECTOR_CAP = 2000
 
 #: How fast an interest goes quiet. A guess, expected to need tuning.
@@ -144,10 +158,18 @@ def _parse_naive_utc(value: object) -> datetime | None:
     return parsed
 
 
+#: A row dated further ahead than this is treated as unreadable rather
+#: than as brand new. Clock skew between a client and the host is
+#: ordinary; clamping it to zero would rank the skewed row above every
+#: genuine one, which is the same fabrication ``_parse_naive_utc``
+#: refuses when the text will not parse.
+_FUTURE_TOLERANCE_DAYS = 1.0
+
+
 def age_days(last_played_at: datetime) -> float:
-    """Days since ``last_played_at``, never negative."""
+    """Days since ``last_played_at``. Negative for a future timestamp."""
     now = datetime.now(UTC).replace(tzinfo=None)
-    return max(0.0, (now - last_played_at).total_seconds() / 86400.0)
+    return (now - last_played_at).total_seconds() / 86400.0
 
 
 def viewer_ids(drive: str) -> list[str]:
@@ -190,12 +212,13 @@ def profile_history(
     drive: str,
     viewer_id: str,
     cap: int = PROFILE_VECTOR_CAP,
+    window_days: float = PROFILE_WINDOW_DAYS,
 ) -> list[WatchedFile]:
-    """This viewer's most recent ``cap`` live entries, newest first.
+    """This viewer's live entries inside the window, newest first.
 
-    The cap is per viewer. The worker this replaces took the drive's 50
-    most recent rows and split them by viewer afterwards, so whoever had
-    been active most recently consumed the whole budget.
+    Both bounds are per viewer. The worker this replaces took the
+    drive's 50 most recent rows and split them by viewer afterwards, so
+    whoever had been active most recently consumed the whole budget.
     """
     with get_litloft_db() as session:
         rows = session.execute(
@@ -219,6 +242,14 @@ def profile_history(
                 "Pickup: unreadable last_played_at for file=%s viewer=%s",
                 file_id, viewer_id,
             )
+            continue
+        age = age_days(parsed)
+        if age < -_FUTURE_TOLERANCE_DAYS:
+            logger.debug(
+                "Pickup: last_played_at is in the future for file=%s", file_id,
+            )
+            continue
+        if age > window_days:
             continue
         history.append(WatchedFile(file_id=file_id, last_played_at=parsed))
     return history
@@ -389,10 +420,20 @@ def _kmeans(matrix: np.ndarray, k: int, seed: int) -> np.ndarray:
     return labels
 
 
-def _centroid(matrix: np.ndarray) -> np.ndarray:
+#: A cluster whose members cancel out has a mean with no direction, and
+#: normalising it is not possible. Passed on as a query it would sit at
+#: an equal distance from everything, scoring a flat 0.5 — above the
+#: retrieval floor — and fill its lane with files related to nothing.
+_MIN_CENTROID_NORM = 1e-6
+
+
+def _centroid(matrix: np.ndarray) -> np.ndarray | None:
+    """The cluster's direction, or None if it has none."""
     mean = matrix.mean(axis=0)
     norm = float(np.linalg.norm(mean))
-    return (mean / norm if norm > 0 else mean).astype(np.float32)
+    if norm < _MIN_CENTROID_NORM:
+        return None
+    return (mean / norm).astype(np.float32)
 
 
 def _merge_similar(
@@ -411,7 +452,10 @@ def _merge_similar(
     """
     groups = [list(g) for g in groups]
     while len(groups) > 1:
-        centroids = np.stack([_centroid(matrix[g]) for g in groups])
+        directions = [_centroid(matrix[g]) for g in groups]
+        if any(d is None for d in directions):
+            break
+        centroids = np.stack(directions)
         similarity = centroids @ centroids.T
         np.fill_diagonal(similarity, -1.0)
         first, second = np.unravel_index(
@@ -450,10 +494,16 @@ def _merge_singletons(
         # Everything is a singleton: one lane holding all of them.
         return [[index for group in groups for index in group]]
 
-    centroids = np.stack([_centroid(matrix[g]) for g in survivors])
     for stray in strays:
-        nearest = int(np.argmax(centroids @ matrix[stray[0]]))
-        survivors[nearest] = survivors[nearest] + stray
+        # Recomputed each round: absorbing a stray moves the centroid it
+        # went into, and the next stray must be judged against where
+        # that lane now sits.
+        directions = [_centroid(matrix[g]) for g in survivors]
+        usable = [i for i, d in enumerate(directions) if d is not None]
+        if not usable:
+            return [[index for group in groups for index in group]]
+        scores = [float(directions[i] @ matrix[stray[0]]) for i in usable]
+        survivors[usable[int(np.argmax(scores))]] += stray
     return survivors
 
 
@@ -477,19 +527,29 @@ def raw_weight(ages: Sequence[float]) -> float:
 
 
 def _normalise(raws: list[float]) -> list[float]:
-    """Map raw weights onto ``[W_MIN, 1.0]``.
+    """Scale raw weights against the loudest lane, with a floor.
 
     Across every lane of every channel together: the interleave treats
     them as one sequence, so a lane's share must not depend on which
     other lanes happened to share its embedding type.
+
+    Deliberately not min-max. Mapping the minimum onto ``W_MIN`` and the
+    maximum onto 1.0 does not only impose a floor, it *stretches the
+    range*: three interests watched in the same week, whose decayed mass
+    differs by one percent, come out as 1.0 / 0.625 / 0.25 and take
+    turns in a 4 : 2.5 : 1 ratio. There is no way to say "these are
+    equally interesting" under it, and the special case for
+    ``max == min`` is the seam where that shows.
+
+    Dividing by the maximum leaves near-ties as near-ties and still
+    guarantees the floor.
     """
     if not raws:
         return []
-    high, low = max(raws), min(raws)
-    if high == low:
+    high = max(raws)
+    if high <= 0.0:
         return [1.0] * len(raws)
-    span = high - low
-    return [W_MIN + (1.0 - W_MIN) * (raw - low) / span for raw in raws]
+    return [max(W_MIN, raw / high) for raw in raws]
 
 
 # ---------------------------------------------------------------------------
@@ -532,10 +592,17 @@ def build_lanes(history: Sequence[WatchedFile], *, key: str) -> list[Lane]:
         groups = _merge_singletons(groups, matrix)
 
         for index, group in enumerate(groups):
+            centroid = _centroid(matrix[group])
+            if centroid is None:
+                logger.debug(
+                    "Pickup: dropping directionless cluster %s:%d",
+                    channel, index,
+                )
+                continue
             pending.append((
                 channel,
                 f"{channel}:{index}",
-                _centroid(matrix[group]),
+                centroid,
                 len(group),
                 raw_weight([ages[members[i]] for i in group]),
             ))

@@ -50,6 +50,20 @@ def _now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+#: Phase 3 owns the real constant; the weights only matter here in terms
+#: of how much of a feed of this size a lane ends up filling.
+_FEED_DEPTH = 300
+
+
+def _feed_share(lane, lanes) -> float:
+    """Fraction of the interleave this lane takes at any prefix length.
+
+    ``key(c, j) = j / weight(c)`` gives each lane a share of the output
+    proportional to its weight, at every depth.
+    """
+    return lane.weight / sum(other.weight for other in lanes)
+
+
 class _Library:
     """A Litloft DB with watch history, plus a search index with vectors."""
 
@@ -344,32 +358,40 @@ def test_an_old_interest_keeps_a_usable_share_of_the_turns(lib):
         lib.watch(f"new{i}", age_days=i * 0.1)
         lib.index(f"new{i}", [_unit(1, 0, 0)])
     for i in range(10):
-        lib.watch(f"old{i}", age_days=365 * 3 + i)
+        lib.watch(f"old{i}", age_days=350 + i * 0.1)
         lib.index(f"old{i}", [_unit(0, 1, 0)])
 
-    history = profile.profile_history("a", "v1")
-    lanes = {l.cluster_id: l for l in profile.build_lanes(history, key="a:v1")}
-    by_age = sorted(lanes.values(), key=lambda l: l.weight)
-    quiet, loud = by_age[0], by_age[-1]
+    lanes = profile.build_lanes(profile.profile_history("a", "v1"), key="a:v1")
+    by_weight = sorted(lanes, key=lambda l: l.weight)
+    quiet, loud = by_weight[0], by_weight[-1]
 
-    # The raw weights are what would have been used, and they are hopeless.
-    assert quiet.raw_weight / loud.raw_weight < 1e-3
-    # The normalised ones keep the floor.
-    assert quiet.weight / loud.weight >= profile.W_MIN - 1e-9
+    # The raw weights are what would have been used, and at the far edge
+    # of the window they are already an order of magnitude down.
+    assert quiet.raw_weight / loud.raw_weight < 0.1
+
+    # Asserting the normalised ratio against W_MIN would prove nothing:
+    # _normalise maps the minimum onto W_MIN by construction, so that
+    # comparison is a constant against itself and holds for any value of
+    # it. What has to hold is the consequence — that the old interest
+    # still fills a usable part of the feed.
+    assert _feed_share(quiet, lanes) >= 0.15
 
 
 def test_no_lane_falls_below_the_floor(lib):
-    for group, age in (("a", 0.0), ("b", 200.0), ("c", 900.0), ("d", 2000.0)):
+    for group, age in (("a", 0.0), ("b", 120.0), ("c", 240.0), ("d", 355.0)):
         for i in range(6):
             lib.watch(f"{group}{i}", age_days=age + i)
             lib.index(f"{group}{i}", [_unit(*(1 if x == ord(group) % 7 else 0
                                               for x in range(DIM)))])
 
     lanes = profile.build_lanes(profile.profile_history("a", "v1"), key="a:v1")
-    weights = [lane.weight for lane in lanes]
+    quietest = min(lanes, key=lambda l: l.weight)
 
-    assert min(weights) >= profile.W_MIN - 1e-9
-    assert max(weights) <= 1.0 + 1e-9
+    assert len(lanes) >= 3
+    # Again the requirement, not the definition: whatever the spread of
+    # ages, the quietest lane still places a usable number of items in a
+    # feed of _FEED_DEPTH.
+    assert _feed_share(quietest, lanes) * _FEED_DEPTH >= 25
 
 
 def test_a_binge_does_not_outweigh_a_small_interest_linearly(lib):
@@ -454,7 +476,7 @@ def test_weights_are_normalised_across_channels_together(lib):
         lib.watch(f"vis{i}", age_days=i)
         lib.index(f"vis{i}", [_unit(1, 0, 0)], channel="clip_thumbnail")
     for i in range(6):
-        lib.watch(f"txt{i}", age_days=800 + i)
+        lib.watch(f"txt{i}", age_days=300 + i)
         lib.index(f"txt{i}", [_unit(0, 1, 0)], channel="tfidf_keywords")
 
     lanes = profile.build_lanes(profile.profile_history("a", "v1"), key="a:v1")
@@ -544,3 +566,92 @@ def test_vectors_are_loaded_in_batches(monkeypatch, tmp_path):
 
 def test_loading_no_vectors_touches_nothing():
     assert profile._load_vectors([], "vec_text") == {}
+
+
+# ---------------------------------------------------------------------------
+# The window, and what it is honest about
+# ---------------------------------------------------------------------------
+
+
+def test_history_outside_the_window_is_not_profiled(lib):
+    lib.watch("inside", age_days=profile.PROFILE_WINDOW_DAYS - 1)
+    lib.watch("outside", age_days=profile.PROFILE_WINDOW_DAYS + 1)
+
+    assert [w.file_id for w in profile.profile_history("a", "v1")] == ["inside"]
+
+
+def test_the_window_does_not_reach_the_exclusion_set(lib):
+    """The two reads have different jobs and different bounds.
+
+    A file watched two years ago is outside the profile but is still a
+    file this viewer has opened, and recommending it back would be the
+    feed breaking its one promise.
+    """
+    lib.watch("ancient", age_days=profile.PROFILE_WINDOW_DAYS * 2)
+
+    assert profile.profile_history("a", "v1") == []
+    assert profile.watched_file_ids("a", "v1") == {"ancient"}
+
+
+def test_a_future_timestamp_is_dropped_not_treated_as_newest(lib):
+    """Clock skew must not promote a row above every genuine one."""
+    lib.watch("real", age_days=1)
+    lib.watch("skewed", age_days=-30)
+
+    assert [w.file_id for w in profile.profile_history("a", "v1")] == ["real"]
+
+
+def test_slight_skew_inside_tolerance_is_kept(lib):
+    lib.watch("barely", age_days=-0.5)
+
+    assert [w.file_id for w in profile.profile_history("a", "v1")] == ["barely"]
+
+
+# ---------------------------------------------------------------------------
+# Weights: a floor, not a stretch
+# ---------------------------------------------------------------------------
+
+
+def test_near_ties_stay_near_ties():
+    """Min-max normalisation turned a one percent spread into 4 : 2.5 : 1.
+
+    Three interests watched in the same week are equally interesting,
+    and the weighting has to be able to say so.
+    """
+    weights = profile._normalise([2.40, 2.39, 2.38])
+
+    assert weights[0] == pytest.approx(1.0)
+    assert min(weights) > 0.98
+
+
+def test_the_floor_still_holds_for_a_genuine_gap():
+    weights = profile._normalise([2.40, 0.001])
+
+    assert weights[0] == pytest.approx(1.0)
+    assert weights[1] == pytest.approx(profile.W_MIN)
+
+
+def test_equal_weights_stay_equal():
+    assert profile._normalise([1.5, 1.5, 1.5]) == [1.0, 1.0, 1.0]
+
+
+# ---------------------------------------------------------------------------
+# A centroid with no direction is not a lane
+# ---------------------------------------------------------------------------
+
+
+def test_a_cluster_that_cancels_out_is_not_given_a_lane(lib):
+    """Its mean has no direction, so it cannot be a query.
+
+    Sent to the retrieval side it would sit equidistant from everything
+    and score a flat 0.5 — above the floor — filling its lane with files
+    related to nothing.
+    """
+    assert profile._centroid(np.stack([_unit(1, 0), -_unit(1, 0)])) is None
+
+
+def test_a_normal_cluster_still_has_a_direction():
+    got = profile._centroid(np.stack([_unit(1, 0), _unit(1, 0.1)]))
+
+    assert got is not None
+    assert np.linalg.norm(got) == pytest.approx(1.0, abs=1e-6)
