@@ -648,7 +648,12 @@ class LLMConfig:
     base_url: str = ""
     api_key: str = ""
     model: str = ""
-    max_tokens: int = 2048
+    # A ceiling, not an allocation: providers bill the tokens actually
+    # generated, so headroom is free and a value that merely fits the
+    # typical answer turns a legitimately long one into a truncated,
+    # unparseable body. Chapter consolidation on a feature-length
+    # transcript is the case that outgrew 2048.
+    max_tokens: int = 8192
     temperature: float = 0.3
     output_language: str = "auto"  # "auto" or a BCP 47 tag; applies to user-visible LLM output
     # Agentic Ask (Phase 1.C). ``agentic_mode="off"`` is the kill

@@ -117,7 +117,12 @@ llm:
                              # openai_compatible: "http://host.docker.internal:11434/v1"
   api_key: ""                # or use env var LLM_API_KEY (ignored for ollama)
   model: ""                  # e.g. "gemma4:e4b", "gpt-4o-mini", "deepseek-chat"
-  max_tokens: 2048
+  # A ceiling, not an allocation — you are billed for what the model
+  # actually writes, so headroom costs nothing. Too low is expensive in
+  # a different way: a long answer comes back cut mid-structure and
+  # unparseable. Lower it only for a model whose context window cannot
+  # hold this many output tokens.
+  max_tokens: 8192
   temperature: 0.3
   output_language: "auto"    # "auto" or a BCP 47 tag — applies to user-visible LLM output
   # Retry behavior for transient failures (timeouts, 429, 5xx)
