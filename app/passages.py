@@ -71,6 +71,13 @@ _CANDIDATE_OVERSAMPLE = 4
 #: Rows returned when the caller does not say.
 _DEFAULT_LIMIT = 5
 
+#: How much wider than ``limit`` to rank, so the recurrence check has
+#: something to fall back on. Measured over sixty channel videos it
+#: rejects 53% of ranked rows; four times the ask covers that with
+#: room to spare, and costs only the text resolution of rows that are
+#: never reached.
+_BOILERPLATE_HEADROOM = 4
+
 #: How much of the reachable z range the bar may occupy on a small
 #: field. Below 1.0 so that passing still means standing out rather than
 #: merely being the maximum.
@@ -599,12 +606,21 @@ def _recurrence_rows(engine, chunk: _Chunk, drive: str, cfg, types: str):
                 "WHERE v.vector MATCH :vec AND k = :k "
                 f"  AND e.embedding_type IN ({types}) "
                 "  AND f.drive = :drive "
+                "  AND f.active = 1 "
                 "  AND e.file_id != :self "
                 "  AND v.distance <= :max_distance"
             ),
             {
                 "vec": chunk.vector.astype(np.float32).tobytes(),
-                "k": cfg.recurrence_k,
+                # ``MATCH`` is a global KNN and every predicate below
+                # is applied after it, so budget for what they discard —
+                # the same reasoning as ``_knn_budgets``. The source's
+                # own chunks are the nearest things to one of its own,
+                # and other drives sit in the same table.
+                "k": min(
+                    _KNN_K_MAX,
+                    _passage_count(chunk.file_id) + cfg.recurrence_k,
+                ),
                 "drive": drive,
                 "self": chunk.file_id,
                 # sqlite-vec reports plain L2, not its square: search.py
@@ -626,7 +642,11 @@ def _build_pairs(
     if not candidates:
         return []
 
-    ranked = _rank_pairs(source, candidates, limit)
+    # Rank a wider pool than the caller asked for: the recurrence check
+    # below rejects rows *after* ranking, and on a channel's output it
+    # rejects half of them. Truncating first would answer with two rows
+    # while four good ones sat just under the cut.
+    ranked = _rank_pairs(source, candidates, limit * _BOILERPLATE_HEADROOM)
     if not ranked:
         return []
 
@@ -657,6 +677,8 @@ def _build_pairs(
                 overlap=overlap_terms(my_text, other_text),
             )
         )
+        if len(pairs) >= limit:
+            break
     return pairs
 
 

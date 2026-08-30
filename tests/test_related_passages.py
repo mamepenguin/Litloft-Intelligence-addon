@@ -703,6 +703,43 @@ async def test_a_signoff_that_recurs_across_the_drive_is_dropped(
 
 
 @pytest.mark.asyncio
+async def test_a_dropped_sign_off_is_backfilled_from_lower_ranks(
+    search_db, monkeypatch
+):
+    """Rejecting after ranking must not shrink the answer.
+
+    The check runs on ranked rows, and on a channel's output it rejects
+    about half of them. Ranking to the caller's limit first would answer
+    with two rows while good ones sat just under the cut.
+    """
+    _add_file(search_db, "src")
+    _add_text_chunk(search_db, "src", 0, "Subscribe and hit like. " * 4, _axis(0))
+    _add_text_chunk(search_db, "src", 1, "The diagonal is the axis. " * 4, _axis(1))
+    for i, name in enumerate(("a.md", "b.md")):
+        _add_file(search_db, name, filename=name)
+        _add_text_chunk(search_db, name, 0, "Subscribe and hit like. " * 4, _near(0))
+    _add_file(search_db, "good", filename="good.md")
+    _add_text_chunk(search_db, "good", 0, "About that same diagonal. " * 4, _near(1))
+
+    _permissive(monkeypatch)
+    _nearest(monkeypatch, "a.md", "b.md", "good")
+    # Only the sign-off recurs; the diagonal passage does not.
+    monkeypatch.setattr(
+        passages,
+        "_recurs_across_drive",
+        lambda chunk, drive: 15 if "Subscribe" in (chunk.preview or "") else 0,
+    )
+
+    with _internal_api(monkeypatch, _verified("a.md", "b.md", "good")):
+        pairs = await passages.find_related_passages(
+            file_id="src", drive="d1", credential=None, limit=1
+        )
+
+    assert len(pairs) == 1
+    assert "diagonal" in pairs[0].text
+
+
+@pytest.mark.asyncio
 async def test_a_passage_only_one_other_file_shares_is_kept(
     search_db, monkeypatch
 ):
