@@ -944,8 +944,10 @@ def _migrate_pickup_to_rows(conn: object) -> None:
     the worker rebuilds a viewer's feed on its next sweep anyway. Keeping
     the rows would only mean serving one stale page until then.
 
-    Idempotent: the create is guarded and the drop is conditional.
+    Idempotent: the drop is conditional, and the replacement tables are
+    created by ``Base.metadata.create_all`` before this runs.
     """
+    logger = logging.getLogger(__name__)
     tables = {
         row[0]
         for row in conn.execute(

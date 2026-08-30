@@ -121,17 +121,20 @@ def test_the_losing_lane_forfeits_no_turn():
     breaking the proportionality above.
     """
     lanes = [_lane("a", 1.0), _lane("b", 1.0)]
+    # ``shared`` must sit in the *middle* of lane b's own ordering, not
+    # at its end. Put it last and removing it leaves 1, 2, 3 either way,
+    # and the test cannot fail. Here b would emit 1, 3, 4 if ``j`` were
+    # fixed before deduplication.
     scored = {
         "a": [("shared", 0.99), ("a1", 0.9), ("a2", 0.8), ("a3", 0.7)],
-        "b": [("b1", 0.95), ("shared", 0.5), ("b2", 0.85), ("b3", 0.75)],
+        "b": [("b1", 0.95), ("shared", 0.90), ("b2", 0.85), ("b3", 0.75)],
     }
 
     items = feed.interleave(lanes, scored, depth=8)
-    b_ranks = [i.rank for i in items if i.cluster_id == "b"]
+    b_items = [i for i in items if i.cluster_id == "b"]
 
-    assert [i.file_id for i in items if i.cluster_id == "b"] == ["b1", "b2", "b3"]
-    assert b_ranks == sorted(b_ranks)
-    assert len(set(b_ranks)) == len(b_ranks)
+    assert [i.file_id for i in b_items] == ["b1", "b2", "b3"]
+    assert [i.rank for i in b_items] == [1, 2, 3]
 
 
 def test_a_file_is_credited_to_the_lane_that_scores_it_highest():

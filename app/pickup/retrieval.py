@@ -91,10 +91,23 @@ _FEED_MIN_SCORE = 0.45
 #: the file through on its next-best chunk.
 _NEAR_IDENTICAL_SCORE = 0.999
 
-#: Rows per ``IN`` clause when reading vectors. Measured on the real
-#: index, a selective read of 2,000 ids takes 0.080s against 0.726s for
-#: a full scan of the same table, so scoping the read is worth it.
-_VECTOR_READ_BATCH = 500
+#: Vectors are read one statement per id, and that is the fast path.
+#:
+#: sqlite-vec does not decompose ``IN`` into point lookups: every such
+#: statement scans the virtual table, so batching multiplies whole scans
+#: rather than amortising them. Measured against the real index
+#: (``vec_text``, 56,422 rows):
+#:
+#:     n_ids     IN/500    IN/2000   point lookup   full scan
+#:      2,000     0.26s      0.08s          0.03s       0.71s
+#:      5,000     0.67s      0.23s          0.07s       0.71s
+#:     12,000     1.57s      0.47s          0.16s       0.71s
+#:
+#: An earlier revision batched at 500 and cited a measurement of a
+#: *single* 2,000-id statement as justification — which is not what the
+#: code did. Point lookups cost about 13 microseconds each here and,
+#: unlike the scans, do not grow with the size of the table; production
+#: holds 463,350 rows in this one.
 
 
 def vector_table_for(channel: str) -> str:
@@ -145,26 +158,23 @@ def _row_identity(drive: str, channel: str) -> list[tuple[str, str]]:
 
 
 def _read_vectors(embedding_ids: Sequence[str], table: str) -> dict[str, bytes]:
-    """Fetch raw vector blobs by embedding id, in batches."""
+    """Fetch raw vector blobs by embedding id, one lookup each.
+
+    See the module note above for why this is not batched.
+    """
     if not embedding_ids:
         return {}
 
     out: dict[str, bytes] = {}
     engine = get_search_engine()
+    statement = sql_text(
+        f"SELECT vector FROM {table} WHERE embedding_id = :eid"
+    )
     with engine.connect() as conn:
-        for start in range(0, len(embedding_ids), _VECTOR_READ_BATCH):
-            batch = embedding_ids[start:start + _VECTOR_READ_BATCH]
-            placeholders = ", ".join(f":e{i}" for i in range(len(batch)))
-            rows = conn.execute(
-                sql_text(
-                    f"SELECT embedding_id, vector FROM {table} "
-                    f"WHERE embedding_id IN ({placeholders})"
-                ),
-                {f"e{i}": value for i, value in enumerate(batch)},
-            ).fetchall()
-            for embedding_id, blob in rows:
-                if blob:
-                    out[embedding_id] = blob
+        for embedding_id in embedding_ids:
+            row = conn.execute(statement, {"eid": embedding_id}).fetchone()
+            if row and row[0]:
+                out[embedding_id] = row[0]
     return out
 
 

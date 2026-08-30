@@ -28,7 +28,7 @@ import hashlib
 import logging
 from datetime import UTC, datetime
 
-from app.database import get_search_db
+from app.database import get_search_db, get_search_db_read
 from app.models import IndexedFile, PickupItem, PickupProfile
 from app.pickup import feed as feed_mod
 from app.pickup import profile as profile_mod
@@ -55,6 +55,8 @@ class PickupWorker:
         self._running = False
         self._drive_locks: dict[str, asyncio.Lock] = {}
         self._pending_tasks: set[asyncio.Task] = set()
+        #: Drives whose trigger arrived while a run held their lock.
+        self._missed_triggers: set[str] = set()
 
     def _lock_for(self, drive: str) -> asyncio.Lock:
         if drive not in self._drive_locks:
@@ -83,12 +85,28 @@ class PickupWorker:
     async def _guarded_compute(self, drive: str) -> None:
         lock = self._lock_for(drive)
         if lock.locked():
+            # A scan finishing mid-sweep is exactly when the feed is
+            # most out of date, so dropping the trigger silently is the
+            # wrong kind of quiet. The run in progress may already have
+            # read the index before the scan committed, and the next
+            # periodic sweep is up to an hour away.
+            self._missed_triggers.add(drive)
+            logger.info(
+                "Pickup: drive=%s already computing; will recompute after",
+                drive,
+            )
             return
         async with lock:
-            try:
-                await self._compute_for_drive(drive)
-            except Exception:
-                logger.exception("Pickup worker failed for drive=%s", drive)
+            while True:
+                self._missed_triggers.discard(drive)
+                try:
+                    await self._compute_for_drive(drive)
+                except Exception:
+                    logger.exception("Pickup worker failed for drive=%s", drive)
+                    return
+                if drive not in self._missed_triggers:
+                    return
+                logger.info("Pickup: recomputing drive=%s for a missed trigger", drive)
 
     async def _sweep_all_drives(self) -> None:
         with get_search_db() as session:
@@ -114,6 +132,28 @@ class PickupWorker:
         if not viewers:
             return
 
+        # Decide who needs rebuilding *before* touching the index. The
+        # candidate matrices cost a read of every vector in the drive,
+        # and on a quiet hour — the common case — none of it would be
+        # used. The staleness check is one small query per viewer.
+        pending: list[tuple[str, set[str], str]] = []
+        for viewer_id in viewers:
+            try:
+                stale = await loop.run_in_executor(
+                    None, lambda v=viewer_id: self._stale_work(drive, v)
+                )
+            except Exception:
+                logger.exception(
+                    "Pickup: could not read history drive=%s viewer=%s",
+                    drive, viewer_id,
+                )
+                continue
+            if stale is not None:
+                pending.append(stale)
+
+        if not pending:
+            return
+
         # Viewer-independent, so built once and scored against by all of
         # them. On a drive with several viewers this is the difference
         # between one read per channel and one per viewer per lane.
@@ -124,48 +164,63 @@ class PickupWorker:
                     None, lambda c=channel: load_candidates(drive=drive, channel=c)
                 )
             except Exception:
+                # Abandon the whole sweep for this drive rather than
+                # build feeds from the channels that happened to load.
+                # A partial feed is not merely thinner: it would be
+                # stored with a fresh checkpoint, and the next sweep
+                # would then skip the viewer as up to date. One
+                # transient error would outlive itself until the viewer
+                # watched something new.
                 logger.exception(
-                    "Pickup: could not load candidates drive=%s channel=%s",
+                    "Pickup: could not load candidates drive=%s channel=%s; "
+                    "skipping this sweep",
                     drive, channel,
                 )
+                return
 
-        for viewer_id in viewers:
+        for viewer_id, watched, checkpoint in pending:
             try:
                 await loop.run_in_executor(
                     None,
-                    lambda v=viewer_id: self._compute_for_viewer(
-                        drive, v, candidates
-                    ),
+                    lambda v=viewer_id, w=watched, c=checkpoint:
+                        self._compute_for_viewer(drive, v, w, c, candidates),
                 )
             except Exception:
                 logger.exception(
                     "Pickup: failed for drive=%s viewer=%s", drive, viewer_id,
                 )
 
-    def _compute_for_viewer(
-        self,
-        drive: str,
-        viewer_id: str,
-        candidates: dict[str, CandidateSet],
-    ) -> None:
+    def _stale_work(
+        self, drive: str, viewer_id: str,
+    ) -> tuple[str, set[str], str] | None:
+        """Return this viewer's pending work, or None if it is current."""
         watched = profile_mod.watched_file_ids(drive, viewer_id)
         if not watched:
-            return
+            return None
 
         checkpoint = _checkpoint(watched)
-        with get_search_db() as session:
+        with get_search_db_read() as session:
             existing = (
                 session.query(PickupProfile)
                 .filter_by(drive_id=drive, viewer_id=viewer_id)
                 .first()
             )
-            if existing and existing.watch_history_checkpoint == checkpoint:
-                return
+        if existing and existing.watch_history_checkpoint == checkpoint:
+            return None
+        return viewer_id, watched, checkpoint
 
+    def _compute_for_viewer(
+        self,
+        drive: str,
+        viewer_id: str,
+        watched: set[str],
+        checkpoint: str,
+        candidates: dict[str, CandidateSet],
+    ) -> None:
         history = profile_mod.profile_history(drive, viewer_id)
         lanes = profile_mod.build_lanes(history, key=f"{drive}\x1f{viewer_id}")
         if not lanes:
-            _store(drive, viewer_id, [], checkpoint)
+            _store(drive, viewer_id, [], None)
             return
 
         scored: dict[str, list[tuple[str, float]]] = {}
@@ -183,7 +238,13 @@ class PickupWorker:
                 scored[lane.cluster_id] = list(hits)
 
         items = feed_mod.interleave(lanes, scored, depth=_FEED_DEPTH)
-        _store(drive, viewer_id, items, checkpoint)
+        # An empty feed is never settled. The checkpoint tracks the
+        # viewer's history, not the state of the index, so storing one
+        # against a checkpoint would strand a viewer whose files simply
+        # had not been embedded yet: their history would not move, and
+        # the sweep would keep skipping them. Recomputing an empty feed
+        # each hour is one matmul against an already-loaded matrix.
+        _store(drive, viewer_id, items, checkpoint if items else None)
         logger.debug(
             "Pickup: %d items across %d lanes for viewer=%s drive=%s",
             len(items), len(lanes), viewer_id, drive,

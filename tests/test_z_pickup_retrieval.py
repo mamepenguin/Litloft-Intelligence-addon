@@ -488,9 +488,9 @@ def test_a_centroid_of_the_wrong_width_is_rejected(index):
         )
 
 
-def test_vectors_are_read_in_batches(index):
+def test_every_row_of_a_large_drive_is_loaded(index):
     """A drive holds far more rows than a neighbour search ever fetched."""
-    total = retrieval._VECTOR_READ_BATCH * 2 + 7
+    total = 1007
     index.add_many("a", total, "a", cos_start=0.90, step=0.0)
 
     assert len(retrieval.load_candidates(drive="a", channel="clip_thumbnail")) \

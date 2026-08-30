@@ -11,7 +11,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Query
 
-from app.database import get_search_db
+from app.database import get_search_db_read
 from app.drive_context import require_drive
 from app.models import PickupItem, PickupProfile
 
@@ -61,7 +61,11 @@ async def pickup_endpoint(
     if not viewer_id:
         return {"file_ids": [], "total": 0}
 
-    with get_search_db() as session:
+    # A read must not take the process-wide write lock: it is held
+    # across long jobs (refine keeps it for a whole forced
+    # alignment), and this endpoint is awaited on the addon's event
+    # loop, so blocking here stalls every other request too.
+    with get_search_db_read() as session:
         header = (
             session.query(PickupProfile)
             .filter_by(drive_id=drive, viewer_id=viewer_id)

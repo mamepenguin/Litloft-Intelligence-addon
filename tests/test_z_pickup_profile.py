@@ -498,12 +498,13 @@ def test_raw_weight_uses_log_compression():
 # ---------------------------------------------------------------------------
 
 
-def test_vectors_are_loaded_in_batches(monkeypatch, tmp_path):
-    """A profile reads far more vectors than a neighbour search does.
+def test_every_requested_vector_is_loaded(monkeypatch, tmp_path):
+    """One statement per id, and none of them dropped.
 
-    ``app.search`` loads a handful for one file and can afford a
-    statement each. This runs over every viewer of every drive on every
-    sweep, up to the profile cap, so the round trips are batched.
+    Batching this looks like the obvious optimisation and is the
+    opposite: sqlite-vec scans the virtual table for every ``IN``, so
+    grouping ids multiplies scans. Measured numbers are in
+    ``app.pickup.retrieval``.
     """
     engine = create_engine(
         f"sqlite:///{tmp_path / 'vec.db'}",
@@ -513,7 +514,7 @@ def test_vectors_are_loaded_in_batches(monkeypatch, tmp_path):
         conn.execute(text(
             "CREATE TABLE vec_text (embedding_id TEXT PRIMARY KEY, vector BLOB)"
         ))
-    total = profile._VECTOR_LOAD_BATCH * 2 + 7
+    total = 1007
     with engine.begin() as conn:
         for i in range(total):
             conn.execute(

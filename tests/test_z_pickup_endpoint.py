@@ -42,9 +42,9 @@ def store(monkeypatch, tmp_path):
         finally:
             s.close()
 
-    monkeypatch.setattr(endpoint, "get_search_db", session_cm)
+    monkeypatch.setattr(endpoint, "get_search_db_read", session_cm)
 
-    def seed(count, drive="a", viewer="v1"):
+    def seed(count, drive="a", viewer="v1", prefix="f"):
         s = maker()
         try:
             s.add(PickupProfile(
@@ -54,7 +54,7 @@ def store(monkeypatch, tmp_path):
             for i in range(count):
                 s.add(PickupItem(
                     drive_id=drive, viewer_id=viewer, rank=i + 1,
-                    file_id=f"f{i:03d}", cluster_id="c0",
+                    file_id=f"{prefix}{i:03d}", cluster_id="c0",
                     channel="clip_thumbnail", score=0.9,
                 ))
             s.commit()
@@ -207,7 +207,55 @@ async def test_a_viewer_with_no_feed_returns_nothing(store):
     assert got == {"file_ids": [], "total": 0}
 
 
-async def test_another_drive_is_not_served(store):
+async def test_another_drives_rows_never_appear(store):
+    """The header lookup must not be the only thing separating drives.
+
+    Seeding one drive and asking for another proves nothing: the header
+    is missing, the endpoint returns early, and the items query — where
+    the second filter lives — is never reached. Both drives are present
+    here, so a missing filter interleaves them visibly.
+    """
+    store(30, drive="a", viewer="v1", prefix="A")
+    store(30, drive="b", viewer="v1", prefix="B")
+
+    got = await _call(drive="a", limit=30)
+
+    assert got["file_ids"] == [f"A{i:03d}" for i in range(30)]
+    assert not any(f.startswith("B") for f in got["file_ids"])
+
+
+async def test_another_viewers_rows_never_appear(store):
+    store(30, drive="a", viewer="v1", prefix="P")
+    store(30, drive="a", viewer="v2", prefix="Q")
+
+    got = await _call(drive="a", viewer_id="v1", limit=30)
+
+    assert got["file_ids"] == [f"P{i:03d}" for i in range(30)]
+    assert not any(f.startswith("Q") for f in got["file_ids"])
+
+
+async def test_both_filters_hold_at_once(store):
+    """Three feeds present; only one of them is this caller's."""
+    store(20, drive="a", viewer="v1", prefix="A")
+    store(20, drive="b", viewer="v1", prefix="B")
+    store(20, drive="a", viewer="v2", prefix="C")
+
+    got = await _call(drive="a", viewer_id="v1", limit=60)
+
+    assert got["file_ids"] == [f"A{i:03d}" for i in range(20)]
+    assert got["total"] == 20
+
+
+async def test_the_daily_window_stays_inside_the_boundary(store):
+    store(60, drive="a", viewer="v1", prefix="A")
+    store(60, drive="b", viewer="v1", prefix="B")
+
+    got = await _call(drive="a", window="daily", date="2026-03-02")
+
+    assert all(f.startswith("A") for f in got["file_ids"])
+
+
+async def test_a_drive_with_no_feed_of_its_own_returns_nothing(store):
     store(100, drive="a")
 
     got = await _call(drive="b")

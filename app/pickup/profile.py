@@ -276,21 +276,16 @@ def profile_history(
 # ---------------------------------------------------------------------------
 
 
-#: Rows per ``IN`` clause when loading vectors. Comfortably inside the
-#: oldest SQLite parameter limit still plausible under Python 3.12.
-_VECTOR_LOAD_BATCH = 500
-
-
 def _load_vectors(
     embedding_ids: Sequence[str],
     table: str,
 ) -> dict[str, np.ndarray]:
     """Fetch raw vectors by embedding id from one vector table.
 
-    Batched rather than one statement per id. The neighbour searches in
-    ``app.search`` fetch a handful of vectors for one file and can
-    afford a loop; a profile reads up to ``PROFILE_VECTOR_CAP`` files,
-    several chunks each, for every viewer of every drive on every sweep.
+    One statement per id. sqlite-vec does not decompose ``IN`` into
+    point lookups — each such statement scans the virtual table — so
+    batching multiplies whole scans instead of amortising them. See the
+    measurement in ``app.pickup.retrieval``.
     """
     if not embedding_ids:
         return {}
@@ -299,21 +294,12 @@ def _load_vectors(
 
     out: dict[str, np.ndarray] = {}
     engine = get_search_engine()
-    ids = list(embedding_ids)
+    statement = sql_text(f"SELECT vector FROM {table} WHERE embedding_id = :eid")
     with engine.connect() as conn:
-        for start in range(0, len(ids), _VECTOR_LOAD_BATCH):
-            batch = ids[start:start + _VECTOR_LOAD_BATCH]
-            placeholders = ", ".join(f":e{i}" for i in range(len(batch)))
-            rows = conn.execute(
-                sql_text(
-                    f"SELECT embedding_id, vector FROM {table} "
-                    f"WHERE embedding_id IN ({placeholders})"
-                ),
-                {f"e{i}": value for i, value in enumerate(batch)},
-            ).fetchall()
-            for embedding_id, blob in rows:
-                if blob:
-                    out[embedding_id] = np.frombuffer(blob, dtype=np.float32)
+        for embedding_id in embedding_ids:
+            row = conn.execute(statement, {"eid": embedding_id}).fetchone()
+            if row and row[0]:
+                out[embedding_id] = np.frombuffer(row[0], dtype=np.float32)
     return out
 
 
