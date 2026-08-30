@@ -187,47 +187,6 @@ class SimilarFilesResponse(BaseModel):
     source_keywords: list[KeywordScore] = []
 
 
-# --- Related passages ---
-
-
-class PassageRef(BaseModel):
-    """One passage, reproduced verbatim, with where to find it.
-
-    ``page`` is set for document chunks, ``timestamp`` for transcript
-    chunks; neither for plain text. They are what lets the UI link to
-    the passage rather than merely to the file.
-    """
-
-    text: str
-    page: int | None = None
-    timestamp: float | None = None
-
-
-class RelatedPassageItem(BaseModel):
-    """A passage of the file being read, beside the one it echoes.
-
-    ``file_id`` / ``drive`` / ``filename`` describe the *other* file —
-    the one being pointed at. The host's ``current_drive_only`` response
-    filter reads ``drive`` from here.
-    """
-
-    source: PassageRef
-    match: PassageRef
-    file_id: str
-    drive: str
-    filename: str
-    score: float
-    #: Words appearing verbatim in both passages, longest first. Empty
-    #: when the pair shares nothing a reader could act on — which is the
-    #: normal case outside Japanese text, where the tokeniser cannot
-    #: separate content words from grammar.
-    overlap: list[str] = Field(default_factory=list)
-
-
-class RelatedPassagesResponse(BaseModel):
-    results: list[RelatedPassageItem]
-
-
 # --- File inspection ---
 
 

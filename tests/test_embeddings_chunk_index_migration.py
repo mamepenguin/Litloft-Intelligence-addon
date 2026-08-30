@@ -11,7 +11,8 @@ The purge is deliberately narrow. ``whisper`` embeddings already carry
 and resetting ``whisper_indexed`` would re-run the transcription
 provider over the whole library, not merely the embedding step.
 
-Spec ``2026-08-29-related-passages.md`` §5.2.
+``chunk_index`` is the key that turns an embedding row back into the
+text in ``fts_text_content`` it was built from.
 """
 
 from sqlalchemy import create_engine, text

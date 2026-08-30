@@ -481,7 +481,7 @@ def test_reindex_empty_extraction_clears_stale_pdf_markdown_row(
 # ---------------------------------------------------------------------------
 # Every text embedding must be joinable to the full chunk text it was
 # built from — the display string and the matched string are one string.
-# Spec ``2026-08-29-related-passages.md`` §3.1 / §5.2.
+# ``chunk_index`` keys an embedding row to its text in fts_text_content.
 # ---------------------------------------------------------------------------
 
 
