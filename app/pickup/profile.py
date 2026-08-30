@@ -1,0 +1,559 @@
+"""The taste profile the Pickup feed retrieves against.
+
+The lane this replaced asked "what resembles the last five files I
+watched". That shape cannot be fixed by asking for more seeds: a
+forty-episode binge still supplies most of any recent window, so
+whatever follows it collapses onto one subject. Recent entries are
+*part of* a history of several hundred, and it is the whole history that
+has to be analysed.
+
+So the history is clustered into a handful of interests, and recency
+becomes a weight on an interest rather than a filter on which interests
+exist. A binge can then only make one cluster denser, and the
+interleave bounds what one cluster is worth.
+
+Two reads of the history, not one. The exclusion set — every file the
+viewer has opened — is never capped, because a cap on it would start
+recommending watched files to anyone past the cap. The profile's vector
+load is capped, because clustering does not get better past a couple of
+thousand points and the cost is real.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import math
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+
+import numpy as np
+from sqlalchemy import text as sql_text
+
+from app.database import get_litloft_db, get_search_db_read
+from app.models import Embedding
+from app.pickup.retrieval import vector_table_for
+
+logger = logging.getLogger(__name__)
+
+#: Embedding types the profile is built on. ``metadata`` is absent for
+#: the same reason ``find_similar`` refuses it as a second opinion: it
+#: embeds the filename, which for "IMG_1234.jpg" or a UUID names
+#: nothing, and a feed has no user in the loop to catch it.
+CHANNELS = ("clip_thumbnail", "tfidf_keywords", "text_content")
+
+#: Vectors loaded per viewer for clustering. Not a bound on the
+#: exclusion set — see the module docstring.
+PROFILE_VECTOR_CAP = 2000
+
+#: How fast an interest goes quiet. A guess, expected to need tuning.
+HALF_LIFE_DAYS = 60.0
+
+#: The quietest lane's share of the turns the loudest one gets.
+#:
+#: Decay alone cannot express "quieter but not gone". Worked against the
+#: interleave's ``key = j / weight``, a cluster of fifty files watched
+#: three years ago earns a raw weight of 1.6e-4 against 1.79 for five
+#: files watched today, which places its first item around position 6250
+#: of a feed that holds a few hundred. That is deletion wearing the
+#: costume of decay, and it contradicts the point of clustering the full
+#: history. Normalising onto ``[W_MIN, 1.0]`` makes the floor a
+#: constraint rather than something the arithmetic might happen to
+#: honour.
+#:
+#: The cost is the other side of the same dial: the loudest lane's share
+#: of the feed is bounded by ``1 / (1 + (L - 1) * W_MIN)`` for ``L``
+#: lanes — 44% at six, 21% at sixteen. Lowering W_MIN contains a binge
+#: harder and buries old interests faster.
+W_MIN = 0.25
+
+#: Below this a history is too small to have distinguishable interests.
+_MIN_FILES_FOR_CLUSTERING = 12
+_K_MIN = 2
+_K_MAX = 8
+
+_KMEANS_ITERATIONS = 25
+
+#: Cosine similarity above which two clusters are one interest.
+#:
+#: K is chosen from how many files the history holds, not from how many
+#: subjects are in it, so k-means will happily split one dense blob —
+#: exactly what a binge is — into several clusters. Left alone that
+#: inverts the containment the lanes exist to provide: forty episodes
+#: split four ways take four lanes' worth of turns instead of one.
+#:
+#: The justification for folding them back is retrieval, not taste.
+#: Centroids this close return overlapping candidate sets, and the
+#: interleave assigns each file to a single lane, so the second lane
+#: spends its turns on the same neighbourhood the first is already
+#: drawing from. Separate lanes over one pool are one lane with extra
+#: turns.
+_LANE_MERGE_SIMILARITY = 0.90
+
+
+@dataclass(frozen=True)
+class WatchedFile:
+    """One entry of the viewer's history, with a naive-UTC timestamp."""
+
+    file_id: str
+    last_played_at: datetime
+
+
+@dataclass(frozen=True)
+class Lane:
+    """One interest, and its share of the feed's turns."""
+
+    channel: str
+    cluster_id: str
+    centroid: np.ndarray
+    member_count: int
+    raw_weight: float
+    weight: float
+
+
+# ---------------------------------------------------------------------------
+# Reading the history
+# ---------------------------------------------------------------------------
+
+
+def _parse_naive_utc(value: object) -> datetime | None:
+    """Read ``watch_history.last_played_at`` as a naive UTC datetime.
+
+    Core writes ``datetime.now(UTC)`` into a column declared without a
+    timezone, so the stored text is UTC wall-clock with no offset. Rows
+    written through a path that bound an aware value carry a ``+00:00``
+    suffix instead; those are converted rather than rejected.
+
+    Returns None for anything unparseable. The caller drops the row: a
+    fabricated timestamp would put a broken row at the top of the
+    recency order, which is worse than losing it.
+    """
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(UTC).replace(tzinfo=None)
+    return parsed
+
+
+def age_days(last_played_at: datetime) -> float:
+    """Days since ``last_played_at``, never negative."""
+    now = datetime.now(UTC).replace(tzinfo=None)
+    return max(0.0, (now - last_played_at).total_seconds() / 86400.0)
+
+
+def viewer_ids(drive: str) -> list[str]:
+    """Every viewer with history in this drive."""
+    with get_litloft_db() as session:
+        rows = session.execute(
+            sql_text(
+                "SELECT DISTINCT wh.viewer_id "
+                "FROM watch_history wh "
+                "JOIN files f ON wh.file_id = f.id "
+                "WHERE f.drive = :drive"
+            ),
+            {"drive": drive},
+        ).fetchall()
+    return [row[0] for row in rows if row[0]]
+
+
+def watched_file_ids(drive: str, viewer_id: str) -> set[str]:
+    """Every file this viewer has opened in this drive. Never capped.
+
+    Trashed and missing files stay in: the question is what the viewer
+    has already seen, not what is currently on disk. They cannot be
+    candidates anyway, so including them costs nothing, and dropping
+    them would risk recommending a file whose row came back.
+    """
+    with get_litloft_db() as session:
+        rows = session.execute(
+            sql_text(
+                "SELECT wh.file_id "
+                "FROM watch_history wh "
+                "JOIN files f ON wh.file_id = f.id "
+                "WHERE f.drive = :drive AND wh.viewer_id = :viewer"
+            ),
+            {"drive": drive, "viewer": viewer_id},
+        ).fetchall()
+    return {row[0] for row in rows}
+
+
+def profile_history(
+    drive: str,
+    viewer_id: str,
+    cap: int = PROFILE_VECTOR_CAP,
+) -> list[WatchedFile]:
+    """This viewer's most recent ``cap`` live entries, newest first.
+
+    The cap is per viewer. The worker this replaces took the drive's 50
+    most recent rows and split them by viewer afterwards, so whoever had
+    been active most recently consumed the whole budget.
+    """
+    with get_litloft_db() as session:
+        rows = session.execute(
+            sql_text(
+                "SELECT wh.file_id, wh.last_played_at "
+                "FROM watch_history wh "
+                "JOIN files f ON wh.file_id = f.id "
+                "WHERE f.drive = :drive AND wh.viewer_id = :viewer "
+                "  AND f.deleted_at IS NULL AND f.missing_since IS NULL "
+                "ORDER BY wh.last_played_at DESC "
+                "LIMIT :cap"
+            ),
+            {"drive": drive, "viewer": viewer_id, "cap": cap},
+        ).fetchall()
+
+    history: list[WatchedFile] = []
+    for file_id, played_at in rows:
+        parsed = _parse_naive_utc(played_at)
+        if parsed is None:
+            logger.debug(
+                "Pickup: unreadable last_played_at for file=%s viewer=%s",
+                file_id, viewer_id,
+            )
+            continue
+        history.append(WatchedFile(file_id=file_id, last_played_at=parsed))
+    return history
+
+
+# ---------------------------------------------------------------------------
+# Representative vectors
+# ---------------------------------------------------------------------------
+
+
+#: Rows per ``IN`` clause when loading vectors. Comfortably inside the
+#: oldest SQLite parameter limit still plausible under Python 3.12.
+_VECTOR_LOAD_BATCH = 500
+
+
+def _load_vectors(
+    embedding_ids: Sequence[str],
+    table: str,
+) -> dict[str, np.ndarray]:
+    """Fetch raw vectors by embedding id from one vector table.
+
+    Batched rather than one statement per id. The neighbour searches in
+    ``app.search`` fetch a handful of vectors for one file and can
+    afford a loop; a profile reads up to ``PROFILE_VECTOR_CAP`` files,
+    several chunks each, for every viewer of every drive on every sweep.
+    """
+    if not embedding_ids:
+        return {}
+
+    from app.database import get_search_engine
+
+    out: dict[str, np.ndarray] = {}
+    engine = get_search_engine()
+    ids = list(embedding_ids)
+    with engine.connect() as conn:
+        for start in range(0, len(ids), _VECTOR_LOAD_BATCH):
+            batch = ids[start:start + _VECTOR_LOAD_BATCH]
+            placeholders = ", ".join(f":e{i}" for i in range(len(batch)))
+            rows = conn.execute(
+                sql_text(
+                    f"SELECT embedding_id, vector FROM {table} "
+                    f"WHERE embedding_id IN ({placeholders})"
+                ),
+                {f"e{i}": value for i, value in enumerate(batch)},
+            ).fetchall()
+            for embedding_id, blob in rows:
+                if blob:
+                    out[embedding_id] = np.frombuffer(blob, dtype=np.float32)
+    return out
+
+
+def representative_vectors(
+    file_ids: Iterable[str],
+    channel: str,
+) -> dict[str, np.ndarray]:
+    """One normalized vector per file for ``channel``.
+
+    ``clip_thumbnail`` and ``tfidf_keywords`` store a single row per
+    file. ``text_content`` stores one per chunk, and their mean is what
+    "this document, generally" means here. Files with no embedding of
+    this channel are simply absent from the result.
+    """
+    ids = list(file_ids)
+    if not ids:
+        return {}
+
+    table = vector_table_for(channel)
+    with get_search_db_read() as session:
+        rows = (
+            session.query(Embedding.id, Embedding.file_id)
+            .filter(
+                Embedding.file_id.in_(ids),
+                Embedding.embedding_type == channel,
+            )
+            .all()
+        )
+    if not rows:
+        return {}
+
+    by_file: dict[str, list[str]] = {}
+    for embedding_id, file_id in rows:
+        by_file.setdefault(file_id, []).append(embedding_id)
+
+    raw = _load_vectors(
+        [e for embedding_ids in by_file.values() for e in embedding_ids],
+        table,
+    )
+
+    out: dict[str, np.ndarray] = {}
+    for file_id, embedding_ids in by_file.items():
+        vectors = [raw[e] for e in embedding_ids if e in raw]
+        if not vectors:
+            continue
+        mean = np.mean(np.stack(vectors), axis=0)
+        norm = float(np.linalg.norm(mean))
+        if norm == 0.0:
+            continue
+        out[file_id] = (mean / norm).astype(np.float32)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Clustering
+# ---------------------------------------------------------------------------
+
+
+def choose_k(n: int) -> int:
+    """How many interests to look for in ``n`` files.
+
+    The lower bound is 2 rather than 3 so K steps 1 -> 2 at the
+    threshold; three clusters over twelve files is noise, and the jump
+    would change the feed's shape on the twelfth watched file.
+    """
+    if n < _MIN_FILES_FOR_CLUSTERING:
+        return 1
+    return min(_K_MAX, max(_K_MIN, round(math.sqrt(n / 2))))
+
+
+def _seed_from(*parts: str) -> int:
+    digest = hashlib.sha256("\x1f".join(parts).encode()).digest()
+    return int.from_bytes(digest[:8], "big")
+
+
+def _kmeans(matrix: np.ndarray, k: int, seed: int) -> np.ndarray:
+    """Spherical k-means. Returns a label per row.
+
+    The vectors are unit length, so cosine similarity is a dot product
+    and a cluster's centre is the normalized mean of its members.
+    Seeded from the caller's key so a run is reproducible — an
+    unreproducible profile would reshuffle the feed on every sweep for
+    no reason the viewer could see.
+    """
+    n = matrix.shape[0]
+    if k <= 1:
+        return np.zeros(n, dtype=int)
+    if n <= k:
+        return np.arange(n)
+
+    rng = np.random.default_rng(seed)
+
+    # k-means++ seeding: spread the initial centres out, so a dense
+    # binge cannot capture several of them.
+    centres = [matrix[rng.integers(n)]]
+    for _ in range(1, k):
+        similarity = np.max(matrix @ np.stack(centres).T, axis=1)
+        distance = np.clip(1.0 - similarity, 0.0, None) ** 2
+        total = float(distance.sum())
+        if total <= 0.0:
+            centres.append(matrix[rng.integers(n)])
+            continue
+        centres.append(matrix[rng.choice(n, p=distance / total)])
+    centroids = np.stack(centres)
+
+    labels = np.full(n, -1, dtype=int)
+    for _ in range(_KMEANS_ITERATIONS):
+        new_labels = np.argmax(matrix @ centroids.T, axis=1)
+        if np.array_equal(new_labels, labels):
+            break
+        labels = new_labels
+        for index in range(k):
+            members = matrix[labels == index]
+            if members.size == 0:
+                continue
+            mean = members.mean(axis=0)
+            norm = float(np.linalg.norm(mean))
+            if norm > 0:
+                centroids[index] = mean / norm
+    return labels
+
+
+def _centroid(matrix: np.ndarray) -> np.ndarray:
+    mean = matrix.mean(axis=0)
+    norm = float(np.linalg.norm(mean))
+    return (mean / norm if norm > 0 else mean).astype(np.float32)
+
+
+def _merge_similar(
+    groups: list[list[int]],
+    matrix: np.ndarray,
+) -> list[list[int]]:
+    """Fold clusters whose centroids sit in the same neighbourhood.
+
+    Repeatedly merges the closest pair until none exceeds
+    ``_LANE_MERGE_SIMILARITY``. K is at most 8, so the quadratic scan is
+    negligible.
+
+    Only ever called within one channel: centroids from ``vec_clip`` and
+    ``vec_text`` live in different spaces and a similarity between them
+    would be a number without a meaning.
+    """
+    groups = [list(g) for g in groups]
+    while len(groups) > 1:
+        centroids = np.stack([_centroid(matrix[g]) for g in groups])
+        similarity = centroids @ centroids.T
+        np.fill_diagonal(similarity, -1.0)
+        first, second = np.unravel_index(
+            int(np.argmax(similarity)), similarity.shape,
+        )
+        if similarity[first, second] < _LANE_MERGE_SIMILARITY:
+            break
+        low, high = sorted((int(first), int(second)))
+        groups[low] = groups[low] + groups[high]
+        del groups[high]
+    return groups
+
+
+def _merge_singletons(
+    groups: list[list[int]],
+    matrix: np.ndarray,
+) -> list[list[int]]:
+    """Fold one-member clusters into their nearest neighbour.
+
+    Every lane is guaranteed a share of the feed (see ``W_MIN``), so a
+    cluster holding one stray file would buy that file's neighbourhood
+    real airtime. Merging beats dropping: the file was watched, and its
+    subject still belongs somewhere.
+
+    A profile that is a single cluster keeps it however small — with one
+    watched file, "more like that one" is the honest profile.
+    """
+    if len(groups) <= 1:
+        return groups
+
+    survivors = [g for g in groups if len(g) > 1]
+    strays = [g for g in groups if len(g) == 1]
+    if not strays:
+        return groups
+    if not survivors:
+        # Everything is a singleton: one lane holding all of them.
+        return [[index for group in groups for index in group]]
+
+    centroids = np.stack([_centroid(matrix[g]) for g in survivors])
+    for stray in strays:
+        nearest = int(np.argmax(centroids @ matrix[stray[0]]))
+        survivors[nearest] = survivors[nearest] + stray
+    return survivors
+
+
+# ---------------------------------------------------------------------------
+# Weights
+# ---------------------------------------------------------------------------
+
+
+def decay(days: float) -> float:
+    """How much a file watched ``days`` ago still counts."""
+    return 0.5 ** (days / HALF_LIFE_DAYS)
+
+
+def raw_weight(ages: Sequence[float]) -> float:
+    """Decayed mass of a cluster, log-compressed.
+
+    The logarithm is what stops a binge dominating: forty episodes must
+    not outweigh a five-file interest by a factor of eight.
+    """
+    return math.log1p(sum(decay(age) for age in ages))
+
+
+def _normalise(raws: list[float]) -> list[float]:
+    """Map raw weights onto ``[W_MIN, 1.0]``.
+
+    Across every lane of every channel together: the interleave treats
+    them as one sequence, so a lane's share must not depend on which
+    other lanes happened to share its embedding type.
+    """
+    if not raws:
+        return []
+    high, low = max(raws), min(raws)
+    if high == low:
+        return [1.0] * len(raws)
+    span = high - low
+    return [W_MIN + (1.0 - W_MIN) * (raw - low) / span for raw in raws]
+
+
+# ---------------------------------------------------------------------------
+# Assembling the profile
+# ---------------------------------------------------------------------------
+
+
+def build_lanes(history: Sequence[WatchedFile], *, key: str) -> list[Lane]:
+    """Cluster ``history`` into weighted lanes across every channel.
+
+    Args:
+        history: The viewer's entries, newest first.
+        key: Stable identity for this (drive, viewer), used to seed
+            clustering so repeated runs agree.
+
+    Returns:
+        Lanes with normalized weights, heaviest first.
+    """
+    if not history:
+        return []
+
+    ages = {w.file_id: age_days(w.last_played_at) for w in history}
+    file_ids = [w.file_id for w in history]
+
+    pending: list[tuple[str, str, np.ndarray, int, float]] = []
+    for channel in CHANNELS:
+        vectors = representative_vectors(file_ids, channel)
+        if not vectors:
+            continue
+        # Fixed order, so the seeded clustering below is reproducible.
+        members = [f for f in file_ids if f in vectors]
+        matrix = np.stack([vectors[f] for f in members])
+
+        labels = _kmeans(matrix, choose_k(len(members)), _seed_from(key, channel))
+        groups = [
+            [i for i in range(len(members)) if labels[i] == index]
+            for index in range(int(labels.max()) + 1)
+        ]
+        groups = _merge_similar([g for g in groups if g], matrix)
+        groups = _merge_singletons(groups, matrix)
+
+        for index, group in enumerate(groups):
+            pending.append((
+                channel,
+                f"{channel}:{index}",
+                _centroid(matrix[group]),
+                len(group),
+                raw_weight([ages[members[i]] for i in group]),
+            ))
+
+    if not pending:
+        return []
+
+    weights = _normalise([raw for *_, raw in pending])
+    lanes = [
+        Lane(
+            channel=channel,
+            cluster_id=cluster_id,
+            centroid=centroid,
+            member_count=count,
+            raw_weight=raw,
+            weight=weight,
+        )
+        for (channel, cluster_id, centroid, count, raw), weight
+        in zip(pending, weights, strict=True)
+    ]
+    return sorted(lanes, key=lambda lane: (-lane.weight, lane.cluster_id))
