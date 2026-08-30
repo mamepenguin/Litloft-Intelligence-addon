@@ -176,17 +176,6 @@ def _token_df(normalized: str) -> int:
         return 0
 
 
-def document_frequency(term: str) -> int:
-    """Document frequency of a single term, normalised for the vocab tables.
-
-    The pair of private helpers above are the whole lookup; this exposes
-    them for callers that need a term's rarity without the clue-filtering
-    policy wrapped around it (``app.passage_terms``). Fail-open is
-    inherited: an uninitialised DB or a missing vocab table reports 0.
-    """
-    return _token_df(_normalize_token(term))
-
-
 def reset_cache() -> None:
     """Drop the corpus-size and per-token LRU caches.
 

@@ -83,34 +83,11 @@ class TestHasKana:
 # --- The intersection -----------------------------------------------
 
 
-def df_none(_term: str) -> int:
-    return 0
-
-
-# Document frequencies measured against the production library
-# (spec §6.2). The junk sits in the extreme tail; the content words sit
-# well below it, and the ceiling's only job is to land in that gap.
-MEASURED_DF = {
-    "20": 7796,
-    "更新": 1415,
-    "本当": 1288,
-    "amp": 697,
-    "1本": 154,
-    "身長": 113,
-    "山根": 77,
-}
-
-
-def df_measured(term: str) -> int:
-    return MEASURED_DF.get(term, 0)
-
-
 class TestOverlapTerms:
     def test_only_words_present_on_both_sides(self):
         terms = overlap_terms(
             "対角線を軸として回転させると立方体になります",
             "同じ性質を持つ回転が立方体にもあり対角線について",
-            df=df_none,
         )
 
         assert set(terms) == {"対角線", "回転", "立方体"}
@@ -119,7 +96,6 @@ class TestOverlapTerms:
         terms = overlap_terms(
             "回転と対角線と立方体の話",
             "立方体の対角線をめぐる回転",
-            df=df_none,
         )
 
         # 対角線 and 立方体 are both three characters; the order they
@@ -128,42 +104,47 @@ class TestOverlapTerms:
 
     def test_capped(self):
         mine = "対角線と立方体と回転と軸性と要素と性質の話"
-        terms = overlap_terms(mine, mine, df=df_none)
+        terms = overlap_terms(mine, mine)
 
         assert len(terms) == 4
 
-    def test_corpus_common_words_are_dropped(self):
-        mine = "20回の更新は本当に amp と1本の身長と山根の話"
-        terms = overlap_terms(mine, mine, df=df_measured, cap=10)
+    def test_a_bare_number_is_not_a_term(self):
+        # `20` was the single most frequent term found in any real
+        # intersection, and says nothing about what a pair is about.
+        terms = overlap_terms("20回と1本の身長の話", "身長は20で1本だけ", cap=10)
 
-        # The tail is junk; everything under the ceiling is a word a
-        # reader could act on.
         assert "20" not in terms
-        assert "更新" not in terms
-        assert "本当" not in terms
+        assert {"1本", "身長"} <= set(terms)
+
+    def test_markup_that_leaked_into_the_text_is_not_a_term(self):
+        # `amp` reaches the text when extraction leaks the markup around
+        # a word. Nobody wrote it.
+        terms = overlap_terms("amp と身長の話です", "身長の話に amp が混ざる", cap=10)
+
         assert "amp" not in terms
-        assert {"1本", "身長", "山根"} <= set(terms)
+        assert "身長" in terms
 
-    def test_no_document_frequency_source_means_no_filtering(self):
-        # rarity_filter is fail-open: an uninitialised DB reports 0 for
-        # everything. Chips are still better than a blank row.
-        terms = overlap_terms("更新と20の話", "20の更新について", df=None)
+    def test_an_ordinary_word_is_kept_rather_than_guessed_at(self):
+        # A document-frequency ceiling used to remove these. Measured on
+        # 42 real pairs it changed the visible four terms in 5% of rows,
+        # in exchange for a constant fitted to one corpus size and counts
+        # drawn from drives the reader cannot open.
+        terms = overlap_terms("更新は本当に大事です", "本当に更新しました", cap=10)
 
-        assert set(terms) == {"更新", "20"}
+        assert set(terms) == {"更新", "本当"}
 
     def test_case_is_folded(self):
         # Spec §11 defect 2: `You` and `you` counted as different terms.
         terms = overlap_terms(
             "これはケースの話です You know",
             "ですね you know について",
-            df=df_none,
         )
 
         assert [t.lower() for t in terms].count("you") == 1
 
     def test_nothing_in_common_yields_nothing(self):
         assert (
-            overlap_terms("対角線の話です", "全然ちがう話題ですね", df=df_none) == []
+            overlap_terms("対角線の話です", "全然ちがう話題ですね") == []
         )
 
     @pytest.mark.parametrize(
@@ -187,7 +168,7 @@ class TestOverlapTerms:
         ],
     )
     def test_a_pair_the_tokeniser_cannot_read_yields_nothing(self, mine, theirs):
-        assert overlap_terms(mine, theirs, df=df_none) == []
+        assert overlap_terms(mine, theirs) == []
 
     def test_english_passages_that_mention_katakana_get_nothing(self):
         mine = (
@@ -201,13 +182,13 @@ class TestOverlapTerms:
 
         # Four shared function words, and a confident chip row asserting
         # a connection that is not there, is worse than no chips at all.
-        assert overlap_terms(mine, theirs, df=df_none) == []
+        assert overlap_terms(mine, theirs) == []
 
     def test_one_japanese_side_is_not_enough(self):
         # Both halves get tokenised, so both must be readable.
         assert (
             overlap_terms(
-                "対角線を軸として回転させる", "the diagonal axis we rotate", df=df_none
+                "対角線を軸として回転させる", "the diagonal axis we rotate"
             )
             == []
         )

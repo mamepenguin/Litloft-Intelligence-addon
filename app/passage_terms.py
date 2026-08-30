@@ -20,7 +20,6 @@ Spec ``2026-08-30-related-passages-recognition-ui.md`` §7.2-7.3.
 from __future__ import annotations
 
 import re
-from typing import Callable
 
 #: Words a reader could act on. Kanji runs, katakana runs, latin words,
 #: and a number carrying a kanji or percent unit.
@@ -63,15 +62,17 @@ _MIN_TERM_LEN = 2
 #: Hiragana only. See :func:`has_kana`.
 _KANA_RE = re.compile(r"[ぁ-ゖ]")
 
-#: Terms in more documents than this are corpus-common, whatever else
-#: they are. Measured against the production library: the junk sits in
-#: the extreme tail (``20`` 7796, ``更新`` 1415, ``本当`` 1288, ``amp``
-#: 697) while content words sit far below (``1本`` 154, ``身長`` 113,
-#: ``山根`` 77). This number's whole job is to land in that gap — it is
-#: neither a ratio nor a percentile, both of which were tried and are
-#: wrong here: a 0.5 ratio never fires at all, and a p90 cut removes
-#: ``身長``.
-DEFAULT_DF_CEILING = 500
+#: A term that is only a number says nothing about what a pair is about,
+#: and bare numbers are the most corpus-common tokens there are — ``20``
+#: was the single most frequent term found in any intersection.
+_BARE_NUMBER = re.compile(r"^\d+(?:\.\d+)?$")
+
+#: HTML entity names, which reach the text when extraction leaks the
+#: markup around a word. ``amp`` was the fourth most frequent term found
+#: in any intersection; it is not a word anybody wrote.
+_MARKUP_ARTEFACTS = frozenset(
+    {"amp", "quot", "nbsp", "lt", "gt", "apos", "rsquo", "ldquo", "rdquo"}
+)
 
 #: Rows returned to the UI. 22% of pairs produce five or more terms.
 DEFAULT_CAP = 4
@@ -113,26 +114,26 @@ def has_kana(text: str) -> bool:
 def overlap_terms(
     mine: str,
     theirs: str,
-    df: Callable[[str], int] | None = None,
     cap: int = DEFAULT_CAP,
-    df_ceiling: int = DEFAULT_DF_CEILING,
 ) -> list[str]:
-    """Words present in both passages, corpus-common ones removed.
+    """Words present in both passages, longest first.
 
-    ``df`` reports a term's document frequency; pass None to skip the
-    ceiling. Skipping is the fail-open path — ``rarity_filter`` reports 0
-    for everything when the vocab tables are missing, and unfiltered
-    chips still beat a blank row.
+    Ties are broken by where the term appears in ``mine``. Length is a
+    crude stand-in for how much a word narrows things down, and it holds
+    up in Japanese, which :func:`has_kana` makes the only place this
+    runs. It does **not** hold in English, where ``something`` and
+    ``because`` are long — which is the gate's job, not this one's.
 
-    Ordered longest first, ties broken by where the term appears in
-    ``mine``. Length is a crude stand-in for how much a word narrows
-    things down, and it holds up in Japanese, which §8 makes the only
-    place this runs. It does **not** hold in English (``something`` and
-    ``because`` are long), and document frequency cannot replace it
-    either: 46% of Japanese terms report a DF of 0 because the word-FTS
-    tokeniser swallows a whole phrase as one token. DF is trustworthy in
-    one direction only, which is why it is a ceiling and not the sort
-    key.
+    **No corpus statistics.** A document-frequency ceiling was tried and
+    measured against the production library: on 42 real pairs it changed
+    the visible four terms in 5% of rows, and in those it traded ``本当``
+    for ``失礼`` and ``更新`` for ``4万`` while leaving ``今日`` standing.
+    The two terms it was supposed to catch — ``20`` and ``amp`` — are
+    removed above by shape, not by frequency. For that it cost a
+    constant fitted to one corpus size (silently inert on a small
+    library, over-eager on a large one) and made a drive-scoped response
+    depend on counts drawn from drives the reader cannot open. Neither
+    was worth 5%.
     """
     if not has_kana(mine) or not has_kana(theirs):
         return []
@@ -144,11 +145,10 @@ def overlap_terms(
         key = term.lower()
         if key in seen or key not in other:
             continue
+        if _BARE_NUMBER.match(term) or key in _MARKUP_ARTEFACTS:
+            continue
         seen.add(key)
         shared.append(term)
-
-    if df is not None:
-        shared = [t for t in shared if df(t) <= df_ceiling]
 
     # Stable, so equal-length terms keep the order they appear in.
     shared.sort(key=lambda t: -len(t))

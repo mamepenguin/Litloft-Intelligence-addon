@@ -39,7 +39,6 @@ from app.config import settings
 from app.credentials import CallerCredential
 from app.database import get_search_engine
 from app.passage_terms import overlap_terms
-from app.rag import rarity_filter
 # Reused rather than reimplemented: this function's fail-closed handling
 # (network error, non-200, and above all a response that does not confirm
 # the trust filter) is exactly the part that must never drift between
@@ -114,9 +113,9 @@ class PassagePair:
     other_page: int | None
     other_timestamp: float | None
     score: float
-    #: Words present, word for word, in both passages. Empty whenever
-    #: the tokeniser's premise does not hold (``passage_terms.has_kana``)
-    #: or the two share nothing but corpus-common words.
+    #: Words present, word for word, in both passages, longest first.
+    #: Empty whenever the two share nothing, or the tokeniser's premise
+    #: does not hold (``passage_terms.has_kana``).
     overlap: list[str]
 
 
@@ -595,27 +594,7 @@ def _build_pairs(
                 other_page=other.page,
                 other_timestamp=other.timestamp_start,
                 score=score,
-                # The frequency lookup spans the whole index rather than
-                # this drive. Both passages are already inside the
-                # caller's drive — the KNN is scoped and the trust filter
-                # ran — so no other drive's content reaches the reader.
-                # What crosses is a count, used to decide whether a word
-                # the reader can already see in both passages is too
-                # ordinary to be worth naming. That is a noise threshold,
-                # not the cross-drive search / favourites / tag
-                # aggregation the drive rule forbids: nothing from
-                # another drive is surfaced, and the single observable is
-                # whether a chip appears.
-                #
-                # Scoping it per drive would also make it useless where
-                # it is needed. The 500 ceiling was measured against a
-                # 428k-chunk corpus; inside a fifty-file drive no term
-                # reaches it, so the junk this exists to remove would
-                # come straight back, and a per-drive *ratio* is the
-                # shape already measured not to work.
-                overlap=overlap_terms(
-                    my_text, other_text, df=rarity_filter.document_frequency
-                ),
+                overlap=overlap_terms(my_text, other_text),
             )
         )
     return pairs
