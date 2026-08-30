@@ -93,7 +93,10 @@ def rig(monkeypatch, tmp_path):
             matrix=np.eye(3, 4, dtype=np.float32),
         )
 
-    def fake_score(candidates, centroids, *, exclude_file_ids, limit):
+    def fake_score(candidates, centroids, *, channel, exclude_file_ids, limit):
+        assert channel == candidates.channel, (
+            f"{channel} lanes scored against {candidates.channel} rows"
+        )
         state["scores"].append(set(exclude_file_ids))
         hits = [(f, 0.9 - i * 0.01)
                 for i, f in enumerate(candidates.file_ids)
@@ -410,8 +413,8 @@ async def test_a_lane_is_scored_against_its_own_channels_candidates(rig):
     """
     seen = []
 
-    def recording_score(candidates, centroids, *, exclude_file_ids, limit):
-        seen.append((candidates.channel, len(centroids)))
+    def recording_score(candidates, centroids, *, channel, exclude_file_ids, limit):
+        seen.append((channel, candidates.channel, len(centroids)))
         return [[] for _ in centroids]
 
     rig["lanes"] = [
@@ -432,7 +435,7 @@ async def test_a_lane_is_scored_against_its_own_channels_candidates(rig):
 
     # tfidf_keywords has no rows in this rig, so only the visual lane is
     # scored — and it is scored against the visual candidate set.
-    assert seen == [("clip_thumbnail", 1)]
+    assert seen == [("clip_thumbnail", "clip_thumbnail", 1)]
 
 
 # ---------------------------------------------------------------------------

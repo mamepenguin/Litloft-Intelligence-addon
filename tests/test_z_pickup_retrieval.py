@@ -179,6 +179,7 @@ def _top(drive="a", channel="clip_thumbnail", exclude=(), limit=10,
     lanes = retrieval.score_lanes(
         candidates,
         centroids if centroids is not None else [_query()],
+        channel=channel,
         exclude_file_ids=set(exclude),
         limit=limit,
     )
@@ -255,7 +256,8 @@ def test_a_document_is_scored_by_its_best_chunk(index):
 
     lane = retrieval.score_lanes(
         retrieval.load_candidates(drive="a", channel="text_content"),
-        [_query()], exclude_file_ids=set(), limit=10,
+        [_query()], channel="text_content",
+        exclude_file_ids=set(), limit=10,
     )[0]
 
     assert [f for f, _ in lane] == ["long", "short"]
@@ -424,7 +426,8 @@ def test_results_are_ordered_by_descending_score(index):
 
     candidates = retrieval.load_candidates(drive="a", channel="clip_thumbnail")
     lane = retrieval.score_lanes(
-        candidates, [_query()], exclude_file_ids=set(), limit=10,
+        candidates, [_query()], channel="clip_thumbnail",
+        exclude_file_ids=set(), limit=10,
     )[0]
     scores = [s for _, s in lane]
 
@@ -484,7 +487,7 @@ def test_a_centroid_of_the_wrong_width_is_rejected(index):
     with pytest.raises(ValueError, match="wide"):
         retrieval.score_lanes(
             candidates, [np.ones(DIM + 2, dtype=np.float32)],
-            exclude_file_ids=set(), limit=5,
+            channel="clip_thumbnail", exclude_file_ids=set(), limit=5,
         )
 
 
@@ -495,3 +498,33 @@ def test_every_row_of_a_large_drive_is_loaded(index):
 
     assert len(retrieval.load_candidates(drive="a", channel="clip_thumbnail")) \
         == total
+
+
+def test_two_channels_of_the_same_width_cannot_be_swapped(index):
+    """Comparing widths cannot catch this, and never will.
+
+    ``tfidf_keywords`` and ``text_content`` both live in ``vec_text``,
+    which declares one width for the whole table, so those two are
+    always the same width. Only their identity separates them.
+    """
+    index.add_file("kw", "a", cosines=[0.8], channel="tfidf_keywords")
+    index.add_file("chunk", "a", cosines=[0.8], channel="text_content")
+    candidates = retrieval.load_candidates(drive="a", channel="text_content")
+
+    with pytest.raises(ValueError, match="tfidf_keywords lanes"):
+        retrieval.score_lanes(
+            candidates, [_query()], channel="tfidf_keywords",
+            exclude_file_ids=set(), limit=5,
+        )
+
+
+def test_the_matching_channel_is_accepted(index):
+    index.add_file("chunk", "a", cosines=[0.8], channel="text_content")
+    candidates = retrieval.load_candidates(drive="a", channel="text_content")
+
+    got = retrieval.score_lanes(
+        candidates, [_query()], channel="text_content",
+        exclude_file_ids=set(), limit=5,
+    )
+
+    assert [f for f, _ in got[0]] == ["chunk"]

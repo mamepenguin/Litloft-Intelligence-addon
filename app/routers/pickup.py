@@ -20,6 +20,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["pickup"])
 
 #: Rows the carousel draws its daily window from.
+#:
+#: Sized to clear the interleave's convergence depth, not chosen for
+#: variety. A lane at the weight floor places its first item around
+#: ``sum(weights) / min(weight)`` — about 33 items for the realistic
+#: worst case of 24 lanes — so the head of the feed is granular and
+#: over-represents the heaviest lanes. Twelve cards taken from the top
+#: show 6 lanes of 24; twelve sampled from the top 40 track the intended
+#: proportions. Shrinking this pool silently narrows what the carousel
+#: can show.
 _WINDOW_POOL = 40
 
 _MAX_LIMIT = 60

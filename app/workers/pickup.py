@@ -231,6 +231,7 @@ class PickupWorker:
             results = score_lanes(
                 candidate_set,
                 [lane.centroid for lane in channel_lanes],
+                channel=channel,
                 exclude_file_ids=watched,
                 limit=_CANDIDATES_PER_LANE,
             )

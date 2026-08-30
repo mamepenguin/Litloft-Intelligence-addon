@@ -239,6 +239,7 @@ def score_lanes(
     candidates: CandidateSet,
     centroids: Sequence[np.ndarray],
     *,
+    channel: str,
     exclude_file_ids: Collection[str],
     limit: int,
 ) -> list[list[tuple[str, float]]]:
@@ -247,6 +248,12 @@ def score_lanes(
     Args:
         candidates: Rows for one drive and channel.
         centroids: One normalized query vector per lane.
+        channel: The channel those centroids were built from. Checked
+            against the candidate set, because comparing widths cannot
+            do it: ``tfidf_keywords`` and ``text_content`` share
+            ``vec_text``, which declares one width for the table, so
+            those two are *always* the same width and swapping them
+            would score silently and meaninglessly.
         exclude_file_ids: Files the viewer has opened. The whole
             history, never truncated — a cap here would start
             recommending watched files to anyone past it.
@@ -255,6 +262,10 @@ def score_lanes(
     Returns:
         Per lane, ``(file_id, score)`` best first.
     """
+    if candidates.channel != channel:
+        raise ValueError(
+            f"{channel} lanes scored against {candidates.channel} rows"
+        )
     if not centroids or limit <= 0 or len(candidates) == 0:
         return [[] for _ in centroids]
 

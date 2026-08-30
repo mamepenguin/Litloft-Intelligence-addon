@@ -54,7 +54,7 @@ def _share(items, cluster_id: str) -> float:
 # ---------------------------------------------------------------------------
 
 
-def test_a_lanes_share_holds_at_every_depth():
+def test_a_lanes_share_holds_once_the_interleave_has_converged():
     lanes = [_lane("loud", 1.0), _lane("quiet", 0.25)]
     scored = {
         "loud": [(f"L{i}", 0.9 - i * 0.001) for i in range(400)],
@@ -67,6 +67,36 @@ def test_a_lanes_share_holds_at_every_depth():
     for depth in (10, 50, 150, 300):
         got = _share(items[:depth], "loud")
         assert got == pytest.approx(expected, abs=0.06), f"at depth {depth}"
+
+
+def test_the_head_of_a_many_laned_feed_is_granular():
+    """The proportions are a limit, not a property of every prefix.
+
+    A lane of weight w places its first item at key 1/w, so with many
+    lanes the head belongs to the heaviest of them and quieter lanes
+    have not appeared at all. Anything that shows a short slice must
+    sample past this point rather than take the head — which is what
+    the endpoint's window pool is sized for.
+    """
+    lanes = ([_lane(f"loud{i}", 1.0) for i in range(3)]
+             + [_lane(f"floor{i}", 0.25) for i in range(21)])
+    scored = {
+        lane.cluster_id: [(f"{lane.cluster_id}-{j}", 0.9) for j in range(60)]
+        for lane in lanes
+    }
+    expected = (21 * 0.25) / (3 + 21 * 0.25)
+
+    items = feed.interleave(lanes, scored, depth=300)
+
+    def floor_share(window):
+        return sum(1 for i in window if i.cluster_id.startswith("floor")) / len(window)
+
+    # The head under-represents the floor lanes badly...
+    assert floor_share(items[:12]) < expected - 0.2
+    assert len({i.cluster_id for i in items[:12]}) < len(lanes) / 2
+    # ...and by the window pool it has converged.
+    assert floor_share(items[:100]) == pytest.approx(expected, abs=0.05)
+    assert {i.cluster_id for i in items[:40]} == {lane.cluster_id for lane in lanes}
 
 
 def test_the_quietest_lane_is_never_starved():

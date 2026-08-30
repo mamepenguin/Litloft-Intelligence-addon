@@ -1,12 +1,29 @@
 """Assembling the Pickup feed from scored lanes.
 
 Stride scheduling. Each lane emits its candidates at positions spaced by
-the reciprocal of its weight, so a lane's share of the output is
-proportional to its weight *at every prefix length* — cut the feed at
-ten items or at three hundred and the proportions match. That is what
-gives the weight floor its meaning: an interest the viewer has not
-touched in months holds a predictable fraction of the feed rather than
-one that thins out with depth.
+the reciprocal of its weight, so a lane's share of the output converges
+on its share of the total weight, and stays there however deep the feed
+is cut. That is what gives the weight floor its meaning: an interest the
+viewer has not touched in months holds a predictable fraction rather
+than one that thins out with depth.
+
+The convergence is not immediate, and the difference matters. A lane of
+weight ``w`` places its first item at key ``1/w``, so every lane has
+appeared only once the feed is about ``sum(weights) / min(weight)``
+items long. Measured with 24 lanes — 3 at 1.0 and 21 at the 0.25 floor,
+the realistic worst case for three channels at ``_K_MAX``:
+
+    depth   lanes seen   floor-lane share   (0.636 expected)
+       12        6 / 24              0.250
+       24       18 / 24              0.625
+       40       24 / 24              0.525
+      100       24 / 24              0.630
+
+Below roughly thirty items the feed is granular and favours the heaviest
+lanes. Anything showing a short slice of it must therefore sample from a
+window past that point rather than take the head — which is what the
+endpoint's daily window is sized for, and why that sizing is
+load-bearing rather than cosmetic.
 
 Deduplication runs before ranking, and the order matters. A file
 reachable from several lanes is credited to the lane that scores it
