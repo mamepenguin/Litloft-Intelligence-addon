@@ -584,6 +584,62 @@ class TestProcessFileStatusTransitions:
         assert (await worker.enqueue("img-ok", manual=True))["accepted"] is True
 
     @pytest.mark.asyncio
+    async def test_work_already_in_flight_is_not_bought_twice(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """Manual does not override "already queued".
+
+        Stickiness is about a settled outcome the user may want to
+        re-spend on. Work already on its way is not that: asking again
+        buys a second LLM call whose result overwrites the first.
+        """
+        worker = VisionDescribeWorker()
+        assert (await worker.enqueue("img-ok", manual=True))["accepted"] is True
+
+        second = await worker.enqueue("img-ok", manual=True)
+        assert second == {"accepted": False, "reason": "already_queued"}
+
+        # Draining the queue releases the file — a worker that took it
+        # and died leaves no claim behind.
+        file_id = await worker._queue.get()
+        worker._queued.discard(file_id)
+        third = await worker.enqueue("img-ok", manual=True)
+        assert third["accepted"] is True
+
+    @pytest.mark.asyncio
+    async def test_accepting_a_file_records_pending_immediately(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """Queued is a true state, and every reader deserves to see it.
+
+        Behind other files the row would otherwise keep reporting its
+        previous outcome, so a caller polling for the change it just
+        asked for reads the old answer and concludes nothing happened.
+        """
+        engine, _ = search_db
+        now = datetime.now(UTC).isoformat()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO file_summaries "
+                    "(file_id, short_summary, long_summary, model, "
+                    "context_type, context_chars, was_truncated, status, "
+                    "created_at, visual_description_status, "
+                    "visual_description_model, visual_description_error) "
+                    "VALUES (:fid, '', '', '', 'image', 0, 0, 'hidden', "
+                    ":now, 'unsupported', 'llava:13b', 'vision_unsupported')"
+                ),
+                {"fid": "img-ok", "now": now},
+            )
+
+        worker = VisionDescribeWorker()
+        assert (await worker.enqueue("img-ok", manual=True))["accepted"] is True
+
+        row = _get_summary_row(engine, "img-ok")
+        assert row[1] == "pending"
+        assert row[4] is None
+
+    @pytest.mark.asyncio
     async def test_manual_does_not_override_the_gates_that_are_not_about_cost(
         self, search_db, feature_manual, policy_allow_family, monkeypatch,
     ):

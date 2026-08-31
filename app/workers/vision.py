@@ -471,6 +471,11 @@ class VisionDescribeWorker:
     def __init__(self) -> None:
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._processing: list[str] = []
+        # Mirrors the queue's contents, because an asyncio.Queue cannot
+        # be asked whether it holds something. Needed so a second
+        # request for a file already waiting is recognised as the same
+        # work rather than bought twice.
+        self._queued: set[str] = set()
 
     def get_status(self) -> dict[str, object]:
         """Snapshot for /status: ``{waiting, processing}``."""
@@ -493,8 +498,8 @@ class VisionDescribeWorker:
         checks exist to stop automatic sweeps from re-spending on a
         settled outcome; a person asking for this file has already
         decided it is worth spending. Every other gate — feature,
-        policy, mime, active — still applies, because those are not
-        about cost.
+        policy, mime, active, and work already in flight — still
+        applies, because those are not about cost.
         """
         if not config.is_vision_describe_available(settings):
             return False, "feature_unavailable"
@@ -531,6 +536,15 @@ class VisionDescribeWorker:
 
             state = _fetch_existing_vision(session, file_id)
 
+        # Already ours to do. Manual does not override this: asking
+        # twice for the same work does not make it happen sooner, it
+        # just buys a second LLM call whose result overwrites the
+        # first. A ``pending`` row that this worker does not hold is a
+        # different thing — a previous process died mid-flight — and
+        # stays retryable.
+        if file_id in self._queued or file_id in self._processing:
+            return False, "already_queued"
+
         if state is not None and not manual:
             status, stored_model = state
             same_model = (stored_model or "") == (settings.llm.vision_model or "")
@@ -561,6 +575,22 @@ class VisionDescribeWorker:
         accepted, reason = await self._should_accept(file_id, manual=manual)
         if not accepted:
             return {"accepted": False, "reason": reason}
+        # Record "pending" here rather than when processing starts, so
+        # the state is true for everyone the moment it becomes true.
+        # A file behind others in the queue would otherwise keep
+        # reporting its previous outcome, and a caller polling for the
+        # change it just asked for would read the old answer and
+        # conclude nothing happened.
+        with get_search_db() as session:
+            _write_status(
+                session,
+                file_id,
+                description=None,
+                status="pending",
+                model=settings.llm.vision_model or "",
+                generated_at=None,
+            )
+        self._queued.add(file_id)
         await self._queue.put(file_id)
         return {"accepted": True, "reason": None}
 
@@ -611,6 +641,7 @@ class VisionDescribeWorker:
         while True:
             try:
                 file_id = await self._queue.get()
+                self._queued.discard(file_id)
                 self._processing.append(file_id)
                 try:
                     await self._process_file(file_id)

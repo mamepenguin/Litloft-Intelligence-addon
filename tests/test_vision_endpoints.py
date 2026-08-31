@@ -255,6 +255,29 @@ class TestGenerateVisualDescription:
         assert enqueue_mock.await_args.kwargs.get("manual") is True
 
     @pytest.mark.asyncio
+    async def test_work_already_on_its_way_is_not_an_error(
+        self, feature_manual, stub_indexed_file, monkeypatch,
+    ):
+        """The caller wanted the file described; it is being described.
+
+        Answering 409 would push the UI into an error state over an
+        outcome that is exactly what was asked for.
+        """
+        stub_indexed_file()
+        monkeypatch.setattr(
+            "app.routers.vision.enqueue_visual_description",
+            AsyncMock(
+                return_value={"accepted": False, "reason": "already_queued"}
+            ),
+            raising=False,
+        )
+
+        result = await generate_visual_description(
+            file_id="img-abc", drive="family",
+        )
+        assert result["status"] == "already_queued"
+
+    @pytest.mark.asyncio
     async def test_a_declined_file_answers_409_with_the_reason(
         self, feature_manual, stub_indexed_file, monkeypatch,
     ):

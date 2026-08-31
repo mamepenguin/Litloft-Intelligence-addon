@@ -298,8 +298,10 @@ export default function VisualDescriptionSection({
               did not start is different: the worker that claimed it may
               be long gone (a restart mid-flight leaves the row exactly
               like this), and a spinner with no way out is the dead end
-              this section had elsewhere. The worker does not treat
-              pending as settled, so the retry goes through. */}
+              this section had elsewhere. Pressing it while the work is
+              genuinely running costs nothing — the worker recognises
+              the file as already queued and answers "already_queued"
+              rather than buying a second LLM call. */}
           {!working && retryButton}
         </div>
       )}

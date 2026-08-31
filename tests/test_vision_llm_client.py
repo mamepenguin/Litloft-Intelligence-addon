@@ -430,6 +430,62 @@ class TestOpenAICompatibleGenerateVision:
         assert result.failure == FAILURE_MODEL_MISSING
 
     @pytest.mark.asyncio
+    async def test_a_404_needs_no_probe_and_outranks_a_cached_verdict(self):
+        """The model went away after it had been probed as capable.
+
+        Nothing about the earlier verdict survives the model's removal,
+        so answering the 404 from cache would blame the image for the
+        model's absence and send the operator looking at the file.
+        """
+        client = _make_openai_client()
+        request = httpx.Request("POST", "http://test/chat/completions")
+        bad_image = httpx.Response(
+            status_code=400, request=request, content=b"{}",
+        )
+        gone = httpx.Response(
+            status_code=404, request=request, content=b"{}",
+        )
+        from openai import APIStatusError
+
+        probe_calls = 0
+        model_present = True
+
+        async def fake_create(**kwargs):
+            nonlocal probe_calls
+            if len(kwargs["messages"]) == 1:
+                probe_calls += 1
+                if model_present:
+                    return _make_response_obj("Red")
+                raise APIStatusError(
+                    message="HTTP 404", response=gone, body=None,
+                )
+            raise APIStatusError(
+                message="HTTP 400" if model_present else "HTTP 404",
+                response=bad_image if model_present else gone,
+                body=None,
+            )
+
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=fake_create
+        )
+
+        first = await client.generate_vision(
+            _TINY_JPEG, "image/jpeg", "Describe this image."
+        )
+        assert first.failure == FAILURE_IMAGE_REJECTED
+        assert probe_calls == 1
+
+        # The operator removes the model. Nothing is restarted.
+        model_present = False
+        second = await client.generate_vision(
+            _TINY_JPEG, "image/jpeg", "Describe this image."
+        )
+        assert second.failure == FAILURE_MODEL_MISSING
+        # The 404 answered itself; no probe was needed for it.
+        assert probe_calls == 1
+
+    @pytest.mark.asyncio
     async def test_probe_runs_once_per_model_and_not_on_success(self):
         """The probe is a failure-path cost, paid once per model."""
         client = _make_openai_client()
@@ -561,25 +617,24 @@ class TestOpenAICompatibleGenerateVision:
         """
         client = _make_openai_client()
         request = httpx.Request("POST", "http://test/chat/completions")
-        missing = httpx.Response(
-            status_code=404,
-            request=request,
-            content=b'{"error": {"message": "model not found"}}',
+        gone = httpx.Response(
+            status_code=404, request=request, content=b"{}",
+        )
+        rejected = httpx.Response(
+            status_code=400, request=request, content=b"{}",
         )
         from openai import APIStatusError
 
-        probe_calls = 0
         installed = False
 
         async def fake_create(**kwargs):
-            nonlocal probe_calls
-            is_probe = len(kwargs["messages"]) == 1
-            if is_probe:
-                probe_calls += 1
-                if installed:
-                    return _make_response_obj("Red")
+            if len(kwargs["messages"]) == 1:
+                # The probe only runs once the model is back.
+                return _make_response_obj("Red")
             raise APIStatusError(
-                message="HTTP 404", response=missing, body=None,
+                message="rejected",
+                response=rejected if installed else gone,
+                body=None,
             )
 
         client._client = MagicMock()
@@ -592,13 +647,14 @@ class TestOpenAICompatibleGenerateVision:
         )
         assert first.failure == FAILURE_MODEL_MISSING
 
-        # The operator pulls the model; nothing is restarted.
+        # The operator pulls the model; nothing is restarted. The next
+        # rejection must be classified afresh rather than answered from
+        # the earlier verdict.
         installed = True
         second = await client.generate_vision(
             _TINY_JPEG, "image/jpeg", "Describe this image."
         )
         assert second.failure == FAILURE_IMAGE_REJECTED
-        assert probe_calls == 2
 
     @pytest.mark.asyncio
     async def test_transient_500_is_a_failed_request(self):

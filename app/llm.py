@@ -314,6 +314,10 @@ class _VisionCapabilityCache:
                 self._verdicts[key] = verdict
             return verdict
 
+    def forget(self, key: tuple[str, str]) -> None:
+        """Drop one verdict because the world changed under it."""
+        self._verdicts.pop(key, None)
+
     def clear(self) -> None:
         """Drop every verdict. For tests; nothing in the app calls it."""
         self._verdicts.clear()
@@ -942,6 +946,17 @@ class LLMClient:
         the problem.
         """
         key = (self._config.base_url or "", self._config.vision_model or "")
+        if status_code == 404:
+            # A 404 answers the probe's question on its own: the model is
+            # not there. Asking anyway would only produce another 404,
+            # and worse, a verdict cached while the model still existed
+            # would answer for it and call this a bad image.
+            _vision_capability_cache.forget(key)
+            logger.info(
+                "Vision request rejected (404); model %s is not installed",
+                self._config.vision_model,
+            )
+            return FAILURE_MODEL_MISSING
         verdict = await _vision_capability_cache.resolve(
             key, self._probe_vision_capability
         )
@@ -1762,6 +1777,17 @@ class OllamaLLMClient:
         as a verdict.
         """
         key = (self._base_url or "", self._config.vision_model or "")
+        if status_code == 404:
+            # See LLMClient._classify_vision_rejection: a 404 needs no
+            # probe, and a verdict cached before the model was removed
+            # must not answer for it.
+            _vision_capability_cache.forget(key)
+            logger.info(
+                "Ollama vision request rejected (404); model %s is not "
+                "installed",
+                self._config.vision_model,
+            )
+            return FAILURE_MODEL_MISSING
         verdict = await _vision_capability_cache.resolve(
             key, self._probe_vision_capability
         )

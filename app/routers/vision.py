@@ -296,12 +296,14 @@ async def generate_visual_description(
     # work was accepted and then polls unchanged state until it gives up.
     result = await enqueue_visual_description(file_id, manual=True)
     if not result["accepted"]:
+        reason = result.get("reason") or "unavailable"
+        if reason == "already_queued":
+            # Not a refusal: the work the caller asked for is already
+            # on its way, so the answer is the same one they wanted.
+            return {"status": "already_queued", "file_id": file_id}
         raise HTTPException(
             status_code=409,
-            detail={
-                "error": "not_queued",
-                "reason": result.get("reason") or "unavailable",
-            },
+            detail={"error": "not_queued", "reason": reason},
         )
     return {"status": "accepted", "file_id": file_id}
 

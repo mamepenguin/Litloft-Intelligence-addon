@@ -299,6 +299,29 @@ describe("VisualDescriptionSection", () => {
     expect(screen.getByRole("button", { name: /Retry/ })).toBeInTheDocument();
   });
 
+  it("treats an already-queued answer as success, not an error", async () => {
+    // Retrying a row that is genuinely running is answered by the
+    // worker recognising the same work, not by refusing it.
+    (getVisualDescription as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      file_id: "f1",
+      visual_description: null,
+      status: "pending",
+      reason: null,
+      model: "llava:13b",
+      generated_at: null,
+    });
+    (generateVisualDescription as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({ status: "already_queued", file_id: "f1" });
+    renderSection();
+    const button = await screen.findByRole("button", { name: /Retry/ });
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    await waitFor(() => expect(generateVisualDescription).toHaveBeenCalled());
+    expect(screen.queryByText(/could not be queued/)).toBeNull();
+    expect(screen.queryByText(/Could not start/)).toBeNull();
+  });
+
   it("shows the pending indicator when status is pending", async () => {
     (getVisualDescription as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       file_id: "f1",
