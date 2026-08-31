@@ -960,3 +960,71 @@ class TestVisionClassificationCannotBeBypassed:
             f"{expected.__name__}; a caller cannot distinguish transient "
             f"from terminal"
         )
+
+
+class TestProbeImageIsActuallyDecodable:
+    """The reference image is the instrument every verdict rests on.
+
+    Every other test in this module mocks the probe's response, so none
+    of them would notice the literal itself going bad — and a corrupt
+    reference makes the probe condemn capable models: the provider
+    rejects the unreadable image with a 400, which is read as
+    "this model will not take images" and cached for the process.
+
+    Decoded here with the standard library rather than Pillow, which the
+    suite replaces with a MagicMock.
+    """
+
+    def _chunks(self):
+        import struct
+        import zlib
+
+        data = base64.b64decode(_PROBE_IMAGE_B64)
+        assert data[:8] == b"\x89PNG\r\n\x1a\n", "not a PNG"
+        out = []
+        offset = 8
+        while offset < len(data):
+            (length,) = struct.unpack(">I", data[offset:offset + 4])
+            tag = data[offset + 4:offset + 8]
+            body = data[offset + 8:offset + 8 + length]
+            (crc,) = struct.unpack(
+                ">I", data[offset + 8 + length:offset + 12 + length]
+            )
+            assert crc == zlib.crc32(tag + body) & 0xFFFFFFFF, (
+                f"{tag!r} chunk fails its own checksum"
+            )
+            out.append((tag, body))
+            offset += 12 + length
+        assert offset == len(data), "trailing bytes after the last chunk"
+        return out
+
+    def test_chunk_structure_is_intact(self):
+        tags = [tag for tag, _ in self._chunks()]
+        assert tags[0] == b"IHDR"
+        assert tags[-1] == b"IEND"
+        assert b"IDAT" in tags
+
+    def test_header_declares_a_64px_truecolour_image(self):
+        import struct
+
+        header = next(body for tag, body in self._chunks() if tag == b"IHDR")
+        width, height, depth, colour = struct.unpack(">IIBB", header[:10])
+        # Measured 2026-08-31: gemma4:e4b answers 200 at this size over
+        # both transports. Smaller images still pass, but this is the
+        # size the recorded measurements were taken at.
+        assert (width, height) == (64, 64)
+        assert (depth, colour) == (8, 2), "expected 8-bit truecolour RGB"
+
+    def test_pixel_data_inflates_to_a_full_solid_image(self):
+        import zlib
+
+        payload = b"".join(
+            body for tag, body in self._chunks() if tag == b"IDAT"
+        )
+        raw = zlib.decompress(payload)
+        stride = 1 + 64 * 3
+        assert len(raw) == 64 * stride, "scanlines are truncated"
+        for row in range(64):
+            line = raw[row * stride:(row + 1) * stride]
+            assert line[0] == 0, "expected the None filter on every scanline"
+            assert set(line[1:]) == {204, 51}, "expected one solid colour"
