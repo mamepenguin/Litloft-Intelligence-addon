@@ -24,7 +24,7 @@ import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import HTTPException
 
 for _mod in (
     "PIL", "PIL.Image",
@@ -143,8 +143,7 @@ class TestGenerateVisualDescription:
         with pytest.raises(HTTPException) as exc:
             await generate_visual_description(
                 file_id="img-abc",
-                background_tasks=BackgroundTasks(),
-                drive="family",
+                    drive="family",
             )
         assert exc.value.status_code == 404
 
@@ -156,8 +155,7 @@ class TestGenerateVisualDescription:
         with pytest.raises(HTTPException) as exc:
             await generate_visual_description(
                 file_id="img-abc",
-                background_tasks=BackgroundTasks(),
-                drive="family",
+                    drive="family",
             )
         assert exc.value.status_code == 404
 
@@ -173,8 +171,7 @@ class TestGenerateVisualDescription:
         with pytest.raises(HTTPException) as exc:
             await generate_visual_description(
                 file_id="img-abc",
-                background_tasks=BackgroundTasks(),
-                drive="family",
+                    drive="family",
             )
         assert exc.value.status_code == 404
 
@@ -197,8 +194,7 @@ class TestGenerateVisualDescription:
         with pytest.raises(HTTPException) as exc:
             await generate_visual_description(
                 file_id="nope",
-                background_tasks=BackgroundTasks(),
-                drive="family",
+                    drive="family",
             )
         assert exc.value.status_code == 404
 
@@ -210,13 +206,12 @@ class TestGenerateVisualDescription:
         with pytest.raises(HTTPException) as exc:
             await generate_visual_description(
                 file_id="img-abc",
-                background_tasks=BackgroundTasks(),
-                drive="family",
+                    drive="family",
             )
         assert exc.value.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_happy_path_schedules_background_task(
+    async def test_happy_path_queues_the_file(
         self, feature_manual, stub_indexed_file, monkeypatch,
     ):
         stub_indexed_file()
@@ -229,19 +224,60 @@ class TestGenerateVisualDescription:
             raising=False,
         )
 
-        bg = BackgroundTasks()
         result = await generate_visual_description(
-            file_id="img-abc", background_tasks=bg, drive="family",
+            file_id="img-abc", drive="family",
         )
 
-        # Response shape: accepted-style.
-        status = getattr(result, "status", None)
-        if status is None and isinstance(result, dict):
-            status = result.get("status")
-        assert status == "accepted"
-        # One background task (or an eager enqueue) must have been
-        # scheduled.
-        assert len(bg.tasks) >= 1 or enqueue_mock.await_count >= 1
+        assert result["status"] == "accepted"
+        assert enqueue_mock.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_the_button_overrides_stickiness(
+        self, feature_manual, stub_indexed_file, monkeypatch,
+    ):
+        """Without manual=True the recovery path does not exist.
+
+        The worker refuses a settled file on the automatic contract, so
+        a request that does not say it is a person asking would be
+        dropped — and, before this route awaited the answer, dropped
+        silently.
+        """
+        stub_indexed_file()
+        enqueue_mock = AsyncMock(return_value={"accepted": True, "reason": None})
+        monkeypatch.setattr(
+            "app.routers.vision.enqueue_visual_description",
+            enqueue_mock,
+            raising=False,
+        )
+
+        await generate_visual_description(file_id="img-abc", drive="family")
+
+        assert enqueue_mock.await_args.kwargs.get("manual") is True
+
+    @pytest.mark.asyncio
+    async def test_a_declined_file_answers_409_with_the_reason(
+        self, feature_manual, stub_indexed_file, monkeypatch,
+    ):
+        """Regression detector for the silent no-op.
+
+        Reporting "accepted" for work that was dropped leaves the
+        browser polling unchanged state until it gives up, with nothing
+        to show the user.
+        """
+        stub_indexed_file()
+        monkeypatch.setattr(
+            "app.routers.vision.enqueue_visual_description",
+            AsyncMock(return_value={"accepted": False, "reason": "policy_off"}),
+            raising=False,
+        )
+
+        with pytest.raises(HTTPException) as excinfo:
+            await generate_visual_description(
+                file_id="img-abc", drive="family",
+            )
+
+        assert excinfo.value.status_code == 409
+        assert excinfo.value.detail["reason"] == "policy_off"
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +334,83 @@ class TestGetVisualDescription:
         assert _field("model") == "llava:13b" or _field(
             "visual_description_model"
         ) == "llava:13b"
+
+    @pytest.mark.asyncio
+    async def test_an_unconfigured_model_is_told_apart_from_a_measured_one(
+        self, feature_manual, stub_indexed_file, monkeypatch, make_settings,
+    ):
+        """Two different situations wore the same label.
+
+        With no vision model set there is nothing to retry — the fix is
+        in the configuration. A stored verdict came from a real attempt
+        and the user can run it again. The UI needs to tell them apart
+        to know whether to offer the button.
+        """
+        stub_indexed_file()
+        unconfigured = make_settings(
+            features=FeaturesConfig(vision_describe="manual"),  # type: ignore[call-arg]
+            llm=LLMConfig(
+                provider="openai_compatible",
+                base_url="http://test",
+                model="gemma2:27b",
+                vision_model="",
+            ),
+        )
+        monkeypatch.setattr("app.config.settings", unconfigured)
+        monkeypatch.setattr("app.routers.vision.settings", unconfigured)
+
+        result = await get_visual_description(
+            file_id="img-abc", drive="family"
+        )
+        assert result["status"] == "unsupported"
+        assert result["reason"] == "not_configured"
+
+    @pytest.mark.asyncio
+    async def test_a_stored_reason_reaches_the_caller(
+        self, feature_manual, stub_indexed_file, monkeypatch,
+    ):
+        stub_indexed_file()
+        monkeypatch.setattr(
+            "app.routers.vision._fetch_visual_description",
+            lambda file_id: {
+                "visual_description": None,
+                "visual_description_status": "failed",
+                "visual_description_model": "llava:13b",
+                "visual_description_generated_at": None,
+                "visual_description_error": "model_missing",
+            },
+            raising=False,
+        )
+
+        result = await get_visual_description(
+            file_id="img-abc", drive="family"
+        )
+        assert result["status"] == "failed"
+        assert result["reason"] == "model_missing"
+
+    @pytest.mark.asyncio
+    async def test_a_row_from_before_the_column_existed_has_no_reason(
+        self, feature_manual, stub_indexed_file, monkeypatch,
+    ):
+        """No backfill, so the UI must cope with not being told why."""
+        stub_indexed_file()
+        monkeypatch.setattr(
+            "app.routers.vision._fetch_visual_description",
+            lambda file_id: {
+                "visual_description": None,
+                "visual_description_status": "failed",
+                "visual_description_model": "llava:13b",
+                "visual_description_generated_at": None,
+                "visual_description_error": None,
+            },
+            raising=False,
+        )
+
+        result = await get_visual_description(
+            file_id="img-abc", drive="family"
+        )
+        assert result["status"] == "failed"
+        assert result["reason"] is None
 
     @pytest.mark.asyncio
     async def test_policy_off_returns_404(

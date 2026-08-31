@@ -13,11 +13,16 @@ Access gates (applied in order):
 
 1. ``features.vision_describe == "false"`` → 404 on every route
 2. ``llm.vision_model`` empty → 404 on generate routes; GET returns
-   ``status="unsupported"`` so the UI can render the helpful notice.
+   ``status="unsupported"`` with ``reason="not_configured"`` so the UI
+   can render the helpful notice.
 3. Per-drive policy OFF → 404 on every route
 4. Cross-drive access → 404 (consistent with host ``drive_access``)
 5. Non-image mime → 404 on generate (other routes don't care: GET
    of a non-image row just returns ``available=False``).
+
+The single-file generate route answers 409 with a machine-readable
+``reason`` when the worker declines the file, rather than reporting
+acceptance for work that was dropped.
 """
 
 from __future__ import annotations
@@ -25,7 +30,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy import text as sql_text
 from sqlalchemy.exc import OperationalError
 
@@ -88,15 +93,16 @@ def _fetch_indexed_file(file_id: str) -> Any | None:
 def _fetch_visual_description(file_id: str) -> dict | None:
     """Load the stored vision description + metadata for ``file_id``.
 
-    Returns a dict of the four ``visual_description*`` columns, or
-    ``None`` when the row doesn't exist. Tests override this to return
-    canned shapes without hitting SQLite.
+    Returns a dict of the ``visual_description*`` columns, or ``None``
+    when the row doesn't exist. Tests override this to return canned
+    shapes without hitting SQLite.
     """
     with get_search_db() as session:
         row = session.execute(
             sql_text(
                 "SELECT visual_description, visual_description_status, "
-                "visual_description_model, visual_description_generated_at "
+                "visual_description_model, visual_description_generated_at, "
+                "visual_description_error "
                 "FROM file_summaries WHERE file_id = :fid"
             ),
             {"fid": file_id},
@@ -108,6 +114,7 @@ def _fetch_visual_description(file_id: str) -> dict | None:
         "visual_description_status": row[1],
         "visual_description_model": row[2],
         "visual_description_generated_at": row[3],
+        "visual_description_error": row[4],
     }
 
 
@@ -133,7 +140,8 @@ def _clear_visual_description(file_id: str) -> bool:
                     "visual_description = NULL, "
                     "visual_description_status = NULL, "
                     "visual_description_model = NULL, "
-                    "visual_description_generated_at = NULL "
+                    "visual_description_generated_at = NULL, "
+                    "visual_description_error = NULL "
                     "WHERE file_id = :fid"
                 ),
                 {"fid": file_id},
@@ -260,10 +268,14 @@ async def _require_drive_policy(drive: str) -> None:
 @router.post("/files/{file_id}/visual_description/generate")
 async def generate_visual_description(
     file_id: str,
-    background_tasks: BackgroundTasks,
     drive: str = Depends(require_drive),
 ) -> dict:
-    """Kick off a vision description for one file."""
+    """Kick off a vision description for one file.
+
+    This is the button, so the request carries ``manual=True`` and
+    overrides the stickiness gates — a file that already settled on
+    "unsupported" is exactly the one a person is here to retry.
+    """
     _require_feature_available()
     await _require_drive_policy(drive)
 
@@ -278,10 +290,20 @@ async def generate_visual_description(
     if not mime or not str(mime).lower().startswith("image/"):
         raise HTTPException(status_code=404, detail="Not an image file")
 
-    # Schedule the actual work off the request path so a slow LLM call
-    # never blocks the browser. Tests can also await the helper directly
-    # by monkeypatching ``enqueue_visual_description``.
-    background_tasks.add_task(enqueue_visual_description, file_id)
+    # Awaiting the enqueue costs a DB read and a cached policy lookup,
+    # never an LLM call — the queue is what defers the slow part. Doing
+    # it here is what lets a refusal be reported: handing the enqueue to
+    # a background task discards its answer, so the browser is told the
+    # work was accepted and then polls unchanged state until it gives up.
+    result = await enqueue_visual_description(file_id, manual=True)
+    if not result["accepted"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "not_queued",
+                "reason": result.get("reason") or "unavailable",
+            },
+        )
     return {"status": "accepted", "file_id": file_id}
 
 
@@ -296,6 +318,11 @@ async def get_visual_description(
     ``vision_model`` is unset but features.vision_describe is truthy
     we surface ``status="unsupported"`` instead of 404 so the UI can
     render the guidance message without polling.
+
+    ``reason`` separates the two ways a caller can see "unsupported".
+    ``"not_configured"`` is this addon's own configuration and the only
+    fix is to set a vision model, so no retry is offered. A stored
+    reason came from a real attempt, and the UI offers to run it again.
     """
     if settings.features.vision_describe == "false":
         raise HTTPException(status_code=404, detail="Feature disabled")
@@ -312,6 +339,7 @@ async def get_visual_description(
             "file_id": file_id,
             "visual_description": None,
             "status": "unsupported",
+            "reason": "not_configured",
             "model": None,
             "generated_at": None,
         }
@@ -322,6 +350,7 @@ async def get_visual_description(
             "file_id": file_id,
             "visual_description": None,
             "status": None,
+            "reason": None,
             "model": None,
             "generated_at": None,
         }
@@ -330,6 +359,7 @@ async def get_visual_description(
         "file_id": file_id,
         "visual_description": data.get("visual_description"),
         "status": data.get("visual_description_status"),
+        "reason": data.get("visual_description_error"),
         "model": data.get("visual_description_model"),
         "generated_at": data.get("visual_description_generated_at"),
     }
