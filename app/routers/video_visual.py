@@ -182,6 +182,13 @@ async def get_visual_index(
     )
 
 
+# Reasons that mean "not now" rather than "not here": the file is
+# eligible, something else has to happen first. Everything else is a 404,
+# which also keeps a file in another drive indistinguishable from one
+# that does not exist.
+_NOT_YET_REASONS = frozenset({"waiting_clip", "unsupported_sticky"})
+
+
 @router.post("/files/{file_id}/visual-index/generate")
 async def generate_visual_index(
     file_id: str,
@@ -201,17 +208,19 @@ async def generate_visual_index(
     result = await worker.enqueue(file_id, requested_by="manual")
     if not result.get("accepted"):
         reason = result.get("reason", "unavailable")
-        if reason == "waiting_clip":
-            raise HTTPException(
-                status_code=409, detail="Scene CLIP indexing is not complete yet"
-            )
-        if reason == "unsupported_sticky":
+        if reason == "already_queued":
+            # Not a refusal: what the caller asked for is on its way.
+            return {"status": "already_queued", "file_id": file_id}
+        if reason in _NOT_YET_REASONS:
+            # A condition that clears on its own or with one operator
+            # action. The reason travels as a field rather than as
+            # prose, because the frontend has to tell them apart to say
+            # anything useful — conflated, they all read as "wait for
+            # scene indexing", which is wrong for every one but that.
             raise HTTPException(
                 status_code=409,
-                detail="The configured Vision model does not support this operation",
+                detail={"error": "not_queued", "reason": reason},
             )
-        if reason == "already_queued":
-            return {"status": "already_queued", "file_id": file_id}
         raise HTTPException(status_code=404, detail="Not available")
 
     return {"status": "accepted", "file_id": file_id, "run_id": result.get("run_id")}

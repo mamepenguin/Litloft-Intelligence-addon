@@ -303,6 +303,7 @@
     "visualIndexSceneFailed": "失敗",
     "visualIndexTranscriptExcerpt": "文字起こし",
     "visualIndexWaitingPrerequisite": "シーンのインデックス作成の完了を待っています。",
+    "visualIndexModelCannotSee": "設定中のモデルは画像を受け付けません。画像対応の llm.vision_model を設定してから再試行してください。",
     "visualIndexActionError": "ビジュアルインデックスの生成を開始できませんでした。"
   },
   "detailedSummary": {

@@ -452,8 +452,19 @@ class VideoVisualWorker:
 
     # -- Enqueue ------------------------------------------------------------
 
-    async def _should_accept(self, file_id: str) -> tuple[bool, str]:
-        """Shared gate: feature flag + vision_model + drive policy + mime + CLIP + stickiness."""
+    async def _should_accept(
+        self, file_id: str, *, manual: bool = False
+    ) -> tuple[bool, str]:
+        """Shared gate: feature flag + vision_model + drive policy + mime + CLIP + stickiness.
+
+        ``manual`` skips the stickiness check and nothing else, matching
+        ``VisionDescribeWorker._should_accept``. Stickiness stops
+        automatic sweeps from re-spending on a settled verdict; a person
+        asking for this file has decided otherwise, usually because they
+        just changed the thing that produced it. Everything else — the
+        feature, the policy, the mime, the CLIP prerequisite, and a run
+        already in flight — applies to everyone.
+        """
         if not is_video_visual_index_available(settings):
             return False, "disabled"
 
@@ -490,9 +501,11 @@ class VideoVisualWorker:
                 .first()
             )
             # Sticky "provider/model can't do this" — same shape as
-            # VisionDescribeWorker._should_accept. A model swap clears it.
+            # VisionDescribeWorker._should_accept. A model swap clears
+            # it, and so does an explicit request.
             if (
-                last_run is not None
+                not manual
+                and last_run is not None
                 and last_run.status == "failed"
                 and last_run.error_class == "Unsupported"
                 and (last_run.vision_model or "") == (settings.llm.vision_model or "")
@@ -524,7 +537,9 @@ class VideoVisualWorker:
         file's CLIP task (§6.1); an automatic request is simply skipped
         (the periodic on_index sweep / CLIP-completion hook retries it).
         """
-        accepted, reason = await self._should_accept(file_id)
+        accepted, reason = await self._should_accept(
+            file_id, manual=(requested_by == "manual")
+        )
         if not accepted:
             if reason == "waiting_clip" and requested_by == "manual":
                 try:

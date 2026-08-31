@@ -594,9 +594,77 @@ class TestEnqueue:
             s.commit()
 
         worker = VideoVisualWorker(MagicMock())
-        result = await worker.enqueue("vid-ok")
+        # The automatic path: a settled verdict is not re-spent on.
+        result = await worker.enqueue("vid-ok", requested_by="on_index")
         assert result["accepted"] is False
         assert result["reason"] == "unsupported_sticky"
+
+    @pytest.mark.asyncio
+    async def test_a_manual_request_overrides_unsupported_stickiness(
+        self, search_db, feature_manual, policy_allow_all,
+    ):
+        """The escape hatch, matching vision_describe.
+
+        Stickiness protects the automatic sweep's budget. A person
+        asking for this file has decided otherwise, and is usually
+        asking precisely because they changed what caused the verdict.
+        """
+        _, Session = search_db
+        with Session() as s:
+            s.add(
+                VideoVisualRun(
+                    id="vvr_prior",
+                    file_id="vid-ok",
+                    status="failed",
+                    is_active=False,
+                    requested_by="manual",
+                    priority=100,
+                    vision_model="llava:13b",
+                    pipeline_version=1,
+                    candidate_fingerprint="fp",
+                    error_class="Unsupported",
+                )
+            )
+            s.commit()
+
+        worker = VideoVisualWorker(MagicMock())
+        assert (await worker.enqueue("vid-ok", requested_by="on_index"))[
+            "reason"
+        ] == "unsupported_sticky"
+        assert (await worker.enqueue("vid-ok", requested_by="manual"))[
+            "accepted"
+        ] is True
+
+    @pytest.mark.asyncio
+    async def test_manual_does_not_override_a_run_already_in_flight(
+        self, search_db, feature_manual, policy_allow_all,
+    ):
+        """Asking twice does not make it happen sooner.
+
+        Unlike a settled verdict, work already staged is not something
+        the user can usefully buy again — the second run would replace
+        the first for nothing.
+        """
+        _, Session = search_db
+        with Session() as s:
+            s.add(
+                VideoVisualRun(
+                    id="vvr_running",
+                    file_id="vid-ok",
+                    status="running",
+                    is_active=False,
+                    requested_by="manual",
+                    priority=100,
+                    vision_model="llava:13b",
+                    pipeline_version=2,
+                    candidate_fingerprint="fp",
+                )
+            )
+            s.commit()
+
+        worker = VideoVisualWorker(MagicMock())
+        result = await worker.enqueue("vid-ok", requested_by="manual")
+        assert result == {"accepted": False, "reason": "already_queued"}
 
     @pytest.mark.asyncio
     async def test_unsupported_sticky_clears_on_model_change(

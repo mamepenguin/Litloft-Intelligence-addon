@@ -345,6 +345,9 @@ class TestGenerateVisualIndex:
         with pytest.raises(HTTPException) as exc:
             await generate_visual_index(file_id="vid-abc", drive="family")
         assert exc.value.status_code == 409
+        # The reason travels as a field: conflated into prose, every
+        # refusal reads as "wait for scene indexing" downstream.
+        assert exc.value.detail["reason"] == "waiting_clip"
 
     @pytest.mark.asyncio
     async def test_unsupported_sticky_returns_409(self, feature_manual, search_db, stub_worker):
@@ -354,6 +357,7 @@ class TestGenerateVisualIndex:
         with pytest.raises(HTTPException) as exc:
             await generate_visual_index(file_id="vid-abc", drive="family")
         assert exc.value.status_code == 409
+        assert exc.value.detail["reason"] == "unsupported_sticky"
 
     @pytest.mark.asyncio
     async def test_already_queued_returns_200_status(self, feature_manual, search_db, stub_worker):

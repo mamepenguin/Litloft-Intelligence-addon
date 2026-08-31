@@ -1828,16 +1828,52 @@ export async function getVideoVisualIndex(
   }
 }
 
-/** Stage a new run (manual priority). Throws on non-2xx so the UI can
- * surface a specific message (e.g. 409 "waiting on scene CLIP"). */
+/** The run was not staged; `reason` names the gate that refused. */
+export interface VideoVisualIndexNotQueued {
+  kind: "not_queued";
+  reason: string;
+}
+
+/**
+ * Stage a new run (manual priority).
+ *
+ * A 409 rejects with a `VideoVisualIndexNotQueued` on `err.info`. The
+ * reason has to reach the caller as data: the conditions behind it are
+ * different enough that one shared message is wrong for all but one of
+ * them.
+ */
 export async function generateVideoVisualIndex(
   fileId: string,
   drive: string,
 ): Promise<{ status: string; file_id: string; run_id?: string }> {
-  return fetchJSON(
+  const res = await fetch(
     `${API_BASE}/addons/intelligence/files/${fileId}/visual-index/generate`,
-    { method: "POST", headers: driveHeaders(drive) },
+    { method: "POST", credentials: "include", headers: driveHeaders(drive) },
   );
+  if (res.status === 409) {
+    let reason = "unavailable";
+    try {
+      const body = (await res.json()) as { detail?: { reason?: unknown } };
+      if (typeof body?.detail?.reason === "string") {
+        reason = body.detail.reason;
+      }
+    } catch {
+      // Keep the fallback reason.
+    }
+    const err = new Error("not_queued") as Error & {
+      info: VideoVisualIndexNotQueued;
+    };
+    err.info = { kind: "not_queued", reason };
+    throw err;
+  }
+  if (!res.ok) {
+    throw new Error(`Visual index generate failed: ${res.status}`);
+  }
+  return (await res.json()) as {
+    status: string;
+    file_id: string;
+    run_id?: string;
+  };
 }
 
 /** Re-queue only the failed scenes of the most recent retryable run. */

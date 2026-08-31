@@ -303,6 +303,7 @@
     "visualIndexSceneFailed": "Failed",
     "visualIndexTranscriptExcerpt": "Transcript",
     "visualIndexWaitingPrerequisite": "Waiting on scene indexing to finish before this can start.",
+    "visualIndexModelCannotSee": "The configured model does not accept images. Set a vision-capable llm.vision_model, then try again.",
     "visualIndexActionError": "Could not start visual index generation."
   },
   "detailedSummary": {

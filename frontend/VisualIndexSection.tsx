@@ -116,13 +116,23 @@ export default function VisualIndexSection({
       await generateVideoVisualIndex(fileId, drive);
       await load(requestIdRef.current);
     } catch (e) {
-      const status = (e as { status?: number } | undefined)?.status;
-      if (status === 409) {
+      // Every refusal used to read as "wait for scene indexing", which
+      // is only true for one of them. The reason arrives as data now,
+      // so each says what would actually change the outcome.
+      const declined = (e as { info?: { kind?: string; reason?: string } })
+        ?.info;
+      if (declined?.kind === "not_queued") {
         setError(
-          t("visualIndexWaitingPrerequisite", {
-            defaultMessage:
-              "Waiting on scene indexing to finish before this can start.",
-          }),
+          declined.reason === "waiting_clip"
+            ? t("visualIndexWaitingPrerequisite", {
+                defaultMessage:
+                  "Waiting on scene indexing to finish before this can start.",
+              })
+            : t("visualIndexModelCannotSee", {
+                defaultMessage:
+                  "The configured model does not accept images. Set a "
+                  + "vision-capable llm.vision_model, then try again.",
+              }),
         );
       } else {
         setError(
