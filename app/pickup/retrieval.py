@@ -227,11 +227,16 @@ def load_candidates(*, drive: str, channel: str) -> CandidateSet:
             matrix=np.zeros((0, 0), dtype=np.float32),
         )
 
+    # ``np.stack`` of float32 rows is already float32, and an
+    # ``astype`` without ``copy=False`` would duplicate the whole matrix
+    # while the blobs and per-row arrays are still live — about 146 MiB
+    # extra for 100,000 rows at 384 dimensions, on the sweep that is
+    # also holding the profile.
     return CandidateSet(
         channel=channel,
         drive=drive,
         file_ids=tuple(file_ids),
-        matrix=np.stack(vectors).astype(np.float32),
+        matrix=np.stack(vectors).astype(np.float32, copy=False),
     )
 
 

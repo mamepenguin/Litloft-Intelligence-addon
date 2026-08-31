@@ -660,3 +660,53 @@ def test_the_reduced_vector_is_still_the_normalised_mean(lib):
     got = profile.representative_vectors(["doc"], "text_content")
 
     assert np.allclose(got["doc"], _unit(1, 1))
+
+
+# ---------------------------------------------------------------------------
+# The watch signature
+# ---------------------------------------------------------------------------
+
+
+def test_the_signature_reports_lifecycle_state(lib):
+    """``profile_history`` filters on it, so the signature must see it.
+
+    Trashing a watched file changes which entries the profile is built
+    from while leaving its id and timestamp untouched. Without this the
+    staleness check would serve a profile built from the old set.
+    """
+    lib.watch("live", age_days=1)
+    lib.watch("trashed", age_days=1, deleted=True)
+
+    got = {row[0]: row[2] for row in profile.watch_signature("a", "v1")}
+
+    assert got == {"live": 1, "trashed": 0}
+
+
+def test_the_signature_keeps_trashed_rows(lib):
+    """It feeds the exclusion set too, and a trashed file was still opened."""
+    lib.watch("trashed", age_days=1, deleted=True)
+
+    signature = profile.watch_signature("a", "v1")
+
+    assert [row[0] for row in signature] == ["trashed"]
+    assert profile.profile_history("a", "v1") == []
+
+
+def test_the_signature_carries_the_timestamp(lib):
+    lib.watch("f1", age_days=3)
+
+    signature = profile.watch_signature("a", "v1")
+
+    assert len(signature) == 1
+    assert signature[0][0] == "f1"
+    assert signature[0][1].startswith("20")
+
+
+def test_the_signature_is_scoped_to_one_drive_and_viewer(lib):
+    lib.watch("mine", viewer="v1", drive="a")
+    lib.watch("other_drive", viewer="v1", drive="b")
+    lib.watch("other_viewer", viewer="v2", drive="a")
+
+    got = {row[0] for row in profile.watch_signature("a", "v1")}
+
+    assert got == {"mine"}

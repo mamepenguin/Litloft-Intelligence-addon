@@ -203,27 +203,39 @@ def viewer_ids(drive: str) -> list[str]:
     return [row[0] for row in rows if row[0]]
 
 
-def watch_signature(drive: str, viewer_id: str) -> list[tuple[str, str]]:
-    """Every (file_id, last_played_at) this viewer has in this drive.
+def watch_signature(drive: str, viewer_id: str) -> list[tuple[str, str, int]]:
+    """Everything about this viewer's history that the profile depends on.
 
-    The timestamps are what make it a signature rather than a set. A
-    viewer reopening something they had already watched changes no ids
-    at all, but it does move that file's recency — which is what the
-    lane weights and the profile window are computed from. Keyed on the
-    set alone, the feed would go on describing an interest the viewer
-    has just revived, or one that has since aged out.
+    Three fields, because three things change the profile without
+    changing the fourth.
+
+    The **timestamps** are what make this a signature rather than a set.
+    Reopening something already watched changes no ids at all, but moves
+    that file's recency — which is what the lane weights and the window
+    are computed from.
+
+    The **lifecycle flag** is here because ``profile_history`` filters on
+    it. Trashing a watched file, or restoring one, changes which entries
+    the profile is built from while leaving ids and timestamps
+    untouched, and the feed would go on describing the old set.
+
+    Rows are *not* filtered by that flag: the exclusion set is derived
+    from this too, and a file in the trash is still a file this viewer
+    has opened.
     """
     with get_litloft_db() as session:
         rows = session.execute(
             sql_text(
-                "SELECT wh.file_id, wh.last_played_at "
+                "SELECT wh.file_id, wh.last_played_at, "
+                "  CASE WHEN f.deleted_at IS NULL AND f.missing_since IS NULL "
+                "       THEN 1 ELSE 0 END AS live "
                 "FROM watch_history wh "
                 "JOIN files f ON wh.file_id = f.id "
                 "WHERE f.drive = :drive AND wh.viewer_id = :viewer"
             ),
             {"drive": drive, "viewer": viewer_id},
         ).fetchall()
-    return [(row[0], str(row[1])) for row in rows]
+    return [(row[0], str(row[1]), int(row[2])) for row in rows]
 
 
 def watched_file_ids(drive: str, viewer_id: str) -> set[str]:

@@ -198,7 +198,7 @@ class PickupWorker:
         signature = profile_mod.watch_signature(drive, viewer_id)
         if not signature:
             return None
-        watched = {file_id for file_id, _ in signature}
+        watched = {file_id for file_id, _, _ in signature}
 
         checkpoint = _checkpoint(signature)
         with get_search_db_read() as session:
@@ -220,8 +220,18 @@ class PickupWorker:
         candidates: dict[str, CandidateSet],
     ) -> None:
         history = profile_mod.profile_history(drive, viewer_id)
+        if not history:
+            # Nothing inside the profile window. Deterministic until the
+            # history moves or the day rolls, both of which the
+            # checkpoint covers, so record it — otherwise every sweep
+            # reloads every vector in the drive to learn the same thing.
+            _store(drive, viewer_id, [], checkpoint)
+            return
+
         lanes = profile_mod.build_lanes(history, key=f"{drive}\x1f{viewer_id}")
         if not lanes:
+            # Watched files inside the window, but none carrying a
+            # vector yet. Indexing lagging, not a settled state.
             _store(drive, viewer_id, [], None)
             return
 
@@ -310,9 +320,11 @@ def _checkpoint(signature: Sequence[tuple[str, str]]) -> str:
     ids of a drive-wide recency list barely moved for a second viewer.
     So the whole set, sorted.
 
-    *Anything re-watched.* Reopening a file already in the set changes
-    no ids, but moves its recency, and recency is what the lane weights
-    are made of. So the timestamps are in the hash too.
+    *Anything re-watched, or trashed, or restored.* Reopening a file
+    already in the set changes no ids, but moves its recency — and
+    recency is what the lane weights are made of. Trashing or restoring
+    one changes which entries the profile is built from, and nothing
+    else. Both are in the hash.
 
     *Time itself.* The profile reads a rolling year and weights it by a
     60-day half-life, both of which drift while the viewer does
@@ -322,5 +334,8 @@ def _checkpoint(signature: Sequence[tuple[str, str]]) -> str:
     hourly sweep still skips them the other twenty-three times.
     """
     stamp = datetime.now(UTC).strftime("%Y-%m-%d")
-    joined = ";".join(f"{file_id}@{played}" for file_id, played in sorted(signature))
+    joined = ";".join(
+        f"{file_id}@{played}#{live}"
+        for file_id, played, live in sorted(signature)
+    )
     return hashlib.md5(f"{stamp}|{joined}".encode()).hexdigest()[:32]

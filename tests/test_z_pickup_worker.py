@@ -68,6 +68,7 @@ def rig(monkeypatch, tmp_path):
         "loads": [],
         "scores": [],
         "played": {},
+        "live": {},
     }
 
     monkeypatch.setattr(worker_mod.profile_mod, "viewer_ids",
@@ -77,7 +78,11 @@ def rig(monkeypatch, tmp_path):
     monkeypatch.setattr(
         worker_mod.profile_mod, "watch_signature",
         lambda drive, v: [
-            (f, state["played"].get((v, f), "2026-08-01 00:00:00"))
+            (
+                f,
+                state["played"].get((v, f), "2026-08-01 00:00:00"),
+                state["live"].get((v, f), 1),
+            )
             for f in sorted(state["watched"].get(v, ()))
         ],
     )
@@ -504,7 +509,7 @@ def test_the_checkpoint_moves_with_the_day():
     from datetime import UTC, datetime
     from unittest.mock import patch
 
-    sig = [("f1", "2026-01-01 00:00:00")]
+    sig = [("f1", "2026-01-01 00:00:00", 1)]
 
     with patch.object(worker_mod, "datetime") as clock:
         clock.now.return_value = datetime(2026, 3, 2, tzinfo=UTC)
@@ -519,12 +524,51 @@ def test_the_checkpoint_moves_with_the_day():
 
 
 def test_the_checkpoint_still_moves_with_membership():
-    a = worker_mod._checkpoint([("f1", "t"), ("f2", "t")])
-    b = worker_mod._checkpoint([("f1", "t")])
+    a = worker_mod._checkpoint([("f1", "t", 1), ("f2", "t", 1)])
+    b = worker_mod._checkpoint([("f1", "t", 1)])
     assert a != b
 
 
 def test_the_checkpoint_is_order_independent_over_pairs():
-    a = worker_mod._checkpoint([("f1", "t1"), ("f2", "t2")])
-    b = worker_mod._checkpoint([("f2", "t2"), ("f1", "t1")])
+    a = worker_mod._checkpoint([("f1", "t1", 1), ("f2", "t2", 1)])
+    b = worker_mod._checkpoint([("f2", "t2", 1), ("f1", "t1", 1)])
     assert a == b
+
+
+def test_trashing_a_watched_file_rebuilds_the_feed():
+    """profile_history filters lifecycle; the signature must see it.
+
+    A trashed file leaves the id and the timestamp untouched while
+    changing which entries the profile is built from.
+    """
+    live = worker_mod._checkpoint([("f1", "t", 1)])
+    trashed = worker_mod._checkpoint([("f1", "t", 0)])
+
+    assert live != trashed
+
+
+async def test_a_history_outside_the_window_is_recorded_not_retried(rig):
+    """Deterministic until the history moves or the day rolls.
+
+    Left uncheckpointed, every hourly sweep reloads every vector in the
+    drive before reaching the same conclusion.
+    """
+    rig["history"]["v1"] = []
+    w = worker_mod.PickupWorker()
+    await w._compute_for_drive("a")
+
+    assert rig["header"]().watch_history_checkpoint is not None
+    rig["loads"].clear()
+
+    await w._compute_for_drive("a")
+
+    assert rig["loads"] == []
+
+
+async def test_missing_embeddings_are_still_retried(rig):
+    """Watched files inside the window with no vectors yet is transient."""
+    rig["lanes"] = []
+
+    await worker_mod.PickupWorker()._compute_for_drive("a")
+
+    assert rig["header"]().watch_history_checkpoint is None
