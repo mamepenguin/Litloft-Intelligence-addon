@@ -269,6 +269,15 @@ _PROBE_TIMEOUT_S = 120.0
 # are the FAILURE_* values the rejection maps to.
 _PROBE_CAPABLE = "capable"
 
+# A probe rejection is the only evidence that produces a permanent
+# verdict, and a permanent verdict is cached for the process and latched
+# onto every file it touches. Every other 400 in this module is retried;
+# it would be perverse for the one irreversible conclusion to rest on a
+# single request. A provider that refuses once under load, or a gateway
+# having a moment, must not condemn a capable model — so the rejection
+# has to happen twice, independently, before it is believed.
+_PROBE_CONFIRMATIONS = 2
+
 # Only verdicts that cannot change while the process runs are worth
 # remembering. Whether a model takes images is a property of the
 # configured model, and LLM configuration changes require a restart.
@@ -949,6 +958,19 @@ class LLMClient:
 
         return VisionGeneration(None, FAILURE_REQUEST_FAILED)
 
+    async def _confirmed_probe(self) -> str:
+        """Probe, and make an unsupported verdict earn a second answer."""
+        verdict = await self._probe_vision_capability()
+        attempts = 1
+        while (
+            verdict == FAILURE_VISION_UNSUPPORTED
+            and attempts < _PROBE_CONFIRMATIONS
+        ):
+            await asyncio.sleep(self._backoff_delay(attempts - 1))
+            verdict = await self._probe_vision_capability()
+            attempts += 1
+        return verdict
+
     async def _classify_vision_rejection(self, status_code: int) -> str:
         """Name what a 400/404 on a vision call actually meant.
 
@@ -970,7 +992,7 @@ class LLMClient:
             )
             return FAILURE_MODEL_MISSING
         verdict = await _vision_capability_cache.resolve(
-            key, self._probe_vision_capability
+            key, self._confirmed_probe
         )
         if verdict == _PROBE_CAPABLE:
             logger.info(
@@ -1783,6 +1805,19 @@ class OllamaLLMClient:
 
         return VisionGeneration(None, FAILURE_REQUEST_FAILED)
 
+    async def _confirmed_probe(self) -> str:
+        """Probe, and make an unsupported verdict earn a second answer."""
+        verdict = await self._probe_vision_capability()
+        attempts = 1
+        while (
+            verdict == FAILURE_VISION_UNSUPPORTED
+            and attempts < _PROBE_CONFIRMATIONS
+        ):
+            await asyncio.sleep(self._backoff_delay(attempts - 1))
+            verdict = await self._probe_vision_capability()
+            attempts += 1
+        return verdict
+
     async def _classify_vision_rejection(self, status_code: int) -> str:
         """Name what a 400/404 on a vision call actually meant.
 
@@ -1804,7 +1839,7 @@ class OllamaLLMClient:
             )
             return FAILURE_MODEL_MISSING
         verdict = await _vision_capability_cache.resolve(
-            key, self._probe_vision_capability
+            key, self._confirmed_probe
         )
         if verdict == _PROBE_CAPABLE:
             logger.info(

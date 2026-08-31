@@ -64,6 +64,7 @@ for _mod in (
 
 from app.config import LLMConfig  # noqa: E402
 from app.llm import (  # noqa: E402
+    _PROBE_CONFIRMATIONS,
     _PROBE_IMAGE_B64,
     FAILURE_EMPTY,
     JsonGeneration,
@@ -316,6 +317,11 @@ class TestOpenAICompatibleGenerateVision:
                 APIStatusError(
                     message="HTTP 400", response=response, body=None,
                 ),
+                # Two probes: the only permanent verdict has to be
+                # rejected twice before it is believed.
+                APIStatusError(
+                    message="HTTP 400", response=response, body=None,
+                ),
                 APIStatusError(
                     message="HTTP 400", response=response, body=None,
                 ),
@@ -330,7 +336,7 @@ class TestOpenAICompatibleGenerateVision:
         # verdict it is allowed to latch.
         assert result.text is None
         assert result.failure == FAILURE_VISION_UNSUPPORTED
-        first, second, probe = (
+        first, second, probe, _confirm = (
             client._client.chat.completions.create.await_args_list
         )
         assert "extra_body" in first.kwargs
@@ -487,6 +493,49 @@ class TestOpenAICompatibleGenerateVision:
         assert probe_calls == 1
 
     @pytest.mark.asyncio
+    async def test_one_bad_moment_does_not_condemn_a_capable_model(self):
+        """The only permanent verdict must not rest on one request.
+
+        A provider refusing once under load would otherwise latch
+        "cannot see" for the life of the process and stamp it onto
+        every file that follows — while every other 400 in this module
+        gets retried.
+        """
+        client = _make_openai_client()
+        request = httpx.Request("POST", "http://test/chat/completions")
+        response = httpx.Response(
+            status_code=400, request=request, content=b"{}",
+        )
+        from openai import APIStatusError
+
+        probe_calls = 0
+
+        async def fake_create(**kwargs):
+            nonlocal probe_calls
+            if len(kwargs["messages"]) == 1:
+                probe_calls += 1
+                if probe_calls == 1:
+                    # One bad moment.
+                    raise APIStatusError(
+                        message="HTTP 400", response=response, body=None,
+                    )
+                return _make_response_obj("Red")
+            raise APIStatusError(
+                message="HTTP 400", response=response, body=None,
+            )
+
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=fake_create
+        )
+
+        result = await client.generate_vision(
+            _TINY_JPEG, "image/jpeg", "Describe this image."
+        )
+        assert result.failure == FAILURE_IMAGE_REJECTED
+        assert probe_calls == 2
+
+    @pytest.mark.asyncio
     async def test_probe_runs_once_per_model_and_not_on_success(self):
         """The probe is a failure-path cost, paid once per model."""
         client = _make_openai_client()
@@ -529,7 +578,9 @@ class TestOpenAICompatibleGenerateVision:
             )
             assert result.failure == FAILURE_VISION_UNSUPPORTED
 
-        assert probe_calls == 1
+        # One classification, confirmed once; the other two files are
+        # answered from the cache.
+        assert probe_calls == _PROBE_CONFIRMATIONS
 
     @pytest.mark.asyncio
     async def test_concurrent_failures_share_one_probe(self):
@@ -571,7 +622,8 @@ class TestOpenAICompatibleGenerateVision:
         ])
 
         assert all(r.failure == FAILURE_VISION_UNSUPPORTED for r in results)
-        assert probe_calls == 1
+        # Five files, one classification — confirmed once, not five times.
+        assert probe_calls == _PROBE_CONFIRMATIONS
 
     @pytest.mark.asyncio
     async def test_an_undetermined_rejection_is_not_a_lost_request(self):

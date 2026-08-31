@@ -389,6 +389,35 @@ class TestGetVisualDescription:
         assert result["reason"] == "not_configured"
 
     @pytest.mark.asyncio
+    async def test_a_disabled_client_reads_as_not_configured(
+        self, feature_manual, stub_indexed_file, monkeypatch,
+    ):
+        """A vision model set against a disabled client runs nothing.
+
+        There is no work the user can trigger, so this belongs with
+        "not configured" — the notice, without a retry button that
+        would only queue something nobody would run.
+        """
+        stub_indexed_file()
+        disabled = MagicMock()
+        disabled.enabled = False
+        monkeypatch.setattr(
+            "app.routers.vision.get_llm_client", lambda: disabled
+        )
+
+        result = await get_visual_description(
+            file_id="img-abc", drive="family"
+        )
+        assert result["status"] == "unsupported"
+        assert result["reason"] == "not_configured"
+
+        with pytest.raises(HTTPException) as exc:
+            await generate_visual_description(
+                file_id="img-abc", drive="family",
+            )
+        assert exc.value.status_code == 404
+
+    @pytest.mark.asyncio
     async def test_a_stored_reason_reaches_the_caller(
         self, feature_manual, stub_indexed_file, monkeypatch,
     ):

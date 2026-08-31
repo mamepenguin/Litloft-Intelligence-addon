@@ -158,6 +158,16 @@ def feature_manual(monkeypatch, make_settings):
     )
     monkeypatch.setattr("app.config.settings", settings)
     monkeypatch.setattr("app.workers.vision.settings", settings)
+
+    # A configured feature with no usable client accepts work that
+    # nothing will ever run, so the gate asks the client too. The
+    # fixture describes a working system; tests that want the client
+    # gone override this.
+    enabled_llm = MagicMock()
+    enabled_llm.enabled = True
+    monkeypatch.setattr(
+        "app.workers.vision.get_llm_client", lambda: enabled_llm
+    )
     return settings
 
 
@@ -667,6 +677,67 @@ class TestProcessFileStatusTransitions:
         assert await fresh.requeue_abandoned() == 0
 
     @pytest.mark.asyncio
+    async def test_accepting_a_file_does_not_destroy_what_is_there(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """Queuing is not a result, so it must not overwrite one.
+
+        A folder-wide accept would otherwise empty every description it
+        touched before a single LLM call had been made — and if the
+        provider then went down, all of them would be gone with nothing
+        to show for it.
+        """
+        engine, _ = search_db
+        now = datetime.now(UTC).isoformat()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO file_summaries "
+                    "(file_id, short_summary, long_summary, model, "
+                    "context_type, context_chars, was_truncated, status, "
+                    "created_at, visual_description, "
+                    "visual_description_status, visual_description_model, "
+                    "visual_description_generated_at) "
+                    "VALUES (:fid, '', '', '', 'image', 0, 0, 'hidden', "
+                    ":now, 'A green leaf, close up.', 'success', "
+                    "'old-model', :now)"
+                ),
+                {"fid": "img-ok", "now": now},
+            )
+
+        worker = VisionDescribeWorker()
+        assert (await worker.enqueue("img-ok", manual=True))["accepted"] is True
+
+        row = _get_summary_row(engine, "img-ok")
+        assert row[1] == "pending"
+        assert row[0] == "A green leaf, close up."
+        assert row[2] == "old-model"
+
+    @pytest.mark.asyncio
+    async def test_no_client_means_no_acceptance(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """Configured is not the same as runnable.
+
+        The worker task only runs while the LLM client is enabled, and
+        a client can be disabled with llm.vision_model still set.
+        Accepting in that state marks the row pending for a worker that
+        will never look at it, and startup recovery sits behind the
+        same gate — so the row would stay pending forever.
+        """
+        engine, _ = search_db
+        disabled = MagicMock()
+        disabled.enabled = False
+        monkeypatch.setattr(
+            "app.workers.vision.get_llm_client", lambda: disabled
+        )
+
+        worker = VisionDescribeWorker()
+        result = await worker.enqueue("img-ok", manual=True)
+        assert result == {"accepted": False, "reason": "llm_unavailable"}
+        assert _get_summary_row(engine, "img-ok") is None
+
+    @pytest.mark.asyncio
     async def test_accepting_a_file_records_pending_immediately(
         self, search_db, feature_manual, policy_allow_family, monkeypatch,
     ):
@@ -800,6 +871,11 @@ class TestProcessFileStatusTransitions:
         )
         monkeypatch.setattr("app.config.settings", settings)
         monkeypatch.setattr("app.workers.vision.settings", settings)
+        enabled_llm = MagicMock()
+        enabled_llm.enabled = True
+        monkeypatch.setattr(
+            "app.workers.vision.get_llm_client", lambda: enabled_llm
+        )
 
         engine, _ = search_db
         now = datetime.now(UTC).isoformat()
@@ -837,6 +913,11 @@ class TestProcessFileStatusTransitions:
         )
         monkeypatch.setattr("app.config.settings", settings)
         monkeypatch.setattr("app.workers.vision.settings", settings)
+        enabled_llm = MagicMock()
+        enabled_llm.enabled = True
+        monkeypatch.setattr(
+            "app.workers.vision.get_llm_client", lambda: enabled_llm
+        )
 
         engine, _ = search_db
         now = datetime.now(UTC).isoformat()

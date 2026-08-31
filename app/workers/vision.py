@@ -337,6 +337,28 @@ def _write_status(
     )
 
 
+def _mark_pending(session: Any, file_id: str) -> None:
+    """Move the row to ``pending`` without touching the stored result.
+
+    Only the status changes, and the reason that belonged to the last
+    attempt is cleared with it. The description, its model and its
+    timestamp are left alone: they still describe the last completed
+    run, and accepting a file is not a reason to destroy what is
+    already there — a bulk accept would otherwise empty every row it
+    touched before a single LLM call had been made.
+    """
+    _ensure_summary_row(session, file_id)
+    session.execute(
+        sql_text(
+            "UPDATE file_summaries SET "
+            "visual_description_status = 'pending', "
+            "visual_description_error = NULL "
+            "WHERE file_id = :fid"
+        ),
+        {"fid": file_id},
+    )
+
+
 def _clear_vision_embeddings(session: Any, file_id: str) -> None:
     """Remove prior ``vision_description`` embeddings for this file.
 
@@ -504,6 +526,24 @@ class VisionDescribeWorker:
         if not config.is_vision_describe_available(settings):
             return False, "feature_unavailable"
 
+        # The worker task only runs when the LLM client is enabled
+        # (app/main.py), so accepting work here in that state would
+        # queue it for nobody: the row would be marked pending and stay
+        # that way, and startup recovery lives behind the same gate and
+        # would not free it either. Config can satisfy
+        # is_vision_describe_available while the client is disabled —
+        # provider "disabled", or an empty base_url / text model.
+        try:
+            llm_enabled = bool(getattr(get_llm_client(), "enabled", False))
+        except Exception as e:
+            logger.warning(
+                "vision: LLM client unavailable (%s); refusing to enqueue %s",
+                type(e).__name__, file_id,
+            )
+            return False, "llm_unavailable"
+        if not llm_enabled:
+            return False, "llm_unavailable"
+
         # Fail-closed on policy lookup failure: the file stays in the
         # queue mentally (caller can retry) and we never accidentally
         # run vision on a drive whose operator has opted out. Read paths
@@ -582,14 +622,7 @@ class VisionDescribeWorker:
         # change it just asked for would read the old answer and
         # conclude nothing happened.
         with get_search_db() as session:
-            _write_status(
-                session,
-                file_id,
-                description=None,
-                status="pending",
-                model=settings.llm.vision_model or "",
-                generated_at=None,
-            )
+            _mark_pending(session, file_id)
         self._queued.add(file_id)
         await self._queue.put(file_id)
         return {"accepted": True, "reason": None}
@@ -717,16 +750,11 @@ class VisionDescribeWorker:
         )
 
         # Mark pending so concurrent readers see "in flight" instead of
-        # the previous state.
+        # the previous state. Redundant when the file arrived through
+        # ``enqueue``, which already did it, but ``_process_file`` is
+        # also driven directly and must not depend on that.
         with get_search_db() as session:
-            _write_status(
-                session,
-                file_id,
-                description=None,
-                status="pending",
-                model=vision_model,
-                generated_at=None,
-            )
+            _mark_pending(session, file_id)
 
         loaded = _load_image_bytes(file_id)
         if loaded is None:
@@ -885,6 +913,7 @@ __all__ = [
     "_ensure_summary_row",
     "_fetch_existing_vision",
     "_load_image_bytes",
+    "_mark_pending",
     "_preprocess_image",
     "_write_status",
     "get_llm_client",
