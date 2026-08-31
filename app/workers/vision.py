@@ -594,6 +594,42 @@ class VisionDescribeWorker:
         await self._queue.put(file_id)
         return {"accepted": True, "reason": None}
 
+    async def requeue_abandoned(self) -> int:
+        """Re-queue rows left ``pending`` by a process that is gone.
+
+        Acceptance records ``pending`` so the state is true the moment
+        it becomes true, but the queue holding that work lives only as
+        long as the process. A restart therefore leaves every waiting
+        file marked pending with nothing left to run it — a whole bulk
+        run stranded by one deploy.
+
+        Called at startup, where the reading is unambiguous: this
+        worker holds nothing yet, so a pending row can only be someone
+        else's abandoned claim. It is deliberately not a periodic sweep,
+        which would race the queue it is meant to repair.
+
+        Runs regardless of feature mode. Resuming work already paid for
+        is not the same decision as starting new work.
+        """
+        with get_search_db() as session:
+            rows = session.execute(
+                sql_text(
+                    "SELECT f.file_id FROM indexed_files f "
+                    "JOIN file_summaries s ON s.file_id = f.file_id "
+                    "WHERE f.active = 1 "
+                    "AND f.mime_type LIKE 'image/%' "
+                    "AND s.visual_description_status = 'pending'"
+                )
+            ).fetchall()
+
+        queued = 0
+        for (file_id,) in rows:
+            # manual=True: the row is already pending, which the
+            # stickiness gates would otherwise read as nothing to do.
+            if (await self.enqueue(file_id, manual=True))["accepted"]:
+                queued += 1
+        return queued
+
     async def enqueue_unprocessed(self) -> int:
         """Sweep already-indexed images that have no description yet.
 

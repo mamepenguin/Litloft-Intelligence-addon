@@ -607,6 +607,66 @@ class TestProcessFileStatusTransitions:
         assert third["accepted"] is True
 
     @pytest.mark.asyncio
+    async def test_a_restart_resumes_work_that_was_already_accepted(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """The queue dies with the process; the rows do not.
+
+        Recording pending on acceptance is what makes the state honest
+        while a file waits its turn, but it also means a restart leaves
+        every waiting file marked pending with nothing left to run it.
+        Startup is where that reading is unambiguous: a fresh worker
+        holds nothing, so a pending row is an abandoned claim.
+        """
+        engine, _ = search_db
+        now = datetime.now(UTC).isoformat()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO file_summaries "
+                    "(file_id, short_summary, long_summary, model, "
+                    "context_type, context_chars, was_truncated, status, "
+                    "created_at, visual_description_status, "
+                    "visual_description_model) "
+                    "VALUES (:fid, '', '', '', 'image', 0, 0, 'hidden', "
+                    ":now, 'pending', 'llava:13b')"
+                ),
+                {"fid": "img-ok", "now": now},
+            )
+
+        fresh = VisionDescribeWorker()
+        assert await fresh.requeue_abandoned() == 1
+        assert "img-ok" in fresh._queued
+
+    @pytest.mark.asyncio
+    async def test_resuming_leaves_settled_rows_alone(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """Only pending rows are abandoned claims.
+
+        A described or refused file was not waiting for anything, so
+        picking it up would be new spending, not resumption.
+        """
+        engine, _ = search_db
+        now = datetime.now(UTC).isoformat()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO file_summaries "
+                    "(file_id, short_summary, long_summary, model, "
+                    "context_type, context_chars, was_truncated, status, "
+                    "created_at, visual_description, "
+                    "visual_description_status, visual_description_model) "
+                    "VALUES (:fid, '', '', '', 'image', 0, 0, 'hidden', "
+                    ":now, 'A description', 'success', 'llava:13b')"
+                ),
+                {"fid": "img-ok", "now": now},
+            )
+
+        fresh = VisionDescribeWorker()
+        assert await fresh.requeue_abandoned() == 0
+
+    @pytest.mark.asyncio
     async def test_accepting_a_file_records_pending_immediately(
         self, search_db, feature_manual, policy_allow_family, monkeypatch,
     ):

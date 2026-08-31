@@ -293,6 +293,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # an existing library would only describe newly-indexed files
         # (the CLIP-completion hook in indexer.py only fires once per
         # file). Mirrors the auto_tags / summaries on_index sweep.
+        # Work that was already accepted before the last shutdown. Its
+        # queue died with that process, so nothing else will pick it up.
+        resumed = await vision_worker.requeue_abandoned()
+        if resumed > 0:
+            logger.info("Vision: resumed %d files left queued", resumed)
+
         if settings.features.vision_describe == "on_index":
             pending = await vision_worker.enqueue_unprocessed()
             if pending > 0:

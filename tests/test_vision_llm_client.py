@@ -70,6 +70,7 @@ from app.llm import (  # noqa: E402
     FAILURE_IMAGE_REJECTED,
     FAILURE_MODEL_MISSING,
     FAILURE_REQUEST_FAILED,
+    FAILURE_VISION_REJECTED,
     FAILURE_VISION_UNSUPPORTED,
     LLMClient,
     OllamaLLMClient,
@@ -573,6 +574,38 @@ class TestOpenAICompatibleGenerateVision:
         assert probe_calls == 1
 
     @pytest.mark.asyncio
+    async def test_an_undetermined_rejection_is_not_a_lost_request(self):
+        """The request landed and was refused; only the reason is missing.
+
+        Collapsing that into request_failed loses the fact that the
+        provider rejected it, which is what the JSON-mode fallback keys
+        on.
+        """
+        client = _make_openai_client()
+        request = httpx.Request("POST", "http://test/chat/completions")
+        response = httpx.Response(
+            status_code=400, request=request, content=b"{}",
+        )
+        from openai import APIStatusError
+
+        async def fake_create(**kwargs):
+            if len(kwargs["messages"]) == 1:
+                raise RuntimeError("probe could not be carried out")
+            raise APIStatusError(
+                message="HTTP 400", response=response, body=None,
+            )
+
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=fake_create
+        )
+
+        result = await client.generate_vision(
+            _TINY_JPEG, "image/jpeg", "Describe this image."
+        )
+        assert result.failure == FAILURE_VISION_REJECTED
+
+    @pytest.mark.asyncio
     async def test_failed_probe_is_not_cached(self):
         """A probe that could not be carried out says nothing about the model."""
         client = _make_openai_client()
@@ -604,7 +637,9 @@ class TestOpenAICompatibleGenerateVision:
             result = await client.generate_vision(
                 _TINY_JPEG, "image/jpeg", "Describe this image."
             )
-            assert result.failure == FAILURE_REQUEST_FAILED
+            # Rejected, cause undetermined — never cached, so the next
+            # rejection probes again.
+            assert result.failure == FAILURE_VISION_REJECTED
 
         assert probe_calls == 2
 
@@ -1129,3 +1164,42 @@ class TestStructuredVisionKeepsTheUpstreamReason:
         )
         assert result.value is None
         assert result.failure == FAILURE_TOKEN_BUDGET
+
+
+
+class TestJsonModeFallbackSurvivesAnUndeterminedProbe:
+    """A provider whose only fault is lacking JSON mode still gets its retry.
+
+    The fallback keys on the rejection having happened, not on the probe
+    having reached a conclusion — otherwise a probe that times out takes
+    the compatibility path down with it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_retry_without_response_format_still_happens(self):
+        client = _make_openai_client()
+        request = httpx.Request("POST", "http://test/chat/completions")
+        rejected = httpx.Response(
+            status_code=400, request=request, content=b"{}",
+        )
+        from openai import APIStatusError
+
+        async def fake_create(**kwargs):
+            if len(kwargs["messages"]) == 1:
+                raise RuntimeError("probe timed out")
+            if "response_format" in kwargs:
+                raise APIStatusError(
+                    message="no json mode", response=rejected, body=None,
+                )
+            return _make_response_obj('{"scene_label":"A kitchen"}')
+
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=fake_create
+        )
+
+        result = await client.generate_video_scene_json(
+            _TINY_JPEG, "image/jpeg", "system", "user",
+        )
+        assert result.value == {"scene_label": "A kitchen"}
+        assert result.failure is None

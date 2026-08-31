@@ -151,6 +151,11 @@ FAILURE_REQUEST_FAILED = "request_failed"
 FAILURE_VISION_UNSUPPORTED = "vision_unsupported"
 FAILURE_MODEL_MISSING = "model_missing"
 FAILURE_IMAGE_REJECTED = "image_rejected"
+# The provider refused the vision request and the probe that would have
+# said why could not be carried out. Distinct from ``request_failed``,
+# which means the request never landed at all: here it landed and was
+# rejected, we simply do not know for which of the reasons above.
+FAILURE_VISION_REJECTED = "vision_rejected"
 
 
 @dataclass(frozen=True)
@@ -333,11 +338,18 @@ def reset_vision_capability_cache() -> None:
 
 
 # Failures that came from a 400 and could therefore have been caused by
-# our own ``response_format`` rather than by the image or the model. A
+# our own ``response_format`` rather than by the image or the model. The
+# set is keyed on the rejection having happened, not on the probe having
+# reached a conclusion — a provider whose only fault is lacking JSON
+# mode must still get its retry when the probe happens to time out. A
 # 404 is excluded: an absent model does not become present by dropping a
 # body field.
 _RESPONSE_FORMAT_SUSPECT_FAILURES = frozenset(
-    {FAILURE_VISION_UNSUPPORTED, FAILURE_IMAGE_REJECTED}
+    {
+        FAILURE_VISION_UNSUPPORTED,
+        FAILURE_IMAGE_REJECTED,
+        FAILURE_VISION_REJECTED,
+    }
 )
 
 
@@ -967,6 +979,9 @@ class LLMClient:
                 status_code, self._config.vision_model,
             )
             return FAILURE_IMAGE_REJECTED
+        if verdict == FAILURE_REQUEST_FAILED:
+            # The rejection is real; only the explanation is missing.
+            return FAILURE_VISION_REJECTED
         logger.info(
             "Vision request rejected (status %d); probe verdict for %s: %s",
             status_code, self._config.vision_model, verdict,
@@ -1798,6 +1813,8 @@ class OllamaLLMClient:
                 status_code, self._config.vision_model,
             )
             return FAILURE_IMAGE_REJECTED
+        if verdict == FAILURE_REQUEST_FAILED:
+            return FAILURE_VISION_REJECTED
         logger.info(
             "Ollama vision request rejected (status %d); probe verdict "
             "for %s: %s",
