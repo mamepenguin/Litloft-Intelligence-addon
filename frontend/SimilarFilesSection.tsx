@@ -67,7 +67,14 @@ export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSecti
   }, [fileId, drive]);
 
   return (
-    <div>
+    // The result grid sizes its columns against this element, not the
+    // viewport: the section renders both full-width and inside the
+    // ~300px inspector, which a viewport breakpoint cannot tell apart.
+    // A containment context is safe here only because the subtree holds
+    // nothing but thumbnails — one wrapped around a <video> or a
+    // cross-origin iframe renders the subtree rotated and spinning on
+    // iOS Safari. hako 7bFYOh3vFZP9EEuf9Ym_5.
+    <div className="@container">
       <div className="mb-3 flex items-center justify-between gap-2">
         {status === "loaded" ? (
           <button
@@ -113,7 +120,9 @@ export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSecti
       )}
 
       {status === "loaded" && isOpen && results.length > 0 && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        // @lg = 32rem, the narrowest host where a third column still
+        // leaves each card ~160px of thumbnail.
+        <div className="grid grid-cols-2 gap-3 @lg:grid-cols-3">
           {results.map((item: SimilarFileItem) => (
             <Link
               key={item.file_id}
