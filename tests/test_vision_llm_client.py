@@ -553,6 +553,54 @@ class TestOpenAICompatibleGenerateVision:
         assert probe_calls == 2
 
     @pytest.mark.asyncio
+    async def test_a_missing_model_verdict_is_not_cached(self):
+        """`ollama pull` clears the condition without a restart.
+
+        Caching it would latch a self-healing condition — the same
+        mistake, one layer up, that the classification exists to undo.
+        """
+        client = _make_openai_client()
+        request = httpx.Request("POST", "http://test/chat/completions")
+        missing = httpx.Response(
+            status_code=404,
+            request=request,
+            content=b'{"error": {"message": "model not found"}}',
+        )
+        from openai import APIStatusError
+
+        probe_calls = 0
+        installed = False
+
+        async def fake_create(**kwargs):
+            nonlocal probe_calls
+            is_probe = len(kwargs["messages"]) == 1
+            if is_probe:
+                probe_calls += 1
+                if installed:
+                    return _make_response_obj("Red")
+            raise APIStatusError(
+                message="HTTP 404", response=missing, body=None,
+            )
+
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=fake_create
+        )
+
+        first = await client.generate_vision(
+            _TINY_JPEG, "image/jpeg", "Describe this image."
+        )
+        assert first.failure == FAILURE_MODEL_MISSING
+
+        # The operator pulls the model; nothing is restarted.
+        installed = True
+        second = await client.generate_vision(
+            _TINY_JPEG, "image/jpeg", "Describe this image."
+        )
+        assert second.failure == FAILURE_IMAGE_REJECTED
+        assert probe_calls == 2
+
+    @pytest.mark.asyncio
     async def test_transient_500_is_a_failed_request(self):
         """5xx is transient; caller marks status=failed and retries later."""
         from openai import InternalServerError

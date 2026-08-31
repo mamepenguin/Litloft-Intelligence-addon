@@ -264,6 +264,17 @@ _PROBE_TIMEOUT_S = 120.0
 # are the FAILURE_* values the rejection maps to.
 _PROBE_CAPABLE = "capable"
 
+# Only verdicts that cannot change while the process runs are worth
+# remembering. Whether a model takes images is a property of the
+# configured model, and LLM configuration changes require a restart.
+# Whether the model is installed is not: ``ollama pull`` clears that with
+# nothing restarted, so caching it would latch a condition that heals
+# itself — the very mistake this classification exists to undo. The cost
+# of re-asking is one instant 404, since a rejection runs no inference.
+_CACHEABLE_PROBE_VERDICTS = frozenset(
+    {_PROBE_CAPABLE, FAILURE_VISION_UNSUPPORTED}
+)
+
 
 class _VisionCapabilityCache:
     """Remembers, per model, whether it accepts images at all.
@@ -275,12 +286,13 @@ class _VisionCapabilityCache:
       single-flight, every one of those failures would launch its own
       probe before the first answer landed, so concurrent callers wait
       on one in-flight probe per key.
-    * ``request_failed`` is never cached. It says the probe itself could
-      not be carried out, which is not evidence about the model.
+    * Only ``_CACHEABLE_PROBE_VERDICTS`` are kept. A probe that could not
+      be carried out is not evidence about the model, and an absent
+      model is a condition the operator can clear without a restart.
 
     Keyed by ``(base_url, model)`` because the same model name on a
-    different endpoint is a different deployment. LLM configuration
-    changes require a container restart, so entries need no TTL.
+    different endpoint is a different deployment. What is cached cannot
+    change while the process runs, so entries need no TTL.
     """
 
     def __init__(self) -> None:
@@ -298,7 +310,7 @@ class _VisionCapabilityCache:
             if cached is not None:
                 return cached
             verdict = await probe()
-            if verdict != FAILURE_REQUEST_FAILED:
+            if verdict in _CACHEABLE_PROBE_VERDICTS:
                 self._verdicts[key] = verdict
             return verdict
 
