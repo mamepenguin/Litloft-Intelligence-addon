@@ -943,6 +943,8 @@ class LLMClient:
 
     async def _probe_vision_capability(self) -> str:
         """Send the reference image and report what the status says."""
+        # A real request to the provider, so it queues like any other.
+        await self._wait_for_rate_limit()
         extra_kwargs: dict = {}
         if _uses_max_completion_tokens(self._config.vision_model):
             extra_kwargs["max_completion_tokens"] = _PROBE_MAX_TOKENS
@@ -1762,6 +1764,7 @@ class OllamaLLMClient:
 
     async def _probe_vision_capability(self) -> str:
         """Send the reference image and report what the status says."""
+        await self._wait_for_rate_limit()
         try:
             resp = await self._http.post(
                 f"{self._base_url}/api/chat",

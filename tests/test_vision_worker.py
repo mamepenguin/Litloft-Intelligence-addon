@@ -51,6 +51,7 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 from app.config import FeaturesConfig, LLMConfig  # noqa: E402
 from app.llm import (  # noqa: E402
     FAILURE_EMPTY,
+    FAILURE_TOKEN_BUDGET,
     FAILURE_VISION_UNSUPPORTED,
     VisionGeneration,
 )
@@ -339,6 +340,49 @@ class TestProcessFileStatusTransitions:
         assert row is not None
         assert row[0] is None
         assert row[1] == "failed"
+
+    @pytest.mark.asyncio
+    async def test_truncated_description_is_not_stored_as_success(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """A description cut off by the token ceiling is not a description.
+
+        Success is sticky for the same model, so storing half a sentence
+        would both put it into retrieval as though it were whole and
+        stop a raised ``vision_max_tokens`` from ever re-running the
+        file.
+        """
+        engine, _ = search_db
+
+        monkeypatch.setattr(
+            "app.workers.vision._load_image_bytes",
+            lambda file_id: (b"\xff\xd8fake", "image/jpeg"),
+            raising=False,
+        )
+
+        llm_stub = MagicMock()
+        llm_stub.enabled = True
+        llm_stub.generate_vision = AsyncMock(
+            return_value=VisionGeneration(
+                "A red apple on a wooden tab", FAILURE_TOKEN_BUDGET
+            )
+        )
+        monkeypatch.setattr(
+            "app.workers.vision.get_llm_client", lambda: llm_stub
+        )
+        embed_mock = MagicMock()
+        monkeypatch.setattr(
+            "app.workers.vision._embed_and_store", embed_mock, raising=False,
+        )
+
+        worker = VisionDescribeWorker()
+        await worker._process_file("img-ok")
+
+        row = _get_summary_row(engine, "img-ok")
+        assert row is not None
+        assert row[1] == "failed"
+        assert row[0] is None
+        embed_mock.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_unsupported_response_sets_unsupported_status(

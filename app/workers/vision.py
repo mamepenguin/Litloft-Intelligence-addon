@@ -696,8 +696,7 @@ class VisionDescribeWorker:
         # other reason clears on its own — the operator pulls the model,
         # or the next file is one the provider can read — so it stays a
         # retryable failure.
-        description = (result.text or "").strip()
-        if not description and result.failure == FAILURE_VISION_UNSUPPORTED:
+        if result.failure == FAILURE_VISION_UNSUPPORTED:
             with get_search_db() as session:
                 _write_status(
                     session,
@@ -713,7 +712,14 @@ class VisionDescribeWorker:
             )
             return
 
-        if not description:
+        description = (result.text or "").strip()
+        # Success needs both a description and a clean call. Text cut off
+        # by the token ceiling arrives non-empty and would otherwise be
+        # stored as success — which is sticky for this model, so raising
+        # ``vision_max_tokens`` would never re-run the file, and half a
+        # sentence would sit in retrieval as though it were the whole
+        # description.
+        if result.failure is not None or not description:
             with get_search_db() as session:
                 _write_status(
                     session,
