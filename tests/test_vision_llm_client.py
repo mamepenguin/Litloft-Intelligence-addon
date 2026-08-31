@@ -76,19 +76,10 @@ from app.llm import (  # noqa: E402
     LLMClient,
     OllamaLLMClient,
     VisionGeneration,
-    reset_vision_capability_cache,
 )
 
 
 _TINY_JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xff\xd9"
-
-
-@pytest.fixture(autouse=True)
-def _clean_capability_cache():
-    """A verdict cached by one test must not answer another's probe."""
-    reset_vision_capability_cache()
-    yield
-    reset_vision_capability_cache()
 
 
 def _make_response_obj(text: str) -> MagicMock:

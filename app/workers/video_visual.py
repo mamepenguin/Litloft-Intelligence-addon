@@ -88,10 +88,18 @@ _READY_EVENTS = {
 # ``vision_unsupported`` is absent on purpose: it ends the run rather
 # than the scene, so it never reaches ``_fail_scene``.
 _SCENE_ERROR_CLASSES = {
-    FAILURE_MODEL_MISSING: "ModelMissing",
     FAILURE_IMAGE_REJECTED: "ImageRejected",
     FAILURE_TOKEN_BUDGET: "TokenBudget",
     FAILURE_REQUEST_FAILED: "RequestFailed",
+}
+
+# Outcomes that describe the model rather than the frame, so the run
+# stops instead of paying two requests per scene to learn the same
+# thing again. The value is the run's ``error_class``; only
+# "Unsupported" is what ``_should_accept`` treats as sticky.
+_RUN_ENDING_OUTCOMES = {
+    "unsupported": "Unsupported",
+    "model_missing": "ModelMissing",
 }
 
 
@@ -794,11 +802,17 @@ class VideoVisualWorker:
         for scene_id in pending_ids:
             await self._pause_event.wait()  # checked between scenes only
             outcome = await self._process_scene(scene_id, run_id, file_id, file_path, filename)
-            if outcome == "unsupported":
-                self._fail_run(run_id, "Unsupported")
+            # Both of these are facts about the model, so every
+            # remaining scene would meet them too. Only the first is
+            # sticky: a model that cannot see stays that way until it
+            # is changed, while an absent one comes back with a pull,
+            # so its error_class deliberately is not the one
+            # ``_should_accept`` latches on.
+            if outcome in _RUN_ENDING_OUTCOMES:
+                self._fail_run(run_id, _RUN_ENDING_OUTCOMES[outcome])
                 await emit_video_visual_event(
                     _READY_EVENTS["failed"],
-                    {"file_id": file_id, "run_id": run_id, "drive": drive, "reason": "unsupported"},
+                    {"file_id": file_id, "run_id": run_id, "drive": drive, "reason": outcome},
                 )
                 return
             await self._emit_progress(run_id, file_id, drive)
@@ -905,6 +919,8 @@ class VideoVisualWorker:
         # rejected frame or an absent model is this scene's problem.
         if result.failure == FAILURE_VISION_UNSUPPORTED:
             return "unsupported"
+        if result.failure == FAILURE_MODEL_MISSING:
+            return "model_missing"
 
         parsed = _validate_scene_output(result.value)
         if parsed is None:
@@ -925,6 +941,8 @@ class VideoVisualWorker:
                 result2 = JsonGeneration(None, FAILURE_REQUEST_FAILED)
             if result2.failure == FAILURE_VISION_UNSUPPORTED:
                 return "unsupported"
+            if result2.failure == FAILURE_MODEL_MISSING:
+                return "model_missing"
             parsed = _validate_scene_output(result2.value)
             if parsed is None:
                 return self._fail_scene(

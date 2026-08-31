@@ -36,6 +36,7 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 from app.config import FeaturesConfig, LLMConfig  # noqa: E402
 from app.llm import (  # noqa: E402
     FAILURE_IMAGE_REJECTED,
+    FAILURE_MODEL_MISSING,
     FAILURE_TOKEN_BUDGET,
     JsonGeneration,
 )
@@ -53,6 +54,7 @@ pytest.importorskip(
 )
 
 from app.workers.video_visual import (  # noqa: E402
+    _RUN_ENDING_OUTCOMES,
     VideoVisualWorker,
     _load_frame_bytes,
     _read_or_extract_frame,
@@ -369,6 +371,63 @@ class TestProcessSceneLabel:
         with Session() as s:
             stored = s.query(VideoVisualScene).filter_by(id=scene_id).one()
             assert stored.error_class == "TokenBudget"
+
+    @pytest.mark.asyncio
+    async def test_an_absent_model_ends_the_run_without_latching_it(
+        self, search_db, feature_manual, policy_allow_all, monkeypatch,
+    ):
+        """Every remaining scene would meet the same absence.
+
+        Carrying on pays two requests per scene to learn it again. But
+        a pull brings the model back, so the run must not be closed
+        with the error_class the stickiness gate latches on.
+        """
+        _, Session = search_db
+        with Session() as s:
+            run = VideoVisualRun(
+                id="vvr_gone", file_id="vid-ok", status="running",
+                is_active=False, requested_by="manual", priority=100,
+                vision_model="llava:13b", pipeline_version=2,
+                candidate_fingerprint="fp", selected_count=1,
+            )
+            scene = VideoVisualScene(
+                run_id="vvr_gone", ordering=0, clip_embedding_id="c0",
+                start_time=5.0, status="pending",
+            )
+            s.add_all([run, scene])
+            s.commit()
+            scene_id = scene.id
+
+        monkeypatch.setattr(
+            "app.workers.video_visual.config.validate_file_path", lambda path: True,
+        )
+        monkeypatch.setattr(
+            "app.workers.video_visual._load_frame_bytes",
+            AsyncMock(return_value=b"raw-frame"),
+        )
+        monkeypatch.setattr(
+            "app.workers.vision._preprocess_image",
+            lambda data, mime: (b"processed-frame", "image/jpeg"),
+        )
+        monkeypatch.setattr(
+            "app.workers.video_visual._select_transcript_excerpt",
+            lambda *args: "",
+        )
+
+        llm = MagicMock()
+        llm.generate_video_scene_json = AsyncMock(
+            return_value=JsonGeneration(None, FAILURE_MODEL_MISSING)
+        )
+
+        outcome = await VideoVisualWorker(llm)._process_scene(
+            scene_id, "vvr_gone", "vid-ok", "/drives/family/clip.mp4", "clip.mp4"
+        )
+        assert outcome == "model_missing"
+        # One call, not a repair attempt as well: the answer will not
+        # change for a model that is not there.
+        assert llm.generate_video_scene_json.await_count == 1
+        assert _RUN_ENDING_OUTCOMES[outcome] == "ModelMissing"
+        assert _RUN_ENDING_OUTCOMES[outcome] != "Unsupported"
 
     @pytest.mark.asyncio
     async def test_a_rejected_frame_does_not_end_the_whole_run(

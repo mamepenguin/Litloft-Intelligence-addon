@@ -641,8 +641,11 @@ class VisionDescribeWorker:
         else's abandoned claim. It is deliberately not a periodic sweep,
         which would race the queue it is meant to repair.
 
-        Runs regardless of feature mode. Resuming work already paid for
-        is not the same decision as starting new work.
+        Does not distinguish how the work was requested: resuming
+        something already accepted is not the same decision as starting
+        new work, so a manual request is picked up as readily as an
+        on_index one. It is still subject to the feature being live —
+        both this call site and ``_should_accept`` require that.
         """
         with get_search_db() as session:
             rows = session.execute(

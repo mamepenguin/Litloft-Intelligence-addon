@@ -210,7 +210,8 @@ export default function VisualDescriptionSection({
         return t("visionModelMissing", {
           model: model ?? "",
           defaultMessage:
-            "The model {model} was not found on the LLM provider.",
+            "The model {model} was not found on the LLM provider. Pull it "
+            + "on the provider side.",
         });
       case "image_rejected":
         return t("visionImageRejected", {
@@ -271,12 +272,23 @@ export default function VisualDescriptionSection({
           <div className="flex items-start gap-2 rounded-lg border border-bg-border bg-bg-elevated/50 px-3 py-2 text-xs text-text-muted">
             <Settings size={14} className="mt-0.5 flex-shrink-0" />
             <span>
-              {t("visionModelCannotSee", {
-                model: model ?? "",
-                defaultMessage:
-                  "The configured model {model} does not accept images. "
-                  + "Set a vision-capable llm.vision_model, then try again.",
-              })}
+              {reason
+                ? t("visionModelCannotSee", {
+                    model: model ?? "",
+                    defaultMessage:
+                      "The configured model {model} does not accept images. "
+                      + "Set a vision-capable llm.vision_model, then try again.",
+                  })
+                : /* No reason recorded means this verdict predates the
+                     backend keeping one, which is to say it came from
+                     the guessing that produced the bug. Repeating its
+                     conclusion here would be making the same guess a
+                     second time. */
+                  t("visionUnknownVerdict", {
+                    defaultMessage:
+                      "An earlier attempt recorded that this could not be "
+                      + "described, without saying why. Try again.",
+                  })}
             </span>
           </div>
           {retryButton}

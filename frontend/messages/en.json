@@ -279,6 +279,7 @@
     "visionFailed": "Failed to create description. Try again or check the intelligence logs.",
     "visionUnsupported": "No LLM capable of image description is configured. Set `llm.vision_model` in search-config.yml.",
     "visionModelCannotSee": "The configured model {model} does not accept images. Set a vision-capable llm.vision_model, then try again.",
+    "visionUnknownVerdict": "An earlier attempt recorded that this could not be described, without saying why. Try again.",
     "visionModelMissing": "The model {model} was not found on the LLM provider. Pull it on the provider side.",
     "visionImageRejected": "The model could not read this image.",
     "visionTokenBudget": "The description was cut off by the token limit. Raise llm.vision_max_tokens and try again.",

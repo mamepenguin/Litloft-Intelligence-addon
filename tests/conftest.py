@@ -118,3 +118,21 @@ def mock_litloft_db():
         yield session
 
     return _get_litloft_db, session
+
+
+@pytest.fixture(autouse=True)
+def _clean_vision_capability_cache():
+    """A probed verdict must not outlive the test that provoked it.
+
+    ``app.llm`` caches capability per (base_url, model) for the process,
+    so without this a stub in one test answers the probe in another —
+    and the two are usually configured identically. Session-wide rather
+    than per-file: the cache is module state, so any test that reaches
+    ``_classify_vision_rejection`` inherits it, not only the ones that
+    meant to.
+    """
+    from app.llm import reset_vision_capability_cache
+
+    reset_vision_capability_cache()
+    yield
+    reset_vision_capability_cache()
