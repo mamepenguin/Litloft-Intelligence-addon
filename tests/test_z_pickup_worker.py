@@ -572,3 +572,20 @@ async def test_missing_embeddings_are_still_retried(rig):
     await worker_mod.PickupWorker()._compute_for_drive("a")
 
     assert rig["header"]().watch_history_checkpoint is None
+
+
+def test_changing_the_ranking_invalidates_stored_feeds(monkeypatch):
+    """A deployment must not leave quiet viewers on the old ranking.
+
+    Their history has not moved — the ranking of it has, which the
+    checkpoint would otherwise have no way to notice.
+    """
+    sig = [("f1", "2026-01-01 00:00:00", 1)]
+    before = worker_mod._checkpoint(sig)
+
+    monkeypatch.setattr(
+        worker_mod.profile_mod, "PROFILE_VERSION",
+        worker_mod.profile_mod.PROFILE_VERSION + 1,
+    )
+
+    assert worker_mod._checkpoint(sig) != before

@@ -37,6 +37,17 @@ from app.pickup.retrieval import vector_table_for
 
 logger = logging.getLogger(__name__)
 
+#: Bumped whenever anything that changes the ranking changes: these
+#: constants, the clustering, the weighting, the channels.
+#:
+#: The worker's checkpoint asks "has this viewer's history moved", and
+#: the honest answer after a change like this is that it has not — the
+#: *ranking of it* has. Without a version in that hash, a deployment
+#: lands and every viewer whose history is quiet keeps yesterday's
+#: ranking until the date rolls, up to a day later. Cheap to get right,
+#: and invisible when it is wrong.
+PROFILE_VERSION = 2
+
 #: Embedding types the profile is built on. ``metadata`` is absent for
 #: the same reason ``find_similar`` refuses it as a second opinion: it
 #: embeds the filename, which for "IMG_1234.jpg" or a UUID names
