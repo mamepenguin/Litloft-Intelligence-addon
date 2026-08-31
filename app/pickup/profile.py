@@ -37,6 +37,17 @@ from app.pickup.retrieval import vector_table_for
 
 logger = logging.getLogger(__name__)
 
+#: Bumped whenever anything that changes the ranking changes: these
+#: constants, the clustering, the weighting, the channels.
+#:
+#: The worker's checkpoint asks "has this viewer's history moved", and
+#: the honest answer after a change like this is that it has not — the
+#: *ranking of it* has. Without a version in that hash, a deployment
+#: lands and every viewer whose history is quiet keeps yesterday's
+#: ranking until the date rolls, up to a day later. Cheap to get right,
+#: and invisible when it is wrong.
+PROFILE_VERSION = 2
+
 #: Embedding types the profile is built on. ``metadata`` is absent for
 #: the same reason ``find_similar`` refuses it as a second opinion: it
 #: embeds the filename, which for "IMG_1234.jpg" or a UUID names
@@ -61,8 +72,43 @@ PROFILE_WINDOW_DAYS = 365
 #: inside the window still clusters in bounded time.
 PROFILE_VECTOR_CAP = 2000
 
-#: How fast an interest goes quiet. A guess, expected to need tuning.
-HALF_LIFE_DAYS = 60.0
+#: How fast an interest goes quiet.
+#:
+#: Set from a requirement rather than a preference: a fortnight without
+#: touching an interest should visibly cost it, which means at least
+#: three quarters of its mass gone by day 14.
+#:
+#: Measured against the production index, on a history that ran 180 days
+#: at 80% one series and then stopped it entirely — feed share of that
+#: series, by half-life:
+#:
+#:     half-life     +0d    +14d    +30d    +60d    +90d
+#:            7d     77%     37%     38%     16%     15%
+#:           14d     77%     46%     48%     20%     17%
+#:           60d     77%     52%     60%     39%     33%
+#:
+#: Three things that might have argued against a short half-life were
+#: measured and did not:
+#:
+#: - Over-reaction. Three days of watching nothing else moves the share
+#:   by +5 points at 7 days against +1 at 60. Not a risk at this scale.
+#: - Steady state. An interest held at 20% of viewing settles at 13% of
+#:   the feed for *every* half-life; the ratio is stationary, so "still
+#:   watching it, still see it" holds regardless.
+#: - Losing old interests. An interest last touched 200-300 days ago
+#:   keeps 67% of the feed at a 7-day half-life against 76% at 60. Its
+#:   raw weight collapses to 0.011 of the loudest, and ``W_MIN`` catches
+#:   it. Old interests are kept visible by the floor, not by the decay.
+#:
+#: The cost that is real: more lanes pin to the floor (4 of 7 at 7 days
+#: against 2 at 14), so interests of quite different ages come out
+#: weighted the same. Resolution among old interests is traded for
+#: responsiveness to recent ones.
+#:
+#: Temper the expectation either way — this is a weak lever. What
+#: dominates the share is how many lanes an interest occupies, which
+#: clustering decides without consulting these weights at all.
+HALF_LIFE_DAYS = 7.0
 
 #: The quietest lane's share of the turns the loudest one gets.
 #:

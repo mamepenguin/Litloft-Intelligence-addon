@@ -326,16 +326,22 @@ def _checkpoint(signature: Sequence[tuple[str, str]]) -> str:
     one changes which entries the profile is built from, and nothing
     else. Both are in the hash.
 
+    *The ranking itself.* Changing a constant or the clustering does not
+    move the viewer's history at all, so without a version in the hash a
+    deployment would leave every quiet viewer on the old ranking until
+    the date rolled.
+
     *Time itself.* The profile reads a rolling year and weights it by a
-    60-day half-life, both of which drift while the viewer does
+    half-life, both of which drift while the viewer does
     nothing at all. Without the date a viewer who stops watching is
     frozen at whatever their profile said the day they stopped. With
     it, a quiet viewer is recomputed once a day rather than never — an
     hourly sweep still skips them the other twenty-three times.
     """
     stamp = datetime.now(UTC).strftime("%Y-%m-%d")
+    version = profile_mod.PROFILE_VERSION
     joined = ";".join(
         f"{file_id}@{played}#{live}"
         for file_id, played, live in sorted(signature)
     )
-    return hashlib.md5(f"{stamp}|{joined}".encode()).hexdigest()[:32]
+    return hashlib.md5(f"v{version}|{stamp}|{joined}".encode()).hexdigest()[:32]
