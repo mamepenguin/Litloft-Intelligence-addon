@@ -145,9 +145,11 @@ def _seed_image_file(engine, *, file_id="img-1", drive="work"):
                 "(file_id, short_summary, long_summary, model, "
                 "context_type, context_chars, was_truncated, status, "
                 "created_at, visual_description, visual_description_status, "
-                "visual_description_model, visual_description_generated_at) "
+                "visual_description_model, visual_description_generated_at, "
+                "visual_description_error) "
                 "VALUES (:fid, '', '', '', 'image', 0, 0, 'hidden', "
-                ":now, 'A red apple.', 'success', 'llava:13b', :now)"
+                ":now, 'A red apple.', 'success', 'llava:13b', :now, "
+                "'image_rejected')"
             ),
             {"fid": file_id, "now": now},
         )
@@ -268,7 +270,7 @@ def test_purge_vision_for_drive_clears_only_vision_artefacts(
             text(
                 "SELECT short_summary, long_summary, "
                 "visual_description, visual_description_status, "
-                "visual_description_model "
+                "visual_description_model, visual_description_error "
                 "FROM file_summaries WHERE file_id = :fid"
             ),
             {"fid": "img-1"},
@@ -286,10 +288,13 @@ def test_purge_vision_for_drive_clears_only_vision_artefacts(
     assert fs is not None
     assert fs[0] == "short"
     assert fs[1] == "long"
-    # Vision columns cleared.
+    # Vision columns cleared — all of them. A reason left behind would
+    # be read against the now-empty status, and would keep DELETE
+    # believing there is still something here to clear.
     assert fs[2] is None
     assert fs[3] is None
     assert fs[4] is None
+    assert fs[5] is None
     # Vision embedding removed.
     assert vision_emb is None
 

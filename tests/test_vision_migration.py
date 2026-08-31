@@ -1,6 +1,6 @@
 """Schema migration tests for the vision_describe feature.
 
-``_migrate_file_summaries_if_needed`` must add four nullable columns
+``_migrate_file_summaries_if_needed`` must add five nullable columns
 used by the vision_describe feature:
 
 * ``visual_description`` TEXT NULL — LLM-generated description body
@@ -10,6 +10,8 @@ used by the vision_describe feature:
   re-generation heuristics when the vision model changes)
 * ``visual_description_status`` TEXT NULL — one of NULL / "pending" /
   "success" / "failed" / "unsupported"
+* ``visual_description_error`` TEXT NULL — why the last attempt produced
+  no description, as one of the ``app.llm`` FAILURE_* values
 
 Idempotent: running migrations twice must not raise. Existing data on
 pre-existing rows must be preserved. Fresh install via
@@ -47,6 +49,7 @@ _VISION_COLUMNS = (
     "visual_description_generated_at",
     "visual_description_model",
     "visual_description_status",
+    "visual_description_error",
 )
 
 
@@ -205,3 +208,49 @@ def test_vision_status_column_accepts_expected_values(legacy_engine):
                 ),
                 {"fid": f"vf-{i}", "now": now, "vs": status},
             )
+
+
+class TestEveryVisionColumnIsClearedTogether:
+    """Detector for a column added to the writer and forgotten elsewhere.
+
+    Three paths clear vision data — DELETE, the policy-off purge, and
+    the worker's status writes. The reason column was added to the
+    writer and missed by the purge, which left a reason to be read
+    against an emptied row. Deriving the SQL from one list is the fix;
+    this checks the list itself still matches the table.
+    """
+
+    def test_the_clear_covers_every_vision_column_in_the_table(self, tmp_path):
+        from sqlalchemy import create_engine
+
+        from app.database import (
+            VISION_DESCRIBE_COLUMNS,
+            _create_file_summaries_table,
+        )
+
+        engine = create_engine(f"sqlite:///{tmp_path}/fresh.db")
+        with engine.begin() as conn:
+            _create_file_summaries_table(conn)
+
+        in_table = {
+            name
+            for name in _columns(engine)
+            if name.startswith("visual_description")
+        }
+        assert in_table == set(VISION_DESCRIBE_COLUMNS), (
+            "a vision column exists that the clear paths do not name"
+        )
+
+    def test_the_derived_sql_names_each_column_once(self):
+        from app.database import (
+            VISION_DESCRIBE_CLEAR_SQL,
+            VISION_DESCRIBE_COLUMNS,
+            VISION_DESCRIBE_PRESENT_SQL,
+        )
+
+        for column in VISION_DESCRIBE_COLUMNS:
+            assert f"{column} = NULL" in VISION_DESCRIBE_CLEAR_SQL
+            assert f"{column} IS NOT NULL" in VISION_DESCRIBE_PRESENT_SQL
+        assert VISION_DESCRIBE_CLEAR_SQL.count("= NULL") == len(
+            VISION_DESCRIBE_COLUMNS
+        )

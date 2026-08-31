@@ -100,14 +100,17 @@ export default function VisualDescriptionSection({
     setError(null);
     try {
       await generateVisualDescription(fileId, drive);
-      // Optimistic pending while the backend queues the work.
+      // Optimistic pending while the backend queues the work. The
+      // previous attempt's reason goes with its status — leaving it
+      // would let the old explanation be read against the new attempt.
       setData((prev) =>
         prev
-          ? { ...prev, status: "pending" }
+          ? { ...prev, status: "pending", reason: null }
           : {
               file_id: fileId,
               visual_description: null,
               status: "pending",
+              reason: null,
               model: null,
               generated_at: null,
             },
@@ -126,11 +129,25 @@ export default function VisualDescriptionSection({
       }
     } catch (e) {
       if (requestId !== requestIdRef.current) return;
-      setError(e instanceof Error ? e.message : String(e));
+      // A 409 means the worker declined the file outright. Say so
+      // rather than leaving the user watching a spinner that will
+      // never resolve.
+      const declined = (e as { info?: { kind?: string } } | undefined)?.info;
+      setError(
+        declined?.kind === "not_queued"
+          ? t("visionNotQueued", {
+              defaultMessage:
+                "The request could not be queued. Check the drive's addon "
+                + "policy and the intelligence logs.",
+            })
+          : t("visionActionError", {
+              defaultMessage: "Could not start description generation.",
+            }),
+      );
     } finally {
       if (requestId === requestIdRef.current) setWorking(false);
     }
-  }, [fileId, drive]);
+  }, [fileId, drive, t]);
 
   const handleRegenerate = useCallback(() => {
     setConfirmRegenerateOpen(true);
@@ -153,10 +170,14 @@ export default function VisualDescriptionSection({
       await handleGenerate();
     } catch (e) {
       if (requestId !== requestIdRef.current) return;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(
+        t("visionActionError", {
+          defaultMessage: "Could not start description generation.",
+        }),
+      );
       setWorking(false);
     }
-  }, [fileId, drive, handleGenerate]);
+  }, [fileId, drive, handleGenerate, t]);
 
   if (!loaded) return null;
 
@@ -172,6 +193,55 @@ export default function VisualDescriptionSection({
 
   const status: VisualDescriptionStatus | string | null =
     data?.status ?? null;
+  const reason = data?.reason ?? null;
+  const model = data?.model ?? null;
+
+  // Only "no vision model is configured" is beyond the user's reach —
+  // there is nothing to run, so no button is offered. Every other
+  // verdict came from a real attempt against a real model and can be
+  // asked again, including the ones recorded before the backend kept a
+  // reason at all: those were the guesses this feature stopped making.
+  const notConfigured =
+    status === "unsupported" && reason === "not_configured";
+
+  const failureMessage = () => {
+    switch (reason) {
+      case "model_missing":
+        return t("visionModelMissing", {
+          model: model ?? "",
+          defaultMessage:
+            "The model {model} was not found on the LLM provider. Pull it "
+            + "on the provider side.",
+        });
+      case "image_rejected":
+        return t("visionImageRejected", {
+          defaultMessage: "The model could not read this image.",
+        });
+      case "token_budget":
+        return t("visionTokenBudget", {
+          defaultMessage:
+            "The description was cut off by the token limit. Raise "
+            + "llm.vision_max_tokens and try again.",
+        });
+      default:
+        return t("visionFailed", {
+          defaultMessage:
+            "Description generation failed. Try again or check the "
+            + "intelligence logs.",
+        });
+    }
+  };
+
+  const retryButton = (
+    <button
+      onClick={handleGenerate}
+      disabled={working}
+      className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+    >
+      <RefreshCw size={11} className={working ? "animate-spin" : ""} />
+      {t("visionRetry", { defaultMessage: "Retry" })}
+    </button>
+  );
 
   return (
     <div>
@@ -185,7 +255,7 @@ export default function VisualDescriptionSection({
         )}
       </div>
 
-      {status === "unsupported" && (
+      {notConfigured && (
         <div className="flex items-start gap-2 rounded-lg border border-bg-border bg-bg-elevated/50 px-3 py-2 text-xs text-text-muted">
           <Settings size={14} className="mt-0.5 flex-shrink-0" />
           <span>
@@ -197,14 +267,54 @@ export default function VisualDescriptionSection({
         </div>
       )}
 
+      {status === "unsupported" && !notConfigured && (
+        <div className="space-y-2">
+          <div className="flex items-start gap-2 rounded-lg border border-bg-border bg-bg-elevated/50 px-3 py-2 text-xs text-text-muted">
+            <Settings size={14} className="mt-0.5 flex-shrink-0" />
+            <span>
+              {reason
+                ? t("visionModelCannotSee", {
+                    model: model ?? "",
+                    defaultMessage:
+                      "The configured model {model} does not accept images. "
+                      + "Set a vision-capable llm.vision_model, then try again.",
+                  })
+                : /* No reason recorded means this verdict predates the
+                     backend keeping one, which is to say it came from
+                     the guessing that produced the bug. Repeating its
+                     conclusion here would be making the same guess a
+                     second time. */
+                  t("visionUnknownVerdict", {
+                    defaultMessage:
+                      "An earlier attempt recorded that this could not be "
+                      + "described, without saying why. Try again.",
+                  })}
+            </span>
+          </div>
+          {retryButton}
+        </div>
+      )}
+
       {status === "pending" && (
-        <div className="flex items-center gap-2 text-xs text-text-muted">
-          <Loader2 size={12} className="animate-spin" />
-          <span>
-            {t("visionGenerating", {
-              defaultMessage: "Generating description…",
-            })}
-          </span>
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-xs text-text-muted">
+            <Loader2 size={12} className="animate-spin" />
+            <span>
+              {t("visionGenerating", {
+                defaultMessage: "Generating description…",
+              })}
+            </span>
+          </div>
+          {/* A run this component started is genuinely in flight, so the
+              spinner is the whole story. Arriving at a pending row we
+              did not start is different: the worker that claimed it may
+              be long gone (a restart mid-flight leaves the row exactly
+              like this), and a spinner with no way out is the dead end
+              this section had elsewhere. Pressing it while the work is
+              genuinely running costs nothing — the worker recognises
+              the file as already queued and answers "already_queued"
+              rather than buying a second LLM call. */}
+          {!working && retryButton}
         </div>
       )}
 
@@ -212,21 +322,9 @@ export default function VisualDescriptionSection({
         <div className="space-y-2">
           <div className="flex items-start gap-2 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">
             <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
-            <span>
-              {t("visionFailed", {
-                defaultMessage:
-                  "Description generation failed. Try again or check the intelligence logs.",
-              })}
-            </span>
+            <span>{failureMessage()}</span>
           </div>
-          <button
-            onClick={handleGenerate}
-            disabled={working}
-            className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
-          >
-            <RefreshCw size={11} className={working ? "animate-spin" : ""} />
-            {t("visionRetry", { defaultMessage: "Retry" })}
-          </button>
+          {retryButton}
         </div>
       )}
 

@@ -116,8 +116,13 @@ export default function VisualIndexSection({
       await generateVideoVisualIndex(fileId, drive);
       await load(requestIdRef.current);
     } catch (e) {
-      const status = (e as { status?: number } | undefined)?.status;
-      if (status === 409) {
+      // Every refusal used to read as "wait for scene indexing". The
+      // reason arrives as data now, so only the refusal that means
+      // that says it, and anything else falls back rather than
+      // asserting a cause it does not know.
+      const declined = (e as { info?: { kind?: string; reason?: string } })
+        ?.info;
+      if (declined?.kind === "not_queued" && declined.reason === "waiting_clip") {
         setError(
           t("visualIndexWaitingPrerequisite", {
             defaultMessage:

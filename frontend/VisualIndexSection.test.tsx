@@ -350,9 +350,10 @@ describe("VisualIndexSection", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows a waiting message on a 409 from generate", async () => {
-    const err = new Error("waiting") as Error & { status?: number };
-    err.status = 409;
+  it("shows a waiting message when scene indexing is the blocker", async () => {
+    const err = Object.assign(new Error("not_queued"), {
+      info: { kind: "not_queued", reason: "waiting_clip" },
+    });
     vi.mocked(generateVideoVisualIndex).mockRejectedValue(err);
     renderSection();
     fireEvent.click(await screen.findByText("Visual index"));
@@ -361,6 +362,18 @@ describe("VisualIndexSection", () => {
       await screen.findByText(
         "Waiting on scene indexing to finish before this can start.",
       ),
+    ).toBeInTheDocument();
+  });
+
+  it("falls back to the generic message for a failure with no reason", async () => {
+    vi.mocked(generateVideoVisualIndex).mockRejectedValue(
+      new Error("network down"),
+    );
+    renderSection();
+    fireEvent.click(await screen.findByText("Visual index"));
+    fireEvent.click(await screen.findByRole("button", { name: "Generate" }));
+    expect(
+      await screen.findByText("Could not start visual index generation."),
     ).toBeInTheDocument();
   });
 

@@ -14,9 +14,14 @@ Status lifecycle (per file_summaries row):
 * "pending"       → worker claimed the file, LLM call in flight
 * "success"       → description persisted + embedding registered
 * "failed"        → transient LLM / decode failure; retryable
-* "unsupported"   → provider/model can't do vision; sticky for this
-                    ``visual_description_model``. Retry only when the
-                    configured ``vision_model`` changes.
+* "unsupported"   → the model was measured, by capability probe, not to
+                    accept image content. Sticky for this
+                    ``visual_description_model`` on automatic paths;
+                    an explicit user request overrides it.
+
+A provider rejection on its own never reaches "unsupported": an absent
+model and an unreadable image produce the same 400/404 as a model that
+cannot see, so ``app.llm`` probes before it names the cause.
 
 Non-goals in Phase 1 (see spec):
 
@@ -41,7 +46,11 @@ from sqlalchemy.exc import OperationalError
 import app.config as config
 from app.config import settings
 from app.database import get_search_db
-from app.llm import VISION_UNSUPPORTED
+from app.llm import (
+    FAILURE_REQUEST_FAILED,
+    FAILURE_VISION_UNSUPPORTED,
+    VisionGeneration,
+)
 from app.models import Embedding, IndexedFile
 from app.policy_client import is_file_feature_enabled
 
@@ -298,8 +307,14 @@ def _write_status(
     status: str,
     model: str,
     generated_at: str | None,
+    error: str | None = None,
 ) -> None:
-    """Atomic UPDATE of the four vision columns."""
+    """Atomic UPDATE of the vision columns.
+
+    ``error`` is written on every transition, cleared included, so a
+    reason can never outlive the attempt that produced it and be read
+    against a later one.
+    """
     _ensure_summary_row(session, file_id)
     session.execute(
         sql_text(
@@ -307,7 +322,8 @@ def _write_status(
             "visual_description = :desc, "
             "visual_description_status = :status, "
             "visual_description_model = :model, "
-            "visual_description_generated_at = :gen_at "
+            "visual_description_generated_at = :gen_at, "
+            "visual_description_error = :error "
             "WHERE file_id = :fid"
         ),
         {
@@ -316,7 +332,30 @@ def _write_status(
             "status": status,
             "model": model,
             "gen_at": generated_at,
+            "error": error,
         },
+    )
+
+
+def _mark_pending(session: Any, file_id: str) -> None:
+    """Move the row to ``pending`` without touching the stored result.
+
+    Only the status changes, and the reason that belonged to the last
+    attempt is cleared with it. The description, its model and its
+    timestamp are left alone: they still describe the last completed
+    run, and accepting a file is not a reason to destroy what is
+    already there — a bulk accept would otherwise empty every row it
+    touched before a single LLM call had been made.
+    """
+    _ensure_summary_row(session, file_id)
+    session.execute(
+        sql_text(
+            "UPDATE file_summaries SET "
+            "visual_description_status = 'pending', "
+            "visual_description_error = NULL "
+            "WHERE file_id = :fid"
+        ),
+        {"fid": file_id},
     )
 
 
@@ -454,6 +493,11 @@ class VisionDescribeWorker:
     def __init__(self) -> None:
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._processing: list[str] = []
+        # Mirrors the queue's contents, because an asyncio.Queue cannot
+        # be asked whether it holds something. Needed so a second
+        # request for a file already waiting is recognised as the same
+        # work rather than bought twice.
+        self._queued: set[str] = set()
 
     def get_status(self) -> dict[str, object]:
         """Snapshot for /status: ``{waiting, processing}``."""
@@ -464,10 +508,41 @@ class VisionDescribeWorker:
 
     # -- Enqueue --------------------------------------------------------
 
-    async def _should_accept(self, file_id: str) -> bool:
-        """Shared gate: feature flag + vision_model + drive policy + mime + stickiness."""
+    async def _should_accept(
+        self, file_id: str, *, manual: bool = False
+    ) -> tuple[bool, str | None]:
+        """Shared gate: feature flag + vision_model + drive policy + mime + stickiness.
+
+        Returns ``(accepted, reason)`` so a router can say which gate
+        turned the request away instead of accepting work it discarded.
+
+        ``manual`` skips the stickiness checks and nothing else. Those
+        checks exist to stop automatic sweeps from re-spending on a
+        settled outcome; a person asking for this file has already
+        decided it is worth spending. Every other gate — feature,
+        policy, mime, active, and work already in flight — still
+        applies, because those are not about cost.
+        """
         if not config.is_vision_describe_available(settings):
-            return False
+            return False, "feature_unavailable"
+
+        # The worker task only runs when the LLM client is enabled
+        # (app/main.py), so accepting work here in that state would
+        # queue it for nobody: the row would be marked pending and stay
+        # that way, and startup recovery lives behind the same gate and
+        # would not free it either. Config can satisfy
+        # is_vision_describe_available while the client is disabled —
+        # provider "disabled", or an empty base_url / text model.
+        try:
+            llm_enabled = bool(getattr(get_llm_client(), "enabled", False))
+        except Exception as e:
+            logger.warning(
+                "vision: LLM client unavailable (%s); refusing to enqueue %s",
+                type(e).__name__, file_id,
+            )
+            return False, "llm_unavailable"
+        if not llm_enabled:
+            return False, "llm_unavailable"
 
         # Fail-closed on policy lookup failure: the file stays in the
         # queue mentally (caller can retry) and we never accidentally
@@ -481,9 +556,9 @@ class VisionDescribeWorker:
                 "to enqueue (fail-closed)",
                 file_id, type(e).__name__,
             )
-            return False
+            return False, "policy_unavailable"
         if not enabled:
-            return False
+            return False, "policy_off"
 
         with get_search_db() as session:
             file_row = (
@@ -495,45 +570,101 @@ class VisionDescribeWorker:
                 .first()
             )
             if file_row is None:
-                return False
+                return False, "file_not_found"
             if not _is_image_mime(file_row.mime_type):
-                return False
+                return False, "not_an_image"
 
             state = _fetch_existing_vision(session, file_id)
 
-        if state is not None:
+        # Already ours to do. Manual does not override this: asking
+        # twice for the same work does not make it happen sooner, it
+        # just buys a second LLM call whose result overwrites the
+        # first. A ``pending`` row that this worker does not hold is a
+        # different thing — a previous process died mid-flight — and
+        # stays retryable.
+        if file_id in self._queued or file_id in self._processing:
+            return False, "already_queued"
+
+        if state is not None and not manual:
             status, stored_model = state
+            same_model = (stored_model or "") == (settings.llm.vision_model or "")
             # "success" is sticky for the SAME vision_model: re-running
             # would just overwrite an identical description and burn
             # LLM budget. Swap the model and we retry so the new model
             # gets a chance.
-            if (
-                status == "success"
-                and (stored_model or "") == (settings.llm.vision_model or "")
-            ):
-                return False
+            if status == "success" and same_model:
+                return False, "already_described"
             # "unsupported" is sticky only for the SAME vision_model. If
             # the operator swapped models we retry — the new model may
             # handle images even if the old one didn't.
-            if (
-                status == "unsupported"
-                and (stored_model or "") == (settings.llm.vision_model or "")
-            ):
-                return False
+            if status == "unsupported" and same_model:
+                return False, "unsupported_sticky"
 
-        return True
+        return True, None
 
-    async def enqueue(self, file_id: str) -> bool:
-        """Queue ``file_id`` for vision description; return True on accept.
+    async def enqueue(self, file_id: str, *, manual: bool = False) -> dict:
+        """Queue ``file_id`` for vision description.
 
-        The bool lets callers distinguish "accepted for processing" from
-        "skipped" (wrong mime / policy OFF / already-unsupported) so a
-        router can answer ``accepted: true/false`` without polling state.
+        Returns ``{"accepted": bool, "reason": str | None}``. The reason
+        lets a router answer 409 with what actually happened rather than
+        reporting acceptance for work that was dropped.
+
+        ``manual=True`` is for an explicit user request and overrides
+        the stickiness gates; automatic callers leave it False.
         """
-        if not await self._should_accept(file_id):
-            return False
+        accepted, reason = await self._should_accept(file_id, manual=manual)
+        if not accepted:
+            return {"accepted": False, "reason": reason}
+        # Record "pending" here rather than when processing starts, so
+        # the state is true for everyone the moment it becomes true.
+        # A file behind others in the queue would otherwise keep
+        # reporting its previous outcome, and a caller polling for the
+        # change it just asked for would read the old answer and
+        # conclude nothing happened.
+        with get_search_db() as session:
+            _mark_pending(session, file_id)
+        self._queued.add(file_id)
         await self._queue.put(file_id)
-        return True
+        return {"accepted": True, "reason": None}
+
+    async def requeue_abandoned(self) -> int:
+        """Re-queue rows left ``pending`` by a process that is gone.
+
+        Acceptance records ``pending`` so the state is true the moment
+        it becomes true, but the queue holding that work lives only as
+        long as the process. A restart therefore leaves every waiting
+        file marked pending with nothing left to run it — a whole bulk
+        run stranded by one deploy.
+
+        Called at startup, where the reading is unambiguous: this
+        worker holds nothing yet, so a pending row can only be someone
+        else's abandoned claim. It is deliberately not a periodic sweep,
+        which would race the queue it is meant to repair.
+
+        Does not distinguish how the work was requested: resuming
+        something already accepted is not the same decision as starting
+        new work, so a manual request is picked up as readily as an
+        on_index one. It is still subject to the feature being live —
+        both this call site and ``_should_accept`` require that.
+        """
+        with get_search_db() as session:
+            rows = session.execute(
+                sql_text(
+                    "SELECT f.file_id FROM indexed_files f "
+                    "JOIN file_summaries s ON s.file_id = f.file_id "
+                    "WHERE f.active = 1 "
+                    "AND f.mime_type LIKE 'image/%' "
+                    "AND s.visual_description_status = 'pending'"
+                )
+            ).fetchall()
+
+        queued = 0
+        for (file_id,) in rows:
+            # manual=True: the row is already pending, which the
+            # stickiness gates would otherwise read as nothing to do.
+            if (await self.enqueue(file_id, manual=True))["accepted"]:
+                queued += 1
+        return queued
 
     async def enqueue_unprocessed(self) -> int:
         """Sweep already-indexed images that have no description yet.
@@ -571,7 +702,7 @@ class VisionDescribeWorker:
 
         queued = 0
         for (file_id,) in rows:
-            if await self.enqueue(file_id):
+            if (await self.enqueue(file_id))["accepted"]:
                 queued += 1
         return queued
 
@@ -582,6 +713,7 @@ class VisionDescribeWorker:
         while True:
             try:
                 file_id = await self._queue.get()
+                self._queued.discard(file_id)
                 self._processing.append(file_id)
                 try:
                     await self._process_file(file_id)
@@ -621,16 +753,11 @@ class VisionDescribeWorker:
         )
 
         # Mark pending so concurrent readers see "in flight" instead of
-        # the previous state.
+        # the previous state. Redundant when the file arrived through
+        # ``enqueue``, which already did it, but ``_process_file`` is
+        # also driven directly and must not depend on that.
         with get_search_db() as session:
-            _write_status(
-                session,
-                file_id,
-                description=None,
-                status="pending",
-                model=vision_model,
-                generated_at=None,
-            )
+            _mark_pending(session, file_id)
 
         loaded = _load_image_bytes(file_id)
         if loaded is None:
@@ -642,6 +769,7 @@ class VisionDescribeWorker:
                     status="failed",
                     model=vision_model,
                     generated_at=None,
+                    error="load",
                 )
             await _emit_ws_event(
                 "intelligence.vision_describe.failed",
@@ -660,6 +788,7 @@ class VisionDescribeWorker:
                     status="failed",
                     model=vision_model,
                     generated_at=None,
+                    error="decode",
                 )
             await _emit_ws_event(
                 "intelligence.vision_describe.failed",
@@ -681,10 +810,13 @@ class VisionDescribeWorker:
                 "vision: LLM call raised for %s (%s)",
                 file_id, type(e).__name__,
             )
-            result = None
+            result = VisionGeneration(None, FAILURE_REQUEST_FAILED)
 
-        # Interpret the three-way return contract.
-        if result is VISION_UNSUPPORTED:
+        # Only a measured verdict about the model is latched. Every
+        # other reason clears on its own — the operator pulls the model,
+        # or the next file is one the provider can read — so it stays a
+        # retryable failure.
+        if result.failure == FAILURE_VISION_UNSUPPORTED:
             with get_search_db() as session:
                 _write_status(
                     session,
@@ -693,6 +825,7 @@ class VisionDescribeWorker:
                     status="unsupported",
                     model=vision_model,
                     generated_at=None,
+                    error=FAILURE_VISION_UNSUPPORTED,
                 )
             await _emit_ws_event(
                 "intelligence.vision_describe.unsupported",
@@ -700,7 +833,14 @@ class VisionDescribeWorker:
             )
             return
 
-        if not isinstance(result, str) or not result.strip():
+        description = (result.text or "").strip()
+        # Success needs both a description and a clean call. Text cut off
+        # by the token ceiling arrives non-empty and would otherwise be
+        # stored as success — which is sticky for this model, so raising
+        # ``vision_max_tokens`` would never re-run the file, and half a
+        # sentence would sit in retrieval as though it were the whole
+        # description.
+        if result.failure is not None or not description:
             with get_search_db() as session:
                 _write_status(
                     session,
@@ -709,14 +849,17 @@ class VisionDescribeWorker:
                     status="failed",
                     model=vision_model,
                     generated_at=None,
+                    error=result.failure or FAILURE_REQUEST_FAILED,
                 )
             await _emit_ws_event(
                 "intelligence.vision_describe.failed",
-                {"file_id": file_id, "reason": "llm"},
+                {
+                    "file_id": file_id,
+                    "reason": result.failure or FAILURE_REQUEST_FAILED,
+                },
             )
             return
 
-        description = result.strip()
         generated_at = _now_iso()
         with get_search_db() as session:
             _write_status(
@@ -773,6 +916,7 @@ __all__ = [
     "_ensure_summary_row",
     "_fetch_existing_vision",
     "_load_image_bytes",
+    "_mark_pending",
     "_preprocess_image",
     "_write_status",
     "get_llm_client",

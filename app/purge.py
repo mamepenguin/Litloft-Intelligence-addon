@@ -85,7 +85,11 @@ def purge_vision_for_drive(drive: str) -> int:
     """
     from sqlalchemy import text as sql_text
 
-    from app.database import get_search_db
+    from app.database import (
+        VISION_DESCRIBE_CLEAR_SQL,
+        VISION_DESCRIBE_PRESENT_SQL,
+        get_search_db,
+    )
     from app.search import invalidate_similar_cache
 
     touched = 0
@@ -100,22 +104,16 @@ def purge_vision_for_drive(drive: str) -> int:
         for file_id in file_ids:
             row = session.execute(
                 sql_text(
-                    "SELECT visual_description, visual_description_status "
+                    f"SELECT ({VISION_DESCRIBE_PRESENT_SQL}) "
                     "FROM file_summaries WHERE file_id = :fid"
                 ),
                 {"fid": file_id},
             ).fetchone()
-            had_columns = (
-                row is not None and (row[0] is not None or row[1] is not None)
-            )
+            had_columns = row is not None and bool(row[0])
             if had_columns:
                 session.execute(
                     sql_text(
-                        "UPDATE file_summaries SET "
-                        "visual_description = NULL, "
-                        "visual_description_status = NULL, "
-                        "visual_description_model = NULL, "
-                        "visual_description_generated_at = NULL "
+                        f"UPDATE file_summaries SET {VISION_DESCRIBE_CLEAR_SQL} "
                         "WHERE file_id = :fid"
                     ),
                     {"fid": file_id},

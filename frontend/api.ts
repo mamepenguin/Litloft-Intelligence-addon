@@ -929,8 +929,23 @@ export interface VisualDescriptionResponse {
   file_id: string;
   visual_description: string | null;
   status: VisualDescriptionStatus | string;
+  /**
+   * Why the last attempt produced nothing, as one of the backend's
+   * FAILURE_* values — or `"not_configured"` when no vision model is
+   * set at all, which is the one situation a retry cannot help.
+   *
+   * `null` means the reason is unknown: rows written before the
+   * backend recorded one, which are not backfilled.
+   */
+  reason: string | null;
   model: string | null;
   generated_at: string | null;
+}
+
+/** The worker declined the file; `reason` names the gate that refused. */
+export interface VisualDescriptionNotQueued {
+  kind: "not_queued";
+  reason: string;
 }
 
 /**
@@ -957,17 +972,39 @@ export async function getVisualDescription(
 /**
  * Kick off vision description generation for one file.
  *
- * Returns `{ status: "accepted" }` on success. The UI should poll
- * `getVisualDescription` to observe `pending → success|failed`.
+ * Returns `{ status: "accepted" }` when the file was queued. A 409
+ * means the worker declined it and rejects with a
+ * `VisualDescriptionNotQueued` on `err.info`, so the caller can say
+ * something instead of polling state that will never change.
  */
 export async function generateVisualDescription(
   fileId: string,
   drive: string,
 ): Promise<{ status: string; file_id: string }> {
-  return fetchJSON<{ status: string; file_id: string }>(
+  const res = await fetch(
     `${API_BASE}/addons/intelligence/files/${fileId}/visual_description/generate`,
-    { method: "POST", headers: driveHeaders(drive) },
+    { method: "POST", credentials: "include", headers: driveHeaders(drive) },
   );
+  if (res.status === 409) {
+    let reason = "unavailable";
+    try {
+      const body = (await res.json()) as { detail?: { reason?: unknown } };
+      if (typeof body?.detail?.reason === "string") {
+        reason = body.detail.reason;
+      }
+    } catch {
+      // Keep the fallback reason.
+    }
+    const err = new Error("not_queued") as Error & {
+      info: VisualDescriptionNotQueued;
+    };
+    err.info = { kind: "not_queued", reason };
+    throw err;
+  }
+  if (!res.ok) {
+    throw new Error(`Visual description generate failed: ${res.status}`);
+  }
+  return (await res.json()) as { status: string; file_id: string };
 }
 
 /**
@@ -1791,16 +1828,52 @@ export async function getVideoVisualIndex(
   }
 }
 
-/** Stage a new run (manual priority). Throws on non-2xx so the UI can
- * surface a specific message (e.g. 409 "waiting on scene CLIP"). */
+/** The run was not staged; `reason` names the gate that refused. */
+export interface VideoVisualIndexNotQueued {
+  kind: "not_queued";
+  reason: string;
+}
+
+/**
+ * Stage a new run (manual priority).
+ *
+ * A 409 rejects with a `VideoVisualIndexNotQueued` on `err.info`. The
+ * reason has to reach the caller as data: the conditions behind it are
+ * different enough that one shared message is wrong for all but one of
+ * them.
+ */
 export async function generateVideoVisualIndex(
   fileId: string,
   drive: string,
 ): Promise<{ status: string; file_id: string; run_id?: string }> {
-  return fetchJSON(
+  const res = await fetch(
     `${API_BASE}/addons/intelligence/files/${fileId}/visual-index/generate`,
-    { method: "POST", headers: driveHeaders(drive) },
+    { method: "POST", credentials: "include", headers: driveHeaders(drive) },
   );
+  if (res.status === 409) {
+    let reason = "unavailable";
+    try {
+      const body = (await res.json()) as { detail?: { reason?: unknown } };
+      if (typeof body?.detail?.reason === "string") {
+        reason = body.detail.reason;
+      }
+    } catch {
+      // Keep the fallback reason.
+    }
+    const err = new Error("not_queued") as Error & {
+      info: VideoVisualIndexNotQueued;
+    };
+    err.info = { kind: "not_queued", reason };
+    throw err;
+  }
+  if (!res.ok) {
+    throw new Error(`Visual index generate failed: ${res.status}`);
+  }
+  return (await res.json()) as {
+    status: string;
+    file_id: string;
+    run_id?: string;
+  };
 }
 
 /** Re-queue only the failed scenes of the most recent retryable run. */

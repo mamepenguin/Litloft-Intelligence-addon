@@ -144,6 +144,19 @@ FAILURE_MALFORMED = "malformed"
 FAILURE_EMPTY = "empty"
 FAILURE_REQUEST_FAILED = "request_failed"
 
+# Why a vision request in particular produced nothing. Only the first is
+# a verdict about the model; the other two are conditions that clear on
+# their own once the operator pulls the model or the file changes, and
+# callers must not latch them.
+FAILURE_VISION_UNSUPPORTED = "vision_unsupported"
+FAILURE_MODEL_MISSING = "model_missing"
+FAILURE_IMAGE_REJECTED = "image_rejected"
+# The provider refused the vision request and the probe that would have
+# said why could not be carried out. Distinct from ``request_failed``,
+# which means the request never landed at all: here it landed and was
+# rejected, we simply do not know for which of the reasons above.
+FAILURE_VISION_REJECTED = "vision_rejected"
+
 
 @dataclass(frozen=True)
 class TextGeneration:
@@ -163,6 +176,19 @@ class JsonGeneration:
     """A parsed JSON payload plus why it is missing, if it is."""
 
     value: list | dict | None
+    failure: str | None
+
+
+@dataclass(frozen=True)
+class VisionGeneration:
+    """A vision completion plus why it is unusable, if it is.
+
+    Same contract as :class:`TextGeneration`: ``text`` is whatever came
+    back, truncation included, and ``failure`` names the reason it is
+    unusable without withholding what arrived.
+    """
+
+    text: str | None
     failure: str | None
 
 
@@ -202,19 +228,175 @@ def _classify_completion(
     return FAILURE_EMPTY
 
 
-# Sentinel return value from ``generate_vision`` when the upstream model
-# signals it cannot handle image content (HTTP 400 / 404 after a vision
-# payload, "images not supported" errors). Callers use it to persist
-# ``visual_description_status = "unsupported"`` and avoid wasteful retries
-# against the same model. A distinct object (not ``None``) so the "empty
-# response" and "not vision-capable" cases don't collide.
-VISION_UNSUPPORTED: object = object()
+# Statuses a provider answers when it refuses a vision request outright.
+# They say the request was rejected; they do not say why. 5xx stays in
+# the transient/retry path.
+_VISION_REJECTION_STATUS_CODES = frozenset({400, 404})
 
 
-# Vision status codes that mean "this provider/model can't do vision".
-# Both are sticky: caller marks status=unsupported and won't retry with
-# the same model. 5xx stays in the transient/retry path.
-_VISION_UNSUPPORTED_STATUS_CODES = frozenset({400, 404})
+# A 64x64 solid-red PNG, 136 bytes. Held as a literal rather than
+# generated, because it is the reference the capability verdict rests on
+# and a generator bug would make the measuring instrument the broken
+# part.
+#
+# Measured against ollama 2026-08-31, sending this exact image:
+#
+#   transport       gemma4:e4b (vision)  qwen3:8b (text)  absent model
+#   openai-compat   200, empty content   400              404
+#   ollama-native   200, "Red"           400              404
+#
+# Two things follow, and both are load-bearing below. A rejection status
+# alone cannot tell "the model cannot see" from "this image could not be
+# read" — a vision-capable model answers 400 to a corrupt PNG, and 404
+# means the operator has not pulled the model rather than anything about
+# its capabilities. And the verdict must read the status only: the same
+# capable model answered 200 with an empty body over one transport and
+# "Red" over the other, so requiring text would misjudge it.
+_PROBE_IMAGE_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAT0lEQVR42u3PQQkA"
+    "AAgEsOt0/RsYygi+hcEKLNO+FgEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB"
+    "AQEBAQEBAQEBAQEBAQEBAQGBywLLOCEe8ZGFKgAAAABJRU5ErkJggg=="
+)
+_PROBE_IMAGE_MIME = "image/png"
+_PROBE_IMAGE_PROMPT = "Reply with one word: what colour is this image?"
+_PROBE_MAX_TOKENS = 16
+
+# Generous enough for a cold model load on a local provider, bounded so a
+# hung provider cannot pin the worker on what is already the failure path.
+_PROBE_TIMEOUT_S = 120.0
+
+# Verdict meaning "this model accepts image content"; the other verdicts
+# are the FAILURE_* values the rejection maps to.
+_PROBE_CAPABLE = "capable"
+
+# A probe rejection is the only evidence that produces a permanent
+# verdict, and a permanent verdict is cached for the process and latched
+# onto every file it touches. Every other 400 in this module is retried;
+# it would be perverse for the one irreversible conclusion to rest on a
+# single request. A provider that refuses once under load, or a gateway
+# having a moment, must not condemn a capable model — so the rejection
+# has to happen twice, independently, before it is believed.
+_PROBE_CONFIRMATIONS = 2
+
+# Only verdicts that cannot change while the process runs are worth
+# remembering. Whether a model takes images is a property of the
+# configured model, and LLM configuration changes require a restart.
+# Whether the model is installed is not: ``ollama pull`` clears that with
+# nothing restarted, so caching it would latch a condition that heals
+# itself — the very mistake this classification exists to undo. The cost
+# of re-asking is one instant 404, since a rejection runs no inference.
+_CACHEABLE_PROBE_VERDICTS = frozenset(
+    {_PROBE_CAPABLE, FAILURE_VISION_UNSUPPORTED}
+)
+
+
+class _VisionCapabilityCache:
+    """Remembers, per model, whether it accepts images at all.
+
+    The probe exists to turn a rejection into a verdict, so it runs only
+    after a real vision call already failed. Two properties matter:
+
+    * A bulk run against a text-only model fails once per file. Without
+      single-flight, every one of those failures would launch its own
+      probe before the first answer landed, so concurrent callers wait
+      on one in-flight probe per key.
+    * Only ``_CACHEABLE_PROBE_VERDICTS`` are kept. A probe that could not
+      be carried out is not evidence about the model, and an absent
+      model is a condition the operator can clear without a restart.
+
+    Keyed by ``(base_url, model)`` because the same model name on a
+    different endpoint is a different deployment. What is cached cannot
+    change while the process runs, so entries need no TTL.
+    """
+
+    def __init__(self) -> None:
+        self._verdicts: dict[tuple[str, str], str] = {}
+        self._locks: dict[tuple[str, str], asyncio.Lock] = {}
+
+    async def resolve(self, key: tuple[str, str], probe) -> str:
+        cached = self._verdicts.get(key)
+        if cached is not None:
+            return cached
+        lock = self._locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            # A probe may have completed while this caller waited.
+            cached = self._verdicts.get(key)
+            if cached is not None:
+                return cached
+            verdict = await probe()
+            if verdict in _CACHEABLE_PROBE_VERDICTS:
+                self._verdicts[key] = verdict
+            return verdict
+
+    def forget(self, key: tuple[str, str]) -> None:
+        """Drop one verdict because the world changed under it."""
+        self._verdicts.pop(key, None)
+
+    def clear(self) -> None:
+        """Drop every verdict. For tests; nothing in the app calls it."""
+        self._verdicts.clear()
+        self._locks.clear()
+
+
+_vision_capability_cache = _VisionCapabilityCache()
+
+
+def reset_vision_capability_cache() -> None:
+    """Forget every probed verdict (test helper)."""
+    _vision_capability_cache.clear()
+
+
+# Failures that came from a 400 and could therefore have been caused by
+# our own ``response_format`` rather than by the image or the model. The
+# set is keyed on the rejection having happened, not on the probe having
+# reached a conclusion — a provider whose only fault is lacking JSON
+# mode must still get its retry when the probe happens to time out. A
+# 404 is excluded: an absent model does not become present by dropping a
+# body field.
+_RESPONSE_FORMAT_SUSPECT_FAILURES = frozenset(
+    {
+        FAILURE_VISION_UNSUPPORTED,
+        FAILURE_IMAGE_REJECTED,
+        FAILURE_VISION_REJECTED,
+    }
+)
+
+
+def _vision_json_result(result: "VisionGeneration") -> JsonGeneration:
+    """Parse a vision completion as JSON, keeping the upstream reason.
+
+    A body cut off by the token ceiling is unusable for a reason the
+    caller can act on, so the upstream cause wins over the parse
+    symptom. The reason survives a *successful* parse too: truncation
+    can leave a syntactically complete object that the domain then
+    rejects for missing a required field, and reporting that as
+    malformed output would send the operator to the prompt when the
+    remedy is the token budget. Whether the value is good enough is the
+    domain validator's call, so both are handed over.
+    """
+    raw = result.text
+    if raw is None:
+        return JsonGeneration(None, result.failure or FAILURE_REQUEST_FAILED)
+    parsed = _parse_json_response(raw)
+    if parsed is None:
+        return JsonGeneration(None, result.failure or FAILURE_MALFORMED)
+    return JsonGeneration(parsed, result.failure)
+
+
+def _classify_probe_status(status_code: int) -> str:
+    """Turn a probe response status into a verdict.
+
+    Anything outside the rejection statuses means the model took the
+    image; an authentication or rate-limit answer says nothing about
+    the model, so it is reported as a failed probe rather than cached.
+    """
+    if status_code == 404:
+        return FAILURE_MODEL_MISSING
+    if status_code == 400:
+        return FAILURE_VISION_UNSUPPORTED
+    if 200 <= status_code < 300:
+        return _PROBE_CAPABLE
+    return FAILURE_REQUEST_FAILED
 
 
 def _build_vision_system_prompt(output_language: str) -> str:
@@ -505,6 +687,7 @@ class LLMClient:
         finish_reason: object,
         response: object,
         reasoning_tokens: int | None,
+        model: str | None = None,
     ) -> None:
         """Say what came back, so the cause is not left to guesswork.
 
@@ -527,7 +710,7 @@ class LLMClient:
             getattr(usage, "completion_tokens", None),
             reasoning_tokens,
             len(content or ""),
-            self._config.model,
+            model or self._config.model,
         )
 
     async def generate_stream(
@@ -658,23 +841,21 @@ class LLMClient:
         user_prompt: str,
         *,
         response_format: dict | None = None,
-    ) -> str | object | None:
+    ) -> VisionGeneration:
         """Shared OpenAI-compatible vision transport.
 
         Private generic-image-message helper factored out of
         ``generate_vision`` (design doc "Video Visual Index" §4.2) so
         the video-scene structured-output path can reuse the same
-        retry / unsupported-detection semantics without duplicating
-        them. The public ``generate_vision`` contract (input, prompt,
-        status handling, return values) is unchanged.
+        retry / classification semantics without duplicating them.
 
-        Returns the response text on success, :data:`VISION_UNSUPPORTED`
-        when the provider answers 400/404 (model is not vision-capable),
-        or ``None`` on disabled state, empty response, or exhausted
-        transient-failure retries.
+        A rejection (400/404) is handed to the capability probe rather
+        than read as a verdict on its own, so ``failure`` distinguishes
+        a model that cannot see from one that is absent or from an image
+        the provider could not read.
         """
         if not self._enabled or not self._config.vision_model:
-            return None
+            return VisionGeneration(None, FAILURE_REQUEST_FAILED)
 
         # Encode once — the same base64 payload is used on every retry
         # so we don't pay O(bytes) per attempt.
@@ -721,7 +902,7 @@ class LLMClient:
                         "Vision generation failed after %d attempts: %s",
                         max_attempts, type(e).__name__,
                     )
-                    return None
+                    return VisionGeneration(None, FAILURE_REQUEST_FAILED)
                 delay = self._backoff_delay(attempt)
                 logger.warning(
                     "Vision generation attempt %d/%d failed (%s), "
@@ -732,48 +913,147 @@ class LLMClient:
                 attempt += 1
                 continue
             except APIStatusError as e:
-                # Before concluding the model cannot see, rule out our
-                # own body field: a 400 from that would otherwise mark a
-                # perfectly capable model unsupported for good.
+                # Before asking what the rejection means, rule out our
+                # own body field: a 400 from that would otherwise be
+                # blamed on the model or the image.
                 reduced = self._without_rejected_extras(e, extra_kwargs)
                 if reduced is not None:
                     extra_kwargs = reduced
                     continue
-                if e.status_code in _VISION_UNSUPPORTED_STATUS_CODES:
-                    logger.info(
-                        "Vision generation rejected by provider (status %d); "
-                        "marking unsupported",
-                        e.status_code,
-                    )
-                    return VISION_UNSUPPORTED
+                if e.status_code in _VISION_REJECTION_STATUS_CODES:
+                    failure = await self._classify_vision_rejection(e.status_code)
+                    return VisionGeneration(None, failure)
                 if e.status_code in _PERMANENT_STATUS_CODES:
                     logger.warning(
                         "Vision generation failed with permanent error %d",
                         e.status_code,
                     )
-                    return None
+                    return VisionGeneration(None, FAILURE_REQUEST_FAILED)
                 if attempt + 1 >= max_attempts:
-                    return None
+                    return VisionGeneration(None, FAILURE_REQUEST_FAILED)
                 delay = self._backoff_delay(attempt)
                 await asyncio.sleep(delay)
                 attempt += 1
                 continue
             except Exception as e:
                 logger.warning("Vision generation failed: %s", type(e).__name__)
-                return None
+                return VisionGeneration(None, FAILURE_REQUEST_FAILED)
 
             try:
-                content = response.choices[0].message.content
+                choice = response.choices[0]
+                content = choice.message.content
             except (AttributeError, IndexError):
-                return None
+                return VisionGeneration(None, FAILURE_EMPTY)
             if not isinstance(content, str):
-                return None
-            text_out = content.strip()
-            if not text_out:
-                return None
-            return text_out
+                return VisionGeneration(None, FAILURE_EMPTY)
+            finish_reason = getattr(choice, "finish_reason", None)
+            failure = _classify_completion(content, finish_reason)
+            if failure is not None:
+                self._log_unusable_completion(
+                    failure, content, finish_reason,
+                    response, _usage_reasoning_tokens(response),
+                    model=self._config.vision_model,
+                )
+            return VisionGeneration(content.strip() or None, failure)
 
-        return None
+        return VisionGeneration(None, FAILURE_REQUEST_FAILED)
+
+    async def _confirmed_probe(self) -> str:
+        """Probe, and make an unsupported verdict earn a second answer."""
+        verdict = await self._probe_vision_capability()
+        attempts = 1
+        while (
+            verdict == FAILURE_VISION_UNSUPPORTED
+            and attempts < _PROBE_CONFIRMATIONS
+        ):
+            await asyncio.sleep(self._backoff_delay(attempts - 1))
+            verdict = await self._probe_vision_capability()
+            attempts += 1
+        return verdict
+
+    async def _classify_vision_rejection(self, status_code: int) -> str:
+        """Name what a 400/404 on a vision call actually meant.
+
+        The rejection is only the question. The answer comes from
+        sending an image known to be readable to the same model: if
+        that is taken, the model can see and this request's image was
+        the problem.
+        """
+        key = (self._config.base_url or "", self._config.vision_model or "")
+        if status_code == 404:
+            # A 404 answers the probe's question on its own: the model is
+            # not there. Asking anyway would only produce another 404,
+            # and worse, a verdict cached while the model still existed
+            # would answer for it and call this a bad image.
+            _vision_capability_cache.forget(key)
+            logger.info(
+                "Vision request rejected (404); model %s is not installed",
+                self._config.vision_model,
+            )
+            return FAILURE_MODEL_MISSING
+        verdict = await _vision_capability_cache.resolve(
+            key, self._confirmed_probe
+        )
+        if verdict == _PROBE_CAPABLE:
+            logger.info(
+                "Vision request rejected (status %d) but model %s reads a "
+                "reference image; treating the image as the cause",
+                status_code, self._config.vision_model,
+            )
+            return FAILURE_IMAGE_REJECTED
+        if verdict == FAILURE_REQUEST_FAILED:
+            # The rejection is real; only the explanation is missing.
+            return FAILURE_VISION_REJECTED
+        logger.info(
+            "Vision request rejected (status %d); probe verdict for %s: %s",
+            status_code, self._config.vision_model, verdict,
+        )
+        return verdict
+
+    async def _probe_vision_capability(self) -> str:
+        """Send the reference image and report what the status says."""
+        # A real request to the provider, so it queues like any other.
+        await self._wait_for_rate_limit()
+        extra_kwargs: dict = {}
+        if _uses_max_completion_tokens(self._config.vision_model):
+            extra_kwargs["max_completion_tokens"] = _PROBE_MAX_TOKENS
+        else:
+            extra_kwargs["max_tokens"] = _PROBE_MAX_TOKENS
+        try:
+            await self._client.chat.completions.create(
+                model=self._config.vision_model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": _PROBE_IMAGE_PROMPT},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": (
+                                        f"data:{_PROBE_IMAGE_MIME};base64,"
+                                        f"{_PROBE_IMAGE_B64}"
+                                    )
+                                },
+                            },
+                        ],
+                    }
+                ],
+                timeout=_PROBE_TIMEOUT_S,
+                **extra_kwargs,
+            )
+        except APIStatusError as e:
+            return _classify_probe_status(e.status_code)
+        except Exception as e:
+            logger.warning(
+                "Vision capability probe could not be carried out (%s)",
+                type(e).__name__,
+            )
+            return FAILURE_REQUEST_FAILED
+        # Any 2xx: the model took the image. The body is deliberately not
+        # inspected — a capable model answers with empty content over
+        # some transports.
+        return _PROBE_CAPABLE
 
     async def generate_vision(
         self,
@@ -781,17 +1061,14 @@ class LLMClient:
         mime_type: str,
         prompt: str,
         output_language: str = "auto",
-    ) -> str | object | None:
+    ) -> VisionGeneration:
         """Generate a description for an image via a vision-capable LLM.
 
         Uses the OpenAI Chat Completions "image_url" content block with
-        a data-URL embedding. Returns:
-
-        * the description text on success,
-        * :data:`VISION_UNSUPPORTED` when the provider answers 400/404
-          (model is not vision-capable),
-        * ``None`` on disabled state, empty response, or transient
-          failures (timeouts, 5xx).
+        a data-URL embedding. Returns the description text and, when the
+        call produced nothing usable, the reason — see
+        :data:`FAILURE_VISION_UNSUPPORTED` and its neighbours for which
+        reasons a caller may treat as settled and which it may not.
 
         The call uses ``self._config.vision_model`` (NOT ``model``) and
         the vision-specific ``vision_max_tokens`` / ``vision_temperature``
@@ -815,37 +1092,35 @@ class LLMClient:
         mime_type: str,
         system_prompt: str,
         user_prompt: str,
-    ) -> dict | list | object | None:
+    ) -> JsonGeneration:
         """Structured-output vision call for one video-visual-index scene.
 
         Reuses :meth:`_vision_chat` (same transport, retry, and
-        unsupported-detection as ``generate_vision``) but requests JSON
-        object mode and parses the result via the same
-        ``_parse_json_response`` fallback used by ``generate_json``.
-        The video path uses a dedicated prompt/parser and never touches
-        ``generate_vision``'s own contract (design doc §4.2).
+        classification as ``generate_vision``) but requests JSON object
+        mode and parses the result via the same ``_parse_json_response``
+        fallback used by ``generate_json``. The video path uses a
+        dedicated prompt/parser and never touches ``generate_vision``'s
+        own contract (design doc §4.2).
 
-        Returns the parsed JSON value, :data:`VISION_UNSUPPORTED`, or
-        ``None`` on failure / malformed / empty output. A provider that
-        rejects JSON mode is retried once without ``response_format``
-        before it is classified as vision-unsupported. Retry/repair
+        A provider that rejects JSON mode answers the same 400 as one
+        that cannot see, so any rejection is retried once without
+        ``response_format`` before its verdict is believed. Retry/repair
         policy for malformed JSON remains the caller's responsibility.
         """
         result = await self._vision_chat(
             image_bytes, mime_type, system_prompt, user_prompt,
             response_format={"type": "json_object"},
         )
-        if result is VISION_UNSUPPORTED:
+        if result.failure in _RESPONSE_FORMAT_SUSPECT_FAILURES:
             logger.info(
-                "Vision request rejected with json_object mode; "
-                "retrying without response_format"
+                "Vision request rejected with json_object mode (%s); "
+                "retrying without response_format",
+                result.failure,
             )
             result = await self._vision_chat(
                 image_bytes, mime_type, system_prompt, user_prompt,
             )
-        if result is VISION_UNSUPPORTED or result is None:
-            return result
-        return _parse_json_response(result)
+        return _vision_json_result(result)
 
     def _backoff_delay(self, attempt: int) -> float:
         """Compute exponential backoff delay for a given attempt.
@@ -1426,7 +1701,7 @@ class OllamaLLMClient:
         user_prompt: str,
         *,
         response_format: dict | None = None,
-    ) -> str | object | None:
+    ) -> VisionGeneration:
         """Shared ollama-native vision transport.
 
         Private generic-image-message helper factored out of
@@ -1434,9 +1709,13 @@ class OllamaLLMClient:
         by both ``generate_vision`` and ``generate_video_scene_json``.
         ``mime_type`` is accepted for API parity; ollama ignores it and
         sniffs from the bytes.
+
+        Classification matches :meth:`LLMClient._vision_chat`: a
+        rejection is referred to the capability probe rather than read
+        as a verdict on its own.
         """
         if not self._enabled or not self._config.vision_model:
-            return None
+            return VisionGeneration(None, FAILURE_REQUEST_FAILED)
 
         b64 = base64.b64encode(image_bytes).decode("ascii")
 
@@ -1473,7 +1752,7 @@ class OllamaLLMClient:
                 )
             except httpx.TimeoutException:
                 if attempt + 1 >= max_attempts:
-                    return None
+                    return VisionGeneration(None, FAILURE_REQUEST_FAILED)
                 await asyncio.sleep(self._backoff_delay(attempt))
                 continue
             except httpx.HTTPError as e:
@@ -1481,20 +1760,17 @@ class OllamaLLMClient:
                     logger.warning(
                         "Ollama vision generation failed: %s", type(e).__name__,
                     )
-                    return None
+                    return VisionGeneration(None, FAILURE_REQUEST_FAILED)
                 await asyncio.sleep(self._backoff_delay(attempt))
                 continue
 
-            if resp.status_code in _VISION_UNSUPPORTED_STATUS_CODES:
-                # Ollama returns 404 for an uninstalled model and 400 for
-                # a model that exists but doesn't handle images. Both
-                # are sticky failures for this (model, provider) pair —
-                # caller records status="unsupported" to suppress retry.
-                return VISION_UNSUPPORTED
+            if resp.status_code in _VISION_REJECTION_STATUS_CODES:
+                failure = await self._classify_vision_rejection(resp.status_code)
+                return VisionGeneration(None, failure)
 
             if resp.status_code in _OLLAMA_RETRY_STATUSES:
                 if attempt + 1 >= max_attempts:
-                    return None
+                    return VisionGeneration(None, FAILURE_REQUEST_FAILED)
                 await asyncio.sleep(self._backoff_delay(attempt))
                 continue
 
@@ -1502,22 +1778,115 @@ class OllamaLLMClient:
                 logger.warning(
                     "Ollama vision unexpected status %d", resp.status_code,
                 )
-                return None
+                return VisionGeneration(None, FAILURE_REQUEST_FAILED)
 
             try:
                 data = resp.json()
             except Exception:
-                return None
+                return VisionGeneration(None, FAILURE_REQUEST_FAILED)
 
             content = data.get("message", {}).get("content", "")
             if not isinstance(content, str):
-                return None
-            text_out = content.strip()
-            if not text_out:
-                return None
-            return text_out
+                return VisionGeneration(None, FAILURE_EMPTY)
+            done_reason = data.get("done_reason")
+            failure = _classify_completion(content, done_reason)
+            if failure is not None:
+                headline = (
+                    "Ollama vision output was truncated (%s)"
+                    if content.strip()
+                    else "Ollama vision produced no usable output (%s)"
+                )
+                logger.warning(
+                    headline + ": done_reason=%s, content_len=%d, model=%s",
+                    failure, done_reason, len(content),
+                    self._config.vision_model,
+                )
+            return VisionGeneration(content.strip() or None, failure)
 
-        return None
+        return VisionGeneration(None, FAILURE_REQUEST_FAILED)
+
+    async def _confirmed_probe(self) -> str:
+        """Probe, and make an unsupported verdict earn a second answer."""
+        verdict = await self._probe_vision_capability()
+        attempts = 1
+        while (
+            verdict == FAILURE_VISION_UNSUPPORTED
+            and attempts < _PROBE_CONFIRMATIONS
+        ):
+            await asyncio.sleep(self._backoff_delay(attempts - 1))
+            verdict = await self._probe_vision_capability()
+            attempts += 1
+        return verdict
+
+    async def _classify_vision_rejection(self, status_code: int) -> str:
+        """Name what a 400/404 on a vision call actually meant.
+
+        Ollama answers 404 for a model that was never pulled and 400
+        both for a model that cannot see and for an image it could not
+        read, so the status is referred to the probe rather than read
+        as a verdict.
+        """
+        key = (self._base_url or "", self._config.vision_model or "")
+        if status_code == 404:
+            # See LLMClient._classify_vision_rejection: a 404 needs no
+            # probe, and a verdict cached before the model was removed
+            # must not answer for it.
+            _vision_capability_cache.forget(key)
+            logger.info(
+                "Ollama vision request rejected (404); model %s is not "
+                "installed",
+                self._config.vision_model,
+            )
+            return FAILURE_MODEL_MISSING
+        verdict = await _vision_capability_cache.resolve(
+            key, self._confirmed_probe
+        )
+        if verdict == _PROBE_CAPABLE:
+            logger.info(
+                "Ollama vision request rejected (status %d) but model %s "
+                "reads a reference image; treating the image as the cause",
+                status_code, self._config.vision_model,
+            )
+            return FAILURE_IMAGE_REJECTED
+        if verdict == FAILURE_REQUEST_FAILED:
+            return FAILURE_VISION_REJECTED
+        logger.info(
+            "Ollama vision request rejected (status %d); probe verdict "
+            "for %s: %s",
+            status_code, self._config.vision_model, verdict,
+        )
+        return verdict
+
+    async def _probe_vision_capability(self) -> str:
+        """Send the reference image and report what the status says."""
+        await self._wait_for_rate_limit()
+        try:
+            resp = await self._http.post(
+                f"{self._base_url}/api/chat",
+                json={
+                    "model": self._config.vision_model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": _PROBE_IMAGE_PROMPT,
+                            "images": [_PROBE_IMAGE_B64],
+                        }
+                    ],
+                    "stream": False,
+                    "think": False,
+                    "options": {"num_predict": _PROBE_MAX_TOKENS},
+                },
+                timeout=_PROBE_TIMEOUT_S,
+            )
+        except Exception as e:
+            logger.warning(
+                "Ollama vision capability probe could not be carried out (%s)",
+                type(e).__name__,
+            )
+            return FAILURE_REQUEST_FAILED
+        # The body is deliberately not inspected — a capable model
+        # answers 200 with empty content over some transports.
+        return _classify_probe_status(resp.status_code)
 
     async def generate_vision(
         self,
@@ -1525,14 +1894,13 @@ class OllamaLLMClient:
         mime_type: str,
         prompt: str,
         output_language: str = "auto",
-    ) -> str | object | None:
+    ) -> VisionGeneration:
         """Generate an image description via ollama's native ``/api/chat``.
 
         Ollama's native protocol embeds images as a list of base64
         strings on the message (no data-URL prefix), distinct from the
         OpenAI-compatible ``image_url`` block. Response contract matches
-        :meth:`LLMClient.generate_vision`: text on success,
-        :data:`VISION_UNSUPPORTED` on 400/404, ``None`` otherwise.
+        :meth:`LLMClient.generate_vision`.
         """
         system_prompt = _build_vision_system_prompt(output_language)
         return await self._vision_chat(image_bytes, mime_type, system_prompt, prompt)
@@ -1543,29 +1911,28 @@ class OllamaLLMClient:
         mime_type: str,
         system_prompt: str,
         user_prompt: str,
-    ) -> dict | list | object | None:
+    ) -> JsonGeneration:
         """Structured-output vision call for one video-visual-index scene.
 
         Same contract as :meth:`LLMClient.generate_video_scene_json`:
-        JSON-mode requested and parsed via ``_parse_json_response``.
-        Providers that reject JSON mode are retried once without it.
-        Returns the parsed value, :data:`VISION_UNSUPPORTED`, or ``None``.
+        JSON-mode requested and parsed via ``_parse_json_response``, and
+        any rejection retried once without ``format`` before its verdict
+        is believed.
         """
         result = await self._vision_chat(
             image_bytes, mime_type, system_prompt, user_prompt,
             response_format={"type": "json_object"},
         )
-        if result is VISION_UNSUPPORTED:
+        if result.failure in _RESPONSE_FORMAT_SUSPECT_FAILURES:
             logger.info(
-                "Ollama vision request rejected with format=json; "
-                "retrying without format"
+                "Ollama vision request rejected with format=json (%s); "
+                "retrying without format",
+                result.failure,
             )
             result = await self._vision_chat(
                 image_bytes, mime_type, system_prompt, user_prompt,
             )
-        if result is VISION_UNSUPPORTED or result is None:
-            return result
-        return _parse_json_response(result)
+        return _vision_json_result(result)
 
     async def generate_json(
         self,

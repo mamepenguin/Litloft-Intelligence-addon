@@ -49,6 +49,13 @@ from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.config import FeaturesConfig, LLMConfig  # noqa: E402
+from app.llm import (  # noqa: E402
+    FAILURE_EMPTY,
+    FAILURE_MODEL_MISSING,
+    FAILURE_TOKEN_BUDGET,
+    FAILURE_VISION_UNSUPPORTED,
+    VisionGeneration,
+)
 from app.database import (  # noqa: E402
     Base,
     _create_file_summaries_table,
@@ -151,6 +158,16 @@ def feature_manual(monkeypatch, make_settings):
     )
     monkeypatch.setattr("app.config.settings", settings)
     monkeypatch.setattr("app.workers.vision.settings", settings)
+
+    # A configured feature with no usable client accepts work that
+    # nothing will ever run, so the gate asks the client too. The
+    # fixture describes a working system; tests that want the client
+    # gone override this.
+    enabled_llm = MagicMock()
+    enabled_llm.enabled = True
+    monkeypatch.setattr(
+        "app.workers.vision.get_llm_client", lambda: enabled_llm
+    )
     return settings
 
 
@@ -186,7 +203,7 @@ class TestEnqueue:
         self, search_db, feature_manual, policy_allow_family,
     ):
         worker = VisionDescribeWorker()
-        accepted = await worker.enqueue("img-ok")
+        accepted = (await worker.enqueue("img-ok"))["accepted"]
         assert accepted is True
 
     @pytest.mark.asyncio
@@ -194,7 +211,7 @@ class TestEnqueue:
         self, search_db, feature_manual, policy_allow_family,
     ):
         worker = VisionDescribeWorker()
-        accepted = await worker.enqueue("vid-skip")
+        accepted = (await worker.enqueue("vid-skip"))["accepted"]
         assert accepted is False
 
     @pytest.mark.asyncio
@@ -203,7 +220,7 @@ class TestEnqueue:
     ):
         """Unknown file_id must not raise — it's a no-op skip."""
         worker = VisionDescribeWorker()
-        accepted = await worker.enqueue("ghost")
+        accepted = (await worker.enqueue("ghost"))["accepted"]
         assert accepted is False
 
     @pytest.mark.asyncio
@@ -211,7 +228,7 @@ class TestEnqueue:
         self, search_db, feature_manual, policy_allow_family,
     ):
         worker = VisionDescribeWorker()
-        accepted = await worker.enqueue("img-off-drive")
+        accepted = (await worker.enqueue("img-off-drive"))["accepted"]
         assert accepted is False
 
     @pytest.mark.asyncio
@@ -226,7 +243,7 @@ class TestEnqueue:
         monkeypatch.setattr("app.workers.vision.settings", settings)
 
         worker = VisionDescribeWorker()
-        assert (await worker.enqueue("img-ok")) is False
+        assert (await worker.enqueue("img-ok"))["accepted"] is False
 
     @pytest.mark.asyncio
     async def test_missing_vision_model_rejects(
@@ -246,7 +263,7 @@ class TestEnqueue:
         monkeypatch.setattr("app.workers.vision.settings", settings)
 
         worker = VisionDescribeWorker()
-        assert (await worker.enqueue("img-ok")) is False
+        assert (await worker.enqueue("img-ok"))["accepted"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +276,8 @@ def _get_summary_row(engine, file_id: str):
         return conn.execute(
             text(
                 "SELECT visual_description, visual_description_status, "
-                "visual_description_model, visual_description_generated_at "
+                "visual_description_model, visual_description_generated_at, "
+                "visual_description_error "
                 "FROM file_summaries WHERE file_id = :fid"
             ),
             {"fid": file_id},
@@ -284,7 +302,7 @@ class TestProcessFileStatusTransitions:
         llm_stub = MagicMock()
         llm_stub.enabled = True
         llm_stub.generate_vision = AsyncMock(
-            return_value="A red apple on a wooden table."
+            return_value=VisionGeneration("A red apple on a wooden table.", None)
         )
         monkeypatch.setattr(
             "app.workers.vision.get_llm_client", lambda: llm_stub
@@ -320,7 +338,9 @@ class TestProcessFileStatusTransitions:
 
         llm_stub = MagicMock()
         llm_stub.enabled = True
-        llm_stub.generate_vision = AsyncMock(return_value=None)
+        llm_stub.generate_vision = AsyncMock(
+            return_value=VisionGeneration(None, FAILURE_EMPTY)
+        )
         monkeypatch.setattr(
             "app.workers.vision.get_llm_client", lambda: llm_stub
         )
@@ -334,6 +354,121 @@ class TestProcessFileStatusTransitions:
         assert row[1] == "failed"
 
     @pytest.mark.asyncio
+    async def test_the_failure_reason_is_persisted(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """The UI cannot offer the right remedy for a reason it never sees."""
+        engine, _ = search_db
+
+        monkeypatch.setattr(
+            "app.workers.vision._load_image_bytes",
+            lambda file_id: (b"\xff\xd8fake", "image/jpeg"),
+            raising=False,
+        )
+
+        llm_stub = MagicMock()
+        llm_stub.enabled = True
+        llm_stub.generate_vision = AsyncMock(
+            return_value=VisionGeneration(None, FAILURE_MODEL_MISSING)
+        )
+        monkeypatch.setattr(
+            "app.workers.vision.get_llm_client", lambda: llm_stub
+        )
+
+        worker = VisionDescribeWorker()
+        await worker._process_file("img-ok")
+
+        row = _get_summary_row(engine, "img-ok")
+        assert row[1] == "failed"
+        assert row[4] == FAILURE_MODEL_MISSING
+
+    @pytest.mark.asyncio
+    async def test_a_reason_does_not_outlive_its_attempt(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """A stale reason read against a later attempt misleads.
+
+        The file fails, then succeeds. The success must not carry the
+        earlier failure's explanation.
+        """
+        engine, _ = search_db
+
+        monkeypatch.setattr(
+            "app.workers.vision._load_image_bytes",
+            lambda file_id: (b"\xff\xd8fake", "image/jpeg"),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "app.workers.vision._embed_and_store",
+            lambda file_id, text: None,
+            raising=False,
+        )
+
+        llm_stub = MagicMock()
+        llm_stub.enabled = True
+        monkeypatch.setattr(
+            "app.workers.vision.get_llm_client", lambda: llm_stub
+        )
+
+        worker = VisionDescribeWorker()
+        llm_stub.generate_vision = AsyncMock(
+            return_value=VisionGeneration(None, FAILURE_MODEL_MISSING)
+        )
+        await worker._process_file("img-ok")
+        assert _get_summary_row(engine, "img-ok")[4] == FAILURE_MODEL_MISSING
+
+        llm_stub.generate_vision = AsyncMock(
+            return_value=VisionGeneration("A red apple.", None)
+        )
+        await worker._process_file("img-ok")
+        row = _get_summary_row(engine, "img-ok")
+        assert row[1] == "success"
+        assert row[4] is None
+
+    @pytest.mark.asyncio
+    async def test_truncated_description_is_not_stored_as_success(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """A description cut off by the token ceiling is not a description.
+
+        Success is sticky for the same model, so storing half a sentence
+        would both put it into retrieval as though it were whole and
+        stop a raised ``vision_max_tokens`` from ever re-running the
+        file.
+        """
+        engine, _ = search_db
+
+        monkeypatch.setattr(
+            "app.workers.vision._load_image_bytes",
+            lambda file_id: (b"\xff\xd8fake", "image/jpeg"),
+            raising=False,
+        )
+
+        llm_stub = MagicMock()
+        llm_stub.enabled = True
+        llm_stub.generate_vision = AsyncMock(
+            return_value=VisionGeneration(
+                "A red apple on a wooden tab", FAILURE_TOKEN_BUDGET
+            )
+        )
+        monkeypatch.setattr(
+            "app.workers.vision.get_llm_client", lambda: llm_stub
+        )
+        embed_mock = MagicMock()
+        monkeypatch.setattr(
+            "app.workers.vision._embed_and_store", embed_mock, raising=False,
+        )
+
+        worker = VisionDescribeWorker()
+        await worker._process_file("img-ok")
+
+        row = _get_summary_row(engine, "img-ok")
+        assert row is not None
+        assert row[1] == "failed"
+        assert row[0] is None
+        embed_mock.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_unsupported_response_sets_unsupported_status(
         self, search_db, feature_manual, policy_allow_family, monkeypatch,
     ):
@@ -345,12 +480,12 @@ class TestProcessFileStatusTransitions:
             raising=False,
         )
 
-        # Sentinel return value → status = "unsupported".
-        from app.llm import VISION_UNSUPPORTED  # expected export
-
+        # A probed verdict about the model → status = "unsupported".
         llm_stub = MagicMock()
         llm_stub.enabled = True
-        llm_stub.generate_vision = AsyncMock(return_value=VISION_UNSUPPORTED)
+        llm_stub.generate_vision = AsyncMock(
+            return_value=VisionGeneration(None, FAILURE_VISION_UNSUPPORTED)
+        )
         monkeypatch.setattr(
             "app.workers.vision.get_llm_client", lambda: llm_stub
         )
@@ -388,15 +523,297 @@ class TestProcessFileStatusTransitions:
 
         llm_stub = MagicMock()
         llm_stub.enabled = True
-        llm_stub.generate_vision = AsyncMock(return_value="should not be called")
+        llm_stub.generate_vision = AsyncMock(
+            return_value=VisionGeneration("should not be called", None)
+        )
         monkeypatch.setattr(
             "app.workers.vision.get_llm_client", lambda: llm_stub
         )
 
         worker = VisionDescribeWorker()
-        accepted = await worker.enqueue("img-ok")
+        accepted = (await worker.enqueue("img-ok"))["accepted"]
         assert accepted is False
         llm_stub.generate_vision.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_manual_request_overrides_unsupported_stickiness(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """The escape hatch from a settled verdict.
+
+        Stickiness protects automatic sweeps from re-spending on an
+        outcome that will not change on its own. A person pressing the
+        button has decided otherwise — most likely because they just
+        fixed the thing that caused it — and must not be told no.
+        """
+        engine, _ = search_db
+        now = datetime.now(UTC).isoformat()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO file_summaries "
+                    "(file_id, short_summary, long_summary, model, "
+                    "context_type, context_chars, was_truncated, status, "
+                    "created_at, visual_description_status, "
+                    "visual_description_model) "
+                    "VALUES (:fid, '', '', '', 'image', 0, 0, 'hidden', "
+                    ":now, 'unsupported', 'llava:13b')"
+                ),
+                {"fid": "img-ok", "now": now},
+            )
+
+        worker = VisionDescribeWorker()
+        # Same model as the stored verdict — the automatic path refuses.
+        assert (await worker.enqueue("img-ok"))["accepted"] is False
+        # The person asking gets through.
+        assert (await worker.enqueue("img-ok", manual=True))["accepted"] is True
+
+    @pytest.mark.asyncio
+    async def test_manual_request_overrides_success_stickiness(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """Regenerate must work without deleting the row first."""
+        engine, _ = search_db
+        now = datetime.now(UTC).isoformat()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO file_summaries "
+                    "(file_id, short_summary, long_summary, model, "
+                    "context_type, context_chars, was_truncated, status, "
+                    "created_at, visual_description, "
+                    "visual_description_status, visual_description_model) "
+                    "VALUES (:fid, '', '', '', 'image', 0, 0, 'hidden', "
+                    ":now, 'An old description', 'success', 'llava:13b')"
+                ),
+                {"fid": "img-ok", "now": now},
+            )
+
+        worker = VisionDescribeWorker()
+        assert (await worker.enqueue("img-ok"))["accepted"] is False
+        assert (await worker.enqueue("img-ok", manual=True))["accepted"] is True
+
+    @pytest.mark.asyncio
+    async def test_work_already_in_flight_is_not_bought_twice(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """Manual does not override "already queued".
+
+        Stickiness is about a settled outcome the user may want to
+        re-spend on. Work already on its way is not that: asking again
+        buys a second LLM call whose result overwrites the first.
+        """
+        worker = VisionDescribeWorker()
+        assert (await worker.enqueue("img-ok", manual=True))["accepted"] is True
+
+        second = await worker.enqueue("img-ok", manual=True)
+        assert second == {"accepted": False, "reason": "already_queued"}
+
+        # Draining the queue releases the file — a worker that took it
+        # and died leaves no claim behind.
+        file_id = await worker._queue.get()
+        worker._queued.discard(file_id)
+        third = await worker.enqueue("img-ok", manual=True)
+        assert third["accepted"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_restart_resumes_work_that_was_already_accepted(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """The queue dies with the process; the rows do not.
+
+        Recording pending on acceptance is what makes the state honest
+        while a file waits its turn, but it also means a restart leaves
+        every waiting file marked pending with nothing left to run it.
+        Startup is where that reading is unambiguous: a fresh worker
+        holds nothing, so a pending row is an abandoned claim.
+        """
+        engine, _ = search_db
+        now = datetime.now(UTC).isoformat()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO file_summaries "
+                    "(file_id, short_summary, long_summary, model, "
+                    "context_type, context_chars, was_truncated, status, "
+                    "created_at, visual_description_status, "
+                    "visual_description_model) "
+                    "VALUES (:fid, '', '', '', 'image', 0, 0, 'hidden', "
+                    ":now, 'pending', 'llava:13b')"
+                ),
+                {"fid": "img-ok", "now": now},
+            )
+
+        fresh = VisionDescribeWorker()
+        assert await fresh.requeue_abandoned() == 1
+        assert "img-ok" in fresh._queued
+
+    @pytest.mark.asyncio
+    async def test_resuming_leaves_settled_rows_alone(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """Only pending rows are abandoned claims.
+
+        A described or refused file was not waiting for anything, so
+        picking it up would be new spending, not resumption.
+        """
+        engine, _ = search_db
+        now = datetime.now(UTC).isoformat()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO file_summaries "
+                    "(file_id, short_summary, long_summary, model, "
+                    "context_type, context_chars, was_truncated, status, "
+                    "created_at, visual_description, "
+                    "visual_description_status, visual_description_model) "
+                    "VALUES (:fid, '', '', '', 'image', 0, 0, 'hidden', "
+                    ":now, 'A description', 'success', 'llava:13b')"
+                ),
+                {"fid": "img-ok", "now": now},
+            )
+
+        fresh = VisionDescribeWorker()
+        assert await fresh.requeue_abandoned() == 0
+
+    @pytest.mark.asyncio
+    async def test_accepting_a_file_does_not_destroy_what_is_there(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """Queuing is not a result, so it must not overwrite one.
+
+        A folder-wide accept would otherwise empty every description it
+        touched before a single LLM call had been made — and if the
+        provider then went down, all of them would be gone with nothing
+        to show for it.
+        """
+        engine, _ = search_db
+        now = datetime.now(UTC).isoformat()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO file_summaries "
+                    "(file_id, short_summary, long_summary, model, "
+                    "context_type, context_chars, was_truncated, status, "
+                    "created_at, visual_description, "
+                    "visual_description_status, visual_description_model, "
+                    "visual_description_generated_at) "
+                    "VALUES (:fid, '', '', '', 'image', 0, 0, 'hidden', "
+                    ":now, 'A green leaf, close up.', 'success', "
+                    "'old-model', :now)"
+                ),
+                {"fid": "img-ok", "now": now},
+            )
+
+        worker = VisionDescribeWorker()
+        assert (await worker.enqueue("img-ok", manual=True))["accepted"] is True
+
+        row = _get_summary_row(engine, "img-ok")
+        assert row[1] == "pending"
+        assert row[0] == "A green leaf, close up."
+        assert row[2] == "old-model"
+
+    @pytest.mark.asyncio
+    async def test_no_client_means_no_acceptance(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """Configured is not the same as runnable.
+
+        The worker task only runs while the LLM client is enabled, and
+        a client can be disabled with llm.vision_model still set.
+        Accepting in that state marks the row pending for a worker that
+        will never look at it, and startup recovery sits behind the
+        same gate — so the row would stay pending forever.
+        """
+        engine, _ = search_db
+        disabled = MagicMock()
+        disabled.enabled = False
+        monkeypatch.setattr(
+            "app.workers.vision.get_llm_client", lambda: disabled
+        )
+
+        worker = VisionDescribeWorker()
+        result = await worker.enqueue("img-ok", manual=True)
+        assert result == {"accepted": False, "reason": "llm_unavailable"}
+        assert _get_summary_row(engine, "img-ok") is None
+
+    @pytest.mark.asyncio
+    async def test_accepting_a_file_records_pending_immediately(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """Queued is a true state, and every reader deserves to see it.
+
+        Behind other files the row would otherwise keep reporting its
+        previous outcome, so a caller polling for the change it just
+        asked for reads the old answer and concludes nothing happened.
+        """
+        engine, _ = search_db
+        now = datetime.now(UTC).isoformat()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO file_summaries "
+                    "(file_id, short_summary, long_summary, model, "
+                    "context_type, context_chars, was_truncated, status, "
+                    "created_at, visual_description_status, "
+                    "visual_description_model, visual_description_error) "
+                    "VALUES (:fid, '', '', '', 'image', 0, 0, 'hidden', "
+                    ":now, 'unsupported', 'llava:13b', 'vision_unsupported')"
+                ),
+                {"fid": "img-ok", "now": now},
+            )
+
+        worker = VisionDescribeWorker()
+        assert (await worker.enqueue("img-ok", manual=True))["accepted"] is True
+
+        row = _get_summary_row(engine, "img-ok")
+        assert row[1] == "pending"
+        assert row[4] is None
+
+    @pytest.mark.asyncio
+    async def test_manual_does_not_override_the_gates_that_are_not_about_cost(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """Policy and mime are not the user's to overrule.
+
+        Stickiness is a spending guard, so an explicit request may spend.
+        A drive whose operator turned the feature off, and a file that is
+        not an image, are different questions entirely.
+        """
+        worker = VisionDescribeWorker()
+        off_drive = await worker.enqueue("img-off-drive", manual=True)
+        assert off_drive == {"accepted": False, "reason": "policy_off"}
+        not_image = await worker.enqueue("vid-skip", manual=True)
+        assert not_image == {"accepted": False, "reason": "not_an_image"}
+
+    @pytest.mark.asyncio
+    async def test_rejection_names_the_gate_that_refused(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """A router cannot explain a refusal it was not told about."""
+        engine, _ = search_db
+        now = datetime.now(UTC).isoformat()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO file_summaries "
+                    "(file_id, short_summary, long_summary, model, "
+                    "context_type, context_chars, was_truncated, status, "
+                    "created_at, visual_description_status, "
+                    "visual_description_model) "
+                    "VALUES (:fid, '', '', '', 'image', 0, 0, 'hidden', "
+                    ":now, 'unsupported', 'llava:13b')"
+                ),
+                {"fid": "img-ok", "now": now},
+            )
+
+        worker = VisionDescribeWorker()
+        assert await worker.enqueue("img-ok") == {
+            "accepted": False, "reason": "unsupported_sticky",
+        }
+        assert await worker.enqueue("ghost") == {
+            "accepted": False, "reason": "file_not_found",
+        }
 
     @pytest.mark.asyncio
     async def test_success_same_model_does_not_retry(
@@ -426,13 +843,15 @@ class TestProcessFileStatusTransitions:
 
         llm_stub = MagicMock()
         llm_stub.enabled = True
-        llm_stub.generate_vision = AsyncMock(return_value="should not be called")
+        llm_stub.generate_vision = AsyncMock(
+            return_value=VisionGeneration("should not be called", None)
+        )
         monkeypatch.setattr(
             "app.workers.vision.get_llm_client", lambda: llm_stub
         )
 
         worker = VisionDescribeWorker()
-        accepted = await worker.enqueue("img-ok")
+        accepted = (await worker.enqueue("img-ok"))["accepted"]
         assert accepted is False
         llm_stub.generate_vision.assert_not_awaited()
 
@@ -452,6 +871,11 @@ class TestProcessFileStatusTransitions:
         )
         monkeypatch.setattr("app.config.settings", settings)
         monkeypatch.setattr("app.workers.vision.settings", settings)
+        enabled_llm = MagicMock()
+        enabled_llm.enabled = True
+        monkeypatch.setattr(
+            "app.workers.vision.get_llm_client", lambda: enabled_llm
+        )
 
         engine, _ = search_db
         now = datetime.now(UTC).isoformat()
@@ -470,7 +894,7 @@ class TestProcessFileStatusTransitions:
             )
 
         worker = VisionDescribeWorker()
-        accepted = await worker.enqueue("img-ok")
+        accepted = (await worker.enqueue("img-ok"))["accepted"]
         assert accepted is True
 
     @pytest.mark.asyncio
@@ -489,6 +913,11 @@ class TestProcessFileStatusTransitions:
         )
         monkeypatch.setattr("app.config.settings", settings)
         monkeypatch.setattr("app.workers.vision.settings", settings)
+        enabled_llm = MagicMock()
+        enabled_llm.enabled = True
+        monkeypatch.setattr(
+            "app.workers.vision.get_llm_client", lambda: enabled_llm
+        )
 
         engine, _ = search_db
         now = datetime.now(UTC).isoformat()
@@ -507,7 +936,7 @@ class TestProcessFileStatusTransitions:
             )
 
         worker = VisionDescribeWorker()
-        accepted = await worker.enqueue("img-ok")
+        accepted = (await worker.enqueue("img-ok"))["accepted"]
         # Different model, so the sticky-unsupported check should let it
         # through. Actual LLM call is out of scope here.
         assert accepted is True
@@ -649,7 +1078,9 @@ class TestEmbeddingRegistration:
         llm_stub = MagicMock()
         llm_stub.enabled = True
         llm_stub.generate_vision = AsyncMock(
-            return_value="A yellow duckling swimming in a pond."
+            return_value=VisionGeneration(
+                "A yellow duckling swimming in a pond.", None
+            )
         )
         monkeypatch.setattr(
             "app.workers.vision.get_llm_client", lambda: llm_stub
@@ -716,7 +1147,9 @@ class TestEmbeddingRegistration:
 
         llm_stub = MagicMock()
         llm_stub.enabled = True
-        llm_stub.generate_vision = AsyncMock(return_value=None)
+        llm_stub.generate_vision = AsyncMock(
+            return_value=VisionGeneration(None, FAILURE_EMPTY)
+        )
         monkeypatch.setattr(
             "app.workers.vision.get_llm_client", lambda: llm_stub
         )

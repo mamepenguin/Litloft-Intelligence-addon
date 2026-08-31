@@ -36,7 +36,14 @@ import app.config as config
 from app.config import is_video_visual_index_available, settings
 from app.database import get_search_db, get_search_db_read, get_search_engine
 from app.frame_cache import ensure_frame_cached
-from app.llm import VISION_UNSUPPORTED
+from app.llm import (
+    FAILURE_IMAGE_REJECTED,
+    FAILURE_MODEL_MISSING,
+    FAILURE_REQUEST_FAILED,
+    FAILURE_TOKEN_BUDGET,
+    FAILURE_VISION_UNSUPPORTED,
+    JsonGeneration,
+)
 from app.models import Embedding, IndexedFile, TranscriptChunk, VideoVisualRun, VideoVisualScene
 from app.output_language import configured_language_requirement
 from app.policy_client import is_file_feature_enabled
@@ -75,6 +82,24 @@ _READY_EVENTS = {
     "succeeded": "intelligence.video_visual.succeeded",
     "partial": "intelligence.video_visual.partial",
     "failed": "intelligence.video_visual.failed",
+}
+
+# Scene ``error_class`` for each vision failure the transport can name.
+# ``vision_unsupported`` is absent on purpose: it ends the run rather
+# than the scene, so it never reaches ``_fail_scene``.
+_SCENE_ERROR_CLASSES = {
+    FAILURE_IMAGE_REJECTED: "ImageRejected",
+    FAILURE_TOKEN_BUDGET: "TokenBudget",
+    FAILURE_REQUEST_FAILED: "RequestFailed",
+}
+
+# Outcomes that describe the model rather than the frame, so the run
+# stops instead of paying two requests per scene to learn the same
+# thing again. The value is the run's ``error_class``; only
+# "Unsupported" is what ``_should_accept`` treats as sticky.
+_RUN_ENDING_OUTCOMES = {
+    "unsupported": "Unsupported",
+    "model_missing": "ModelMissing",
 }
 
 
@@ -435,8 +460,19 @@ class VideoVisualWorker:
 
     # -- Enqueue ------------------------------------------------------------
 
-    async def _should_accept(self, file_id: str) -> tuple[bool, str]:
-        """Shared gate: feature flag + vision_model + drive policy + mime + CLIP + stickiness."""
+    async def _should_accept(
+        self, file_id: str, *, manual: bool = False
+    ) -> tuple[bool, str]:
+        """Shared gate: feature flag + vision_model + drive policy + mime + CLIP + stickiness.
+
+        ``manual`` skips the stickiness check and nothing else, matching
+        ``VisionDescribeWorker._should_accept``. Stickiness stops
+        automatic sweeps from re-spending on a settled verdict; a person
+        asking for this file has decided otherwise, usually because they
+        just changed the thing that produced it. Everything else — the
+        feature, the policy, the mime, the CLIP prerequisite, and a run
+        already in flight — applies to everyone.
+        """
         if not is_video_visual_index_available(settings):
             return False, "disabled"
 
@@ -473,9 +509,11 @@ class VideoVisualWorker:
                 .first()
             )
             # Sticky "provider/model can't do this" — same shape as
-            # VisionDescribeWorker._should_accept. A model swap clears it.
+            # VisionDescribeWorker._should_accept. A model swap clears
+            # it, and so does an explicit request.
             if (
-                last_run is not None
+                not manual
+                and last_run is not None
                 and last_run.status == "failed"
                 and last_run.error_class == "Unsupported"
                 and (last_run.vision_model or "") == (settings.llm.vision_model or "")
@@ -507,7 +545,9 @@ class VideoVisualWorker:
         file's CLIP task (§6.1); an automatic request is simply skipped
         (the periodic on_index sweep / CLIP-completion hook retries it).
         """
-        accepted, reason = await self._should_accept(file_id)
+        accepted, reason = await self._should_accept(
+            file_id, manual=(requested_by == "manual")
+        )
         if not accepted:
             if reason == "waiting_clip" and requested_by == "manual":
                 try:
@@ -762,11 +802,17 @@ class VideoVisualWorker:
         for scene_id in pending_ids:
             await self._pause_event.wait()  # checked between scenes only
             outcome = await self._process_scene(scene_id, run_id, file_id, file_path, filename)
-            if outcome == "unsupported":
-                self._fail_run(run_id, "Unsupported")
+            # Both of these are facts about the model, so every
+            # remaining scene would meet them too. Only the first is
+            # sticky: a model that cannot see stays that way until it
+            # is changed, while an absent one comes back with a pull,
+            # so its error_class deliberately is not the one
+            # ``_should_accept`` latches on.
+            if outcome in _RUN_ENDING_OUTCOMES:
+                self._fail_run(run_id, _RUN_ENDING_OUTCOMES[outcome])
                 await emit_video_visual_event(
                     _READY_EVENTS["failed"],
-                    {"file_id": file_id, "run_id": run_id, "drive": drive, "reason": "unsupported"},
+                    {"file_id": file_id, "run_id": run_id, "drive": drive, "reason": outcome},
                 )
                 return
             await self._emit_progress(run_id, file_id, drive)
@@ -867,12 +913,16 @@ class VideoVisualWorker:
             )
         except Exception as e:
             logger.warning("video_visual: LLM call raised for scene %s (%s)", scene_id, type(e).__name__)
-            result = None
+            result = JsonGeneration(None, FAILURE_REQUEST_FAILED)
 
-        if result is VISION_UNSUPPORTED:
+        # Only a probed verdict about the model ends the whole run; a
+        # rejected frame or an absent model is this scene's problem.
+        if result.failure == FAILURE_VISION_UNSUPPORTED:
             return "unsupported"
+        if result.failure == FAILURE_MODEL_MISSING:
+            return "model_missing"
 
-        parsed = _validate_scene_output(result)
+        parsed = _validate_scene_output(result.value)
         if parsed is None:
             # One repair attempt, same frame, no resend of a different
             # image (design doc §12).
@@ -888,14 +938,19 @@ class VideoVisualWorker:
                     "video_visual: repair LLM call raised for scene %s (%s)",
                     scene_id, type(e).__name__,
                 )
-                result2 = None
-            if result2 is VISION_UNSUPPORTED:
+                result2 = JsonGeneration(None, FAILURE_REQUEST_FAILED)
+            if result2.failure == FAILURE_VISION_UNSUPPORTED:
                 return "unsupported"
-            parsed = _validate_scene_output(result2)
+            if result2.failure == FAILURE_MODEL_MISSING:
+                return "model_missing"
+            parsed = _validate_scene_output(result2.value)
             if parsed is None:
                 return self._fail_scene(
-                    scene_id, run_id, "MalformedOutput",
-                    "structured output invalid after repair attempt",
+                    scene_id, run_id,
+                    _SCENE_ERROR_CLASSES.get(result2.failure, "MalformedOutput"),
+                    "structured output invalid after repair attempt"
+                    if result2.failure is None
+                    else f"vision call failed: {result2.failure}",
                 )
 
         with get_search_db() as session:

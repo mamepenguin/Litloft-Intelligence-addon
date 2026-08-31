@@ -34,6 +34,12 @@ from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.config import FeaturesConfig, LLMConfig  # noqa: E402
+from app.llm import (  # noqa: E402
+    FAILURE_IMAGE_REJECTED,
+    FAILURE_MODEL_MISSING,
+    FAILURE_TOKEN_BUDGET,
+    JsonGeneration,
+)
 from app.database import Base  # noqa: E402
 from app.models import (  # noqa: E402
     Embedding,
@@ -48,6 +54,7 @@ pytest.importorskip(
 )
 
 from app.workers.video_visual import (  # noqa: E402
+    _RUN_ENDING_OUTCOMES,
     VideoVisualWorker,
     _load_frame_bytes,
     _read_or_extract_frame,
@@ -282,11 +289,14 @@ class TestProcessSceneLabel:
         monkeypatch.setattr("app.workers.video_visual._embed_scene", embed_scene)
 
         llm = MagicMock()
-        llm.generate_video_scene_json = AsyncMock(return_value={
-            "scene_label": "Chicken marinade added",
-            "visible_text": "",
-            "scene_type": "demonstration",
-        })
+        llm.generate_video_scene_json = AsyncMock(return_value=JsonGeneration(
+            {
+                "scene_label": "Chicken marinade added",
+                "visible_text": "",
+                "scene_type": "demonstration",
+            },
+            None,
+        ))
 
         outcome = await VideoVisualWorker(llm)._process_scene(
             scene_id, "vvr_label", "vid-ok", "/drives/family/clip.mp4", "clip.mp4"
@@ -301,6 +311,179 @@ class TestProcessSceneLabel:
         embed_scene.assert_called_once_with(
             "vid-ok", scene_id, "Chicken marinade added", "", 5.0, None,
         )
+
+    @pytest.mark.asyncio
+    async def test_a_truncated_scene_reports_the_budget_not_the_prompt(
+        self, search_db, feature_manual, policy_allow_all, monkeypatch,
+    ):
+        """The remedy differs, so the error class must too.
+
+        Truncation can leave a syntactically complete object that the
+        scene validator still rejects for missing scene_label. Calling
+        that malformed output points the operator at the prompt; the
+        fix is the token budget.
+        """
+        _, Session = search_db
+        with Session() as s:
+            run = VideoVisualRun(
+                id="vvr_trunc", file_id="vid-ok", status="running",
+                is_active=False, requested_by="manual", priority=100,
+                vision_model="llava:13b", pipeline_version=2,
+                candidate_fingerprint="fp", selected_count=1,
+            )
+            scene = VideoVisualScene(
+                run_id="vvr_trunc", ordering=0, clip_embedding_id="c0",
+                start_time=5.0, status="pending",
+            )
+            s.add_all([run, scene])
+            s.commit()
+            scene_id = scene.id
+
+        monkeypatch.setattr(
+            "app.workers.video_visual.config.validate_file_path", lambda path: True,
+        )
+        monkeypatch.setattr(
+            "app.workers.video_visual._load_frame_bytes",
+            AsyncMock(return_value=b"raw-frame"),
+        )
+        monkeypatch.setattr(
+            "app.workers.vision._preprocess_image",
+            lambda data, mime: (b"processed-frame", "image/jpeg"),
+        )
+        monkeypatch.setattr(
+            "app.workers.video_visual._select_transcript_excerpt",
+            lambda *args: "",
+        )
+
+        llm = MagicMock()
+        # Parses, but carries no scene_label — the validator rejects it.
+        llm.generate_video_scene_json = AsyncMock(
+            return_value=JsonGeneration(
+                {"visible_text": "partial"}, FAILURE_TOKEN_BUDGET
+            )
+        )
+
+        outcome = await VideoVisualWorker(llm)._process_scene(
+            scene_id, "vvr_trunc", "vid-ok", "/drives/family/clip.mp4", "clip.mp4"
+        )
+
+        assert outcome != "succeeded"
+        with Session() as s:
+            stored = s.query(VideoVisualScene).filter_by(id=scene_id).one()
+            assert stored.error_class == "TokenBudget"
+
+    @pytest.mark.asyncio
+    async def test_an_absent_model_ends_the_run_without_latching_it(
+        self, search_db, feature_manual, policy_allow_all, monkeypatch,
+    ):
+        """Every remaining scene would meet the same absence.
+
+        Carrying on pays two requests per scene to learn it again. But
+        a pull brings the model back, so the run must not be closed
+        with the error_class the stickiness gate latches on.
+        """
+        _, Session = search_db
+        with Session() as s:
+            run = VideoVisualRun(
+                id="vvr_gone", file_id="vid-ok", status="running",
+                is_active=False, requested_by="manual", priority=100,
+                vision_model="llava:13b", pipeline_version=2,
+                candidate_fingerprint="fp", selected_count=1,
+            )
+            scene = VideoVisualScene(
+                run_id="vvr_gone", ordering=0, clip_embedding_id="c0",
+                start_time=5.0, status="pending",
+            )
+            s.add_all([run, scene])
+            s.commit()
+            scene_id = scene.id
+
+        monkeypatch.setattr(
+            "app.workers.video_visual.config.validate_file_path", lambda path: True,
+        )
+        monkeypatch.setattr(
+            "app.workers.video_visual._load_frame_bytes",
+            AsyncMock(return_value=b"raw-frame"),
+        )
+        monkeypatch.setattr(
+            "app.workers.vision._preprocess_image",
+            lambda data, mime: (b"processed-frame", "image/jpeg"),
+        )
+        monkeypatch.setattr(
+            "app.workers.video_visual._select_transcript_excerpt",
+            lambda *args: "",
+        )
+
+        llm = MagicMock()
+        llm.generate_video_scene_json = AsyncMock(
+            return_value=JsonGeneration(None, FAILURE_MODEL_MISSING)
+        )
+
+        outcome = await VideoVisualWorker(llm)._process_scene(
+            scene_id, "vvr_gone", "vid-ok", "/drives/family/clip.mp4", "clip.mp4"
+        )
+        assert outcome == "model_missing"
+        # One call, not a repair attempt as well: the answer will not
+        # change for a model that is not there.
+        assert llm.generate_video_scene_json.await_count == 1
+        assert _RUN_ENDING_OUTCOMES[outcome] == "ModelMissing"
+        assert _RUN_ENDING_OUTCOMES[outcome] != "Unsupported"
+
+    @pytest.mark.asyncio
+    async def test_a_rejected_frame_does_not_end_the_whole_run(
+        self, search_db, feature_manual, policy_allow_all, monkeypatch,
+    ):
+        """Only a probed verdict about the model ends a run.
+
+        One frame the provider would not read says nothing about the
+        remaining scenes.
+        """
+        _, Session = search_db
+        with Session() as s:
+            run = VideoVisualRun(
+                id="vvr_rej", file_id="vid-ok", status="running",
+                is_active=False, requested_by="manual", priority=100,
+                vision_model="llava:13b", pipeline_version=2,
+                candidate_fingerprint="fp", selected_count=1,
+            )
+            scene = VideoVisualScene(
+                run_id="vvr_rej", ordering=0, clip_embedding_id="c0",
+                start_time=5.0, status="pending",
+            )
+            s.add_all([run, scene])
+            s.commit()
+            scene_id = scene.id
+
+        monkeypatch.setattr(
+            "app.workers.video_visual.config.validate_file_path", lambda path: True,
+        )
+        monkeypatch.setattr(
+            "app.workers.video_visual._load_frame_bytes",
+            AsyncMock(return_value=b"raw-frame"),
+        )
+        monkeypatch.setattr(
+            "app.workers.vision._preprocess_image",
+            lambda data, mime: (b"processed-frame", "image/jpeg"),
+        )
+        monkeypatch.setattr(
+            "app.workers.video_visual._select_transcript_excerpt",
+            lambda *args: "",
+        )
+
+        llm = MagicMock()
+        llm.generate_video_scene_json = AsyncMock(
+            return_value=JsonGeneration(None, FAILURE_IMAGE_REJECTED)
+        )
+
+        outcome = await VideoVisualWorker(llm)._process_scene(
+            scene_id, "vvr_rej", "vid-ok", "/drives/family/clip.mp4", "clip.mp4"
+        )
+
+        assert outcome != "unsupported"
+        with Session() as s:
+            stored = s.query(VideoVisualScene).filter_by(id=scene_id).one()
+            assert stored.error_class == "ImageRejected"
+
 
 
 # ---------------------------------------------------------------------------
@@ -470,9 +653,77 @@ class TestEnqueue:
             s.commit()
 
         worker = VideoVisualWorker(MagicMock())
-        result = await worker.enqueue("vid-ok")
+        # The automatic path: a settled verdict is not re-spent on.
+        result = await worker.enqueue("vid-ok", requested_by="on_index")
         assert result["accepted"] is False
         assert result["reason"] == "unsupported_sticky"
+
+    @pytest.mark.asyncio
+    async def test_a_manual_request_overrides_unsupported_stickiness(
+        self, search_db, feature_manual, policy_allow_all,
+    ):
+        """The escape hatch, matching vision_describe.
+
+        Stickiness protects the automatic sweep's budget. A person
+        asking for this file has decided otherwise, and is usually
+        asking precisely because they changed what caused the verdict.
+        """
+        _, Session = search_db
+        with Session() as s:
+            s.add(
+                VideoVisualRun(
+                    id="vvr_prior",
+                    file_id="vid-ok",
+                    status="failed",
+                    is_active=False,
+                    requested_by="manual",
+                    priority=100,
+                    vision_model="llava:13b",
+                    pipeline_version=1,
+                    candidate_fingerprint="fp",
+                    error_class="Unsupported",
+                )
+            )
+            s.commit()
+
+        worker = VideoVisualWorker(MagicMock())
+        assert (await worker.enqueue("vid-ok", requested_by="on_index"))[
+            "reason"
+        ] == "unsupported_sticky"
+        assert (await worker.enqueue("vid-ok", requested_by="manual"))[
+            "accepted"
+        ] is True
+
+    @pytest.mark.asyncio
+    async def test_manual_does_not_override_a_run_already_in_flight(
+        self, search_db, feature_manual, policy_allow_all,
+    ):
+        """Asking twice does not make it happen sooner.
+
+        Unlike a settled verdict, work already staged is not something
+        the user can usefully buy again — the second run would replace
+        the first for nothing.
+        """
+        _, Session = search_db
+        with Session() as s:
+            s.add(
+                VideoVisualRun(
+                    id="vvr_running",
+                    file_id="vid-ok",
+                    status="running",
+                    is_active=False,
+                    requested_by="manual",
+                    priority=100,
+                    vision_model="llava:13b",
+                    pipeline_version=2,
+                    candidate_fingerprint="fp",
+                )
+            )
+            s.commit()
+
+        worker = VideoVisualWorker(MagicMock())
+        result = await worker.enqueue("vid-ok", requested_by="manual")
+        assert result == {"accepted": False, "reason": "already_queued"}
 
     @pytest.mark.asyncio
     async def test_unsupported_sticky_clears_on_model_change(
