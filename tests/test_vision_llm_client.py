@@ -1028,3 +1028,48 @@ class TestProbeImageIsActuallyDecodable:
             line = raw[row * stride:(row + 1) * stride]
             assert line[0] == 0, "expected the None filter on every scanline"
             assert set(line[1:]) == {204, 51}, "expected one solid colour"
+
+
+
+class TestStructuredVisionKeepsTheUpstreamReason:
+    """Truncation can leave a parseable object the domain still rejects.
+
+    Reporting that as malformed output sends the operator to the prompt
+    when the remedy is the token budget. The parser hands over both the
+    value and the reason and lets the domain validator decide.
+    """
+
+    def test_a_parsed_value_keeps_a_truncation_reason(self):
+        from app.llm import (
+            FAILURE_TOKEN_BUDGET,
+            VisionGeneration,
+            _vision_json_result,
+        )
+
+        result = _vision_json_result(
+            VisionGeneration('{"visible_text":"x"}', FAILURE_TOKEN_BUDGET)
+        )
+        assert result.value == {"visible_text": "x"}
+        assert result.failure == FAILURE_TOKEN_BUDGET
+
+    def test_a_clean_parse_carries_no_reason(self):
+        from app.llm import VisionGeneration, _vision_json_result
+
+        result = _vision_json_result(
+            VisionGeneration('{"scene_label":"A kitchen"}', None)
+        )
+        assert result.value == {"scene_label": "A kitchen"}
+        assert result.failure is None
+
+    def test_an_unparseable_body_reports_the_upstream_cause(self):
+        from app.llm import (
+            FAILURE_TOKEN_BUDGET,
+            VisionGeneration,
+            _vision_json_result,
+        )
+
+        result = _vision_json_result(
+            VisionGeneration('{"scene_label":"A kit', FAILURE_TOKEN_BUDGET)
+        )
+        assert result.value is None
+        assert result.failure == FAILURE_TOKEN_BUDGET

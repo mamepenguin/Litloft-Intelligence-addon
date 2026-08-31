@@ -35,7 +35,11 @@ from sqlalchemy import text as sql_text
 from sqlalchemy.exc import OperationalError
 
 from app.config import is_vision_describe_available, settings
-from app.database import get_search_db
+from app.database import (
+    VISION_DESCRIBE_CLEAR_SQL,
+    VISION_DESCRIBE_PRESENT_SQL,
+    get_search_db,
+)
 from app.dependencies import get_llm_client
 from app.drive_context import require_drive
 from app.models import Embedding, IndexedFile
@@ -128,20 +132,15 @@ def _clear_visual_description(file_id: str) -> bool:
     with get_search_db() as session:
         row = session.execute(
             sql_text(
-                "SELECT visual_description, visual_description_status "
+                f"SELECT ({VISION_DESCRIBE_PRESENT_SQL}) "
                 "FROM file_summaries WHERE file_id = :fid"
             ),
             {"fid": file_id},
         ).fetchone()
-        if row is not None and (row[0] is not None or row[1] is not None):
+        if row is not None and bool(row[0]):
             session.execute(
                 sql_text(
-                    "UPDATE file_summaries SET "
-                    "visual_description = NULL, "
-                    "visual_description_status = NULL, "
-                    "visual_description_model = NULL, "
-                    "visual_description_generated_at = NULL, "
-                    "visual_description_error = NULL "
+                    f"UPDATE file_summaries SET {VISION_DESCRIBE_CLEAR_SQL} "
                     "WHERE file_id = :fid"
                 ),
                 {"fid": file_id},

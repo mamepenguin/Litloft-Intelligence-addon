@@ -340,9 +340,14 @@ _RESPONSE_FORMAT_SUSPECT_FAILURES = frozenset(
 def _vision_json_result(result: "VisionGeneration") -> JsonGeneration:
     """Parse a vision completion as JSON, keeping the upstream reason.
 
-    Mirrors ``generate_json_result``: a body cut off by the token
-    ceiling is unparseable for a reason the caller can act on, so the
-    upstream cause wins over the parse symptom.
+    A body cut off by the token ceiling is unusable for a reason the
+    caller can act on, so the upstream cause wins over the parse
+    symptom. The reason survives a *successful* parse too: truncation
+    can leave a syntactically complete object that the domain then
+    rejects for missing a required field, and reporting that as
+    malformed output would send the operator to the prompt when the
+    remedy is the token budget. Whether the value is good enough is the
+    domain validator's call, so both are handed over.
     """
     raw = result.text
     if raw is None:
@@ -350,7 +355,7 @@ def _vision_json_result(result: "VisionGeneration") -> JsonGeneration:
     parsed = _parse_json_response(raw)
     if parsed is None:
         return JsonGeneration(None, result.failure or FAILURE_MALFORMED)
-    return JsonGeneration(parsed, None)
+    return JsonGeneration(parsed, result.failure)
 
 
 def _classify_probe_status(status_code: int) -> str:

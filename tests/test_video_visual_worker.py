@@ -34,7 +34,11 @@ from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.config import FeaturesConfig, LLMConfig  # noqa: E402
-from app.llm import JsonGeneration  # noqa: E402
+from app.llm import (  # noqa: E402
+    FAILURE_IMAGE_REJECTED,
+    FAILURE_TOKEN_BUDGET,
+    JsonGeneration,
+)
 from app.database import Base  # noqa: E402
 from app.models import (  # noqa: E402
     Embedding,
@@ -305,6 +309,122 @@ class TestProcessSceneLabel:
         embed_scene.assert_called_once_with(
             "vid-ok", scene_id, "Chicken marinade added", "", 5.0, None,
         )
+
+    @pytest.mark.asyncio
+    async def test_a_truncated_scene_reports_the_budget_not_the_prompt(
+        self, search_db, feature_manual, policy_allow_all, monkeypatch,
+    ):
+        """The remedy differs, so the error class must too.
+
+        Truncation can leave a syntactically complete object that the
+        scene validator still rejects for missing scene_label. Calling
+        that malformed output points the operator at the prompt; the
+        fix is the token budget.
+        """
+        _, Session = search_db
+        with Session() as s:
+            run = VideoVisualRun(
+                id="vvr_trunc", file_id="vid-ok", status="running",
+                is_active=False, requested_by="manual", priority=100,
+                vision_model="llava:13b", pipeline_version=2,
+                candidate_fingerprint="fp", selected_count=1,
+            )
+            scene = VideoVisualScene(
+                run_id="vvr_trunc", ordering=0, clip_embedding_id="c0",
+                start_time=5.0, status="pending",
+            )
+            s.add_all([run, scene])
+            s.commit()
+            scene_id = scene.id
+
+        monkeypatch.setattr(
+            "app.workers.video_visual.config.validate_file_path", lambda path: True,
+        )
+        monkeypatch.setattr(
+            "app.workers.video_visual._load_frame_bytes",
+            AsyncMock(return_value=b"raw-frame"),
+        )
+        monkeypatch.setattr(
+            "app.workers.vision._preprocess_image",
+            lambda data, mime: (b"processed-frame", "image/jpeg"),
+        )
+        monkeypatch.setattr(
+            "app.workers.video_visual._select_transcript_excerpt",
+            lambda *args: "",
+        )
+
+        llm = MagicMock()
+        # Parses, but carries no scene_label — the validator rejects it.
+        llm.generate_video_scene_json = AsyncMock(
+            return_value=JsonGeneration(
+                {"visible_text": "partial"}, FAILURE_TOKEN_BUDGET
+            )
+        )
+
+        outcome = await VideoVisualWorker(llm)._process_scene(
+            scene_id, "vvr_trunc", "vid-ok", "/drives/family/clip.mp4", "clip.mp4"
+        )
+
+        assert outcome != "succeeded"
+        with Session() as s:
+            stored = s.query(VideoVisualScene).filter_by(id=scene_id).one()
+            assert stored.error_class == "TokenBudget"
+
+    @pytest.mark.asyncio
+    async def test_a_rejected_frame_does_not_end_the_whole_run(
+        self, search_db, feature_manual, policy_allow_all, monkeypatch,
+    ):
+        """Only a probed verdict about the model ends a run.
+
+        One frame the provider would not read says nothing about the
+        remaining scenes.
+        """
+        _, Session = search_db
+        with Session() as s:
+            run = VideoVisualRun(
+                id="vvr_rej", file_id="vid-ok", status="running",
+                is_active=False, requested_by="manual", priority=100,
+                vision_model="llava:13b", pipeline_version=2,
+                candidate_fingerprint="fp", selected_count=1,
+            )
+            scene = VideoVisualScene(
+                run_id="vvr_rej", ordering=0, clip_embedding_id="c0",
+                start_time=5.0, status="pending",
+            )
+            s.add_all([run, scene])
+            s.commit()
+            scene_id = scene.id
+
+        monkeypatch.setattr(
+            "app.workers.video_visual.config.validate_file_path", lambda path: True,
+        )
+        monkeypatch.setattr(
+            "app.workers.video_visual._load_frame_bytes",
+            AsyncMock(return_value=b"raw-frame"),
+        )
+        monkeypatch.setattr(
+            "app.workers.vision._preprocess_image",
+            lambda data, mime: (b"processed-frame", "image/jpeg"),
+        )
+        monkeypatch.setattr(
+            "app.workers.video_visual._select_transcript_excerpt",
+            lambda *args: "",
+        )
+
+        llm = MagicMock()
+        llm.generate_video_scene_json = AsyncMock(
+            return_value=JsonGeneration(None, FAILURE_IMAGE_REJECTED)
+        )
+
+        outcome = await VideoVisualWorker(llm)._process_scene(
+            scene_id, "vvr_rej", "vid-ok", "/drives/family/clip.mp4", "clip.mp4"
+        )
+
+        assert outcome != "unsupported"
+        with Session() as s:
+            stored = s.query(VideoVisualScene).filter_by(id=scene_id).one()
+            assert stored.error_class == "ImageRejected"
+
 
 
 # ---------------------------------------------------------------------------

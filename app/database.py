@@ -1442,6 +1442,31 @@ def _create_file_summaries_table(conn: object) -> None:
     ))
 
 
+# Every column on ``file_summaries`` that the vision_describe feature
+# owns. Named once because three separate paths clear them — DELETE, the
+# policy-off purge, and the worker's own status writes — and a column
+# added to the writer has already been forgotten by one of the others.
+VISION_DESCRIBE_COLUMNS = (
+    "visual_description",
+    "visual_description_status",
+    "visual_description_model",
+    "visual_description_generated_at",
+    "visual_description_error",
+)
+
+# "col = NULL, col = NULL, ..." for the UPDATE that wipes them all.
+VISION_DESCRIBE_CLEAR_SQL = ", ".join(
+    f"{column} = NULL" for column in VISION_DESCRIBE_COLUMNS
+)
+
+# "col IS NOT NULL OR ..." — true when the file carries any vision
+# artefact at all, so "is there something to clear?" cannot drift from
+# "what gets cleared".
+VISION_DESCRIBE_PRESENT_SQL = " OR ".join(
+    f"{column} IS NOT NULL" for column in VISION_DESCRIBE_COLUMNS
+)
+
+
 def _migrate_file_summaries_if_needed(conn: object) -> None:
     """Evolve ``file_summaries`` schema for user-edit support.
 
