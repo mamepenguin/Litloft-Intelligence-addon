@@ -422,6 +422,30 @@ def test_a_single_lane_gets_the_full_weight(lib):
     assert lanes[0].weight == pytest.approx(1.0)
 
 
+def test_a_fortnight_untouched_costs_an_interest_most_of_its_mass():
+    """The requirement the half-life is set from, not the value itself.
+
+    Two weeks of not watching something should visibly cost it. Stated
+    on the decay rather than on a weight, because ``log1p`` compresses
+    the difference afterwards and would hide a half-life twice as long.
+
+    This fails for any half-life above 7 days. If it needs relaxing,
+    the number in the module is the thing to argue about — the
+    measurements behind it are recorded there.
+    """
+    assert profile.decay(14.0) <= 0.25
+
+
+def test_an_interest_still_being_watched_still_counts():
+    """The other half of the same requirement.
+
+    A short half-life must not amount to forgetting something the
+    viewer is still returning to. Yesterday's viewing keeps most of its
+    weight.
+    """
+    assert profile.decay(1.0) > 0.85
+
+
 def test_decay_is_measured_from_the_half_life(lib):
     one = profile.decay(0.0)
     half = profile.decay(profile.HALF_LIFE_DAYS)
