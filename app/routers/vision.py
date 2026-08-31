@@ -416,6 +416,15 @@ async def generate_folder_visual_description(
     absolute-``file_path`` mismatch the prior implementation had
     (``indexed_files.file_path`` is the full filesystem path, not a
     drive-relative one).
+
+    Manual, like the single-file route. It is a button a person pressed
+    with a confirmation that names the cost, so it carries the same
+    authority — and without it the one population that most needs
+    recovering, a library the old guessing marked unsupported, could
+    only be cleared one file at a time. The consequence is that the
+    button now means what it says: every image in the folder, including
+    the ones already described. ``MAX_BULK_ENQUEUE`` is what bounds
+    that, and it was written for exactly this.
     """
     body_drive = body.get("drive") if isinstance(body, dict) else None
     if body_drive is not None and body_drive != drive:
@@ -454,7 +463,7 @@ async def generate_folder_visual_description(
                     "requested": len(file_ids),
                 },
             )
-        result = await enqueue_visual_description(fid)
+        result = await enqueue_visual_description(fid, manual=True)
         if result["accepted"]:
             queued += 1
             queued_ids.append(fid)

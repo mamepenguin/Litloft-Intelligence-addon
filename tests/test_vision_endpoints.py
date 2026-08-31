@@ -581,6 +581,14 @@ class TestFolderBulkGenerate:
         )
 
         assert enqueue_mock.await_count == 2
+        # The folder button is a person pressing it, so it carries the
+        # same authority as the single-file one — otherwise the images
+        # the old guessing marked unsupported could only be recovered
+        # one at a time.
+        assert all(
+            call.kwargs.get("manual") is True
+            for call in enqueue_mock.await_args_list
+        )
         queued = (
             getattr(result, "queued", None)
             if not isinstance(result, dict)
