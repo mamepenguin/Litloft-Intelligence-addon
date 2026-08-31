@@ -493,6 +493,65 @@ class TestOpenAICompatibleGenerateVision:
         assert probe_calls == 1
 
     @pytest.mark.asyncio
+    async def test_a_404_evicts_the_verdict_it_contradicts(self):
+        """The 404 says the cached verdict was about a model that is gone.
+
+        Leaving it would let "the model can see" answer for a model
+        that is no longer installed, so a later rejection would be
+        blamed on the image and the operator sent to look at the file.
+        """
+        client = _make_openai_client()
+        request = httpx.Request("POST", "http://test/chat/completions")
+        rejected = httpx.Response(
+            status_code=400, request=request, content=b"{}",
+        )
+        gone = httpx.Response(
+            status_code=404, request=request, content=b"{}",
+        )
+        from openai import APIStatusError
+
+        # 1: rejected + a probe that reads the reference -> capable is
+        # cached. 2: the model is removed. 3: it comes back, but this
+        # time it cannot see.
+        stage = 1
+
+        async def fake_create(**kwargs):
+            probing = len(kwargs["messages"]) == 1
+            if stage == 2:
+                raise APIStatusError(
+                    message="HTTP 404", response=gone, body=None,
+                )
+            if probing and stage == 1:
+                return _make_response_obj("Red")
+            raise APIStatusError(
+                message="HTTP 400", response=rejected, body=None,
+            )
+
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=fake_create
+        )
+
+        first = await client.generate_vision(
+            _TINY_JPEG, "image/jpeg", "Describe this image."
+        )
+        assert first.failure == FAILURE_IMAGE_REJECTED
+
+        stage = 2
+        gone_result = await client.generate_vision(
+            _TINY_JPEG, "image/jpeg", "Describe this image."
+        )
+        assert gone_result.failure == FAILURE_MODEL_MISSING
+
+        stage = 3
+        # Without eviction the stale "capable" answers here and this
+        # comes back as image_rejected.
+        after = await client.generate_vision(
+            _TINY_JPEG, "image/jpeg", "Describe this image."
+        )
+        assert after.failure == FAILURE_VISION_UNSUPPORTED
+
+    @pytest.mark.asyncio
     async def test_one_bad_moment_does_not_condemn_a_capable_model(self):
         """The only permanent verdict must not rest on one request.
 

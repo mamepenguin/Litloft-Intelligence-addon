@@ -186,7 +186,13 @@ async def get_visual_index(
 # eligible, something else has to happen first. Everything else is a 404,
 # which also keeps a file in another drive indistinguishable from one
 # that does not exist.
-_NOT_YET_REASONS = frozenset({"waiting_clip", "unsupported_sticky"})
+#
+# ``unsupported_sticky`` is deliberately absent. This route is always a
+# manual request, and manual skips the stickiness gate, so the worker
+# cannot answer it here — listing it would be a branch that never runs
+# and a message no one would ever read. A model that cannot see now
+# fails the run it is given, visibly, instead of refusing to start.
+_NOT_YET_REASONS = frozenset({"waiting_clip"})
 
 
 @router.post("/files/{file_id}/visual-index/generate")

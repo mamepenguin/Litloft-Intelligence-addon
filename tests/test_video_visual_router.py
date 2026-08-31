@@ -350,16 +350,6 @@ class TestGenerateVisualIndex:
         assert exc.value.detail["reason"] == "waiting_clip"
 
     @pytest.mark.asyncio
-    async def test_unsupported_sticky_returns_409(self, feature_manual, search_db, stub_worker):
-        stub_worker.enqueue = AsyncMock(
-            return_value={"accepted": False, "reason": "unsupported_sticky"}
-        )
-        with pytest.raises(HTTPException) as exc:
-            await generate_visual_index(file_id="vid-abc", drive="family")
-        assert exc.value.status_code == 409
-        assert exc.value.detail["reason"] == "unsupported_sticky"
-
-    @pytest.mark.asyncio
     async def test_already_queued_returns_200_status(self, feature_manual, search_db, stub_worker):
         stub_worker.enqueue = AsyncMock(
             return_value={"accepted": False, "reason": "already_queued"}

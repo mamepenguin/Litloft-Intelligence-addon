@@ -34,8 +34,6 @@ const visualIndexMessages = vi.hoisted(() => ({
   visualIndexWaitingPrerequisite:
     "Waiting on scene indexing to finish before this can start.",
   visualIndexActionError: "Could not start visual index generation.",
-  visualIndexModelCannotSee:
-    "The configured model does not accept images. Set a vision-capable llm.vision_model, then try again.",
 }));
 
 vi.mock("next-intl", () => ({
@@ -365,25 +363,6 @@ describe("VisualIndexSection", () => {
         "Waiting on scene indexing to finish before this can start.",
       ),
     ).toBeInTheDocument();
-  });
-
-  it("names the model when it is the model that cannot see", async () => {
-    // Both refusals arrive as 409. Reading them as one told the user to
-    // wait for scene indexing that had already finished, and left the
-    // real remedy — a different vision model — unmentioned.
-    const err = Object.assign(new Error("not_queued"), {
-      info: { kind: "not_queued", reason: "unsupported_sticky" },
-    });
-    vi.mocked(generateVideoVisualIndex).mockRejectedValue(err);
-    renderSection();
-    fireEvent.click(await screen.findByText("Visual index"));
-    fireEvent.click(await screen.findByRole("button", { name: "Generate" }));
-    expect(
-      await screen.findByText(/does not accept images/),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText(/Waiting on scene indexing/),
-    ).toBeNull();
   });
 
   it("falls back to the generic message for a failure with no reason", async () => {
