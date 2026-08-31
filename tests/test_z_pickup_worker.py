@@ -67,12 +67,20 @@ def rig(monkeypatch, tmp_path):
         )],
         "loads": [],
         "scores": [],
+        "played": {},
     }
 
     monkeypatch.setattr(worker_mod.profile_mod, "viewer_ids",
                         lambda drive: list(state["viewers"]))
     monkeypatch.setattr(worker_mod.profile_mod, "watched_file_ids",
                         lambda drive, v: set(state["watched"].get(v, ())))
+    monkeypatch.setattr(
+        worker_mod.profile_mod, "watch_signature",
+        lambda drive, v: [
+            (f, state["played"].get((v, f), "2026-08-01 00:00:00"))
+            for f in sorted(state["watched"].get(v, ()))
+        ],
+    )
     monkeypatch.setattr(worker_mod.profile_mod, "profile_history",
                         lambda drive, v: list(state["history"].get(v, ())))
     monkeypatch.setattr(worker_mod.profile_mod, "build_lanes",
@@ -391,14 +399,6 @@ async def test_a_change_beyond_the_first_twenty_ids_is_noticed(rig):
     assert len(rig["scores"]) == before + 1
 
 
-def test_the_checkpoint_is_order_independent():
-    a = worker_mod._checkpoint({"x", "y", "z"})
-    b = worker_mod._checkpoint(["z", "y", "x"])
-
-    assert a == b
-    assert a != worker_mod._checkpoint({"x", "y"})
-
-
 # ---------------------------------------------------------------------------
 # A lane is only ever scored against its own channel
 # ---------------------------------------------------------------------------
@@ -471,3 +471,60 @@ async def test_the_missed_trigger_is_served_before_the_lock_is_released(rig):
     await w._guarded_compute("a")
 
     assert calls == ["a", "a"]
+
+
+# ---------------------------------------------------------------------------
+# The checkpoint has to move with recency, not only with membership
+# ---------------------------------------------------------------------------
+
+
+async def test_reopening_a_watched_file_rebuilds_the_feed(rig):
+    """Re-watching changes no ids, and changes the profile completely.
+
+    Lane weights are made of recency. A viewer returning to something
+    they had drifted away from is reviving that interest, and a feed
+    keyed on the set alone would go on describing the old one.
+    """
+    w = worker_mod.PickupWorker()
+    await w._compute_for_drive("a")
+    before = len(rig["scores"])
+
+    rig["played"][("v1", "seen1")] = "2026-08-30 12:00:00"
+    await w._compute_for_drive("a")
+
+    assert len(rig["scores"]) == before + 1
+
+
+def test_the_checkpoint_moves_with_the_day():
+    """The window and the half-life drift while the viewer does nothing.
+
+    Without this a viewer who stops watching is frozen at whatever their
+    profile said the day they stopped.
+    """
+    from datetime import UTC, datetime
+    from unittest.mock import patch
+
+    sig = [("f1", "2026-01-01 00:00:00")]
+
+    with patch.object(worker_mod, "datetime") as clock:
+        clock.now.return_value = datetime(2026, 3, 2, tzinfo=UTC)
+        monday = worker_mod._checkpoint(sig)
+        clock.now.return_value = datetime(2026, 3, 3, tzinfo=UTC)
+        tuesday = worker_mod._checkpoint(sig)
+        clock.now.return_value = datetime(2026, 3, 3, 23, tzinfo=UTC)
+        same_day = worker_mod._checkpoint(sig)
+
+    assert monday != tuesday
+    assert tuesday == same_day
+
+
+def test_the_checkpoint_still_moves_with_membership():
+    a = worker_mod._checkpoint([("f1", "t"), ("f2", "t")])
+    b = worker_mod._checkpoint([("f1", "t")])
+    assert a != b
+
+
+def test_the_checkpoint_is_order_independent_over_pairs():
+    a = worker_mod._checkpoint([("f1", "t1"), ("f2", "t2")])
+    b = worker_mod._checkpoint([("f2", "t2"), ("f1", "t1")])
+    assert a == b

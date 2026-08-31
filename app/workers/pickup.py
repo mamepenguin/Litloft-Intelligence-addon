@@ -26,6 +26,7 @@ watched. Neither was a tuning problem.
 import asyncio
 import hashlib
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from app.database import get_search_db, get_search_db_read
@@ -194,11 +195,12 @@ class PickupWorker:
         self, drive: str, viewer_id: str,
     ) -> tuple[str, set[str], str] | None:
         """Return this viewer's pending work, or None if it is current."""
-        watched = profile_mod.watched_file_ids(drive, viewer_id)
-        if not watched:
+        signature = profile_mod.watch_signature(drive, viewer_id)
+        if not signature:
             return None
+        watched = {file_id for file_id, _ in signature}
 
-        checkpoint = _checkpoint(watched)
+        checkpoint = _checkpoint(signature)
         with get_search_db_read() as session:
             existing = (
                 session.query(PickupProfile)
@@ -298,13 +300,27 @@ def _store(drive: str, viewer_id: str, items, checkpoint: str) -> None:
         session.commit()
 
 
-def _checkpoint(watched_file_ids) -> str:
-    """A hash of what this viewer has opened.
+def _checkpoint(signature: Sequence[tuple[str, str]]) -> str:
+    """A hash of what this viewer has opened, and when.
 
-    Over the whole set rather than a recent slice, and sorted, so it
-    moves when anything is watched and not merely when the newest
-    changes. The previous version hashed the first twenty of a
-    drive-wide list, which for a second viewer barely moved at all.
+    Three things have to move it, and each was missed by an earlier
+    version of this function.
+
+    *Anything watched*, not just the newest — a hash of the first twenty
+    ids of a drive-wide recency list barely moved for a second viewer.
+    So the whole set, sorted.
+
+    *Anything re-watched.* Reopening a file already in the set changes
+    no ids, but moves its recency, and recency is what the lane weights
+    are made of. So the timestamps are in the hash too.
+
+    *Time itself.* The profile reads a rolling year and weights it by a
+    60-day half-life, both of which drift while the viewer does
+    nothing at all. Without the date a viewer who stops watching is
+    frozen at whatever their profile said the day they stopped. With
+    it, a quiet viewer is recomputed once a day rather than never — an
+    hourly sweep still skips them the other twenty-three times.
     """
-    joined = ",".join(sorted(watched_file_ids))
-    return hashlib.md5(joined.encode()).hexdigest()[:32]
+    stamp = datetime.now(UTC).strftime("%Y-%m-%d")
+    joined = ";".join(f"{file_id}@{played}" for file_id, played in sorted(signature))
+    return hashlib.md5(f"{stamp}|{joined}".encode()).hexdigest()[:32]

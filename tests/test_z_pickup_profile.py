@@ -622,3 +622,41 @@ def test_a_normal_cluster_still_has_a_direction():
 
     assert got is not None
     assert np.linalg.norm(got) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_chunks_are_reduced_per_file_not_held_all_at_once(lib, monkeypatch):
+    """The cap is on files; ``text_content`` averages 53 chunks each.
+
+    Holding every chunk would keep six figures of vectors resident at
+    the supported profile size, beside the drive-wide candidate
+    matrices the worker already carries.
+    """
+    for i in range(6):
+        lib.watch(f"doc{i}")
+        lib.index(f"doc{i}", [_unit(1, 0), _unit(0, 1)], channel="text_content")
+
+    live = []
+    original = profile._load_vectors
+
+    def counting(embedding_ids, table):
+        live.append(len(embedding_ids))
+        return original(embedding_ids, table)
+
+    monkeypatch.setattr(profile, "_load_vectors", counting)
+    got = profile.representative_vectors(
+        [f"doc{i}" for i in range(6)], "text_content",
+    )
+
+    assert len(got) == 6
+    # One file's chunks per call, never all eighteen at once.
+    assert max(live) == 2
+    assert len(live) == 6
+
+
+def test_the_reduced_vector_is_still_the_normalised_mean(lib):
+    lib.watch("doc")
+    lib.index("doc", [_unit(1, 0), _unit(0, 1)], channel="text_content")
+
+    got = profile.representative_vectors(["doc"], "text_content")
+
+    assert np.allclose(got["doc"], _unit(1, 1))

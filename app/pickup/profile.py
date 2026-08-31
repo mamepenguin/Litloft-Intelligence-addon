@@ -203,6 +203,29 @@ def viewer_ids(drive: str) -> list[str]:
     return [row[0] for row in rows if row[0]]
 
 
+def watch_signature(drive: str, viewer_id: str) -> list[tuple[str, str]]:
+    """Every (file_id, last_played_at) this viewer has in this drive.
+
+    The timestamps are what make it a signature rather than a set. A
+    viewer reopening something they had already watched changes no ids
+    at all, but it does move that file's recency — which is what the
+    lane weights and the profile window are computed from. Keyed on the
+    set alone, the feed would go on describing an interest the viewer
+    has just revived, or one that has since aged out.
+    """
+    with get_litloft_db() as session:
+        rows = session.execute(
+            sql_text(
+                "SELECT wh.file_id, wh.last_played_at "
+                "FROM watch_history wh "
+                "JOIN files f ON wh.file_id = f.id "
+                "WHERE f.drive = :drive AND wh.viewer_id = :viewer"
+            ),
+            {"drive": drive, "viewer": viewer_id},
+        ).fetchall()
+    return [(row[0], str(row[1])) for row in rows]
+
+
 def watched_file_ids(drive: str, viewer_id: str) -> set[str]:
     """Every file this viewer has opened in this drive. Never capped.
 
@@ -335,17 +358,28 @@ def representative_vectors(
     for embedding_id, file_id in rows:
         by_file.setdefault(file_id, []).append(embedding_id)
 
-    raw = _load_vectors(
-        [e for embedding_ids in by_file.values() for e in embedding_ids],
-        table,
-    )
-
+    # Reduced per file rather than loaded all at once. The cap is on
+    # *files*, and ``text_content`` averages 53 chunks each, so holding
+    # every chunk would keep six figures of vectors resident — hundreds
+    # of megabytes at 384 or 768 dimensions — beside the drive-wide
+    # candidate matrices the worker is already carrying. Only one file's
+    # chunks are live at a time here.
     out: dict[str, np.ndarray] = {}
     for file_id, embedding_ids in by_file.items():
-        vectors = [raw[e] for e in embedding_ids if e in raw]
+        vectors = _load_vectors(embedding_ids, table)
         if not vectors:
             continue
-        mean = np.mean(np.stack(vectors), axis=0)
+        total = None
+        count = 0
+        for embedding_id in embedding_ids:
+            vector = vectors.get(embedding_id)
+            if vector is None:
+                continue
+            total = vector.astype(np.float32) if total is None else total + vector
+            count += 1
+        if total is None or count == 0:
+            continue
+        mean = total / count
         norm = float(np.linalg.norm(mean))
         if norm == 0.0:
             continue

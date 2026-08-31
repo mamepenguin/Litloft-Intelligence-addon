@@ -23,7 +23,8 @@
       "heading": "Pickup",
       "description": "Files you have not opened yet, drawn from what you have been watching.",
       "empty": "Nothing to suggest yet.",
-      "loading": "Loading…"
+      "loading": "Loading…",
+      "retry": "Try again"
     }
   },
   "semanticSearch": {

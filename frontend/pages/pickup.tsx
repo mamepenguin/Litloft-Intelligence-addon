@@ -30,38 +30,70 @@ export default function PickupPage() {
   const [files, setFiles] = useState<FileItem[]>([]);
   const [total, setTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
   const sentinel = useRef<HTMLDivElement | null>(null);
   // Read inside the observer callback, which would otherwise close over
   // a stale count and ask for the same page forever.
   const loadedRef = useRef(0);
+  // Bumped whenever the drive changes. A request in flight when that
+  // happens resolves against the old drive, and without this its files
+  // would be appended to the new drive's feed.
+  const generation = useRef(0);
 
   const loadMore = useCallback(async () => {
+    // Not gated on ``failed``: retry calls this directly, and the
+    // callback it holds was built while the flag was still set. The
+    // sentinel is unmounted on failure, so nothing else can re-enter.
     if (!drive || loading) return;
     const offset = loadedRef.current;
     if (total !== null && offset >= total) return;
 
+    const mine = generation.current;
     setLoading(true);
     try {
       const page = await fetchPickup(drive, { limit: PAGE_SIZE, offset });
+      if (mine !== generation.current) return;
       setTotal(page.total);
       if (page.file_ids.length === 0) return;
       const items = await batchGetFiles(page.file_ids);
+      if (mine !== generation.current) return;
       loadedRef.current = offset + page.file_ids.length;
       setFiles((prev) => [...prev, ...items]);
+    } catch {
+      // Hydration can fail after the page itself succeeded. Stopping is
+      // the point: the sentinel is re-observed as soon as loading ends,
+      // so retrying from the same offset would spin on the same failure
+      // for as long as the page is open.
+      if (mine === generation.current) setFailed(true);
     } finally {
-      setLoading(false);
+      if (mine === generation.current) setLoading(false);
     }
   }, [drive, loading, total]);
 
+  // Clearing the flag is not enough on its own: the sentinel only
+  // re-triggers a load when it crosses back into view, and after a
+  // failure it is usually already sitting there.
+  const retry = useCallback(() => {
+    setFailed(false);
+    void loadMore();
+  }, [loadMore]);
+
   useEffect(() => {
+    generation.current += 1;
     setFiles([]);
     setTotal(null);
+    setFailed(false);
+    // Also cleared here, and not only in the finally above. A request
+    // belonging to the previous drive must not write state on the way
+    // out, so it leaves this flag set — and the new drive's first load
+    // would then find the page busy and never start.
+    setLoading(false);
     loadedRef.current = 0;
   }, [drive]);
 
   useEffect(() => {
-    if (files.length === 0 && total === null) void loadMore();
-  }, [files.length, total, loadMore]);
+    if (files.length === 0 && total === null && !failed) void loadMore();
+  }, [files.length, total, failed, loadMore]);
 
   useEffect(() => {
     const node = sentinel.current;
@@ -101,7 +133,21 @@ export default function PickupPage() {
         </p>
       )}
 
-      {!exhausted && <div ref={sentinel} className="h-px" aria-hidden />}
+      {failed && !loading && (
+        <div className="py-6 text-center">
+          <button
+            type="button"
+            onClick={retry}
+            className="text-sm text-text-muted transition-colors hover:text-accent"
+          >
+            {t("pickup.retry")}
+          </button>
+        </div>
+      )}
+
+      {!exhausted && !failed && (
+        <div ref={sentinel} className="h-px" aria-hidden />
+      )}
     </div>
   );
 }
