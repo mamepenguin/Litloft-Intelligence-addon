@@ -307,8 +307,14 @@ def _write_status(
     status: str,
     model: str,
     generated_at: str | None,
+    error: str | None = None,
 ) -> None:
-    """Atomic UPDATE of the four vision columns."""
+    """Atomic UPDATE of the vision columns.
+
+    ``error`` is written on every transition, cleared included, so a
+    reason can never outlive the attempt that produced it and be read
+    against a later one.
+    """
     _ensure_summary_row(session, file_id)
     session.execute(
         sql_text(
@@ -316,7 +322,8 @@ def _write_status(
             "visual_description = :desc, "
             "visual_description_status = :status, "
             "visual_description_model = :model, "
-            "visual_description_generated_at = :gen_at "
+            "visual_description_generated_at = :gen_at, "
+            "visual_description_error = :error "
             "WHERE file_id = :fid"
         ),
         {
@@ -325,6 +332,7 @@ def _write_status(
             "status": status,
             "model": model,
             "gen_at": generated_at,
+            "error": error,
         },
     )
 
@@ -473,10 +481,23 @@ class VisionDescribeWorker:
 
     # -- Enqueue --------------------------------------------------------
 
-    async def _should_accept(self, file_id: str) -> bool:
-        """Shared gate: feature flag + vision_model + drive policy + mime + stickiness."""
+    async def _should_accept(
+        self, file_id: str, *, manual: bool = False
+    ) -> tuple[bool, str | None]:
+        """Shared gate: feature flag + vision_model + drive policy + mime + stickiness.
+
+        Returns ``(accepted, reason)`` so a router can say which gate
+        turned the request away instead of accepting work it discarded.
+
+        ``manual`` skips the stickiness checks and nothing else. Those
+        checks exist to stop automatic sweeps from re-spending on a
+        settled outcome; a person asking for this file has already
+        decided it is worth spending. Every other gate — feature,
+        policy, mime, active — still applies, because those are not
+        about cost.
+        """
         if not config.is_vision_describe_available(settings):
-            return False
+            return False, "feature_unavailable"
 
         # Fail-closed on policy lookup failure: the file stays in the
         # queue mentally (caller can retry) and we never accidentally
@@ -490,9 +511,9 @@ class VisionDescribeWorker:
                 "to enqueue (fail-closed)",
                 file_id, type(e).__name__,
             )
-            return False
+            return False, "policy_unavailable"
         if not enabled:
-            return False
+            return False, "policy_off"
 
         with get_search_db() as session:
             file_row = (
@@ -504,45 +525,44 @@ class VisionDescribeWorker:
                 .first()
             )
             if file_row is None:
-                return False
+                return False, "file_not_found"
             if not _is_image_mime(file_row.mime_type):
-                return False
+                return False, "not_an_image"
 
             state = _fetch_existing_vision(session, file_id)
 
-        if state is not None:
+        if state is not None and not manual:
             status, stored_model = state
+            same_model = (stored_model or "") == (settings.llm.vision_model or "")
             # "success" is sticky for the SAME vision_model: re-running
             # would just overwrite an identical description and burn
             # LLM budget. Swap the model and we retry so the new model
             # gets a chance.
-            if (
-                status == "success"
-                and (stored_model or "") == (settings.llm.vision_model or "")
-            ):
-                return False
+            if status == "success" and same_model:
+                return False, "already_described"
             # "unsupported" is sticky only for the SAME vision_model. If
             # the operator swapped models we retry — the new model may
             # handle images even if the old one didn't.
-            if (
-                status == "unsupported"
-                and (stored_model or "") == (settings.llm.vision_model or "")
-            ):
-                return False
+            if status == "unsupported" and same_model:
+                return False, "unsupported_sticky"
 
-        return True
+        return True, None
 
-    async def enqueue(self, file_id: str) -> bool:
-        """Queue ``file_id`` for vision description; return True on accept.
+    async def enqueue(self, file_id: str, *, manual: bool = False) -> dict:
+        """Queue ``file_id`` for vision description.
 
-        The bool lets callers distinguish "accepted for processing" from
-        "skipped" (wrong mime / policy OFF / already-unsupported) so a
-        router can answer ``accepted: true/false`` without polling state.
+        Returns ``{"accepted": bool, "reason": str | None}``. The reason
+        lets a router answer 409 with what actually happened rather than
+        reporting acceptance for work that was dropped.
+
+        ``manual=True`` is for an explicit user request and overrides
+        the stickiness gates; automatic callers leave it False.
         """
-        if not await self._should_accept(file_id):
-            return False
+        accepted, reason = await self._should_accept(file_id, manual=manual)
+        if not accepted:
+            return {"accepted": False, "reason": reason}
         await self._queue.put(file_id)
-        return True
+        return {"accepted": True, "reason": None}
 
     async def enqueue_unprocessed(self) -> int:
         """Sweep already-indexed images that have no description yet.
@@ -580,7 +600,7 @@ class VisionDescribeWorker:
 
         queued = 0
         for (file_id,) in rows:
-            if await self.enqueue(file_id):
+            if (await self.enqueue(file_id))["accepted"]:
                 queued += 1
         return queued
 
@@ -651,6 +671,7 @@ class VisionDescribeWorker:
                     status="failed",
                     model=vision_model,
                     generated_at=None,
+                    error="load",
                 )
             await _emit_ws_event(
                 "intelligence.vision_describe.failed",
@@ -669,6 +690,7 @@ class VisionDescribeWorker:
                     status="failed",
                     model=vision_model,
                     generated_at=None,
+                    error="decode",
                 )
             await _emit_ws_event(
                 "intelligence.vision_describe.failed",
@@ -705,6 +727,7 @@ class VisionDescribeWorker:
                     status="unsupported",
                     model=vision_model,
                     generated_at=None,
+                    error=FAILURE_VISION_UNSUPPORTED,
                 )
             await _emit_ws_event(
                 "intelligence.vision_describe.unsupported",
@@ -728,6 +751,7 @@ class VisionDescribeWorker:
                     status="failed",
                     model=vision_model,
                     generated_at=None,
+                    error=result.failure or FAILURE_REQUEST_FAILED,
                 )
             await _emit_ws_event(
                 "intelligence.vision_describe.failed",

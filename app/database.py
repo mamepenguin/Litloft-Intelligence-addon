@@ -1436,7 +1436,8 @@ def _create_file_summaries_table(conn: object) -> None:
         "  visual_description TEXT,"
         "  visual_description_generated_at TEXT,"
         "  visual_description_model TEXT,"
-        "  visual_description_status TEXT"
+        "  visual_description_status TEXT,"
+        "  visual_description_error TEXT"
         ")"
     ))
 
@@ -1513,6 +1514,17 @@ def _migrate_file_summaries_if_needed(conn: object) -> None:
             text(
                 "ALTER TABLE file_summaries "
                 "ADD COLUMN visual_description_status TEXT"
+            )
+        )
+    # Why the last attempt produced no description, as one of the
+    # ``app.llm`` FAILURE_* values. Rows written before this column
+    # existed keep NULL; the UI reads that as "reason unknown" and shows
+    # its generic wording rather than guessing.
+    if "visual_description_error" not in cols:
+        conn.execute(
+            text(
+                "ALTER TABLE file_summaries "
+                "ADD COLUMN visual_description_error TEXT"
             )
         )
 

@@ -51,6 +51,7 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 from app.config import FeaturesConfig, LLMConfig  # noqa: E402
 from app.llm import (  # noqa: E402
     FAILURE_EMPTY,
+    FAILURE_MODEL_MISSING,
     FAILURE_TOKEN_BUDGET,
     FAILURE_VISION_UNSUPPORTED,
     VisionGeneration,
@@ -192,7 +193,7 @@ class TestEnqueue:
         self, search_db, feature_manual, policy_allow_family,
     ):
         worker = VisionDescribeWorker()
-        accepted = await worker.enqueue("img-ok")
+        accepted = (await worker.enqueue("img-ok"))["accepted"]
         assert accepted is True
 
     @pytest.mark.asyncio
@@ -200,7 +201,7 @@ class TestEnqueue:
         self, search_db, feature_manual, policy_allow_family,
     ):
         worker = VisionDescribeWorker()
-        accepted = await worker.enqueue("vid-skip")
+        accepted = (await worker.enqueue("vid-skip"))["accepted"]
         assert accepted is False
 
     @pytest.mark.asyncio
@@ -209,7 +210,7 @@ class TestEnqueue:
     ):
         """Unknown file_id must not raise — it's a no-op skip."""
         worker = VisionDescribeWorker()
-        accepted = await worker.enqueue("ghost")
+        accepted = (await worker.enqueue("ghost"))["accepted"]
         assert accepted is False
 
     @pytest.mark.asyncio
@@ -217,7 +218,7 @@ class TestEnqueue:
         self, search_db, feature_manual, policy_allow_family,
     ):
         worker = VisionDescribeWorker()
-        accepted = await worker.enqueue("img-off-drive")
+        accepted = (await worker.enqueue("img-off-drive"))["accepted"]
         assert accepted is False
 
     @pytest.mark.asyncio
@@ -232,7 +233,7 @@ class TestEnqueue:
         monkeypatch.setattr("app.workers.vision.settings", settings)
 
         worker = VisionDescribeWorker()
-        assert (await worker.enqueue("img-ok")) is False
+        assert (await worker.enqueue("img-ok"))["accepted"] is False
 
     @pytest.mark.asyncio
     async def test_missing_vision_model_rejects(
@@ -252,7 +253,7 @@ class TestEnqueue:
         monkeypatch.setattr("app.workers.vision.settings", settings)
 
         worker = VisionDescribeWorker()
-        assert (await worker.enqueue("img-ok")) is False
+        assert (await worker.enqueue("img-ok"))["accepted"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +266,8 @@ def _get_summary_row(engine, file_id: str):
         return conn.execute(
             text(
                 "SELECT visual_description, visual_description_status, "
-                "visual_description_model, visual_description_generated_at "
+                "visual_description_model, visual_description_generated_at, "
+                "visual_description_error "
                 "FROM file_summaries WHERE file_id = :fid"
             ),
             {"fid": file_id},
@@ -340,6 +342,78 @@ class TestProcessFileStatusTransitions:
         assert row is not None
         assert row[0] is None
         assert row[1] == "failed"
+
+    @pytest.mark.asyncio
+    async def test_the_failure_reason_is_persisted(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """The UI cannot offer the right remedy for a reason it never sees."""
+        engine, _ = search_db
+
+        monkeypatch.setattr(
+            "app.workers.vision._load_image_bytes",
+            lambda file_id: (b"\xff\xd8fake", "image/jpeg"),
+            raising=False,
+        )
+
+        llm_stub = MagicMock()
+        llm_stub.enabled = True
+        llm_stub.generate_vision = AsyncMock(
+            return_value=VisionGeneration(None, FAILURE_MODEL_MISSING)
+        )
+        monkeypatch.setattr(
+            "app.workers.vision.get_llm_client", lambda: llm_stub
+        )
+
+        worker = VisionDescribeWorker()
+        await worker._process_file("img-ok")
+
+        row = _get_summary_row(engine, "img-ok")
+        assert row[1] == "failed"
+        assert row[4] == FAILURE_MODEL_MISSING
+
+    @pytest.mark.asyncio
+    async def test_a_reason_does_not_outlive_its_attempt(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """A stale reason read against a later attempt misleads.
+
+        The file fails, then succeeds. The success must not carry the
+        earlier failure's explanation.
+        """
+        engine, _ = search_db
+
+        monkeypatch.setattr(
+            "app.workers.vision._load_image_bytes",
+            lambda file_id: (b"\xff\xd8fake", "image/jpeg"),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "app.workers.vision._embed_and_store",
+            lambda file_id, text: None,
+            raising=False,
+        )
+
+        llm_stub = MagicMock()
+        llm_stub.enabled = True
+        monkeypatch.setattr(
+            "app.workers.vision.get_llm_client", lambda: llm_stub
+        )
+
+        worker = VisionDescribeWorker()
+        llm_stub.generate_vision = AsyncMock(
+            return_value=VisionGeneration(None, FAILURE_MODEL_MISSING)
+        )
+        await worker._process_file("img-ok")
+        assert _get_summary_row(engine, "img-ok")[4] == FAILURE_MODEL_MISSING
+
+        llm_stub.generate_vision = AsyncMock(
+            return_value=VisionGeneration("A red apple.", None)
+        )
+        await worker._process_file("img-ok")
+        row = _get_summary_row(engine, "img-ok")
+        assert row[1] == "success"
+        assert row[4] is None
 
     @pytest.mark.asyncio
     async def test_truncated_description_is_not_stored_as_success(
@@ -447,9 +521,112 @@ class TestProcessFileStatusTransitions:
         )
 
         worker = VisionDescribeWorker()
-        accepted = await worker.enqueue("img-ok")
+        accepted = (await worker.enqueue("img-ok"))["accepted"]
         assert accepted is False
         llm_stub.generate_vision.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_manual_request_overrides_unsupported_stickiness(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """The escape hatch from a settled verdict.
+
+        Stickiness protects automatic sweeps from re-spending on an
+        outcome that will not change on its own. A person pressing the
+        button has decided otherwise — most likely because they just
+        fixed the thing that caused it — and must not be told no.
+        """
+        engine, _ = search_db
+        now = datetime.now(UTC).isoformat()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO file_summaries "
+                    "(file_id, short_summary, long_summary, model, "
+                    "context_type, context_chars, was_truncated, status, "
+                    "created_at, visual_description_status, "
+                    "visual_description_model) "
+                    "VALUES (:fid, '', '', '', 'image', 0, 0, 'hidden', "
+                    ":now, 'unsupported', 'llava:13b')"
+                ),
+                {"fid": "img-ok", "now": now},
+            )
+
+        worker = VisionDescribeWorker()
+        # Same model as the stored verdict — the automatic path refuses.
+        assert (await worker.enqueue("img-ok"))["accepted"] is False
+        # The person asking gets through.
+        assert (await worker.enqueue("img-ok", manual=True))["accepted"] is True
+
+    @pytest.mark.asyncio
+    async def test_manual_request_overrides_success_stickiness(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """Regenerate must work without deleting the row first."""
+        engine, _ = search_db
+        now = datetime.now(UTC).isoformat()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO file_summaries "
+                    "(file_id, short_summary, long_summary, model, "
+                    "context_type, context_chars, was_truncated, status, "
+                    "created_at, visual_description, "
+                    "visual_description_status, visual_description_model) "
+                    "VALUES (:fid, '', '', '', 'image', 0, 0, 'hidden', "
+                    ":now, 'An old description', 'success', 'llava:13b')"
+                ),
+                {"fid": "img-ok", "now": now},
+            )
+
+        worker = VisionDescribeWorker()
+        assert (await worker.enqueue("img-ok"))["accepted"] is False
+        assert (await worker.enqueue("img-ok", manual=True))["accepted"] is True
+
+    @pytest.mark.asyncio
+    async def test_manual_does_not_override_the_gates_that_are_not_about_cost(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """Policy and mime are not the user's to overrule.
+
+        Stickiness is a spending guard, so an explicit request may spend.
+        A drive whose operator turned the feature off, and a file that is
+        not an image, are different questions entirely.
+        """
+        worker = VisionDescribeWorker()
+        off_drive = await worker.enqueue("img-off-drive", manual=True)
+        assert off_drive == {"accepted": False, "reason": "policy_off"}
+        not_image = await worker.enqueue("vid-skip", manual=True)
+        assert not_image == {"accepted": False, "reason": "not_an_image"}
+
+    @pytest.mark.asyncio
+    async def test_rejection_names_the_gate_that_refused(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        """A router cannot explain a refusal it was not told about."""
+        engine, _ = search_db
+        now = datetime.now(UTC).isoformat()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO file_summaries "
+                    "(file_id, short_summary, long_summary, model, "
+                    "context_type, context_chars, was_truncated, status, "
+                    "created_at, visual_description_status, "
+                    "visual_description_model) "
+                    "VALUES (:fid, '', '', '', 'image', 0, 0, 'hidden', "
+                    ":now, 'unsupported', 'llava:13b')"
+                ),
+                {"fid": "img-ok", "now": now},
+            )
+
+        worker = VisionDescribeWorker()
+        assert await worker.enqueue("img-ok") == {
+            "accepted": False, "reason": "unsupported_sticky",
+        }
+        assert await worker.enqueue("ghost") == {
+            "accepted": False, "reason": "file_not_found",
+        }
 
     @pytest.mark.asyncio
     async def test_success_same_model_does_not_retry(
@@ -487,7 +664,7 @@ class TestProcessFileStatusTransitions:
         )
 
         worker = VisionDescribeWorker()
-        accepted = await worker.enqueue("img-ok")
+        accepted = (await worker.enqueue("img-ok"))["accepted"]
         assert accepted is False
         llm_stub.generate_vision.assert_not_awaited()
 
@@ -525,7 +702,7 @@ class TestProcessFileStatusTransitions:
             )
 
         worker = VisionDescribeWorker()
-        accepted = await worker.enqueue("img-ok")
+        accepted = (await worker.enqueue("img-ok"))["accepted"]
         assert accepted is True
 
     @pytest.mark.asyncio
@@ -562,7 +739,7 @@ class TestProcessFileStatusTransitions:
             )
 
         worker = VisionDescribeWorker()
-        accepted = await worker.enqueue("img-ok")
+        accepted = (await worker.enqueue("img-ok"))["accepted"]
         # Different model, so the sticky-unsupported check should let it
         # through. Actual LLM call is out of scope here.
         assert accepted is True

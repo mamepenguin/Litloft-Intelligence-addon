@@ -222,7 +222,7 @@ class TestGenerateVisualDescription:
         stub_indexed_file()
 
         # Stub the worker entry point to avoid real enqueue plumbing.
-        enqueue_mock = AsyncMock(return_value=True)
+        enqueue_mock = AsyncMock(return_value={"accepted": True, "reason": None})
         monkeypatch.setattr(
             "app.routers.vision.enqueue_visual_description",
             enqueue_mock,
@@ -400,7 +400,7 @@ class TestFolderBulkGenerate:
             MagicMock(return_value=["img-1", "img-2"]),
             raising=False,
         )
-        enqueue_mock = AsyncMock(return_value=True)
+        enqueue_mock = AsyncMock(return_value={"accepted": True, "reason": None})
         monkeypatch.setattr(
             "app.routers.vision.enqueue_visual_description",
             enqueue_mock,
@@ -475,7 +475,7 @@ class TestFolderBulkGenerate:
             MagicMock(return_value=[]),
             raising=False,
         )
-        enqueue_mock = AsyncMock(return_value=True)
+        enqueue_mock = AsyncMock(return_value={"accepted": True, "reason": None})
         monkeypatch.setattr(
             "app.routers.vision.enqueue_visual_description",
             enqueue_mock,

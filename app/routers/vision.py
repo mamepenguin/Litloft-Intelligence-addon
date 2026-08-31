@@ -171,12 +171,16 @@ def _clear_visual_description(file_id: str) -> bool:
     return cleared_any
 
 
-async def enqueue_visual_description(file_id: str) -> bool:
+async def enqueue_visual_description(
+    file_id: str, *, manual: bool = False
+) -> dict:
     """Hand ``file_id`` to the vision worker.
 
     Prefers the dependency-injected worker singleton so the running
     loop sees the same queue as the background task. Tests override
     this helper wholesale.
+
+    Returns the worker's ``{"accepted": bool, "reason": str | None}``.
     """
     try:
         from app.dependencies import _vision_worker  # type: ignore
@@ -190,7 +194,7 @@ async def enqueue_visual_description(file_id: str) -> bool:
         from app.workers.vision import VisionDescribeWorker
 
         worker = VisionDescribeWorker()
-    return await worker.enqueue(file_id)
+    return await worker.enqueue(file_id, manual=manual)
 
 
 def filter_image_file_ids(drive: str, file_ids: list[str]) -> list[str]:
@@ -402,8 +406,8 @@ async def generate_folder_visual_description(
                     "requested": len(file_ids),
                 },
             )
-        accepted = await enqueue_visual_description(fid)
-        if accepted:
+        result = await enqueue_visual_description(fid)
+        if result["accepted"]:
             queued += 1
             queued_ids.append(fid)
 

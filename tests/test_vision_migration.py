@@ -1,6 +1,6 @@
 """Schema migration tests for the vision_describe feature.
 
-``_migrate_file_summaries_if_needed`` must add four nullable columns
+``_migrate_file_summaries_if_needed`` must add five nullable columns
 used by the vision_describe feature:
 
 * ``visual_description`` TEXT NULL — LLM-generated description body
@@ -10,6 +10,8 @@ used by the vision_describe feature:
   re-generation heuristics when the vision model changes)
 * ``visual_description_status`` TEXT NULL — one of NULL / "pending" /
   "success" / "failed" / "unsupported"
+* ``visual_description_error`` TEXT NULL — why the last attempt produced
+  no description, as one of the ``app.llm`` FAILURE_* values
 
 Idempotent: running migrations twice must not raise. Existing data on
 pre-existing rows must be preserved. Fresh install via
@@ -47,6 +49,7 @@ _VISION_COLUMNS = (
     "visual_description_generated_at",
     "visual_description_model",
     "visual_description_status",
+    "visual_description_error",
 )
 
 
