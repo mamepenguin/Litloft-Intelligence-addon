@@ -1,7 +1,7 @@
 """Vision LLM client tests.
 
-Both ``LLMClient`` (OpenAI-compatible) and ``OllamaLLMClient`` must grow
-a ``generate_vision`` coroutine:
+Both ``LLMClient`` (OpenAI-compatible) and ``OllamaLLMClient`` expose a
+``generate_vision`` coroutine:
 
 .. code-block:: python
 
@@ -11,16 +11,21 @@ a ``generate_vision`` coroutine:
         mime_type: str,
         prompt: str,
         output_language: str = "auto",
-    ) -> str | None | object:
+    ) -> VisionGeneration:
         ...
 
 Contract:
 
-* Returns the description text on success.
-* Returns ``None`` on transient errors (timeouts, rate limits).
-* Returns the sentinel ``VISION_UNSUPPORTED`` when the provider signals
-  it cannot handle vision content (HTTP 400/404 after a vision payload,
-  "does not support images" upstream error).
+* Returns ``VisionGeneration(text, failure)`` — the description and, when
+  the call produced nothing usable, why.
+* ``failure`` is ``FAILURE_REQUEST_FAILED`` for transient errors
+  (timeouts, rate limits, 5xx) and ``FAILURE_EMPTY`` for a blank answer.
+* A provider rejection (400/404) is not a verdict on its own. It is
+  referred to the capability probe, which sends a reference image to the
+  same model and reports ``FAILURE_VISION_UNSUPPORTED`` (the model will
+  not take images), ``FAILURE_MODEL_MISSING`` (the model is absent), or
+  ``FAILURE_IMAGE_REJECTED`` (the model reads the reference, so this
+  request's image was the problem).
 * Uses ``config.vision_model`` (NOT ``config.model``) and the vision-
   specific max_tokens / temperature.
 * ``openai_compatible`` path builds ``messages[].content`` as a list
@@ -58,18 +63,30 @@ for _mod in (
         sys.modules[_mod] = MagicMock()
 
 from app.config import LLMConfig  # noqa: E402
-from app.llm import LLMClient, OllamaLLMClient  # noqa: E402
-
-
-# Implementation is expected to expose a module-level sentinel so
-# callers don't have to inspect status strings.
-try:
-    from app.llm import VISION_UNSUPPORTED  # noqa: F401
-except ImportError:
-    VISION_UNSUPPORTED = "__vision_unsupported__"  # placeholder for RED phase
+from app.llm import (  # noqa: E402
+    _PROBE_IMAGE_B64,
+    FAILURE_EMPTY,
+    JsonGeneration,
+    FAILURE_IMAGE_REJECTED,
+    FAILURE_MODEL_MISSING,
+    FAILURE_REQUEST_FAILED,
+    FAILURE_VISION_UNSUPPORTED,
+    LLMClient,
+    OllamaLLMClient,
+    VisionGeneration,
+    reset_vision_capability_cache,
+)
 
 
 _TINY_JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xff\xd9"
+
+
+@pytest.fixture(autouse=True)
+def _clean_capability_cache():
+    """A verdict cached by one test must not answer another's probe."""
+    reset_vision_capability_cache()
+    yield
+    reset_vision_capability_cache()
 
 
 def _make_response_obj(text: str) -> MagicMock:
@@ -120,13 +137,14 @@ def _make_ollama_client(**overrides) -> OllamaLLMClient:
 
 class TestOpenAICompatibleGenerateVision:
     @pytest.mark.asyncio
-    async def test_returns_none_when_disabled(self):
-        """provider=disabled or missing vision_model → None."""
+    async def test_reports_request_failed_when_disabled(self):
+        """provider=disabled or missing vision_model → nothing was sent."""
         client = _make_openai_client(vision_model="")
         result = await client.generate_vision(
             _TINY_JPEG, "image/jpeg", "Describe this image."
         )
-        assert result is None
+        assert result.text is None
+        assert result.failure == FAILURE_REQUEST_FAILED
 
     @pytest.mark.asyncio
     async def test_builds_data_url_image_content(self):
@@ -146,7 +164,8 @@ class TestOpenAICompatibleGenerateVision:
             _TINY_JPEG, "image/jpeg", "Describe this image."
         )
 
-        assert result == "A red apple on a table."
+        assert result.text == "A red apple on a table."
+        assert result.failure is None
 
         # User message content must be a list including an image_url part.
         messages = captured["messages"]
@@ -286,9 +305,13 @@ class TestOpenAICompatibleGenerateVision:
         client._client = MagicMock()
         # Reasoning suppression is on by default, so the first 400 is
         # read as the provider refusing that field and costs one re-send.
-        # A 400 that survives without it is about the image.
+        # A 400 that survives without it goes to the probe, which is
+        # rejected too — so the model, not the image, is the cause.
         client._client.chat.completions.create = AsyncMock(
             side_effect=[
+                APIStatusError(
+                    message="HTTP 400", response=response, body=None,
+                ),
                 APIStatusError(
                     message="HTTP 400", response=response, body=None,
                 ),
@@ -302,16 +325,89 @@ class TestOpenAICompatibleGenerateVision:
             _TINY_JPEG, "image/jpeg", "Describe this image."
         )
 
-        # The caller persists status = "unsupported" to avoid wasteful
-        # retries. Don't collapse to None (which would invite retry).
-        assert result == VISION_UNSUPPORTED
-        first, second = client._client.chat.completions.create.await_args_list
+        # The caller persists status = "unsupported"; this is the one
+        # verdict it is allowed to latch.
+        assert result.text is None
+        assert result.failure == FAILURE_VISION_UNSUPPORTED
+        first, second, probe = (
+            client._client.chat.completions.create.await_args_list
+        )
         assert "extra_body" in first.kwargs
         assert "extra_body" not in second.kwargs
+        # The probe carries its own reference image, not the caller's.
+        probe_content = probe.kwargs["messages"][0]["content"]
+        probe_url = next(
+            p for p in probe_content if p.get("type") == "image_url"
+        )["image_url"]["url"]
+        assert probe_url.startswith("data:image/png;base64,")
+        assert base64.b64encode(_TINY_JPEG).decode("ascii") not in probe_url
 
     @pytest.mark.asyncio
-    async def test_returns_unsupported_sentinel_on_404(self):
-        """Some ollama /v1 deployments return 404 for missing vision model."""
+    async def test_rejected_image_is_not_blamed_on_the_model(self):
+        """A capable model refusing one image must stay retryable.
+
+        Measured 2026-08-31: ollama answers 400 "Failed to load image or
+        audio file" for a corrupt PNG sent to a vision-capable model —
+        the same status a text-only model answers.
+        """
+        client = _make_openai_client()
+        request = httpx.Request("POST", "http://test/chat/completions")
+        response = httpx.Response(
+            status_code=400,
+            request=request,
+            content=b'{"error": {"message": "Failed to load image"}}',
+        )
+        from openai import APIStatusError
+
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=[
+                APIStatusError(message="HTTP 400", response=response, body=None),
+                APIStatusError(message="HTTP 400", response=response, body=None),
+                # The probe's reference image is taken, so the model sees.
+                _make_response_obj("Red"),
+            ]
+        )
+
+        result = await client.generate_vision(
+            _TINY_JPEG, "image/jpeg", "Describe this image."
+        )
+        assert result.failure == FAILURE_IMAGE_REJECTED
+
+    @pytest.mark.asyncio
+    async def test_probe_verdict_ignores_an_empty_body(self):
+        """A 2xx is capability, whatever the body says.
+
+        Measured 2026-08-31: gemma4:e4b answers 200 with empty content
+        over the OpenAI-compatible transport and "Red" over ollama's
+        native one. Reading the body would misjudge the first.
+        """
+        client = _make_openai_client()
+        request = httpx.Request("POST", "http://test/chat/completions")
+        response = httpx.Response(
+            status_code=400,
+            request=request,
+            content=b'{"error": {"message": "bad image"}}',
+        )
+        from openai import APIStatusError
+
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=[
+                APIStatusError(message="HTTP 400", response=response, body=None),
+                APIStatusError(message="HTTP 400", response=response, body=None),
+                _make_response_obj(""),
+            ]
+        )
+
+        result = await client.generate_vision(
+            _TINY_JPEG, "image/jpeg", "Describe this image."
+        )
+        assert result.failure == FAILURE_IMAGE_REJECTED
+
+    @pytest.mark.asyncio
+    async def test_404_is_a_missing_model_not_an_incapable_one(self):
+        """An absent model clears when the operator pulls it."""
         client = _make_openai_client()
         request = httpx.Request("POST", "http://test/chat/completions")
         response = httpx.Response(
@@ -331,10 +427,133 @@ class TestOpenAICompatibleGenerateVision:
         result = await client.generate_vision(
             _TINY_JPEG, "image/jpeg", "Describe this image."
         )
-        assert result == VISION_UNSUPPORTED
+        assert result.failure == FAILURE_MODEL_MISSING
 
     @pytest.mark.asyncio
-    async def test_returns_none_on_transient_500(self):
+    async def test_probe_runs_once_per_model_and_not_on_success(self):
+        """The probe is a failure-path cost, paid once per model."""
+        client = _make_openai_client()
+        request = httpx.Request("POST", "http://test/chat/completions")
+        response = httpx.Response(
+            status_code=400,
+            request=request,
+            content=b'{"error": {"message": "no"}}',
+        )
+        from openai import APIStatusError
+
+        rejection = APIStatusError(
+            message="HTTP 400", response=response, body=None,
+        )
+        probe_calls = 0
+
+        async def fake_create(**kwargs):
+            nonlocal probe_calls
+            messages = kwargs["messages"]
+            is_probe = (
+                len(messages) == 1
+                and any(
+                    p.get("type") == "image_url"
+                    and "png" in p["image_url"]["url"]
+                    for p in messages[0]["content"]
+                )
+            )
+            if is_probe:
+                probe_calls += 1
+            raise rejection
+
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=fake_create
+        )
+
+        for _ in range(3):
+            result = await client.generate_vision(
+                _TINY_JPEG, "image/jpeg", "Describe this image."
+            )
+            assert result.failure == FAILURE_VISION_UNSUPPORTED
+
+        assert probe_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_concurrent_failures_share_one_probe(self):
+        """A bulk run must not launch a probe per file."""
+        import asyncio
+
+        client = _make_openai_client()
+        request = httpx.Request("POST", "http://test/chat/completions")
+        response = httpx.Response(
+            status_code=400,
+            request=request,
+            content=b'{"error": {"message": "no"}}',
+        )
+        from openai import APIStatusError
+
+        probe_calls = 0
+
+        async def fake_create(**kwargs):
+            nonlocal probe_calls
+            messages = kwargs["messages"]
+            if len(messages) == 1:
+                probe_calls += 1
+                # Hold the probe open so every caller queues behind it.
+                await asyncio.sleep(0.05)
+            raise APIStatusError(
+                message="HTTP 400", response=response, body=None,
+            )
+
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=fake_create
+        )
+
+        results = await asyncio.gather(*[
+            client.generate_vision(
+                _TINY_JPEG, "image/jpeg", "Describe this image."
+            )
+            for _ in range(5)
+        ])
+
+        assert all(r.failure == FAILURE_VISION_UNSUPPORTED for r in results)
+        assert probe_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_failed_probe_is_not_cached(self):
+        """A probe that could not be carried out says nothing about the model."""
+        client = _make_openai_client()
+        request = httpx.Request("POST", "http://test/chat/completions")
+        response = httpx.Response(
+            status_code=400,
+            request=request,
+            content=b'{"error": {"message": "no"}}',
+        )
+        from openai import APIStatusError
+
+        probe_calls = 0
+
+        async def fake_create(**kwargs):
+            nonlocal probe_calls
+            if len(kwargs["messages"]) == 1:
+                probe_calls += 1
+                raise RuntimeError("connection reset")
+            raise APIStatusError(
+                message="HTTP 400", response=response, body=None,
+            )
+
+        client._client = MagicMock()
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=fake_create
+        )
+
+        for _ in range(2):
+            result = await client.generate_vision(
+                _TINY_JPEG, "image/jpeg", "Describe this image."
+            )
+            assert result.failure == FAILURE_REQUEST_FAILED
+
+        assert probe_calls == 2
+
+    @pytest.mark.asyncio
+    async def test_transient_500_is_a_failed_request(self):
         """5xx is transient; caller marks status=failed and retries later."""
         from openai import InternalServerError
 
@@ -355,7 +574,8 @@ class TestOpenAICompatibleGenerateVision:
         result = await client.generate_vision(
             _TINY_JPEG, "image/jpeg", "Describe this image."
         )
-        assert result is None
+        assert result.text is None
+        assert result.failure == FAILURE_REQUEST_FAILED
 
 
 class TestOpenAICompatibleGenerateVideoSceneJson:
@@ -371,12 +591,14 @@ class TestOpenAICompatibleGenerateVideoSceneJson:
             content=b'{"error": {"message": "response_format unsupported"}}',
         )
         client._client = MagicMock()
-        # The first 400 is spent ruling out our own reasoning field; the
-        # provider then rejects json mode on its own merits.
+        # The first 400 is spent ruling out our own reasoning field. The
+        # second goes to the probe, which the model answers — so json
+        # mode, not the image or the model, is what was refused.
         client._client.chat.completions.create = AsyncMock(
             side_effect=[
                 APIStatusError(message="HTTP 400", response=response, body=None),
                 APIStatusError(message="HTTP 400", response=response, body=None),
+                _make_response_obj("Red"),
                 _make_response_obj(
                     '{"scene_label":"Architecture diagram","visible_text":"","scene_type":"slide"}'
                 ),
@@ -387,12 +609,14 @@ class TestOpenAICompatibleGenerateVideoSceneJson:
             _TINY_JPEG, "image/jpeg", "system", "user",
         )
 
-        assert result["scene_label"] == "Architecture diagram"
+        assert result.value["scene_label"] == "Architecture diagram"
+        assert result.failure is None
         calls = client._client.chat.completions.create.await_args_list
         assert calls[0].kwargs["response_format"] == {"type": "json_object"}
         assert "extra_body" in calls[0].kwargs
         assert "extra_body" not in calls[1].kwargs
-        assert "response_format" not in calls[2].kwargs
+        # calls[2] is the probe; the real retry drops response_format.
+        assert "response_format" not in calls[3].kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -402,12 +626,13 @@ class TestOpenAICompatibleGenerateVideoSceneJson:
 
 class TestOllamaGenerateVision:
     @pytest.mark.asyncio
-    async def test_returns_none_when_disabled(self):
+    async def test_reports_request_failed_when_disabled(self):
         client = _make_ollama_client(vision_model="")
         result = await client.generate_vision(
             _TINY_JPEG, "image/jpeg", "Describe this image."
         )
-        assert result is None
+        assert result.text is None
+        assert result.failure == FAILURE_REQUEST_FAILED
 
     @pytest.mark.asyncio
     async def test_posts_to_api_chat_with_images_field(self):
@@ -430,7 +655,8 @@ class TestOllamaGenerateVision:
             _TINY_JPEG, "image/jpeg", "Describe this image."
         )
 
-        assert result == "A dog on grass."
+        assert result.text == "A dog on grass."
+        assert result.failure is None
         assert captured["url"] == "http://localhost:11434/api/chat"
         assert captured["json"]["model"] == "llava:13b"
         assert captured["json"]["stream"] is False
@@ -497,10 +723,11 @@ class TestOllamaGenerateVision:
         assert "{language_requirement}" not in system_msg["content"]
 
     @pytest.mark.asyncio
-    async def test_unsupported_sentinel_on_400(self):
+    async def test_400_goes_to_the_probe(self):
+        """A rejected model is only unsupported once the probe agrees."""
         client = _make_ollama_client()
 
-        async def fake_post(url, json):
+        async def fake_post(url, json, **kwargs):
             return httpx.Response(
                 status_code=400,
                 content=b'{"error": "model does not support images"}',
@@ -511,13 +738,39 @@ class TestOllamaGenerateVision:
         result = await client.generate_vision(
             _TINY_JPEG, "image/jpeg", "Describe this image."
         )
-        assert result == VISION_UNSUPPORTED
+        assert result.failure == FAILURE_VISION_UNSUPPORTED
 
     @pytest.mark.asyncio
-    async def test_unsupported_sentinel_on_404_for_missing_model(self):
+    async def test_400_with_a_capable_model_blames_the_image(self):
+        client = _make_ollama_client()
+        seen: list[dict] = []
+
+        async def fake_post(url, json, **kwargs):
+            seen.append(json)
+            if json["messages"][0].get("images") == [_PROBE_IMAGE_B64]:
+                return httpx.Response(
+                    status_code=200,
+                    content=b'{"message": {"content": "Red"}}',
+                )
+            return httpx.Response(
+                status_code=400,
+                content=b'{"error": "Failed to load image or audio file"}',
+            )
+
+        client._http.post = fake_post
+
+        result = await client.generate_vision(
+            _TINY_JPEG, "image/jpeg", "Describe this image."
+        )
+        assert result.failure == FAILURE_IMAGE_REJECTED
+        # The probe sent its own reference image, not the caller's.
+        assert seen[-1]["messages"][0]["images"] == [_PROBE_IMAGE_B64]
+
+    @pytest.mark.asyncio
+    async def test_404_is_a_missing_model(self):
         client = _make_ollama_client()
 
-        async def fake_post(url, json):
+        async def fake_post(url, json, **kwargs):
             return httpx.Response(
                 status_code=404,
                 content=b'{"error": "model \\"llava:13b\\" not found"}',
@@ -528,11 +781,11 @@ class TestOllamaGenerateVision:
         result = await client.generate_vision(
             _TINY_JPEG, "image/jpeg", "Describe this image."
         )
-        assert result == VISION_UNSUPPORTED
+        assert result.failure == FAILURE_MODEL_MISSING
 
     @pytest.mark.asyncio
-    async def test_empty_content_returns_none(self):
-        """Blank response → None so the worker marks status=failed."""
+    async def test_empty_content_is_reported_as_empty(self):
+        """Blank response → the worker marks status=failed."""
         client = _make_ollama_client()
 
         async def fake_post(url, json):
@@ -546,7 +799,8 @@ class TestOllamaGenerateVision:
         result = await client.generate_vision(
             _TINY_JPEG, "image/jpeg", "Describe this image."
         )
-        assert result is None
+        assert result.text is None
+        assert result.failure == FAILURE_EMPTY
 
     @pytest.mark.asyncio
     async def test_uses_vision_temperature_via_options(self):
@@ -582,12 +836,17 @@ class TestOllamaGenerateVideoSceneJson:
         client = _make_ollama_client()
         bodies: list[dict] = []
 
-        async def fake_post(url, json):
+        async def fake_post(url, json, **kwargs):
             bodies.append(json)
             if len(bodies) == 1:
                 return httpx.Response(
                     status_code=400,
                     content=b'{"error": "format unsupported"}',
+                )
+            if json["messages"][0].get("images") == [_PROBE_IMAGE_B64]:
+                return httpx.Response(
+                    status_code=200,
+                    content=b'{"message": {"content": "Red"}}',
                 )
             return httpx.Response(
                 status_code=200,
@@ -604,6 +863,52 @@ class TestOllamaGenerateVideoSceneJson:
             _TINY_JPEG, "image/jpeg", "system", "user",
         )
 
-        assert result["scene_label"] == "Architecture diagram"
+        assert result.value["scene_label"] == "Architecture diagram"
+        assert result.failure is None
         assert bodies[0]["format"] == "json"
-        assert "format" not in bodies[1]
+        # bodies[1] is the probe; the real retry drops the format field.
+        assert "format" not in bodies[2]
+
+
+# ---------------------------------------------------------------------------
+# Regression detector: the vision path must stay on the failure taxonomy
+# ---------------------------------------------------------------------------
+
+
+class TestVisionClassificationCannotBeBypassed:
+    """Guards the seam this module's whole contract rests on.
+
+    The defect these tests exist for was structural, not a typo: the
+    vision path returned a bare sentinel while every other generation
+    path had moved to a classified result, so a rejection reached the
+    worker with no way to ask what it meant. A future edit that returns
+    a naked value again would silently restore that.
+    """
+
+    def test_no_bare_sentinel_survives(self):
+        import app.llm as llm
+
+        assert not hasattr(llm, "VISION_UNSUPPORTED"), (
+            "a sentinel cannot carry a reason; return VisionGeneration"
+        )
+
+    @pytest.mark.parametrize(
+        "cls,method,expected",
+        [
+            (LLMClient, "generate_vision", VisionGeneration),
+            (LLMClient, "_vision_chat", VisionGeneration),
+            (LLMClient, "generate_video_scene_json", JsonGeneration),
+            (OllamaLLMClient, "generate_vision", VisionGeneration),
+            (OllamaLLMClient, "_vision_chat", VisionGeneration),
+            (OllamaLLMClient, "generate_video_scene_json", JsonGeneration),
+        ],
+    )
+    def test_vision_entry_points_return_a_classified_result(
+        self, cls, method, expected
+    ):
+        annotation = getattr(cls, method).__annotations__.get("return")
+        assert annotation is expected, (
+            f"{cls.__name__}.{method} returns {annotation!r}, not "
+            f"{expected.__name__}; a caller cannot distinguish transient "
+            f"from terminal"
+        )

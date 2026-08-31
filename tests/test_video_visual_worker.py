@@ -34,6 +34,7 @@ from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.config import FeaturesConfig, LLMConfig  # noqa: E402
+from app.llm import JsonGeneration  # noqa: E402
 from app.database import Base  # noqa: E402
 from app.models import (  # noqa: E402
     Embedding,
@@ -282,11 +283,14 @@ class TestProcessSceneLabel:
         monkeypatch.setattr("app.workers.video_visual._embed_scene", embed_scene)
 
         llm = MagicMock()
-        llm.generate_video_scene_json = AsyncMock(return_value={
-            "scene_label": "Chicken marinade added",
-            "visible_text": "",
-            "scene_type": "demonstration",
-        })
+        llm.generate_video_scene_json = AsyncMock(return_value=JsonGeneration(
+            {
+                "scene_label": "Chicken marinade added",
+                "visible_text": "",
+                "scene_type": "demonstration",
+            },
+            None,
+        ))
 
         outcome = await VideoVisualWorker(llm)._process_scene(
             scene_id, "vvr_label", "vid-ok", "/drives/family/clip.mp4", "clip.mp4"

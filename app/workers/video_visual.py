@@ -36,7 +36,14 @@ import app.config as config
 from app.config import is_video_visual_index_available, settings
 from app.database import get_search_db, get_search_db_read, get_search_engine
 from app.frame_cache import ensure_frame_cached
-from app.llm import VISION_UNSUPPORTED
+from app.llm import (
+    FAILURE_IMAGE_REJECTED,
+    FAILURE_MODEL_MISSING,
+    FAILURE_REQUEST_FAILED,
+    FAILURE_TOKEN_BUDGET,
+    FAILURE_VISION_UNSUPPORTED,
+    JsonGeneration,
+)
 from app.models import Embedding, IndexedFile, TranscriptChunk, VideoVisualRun, VideoVisualScene
 from app.output_language import configured_language_requirement
 from app.policy_client import is_file_feature_enabled
@@ -75,6 +82,16 @@ _READY_EVENTS = {
     "succeeded": "intelligence.video_visual.succeeded",
     "partial": "intelligence.video_visual.partial",
     "failed": "intelligence.video_visual.failed",
+}
+
+# Scene ``error_class`` for each vision failure the transport can name.
+# ``vision_unsupported`` is absent on purpose: it ends the run rather
+# than the scene, so it never reaches ``_fail_scene``.
+_SCENE_ERROR_CLASSES = {
+    FAILURE_MODEL_MISSING: "ModelMissing",
+    FAILURE_IMAGE_REJECTED: "ImageRejected",
+    FAILURE_TOKEN_BUDGET: "TokenBudget",
+    FAILURE_REQUEST_FAILED: "RequestFailed",
 }
 
 
@@ -867,12 +884,14 @@ class VideoVisualWorker:
             )
         except Exception as e:
             logger.warning("video_visual: LLM call raised for scene %s (%s)", scene_id, type(e).__name__)
-            result = None
+            result = JsonGeneration(None, FAILURE_REQUEST_FAILED)
 
-        if result is VISION_UNSUPPORTED:
+        # Only a probed verdict about the model ends the whole run; a
+        # rejected frame or an absent model is this scene's problem.
+        if result.failure == FAILURE_VISION_UNSUPPORTED:
             return "unsupported"
 
-        parsed = _validate_scene_output(result)
+        parsed = _validate_scene_output(result.value)
         if parsed is None:
             # One repair attempt, same frame, no resend of a different
             # image (design doc §12).
@@ -888,14 +907,17 @@ class VideoVisualWorker:
                     "video_visual: repair LLM call raised for scene %s (%s)",
                     scene_id, type(e).__name__,
                 )
-                result2 = None
-            if result2 is VISION_UNSUPPORTED:
+                result2 = JsonGeneration(None, FAILURE_REQUEST_FAILED)
+            if result2.failure == FAILURE_VISION_UNSUPPORTED:
                 return "unsupported"
-            parsed = _validate_scene_output(result2)
+            parsed = _validate_scene_output(result2.value)
             if parsed is None:
                 return self._fail_scene(
-                    scene_id, run_id, "MalformedOutput",
-                    "structured output invalid after repair attempt",
+                    scene_id, run_id,
+                    _SCENE_ERROR_CLASSES.get(result2.failure, "MalformedOutput"),
+                    "structured output invalid after repair attempt"
+                    if result2.failure is None
+                    else f"vision call failed: {result2.failure}",
                 )
 
         with get_search_db() as session:

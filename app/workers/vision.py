@@ -14,9 +14,14 @@ Status lifecycle (per file_summaries row):
 * "pending"       → worker claimed the file, LLM call in flight
 * "success"       → description persisted + embedding registered
 * "failed"        → transient LLM / decode failure; retryable
-* "unsupported"   → provider/model can't do vision; sticky for this
-                    ``visual_description_model``. Retry only when the
-                    configured ``vision_model`` changes.
+* "unsupported"   → the model was measured, by capability probe, not to
+                    accept image content. Sticky for this
+                    ``visual_description_model`` on automatic paths;
+                    an explicit user request overrides it.
+
+A provider rejection on its own never reaches "unsupported": an absent
+model and an unreadable image produce the same 400/404 as a model that
+cannot see, so ``app.llm`` probes before it names the cause.
 
 Non-goals in Phase 1 (see spec):
 
@@ -41,7 +46,11 @@ from sqlalchemy.exc import OperationalError
 import app.config as config
 from app.config import settings
 from app.database import get_search_db
-from app.llm import VISION_UNSUPPORTED
+from app.llm import (
+    FAILURE_REQUEST_FAILED,
+    FAILURE_VISION_UNSUPPORTED,
+    VisionGeneration,
+)
 from app.models import Embedding, IndexedFile
 from app.policy_client import is_file_feature_enabled
 
@@ -681,10 +690,14 @@ class VisionDescribeWorker:
                 "vision: LLM call raised for %s (%s)",
                 file_id, type(e).__name__,
             )
-            result = None
+            result = VisionGeneration(None, FAILURE_REQUEST_FAILED)
 
-        # Interpret the three-way return contract.
-        if result is VISION_UNSUPPORTED:
+        # Only a measured verdict about the model is latched. Every
+        # other reason clears on its own — the operator pulls the model,
+        # or the next file is one the provider can read — so it stays a
+        # retryable failure.
+        description = (result.text or "").strip()
+        if not description and result.failure == FAILURE_VISION_UNSUPPORTED:
             with get_search_db() as session:
                 _write_status(
                     session,
@@ -700,7 +713,7 @@ class VisionDescribeWorker:
             )
             return
 
-        if not isinstance(result, str) or not result.strip():
+        if not description:
             with get_search_db() as session:
                 _write_status(
                     session,
@@ -712,11 +725,13 @@ class VisionDescribeWorker:
                 )
             await _emit_ws_event(
                 "intelligence.vision_describe.failed",
-                {"file_id": file_id, "reason": "llm"},
+                {
+                    "file_id": file_id,
+                    "reason": result.failure or FAILURE_REQUEST_FAILED,
+                },
             )
             return
 
-        description = result.strip()
         generated_at = _now_iso()
         with get_search_db() as session:
             _write_status(

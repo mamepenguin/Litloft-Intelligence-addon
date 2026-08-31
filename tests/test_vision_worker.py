@@ -49,6 +49,11 @@ from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.config import FeaturesConfig, LLMConfig  # noqa: E402
+from app.llm import (  # noqa: E402
+    FAILURE_EMPTY,
+    FAILURE_VISION_UNSUPPORTED,
+    VisionGeneration,
+)
 from app.database import (  # noqa: E402
     Base,
     _create_file_summaries_table,
@@ -284,7 +289,7 @@ class TestProcessFileStatusTransitions:
         llm_stub = MagicMock()
         llm_stub.enabled = True
         llm_stub.generate_vision = AsyncMock(
-            return_value="A red apple on a wooden table."
+            return_value=VisionGeneration("A red apple on a wooden table.", None)
         )
         monkeypatch.setattr(
             "app.workers.vision.get_llm_client", lambda: llm_stub
@@ -320,7 +325,9 @@ class TestProcessFileStatusTransitions:
 
         llm_stub = MagicMock()
         llm_stub.enabled = True
-        llm_stub.generate_vision = AsyncMock(return_value=None)
+        llm_stub.generate_vision = AsyncMock(
+            return_value=VisionGeneration(None, FAILURE_EMPTY)
+        )
         monkeypatch.setattr(
             "app.workers.vision.get_llm_client", lambda: llm_stub
         )
@@ -345,12 +352,12 @@ class TestProcessFileStatusTransitions:
             raising=False,
         )
 
-        # Sentinel return value → status = "unsupported".
-        from app.llm import VISION_UNSUPPORTED  # expected export
-
+        # A probed verdict about the model → status = "unsupported".
         llm_stub = MagicMock()
         llm_stub.enabled = True
-        llm_stub.generate_vision = AsyncMock(return_value=VISION_UNSUPPORTED)
+        llm_stub.generate_vision = AsyncMock(
+            return_value=VisionGeneration(None, FAILURE_VISION_UNSUPPORTED)
+        )
         monkeypatch.setattr(
             "app.workers.vision.get_llm_client", lambda: llm_stub
         )
@@ -388,7 +395,9 @@ class TestProcessFileStatusTransitions:
 
         llm_stub = MagicMock()
         llm_stub.enabled = True
-        llm_stub.generate_vision = AsyncMock(return_value="should not be called")
+        llm_stub.generate_vision = AsyncMock(
+            return_value=VisionGeneration("should not be called", None)
+        )
         monkeypatch.setattr(
             "app.workers.vision.get_llm_client", lambda: llm_stub
         )
@@ -426,7 +435,9 @@ class TestProcessFileStatusTransitions:
 
         llm_stub = MagicMock()
         llm_stub.enabled = True
-        llm_stub.generate_vision = AsyncMock(return_value="should not be called")
+        llm_stub.generate_vision = AsyncMock(
+            return_value=VisionGeneration("should not be called", None)
+        )
         monkeypatch.setattr(
             "app.workers.vision.get_llm_client", lambda: llm_stub
         )
@@ -649,7 +660,9 @@ class TestEmbeddingRegistration:
         llm_stub = MagicMock()
         llm_stub.enabled = True
         llm_stub.generate_vision = AsyncMock(
-            return_value="A yellow duckling swimming in a pond."
+            return_value=VisionGeneration(
+                "A yellow duckling swimming in a pond.", None
+            )
         )
         monkeypatch.setattr(
             "app.workers.vision.get_llm_client", lambda: llm_stub
@@ -716,7 +729,9 @@ class TestEmbeddingRegistration:
 
         llm_stub = MagicMock()
         llm_stub.enabled = True
-        llm_stub.generate_vision = AsyncMock(return_value=None)
+        llm_stub.generate_vision = AsyncMock(
+            return_value=VisionGeneration(None, FAILURE_EMPTY)
+        )
         monkeypatch.setattr(
             "app.workers.vision.get_llm_client", lambda: llm_stub
         )
