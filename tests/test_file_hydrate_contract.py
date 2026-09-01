@@ -56,7 +56,7 @@ _FILE_ITEM_KEYS = {
     "has_thumbnail",
     "file_size",
     "duration",
-    "likes",
+    "liked_at",
     "is_favorite",
     "tags",
     "subtitles",
@@ -81,7 +81,7 @@ def _make_file_item(file_id: str = "abc123def456", **overrides) -> dict:
         "has_thumbnail": True,
         "file_size": 1024,
         "duration": 120.5,
-        "likes": 0,
+        "liked_at": None,
         "is_favorite": False,
         "tags": [],
         "subtitles": [],
@@ -183,6 +183,7 @@ async def test_preserves_all_file_item_fields_unchanged(monkeypatch):
     item = _make_file_item(
         file_id="xyz789abc012",
         is_favorite=True,
+        liked_at="2026-04-20T09:00:00",
         tags=["family", "2026"],
         subtitles=[
             {"index": 0, "language": "ja", "format": "vtt", "label": "JA"}
