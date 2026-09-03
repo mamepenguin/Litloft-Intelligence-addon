@@ -12,9 +12,12 @@ This is the second implementation of the classifier that
 ``backend/app/routers/drives.py`` owns (``_KIND_MIMES`` /
 ``_KIND_SUFFIXES`` / ``_apply_kind_filter``). The addon runs in its own
 container and cannot import core, the same situation as the two
-``frontmatter.py`` parsers. Drift is caught by
-``frontend/src/__tests__/file-kind-parity.test.ts`` in the core
-repository, which reads both tables.
+``frontmatter.py`` parsers. Unlike those, the drift here is caught
+mechanically: ``frontend/src/__tests__/file-kind-parity.test.ts`` in the
+core repository reads ``_KIND_MIMES`` / ``_KIND_SUFFIXES`` out of
+``drives.py`` and ``KIND_MIMES`` / ``KIND_SUFFIXES`` out of this file
+and compares them. Renaming either pair breaks that test rather than
+slipping past it.
 
 The suffix fallback is not decoration: rows whose mime was never
 recorded are exactly the ones the two old filters used to disagree
@@ -25,7 +28,7 @@ from sqlalchemy import func, or_
 
 from app.models import IndexedFile
 
-# BEGIN kind-table (parity-checked against core — keep the shape)
+# Parity-checked against core's ``_KIND_MIMES`` / ``_KIND_SUFFIXES``.
 KIND_MIMES: dict[str, tuple[str, ...]] = {
     "markdown": ("text/markdown",),
     "pdf": ("application/pdf",),
@@ -34,7 +37,6 @@ KIND_SUFFIXES: dict[str, tuple[str, ...]] = {
     "markdown": (".md", ".markdown"),
     "pdf": (".pdf",),
 }
-# END kind-table
 
 
 def apply_kind_filter(query, kind: str | None):

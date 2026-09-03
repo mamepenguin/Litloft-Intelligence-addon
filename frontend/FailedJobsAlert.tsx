@@ -57,24 +57,34 @@ export default function FailedJobsAlert() {
     };
   }, [poll]);
 
-  if (count <= 0) return null;
+  // Nothing wrong, and nobody looking: render nothing at all.
+  //
+  // The modal is deliberately outside that test. Retry and Exclude both
+  // remove jobs from the failing set, so an operator clearing the last
+  // two would have the poll drop `count` to 0 underneath them and the
+  // dialog they are reading would vanish mid-read — nobody pressed
+  // Close. The band goes; the modal stays until it is dismissed.
+  if (count <= 0 && !open) return null;
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        // WCAG 2.5.3 Label in Name: the accessible name has to contain
-        // the visible label, so it is the same string, not "View".
-        aria-label={t("summary", { count })}
-        className="flex w-full items-center justify-between gap-3 rounded-xl border border-accent-amber/30 bg-accent-amber/10 px-4 py-3 text-sm font-medium text-accent-amber transition-colors hover:bg-accent-amber/20"
-      >
-        <span className="flex min-w-0 items-center gap-2">
-          <AlertTriangle size={16} className="shrink-0" />
-          <span className="truncate">{t("summary", { count })}</span>
-        </span>
-        <span className="shrink-0 text-xs">{t("view")}</span>
-      </button>
+      {count > 0 && (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          // No `aria-label`: WCAG 2.5.3 asks that the accessible name
+          // contain the visible label, and the name computed from the
+          // content ("3 failed jobs View") already does. An
+          // `aria-label` here could only subtract from it.
+          className="flex w-full items-center justify-between gap-3 rounded-xl border border-accent-amber/30 bg-accent-amber/10 px-4 py-3 text-sm font-medium text-accent-amber transition-colors hover:bg-accent-amber/20"
+        >
+          <span className="flex min-w-0 items-center gap-2">
+            <AlertTriangle size={16} className="shrink-0" />
+            <span className="truncate">{t("summary", { count })}</span>
+          </span>
+          <span className="shrink-0 text-xs">{t("view")}</span>
+        </button>
+      )}
 
       <FailedJobsModal open={open} onClose={() => setOpen(false)} />
     </>

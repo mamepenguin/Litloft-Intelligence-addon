@@ -59,6 +59,14 @@ ROWS = [
     ("video0000001", "clip.mp4", "video", "video/mp4"),
     ("audio0000001", "talk.mp3", "audio", "audio/mpeg"),
     ("image0000001", "shot.jpg", "image", "image/jpeg"),
+    # Filed as `other` by core but named like a note, and with no mime
+    # to say otherwise. It is here to pin the nested branch's one real
+    # decision: it does *not* also require `file_type == "document"`,
+    # because a row whose mime was never recorded may well carry the
+    # wrong file_type from the same writer. Tightening the predicate
+    # "for correctness" drops exactly the rows the fallback exists for,
+    # and this row is what turns that into a red test.
+    ("note0000othr", "stray.md", "other", ""),
 ]
 
 
@@ -120,10 +128,14 @@ def test_no_filter_returns_everything(search_db):
 
 
 def test_markdown_finds_the_mime_and_the_extension(search_db):
+    # ``note0000othr`` is in here on its name alone, with a file_type
+    # of ``other``: the nested branch does not require the row to also
+    # be a document. See the comment on that row.
     assert _search("markdown") == {
         "note0000mark",
         "note0000mime",
         "note0000long",
+        "note0000othr",
     }
 
 
@@ -140,10 +152,14 @@ def test_extension_match_is_case_insensitive(search_db):
     assert "pdf00000ext0" in _search("pdf")
 
 
-def test_document_still_returns_the_whole_family(search_db):
-    # The nesting is core's classifier's doing — everything above is
-    # filed as ``document`` — so asking for documents returns markdown
-    # and PDFs as well.
+def test_document_is_the_flat_kind_and_nothing_more(search_db):
+    # ``document`` is a flat kind: it matches the column, not the mime
+    # or the name. That markdown and PDFs come back with it is core's
+    # classifier's doing — it files them under document — and is not
+    # something this filter can be asked to demonstrate. So the claim
+    # here is the narrow, checkable one: the rows whose column says
+    # document, and only those. ``note0000othr`` is filed ``other``
+    # despite its ``.md`` name, and stays out.
     assert _search("document") == {
         "note0000mark",
         "note0000mime",

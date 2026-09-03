@@ -64,7 +64,9 @@ describe("FailedJobsAlert", () => {
     mockedFailedJobs.mockResolvedValue(page(3));
     render(<FailedJobsAlert />);
 
-    const band = await screen.findByRole("button", { name: "3 failed jobs" });
+    // No `aria-label`: the name is computed from the content, so it
+    // contains the visible label by construction (WCAG 2.5.3).
+    const band = await screen.findByRole("button", { name: /3 failed jobs/ });
     expect(band).toHaveTextContent("3 failed jobs");
   });
 
@@ -72,7 +74,7 @@ describe("FailedJobsAlert", () => {
     mockedFailedJobs.mockResolvedValue(page(1));
     render(<FailedJobsAlert />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "1 failed jobs" }));
+    fireEvent.click(await screen.findByRole("button", { name: /1 failed job/ }));
 
     await waitFor(() =>
       expect(screen.getByTestId("failed-jobs-modal-stub")).toBeInTheDocument(),
@@ -83,7 +85,7 @@ describe("FailedJobsAlert", () => {
     mockedFailedJobs.mockResolvedValue(page(1));
     render(<FailedJobsAlert />);
 
-    const band = await screen.findByRole("button", { name: "1 failed jobs" });
+    const band = await screen.findByRole("button", { name: /1 failed job/ });
     band.focus();
     expect(band).toHaveFocus();
     // A <button> turns Enter into a click; asserting the element is a
@@ -101,13 +103,41 @@ describe("FailedJobsAlert", () => {
     mockedFailedJobs.mockResolvedValue(page(2));
     render(<FailedJobsAlert />);
     await vi.waitFor(() =>
-      expect(screen.getByRole("button", { name: "2 failed jobs" })).toBeInTheDocument(),
+      expect(screen.getByRole("button", { name: /2 failed jobs/ })).toBeInTheDocument(),
     );
 
     mockedFailedJobs.mockResolvedValue(page(0));
     await vi.advanceTimersByTimeAsync(10_000);
 
     await vi.waitFor(() => expect(screen.queryByRole("button")).toBeNull());
+  });
+
+  it("keeps an open modal on screen when the last job is cleared", async () => {
+    // Retry and Exclude both remove jobs from the failing set, so an
+    // operator clearing the last two has `count` drop to 0 under them.
+    // The band goes; the dialog they are reading does not — nobody
+    // pressed Close.
+    vi.useFakeTimers();
+    mockedFailedJobs.mockResolvedValue(page(2));
+    render(<FailedJobsAlert />);
+    fireEvent.click(
+      await vi.waitFor(() => screen.getByRole("button", { name: /2 failed jobs/ })),
+    );
+    expect(screen.getByTestId("failed-jobs-modal-stub")).toBeInTheDocument();
+
+    mockedFailedJobs.mockResolvedValue(page(0));
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await vi.waitFor(() =>
+      expect(screen.queryByRole("button", { name: /failed job/ })).toBeNull(),
+    );
+    expect(screen.getByTestId("failed-jobs-modal-stub")).toBeInTheDocument();
+
+    // And it still closes when they say so.
+    fireEvent.click(screen.getByText("close-modal"));
+    await vi.waitFor(() =>
+      expect(screen.queryByTestId("failed-jobs-modal-stub")).toBeNull(),
+    );
   });
 
   it("stays silent when the addon cannot be reached", async () => {

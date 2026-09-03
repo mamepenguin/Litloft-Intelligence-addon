@@ -6,7 +6,8 @@ Spec: ``2026-04-26-intelligence-ask-personal-history-query.md`` §4.2.
 * ``time_range`` — half-open ``[after, before)`` over ``last_played_at``.
 * ``personal_scope`` — ``viewed`` / ``not_viewed`` / ``none``.
 * ``file_type_hint`` — ``video`` / ``audio`` / ``image`` / ``text`` /
-  ``none``. Matches ``File.file_type`` so the retriever can reuse it.
+  ``none``. Three of those are ``File.file_type`` values; ``text`` is
+  not, and is translated to ``document`` at the retrieval call site.
 * ``semantic_query`` — the residual concept (e.g. "SF") that survives
   after stripping out time / scope / file-type clues. Stage C expands
   it; Stages B+D use it as the query text.
@@ -68,8 +69,13 @@ _TIME_RANGE_LABELS = frozenset(
 # sentinel so the caller can short-circuit Stage B entirely.
 _SCOPE_LABELS = frozenset({"viewed", "not_viewed", "none"})
 
-# File-type hint vocabulary. Aligns with ``File.file_type`` values that
-# the retriever already understands. ``"none"`` is the no-hint sentinel.
+# File-type hint vocabulary. This is the *prompt's* label set, not
+# core's: ``"text"`` is a word the model reaches for, and core has no
+# such ``file_type`` — it files text documents under ``document``. The
+# translation lives at the retrieval call site
+# (``service._find_kind_for_hint``), because widening the labels here to
+# match core would change what the model is asked to emit. ``"none"`` is
+# the no-hint sentinel.
 _FILE_TYPE_LABELS = frozenset({"video", "audio", "image", "text", "none"})
 
 
