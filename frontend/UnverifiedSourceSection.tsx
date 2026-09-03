@@ -75,7 +75,7 @@ export default function UnverifiedSourceSection({
         <button
           onClick={() => rule("verified")}
           disabled={pending}
-          className="inline-flex items-center gap-1.5 rounded-2xl bg-accent px-3 py-2 text-sm text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-2xl bg-accent px-3 py-2 text-sm text-white transition-colors hover:bg-accent-hover disabled:bg-sand disabled:text-warm-silver disabled:cursor-not-allowed"
         >
           <ShieldCheck size={16} />
           {t("trust")}

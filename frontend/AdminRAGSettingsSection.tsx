@@ -195,7 +195,7 @@ export default function AdminRAGSettingsSection(): React.ReactElement {
               {resetting ? t("resetting") : t("reset")}
             </button>
             {resetOk && (
-              <span className="text-xs text-success">{t("resetSuccess")}</span>
+              <span className="text-xs text-accent-teal">{t("resetSuccess")}</span>
             )}
             {resetError && (
               <span className="text-xs text-danger">{resetError}</span>
@@ -245,11 +245,11 @@ export default function AdminRAGSettingsSection(): React.ReactElement {
           type="button"
           onClick={handleSave}
           disabled={saving}
-          className="rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-sand disabled:text-warm-silver"
         >
           {saving ? t("saving") : t("save")}
         </button>
-        {savedOk && <span className="text-xs text-success">{t("saved")}</span>}
+        {savedOk && <span className="text-xs text-accent-teal">{t("saved")}</span>}
         {saveError && <span className="text-xs text-danger">{saveError}</span>}
       </div>
     </section>

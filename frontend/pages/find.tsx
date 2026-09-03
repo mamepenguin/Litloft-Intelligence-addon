@@ -275,7 +275,7 @@ function IntelligenceFindPageInner() {
         />
         <button
           type="submit"
-          className="inline-flex items-center gap-1.5 rounded-2xl bg-accent px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex items-center gap-1.5 rounded-2xl bg-accent px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-sand disabled:text-warm-silver"
           disabled={state.kind === "loading" || input.trim().length === 0}
         >
           <Search size={12} /> {t("submit")}

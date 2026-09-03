@@ -311,7 +311,7 @@ function ErrorMessage({ message }: { message: string }) {
   return (
     <p
       role="alert"
-      className="mt-2 flex items-center gap-1.5 rounded-lg bg-danger-bg px-2 py-1.5 text-xs text-danger"
+      className="mt-2 flex items-center gap-1.5 rounded-lg bg-danger/15 px-2 py-1.5 text-xs text-danger"
     >
       <AlertCircle size={13} className="shrink-0" aria-hidden="true" />
       {message}
