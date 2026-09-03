@@ -40,8 +40,10 @@ vi.mock("./api", () => ({
 }));
 
 import SuggestedTagsSection from "@/addons/intelligence/SuggestedTagsSection";
+import FileAIActionsButton from "@/addons/intelligence/FileAIActionsButton";
+import { resetFileAiActions } from "@/addons/intelligence/fileAiActions";
 import { fetchJSON } from "@/lib/api";
-import { getSuggestedTags } from "@/addons/intelligence/api";
+import { getSuggestedTags, regenerateSuggestedTags } from "@/addons/intelligence/api";
 import { saveFileTags } from "@/lib/tags";
 
 const mdFile = {
@@ -70,6 +72,7 @@ const mdFile = {
 beforeEach(() => {
   savedCalls.length = 0;
   vi.clearAllMocks();
+  resetFileAiActions();
   vi.mocked(getSuggestedTags).mockResolvedValue({
     available: true,
     tags: ["new-one", "new-two"],
@@ -182,5 +185,61 @@ describe("SuggestedTagsSection accept dispatch", () => {
           (init as RequestInit | undefined)?.method === "PUT",
       );
     expect(putCalls).toHaveLength(0);
+  });
+});
+
+describe("SuggestedTagsSection — the offer moves to the AI menu", () => {
+  function renderWithActionMenu() {
+    return render(
+      <>
+        <SuggestedTagsSection fileId="fMd000000001" drive="media" />
+        <FileAIActionsButton fileId="fMd000000001" />
+      </>,
+    );
+  }
+
+  it("renders nothing and offers generation when nothing is pending", async () => {
+    vi.mocked(getSuggestedTags).mockResolvedValue({
+      available: false,
+      tags: [],
+      status: null,
+      model: null,
+    } as never);
+    renderWithActionMenu();
+
+    const trigger = await screen.findByRole("button", { name: "AI" });
+    // The heading the section used to draw over an empty box is gone,
+    // and the trigger is the only control left on the page.
+    expect(screen.queryByText("AI tag candidates")).toBeNull();
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    fireEvent.click(trigger);
+    expect(
+      screen.getByRole("menuitem", { name: /Create AI tag candidates/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("withdraws the offer while candidates are waiting for approval", async () => {
+    renderWithActionMenu();
+
+    await waitFor(() => expect(screen.getByText("new-one")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "AI" })).toBeNull();
+  });
+
+  it("runs the section's own regenerate when the menu item is pressed", async () => {
+    vi.mocked(getSuggestedTags).mockResolvedValue({
+      available: false,
+      tags: [],
+      status: null,
+      model: null,
+    } as never);
+    renderWithActionMenu();
+
+    fireEvent.click(await screen.findByRole("button", { name: "AI" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: /Create AI tag candidates/ }),
+    );
+    await waitFor(() =>
+      expect(regenerateSuggestedTags).toHaveBeenCalledWith("fMd000000001", "media"),
+    );
   });
 });

@@ -7,7 +7,6 @@ import {
   CheckCheck,
   ListVideo,
   RefreshCw,
-  Sparkles,
   X,
 } from "lucide-react";
 
@@ -26,6 +25,8 @@ import {
   getSuggestedChapters,
 } from "./api";
 import type { SuggestedChaptersResponse } from "./api";
+import { useOfferFileAiAction } from "./fileAiActions";
+import { GeneratingRow } from "./GeneratingRow";
 
 interface SuggestedChaptersSectionProps {
   fileId: string;
@@ -169,6 +170,30 @@ export default function SuggestedChaptersSection({
     }
   }, [drive, fileId, t]);
 
+  const status = data?.status;
+  const chapters = data?.chapters ?? [];
+  const hasPending = Boolean(
+    data?.enabled && data.available && status === "pending" && chapters.length > 0,
+  );
+  const applies = loaded && isMedia && !policy.isLoading && policy.enabled
+    && data !== null && data.enabled !== false;
+
+  // With no candidates waiting, this section had nothing to say but
+  // "you could make some" — and said it under its own icon on every
+  // video in the drive. The offer moves to the action row's "AI" menu;
+  // approved candidates are already visible in the core chapter rail,
+  // so their acknowledgement row goes with it.
+  useOfferFileAiAction({
+    fileId,
+    kind: "chapters",
+    labelKey: status === "accepted" || status === "dismissed"
+      ? "regenerateChapters"
+      : "generateChapters",
+    active: applies && !hasPending,
+    busy: operation === "generate",
+    run: handleGenerate,
+  });
+
   if (!loaded) return null;
 
   if (!isMedia || policy.isLoading || !policy.enabled) return null;
@@ -179,51 +204,17 @@ export default function SuggestedChaptersSection({
     return error ? <ErrorMessage message={error} /> : null;
   }
 
-  const status = data.status;
-  const chapters = data.chapters ?? [];
-  const hasPending = data.enabled && data.available && status === "pending" && chapters.length > 0;
-
+  // A run in flight and a failure both have to be visible; everything
+  // else about the empty state now lives in the menu.
   if (!hasPending) {
-    const statusMessage = status === "accepted"
-      ? t("chapterCandidatesAccepted", {
-          defaultMessage: "Chapter candidates approved",
-        })
-      : status === "dismissed"
-        ? t("chapterCandidatesDismissed", {
-            defaultMessage: "Chapter candidates dismissed",
-          })
-        : null;
-
-    return (
-      <div className="space-y-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <Sparkles size={14} className="text-text-muted" aria-hidden="true" />
-          {statusMessage && (
-            <span className="text-xs text-text-muted">{statusMessage}</span>
-          )}
-          <button
-            type="button"
-            onClick={handleGenerate}
-            disabled={operation !== null}
-            className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
-          >
-            <RefreshCw
-              size={11}
-              className={operation === "generate" ? "animate-spin" : ""}
-              aria-hidden="true"
-            />
-            {operation === "generate"
-              ? t("generatingChapters", { defaultMessage: "Creating chapters..." })
-              : statusMessage
-                ? t("regenerateChapters", { defaultMessage: "Create again" })
-                : t("generateChapters", {
-                    defaultMessage: "Create AI chapter candidates",
-                  })}
-          </button>
-        </div>
-        {error && <ErrorMessage message={error} />}
-      </div>
-    );
+    if (operation === "generate") {
+      return (
+        <GeneratingRow
+          label={t("generatingChapters", { defaultMessage: "Creating chapters..." })}
+        />
+      );
+    }
+    return error ? <ErrorMessage message={error} /> : null;
   }
 
   return (

@@ -7,6 +7,8 @@ import { getSuggestedTags, dismissSuggestedTags, regenerateSuggestedTags } from 
 import type { SuggestedTagsResponse } from "./api";
 import { fetchJSON } from "@/lib/api";
 import { ConflictError, saveFileTags } from "@/lib/tags";
+import { useOfferFileAiAction } from "./fileAiActions";
+import { GeneratingRow } from "./GeneratingRow";
 import type { FileItem } from "@/types";
 
 interface SuggestedTagsSectionProps {
@@ -147,35 +149,36 @@ export default function SuggestedTagsSection({ fileId, drive }: SuggestedTagsSec
     }
   }, [fileId, drive]);
 
+  const hasPendingTags = Boolean(
+    data?.available
+      && data.tags
+      && data.tags.length > 0
+      && data.status !== "accepted"
+      && !hidden
+      && data.tags.some((tag) => !acceptedTags.has(tag)),
+  );
+
+  // Nothing to approve — dismissed, already accepted, or never
+  // generated. The offer to (re)generate belongs to the action row's
+  // "AI" menu; a heading and a button here would be a section about
+  // something that does not exist yet.
+  useOfferFileAiAction({
+    fileId,
+    kind: "tags",
+    labelKey: "generateTags",
+    active: loaded && !hasPendingTags,
+    busy: regenerating,
+    run: handleRegenerate,
+  });
+
   if (!loaded) return null;
 
-  // Show compact regenerate-only UI when no pending tags to display
-  const hasPendingTags = data?.available
-    && data.tags
-    && data.tags.length > 0
-    && data.status !== "accepted"
-    && !hidden
-    && data.tags.some((tag) => !acceptedTags.has(tag));
-
   if (!hasPendingTags) {
-    // Show regenerate button for dismissed, accepted, or not-yet-generated files
-    return (
-      <div>
-        <div className="flex items-center gap-2">
-          <Sparkles size={14} className="text-text-muted" />
-          <button
-            onClick={handleRegenerate}
-            disabled={regenerating}
-            className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
-          >
-            <RefreshCw size={11} className={regenerating ? "animate-spin" : ""} />
-            {regenerating
-              ? t("regeneratingTags", { defaultMessage: "Generating..." })
-              : t("generateTags", { defaultMessage: "Generate AI tags" })}
-          </button>
-        </div>
-      </div>
-    );
+    return regenerating ? (
+      <GeneratingRow
+        label={t("regeneratingTags", { defaultMessage: "Generating..." })}
+      />
+    ) : null;
   }
 
   const pendingTags = (data?.tags ?? []).filter((tag) => !acceptedTags.has(tag));
@@ -187,7 +190,7 @@ export default function SuggestedTagsSection({ fileId, drive }: SuggestedTagsSec
         <h2 className="text-sm font-semibold text-text-muted">
           {t("suggestedTags", { defaultMessage: "AI Suggested Tags" })}
         </h2>
-        {data.model && (
+        {data?.model && (
           <span className="text-[10px] text-text-muted/50">{data.model}</span>
         )}
       </div>

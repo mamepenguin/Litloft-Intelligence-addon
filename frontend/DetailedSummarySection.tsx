@@ -61,6 +61,7 @@ import {
   regenerateDetailedSummary,
   revertDetailedSummary,
 } from "./api";
+import { useOfferFileAiAction } from "./fileAiActions";
 import type {
   CitationChunkExcerpt,
   DetailedSummaryCitation,
@@ -384,10 +385,27 @@ export default function DetailedSummarySection({
     }
   }, [fileId, drive, fetchCitations]);
 
-  if (!loaded) return null;
-
   const reason = data?.reason;
   const status = data?.status;
+
+  // Everything below this line that is not a real state — a run in
+  // flight, a failure, too little text — was a heading offering to make
+  // something. That offer belongs in the action row's "AI" menu.
+  useOfferFileAiAction({
+    fileId,
+    kind: "detailedSummary",
+    labelKey: "detailedSummaryGenerate",
+    active: loaded
+      && !data?.available
+      && reason !== "unsupported_type"
+      && reason !== "insufficient_content"
+      && status !== "generating"
+      && status !== "failed",
+    busy: working,
+    run: handleGenerate,
+  });
+
+  if (!loaded) return null;
 
   if (!data?.available && reason === "unsupported_type") return null;
   if (!data?.available && !status && !reason) return null;
@@ -447,29 +465,8 @@ export default function DetailedSummarySection({
     );
   }
 
-  if (!data?.available) {
-    return (
-      <div>
-        <div className="flex items-center gap-2">
-          <FileText size={14} className="text-text-muted" />
-          <button
-            onClick={handleGenerate}
-            disabled={working}
-            className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
-          >
-            <RefreshCw size={11} className={working ? "animate-spin" : ""} />
-            {working
-              ? t("detailedSummaryGenerating", {
-                  defaultMessage: "Generating detailed summary…",
-                })
-              : t("detailedSummaryGenerate", {
-                  defaultMessage: "Generate detailed summary",
-                })}
-          </button>
-        </div>
-      </div>
-    );
-  }
+  // Never generated: the "AI" menu carries the offer.
+  if (!data?.available) return null;
 
   const edited = Boolean(data.edited_at);
   const canRevert = edited && (data.has_original !== false);

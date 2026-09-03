@@ -21,6 +21,8 @@ import type {
   VisualDescriptionResponse,
   VisualDescriptionStatus,
 } from "./api";
+import { useOfferFileAiAction } from "./fileAiActions";
+import { GeneratingRow } from "./GeneratingRow";
 
 interface VisualDescriptionSectionProps {
   fileId: string;
@@ -179,6 +181,21 @@ export default function VisualDescriptionSection({
     }
   }, [fileId, drive, handleGenerate, t]);
 
+  const status: VisualDescriptionStatus | string | null =
+    data?.status ?? null;
+
+  // Never attempted: the heading and its button were the whole section,
+  // on every image in the drive. The offer moves to the action row's
+  // "AI" menu and the heading waits for a description to head.
+  useOfferFileAiAction({
+    fileId,
+    kind: "visualDescription",
+    labelKey: "visionGenerate",
+    active: loaded && available && isImageFile(file) && !status,
+    busy: working,
+    run: handleGenerate,
+  });
+
   if (!loaded) return null;
 
   // Feature gate — when GET returned 404 the feature is unreachable
@@ -191,8 +208,23 @@ export default function VisualDescriptionSection({
   // nothing rendered so the section doesn't clutter video/audio pages.
   if (!isImageFile(file)) return null;
 
-  const status: VisualDescriptionStatus | string | null =
-    data?.status ?? null;
+  // Nothing has been attempted, so there is nothing to head — unless
+  // the attempt this component just made failed before the backend
+  // recorded a status. That failure is the one thing the "AI" menu
+  // cannot say for us: it fires and forgets, and a run that dies here
+  // would otherwise be silent and endlessly repeatable.
+  if (!status) {
+    if (working) {
+      return (
+        <GeneratingRow
+          label={t("visionGenerating", { defaultMessage: "Generating description…" })}
+        />
+      );
+    }
+    return error ? (
+      <p className="text-[11px] text-danger/80">{error}</p>
+    ) : null;
+  }
   const reason = data?.reason ?? null;
   const model = data?.model ?? null;
 
@@ -348,25 +380,6 @@ export default function VisualDescriptionSection({
             </button>
           </div>
         </>
-      )}
-
-      {/* Never generated yet — offer a manual trigger. Covers both
-          features=manual and features=on_index (pre-index). */}
-      {!status && (
-        <button
-          onClick={handleGenerate}
-          disabled={working}
-          className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
-        >
-          <RefreshCw size={11} className={working ? "animate-spin" : ""} />
-          {working
-            ? t("visionGenerating", {
-                defaultMessage: "Generating description…",
-              })
-            : t("visionGenerate", {
-                defaultMessage: "Generate AI description",
-              })}
-        </button>
       )}
 
       {error && (

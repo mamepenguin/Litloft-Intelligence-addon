@@ -19,6 +19,8 @@ import {
   revertSummary,
 } from "./api";
 import type { SummaryResponse } from "./api";
+import { useOfferFileAiAction } from "./fileAiActions";
+import { GeneratingRow } from "./GeneratingRow";
 
 interface SummarySectionProps {
   fileId: string;
@@ -141,6 +143,22 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
     }
   }, [fileId, drive]);
 
+  // The generate offer moves to the action row's "AI" menu; what stays
+  // here are the states that report something real — too little text to
+  // work with, a run in flight, a failure. "You could make one" is not
+  // one of those, and it was the only thing most files ever showed.
+  useOfferFileAiAction({
+    fileId,
+    kind: "summary",
+    labelKey: "summaryGenerate",
+    active: loaded
+      && !data?.available
+      && data?.reason !== "unsupported_type"
+      && data?.reason !== "insufficient_content",
+    busy: regenerating,
+    run: handleRegenerate,
+  });
+
   if (!loaded) return null;
 
   if (!data?.available) {
@@ -164,25 +182,16 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
       );
     }
 
-    // Ready to generate — show the button. Covers reason="not_generated"
-    // as well as feature-disabled/null-reason legacy paths.
-    return (
-      <div>
-        <div className="flex items-center gap-2">
-          <BookOpen size={14} className="text-text-muted" />
-          <button
-            onClick={handleRegenerate}
-            disabled={regenerating}
-            className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
-          >
-            <RefreshCw size={11} className={regenerating ? "animate-spin" : ""} />
-            {regenerating
-              ? t("summaryGenerating", { defaultMessage: "Generating summary..." })
-              : t("summaryGenerate", { defaultMessage: "Generate AI summary" })}
-          </button>
-        </div>
-      </div>
-    );
+    // Ready to generate — the offer above carries it. Covers
+    // reason="not_generated" as well as feature-disabled/null-reason
+    // legacy paths. A run already under way is the exception: there is
+    // no backend status for it, so this component is the only thing
+    // that knows.
+    return regenerating ? (
+      <GeneratingRow
+        label={t("summaryGenerating", { defaultMessage: "Generating summary..." })}
+      />
+    ) : null;
   }
 
   const shortInvalid =
