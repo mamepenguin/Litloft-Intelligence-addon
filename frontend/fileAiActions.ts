@@ -56,7 +56,20 @@ export interface FileAiAction {
 
 const EMPTY: readonly FileAiAction[] = [];
 
-const registry = new Map<string, FileAiAction>();
+/**
+ * Offers, keyed by file and kind — and within that, by the individual
+ * offering component.
+ *
+ * The inner key exists because two mounts of the same section on one
+ * page are not obviously impossible: the file detail page renders the
+ * inspector and the mobile bottom sheet from the same subtree and
+ * relies on a comment to keep them mutually exclusive. Under a single
+ * slot, the second mount would overwrite the first and the first
+ * unmount would then take the offer away from a section still showing
+ * — the "AI" button would vanish for no reason a reader could see.
+ * Holding the offers per registrant makes that a non-event.
+ */
+const registry = new Map<string, Map<symbol, FileAiAction>>();
 const listeners = new Set<() => void>();
 let snapshots = new Map<string, readonly FileAiAction[]>();
 
@@ -72,13 +85,20 @@ function publish(): void {
   for (const listener of listeners) listener();
 }
 
-function offer(fileId: string, action: FileAiAction): void {
-  registry.set(slot(fileId, action.kind), action);
+function offer(by: symbol, fileId: string, action: FileAiAction): void {
+  const key = slot(fileId, action.kind);
+  const held = registry.get(key) ?? new Map<symbol, FileAiAction>();
+  held.set(by, action);
+  registry.set(key, held);
   publish();
 }
 
-function withdraw(fileId: string, kind: FileAiActionKind): void {
-  if (registry.delete(slot(fileId, kind))) publish();
+function withdraw(by: symbol, fileId: string, kind: FileAiActionKind): void {
+  const key = slot(fileId, kind);
+  const held = registry.get(key);
+  if (!held?.delete(by)) return;
+  if (held.size === 0) registry.delete(key);
+  publish();
 }
 
 function subscribe(listener: () => void): () => void {
@@ -91,9 +111,14 @@ function subscribe(listener: () => void): () => void {
 function read(fileId: string): readonly FileAiAction[] {
   const cached = snapshots.get(fileId);
   if (cached) return cached;
-  const built = ORDER.map((kind) => registry.get(slot(fileId, kind))).filter(
-    (action): action is FileAiAction => action !== undefined,
-  );
+  // One entry per kind however many components offered it: they are
+  // the same section, and the menu shows one row for one action.
+  const built = ORDER.map((kind) => {
+    const held = registry.get(slot(fileId, kind));
+    if (!held) return undefined;
+    for (const action of held.values()) return action;
+    return undefined;
+  }).filter((action): action is FileAiAction => action !== undefined);
   const result = built.length > 0 ? built : EMPTY;
   snapshots.set(fileId, result);
   return result;
@@ -131,16 +156,21 @@ export function useOfferFileAiAction(params: {
     runRef.current = run;
   });
 
+  // This component's identity in the registry, stable for its lifetime.
+  const idRef = useRef<symbol | null>(null);
+  if (idRef.current === null) idRef.current = Symbol("fileAiAction");
+  const id = idRef.current;
+
   useEffect(() => {
     if (!active) return;
-    offer(fileId, {
+    offer(id, fileId, {
       kind,
       labelKey,
       busy,
       run: () => runRef.current(),
     });
-    return () => withdraw(fileId, kind);
-  }, [fileId, kind, labelKey, active, busy]);
+    return () => withdraw(id, fileId, kind);
+  }, [id, fileId, kind, labelKey, active, busy]);
 }
 
 /** Test seam: drop every registration. */

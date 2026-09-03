@@ -207,7 +207,16 @@ export default function VisualDescriptionSection({
   // nothing rendered so the section doesn't clutter video/audio pages.
   if (!isImageFile(file)) return null;
 
-  if (!status) return null;
+  // Nothing has been attempted, so there is nothing to head — unless
+  // the attempt this component just made failed before the backend
+  // recorded a status. That failure is the one thing the "AI" menu
+  // cannot say for us: it fires and forgets, and a run that dies here
+  // would otherwise be silent and endlessly repeatable.
+  if (!status) {
+    return error ? (
+      <p className="text-[11px] text-danger/80">{error}</p>
+    ) : null;
+  }
   const reason = data?.reason ?? null;
   const model = data?.model ?? null;
 

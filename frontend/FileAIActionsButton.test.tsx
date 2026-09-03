@@ -154,6 +154,31 @@ describe("FileAIActionsButton", () => {
     expect(screen.queryByRole("button", { name: "AI" })).toBeNull();
   });
 
+  it("survives the same section being mounted twice for one file", () => {
+    // The file detail page builds the inspector and the mobile bottom
+    // sheet from the same subtree and keeps them exclusive by
+    // convention. If that convention ever slips, one unmount must not
+    // take an offer away from the copy still on screen.
+    const { rerender } = render(
+      <>
+        <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active />
+        <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active />
+        <FileAIActionsButton fileId="f1" />
+      </>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+    // One row for one action, however many components offered it.
+    expect(screen.getAllByRole("menuitem")).toHaveLength(1);
+
+    rerender(
+      <>
+        <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active />
+        <FileAIActionsButton fileId="f1" />
+      </>,
+    );
+    expect(screen.getByRole("button", { name: "AI" })).toBeInTheDocument();
+  });
+
   it("keeps one file's offers out of another file's menu", () => {
     render(
       <>

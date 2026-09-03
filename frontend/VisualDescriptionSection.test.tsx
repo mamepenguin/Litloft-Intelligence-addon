@@ -119,6 +119,29 @@ describe("VisualDescriptionSection", () => {
     ).toBeInTheDocument();
   });
 
+  it("says so when a run started from the AI menu fails outright", async () => {
+    // The menu fires and forgets; a rejection here leaves the backend
+    // with no status to report, so the section is the only thing that
+    // can say the run did not start. Without this, pressing the menu
+    // item would do nothing visible, repeatably.
+    (getVisualDescription as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue(neverDescribed);
+    (generateVisualDescription as unknown as ReturnType<typeof vi.fn>)
+      .mockRejectedValue(
+        Object.assign(new Error("nope"), { info: { kind: "not_queued" } }),
+      );
+    renderWithActionMenu();
+
+    fireEvent.click(await screen.findByRole("button", { name: "AI" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: /Create description/ }));
+    });
+
+    expect(
+      await screen.findByText(/could not be queued|Could not start/i),
+    ).toBeInTheDocument();
+  });
+
   it("offers nothing to the AI menu for a non-image file", async () => {
     (getFile as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       ...imageFile,
