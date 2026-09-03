@@ -96,6 +96,24 @@ describe("SummarySection — the offer moves to the AI menu", () => {
     );
   });
 
+  it("says the run is under way after the menu closes on it", async () => {
+    // The menu closes when an item is pressed, so the section is the
+    // only place left that can say anything is happening.
+    vi.mocked(getSummary).mockResolvedValue({
+      available: false,
+      reason: "not_generated",
+    } as never);
+    vi.mocked(regenerateSummary).mockReturnValue(new Promise(() => {}) as never);
+    renderWithActionMenu();
+
+    fireEvent.click(await screen.findByRole("button", { name: "AI" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: /Create AI summary/ }));
+    });
+
+    expect(await screen.findByText(/Creating summary/i)).toBeInTheDocument();
+  });
+
   it("offers nothing for a file type that cannot be summarised", async () => {
     vi.mocked(getSummary).mockResolvedValue({
       available: false,

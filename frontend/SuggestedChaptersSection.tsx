@@ -26,6 +26,7 @@ import {
 } from "./api";
 import type { SuggestedChaptersResponse } from "./api";
 import { useOfferFileAiAction } from "./fileAiActions";
+import { GeneratingRow } from "./GeneratingRow";
 
 interface SuggestedChaptersSectionProps {
   fileId: string;
@@ -203,9 +204,16 @@ export default function SuggestedChaptersSection({
     return error ? <ErrorMessage message={error} /> : null;
   }
 
-  // A failure the user asked for still has to be visible; everything
+  // A run in flight and a failure both have to be visible; everything
   // else about the empty state now lives in the menu.
   if (!hasPending) {
+    if (operation === "generate") {
+      return (
+        <GeneratingRow
+          label={t("generatingChapters", { defaultMessage: "Creating chapters..." })}
+        />
+      );
+    }
     return error ? <ErrorMessage message={error} /> : null;
   }
 

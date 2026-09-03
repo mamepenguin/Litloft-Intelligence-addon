@@ -8,6 +8,7 @@ import type { SuggestedTagsResponse } from "./api";
 import { fetchJSON } from "@/lib/api";
 import { ConflictError, saveFileTags } from "@/lib/tags";
 import { useOfferFileAiAction } from "./fileAiActions";
+import { GeneratingRow } from "./GeneratingRow";
 import type { FileItem } from "@/types";
 
 interface SuggestedTagsSectionProps {
@@ -172,7 +173,13 @@ export default function SuggestedTagsSection({ fileId, drive }: SuggestedTagsSec
 
   if (!loaded) return null;
 
-  if (!hasPendingTags) return null;
+  if (!hasPendingTags) {
+    return regenerating ? (
+      <GeneratingRow
+        label={t("regeneratingTags", { defaultMessage: "Generating..." })}
+      />
+    ) : null;
+  }
 
   const pendingTags = (data?.tags ?? []).filter((tag) => !acceptedTags.has(tag));
 

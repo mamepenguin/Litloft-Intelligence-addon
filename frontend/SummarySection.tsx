@@ -20,6 +20,7 @@ import {
 } from "./api";
 import type { SummaryResponse } from "./api";
 import { useOfferFileAiAction } from "./fileAiActions";
+import { GeneratingRow } from "./GeneratingRow";
 
 interface SummarySectionProps {
   fileId: string;
@@ -183,8 +184,14 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
 
     // Ready to generate — the offer above carries it. Covers
     // reason="not_generated" as well as feature-disabled/null-reason
-    // legacy paths.
-    return null;
+    // legacy paths. A run already under way is the exception: there is
+    // no backend status for it, so this component is the only thing
+    // that knows.
+    return regenerating ? (
+      <GeneratingRow
+        label={t("summaryGenerating", { defaultMessage: "Generating summary..." })}
+      />
+    ) : null;
   }
 
   const shortInvalid =

@@ -239,8 +239,6 @@
     "dismissChapters": "却下",
     "dismissingChapters": "却下中...",
     "regenerateChapters": "作り直す",
-    "chapterCandidatesAccepted": "チャプター候補を承認しました",
-    "chapterCandidatesDismissed": "チャプター候補を却下しました",
     "chapterCandidatesLoadError": "チャプター候補を読み込めませんでした。もう一度お試しください。",
     "chapterCandidatesActionError": "チャプターの操作に失敗しました。もう一度お試しください。",
     "chapterCandidatesGenerationFailed": "チャプター生成に失敗しました。もう一度作成してください。",

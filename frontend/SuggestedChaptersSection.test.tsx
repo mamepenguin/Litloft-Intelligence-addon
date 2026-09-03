@@ -11,8 +11,6 @@ const translations = vi.hoisted(() => ({
   dismissChapters: "Dismiss",
   dismissingChapters: "Dismissing...",
   regenerateChapters: "Create again",
-  chapterCandidatesAccepted: "Chapter candidates approved",
-  chapterCandidatesDismissed: "Chapter candidates dismissed",
   chapterCandidatesLoadError: "Could not load chapter candidates. Try again.",
   chapterCandidatesActionError: "The chapter action failed. Try again.",
   chapterCandidatesGenerationFailed:

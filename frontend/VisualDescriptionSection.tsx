@@ -22,6 +22,7 @@ import type {
   VisualDescriptionStatus,
 } from "./api";
 import { useOfferFileAiAction } from "./fileAiActions";
+import { GeneratingRow } from "./GeneratingRow";
 
 interface VisualDescriptionSectionProps {
   fileId: string;
@@ -213,6 +214,13 @@ export default function VisualDescriptionSection({
   // cannot say for us: it fires and forgets, and a run that dies here
   // would otherwise be silent and endlessly repeatable.
   if (!status) {
+    if (working) {
+      return (
+        <GeneratingRow
+          label={t("visionGenerating", { defaultMessage: "Generating description…" })}
+        />
+      );
+    }
     return error ? (
       <p className="text-[11px] text-danger/80">{error}</p>
     ) : null;
