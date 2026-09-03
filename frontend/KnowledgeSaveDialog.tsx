@@ -23,6 +23,8 @@ import { useTranslations } from "next-intl";
 import { X } from "lucide-react";
 
 import { FolderPicker } from "@/components/FolderPicker";
+import { useShortcuts } from "@/hooks/useShortcuts";
+import { OVERLAY_PRIORITY } from "@/lib/shortcuts";
 import {
   distillToKnowledge,
   getNotesBySourceFile,
@@ -103,14 +105,27 @@ export function KnowledgeSaveDialog({
     void loadDialogState();
   }, [open, loadDialogState]);
 
-  useEffect(() => {
-    if (!open) return;
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open, onClose]);
+  // Escape goes through the shortcut stack instead of a listener of its
+  // own, so a layer pushed on top wins the key rather than both closing
+  // on one press. `editingOnly: false` is load-bearing: the provider
+  // counts a focused input as "editing", and the default means "only
+  // when not editing" — which in a dialog that focuses its filename
+  // field is never.
+  useShortcuts(
+    "intelligence-knowledge-save-dialog",
+    "Dialog",
+    [
+      {
+        key: "escape",
+        label: "Close",
+        editingOnly: false,
+        hidden: true,
+        handler: onClose,
+      },
+    ],
+    open,
+    OVERLAY_PRIORITY,
+  );
 
   const handleSubmit = useCallback(async () => {
     setSubmitting(true);
