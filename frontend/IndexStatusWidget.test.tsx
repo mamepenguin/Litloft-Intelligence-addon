@@ -5,11 +5,10 @@
  * Covers:
  *  1. The "Reindex" button (and its ConfirmDialog) are gone — re-rendering
  *     the widget must not let an operator nuke every flag in one click.
- *  2. The failed-jobs summary row is rendered. When zero, it shows the
- *     "no failed jobs" hint. When > 0, it surfaces a clickable amber row.
- *  3. Clicking the failed-jobs row opens the FailedJobsModal.
- *  4. The Pause / Resume button still works (regression guard).
- *  5. No emoji anywhere (UI rule `feedback_no_emoji_in_ui`).
+ *  2. The failed-jobs warning is *not* here — it moved to the
+ *     `dashboard-alerts` slot (see FailedJobsAlert.test.tsx).
+ *  3. The Pause / Resume button still works (regression guard).
+ *  4. No emoji anywhere (UI rule `feedback_no_emoji_in_ui`).
  *
  * RED-phase: the widget still renders the Reindex button today; these
  * tests fail on the current code base. They turn green only after the
@@ -104,68 +103,19 @@ describe("IndexStatusWidget — reindex button removal (spec §3.1)", () => {
   });
 });
 
-describe("IndexStatusWidget — failed-jobs summary (spec §3.1)", () => {
-  it("renders a no-failed-jobs hint when count is 0", async () => {
-    mockedFailedJobs.mockResolvedValue({
-      items: [],
-      total: 0,
-      limit: 50,
-      offset: 0,
-    });
+describe("IndexStatusWidget — the failed-jobs warning is not here", () => {
+  it("does not poll for failed jobs at all", async () => {
+    // The warning moved to `dashboard-alerts` (FailedJobsAlert), above
+    // the drive cards. Two pollers would say the same thing twice and
+    // ask the server twice for it.
     render(<IndexStatusWidget />);
+    await waitFor(() => expect(mockedStatus).toHaveBeenCalled());
 
-    // Either the localised "no failed jobs" copy, or the raw i18n key
-    // — accept both so the test isn't gated on the merge script.
-    await waitFor(() => {
-      const noneRe = /no failed jobs|failed jobs.*0|semanticSearch\.failedJobs\.none/i;
-      expect(screen.getByText(noneRe)).toBeInTheDocument();
-    });
-  });
-
-  it("renders the failed-jobs count when > 0", async () => {
-    mockedFailedJobs.mockResolvedValue({
-      items: [
-        { file_id: "abc", filename: "a.mp4", drive: "d1", job_kind: "transcription", provider: "whisper_local", error_class: "FatalError", error_message_excerpt: "err", attempted_at: "2026-05-23T00:00:00Z", attempts: 1 },
-      ],
-      total: 3,
-      limit: 50,
-      offset: 0,
-    });
-    render(<IndexStatusWidget />);
-
-    // Either a rendered string containing "3" or a count-bound i18n
-    // value — anything visible that names the number.
-    await waitFor(() => {
-      expect(
-        screen.getByText(/3.*failed|failed.*3|semanticSearch\.failedJobs/i),
-      ).toBeInTheDocument();
-    });
-  });
-
-  it("opens the FailedJobsModal when the summary is clicked", async () => {
-    mockedFailedJobs.mockResolvedValue({
-      items: [
-        { file_id: "abc", filename: "a.mp4", drive: "d1", job_kind: "transcription", provider: "whisper_local", error_class: "FatalError", error_message_excerpt: "err", attempted_at: "2026-05-23T00:00:00Z", attempts: 1 },
-      ],
-      total: 1,
-      limit: 50,
-      offset: 0,
-    });
-    render(<IndexStatusWidget />);
-
-    // The widget renders the row as a button so the operator can open it
-    // with keyboard navigation too. Match the real label rather than
-    // allowing the raw i18n key: accepting the key means the test still
-    // passes when the translation is missing, which is how the capture
-    // basket assertions here silently rotted.
-    const summary = await screen.findByRole("button", {
-      name: "1 failed jobs",
-    });
-    fireEvent.click(summary);
-
-    await waitFor(() => {
-      expect(screen.getByTestId("failed-jobs-modal-stub")).toBeInTheDocument();
-    });
+    expect(mockedFailedJobs).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("failed-jobs-modal-stub")).toBeNull();
+    expect(
+      screen.queryByText(/failed jobs|semanticSearch\.failedJobs/i),
+    ).toBeNull();
   });
 });
 

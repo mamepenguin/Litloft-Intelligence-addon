@@ -18,6 +18,7 @@ from app.config import settings
 from concurrent.futures import ThreadPoolExecutor
 
 from app.database import get_search_db, get_search_db_read, get_search_engine, validate_vector_table
+from app.file_kind import apply_kind_filter
 from app.models import Embedding, IndexedFile, TranscriptChunk
 from app.workers.clip import embed_text_clip
 from app.workers.embedder import embed_query
@@ -1394,8 +1395,7 @@ def _build_results(
             IndexedFile.active.is_(True),
         )
 
-        if file_type:
-            query = query.filter(IndexedFile.file_type == file_type)
+        query = apply_kind_filter(query, file_type)
         if drive:
             query = query.filter(IndexedFile.drive == drive)
 

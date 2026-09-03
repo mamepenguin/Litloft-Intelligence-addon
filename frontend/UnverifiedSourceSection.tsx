@@ -80,6 +80,11 @@ export default function UnverifiedSourceSection({
           <ShieldCheck size={16} />
           {t("trust")}
         </button>
+        {/* Pressing this stamps ``trust_reviewed_at`` just as trusting
+            does — the file leaves the "nobody has ruled" set and the
+            panel does not come back. So the label says what the file
+            becomes (unverified, reviewed), not "not for now", which
+            promised a decision deferred that the write does not defer. */}
         <button
           onClick={() => rule("unverified")}
           disabled={pending}

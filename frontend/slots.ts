@@ -10,6 +10,7 @@ export const slotComponents: Record<string, React.LazyExoticComponent<React.Comp
   "similar-files": lazy(() => import("./SimilarFilesSection")),
   "pickup": lazy(() => import("./PickupWidget")),
   "index-status": lazy(() => import("./IndexStatusWidget")),
+  "failed-jobs": lazy(() => import("./FailedJobsAlert")),
   "visual-index": lazy(() => import("./VisualIndexSection")),
   "clip-frames": lazy(() => import("./ClipFramesSection")),
   "index-details": lazy(() => import("./IndexDetailsMenuItem")),

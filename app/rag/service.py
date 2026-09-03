@@ -1884,6 +1884,22 @@ _FIND_DEFAULT_LIMIT = 20
 # filter — they translate to "no hint", which means "do not filter".
 _FIND_NO_FILE_TYPE = frozenset({"none", "", None})
 
+# The decomposer emits its own small label set (``video`` / ``audio`` /
+# ``image`` / ``text`` / ``none``), and one of them is not a file kind:
+# core files text documents as ``document``. Passing ``text`` straight
+# through narrowed every Find hinted that way to nothing at all —
+# silently, since an empty retrieval reads as "found nothing about
+# this". Kept here rather than in ``app.file_kind`` because it is this
+# prompt's vocabulary, not the vocabulary core's toolbar shares.
+_FIND_HINT_TO_KIND = {"text": "document"}
+
+
+def _find_kind_for_hint(file_type_hint: str | None) -> str | None:
+    """The file kind a decomposer hint asks for, or None for no filter."""
+    if file_type_hint in _FIND_NO_FILE_TYPE:
+        return None
+    return _FIND_HINT_TO_KIND.get(file_type_hint, file_type_hint)
+
 
 def _build_decomposed_from_overrides(
     raw_query: str, overrides: dict[str, Any]
@@ -2136,10 +2152,7 @@ async def find_files(
     # Stage D: scoped retrieval. ``file_type=None`` when the hint is
     # "none" / empty — passing the literal "none" would filter to
     # nothing.
-    file_type_hint = decomposed.file_type_hint
-    file_type_filter = (
-        None if file_type_hint in _FIND_NO_FILE_TYPE else file_type_hint
-    )
+    file_type_filter = _find_kind_for_hint(decomposed.file_type_hint)
 
     # Stage D bonus: structured query transform for the required-keyword
     # hard filter. Independent from ``decomposed`` (which carries
