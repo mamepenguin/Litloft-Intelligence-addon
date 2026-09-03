@@ -260,7 +260,7 @@ export default function SuggestedChaptersSection({
           type="button"
           onClick={handleApprove}
           disabled={operation !== null}
-          className="flex items-center gap-1 rounded-lg bg-accent-teal/15 px-2 py-1 text-xs font-medium text-accent-teal transition-colors hover:bg-accent-teal/20 disabled:bg-sand disabled:text-warm-silver disabled:cursor-not-allowed"
+          className="flex items-center gap-1 rounded-lg bg-accent-teal/15 px-2 py-1 text-xs font-medium text-accent-teal transition-colors hover:bg-accent-teal/20 disabled:opacity-50"
         >
           {operation === "approve" ? (
             <RefreshCw size={11} className="animate-spin" aria-hidden="true" />

@@ -242,7 +242,7 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
               {resetting ? t("resetting") : t("reset")}
             </button>
             {resetOk && (
-              <span className="text-xs text-success">{t("resetSuccess")}</span>
+              <span className="text-xs text-accent-teal">{t("resetSuccess")}</span>
             )}
             {resetError && (
               <span className="text-xs text-danger">{resetError}</span>
@@ -313,7 +313,7 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
         >
           {saving ? t("saving") : t("save")}
         </button>
-        {savedOk && <span className="text-xs text-success">{t("saved")}</span>}
+        {savedOk && <span className="text-xs text-accent-teal">{t("saved")}</span>}
         {saveError && <span className="text-xs text-danger">{saveError}</span>}
       </div>
     </section>

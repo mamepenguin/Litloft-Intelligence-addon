@@ -266,7 +266,7 @@ export default function AdminTranscriptionSettingsSection(): React.ReactElement 
               {resetting ? t("resetting") : t("reset")}
             </button>
             {resetOk && (
-              <span className="text-xs text-success">{t("resetSuccess")}</span>
+              <span className="text-xs text-accent-teal">{t("resetSuccess")}</span>
             )}
             {resetError && (
               <span className="text-xs text-danger">{resetError}</span>
@@ -312,7 +312,7 @@ export default function AdminTranscriptionSettingsSection(): React.ReactElement 
                       {envKey}:{" "}
                       <span
                         className={
-                          present ? "text-success" : "text-danger"
+                          present ? "text-accent-teal" : "text-danger"
                         }
                       >
                         {present ? t("apiKeyPresent") : t("apiKeyMissing")}
@@ -376,7 +376,7 @@ export default function AdminTranscriptionSettingsSection(): React.ReactElement 
           {saving ? t("saving") : t("save")}
         </button>
         {savedOk && (
-          <span className="text-xs text-success">{t("saved")}</span>
+          <span className="text-xs text-accent-teal">{t("saved")}</span>
         )}
         {saveError && (
           <span className="text-xs text-danger">{saveError}</span>

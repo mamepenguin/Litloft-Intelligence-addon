@@ -1566,7 +1566,7 @@ function EditTextarea({
           type="button"
           onClick={onSaveEdit}
           disabled={saving || draft.trim().length === 0}
-          className="flex items-center gap-1 rounded-lg bg-accent-teal px-2 py-1 text-[11px] text-white transition-colors hover:bg-accent-teal/90 disabled:bg-sand disabled:text-warm-silver disabled:cursor-not-allowed"
+          className="flex items-center gap-1 rounded-lg bg-accent-teal px-2 py-1 text-[11px] text-white transition-colors hover:bg-accent-teal/90 disabled:opacity-50"
         >
           {saving ? (
             <RefreshCw size={11} className="animate-spin" />

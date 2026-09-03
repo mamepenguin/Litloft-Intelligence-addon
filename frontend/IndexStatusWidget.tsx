@@ -81,10 +81,6 @@ function ProgressBar({
   label: string;
 }) {
   const percent = total > 0 ? (done / total) * 100 : 0;
-  // Finished work is a success, not a call to action. DESIGN.md §2.2 keeps
-  // --accent for CTAs and brand highlights, so four accent bars at 100% — the
-  // state where everything has gone right — read as four alarms instead.
-  const barColor = done >= total ? "bg-accent-teal" : "bg-accent-amber";
 
   return (
     <div className="space-y-1">
@@ -92,9 +88,14 @@ function ProgressBar({
         <span className="text-text-muted">{label}</span>
         <span className="text-text-primary">{Math.floor(percent)}%</span>
       </div>
+      {/* One colour: the width already says how far along this is, and the
+          chips above own teal for "running" and amber for "paused", so a bar
+          that switched between them would contradict its own header. Accent is
+          not an option either — four accent bars at 100% read as four alarms
+          (DESIGN.md §2.2 keeps it for CTAs). */}
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg-elevated">
         <div
-          className={`h-full rounded-full ${barColor} transition-all`}
+          className="h-full rounded-full bg-accent-teal transition-all"
           style={{ width: `${Math.min(percent, 100)}%` }}
         />
       </div>
