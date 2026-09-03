@@ -349,7 +349,7 @@ export default function AdminEmbeddingSettingsSection(): React.ReactElement {
                 type="button"
                 onClick={handleConfirm}
                 disabled={saving}
-                className="rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-sand disabled:text-warm-silver "
               >
                 {t("confirm.confirm")}
               </button>

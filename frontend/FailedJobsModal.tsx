@@ -369,7 +369,7 @@ export default function FailedJobsModal({ open, onClose }: FailedJobsModalProps)
                           type="button"
                           onClick={() => handleResolve(row)}
                           disabled={isRetrying || isResolving}
-                          className="inline-flex h-7 items-center gap-1 whitespace-nowrap rounded-xl px-2 text-[11px] font-semibold text-accent-teal transition-colors hover:bg-accent-teal/10 disabled:opacity-50"
+                          className="inline-flex h-7 items-center gap-1 whitespace-nowrap rounded-xl px-2 text-[11px] font-semibold text-accent-teal transition-colors hover:bg-accent-teal/10 disabled:bg-sand disabled:text-warm-silver disabled:cursor-not-allowed"
                           aria-label={t("resolve")}
                         >
                           {isResolving ? (

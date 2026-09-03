@@ -259,7 +259,7 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
             <button
               onClick={handleSaveEdit}
               disabled={saving || shortInvalid || longInvalid}
-              className="flex items-center gap-1 rounded-lg bg-accent-teal px-2 py-1 text-[11px] text-white transition-colors hover:bg-accent-teal/90 disabled:opacity-50"
+              className="flex items-center gap-1 rounded-lg bg-accent-teal px-2 py-1 text-[11px] text-white transition-colors hover:bg-accent-teal/90 disabled:bg-sand disabled:text-warm-silver disabled:cursor-not-allowed"
             >
               {saving ? (
                 <RefreshCw size={11} className="animate-spin" />

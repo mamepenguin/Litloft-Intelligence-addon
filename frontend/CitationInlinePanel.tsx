@@ -226,7 +226,7 @@ function InlineExcerptBody({
   }
   if (state.kind === "error") {
     return (
-      <p className="text-accent-red">
+      <p className="text-danger">
         {t("citations.error", { defaultMessage: "Failed to load excerpt" })}
       </p>
     );

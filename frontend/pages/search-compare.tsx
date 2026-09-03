@@ -125,7 +125,7 @@ function DiffSummary({
   if (rrf.length === 0 && cosine.length === 0) return null;
 
   return (
-    <div className="rounded-lg border border-bg-border bg-bg-secondary p-3 text-xs text-text-muted">
+    <div className="rounded-lg border border-bg-border bg-bg-elevated p-3 text-xs text-text-muted">
       <span className="font-medium text-text-primary">Diff: </span>
       shared {shared.length} /
       RRF only {rrfOnly.length} /
@@ -150,7 +150,7 @@ function SourceCountsBar({ counts }: { counts: SearchSourceCounts | null }) {
   const total = items.reduce((sum, i) => sum + i.count, 0);
 
   return (
-    <div className="rounded-lg border border-bg-border bg-bg-secondary p-3 text-xs">
+    <div className="rounded-lg border border-bg-border bg-bg-elevated p-3 text-xs">
       <span className="font-medium text-text-primary">
         Source hits (post-filter):
       </span>
@@ -246,7 +246,7 @@ export default function SearchComparePage() {
         <button
           onClick={handleSearch}
           disabled={loading || !query.trim() || !drive}
-          className="rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          className="rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white disabled:bg-sand disabled:text-warm-silver disabled:cursor-not-allowed"
         >
           {loading ? "..." : "Search"}
         </button>

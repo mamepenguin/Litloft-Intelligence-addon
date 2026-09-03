@@ -913,7 +913,7 @@ function IntelligenceAskPageInner() {
             <button
               type="submit"
               disabled={!canSubmit}
-              className="inline-flex items-center gap-1.5 rounded-2xl bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex items-center gap-1.5 rounded-2xl bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-sand disabled:text-warm-silver "
             >
               <Send size={12} /> {t("poweredByLlm")}
             </button>

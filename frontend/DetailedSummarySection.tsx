@@ -423,8 +423,8 @@ export default function DetailedSummarySection({
     return (
       <div>
         <div className="flex items-center gap-2">
-          <FileText size={14} className="text-accent-red/70" />
-          <span className="text-xs text-accent-red/80">
+          <FileText size={14} className="text-danger/70" />
+          <span className="text-xs text-danger/80">
             {t("detailedSummaryFailed", {
               defaultMessage: "Detailed summary generation failed",
             })}
@@ -1559,14 +1559,14 @@ function EditTextarea({
         onChange={(e) => onDraftChange(e.target.value)}
         rows={Math.max(4, draft.split("\n").length + 1)}
         spellCheck={false}
-        className="block w-full resize-y rounded-lg border border-bg-border bg-bg-card px-3 py-2.5 font-mono text-[13.5px] leading-relaxed text-text-primary outline-none focus:border-focus-ring-teal"
+        className="block w-full resize-y rounded-lg border border-bg-border bg-bg-card px-3 py-2.5 font-mono text-[13.5px] leading-relaxed text-text-primary outline-none focus:border-focus-ring"
       />
       <div className="mt-2 flex items-center gap-2">
         <button
           type="button"
           onClick={onSaveEdit}
           disabled={saving || draft.trim().length === 0}
-          className="flex items-center gap-1 rounded-lg bg-accent-teal px-2 py-1 text-[11px] text-white transition-colors hover:bg-accent-teal/90 disabled:opacity-50"
+          className="flex items-center gap-1 rounded-lg bg-accent-teal px-2 py-1 text-[11px] text-white transition-colors hover:bg-accent-teal/90 disabled:bg-sand disabled:text-warm-silver disabled:cursor-not-allowed"
         >
           {saving ? (
             <RefreshCw size={11} className="animate-spin" />

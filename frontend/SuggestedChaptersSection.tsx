@@ -260,7 +260,7 @@ export default function SuggestedChaptersSection({
           type="button"
           onClick={handleApprove}
           disabled={operation !== null}
-          className="flex items-center gap-1 rounded-lg bg-accent-teal/15 px-2 py-1 text-xs font-medium text-accent-teal transition-colors hover:bg-accent-teal/20 disabled:opacity-50"
+          className="flex items-center gap-1 rounded-lg bg-accent-teal/15 px-2 py-1 text-xs font-medium text-accent-teal transition-colors hover:bg-accent-teal/20 disabled:bg-sand disabled:text-warm-silver disabled:cursor-not-allowed"
         >
           {operation === "approve" ? (
             <RefreshCw size={11} className="animate-spin" aria-hidden="true" />
@@ -311,7 +311,7 @@ function ErrorMessage({ message }: { message: string }) {
   return (
     <p
       role="alert"
-      className="mt-2 flex items-center gap-1.5 rounded-lg bg-danger-bg px-2 py-1.5 text-xs text-danger"
+      className="mt-2 flex items-center gap-1.5 rounded-lg bg-danger/15 px-2 py-1.5 text-xs text-danger"
     >
       <AlertCircle size={13} className="shrink-0" aria-hidden="true" />
       {message}

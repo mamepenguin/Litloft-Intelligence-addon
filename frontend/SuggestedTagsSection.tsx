@@ -218,7 +218,7 @@ export default function SuggestedTagsSection({ fileId, drive }: SuggestedTagsSec
               <button
                 onClick={() => handleAcceptTag(tag)}
                 disabled={isAccepting}
-                className="rounded-full p-0.5 text-accent-amber/70 transition-colors hover:bg-accent-amber/20 hover:text-accent-amber disabled:opacity-50"
+                className="rounded-full p-0.5 text-accent-amber/70 transition-colors hover:bg-accent-amber/20 hover:text-accent-amber disabled:bg-sand disabled:text-warm-silver disabled:cursor-not-allowed"
                 aria-label={t("acceptTag", { defaultMessage: "Add tag {tag}", tag })}
               >
                 {isAccepting ? (
