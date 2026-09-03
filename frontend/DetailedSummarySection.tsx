@@ -33,6 +33,7 @@ import {
 } from "react";
 import { useTranslations } from "next-intl";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
+import { useShortcuts } from "@/hooks/useShortcuts";
 import {
   BookmarkPlus,
   ChevronDown,
@@ -647,6 +648,31 @@ function DetailedSummaryBody({
   // when focus is transient (focused spans inside `<p>` lose focus
   // when React re-renders). The input-focus guard stops shortcuts
   // from stealing keystrokes inside the textarea / edit input.
+  // Escape collapses the expanded citations, registered on the shortcut
+  // stack rather than handled in the section's own keydown listener.
+  // Only claimed while something is expanded, so it is not swallowed
+  // when there is nothing to collapse — and an overlay pushed at
+  // OVERLAY_PRIORITY outranks it, which the listener could not do.
+  //
+  // The `editingOnly` default reproduces the listener's `isTextInput`
+  // guard exactly: the flag left off means "only when nothing is being
+  // edited". The old focus-containment check is deliberately not
+  // carried over — Escape backs out of the last thing opened, and the
+  // stack is what decides whose "last thing" that is.
+  useShortcuts(
+    "intelligence-detailed-summary-citations",
+    "Detailed summary",
+    [
+      {
+        key: "escape",
+        label: "Collapse citations",
+        hidden: true,
+        handler: collapseAll,
+      },
+    ],
+    !collapsed && expanded.size > 0,
+  );
+
   useEffect(() => {
     if (collapsed) return;
     const host = containerRef.current;
@@ -670,13 +696,6 @@ function DetailedSummaryBody({
       if (e.key === "v" || e.key === "V") {
         e.preventDefault();
         setVerify(!verify);
-        return;
-      }
-      if (e.key === "Escape") {
-        if (expanded.size > 0) {
-          e.preventDefault();
-          collapseAll();
-        }
         return;
       }
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
