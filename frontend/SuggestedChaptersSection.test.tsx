@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const translations = vi.hoisted(() => ({
+  aiFileActions: "AI",
   suggestedChapters: "AI chapter candidates",
   generateChapters: "Create AI chapter candidates",
   generatingChapters: "Creating chapters...",
@@ -52,6 +53,8 @@ vi.mock("@/hooks/useWebSocket", () => ({
 }));
 
 import SuggestedChaptersSection from "@/addons/intelligence/SuggestedChaptersSection";
+import FileAIActionsButton from "@/addons/intelligence/FileAIActionsButton";
+import { resetFileAiActions } from "@/addons/intelligence/fileAiActions";
 import {
   approveSuggestedChapters,
   dismissSuggestedChapters,
@@ -80,10 +83,29 @@ function renderSection() {
   );
 }
 
+/**
+ * The section plus the action row's "AI" menu. With no candidates
+ * waiting, the section renders nothing and the offer to create some is
+ * only observable through the menu.
+ */
+function renderWithActionMenu() {
+  return render(
+    <>
+      <SuggestedChaptersSection fileId="f1" drive="media" fileType="video" />
+      <FileAIActionsButton fileId="f1" />
+    </>,
+  );
+}
+
+async function openActionMenu() {
+  fireEvent.click(await screen.findByRole("button", { name: "AI" }));
+}
+
 describe("SuggestedChaptersSection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wsEvent.value = null;
+    resetFileAiActions();
     vi.mocked(usePolicy).mockReturnValue({ enabled: true, isLoading: false });
     vi.mocked(getSuggestedChapters).mockResolvedValue(pendingResponse);
     vi.mocked(generateSuggestedChapters).mockResolvedValue(undefined);
@@ -118,39 +140,68 @@ describe("SuggestedChaptersSection", () => {
     });
     const event = listener.mock.calls[0][0] as CustomEvent<{ fileId: string }>;
     expect(event.detail).toEqual({ fileId: "f1" });
-    expect(screen.getByText("Chapter candidates approved")).toBeInTheDocument();
+    // Approved chapters live in the core chapter rail; this section has
+    // nothing left to say and stops taking a row.
+    expect(screen.queryByText("Chapter candidates approved")).not.toBeInTheDocument();
     expect(screen.queryByText("Opening")).not.toBeInTheDocument();
 
     window.removeEventListener(FILE_CHAPTERS_UPDATED_EVENT, listener);
   });
 
-  it("dismisses the candidate set into the compact regenerate state", async () => {
-    renderSection();
+  it("dismisses the candidate set and hands 'create again' to the AI menu", async () => {
+    renderWithActionMenu();
     fireEvent.click(await screen.findByRole("button", { name: "Dismiss" }));
 
     await waitFor(() => {
       expect(dismissSuggestedChapters).toHaveBeenCalledWith("f1", "media");
     });
-    expect(screen.getByText("Chapter candidates dismissed")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Create again" })).toBeInTheDocument();
+    expect(screen.queryByText("Chapter candidates dismissed")).not.toBeInTheDocument();
+
+    await openActionMenu();
+    expect(
+      screen.getByRole("menuitem", { name: "Create again" }),
+    ).toBeInTheDocument();
   });
 
-  it("shows compact generate UI when no candidates exist", async () => {
+  it("offers generation through the AI menu when no candidates exist", async () => {
     vi.mocked(getSuggestedChapters).mockResolvedValue({
       enabled: true,
       available: false,
       chapters: [],
     });
-    renderSection();
+    renderWithActionMenu();
 
-    const button = await screen.findByRole("button", {
-      name: "Create AI chapter candidates",
-    });
-    fireEvent.click(button);
+    // The menu trigger is the only button: the section draws nothing.
+    await screen.findByRole("button", { name: "AI" });
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+
+    await openActionMenu();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Create AI chapter candidates" }),
+    );
 
     await waitFor(() => {
       expect(generateSuggestedChapters).toHaveBeenCalledWith("f1", "media");
     });
+  });
+
+  it("withdraws the AI menu entry while candidates are waiting", async () => {
+    renderWithActionMenu();
+
+    await screen.findByText("Opening");
+    expect(screen.queryByRole("button", { name: "AI" })).toBeNull();
+  });
+
+  it("offers nothing to the AI menu when the drive has the feature off", async () => {
+    vi.mocked(getSuggestedChapters).mockResolvedValue({
+      enabled: false,
+      available: false,
+      chapters: [],
+    });
+    renderWithActionMenu();
+
+    await waitFor(() => expect(getSuggestedChapters).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "AI" })).toBeNull();
   });
 
   it("does not render when chapter suggestions are disabled for the drive", async () => {

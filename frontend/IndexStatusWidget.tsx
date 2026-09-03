@@ -6,6 +6,8 @@ import {
   AlertTriangle,
   Brain,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   FileText,
   Film,
   Image as ImageIcon,
@@ -216,6 +218,7 @@ function StatusContent({
 }) {
   const t = useTranslations("semanticSearch");
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [idleOpen, setIdleOpen] = useState(false);
 
   const handlePauseResume = useCallback(async () => {
     const isPaused = status.queue?.paused;
@@ -252,6 +255,17 @@ function StatusContent({
       (entry): entry is { kind: QueueTaskKind; breakdown: QueueTaskBreakdown } =>
         entry.breakdown !== undefined,
     );
+
+  // Reporting a queue's state is not the same as the queue doing
+  // anything. Every kind the backend knows answers, so all eleven used
+  // to draw a card, and ten of them said "Idle" on a machine at rest —
+  // the summary line right above already says how much work exists.
+  const activeRows = taskRows.filter(
+    ({ breakdown }) => breakdown.processing.length > 0 || breakdown.waiting > 0,
+  );
+  const idleRows = taskRows.filter(
+    ({ breakdown }) => breakdown.processing.length === 0 && breakdown.waiting === 0,
+  );
 
   return (
     <>
@@ -326,16 +340,41 @@ function StatusContent({
         )}
       </div>
 
-      {taskRows.length > 0 && (
+      {activeRows.length > 0 && (
         <div className="mt-4 space-y-2">
           <div className="text-xs font-semibold text-text-muted">
             {t("tasks.heading")}
           </div>
           <div className="space-y-2">
-            {taskRows.map(({ kind, breakdown }) => (
+            {activeRows.map(({ kind, breakdown }) => (
               <TaskRow key={kind} kind={kind} breakdown={breakdown} />
             ))}
           </div>
+        </div>
+      )}
+
+      {idleRows.length > 0 && (
+        <div className="mt-4 space-y-2">
+          <button
+            type="button"
+            onClick={() => setIdleOpen((open) => !open)}
+            aria-expanded={idleOpen}
+            className="flex items-center gap-1 text-xs text-text-muted transition-colors hover:text-text-primary"
+          >
+            {idleOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <span>
+              {idleOpen
+                ? t("tasks.hideIdle", { count: idleRows.length })
+                : t("tasks.showIdle", { count: idleRows.length })}
+            </span>
+          </button>
+          {idleOpen && (
+            <div className="space-y-2">
+              {idleRows.map(({ kind, breakdown }) => (
+                <TaskRow key={kind} kind={kind} breakdown={breakdown} />
+              ))}
+            </div>
+          )}
         </div>
       )}
 

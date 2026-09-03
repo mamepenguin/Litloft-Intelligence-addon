@@ -83,7 +83,7 @@ export default function PickupWidget({ drive }: PickupWidgetProps) {
   return (
     <CarouselSection
       title={t("pickup")}
-      icon={<Sparkles size={20} className="text-accent-cta" />}
+      icon={<Sparkles size={20} className="text-text-muted" />}
       files={files}
       loading={loading}
       seeAllHref={seeAllHref}

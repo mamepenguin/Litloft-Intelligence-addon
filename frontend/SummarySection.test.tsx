@@ -25,9 +25,12 @@ vi.mock("@/addons/intelligence/api", () => ({
 }));
 
 import SummarySection from "@/addons/intelligence/SummarySection";
+import FileAIActionsButton from "@/addons/intelligence/FileAIActionsButton";
+import { resetFileAiActions } from "@/addons/intelligence/fileAiActions";
 import {
   editSummary,
   getSummary,
+  regenerateSummary,
   revertSummary,
 } from "@/addons/intelligence/api";
 
@@ -58,9 +61,80 @@ function renderSection() {
   );
 }
 
+function renderWithActionMenu() {
+  return render(
+    <NextIntlClientProvider locale="en" messages={{}}>
+      <SummarySection fileId="f1" drive="drive1" />
+      <FileAIActionsButton fileId="f1" />
+    </NextIntlClientProvider>,
+  );
+}
+
+describe("SummarySection — the offer moves to the AI menu", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetFileAiActions();
+  });
+
+  it("renders nothing and offers generation when none has been made", async () => {
+    vi.mocked(getSummary).mockResolvedValue({
+      available: false,
+      reason: "not_generated",
+    } as never);
+    renderWithActionMenu();
+
+    const trigger = await screen.findByRole("button", { name: "AI" });
+    // The section contributes no control of its own — the menu trigger
+    // is the only button on the page. Asserting the count rather than
+    // the absence of one label is what makes this catch a section that
+    // quietly starts drawing its heading and button again.
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("menuitem", { name: /Create AI summary/ }));
+    await waitFor(() =>
+      expect(regenerateSummary).toHaveBeenCalledWith("f1", "drive1"),
+    );
+  });
+
+  it("offers nothing for a file type that cannot be summarised", async () => {
+    vi.mocked(getSummary).mockResolvedValue({
+      available: false,
+      reason: "unsupported_type",
+    } as never);
+    renderWithActionMenu();
+
+    await waitFor(() => expect(getSummary).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "AI" })).toBeNull();
+  });
+
+  it("offers nothing when there is too little text to summarise", async () => {
+    // The note stays — it answers a question the menu could not — but
+    // the menu must not offer a run that the backend would skip.
+    vi.mocked(getSummary).mockResolvedValue({
+      available: false,
+      reason: "insufficient_content",
+    } as never);
+    renderWithActionMenu();
+
+    expect(
+      await screen.findByText(/Not enough content to summarize/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "AI" })).toBeNull();
+  });
+
+  it("withdraws the offer once a summary exists", async () => {
+    vi.mocked(getSummary).mockResolvedValue(aiResponse as never);
+    renderWithActionMenu();
+
+    await screen.findByText("AI short");
+    expect(screen.queryByRole("button", { name: "AI" })).toBeNull();
+  });
+});
+
 describe("SummarySection — edit flow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetFileAiActions();
   });
 
   it("enters edit mode with the current summary pre-filled", async () => {

@@ -83,6 +83,8 @@ vi.mock("@/addons/intelligence/api", () => ({
 import DetailedSummarySection, {
   parseSections,
 } from "@/addons/intelligence/DetailedSummarySection";
+import FileAIActionsButton from "@/addons/intelligence/FileAIActionsButton";
+import { resetFileAiActions } from "@/addons/intelligence/fileAiActions";
 import {
   editDetailedSummarySection,
   getDetailedSummary,
@@ -95,6 +97,20 @@ function renderSection() {
   return render(
     <NextIntlClientProvider locale="ja" messages={{}}>
       <DetailedSummarySection fileId="f1" drive="drive1" />
+    </NextIntlClientProvider>,
+  );
+}
+
+/**
+ * The section plus the action row's "AI" menu, which is where the
+ * offer to generate now lives. Rendering both is the only way to
+ * assert the handover rather than just the absence of a button.
+ */
+function renderWithActionMenu() {
+  return render(
+    <NextIntlClientProvider locale="ja" messages={{}}>
+      <DetailedSummarySection fileId="f1" drive="drive1" />
+      <FileAIActionsButton fileId="f1" />
     </NextIntlClientProvider>,
   );
 }
@@ -129,6 +145,7 @@ describe("DetailedSummarySection — state machine", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockWsLastEvent.current = null;
+    resetFileAiActions();
   });
 
   afterEach(() => {
@@ -160,15 +177,29 @@ describe("DetailedSummarySection — state machine", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows generate button when not_generated", async () => {
+  it("offers generation through the AI menu, not as a section, when not_generated", async () => {
     (getDetailedSummary as unknown as ReturnType<typeof vi.fn>)
       .mockResolvedValue({ available: false, reason: "not_generated" });
 
-    renderSection();
+    renderWithActionMenu();
 
+    const trigger = await screen.findByRole("button", { name: "AI" });
+    // Nothing else on the page: no heading, no button of its own.
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    fireEvent.click(trigger);
     expect(
-      await screen.findByRole("button", { name: /Create detailed summary/ }),
+      screen.getByRole("menuitem", { name: /Create detailed summary/ }),
     ).toBeInTheDocument();
+  });
+
+  it("withdraws the AI menu entry once a detailed summary exists", async () => {
+    (getDetailedSummary as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue(generatedResponse);
+
+    renderWithActionMenu();
+
+    await screen.findByRole("button", { name: /Expand/ });
+    expect(screen.queryByRole("button", { name: "AI" })).toBeNull();
   });
 
   it("renders the Markdown body when generated", async () => {

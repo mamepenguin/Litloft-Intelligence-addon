@@ -93,6 +93,13 @@
         "priority": 10
       }
     ],
+    "file-detail-actions": [
+      {
+        "id": "file-ai-actions",
+        "label": "AI",
+        "priority": 10
+      }
+    ],
     "admin-settings-sections": [],
     "admin-intelligence-sections": [
       {

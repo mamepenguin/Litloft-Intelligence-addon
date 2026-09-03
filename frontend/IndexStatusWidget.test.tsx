@@ -223,6 +223,156 @@ describe("IndexStatusWidget — pause / resume regression guard", () => {
   });
 });
 
+describe("IndexStatusWidget — idle queues are collapsed (ADM-1)", () => {
+  /**
+   * The eleven task kinds the backend reports, with the label each one
+   * renders. Matching the rendered label rather than the message key is
+   * deliberate: next-intl resolves against the real catalogue in this
+   * suite, so a key-shaped matcher matches nothing and a "row is absent"
+   * assertion passes without ever having looked at a row.
+   */
+  const TASK_LABEL: Record<string, string> = {
+    metadata: "Metadata extraction",
+    clip: "Image analysis (CLIP)",
+    whisper: "Transcription (Whisper)",
+    text_content: "Text extraction",
+    auto_tags: "AI tag candidates",
+    summaries: "AI summaries",
+    vision_describe: "AI image descriptions",
+    transcript_refine: "AI transcript cleanup",
+    retrieval_keywords: "AI search keyword expansion",
+    chapter_suggestions: "AI chapter candidates",
+    video_visual: "Visual index",
+  };
+  const ELEVEN_KINDS = Object.keys(TASK_LABEL);
+
+  type Breakdown = { waiting: number; processing: { file_id: string; filename: string }[] };
+
+  /** Every task kind reporting state, with the named ones actually busy. */
+  function tasksPayload(busy: Record<string, Breakdown> = {}) {
+    return Object.fromEntries(
+      ELEVEN_KINDS.map((kind) => [kind, busy[kind] ?? { waiting: 0, processing: [] }]),
+    );
+  }
+
+  const label = (kind: string) => TASK_LABEL[kind];
+  const disclosure = () =>
+    screen.findByRole("button", { name: /idle queue/i });
+
+  it("draws no task row when every queue is stopped", async () => {
+    mockedStatus.mockResolvedValue(
+      statusPayload({
+        queue: { processing: 0, waiting: 0, paused: false, tasks: tasksPayload() },
+      }),
+    );
+    render(<IndexStatusWidget />);
+    await waitFor(() => expect(mockedStatus).toHaveBeenCalled());
+    await disclosure();
+
+    for (const kind of ELEVEN_KINDS) {
+      expect(screen.queryByText(label(kind))).toBeNull();
+    }
+    // The "Current activity" heading goes with them.
+    expect(screen.queryByText("Current activity")).toBeNull();
+  });
+
+  it("keeps the queue total line when every queue is stopped", async () => {
+    mockedStatus.mockResolvedValue(
+      statusPayload({
+        queue: { processing: 0, waiting: 0, paused: false, tasks: tasksPayload() },
+      }),
+    );
+    render(<IndexStatusWidget />);
+
+    expect(await screen.findByText("Task queue")).toBeInTheDocument();
+    expect(screen.getByText("0 processing / 0 waiting")).toBeInTheDocument();
+  });
+
+  it("draws a row only for the queues that are actually moving", async () => {
+    mockedStatus.mockResolvedValue(
+      statusPayload({
+        queue: {
+          processing: 1,
+          waiting: 3,
+          paused: false,
+          tasks: tasksPayload({
+            whisper: { waiting: 0, processing: [{ file_id: "a", filename: "talk.mp4" }] },
+            summaries: { waiting: 3, processing: [] },
+          }),
+        },
+      }),
+    );
+    render(<IndexStatusWidget />);
+    await waitFor(() => expect(mockedStatus).toHaveBeenCalled());
+    await disclosure();
+
+    expect(screen.getByText(label("whisper"))).toBeInTheDocument();
+    expect(screen.getByText(label("summaries"))).toBeInTheDocument();
+    expect(screen.getByText("Current activity")).toBeInTheDocument();
+    for (const kind of ELEVEN_KINDS.filter((k) => k !== "whisper" && k !== "summaries")) {
+      expect(screen.queryByText(label(kind))).toBeNull();
+    }
+  });
+
+  it("reaches every stopped queue through the disclosure", async () => {
+    mockedStatus.mockResolvedValue(
+      statusPayload({
+        queue: {
+          processing: 1,
+          waiting: 0,
+          paused: false,
+          tasks: tasksPayload({
+            whisper: { waiting: 0, processing: [{ file_id: "a", filename: "talk.mp4" }] },
+          }),
+        },
+      }),
+    );
+    render(<IndexStatusWidget />);
+
+    const toggle = await disclosure();
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    // Ten are idle; the count has to say so, or the row is a mystery box.
+    expect(toggle.textContent).toContain("10");
+    fireEvent.click(toggle);
+
+    // All eleven are now on screen: the busy one above, the ten below.
+    for (const kind of ELEVEN_KINDS) {
+      expect(screen.getByText(label(kind))).toBeInTheDocument();
+    }
+    expect(
+      screen.getByRole("button", { name: /idle queue/i }),
+    ).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("still offers the disclosure when nothing is running", async () => {
+    mockedStatus.mockResolvedValue(
+      statusPayload({
+        queue: { processing: 0, waiting: 0, paused: false, tasks: tasksPayload() },
+      }),
+    );
+    render(<IndexStatusWidget />);
+
+    const toggle = await disclosure();
+    expect(toggle.textContent).toContain("11");
+    fireEvent.click(toggle);
+    for (const kind of ELEVEN_KINDS) {
+      expect(screen.getByText(label(kind))).toBeInTheDocument();
+    }
+  });
+
+  it("offers no disclosure when the backend reports no task state at all", async () => {
+    mockedStatus.mockResolvedValue(
+      statusPayload({
+        queue: { processing: 0, waiting: 0, paused: false, tasks: {} },
+      }),
+    );
+    render(<IndexStatusWidget />);
+    await screen.findByText("Task queue");
+
+    expect(screen.queryByRole("button", { name: /idle queue/i })).toBeNull();
+  });
+});
+
 describe("IndexStatusWidget — UI rules", () => {
   it("renders no emoji characters", async () => {
     mockedFailedJobs.mockResolvedValue({

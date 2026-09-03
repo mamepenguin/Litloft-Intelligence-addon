@@ -19,6 +19,8 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import VisualDescriptionSection from "@/addons/intelligence/VisualDescriptionSection";
+import FileAIActionsButton from "@/addons/intelligence/FileAIActionsButton";
+import { resetFileAiActions } from "@/addons/intelligence/fileAiActions";
 import {
   getVisualDescription,
   generateVisualDescription,
@@ -41,9 +43,32 @@ function renderSection() {
   );
 }
 
+/**
+ * The section plus the action row's "AI" menu — where the offer to
+ * describe an image lives once the section stops heading an empty box.
+ */
+function renderWithActionMenu() {
+  return render(
+    <NextIntlClientProvider locale="en" messages={{}}>
+      <VisualDescriptionSection fileId="f1" drive="family" />
+      <FileAIActionsButton fileId="f1" />
+    </NextIntlClientProvider>,
+  );
+}
+
+const neverDescribed = {
+  file_id: "f1",
+  visual_description: null,
+  status: null,
+  reason: null,
+  model: null,
+  generated_at: null,
+};
+
 describe("VisualDescriptionSection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetFileAiActions();
     (getFile as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(imageFile);
   });
 
@@ -78,19 +103,34 @@ describe("VisualDescriptionSection", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders the generate button when status is null", async () => {
-    (getVisualDescription as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
-      file_id: "f1",
-      visual_description: null,
-      status: null,
-      reason: null,
-      model: null,
-      generated_at: null,
-    });
-    renderSection();
+  it("renders nothing, and offers the AI menu instead, when status is null", async () => {
+    (getVisualDescription as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue(neverDescribed);
+    renderWithActionMenu();
+
+    const trigger = await screen.findByRole("button", { name: "AI" });
+    // The heading that used to sit above the button is gone, and so is
+    // the button: the trigger is the only control on the page.
+    expect(screen.queryByText(/AI visual description/i)).toBeNull();
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    fireEvent.click(trigger);
     expect(
-      await screen.findByRole("button", { name: /Create description/ }),
+      screen.getByRole("menuitem", { name: /Create description/ }),
     ).toBeInTheDocument();
+  });
+
+  it("offers nothing to the AI menu for a non-image file", async () => {
+    (getFile as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...imageFile,
+      file_type: "video",
+      mime_type: "video/mp4",
+    });
+    (getVisualDescription as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue(neverDescribed);
+    renderWithActionMenu();
+
+    await waitFor(() => expect(getFile).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "AI" })).toBeNull();
   });
 
   it("shows the configuration notice, and no retry, when no vision model is set", async () => {
@@ -270,8 +310,9 @@ describe("VisualDescriptionSection", () => {
     });
     (generateVisualDescription as unknown as ReturnType<typeof vi.fn>)
       .mockResolvedValue({ status: "accepted", file_id: "f1" });
-    renderSection();
-    const button = await screen.findByRole("button", {
+    renderWithActionMenu();
+    fireEvent.click(await screen.findByRole("button", { name: "AI" }));
+    const button = screen.getByRole("menuitem", {
       name: /Create description/,
     });
     await act(async () => {

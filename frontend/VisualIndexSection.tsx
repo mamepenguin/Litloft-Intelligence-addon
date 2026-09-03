@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import {
   AlertTriangle,
+  ChevronDown,
+  ChevronUp,
   Film,
   Loader2,
   RefreshCw,
@@ -242,6 +244,11 @@ export default function VisualIndexSection({
         {isStagedInFlight && (
           <Loader2 size={12} className="animate-spin text-text-muted" aria-hidden="true" />
         )}
+        {/* The other two derived views name their disclosure with a
+            chevron; without one this header read as a dead label. */}
+        <span className="ml-auto" aria-hidden>
+          {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </span>
       </button>
 
       {expanded && (
