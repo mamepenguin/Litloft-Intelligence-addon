@@ -28,6 +28,8 @@ import {
 import type { LucideIcon } from "lucide-react";
 
 import { useFileAiActions, type FileAiActionKind } from "./fileAiActions";
+import { useShortcuts } from "@/hooks/useShortcuts";
+import { OVERLAY_PRIORITY } from "@/lib/shortcuts";
 
 /** Same icon the section itself uses, so the menu previews the result. */
 const ACTION_ICON: Record<FileAiActionKind, LucideIcon> = {
@@ -50,17 +52,31 @@ export default function FileAIActionsButton({ fileId }: FileAIActionsButtonProps
 
   // Closing on Escape rather than only on the scrim: the row also lives
   // in a narrow inspector column where the scrim covers the whole page.
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.stopPropagation();
-      setOpen(false);
-      triggerRef.current?.focus();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [open]);
+  //
+  // On the shortcut stack, not on `document`. The old listener called
+  // `stopPropagation` to keep the press to itself, which cannot work
+  // from a listener on the same node the provider listens on — the
+  // intent was already failing. Push order is what actually delivers
+  // it: the menu opens last, so it answers first, and whatever opens
+  // over the menu answers before the menu does.
+  useShortcuts(
+    "intelligence-file-ai-actions",
+    "Dialog",
+    [
+      {
+        key: "escape",
+        label: "Close",
+        editingOnly: false,
+        hidden: true,
+        handler: () => {
+          setOpen(false);
+          triggerRef.current?.focus();
+        },
+      },
+    ],
+    open,
+    OVERLAY_PRIORITY,
+  );
 
   // The offer disappears the moment its section has content, which can
   // happen while the menu is open — leave nothing hanging.

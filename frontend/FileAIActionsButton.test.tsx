@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { act, render, screen, fireEvent } from "@testing-library/react";
 
 import FileAIActionsButton from "@/addons/intelligence/FileAIActionsButton";
+import { ShortcutsProvider } from "@/components/ShortcutsProvider";
 import {
   resetFileAiActions,
   useOfferFileAiAction,
@@ -50,6 +51,15 @@ beforeEach(() => {
   resetFileAiActions();
 });
 
+/**
+ * Escape reaches the menu through the shortcut stack, and `AppShell`
+ * mounts the provider around every route — a bare render is a tree the
+ * browser never has.
+ */
+function renderWithStack(ui: React.ReactElement) {
+  return render(<ShortcutsProvider>{ui}</ShortcutsProvider>);
+}
+
 describe("FileAIActionsButton", () => {
   it("renders nothing when no section is offering anything", () => {
     const { container } = render(<FileAIActionsButton fileId="f1" />);
@@ -57,7 +67,7 @@ describe("FileAIActionsButton", () => {
   });
 
   it("appears once a section offers, and lists what it offered", () => {
-    render(
+    renderWithStack(
       <>
         <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active />
         <FileAIActionsButton fileId="f1" />
@@ -72,7 +82,7 @@ describe("FileAIActionsButton", () => {
 
   it("runs the offering section's own callback", () => {
     let ran = 0;
-    render(
+    renderWithStack(
       <>
         <Offering
           fileId="f1"
@@ -95,7 +105,7 @@ describe("FileAIActionsButton", () => {
   });
 
   it("keeps a fixed order regardless of which section registers first", () => {
-    render(
+    renderWithStack(
       <>
         <Offering fileId="f1" kind="chapters" labelKey="generateChapters" active />
         <Offering fileId="f1" kind="tags" labelKey="generateTags" active />
@@ -180,7 +190,7 @@ describe("FileAIActionsButton", () => {
   });
 
   it("keeps one file's offers out of another file's menu", () => {
-    render(
+    renderWithStack(
       <>
         <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active />
         <FileAIActionsButton fileId="f2" />
@@ -190,7 +200,7 @@ describe("FileAIActionsButton", () => {
   });
 
   it("disables an entry whose run is already in flight", () => {
-    render(
+    renderWithStack(
       <>
         <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active busy />
         <FileAIActionsButton fileId="f1" />
@@ -202,7 +212,7 @@ describe("FileAIActionsButton", () => {
   });
 
   it("closes on Escape", () => {
-    render(
+    renderWithStack(
       <>
         <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active />
         <FileAIActionsButton fileId="f1" />
@@ -219,7 +229,7 @@ describe("FileAIActionsButton", () => {
   });
 
   it("uses no emoji", () => {
-    render(
+    renderWithStack(
       <>
         <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active />
         <FileAIActionsButton fileId="f1" />
