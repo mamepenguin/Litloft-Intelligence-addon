@@ -3,9 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import {
-  AlertTriangle,
   Brain,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
   FileText,
@@ -27,7 +25,6 @@ import {
 import type { LucideIcon } from "lucide-react";
 
 import {
-  getFailedJobs,
   getSearchStatus,
   searchQueuePause,
   searchQueueResume,
@@ -38,7 +35,6 @@ import type {
   QueueTaskKind,
   SearchServiceStatus,
 } from "./api";
-import FailedJobsModal from "./FailedJobsModal";
 
 const POLL_INTERVAL = 10_000;
 
@@ -165,56 +161,12 @@ function TaskRow({
   );
 }
 
-function FailedJobsSummary({
-  count,
-  onOpen,
-}: {
-  count: number;
-  onOpen: () => void;
-}) {
-  const t = useTranslations("semanticSearch.failedJobs");
-
-  if (count <= 0) {
-    return (
-      <div
-        className="mt-4 flex items-center gap-2 rounded-lg border border-bg-border bg-bg-elevated/40 px-3 py-2 text-xs text-text-muted"
-        aria-disabled
-      >
-        <CheckCircle2 size={14} className="text-accent-teal" />
-        <span>{t("none")}</span>
-      </div>
-    );
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="mt-4 flex w-full items-center justify-between gap-2 rounded-lg bg-accent-amber/10 px-3 py-2 text-xs font-medium text-accent-amber transition-colors hover:bg-accent-amber/20"
-      // WCAG 2.5.3 Label in Name: the accessible name has to contain the
-      // visible label. A bare "View" left screen-reader and voice-control
-      // users with a name that shares no words with what the button reads.
-      aria-label={t("summary", { count })}
-    >
-      <span className="flex items-center gap-2">
-        <AlertTriangle size={14} />
-        <span>{count}</span>
-        <span>{t("summary", { count })}</span>
-      </span>
-    </button>
-  );
-}
-
 function StatusContent({
   status,
   drive,
-  failedCount,
-  onOpenFailed,
 }: {
   status: SearchServiceStatus;
   drive?: string;
-  failedCount: number;
-  onOpenFailed: () => void;
 }) {
   const t = useTranslations("semanticSearch");
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -378,8 +330,6 @@ function StatusContent({
         </div>
       )}
 
-      <FailedJobsSummary count={failedCount} onOpen={onOpenFailed} />
-
       <div className="mt-4 flex gap-2">
         <button
           onClick={handlePauseResume}
@@ -412,27 +362,13 @@ interface IndexStatusWidgetProps {
 export default function IndexStatusWidget({ drive }: IndexStatusWidgetProps) {
   const t = useTranslations("semanticSearch");
   const [status, setStatus] = useState<SearchServiceStatus | null>(null);
-  const [failedCount, setFailedCount] = useState<number>(0);
-  const [modalOpen, setModalOpen] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef<boolean>(true);
 
   const fetchStatus = useCallback(async () => {
-    const [result, failed] = await Promise.all([
-      getSearchStatus(drive),
-      // Cheap poll: ask the server for limit=1 so we get the
-      // aggregate ``total`` count without paying for a full page of
-      // rows. The Modal does the real fetch when opened.
-      getFailedJobs(1, 0).catch(() => ({
-        items: [],
-        total: 0,
-        limit: 1,
-        offset: 0,
-      })),
-    ]);
+    const result = await getSearchStatus(drive);
     if (!mountedRef.current) return;
     setStatus(result);
-    setFailedCount(failed.total ?? 0);
   }, [drive]);
 
   useEffect(() => {
@@ -470,23 +406,13 @@ export default function IndexStatusWidget({ drive }: IndexStatusWidgetProps) {
       </div>
 
       {status.available ? (
-        <StatusContent
-          status={status}
-          drive={drive}
-          failedCount={failedCount}
-          onOpenFailed={() => setModalOpen(true)}
-        />
+        <StatusContent status={status} drive={drive} />
       ) : (
         <div className="flex items-center gap-2 text-sm text-text-muted">
           <SearchX size={16} />
           {t("unavailable")}
         </div>
       )}
-
-      <FailedJobsModal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-      />
     </div>
   );
 }

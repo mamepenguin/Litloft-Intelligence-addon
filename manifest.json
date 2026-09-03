@@ -86,6 +86,13 @@
         "priority": 10
       }
     ],
+    "dashboard-alerts": [
+      {
+        "id": "failed-jobs",
+        "label": "Failed jobs",
+        "priority": 5
+      }
+    ],
     "folder-actions": [
       {
         "id": "folder-ai-actions",

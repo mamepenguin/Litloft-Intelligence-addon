@@ -16,7 +16,7 @@
       "title": "Do you trust this source?",
       "explanation": "This file is findable in search, but it is not yet used as evidence in answers. Once you have read it and decided it holds up, it can be cited.",
       "trust": "Trust as a source",
-      "dismiss": "Not for now",
+      "dismiss": "Leave it unverified",
       "distilHint": "To keep just one passage, select it in the document and add it to the quotation basket."
     },
     "pickup": {
