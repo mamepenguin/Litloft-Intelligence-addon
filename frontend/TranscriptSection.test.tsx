@@ -628,19 +628,21 @@ describe("TranscriptSection — per-row capture buttons", () => {
   });
 
   it("grows its hit area, not its box, where there is no hover to give", async () => {
+    // 44px across and 38px down, not 44 both ways: rows are 38px apart,
+    // so each pseudo-element overlaps its neighbour's by 6px and the
+    // later row wins. Recorded because the alternative — a 44px row —
+    // costs density the seek button would still not satisfy.
     renderSection();
     const buttons = await captureButtons();
 
     for (const button of buttons) {
       const classes = button.classList;
       expect(classes.contains("pointer-coarse:opacity-100")).toBe(true);
-      // 44px of hit area, from a pseudo-element that overhangs the box
-      // by 6px on each side — not from a bigger box. The row is
-      // `items-start` around this button, so a 44px button is a 44px
-      // row, and the list is bounded at `max-h-80`: on a phone that
-      // trades about a quarter of the visible cues for a rule that is
-      // about touch accuracy. Vertical space is scarcest exactly where
-      // the rule applies.
+      // The target grows from a pseudo-element overhanging the box by
+      // 6px a side, not from a bigger box. A 44px button would be a
+      // 44px row (`items-start`), and the list is capped at `max-h-80`:
+      // on a phone that trades about a quarter of the visible cues for
+      // a rule about touch accuracy.
       expect(classes.contains("relative")).toBe(true);
       expect(classes.contains("pointer-coarse:before:absolute")).toBe(true);
       expect(classes.contains("pointer-coarse:before:-inset-1.5")).toBe(true);

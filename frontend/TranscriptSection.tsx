@@ -422,22 +422,40 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
                   *description*, which NVDA and JAWS read after the name,
                   so the sentence would be announced twice.
 
-                  On a coarse pointer the 44px floor is met by growing
-                  the hit area and not the box — a taller button would
-                  raise the row it sits in, and this list is bounded at
-                  `max-h-80`, so on a phone every 12px costs about a
-                  quarter of the cues on screen. Vertical space is
-                  scarcest exactly where the rule applies.
+                  On a coarse pointer the target grows by overhanging
+                  the box rather than by enlarging it: a taller button
+                  would raise the row it sits in, and this list is capped
+                  at `max-h-80`, so every 12px costs roughly a quarter of
+                  the cues on a phone. Vertical space is scarcest exactly
+                  where the rule applies.
 
-                  A device that reports `pointer: fine` *and* `hover:
-                  none` — a stylus, some TV browsers — matches neither
-                  trigger and reaches the button only by focusing it.
-                  Left as is deliberately: `[@media(hover:none)]` emits
-                  no CSS in this Tailwind, and `not-hover` compiles to
-                  `:not(:hover)` as well, which would keep the button
-                  drawn on every desktop row the pointer is not over —
-                  the whole thing this stops doing. Both were checked
-                  against the compiler, not assumed. */}
+                  That buys 44px across and **38px down**, not 44 both
+                  ways, and the difference is geometry rather than a
+                  wrong number. Rows sit 38px apart (36px row + 2px
+                  gap), so each `::before` overlaps its neighbour's by
+                  6px, and inside one stacking context the later row
+                  wins — every button keeps 6px above and 32px of its own
+                  height. A true 44px would need `pointer-coarse:min-h-11`
+                  on the row, at 8px per row of density. Not taken here,
+                  because the row's *primary* control — the seek button,
+                  32px on touch — would still miss the floor, so the
+                  spend would buy compliance for the secondary control
+                  only. That is a decision about the row, and it belongs
+                  with the row-action rule Phase 2 owes `DESIGN.md`.
+
+                  A device reporting `pointer: fine` with `hover: none`
+                  — a stylus, some TV browsers — matches neither trigger
+                  and reaches the button only by focusing it.
+                  `[@media(hover:none)]:opacity-100` does close that, and
+                  compiles here; it is left out because it compiles *here*
+                  and not in Tailwind 4.3, while `package.json` asks for
+                  `^4`. A class that stops emitting on a patch bump fails
+                  exactly the way this whole control already failed once:
+                  silently invisible. `not-hover` is not an alternative —
+                  it emits `:not(:hover)` alongside the media query, which
+                  would draw the button on every desktop row the pointer
+                  is not over. Both measured against the pinned compiler,
+                  not assumed. */}
               <button
                 type="button"
                 onClick={() => captureCue(cue)}
