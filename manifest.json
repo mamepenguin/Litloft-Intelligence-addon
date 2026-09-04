@@ -69,6 +69,7 @@
       {
         "id": "transcript",
         "label": "Transcript",
+        "i18n_key": "intelligence.slots.transcript",
         "priority": 10
       }
     ],
