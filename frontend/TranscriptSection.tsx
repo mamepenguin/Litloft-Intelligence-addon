@@ -354,11 +354,13 @@ export default function TranscriptSection({
     if (!list || !hasCues) return;
     const saved = recallTranscriptScroll(fileId);
     if (!saved) return;
+    // Both, together. Not an ordering constraint — `setFollowing` is a
+    // state setter queued for the next render, so the auto-scroll effect
+    // sees the restored value whichever line runs first. It is that
+    // restoring the offset *without* it would hand the reader back their
+    // place and then, a second later, drag them to the cue that is
+    // playing: the state they left by scrolling away from it.
     list.scrollTop = saved.top;
-    // Order matters: `following` is restored after the offset, and if it
-    // is false the auto-scroll effect returns early and leaves the
-    // offset alone. Restoring the offset without it would hand the
-    // reader back their place and then drag them off it.
     setFollowing(saved.following);
   }, [fileId, hasCues]);
 
@@ -369,14 +371,23 @@ export default function TranscriptSection({
    * — the cues, the language, the highlight. Where the reader had got
    * to is not a fact about the file, so nothing re-derives it.
    *
-   * On `scroll` rather than only on unmount: the unmount here is a
-   * bottom sheet collapsing, and reading the offset off an element
-   * whose ancestor is already being torn down is a worse bet than
-   * having written it down beforehand. The auto-scroll emits scroll
-   * events of its own and that is fine — unlike the follow-suspension
-   * above, this does not care who moved the list, only where it is now.
-   * The cleanup saves once more so that a change of `following` with no
-   * further scrolling is not lost.
+   * Two strands, and each covers what the other cannot.
+   *
+   * The `scroll` listener writes it down as it happens. That is the one
+   * that matters in a browser: `useEffect` cleanups are passive, so on
+   * unmount they run *after* React has detached the subtree, and
+   * `scrollTop` on a detached element reads 0. jsdom keeps the value,
+   * which is why a test cannot show this — the same class of blind spot
+   * `mediaDetailTheaterCss.test.ts` exists for.
+   *
+   * The cleanup save covers the reverse: `following` can change with no
+   * scroll of the reader's — clicking a cue resumes it — and there is
+   * no event for that. It is also what saves file A's position when the
+   * host swaps the file under one mount rather than unmounting.
+   *
+   * The auto-scroll emits scroll events of its own and that is fine:
+   * unlike the follow-suspension above, this does not care who moved the
+   * list, only where it is now.
    */
   useEffect(() => {
     const list = listRef.current;

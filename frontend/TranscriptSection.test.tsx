@@ -16,45 +16,61 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import React from "react";
 
-// Mock global fetch (used by component for VTT endpoints)
-const fetchMock = vi.fn().mockResolvedValue({
+/** No VTT at either endpoint, which is what most of this file assumes. */
+const FETCH_MISS = {
   ok: false,
   status: 404,
   text: async () => "",
   json: async () => null,
-} as Response);
+} as Response;
+
+/**
+ * The response the module mock resolves to, and the one a test that
+ * overrides it puts back.
+ *
+ * `vi.hoisted` because `vi.mock` factories are hoisted above every
+ * `const` in the file. Written out twice it was worse than duplication:
+ * the copy inside the factory became unreachable the moment a
+ * `beforeEach` started resetting the mock, so editing it changed
+ * nothing and no test said so.
+ */
+const TRANSCRIPT_RESPONSE = vi.hoisted(() => ({
+  available: true,
+  file_id: "abc",
+  drive: "family",
+  language: "ja",
+  chunks: [
+    {
+      index: 0,
+      text: "これは修正された文章です。",
+      start: 0,
+      end: 5,
+      refinedAt: "2026-04-15T00:00:00Z",
+      textOriginal: "これはげんぶんの文章です。",
+    },
+    { index: 1, text: "未修正の文章。", start: 5, end: 10 },
+  ],
+}));
+
+// Mock global fetch (used by component for VTT endpoints)
+const fetchMock = vi.fn().mockResolvedValue(FETCH_MISS);
 vi.stubGlobal("fetch", fetchMock);
 
 // Mock the addon API module to return controlled transcript data.
 // The module exports `getFileTranscript` which the component calls on
 // mount. The test data includes refined + unrefined chunks.
 vi.mock("@/addons/intelligence/api", () => ({
-  getFileTranscript: vi.fn().mockResolvedValue({
-    available: true,
-    file_id: "abc",
-    drive: "family",
-    language: "ja",
-    chunks: [
-      {
-        index: 0,
-        text: "これは修正された文章です。",
-        start: 0,
-        end: 5,
-        // New fields (spec): refinedAt + textOriginal
-        refinedAt: "2026-04-15T00:00:00Z",
-        textOriginal: "これはげんぶんの文章です。",
-      },
-      {
-        index: 1,
-        text: "未修正の文章。",
-        start: 5,
-        end: 10,
-      },
-    ],
-  }),
+  getFileTranscript: vi.fn().mockResolvedValue(TRANSCRIPT_RESPONSE),
   refineFileTranscript: vi.fn().mockResolvedValue({
     job_id: "job-1",
     chunk_count: 2,
@@ -85,41 +101,23 @@ import {
   recallTranscriptScroll,
 } from "@/addons/intelligence/transcriptScroll";
 
-/**
- * The two-cue response the module mock is set up with, restated so a
- * test that overrides it can put it back.
- */
-const TRANSCRIPT_RESPONSE = {
-  available: true,
-  file_id: "abc",
-  drive: "family",
-  language: "ja",
-  chunks: [
-    {
-      index: 0,
-      text: "これは修正された文章です。",
-      start: 0,
-      end: 5,
-      refinedAt: "2026-04-15T00:00:00Z",
-      textOriginal: "これはげんぶんの文章です。",
-    },
-    { index: 1, text: "未修正の文章。", start: 5, end: 10 },
-  ],
-};
-
 async function transcriptApiMock() {
   const apiMock = await import("@/addons/intelligence/api");
   return apiMock.getFileTranscript as unknown as ReturnType<typeof vi.fn>;
 }
 
 /**
- * One mock object is shared by every test in this file.
+ * Both mocks are one object each, shared by every test in this file.
  *
- * A test that changes what it resolves to changes it for whatever runs
- * next — and under the shuffled-order job that is not the test written
- * below it. One test handing this file an untranscribed video was
- * enough to time out eight tests in two other describes, and it stayed
- * invisible in source order only because it happened to be near the end.
+ * A test that changes what one of them answers changes it for whatever
+ * runs next — and under the shuffled-order job that is not the test
+ * written below it. This happened twice while the file was being
+ * written: one test handing everything an untranscribed video timed out
+ * eight tests in two other describes, and one leaving word-level cues in
+ * `fetch` broke a test that asserts an empty panel. Both stayed
+ * invisible in source order only because they happened to be near the
+ * end. So neither is cleaned up by the test that dirtied it — both are
+ * put back before every test, wherever it runs.
  *
  * `mockReset` and not merely `mockResolvedValue`: an unconsumed
  * `mockResolvedValueOnce` would otherwise still be at the head of the
@@ -129,6 +127,8 @@ beforeEach(async () => {
   const getFileTranscript = await transcriptApiMock();
   getFileTranscript.mockReset();
   getFileTranscript.mockResolvedValue(TRANSCRIPT_RESPONSE);
+  fetchMock.mockReset();
+  fetchMock.mockResolvedValue(FETCH_MISS);
 });
 
 
@@ -797,6 +797,9 @@ describe("TranscriptSection — telling the host whether there is anything", () 
     // Waiting on the fetch is not enough — the answer is derived a
     // render later. Wait for the thing being asserted.
     await waitFor(() => expect(container).toBeEmptyDOMElement());
+    // Both halves: it said so, and it never said otherwise. `every` alone
+    // is vacuously true on a callback that was never called at all.
+    expect(onAvailability).toHaveBeenCalledWith(false);
     expect(onAvailability.mock.calls.every(([v]) => v === false)).toBe(true);
   });
 
@@ -853,16 +856,37 @@ describe("TranscriptSection — whose name is on the panel", () => {
   });
 
   it("keeps the facts about the transcript either way", async () => {
-    // Only the name goes. The language, the count and the controls are
-    // facts about this transcript, not a second name for it.
-    const { container } = render(
-      <TranscriptSection fileId="abc" drive="family" labelledByHost />,
-    );
+    // Only the name goes. The language and the count are facts about
+    // this transcript, not a second name for it.
+    render(<TranscriptSection fileId="abc" drive="family" labelledByHost />);
 
     await screen.findByText("未修正の文章。");
     expect(screen.getByText("ja")).toBeInTheDocument();
     expect(screen.getByText("(2)")).toBeInTheDocument();
-    expect(container.querySelector(".mb-2")).not.toBeEmptyDOMElement();
+  });
+
+  it("keeps the controls too, which is the half that would go quietly", async () => {
+    // The source toggle and the refine button are the reason the row
+    // survives at all, and both are conditional already — a rule that
+    // also hid them under `labelledByHost` would take them out of the
+    // inspector tab, which is now the placement most readers see, with
+    // nothing to say so. The toggle needs two available sources to
+    // render, so the word-level fetch has to answer.
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nfirst\n\n00:00:02.000 --> 00:00:04.000\nsecond\n",
+      json: async () => null,
+    } as Response);
+
+    render(<TranscriptSection fileId="abc" drive="family" labelledByHost />);
+
+    expect(await screen.findByRole("button", { name: "Words" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Text chunks" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Clean up with AI" }),
+    ).toBeInTheDocument();
   });
 });
 
@@ -911,8 +935,10 @@ describe("TranscriptSection — where the reader had got to", () => {
       ok: true,
       status: 200,
       // Three, where the chunk source has two. The restore effect is
-      // keyed on the cue count, so two sources of equal length would
-      // not re-run it and the switch would prove nothing.
+      // keyed on whether there is a list, not on how long it is — so
+      // this asymmetry is what makes a count-keyed regression visible.
+      // Two sources of equal length would not re-run even the broken
+      // form, and the switch would prove nothing either way.
       text: async () =>
         "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nfirst\n\n00:00:02.000 --> 00:00:04.000\nsecond\n\n00:00:04.000 --> 00:00:06.000\nthird\n",
       json: async () => null,
@@ -1017,6 +1043,74 @@ describe("TranscriptSection — where the reader had got to", () => {
     expect(list.scrollTop).toBe(10);
   });
 
+  it("writes the position down as the reader moves, not only on the way out", async () => {
+    // In a browser the unmount save is the weaker of the two: `useEffect`
+    // cleanups are passive, so they run after React has detached the
+    // subtree, and `scrollTop` on a detached element reads 0. jsdom keeps
+    // the value, so no test can show that directly — what a test can show
+    // is that the position is already written down while the panel is
+    // still on screen, which is the property that makes the unmount
+    // reading unnecessary.
+    const utils = render(<TranscriptSection fileId="abc" drive="family" />);
+    await screen.findByText("未修正の文章。");
+    const list = utils.container.querySelector(".overflow-y-auto")! as HTMLElement;
+
+    list.scrollTop = 275;
+    fireEvent.scroll(list);
+
+    expect(recallTranscriptScroll("abc")).toEqual({ top: 275, following: true });
+  });
+
+  it("catches a change of mind that moved nothing", async () => {
+    // `following` can change with no scroll of the reader's — clicking a
+    // cue resumes it — and there is no event for that. Without the save
+    // in the cleanup the store would still say they had taken over, and
+    // the next mount would restore them into a transcript that has
+    // stopped following the playhead they just jumped to.
+    const state = { currentTime: 1 };
+    const utils = render(
+      <TranscriptSection
+        fileId="abc"
+        drive="family"
+        mediaController={scrollStubController(state)}
+      />,
+    );
+    await screen.findByText("未修正の文章。");
+    const list = utils.container.querySelector(".overflow-y-auto")! as HTMLElement;
+    list.scrollTop = 275;
+    fireEvent.wheel(list);
+    fireEvent.scroll(list);
+    expect(recallTranscriptScroll("abc")).toEqual({ top: 275, following: false });
+
+    // Jumping to a cue is a statement about where they want to be, so it
+    // resumes following — and moves no scrollbar in jsdom.
+    fireEvent.click(screen.getByText("未修正の文章。"));
+    utils.unmount();
+
+    expect(recallTranscriptScroll("abc")?.following).toBe(true);
+  });
+
+  it("forgets the least recently written, not the oldest ever", async () => {
+    // Twenty-one files each written once cannot tell the two apart —
+    // insertion order and write order are the same list. Re-writing an
+    // early one is what separates them, and it is the case that matters:
+    // the file a reader keeps coming back to is the one that must not be
+    // evicted for a file they opened once an hour ago.
+    for (let i = 0; i < 20; i += 1) {
+      const { utils } = await mountAndScroll(`f${i}`, 100 + i);
+      utils.unmount();
+    }
+    // Touch the oldest again, then push one more in.
+    const { utils: revisit } = await mountAndScroll("f0", 999);
+    revisit.unmount();
+    const { utils: last } = await mountAndScroll("f20", 120);
+    last.unmount();
+
+    expect(recallTranscriptScroll("f0")).toEqual({ top: 999, following: true });
+    expect(recallTranscriptScroll("f1")).toBeUndefined();
+    expect(recallTranscriptScroll("f20")).toEqual({ top: 120, following: true });
+  });
+
   it("forgets the oldest file rather than growing without limit", async () => {
     // Module state nothing ever clears. A tab left open for a week
     // browsing a large drive would otherwise keep an entry per file.
@@ -1030,3 +1124,192 @@ describe("TranscriptSection — where the reader had got to", () => {
     expect(recallTranscriptScroll("f20")).toEqual({ top: 120, following: true });
   });
 });
+
+describe("TranscriptSection — a response that arrives too late", () => {
+  beforeEach(() => {
+    mockAddonStatus.features.transcript_refine = "manual";
+    fetchMock.mockClear();
+    clearTranscriptScroll();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  /** A promise this test resolves by hand, so "too late" is a moment it picks. */
+  function deferred<T>() {
+    let settle!: (value: T) => void;
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<T>((resolve, rejectFn) => {
+      settle = resolve;
+      reject = rejectFn;
+    });
+    // Nothing is listening yet when a test rejects, and an unhandled
+    // rejection is reported as an error while every test still passes.
+    promise.catch(() => undefined);
+    return { promise, settle, reject };
+  }
+
+  it("ignores the previous file's transcript", async () => {
+    // The host reuses one mount across files — the below-player
+    // placement keys its nodes on the entry id, not on the file — so a
+    // request started for one file can land while another is on screen.
+    // Two things go wrong at once if it is not abandoned: one file's
+    // cues render under another file's player, and `hasAnything` is
+    // derived from the same state, so the host is told the new file has
+    // a transcript because the old one did — which is a Transcript tab
+    // on an untranscribed video, the defect this all exists to remove.
+    const slow = deferred<unknown>();
+    const getFileTranscript = await transcriptApiMock();
+    getFileTranscript.mockReset();
+    getFileTranscript
+      .mockReturnValueOnce(slow.promise)
+      .mockResolvedValue({
+        available: false,
+        file_id: "def",
+        drive: "family",
+        language: "",
+        chunks: [],
+      });
+
+    const onAvailability = vi.fn();
+    const { rerender, container } = render(
+      <TranscriptSection fileId="abc" drive="family" onAvailability={onAvailability} />,
+    );
+    rerender(
+      <TranscriptSection fileId="def" drive="family" onAvailability={onAvailability} />,
+    );
+    await waitFor(() =>
+      expect(getFileTranscript).toHaveBeenCalledTimes(2),
+    );
+
+    slow.settle(TRANSCRIPT_RESPONSE);
+    await slow.promise;
+
+    await waitFor(() => expect(container).toBeEmptyDOMElement());
+    expect(screen.queryByText("未修正の文章。")).toBeNull();
+    expect(onAvailability).toHaveBeenLastCalledWith(false);
+  });
+
+  it("ignores the previous file's word-level cues", async () => {
+    // Same shape, the other fetch. This one has no `loading` flag of its
+    // own, so nothing else would notice.
+    //
+    // Asserted on the source toggle rather than on the cues' text, and
+    // on a file that does render. An absence is the hardest thing to
+    // wait for — the first poll of a `waitFor` succeeds before a stale
+    // response has finished travelling through two `.then` links, so it
+    // passes whether the guard is there or not. The toggle is a positive
+    // signal: it appears only when two sources are available, so a stale
+    // word list that landed shows up as a control that should not exist.
+    const slow = deferred<Response>();
+    fetchMock.mockReturnValueOnce(slow.promise).mockResolvedValue(FETCH_MISS);
+
+    const { rerender } = render(<TranscriptSection fileId="abc" drive="family" />);
+    rerender(<TranscriptSection fileId="def" drive="family" />);
+    await screen.findByText("未修正の文章。");
+    expect(screen.queryByRole("button", { name: "Words" })).toBeNull();
+
+    await act(async () => {
+      slow.settle({
+        ok: true,
+        status: 200,
+        text: async () =>
+          "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nstale word cue\n",
+        json: async () => null,
+      } as Response);
+      // Drain the `.then` chain the component built on it, inside `act`,
+      // so any state it would set has been committed by the time the
+      // assertions below run.
+      await slow.promise;
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByRole("button", { name: "Words" })).toBeNull();
+    expect(screen.queryByText("stale word cue")).toBeNull();
+  });
+  it("ignores the previous file's external subtitles", async () => {
+    // The third fetch, and the one with the least around it: no loading
+    // flag, and its cues are only reachable through the source toggle.
+    //
+    // Both files carry subtitles, which is what makes the guard
+    // observable at all: `externalAvailable` is also gated on the
+    // *current* `subtitles` prop, so a stale list landing on a file with
+    // none is invisible whether it was abandoned or not. With both
+    // carrying them, only the second file's own (empty) answer should
+    // count, and a stale list shows up as an "External" source that has
+    // nothing behind it.
+    const SUBS_A = [
+      { index: 0, language: "en", format: "vtt", label: "English" },
+    ];
+    const SUBS_B = [
+      { index: 0, language: "fr", format: "vtt", label: "French" },
+    ];
+    const slow = deferred<Response>();
+    fetchMock.mockImplementation((url: string) =>
+      !String(url).includes("subtitles.vtt") && String(url).includes("/abc/")
+        ? slow.promise
+        : Promise.resolve(FETCH_MISS),
+    );
+
+    const { rerender } = render(
+      <TranscriptSection fileId="abc" drive="family" subtitles={SUBS_A} />,
+    );
+    rerender(
+      <TranscriptSection fileId="def" drive="family" subtitles={SUBS_B} />,
+    );
+    await screen.findByText("未修正の文章。");
+    expect(screen.queryByRole("button", { name: "External" })).toBeNull();
+
+    await act(async () => {
+      slow.settle({
+        ok: true,
+        status: 200,
+        text: async () =>
+          "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nstale external cue\n",
+        json: async () => null,
+      } as Response);
+      await slow.promise;
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByRole("button", { name: "External" })).toBeNull();
+    expect(screen.queryByText("stale external cue")).toBeNull();
+  });
+  it("ignores the previous file's failure as well as its answer", async () => {
+    // The `catch` half. It writes an empty list, which looks harmless
+    // until it lands on a file that does have one — then the previous
+    // file failing takes the current file's cues away. Asserted on the
+    // toggle still being there, because an assertion that something is
+    // *absent* passes before a late rejection has finished travelling.
+    const slow = deferred<Response>();
+    const wordVtt =
+      "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nfirst\n\n00:00:02.000 --> 00:00:04.000\nsecond\n";
+    fetchMock.mockImplementation((url: string) =>
+      String(url).includes("/abc/")
+        ? slow.promise
+        : Promise.resolve({
+            ok: true,
+            status: 200,
+            text: async () => wordVtt,
+            json: async () => null,
+          } as Response),
+    );
+
+    const { rerender } = render(<TranscriptSection fileId="abc" drive="family" />);
+    rerender(<TranscriptSection fileId="def" drive="family" />);
+    expect(await screen.findByRole("button", { name: "Words" })).toBeInTheDocument();
+
+    await act(async () => {
+      slow.reject(new Error("the previous file's request failed"));
+      await slow.promise.catch(() => undefined);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("button", { name: "Words" })).toBeInTheDocument();
+  });
+});
+
