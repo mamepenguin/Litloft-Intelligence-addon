@@ -147,7 +147,7 @@ describe("TranscriptSection — transcript refine UI", () => {
     );
 
     const buttons = await screen.findAllByRole("button", {
-      name: "Add transcript excerpt to capture basket",
+      name: /capture basket/,
     });
     fireEvent.click(buttons[0]);
 
@@ -322,7 +322,7 @@ describe("TranscriptSection — rail vs stacked form", () => {
     );
 
     const buttons = await screen.findAllByRole("button", {
-      name: "Add transcript excerpt to capture basket",
+      name: /capture basket/,
     });
     fireEvent.click(buttons[0]);
 
@@ -539,5 +539,99 @@ describe("TranscriptSection — suspension actually stops the scrolling", () => 
 
     // The highlight moved on; the list did not.
     expect(scrollTo).not.toHaveBeenCalled();
+  });
+});
+
+// M-3. A transcript is hundreds of rows long, and until now every one
+// of them drew the same quote button at all times: a grey rule down the
+// right edge of the text it annotates, and — to a screen reader — the
+// same four words several hundred times over, with nothing to say which
+// line each one would quote.
+//
+// The reveal itself is CSS (`opacity-0` lifted by `group-hover/cue`,
+// `group-focus-within/cue`, `pointer-coarse`), and jsdom loads no
+// stylesheet, so no assertion here can see the button appear. What these
+// check is the contract the CSS hangs off: the row is the group, the
+// button names the signals, and it stays in the tab order while hidden.
+// The appearance itself is on the manual 1512 / 400 / 375 pass.
+describe("TranscriptSection — per-row capture buttons", () => {
+  beforeEach(() => {
+    mockAddonStatus.features.transcript_refine = "manual";
+    fetchMock.mockClear();
+    clearSourceCaptures("family");
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  async function captureButtons(): Promise<HTMLElement[]> {
+    return screen.findAllByRole("button", { name: /capture basket/ });
+  }
+
+  it("names each button for the line it would quote", async () => {
+    renderSection();
+    const buttons = await captureButtons();
+
+    // Exactly the two cues in the fixture. A lower bound would pass on a
+    // render that produced one button and on one that produced fifty.
+    expect(buttons).toHaveLength(2);
+    const names = buttons.map((b) => b.getAttribute("aria-label"));
+    expect(names).toEqual([
+      "Add the 0:00 line to the capture basket",
+      "Add the 0:05 line to the capture basket",
+    ]);
+    // The point of the timestamp is that the names differ.
+    expect(new Set(names).size).toBe(names.length);
+    // The tooltip says the same thing as the accessible name.
+    expect(buttons.map((b) => b.getAttribute("title"))).toEqual(names);
+  });
+
+  it("hangs the reveal on the row, not on the button alone", async () => {
+    renderSection();
+    const buttons = await captureButtons();
+
+    for (const button of buttons) {
+      const row = button.parentElement;
+      expect(row?.className).toContain("group/cue");
+      // Hover anywhere on the row, or focus the row's seek button, and
+      // the quote button comes with it.
+      expect(button.className).toContain("group-hover/cue:opacity-100");
+      expect(button.className).toContain("group-focus-within/cue:opacity-100");
+    }
+  });
+
+  it("stays in the tab order while it is invisible", async () => {
+    renderSection();
+    const buttons = await captureButtons();
+
+    for (const button of buttons) {
+      expect(button.className).toContain("opacity-0");
+      // `hidden` and `invisible` both drop the button out of the tab
+      // order, and `group-focus-within` would then have nothing to fire
+      // on — the keyboard path would be the one path that never reveals
+      // the control it needs.
+      expect(button.className).not.toMatch(/\b(hidden|invisible)\b/);
+      expect(button).not.toHaveAttribute("tabindex", "-1");
+      expect(button).not.toHaveAttribute("aria-hidden");
+    }
+  });
+
+  it("shows itself, at 44px, where there is no hover to give", async () => {
+    renderSection();
+    const buttons = await captureButtons();
+
+    for (const button of buttons) {
+      expect(button.className).toContain("pointer-coarse:opacity-100");
+      // 44px is the tap-target floor from the mobile sizing rules, and a
+      // coarse pointer is exactly the input it is about. Fine pointers
+      // keep the 32px box: hundreds of rows would pay 12px each, and
+      // 32px already clears the 24px floor for repeated icon-only
+      // controls (hako Prwd_iaXmCjWfY24KjFz2).
+      expect(button.className).toContain("pointer-coarse:h-11");
+      expect(button.className).toContain("pointer-coarse:w-11");
+      expect(button.className).toContain("h-8");
+      expect(button.className).toContain("w-8");
+    }
   });
 });

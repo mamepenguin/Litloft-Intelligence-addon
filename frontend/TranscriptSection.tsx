@@ -375,7 +375,7 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
           return (
             <div
               key={cue.index}
-              className={`flex w-full items-start rounded-lg text-sm transition-colors hover:bg-bg-primary ${
+              className={`group/cue flex w-full items-start rounded-lg text-sm transition-colors hover:bg-bg-primary ${
                 cue.index === activeIndex
                   ? "bg-accent/10 text-accent"
                   : "text-text-primary"
@@ -400,12 +400,37 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
                   </span>
                 )}
               </button>
+              {/* One of these per cue, and a transcript runs to
+                  hundreds — drawn at all times they read as a grey rule
+                  down the right edge of the text they are meant to
+                  annotate. Revealed by the row instead, on the three
+                  signals that mean someone is working on that row:
+                  hovering it, focusing anything inside it (so the
+                  keyboard path opens with the pointer one), or having no
+                  hover to give in the first place.
+
+                  `opacity-0` and not `hidden` / `invisible`: those two
+                  take the button out of the tab order, and
+                  `group-focus-within` could then never fire.
+
+                  The accessible name carries the timestamp because the
+                  name is all a screen reader gets — several hundred
+                  identical "add to capture basket" leave no way to tell
+                  which line is about to be quoted (hako
+                  Prwd_iaXmCjWfY24KjFz2). The tap target grows to 44px on
+                  coarse pointers only: that is the input the 44px rule
+                  is about, and spending it on every desktop row would
+                  add 12px to each of hundreds of rows. */}
               <button
                 type="button"
                 onClick={() => captureCue(cue)}
-                title={t("addToCaptureBasket")}
-                aria-label={t("addToCaptureBasket")}
-                className="m-0.5 inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-text-muted hover:bg-bg-elevated hover:text-text-primary"
+                title={t("transcriptCaptureCue", {
+                  time: formatDuration(cue.start),
+                })}
+                aria-label={t("transcriptCaptureCue", {
+                  time: formatDuration(cue.start),
+                })}
+                className="m-0.5 inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-text-muted opacity-0 transition-opacity hover:bg-bg-elevated hover:text-text-primary group-hover/cue:opacity-100 group-focus-within/cue:opacity-100 pointer-coarse:h-11 pointer-coarse:w-11 pointer-coarse:opacity-100"
               >
                 <Quote size={14} />
               </button>

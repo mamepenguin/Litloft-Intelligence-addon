@@ -21,6 +21,13 @@ type Status = "idle" | "loading" | "loaded" | "unavailable";
 // growing delays before surrendering to the unavailable state.
 const RETRY_DELAYS_MS = [6000, 12000];
 
+// Matches the `limit` `getSimilarFiles` asks for, so a full result set
+// swaps in at exactly the height the ghosts reserved. A shorter set
+// shrinks the box, which reads as the answer arriving; a set that grew
+// past the reservation would push everything below it down, which is
+// the jump this exists to prevent.
+const GHOST_CARDS = 6;
+
 export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSectionProps) {
   const t = useTranslations("file");
   const [results, setResults] = useState<SimilarFileItem[]>([]);
@@ -29,8 +36,8 @@ export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSecti
   const requestIdRef = useRef(0);
 
   // Reset to idle whenever we navigate to a different file. Detection
-  // is heavy on the backend (CLIP / tf-idf / whisper similarity), so we
-  // never auto-trigger — the user must explicitly press the button.
+  // is heavy on the backend (CLIP / tf-idf / whisper similarity), so it
+  // never runs on mount — opening the disclosure is what asks for it.
   useEffect(() => {
     requestIdRef.current += 1;
     setResults([]);
@@ -48,7 +55,6 @@ export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSecti
         if (reqId !== requestIdRef.current) return; // stale (file changed / re-clicked)
         setResults(data.results);
         setStatus("loaded");
-        setIsOpen(true);
         return;
       } catch {
         if (attempt === RETRY_DELAYS_MS.length) {
@@ -66,25 +72,34 @@ export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSecti
     }
   }, [fileId, drive]);
 
+  // Opening is the trigger. That works under either reading of how long
+  // detection takes: on a warm file the answer lands before the ghosts
+  // have said much, and on a cold one the retries above cover the addon
+  // proxy timeout — while a file nobody opens this on never computes at
+  // all. Only the first open fetches; `unavailable` keeps its own retry
+  // button rather than re-firing on every open/close.
+  const handleToggle = useCallback(() => {
+    const next = !isOpen;
+    setIsOpen(next);
+    if (next && status === "idle") void fetchSimilar();
+  }, [isOpen, status, fetchSimilar]);
+
   const countLabel = status === "loaded" ? ` (${results.length})` : "";
 
   return (
     // The result grid sizes its columns against this element, not the
     // viewport: the section renders both full-width and inside the
-    // ~300px inspector, which a viewport breakpoint cannot tell apart.
+    // ~384px inspector, which a viewport breakpoint cannot tell apart.
     // A containment context is safe here only because the subtree holds
     // nothing but thumbnails — one wrapped around a <video> or a
     // cross-origin iframe renders the subtree rotated and spinning on
     // iOS Safari. hako 7bFYOh3vFZP9EEuf9Ym_5.
     <div className="@container">
       {/* Collapsed by default, and the same disclosure shape as the
-          other two derived views. Detection is heavy enough that it has
-          always been opt-in, which made this a permanent heading over a
-          single button — the header now carries that weight itself and
-          the button waits inside for someone who opened the drawer. */}
+          other two derived views. */}
       <button
         type="button"
-        onClick={() => setIsOpen((v) => !v)}
+        onClick={handleToggle}
         aria-expanded={isOpen}
         aria-controls={`similar-files-${fileId}`}
         className="flex w-full cursor-pointer items-center gap-2 text-sm font-semibold text-text-muted transition-colors hover:text-text-primary"
@@ -96,27 +111,50 @@ export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSecti
       </button>
 
       {isOpen && (
-        <div id={`similar-files-${fileId}`} className="mt-2">
-          {status === "idle" && (
-            <button
-              type="button"
-              onClick={fetchSimilar}
-              className="rounded-lg bg-bg-elevated px-2.5 py-1 text-xs text-text-primary transition-colors hover:bg-bg-card"
-            >
-              {t("similarFilesDetect")}
-            </button>
-          )}
-
+        <div
+          id={`similar-files-${fileId}`}
+          className="mt-2"
+          aria-busy={status === "loading" || undefined}
+        >
           {status === "loading" && (
-            <span className="text-xs text-text-muted">
-              {t("similarFilesDetecting")}
-            </span>
+            <>
+              {/* Said once, to assistive tech only: the ghosts below
+                  carry the same news to anyone who can see them, and
+                  six announcements of "Searching" would not. */}
+              <p role="status" className="sr-only">
+                {t("similarFilesDetecting")}
+              </p>
+              <div
+                data-testid="similar-files-ghosts"
+                aria-hidden
+                className="grid grid-cols-2 gap-3 @lg:grid-cols-3"
+              >
+                {Array.from({ length: GHOST_CARDS }, (_, i) => (
+                  <div key={i} className="overflow-hidden rounded-lg bg-bg-card">
+                    <div className="aspect-video w-full animate-pulse bg-bg-elevated" />
+                    <div className="px-2 py-1.5">
+                      <div className="h-3 w-4/5 animate-pulse rounded-lg bg-bg-elevated" />
+                      <div className="mt-1 h-3 w-1/2 animate-pulse rounded-lg bg-bg-elevated" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
 
           {status === "unavailable" && (
-            <p className="text-xs text-text-muted">
-              {t("similarFilesUnavailable")}
-            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-xs text-text-muted">
+                {t("similarFilesUnavailable")}
+              </p>
+              <button
+                type="button"
+                onClick={() => void fetchSimilar()}
+                className="rounded-lg bg-bg-elevated px-2.5 py-1 text-xs text-text-primary transition-colors hover:bg-bg-card"
+              >
+                {t("similarFilesRetry")}
+              </button>
+            </div>
           )}
 
           {status === "loaded" && results.length === 0 && (

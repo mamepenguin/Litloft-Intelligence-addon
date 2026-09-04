@@ -127,7 +127,7 @@
     "transcriptSourceExternal": "外部字幕",
     "transcriptRefine": "AIで整える",
     "transcriptRefinedBadge": "AI整形済み",
-    "addToCaptureBasket": "文字起こしを引用バスケットに追加",
+    "transcriptCaptureCue": "{time} の行を引用バスケットに追加",
     "indexTitle": "インデックス詳細",
     "clipTitle": "CLIPフレーム",
     "more": "件以上",
@@ -219,7 +219,6 @@
   },
   "file": {
     "similarFiles": "似たファイル",
-    "similarFilesDetect": "似たファイルを検出",
     "similarFilesDetecting": "検出中...",
     "similarFilesEmpty": "似たファイルは見つかりませんでした",
     "similarFilesUnavailable": "似たファイル検出は利用できません",
