@@ -20,6 +20,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Nothing here writes to the repository; the cross-repository checkouts read
+# public repositories only.
+permissions:
+  contents: read
+
 jobs:
   backend:
     # This addon is an independent service with its own `app` package and
