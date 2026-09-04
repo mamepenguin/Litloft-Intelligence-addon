@@ -157,10 +157,10 @@ describe("FailedJobsModal — initial render", () => {
 describe("FailedJobsModal — retry button", () => {
   it("calls reindexFile with the row's file_id and derived task on click", async () => {
     render(<FailedJobsModal open onClose={() => {}} />);
-    await waitFor(() => expect(mockedFailedJobs).toHaveBeenCalled());
-
     // Locate the row for movie.mp4 (transcription / whisper_local).
-    const row = screen.getByText("movie.mp4").closest("tr, li, [role='row'], div");
+    const row = (await screen.findByText("movie.mp4")).closest(
+      "tr, li, [role='row'], div",
+    );
     expect(row).not.toBeNull();
     const retryBtn = within(row as HTMLElement).getByRole("button", {
       name: /retry|再試行|semanticSearch\.failedJobs\.retry/i,
@@ -179,9 +179,9 @@ describe("FailedJobsModal — retry button", () => {
 
   it("derives task=clip for job_kind=clip rows", async () => {
     render(<FailedJobsModal open onClose={() => {}} />);
-    await waitFor(() => expect(mockedFailedJobs).toHaveBeenCalled());
-
-    const row = screen.getByText("image.png").closest("tr, li, [role='row'], div");
+    const row = (await screen.findByText("image.png")).closest(
+      "tr, li, [role='row'], div",
+    );
     const retryBtn = within(row as HTMLElement).getByRole("button", {
       name: /retry|再試行|semanticSearch\.failedJobs\.retry/i,
     });
@@ -198,10 +198,8 @@ describe("FailedJobsModal — retry button", () => {
 describe("FailedJobsModal — deep link (SPA navigation rule)", () => {
   it("renders the details link as a next/link <a> (no window.location)", async () => {
     render(<FailedJobsModal open onClose={() => {}} />);
-    await waitFor(() => expect(mockedFailedJobs).toHaveBeenCalled());
-
     // Find a Link instance pointing at the file detail route.
-    const links = screen.getAllByTestId("next-link");
+    const links = await screen.findAllByTestId("next-link");
     const movieLink = links.find(
       (el) =>
         (el.getAttribute("href") ?? "").includes("drive1") &&
@@ -224,9 +222,9 @@ describe("FailedJobsModal — deep link (SPA navigation rule)", () => {
 describe("FailedJobsModal — resolve button", () => {
   it("calls resolveFailedJob with the row identity and removes the row", async () => {
     render(<FailedJobsModal open onClose={() => {}} />);
-    await waitFor(() => expect(mockedFailedJobs).toHaveBeenCalled());
-
-    const row = screen.getByText("movie.mp4").closest("tr, li, [role='row'], div");
+    const row = (await screen.findByText("movie.mp4")).closest(
+      "tr, li, [role='row'], div",
+    );
     expect(row).not.toBeNull();
     const resolveBtn = within(row as HTMLElement).getByRole("button", {
       name: /exclude|対象外|semanticSearch\.failedJobs\.resolve/i,
@@ -248,7 +246,7 @@ describe("FailedJobsModal — resolve button", () => {
 describe("FailedJobsModal — multi-select scaffolding (spec §3.2)", () => {
   it("reserves a 24px column at the row head for future checkboxes", async () => {
     render(<FailedJobsModal open onClose={() => {}} />);
-    await waitFor(() => expect(mockedFailedJobs).toHaveBeenCalled());
+    await screen.findByText("movie.mp4");
 
     // The spec only requires the DOM structure permit a checkbox
     // column without reflow; the simplest signal is a dedicated cell
@@ -272,9 +270,8 @@ describe("FailedJobsModal — empty state and close", () => {
     });
     render(<FailedJobsModal open onClose={() => {}} />);
 
-    await waitFor(() => expect(mockedFailedJobs).toHaveBeenCalled());
     expect(
-      screen.getByText(
+      await screen.findByText(
         /no failed jobs|semanticSearch\.failedJobs\.none|失敗.*ありません/i,
       ),
     ).toBeInTheDocument();
@@ -283,11 +280,9 @@ describe("FailedJobsModal — empty state and close", () => {
   it("calls onClose when the close button fires", async () => {
     const onClose = vi.fn();
     render(<FailedJobsModal open onClose={onClose} />);
-    await waitFor(() => expect(mockedFailedJobs).toHaveBeenCalled());
-
     // The modal must expose a closeable affordance — by role or by
     // localised name — so the dashboard widget can dismiss it.
-    const closeBtn = screen.getByRole("button", {
+    const closeBtn = await screen.findByRole("button", {
       name: /close|閉じる|semanticSearch\.failedJobs\.close/i,
     });
     fireEvent.click(closeBtn);
@@ -298,7 +293,9 @@ describe("FailedJobsModal — empty state and close", () => {
 describe("FailedJobsModal — UI rules", () => {
   it("renders no emoji", async () => {
     render(<FailedJobsModal open onClose={() => {}} />);
-    await waitFor(() => expect(mockedFailedJobs).toHaveBeenCalled());
+    // Wait for a row: the rule is about what the rendered list shows,
+    // and the request having been made says nothing about that yet.
+    await screen.findByText("movie.mp4");
 
     expect(document.body.textContent ?? "").not.toMatch(
       /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u,
