@@ -628,10 +628,6 @@ describe("TranscriptSection — per-row capture buttons", () => {
   });
 
   it("grows its hit area, not its box, where there is no hover to give", async () => {
-    // 44px across and 38px down, not 44 both ways: rows are 38px apart,
-    // so each pseudo-element overlaps its neighbour's by 6px and the
-    // later row wins. Recorded because the alternative — a 44px row —
-    // costs density the seek button would still not satisfy.
     renderSection();
     const buttons = await captureButtons();
 
@@ -639,10 +635,10 @@ describe("TranscriptSection — per-row capture buttons", () => {
       const classes = button.classList;
       expect(classes.contains("pointer-coarse:opacity-100")).toBe(true);
       // The target grows from a pseudo-element overhanging the box by
-      // 6px a side, not from a bigger box. A 44px button would be a
-      // 44px row (`items-start`), and the list is capped at `max-h-80`:
-      // on a phone that trades about a quarter of the visible cues for
-      // a rule about touch accuracy.
+      // 6px a side rather than from a bigger box, so the icon stays the
+      // same size at every pointer type. The row is what grows (see the
+      // test below), which is also what keeps this pseudo-element from
+      // overlapping its neighbour's.
       expect(classes.contains("relative")).toBe(true);
       expect(classes.contains("pointer-coarse:before:absolute")).toBe(true);
       expect(classes.contains("pointer-coarse:before:-inset-1.5")).toBe(true);
@@ -653,6 +649,31 @@ describe("TranscriptSection — per-row capture buttons", () => {
       expect(classes.contains("w-8")).toBe(true);
       expect(classes.contains("pointer-coarse:h-11")).toBe(false);
       expect(classes.contains("pointer-coarse:w-11")).toBe(false);
+    }
+  });
+
+  it("takes the 44px floor on the row, and only where it is a rule", async () => {
+    renderSection();
+    const buttons = await captureButtons();
+
+    for (const button of buttons) {
+      const row = button.parentElement!;
+      // The floor lives in the mobile sizing rules, so it is about
+      // touch. `pointer-coarse` is that condition; a plain `min-h-11`
+      // would add 37% of height to a transcript of several hundred
+      // lines on a desktop the rule was not written about, where 32px
+      // already clears the 24px minimum for repeated icon-only controls
+      // (hako Prwd_iaXmCjWfY24KjFz2).
+      expect(row.classList.contains("pointer-coarse:min-h-11")).toBe(true);
+      expect(row.classList.contains("min-h-11")).toBe(false);
+
+      // The seek button takes it too. It is the row's *primary* action,
+      // and `items-start` means it does not inherit the row's height —
+      // a list whose secondary control clears the floor while its main
+      // one does not has bought nothing.
+      const seek = row.querySelector("button[aria-current], button:first-child");
+      expect(seek).not.toBeNull();
+      expect(seek!.classList.contains("pointer-coarse:min-h-11")).toBe(true);
     }
   });
 });

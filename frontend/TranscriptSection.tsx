@@ -375,7 +375,20 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
           return (
             <div
               key={cue.index}
-              className={`group/cue flex w-full items-start rounded-lg text-sm transition-colors hover:bg-bg-primary ${
+              // 44px of row on a coarse pointer, and 32px on a fine one.
+              // The floor is from the mobile sizing rules, so it is about
+              // touch and says nothing against a dense desktop list —
+              // where 32px already clears the 24px minimum for repeated
+              // icon-only controls (hako Prwd_iaXmCjWfY24KjFz2). Applying
+              // it everywhere would add 37% of height to a transcript
+              // that runs to hundreds of lines, in an environment the
+              // rule was not written for.
+              //
+              // It goes on the row, not on either control: the row is
+              // what both of them are asking to be big enough, and a
+              // 44px pitch is also what stops the quote button's
+              // pseudo-element overlapping its neighbour's.
+              className={`group/cue flex w-full items-start rounded-lg text-sm transition-colors hover:bg-bg-primary pointer-coarse:min-h-11 ${
                 cue.index === activeIndex
                   ? "bg-accent/10 text-accent"
                   : "text-text-primary"
@@ -388,7 +401,12 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
                 // the only handle a test has on the highlight.
                 aria-current={cue.index === activeIndex ? "true" : undefined}
                 onClick={() => seekTo(cue.start)}
-                className="flex min-w-0 flex-1 cursor-pointer gap-3 px-2 py-1.5 text-left"
+                // The row's primary action — tapping to move the
+                // playhead — so it takes the floor too. `items-start`
+                // means it does not inherit the row's height, and a
+                // list whose secondary control clears 44px while its
+                // main one does not has bought nothing.
+                className="flex min-w-0 flex-1 cursor-pointer gap-3 px-2 py-1.5 text-left pointer-coarse:min-h-11"
               >
                 <span className="shrink-0 font-mono text-xs text-text-muted">
                   {formatDuration(cue.start)}
@@ -429,19 +447,14 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
                   the cues on a phone. Vertical space is scarcest exactly
                   where the rule applies.
 
-                  That buys 44px across and **38px down**, not 44 both
-                  ways, and the difference is geometry rather than a
-                  wrong number. Rows sit 38px apart (36px row + 2px
-                  gap), so each `::before` overlaps its neighbour's by
-                  6px, and inside one stacking context the later row
-                  wins — every button keeps 6px above and 32px of its own
-                  height. A true 44px would need `pointer-coarse:min-h-11`
-                  on the row, at 8px per row of density. Not taken here,
-                  because the row's *primary* control — the seek button,
-                  32px on touch — would still miss the floor, so the
-                  spend would buy compliance for the secondary control
-                  only. That is a decision about the row, and it belongs
-                  with the row-action rule Phase 2 owes `DESIGN.md`.
+                  That is 44px in both axes because the row is 44px on
+                  a coarse pointer: at a 46px pitch this pseudo-element
+                  ends 2px before the next row's begins, so nothing
+                  overlaps and no row wins a band of its neighbour's. On
+                  a fine pointer the row stays 36px and so does the
+                  32px box — the floor is a mobile rule, and a desktop
+                  transcript of several hundred lines is not what it was
+                  written about.
 
                   A device reporting `pointer: fine` with `hover: none`
                   — a stylus, some TV browsers — matches neither trigger
