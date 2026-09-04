@@ -954,10 +954,29 @@ describe("TranscriptSection — where the reader had got to", () => {
    * on the whole application. Everything else this panel holds comes
    * back from the refetch; the offset does not.
    */
+  /**
+   * Wait for the cues *and* for the effects that follow them.
+   *
+   * `findByText` resolves as soon as the text is in the DOM, which is
+   * the end of the commit — and passive effects run after that, on their
+   * own schedule. The effect that attaches the save listener is one of
+   * them, so a test that scrolls the moment the text appears sometimes
+   * scrolls a list nothing is listening to. It failed about one run in
+   * thirty, and only in CI's shuffled job often enough to see.
+   *
+   * This is the third detector rule applied to a test's own setup: wait
+   * for what you are about to depend on, not for the thing that starts
+   * it.
+   */
+  async function readyList(container: HTMLElement): Promise<HTMLElement> {
+    await screen.findByText("未修正の文章。");
+    await act(async () => {});
+    return container.querySelector(".overflow-y-auto")! as HTMLElement;
+  }
+
   async function mountAndScroll(fileId: string, top: number) {
     const utils = render(<TranscriptSection fileId={fileId} drive="family" />);
-    await screen.findByText("未修正の文章。");
-    const list = utils.container.querySelector(".overflow-y-auto")! as HTMLElement;
+    const list = await readyList(utils.container);
     list.scrollTop = top;
     fireEvent.scroll(list);
     return { utils, list };
@@ -965,8 +984,7 @@ describe("TranscriptSection — where the reader had got to", () => {
 
   async function remount(fileId: string) {
     const utils = render(<TranscriptSection fileId={fileId} drive="family" />);
-    await screen.findByText("未修正の文章。");
-    return utils.container.querySelector(".overflow-y-auto")! as HTMLElement;
+    return readyList(utils.container);
   }
 
   it("puts the reader back where they were", async () => {
@@ -1003,8 +1021,7 @@ describe("TranscriptSection — where the reader had got to", () => {
         />,
       );
     const utils = withPlayer();
-    await screen.findByText("未修正の文章。");
-    const list = utils.container.querySelector(".overflow-y-auto")! as HTMLElement;
+    const list = await readyList(utils.container);
     list.scrollTop = 300;
     fireEvent.wheel(list);
     fireEvent.scroll(list);
@@ -1012,8 +1029,7 @@ describe("TranscriptSection — where the reader had got to", () => {
     utils.unmount();
 
     const back = withPlayer();
-    await screen.findByText("未修正の文章。");
-    const list2 = back.container.querySelector(".overflow-y-auto")! as HTMLElement;
+    const list2 = await readyList(back.container);
     expect(list2.scrollTop).toBe(300);
     // Still suspended, so the auto-scroll will not take the offset back
     // off them the moment playback moves on.
@@ -1052,8 +1068,7 @@ describe("TranscriptSection — where the reader had got to", () => {
     // still on screen, which is the property that makes the unmount
     // reading unnecessary.
     const utils = render(<TranscriptSection fileId="abc" drive="family" />);
-    await screen.findByText("未修正の文章。");
-    const list = utils.container.querySelector(".overflow-y-auto")! as HTMLElement;
+    const list = await readyList(utils.container);
 
     list.scrollTop = 275;
     fireEvent.scroll(list);
@@ -1075,8 +1090,7 @@ describe("TranscriptSection — where the reader had got to", () => {
         mediaController={scrollStubController(state)}
       />,
     );
-    await screen.findByText("未修正の文章。");
-    const list = utils.container.querySelector(".overflow-y-auto")! as HTMLElement;
+    const list = await readyList(utils.container);
     list.scrollTop = 275;
     fireEvent.wheel(list);
     fireEvent.scroll(list);
