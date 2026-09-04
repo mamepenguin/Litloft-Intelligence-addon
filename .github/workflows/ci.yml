@@ -51,6 +51,12 @@ jobs:
     # Core's default branch is what this commit is about to be pinned into, so
     # that is what it is tested against. A core-side break turning this job red
     # is the pairing being reported, not noise.
+    #
+    # The consequence to know before it bites: `develop` is resolved to its tip
+    # at run time, not to a fixed SHA, so this job's result is not reproducible.
+    # A pull request that changes nothing here can go red later because core
+    # moved. If a branch you have not touched fails in a core file, re-run the
+    # job — if core has since merged the fix, that is all it needs.
     name: frontend (core vitest / tsc)
     runs-on: ubuntu-latest
     steps:
