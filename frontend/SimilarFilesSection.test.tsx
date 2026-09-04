@@ -303,3 +303,25 @@ describe("SimilarFilesSection", () => {
     }
   });
 });
+
+describe("SimilarFilesSection — its weight inside the Related group", () => {
+  it("draws its heading at the group weight, not at section weight", async () => {
+    // This entry is in core's `file-relations` slot, which draws it under
+    // one "Related" heading beside core's own relations. At section
+    // weight it matched the heading above it and the two read as sibling
+    // lists rather than as a group and its member.
+    //
+    // The values are `DESIGN.md` §The Related group, and the other member
+    // of that group is in the core repository — so this assertion and
+    // core's `RelatedFilesSection` test are the only things holding the
+    // pair in step, the way the duplicated frontmatter parsers are.
+    renderSection();
+
+    const heading = await screen.findByRole("button", { name: /Similar files/i });
+    for (const cls of ["text-xs", "font-medium", "text-text-muted"]) {
+      expect(heading.classList.contains(cls)).toBe(true);
+    }
+    expect(heading.classList.contains("text-sm")).toBe(false);
+    expect(heading.classList.contains("font-semibold")).toBe(false);
+  });
+});
