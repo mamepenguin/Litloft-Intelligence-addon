@@ -1,23 +1,32 @@
 /**
- * Tests for SimilarFilesSection's disclosure shape.
+ * Tests for SimilarFilesSection's disclosure shape and what starts it.
  *
  * The section used to draw a heading and a "Find similar files" button
- * on every file detail page whether or not anyone ever pressed it —
- * detection is heavy on the backend, so it has always been opt-in, and
- * an opt-in with a permanent heading is a row that only says a feature
- * exists. It is now the same collapsed disclosure as the other two
- * derived views, with the button waiting inside.
+ * on every file detail page whether or not anyone ever pressed it. The
+ * heading became a disclosure first; the button is gone now too —
+ * opening the disclosure is the request. That keeps detection off the
+ * mount path (a file nobody opens this on never computes) while costing
+ * the person who does want it a press rather than two.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 
-vi.mock("@/addons/intelligence/api", () => ({
-  getSimilarFiles: vi.fn(),
-}));
+vi.mock("@/addons/intelligence/api", async () => {
+  // Only the request is stubbed. `SIMILAR_FILES_LIMIT` stays the real
+  // one, because a test that stubbed it could not tell whether the
+  // ghosts and the wire still agree — which is the thing worth pinning.
+  const actual = await vi.importActual<
+    typeof import("@/addons/intelligence/api")
+  >("@/addons/intelligence/api");
+  return { ...actual, getSimilarFiles: vi.fn() };
+});
 
 import SimilarFilesSection from "@/addons/intelligence/SimilarFilesSection";
-import { getSimilarFiles } from "@/addons/intelligence/api";
+import {
+  getSimilarFiles,
+  SIMILAR_FILES_LIMIT,
+} from "@/addons/intelligence/api";
 
 const results = [
   {
@@ -27,8 +36,8 @@ const results = [
   },
 ];
 
-function renderSection() {
-  return render(<SimilarFilesSection fileId="f1" drive="media" />);
+function renderSection(fileId = "f1") {
+  return render(<SimilarFilesSection fileId={fileId} drive="media" />);
 }
 
 const header = () => screen.getByRole("button", { name: /Similar files/ });
@@ -39,39 +48,101 @@ beforeEach(() => {
 });
 
 describe("SimilarFilesSection", () => {
-  it("starts collapsed, with no detect button on the page", () => {
+  it("starts collapsed and asks the backend for nothing", () => {
     renderSection();
 
     expect(header()).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("button", { name: /Find similar files/ })).toBeNull();
-    // Nothing is fetched until someone asks.
+    // The mount path is the one this section must stay off: it is the
+    // path every file detail page takes, opened or not.
     expect(getSimilarFiles).not.toHaveBeenCalled();
   });
 
-  it("keeps the detect button reachable inside the disclosure", async () => {
+  it("has no detect button, collapsed or expanded", async () => {
+    renderSection();
+    expect(screen.queryByRole("button", { name: /Find similar files/ })).toBeNull();
+
+    fireEvent.click(header());
+    expect(await screen.findByText("neighbour.mp4")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Find similar files/ })).toBeNull();
+  });
+
+  it("opening the disclosure is what fetches", async () => {
     renderSection();
     fireEvent.click(header());
 
     expect(header()).toHaveAttribute("aria-expanded", "true");
-    fireEvent.click(screen.getByRole("button", { name: /Find similar files/ }));
-
-    await waitFor(() => expect(getSimilarFiles).toHaveBeenCalledWith("f1", "media"));
     expect(await screen.findByText("neighbour.mp4")).toBeInTheDocument();
+    expect(getSimilarFiles).toHaveBeenCalledWith("f1", "media");
+  });
+
+  it("draws one ghost per neighbour it asked for, until the answer lands", async () => {
+    let settle: (value: unknown) => void = () => {};
+    vi.mocked(getSimilarFiles).mockReturnValue(
+      new Promise((resolve) => {
+        settle = resolve;
+      }) as never,
+    );
+
+    renderSection();
+    fireEvent.click(header());
+
+    const ghosts = await screen.findByTestId("similar-files-ghosts");
+    // Read from the request's own limit, not from a 6 written out here:
+    // the two agreeing is the whole mechanism, so a test that hard-coded
+    // the number would go on passing after they stopped agreeing.
+    expect(ghosts.children).toHaveLength(SIMILAR_FILES_LIMIT);
+    // One request, not one per ghost or one per render.
+    expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      settle({ results });
+    });
+
+    expect(await screen.findByText("neighbour.mp4")).toBeInTheDocument();
+    expect(screen.queryByTestId("similar-files-ghosts")).toBeNull();
+    // Whether the swap moves the page is a question about heights, which
+    // jsdom does not compute. The ghost card mirrors the real card's
+    // text block in the component; that pairing is on the manual pass.
+  });
+
+  it("does not reopen itself when a result lands after the reader closed it", async () => {
+    let settle: (value: unknown) => void = () => {};
+    vi.mocked(getSimilarFiles).mockReturnValue(
+      new Promise((resolve) => {
+        settle = resolve;
+      }) as never,
+    );
+
+    renderSection();
+    fireEvent.click(header());
+    await screen.findByTestId("similar-files-ghosts");
+
+    // Away again before the backend answers.
+    fireEvent.click(header());
+    expect(header()).toHaveAttribute("aria-expanded", "false");
+
+    await act(async () => {
+      settle({ results });
+    });
+
+    // The answer is kept — the header counts it — but it does not pull
+    // the section back open over whatever the reader moved on to.
+    expect(header()).toHaveAttribute("aria-expanded", "false");
+    await waitFor(() => expect(header().textContent).toContain("(1)"));
+    expect(screen.queryByText("neighbour.mp4")).toBeNull();
   });
 
   it("names the count in the header once results are in", async () => {
     renderSection();
     fireEvent.click(header());
-    fireEvent.click(screen.getByRole("button", { name: /Find similar files/ }));
 
     await screen.findByText("neighbour.mp4");
     expect(header().textContent).toContain("(1)");
   });
 
-  it("collapses again without losing the results", async () => {
+  it("collapses again without losing the results or asking twice", async () => {
     renderSection();
     fireEvent.click(header());
-    fireEvent.click(screen.getByRole("button", { name: /Find similar files/ }));
     await screen.findByText("neighbour.mp4");
 
     fireEvent.click(header());
@@ -82,20 +153,151 @@ describe("SimilarFilesSection", () => {
     expect(getSimilarFiles).toHaveBeenCalledTimes(1);
   });
 
-  it("reports an unavailable backend inside the disclosure", async () => {
+  it("keeps both backoff waits before it reports the backend unavailable", async () => {
     vi.mocked(getSimilarFiles).mockRejectedValue(new Error("boom"));
     vi.useFakeTimers();
     try {
       renderSection();
       fireEvent.click(header());
-      fireEvent.click(screen.getByRole("button", { name: /Find similar files/ }));
-      // Two backoff waits before it gives up.
+
+      // First failure: still trying, and still holding the height.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByTestId("similar-files-ghosts")).toBeInTheDocument();
+      expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+
+      // One millisecond short of the first backoff, nothing has moved.
+      // Advancing straight to 6 s would also pass with a 5 s delay, or a
+      // 1 s one — it would bound the wait rather than pin it.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_999);
+      });
+      expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+
+      // The millisecond that reaches it starts the second attempt.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(getSimilarFiles).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId("similar-files-ghosts")).toBeInTheDocument();
+
+      // The same boundary again for the second backoff.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(11_999);
+      });
+      expect(getSimilarFiles).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(
+        screen.getByText(/Similar file detection unavailable/i),
+      ).toBeInTheDocument();
+      expect(getSimilarFiles).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("offers a retry that succeeds after an unavailable backend", async () => {
+    vi.mocked(getSimilarFiles).mockRejectedValue(new Error("boom"));
+    vi.useFakeTimers();
+    try {
+      renderSection();
+      fireEvent.click(header());
       await act(async () => {
         await vi.advanceTimersByTimeAsync(20_000);
       });
       expect(
         screen.getByText(/Similar file detection unavailable/i),
       ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    vi.mocked(getSimilarFiles).mockResolvedValue({ results } as never);
+    fireEvent.click(screen.getByRole("button", { name: /Search again/ }));
+
+    expect(await screen.findByText("neighbour.mp4")).toBeInTheDocument();
+  });
+
+  it("goes back to asking nothing when the file changes under it", async () => {
+    const { rerender } = renderSection("f1");
+    fireEvent.click(header());
+    await screen.findByText("neighbour.mp4");
+    expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+
+    rerender(<SimilarFilesSection fileId="f2" drive="media" />);
+
+    // Asserted directly: the reset runs inside the rerender's own act,
+    // so it has already happened. A `waitFor` here would find its
+    // condition true on the first poll and return before anything else
+    // it was meant to settle — the shape this suite exists to avoid.
+    expect(header()).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("neighbour.mp4")).toBeNull();
+    // The new file gets the same deal the old one did: nothing until asked.
+    expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a slow answer that arrives after the reader moved to another file", async () => {
+    // The case the `requestIdRef` guard exists for, and the only one:
+    // the previous test changes the file with nothing in flight, so it
+    // passes with the guard deleted. This one holds the request open
+    // across the change.
+    //
+    // Without the guard: the file-change effect resets to idle and
+    // closed, then file A's response lands and writes `loaded` with A's
+    // neighbours. File B's header then reads "(1)", opening it shows
+    // another file's results, and it never refetches — opening only
+    // fetches from `idle`. Wrong data, silent, and permanent for as long
+    // as that file is open.
+    let settle: (value: unknown) => void = () => {};
+    vi.mocked(getSimilarFiles).mockReturnValue(
+      new Promise((resolve) => {
+        settle = resolve;
+      }) as never,
+    );
+
+    const { rerender } = renderSection("f1");
+    fireEvent.click(header());
+    await screen.findByTestId("similar-files-ghosts");
+
+    rerender(<SimilarFilesSection fileId="f2" drive="media" />);
+    await act(async () => {
+      settle({ results });
+    });
+
+    expect(header().textContent).not.toContain("(1)");
+    fireEvent.click(header());
+    expect(screen.queryByText("neighbour.mp4")).toBeNull();
+  });
+
+  it("drops one that arrives after a backoff, too", async () => {
+    // The same guard, at the other exit the retry loop can take: the
+    // sleep between attempts is where a slow file spends most of its
+    // time, so it is the likeliest moment for the reader to move on.
+    vi.mocked(getSimilarFiles).mockRejectedValueOnce(new Error("cold"));
+    vi.useFakeTimers();
+    try {
+      const { rerender } = renderSection("f1");
+      fireEvent.click(header());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      // In the backoff now, with a second attempt scheduled.
+      expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+
+      rerender(<SimilarFilesSection fileId="f2" drive="media" />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+
+      // The retired loop returns after its sleep instead of firing the
+      // next attempt against the file the reader has left.
+      expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+      expect(header()).toHaveAttribute("aria-expanded", "false");
+      expect(header().textContent).not.toContain("(");
     } finally {
       vi.useRealTimers();
     }

@@ -147,7 +147,7 @@ describe("TranscriptSection — transcript refine UI", () => {
     );
 
     const buttons = await screen.findAllByRole("button", {
-      name: "Add transcript excerpt to capture basket",
+      name: /capture basket/,
     });
     fireEvent.click(buttons[0]);
 
@@ -322,7 +322,7 @@ describe("TranscriptSection — rail vs stacked form", () => {
     );
 
     const buttons = await screen.findAllByRole("button", {
-      name: "Add transcript excerpt to capture basket",
+      name: /capture basket/,
     });
     fireEvent.click(buttons[0]);
 
@@ -539,5 +539,120 @@ describe("TranscriptSection — suspension actually stops the scrolling", () => 
 
     // The highlight moved on; the list did not.
     expect(scrollTo).not.toHaveBeenCalled();
+  });
+});
+
+// M-3. A transcript is hundreds of rows long, and until now every one
+// of them drew the same quote button at all times: a grey rule down the
+// right edge of the text it annotates, and — to a screen reader — the
+// same four words several hundred times over, with nothing to say which
+// line each one would quote.
+//
+// The reveal itself is CSS (`opacity-0` lifted by `group-hover/cue`,
+// `group-focus-within/cue`, `pointer-coarse`), and jsdom loads no
+// stylesheet, so no assertion here can see the button appear. What these
+// check is the contract the CSS hangs off: the row is the group, the
+// button names the signals, and it stays in the tab order while hidden.
+// The appearance itself is on the manual 1512 / 400 / 375 pass.
+describe("TranscriptSection — per-row capture buttons", () => {
+  beforeEach(() => {
+    mockAddonStatus.features.transcript_refine = "manual";
+    fetchMock.mockClear();
+    clearSourceCaptures("family");
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  async function captureButtons(): Promise<HTMLElement[]> {
+    return screen.findAllByRole("button", { name: /capture basket/ });
+  }
+
+  it("names each button for the line it would quote", async () => {
+    renderSection();
+    const buttons = await captureButtons();
+
+    // Exactly the two cues in the fixture. A lower bound would pass on a
+    // render that produced one button and on one that produced fifty.
+    expect(buttons).toHaveLength(2);
+    const names = buttons.map((b) => b.getAttribute("aria-label"));
+    expect(names).toEqual([
+      "Add the 0:00 line to the capture basket",
+      "Add the 0:05 line to the capture basket",
+    ]);
+    // The point of the timestamp is that the names differ.
+    expect(new Set(names).size).toBe(names.length);
+    // And the name is the only one. A `title` beside an `aria-label`
+    // becomes the accessible *description*, which NVDA and JAWS read
+    // after the name — the same sentence, twice.
+    expect(buttons.map((b) => b.getAttribute("title"))).toEqual([null, null]);
+  });
+
+  it("hangs the reveal on the row, not on the button alone", async () => {
+    renderSection();
+    const buttons = await captureButtons();
+
+    for (const button of buttons) {
+      // `classList.contains` matches whole tokens. `className.toContain`
+      // would not: it also says yes to `pointer-coarse:opacity-0` when
+      // asked about `opacity-0`, so the assertions that matter most
+      // here would survive being broken.
+      expect(button.parentElement?.classList.contains("group/cue")).toBe(true);
+      // Hover anywhere on the row, or focus the row's seek button, and
+      // the quote button comes with it.
+      expect(
+        button.classList.contains("group-hover/cue:opacity-100"),
+      ).toBe(true);
+      expect(
+        button.classList.contains("group-focus-within/cue:opacity-100"),
+      ).toBe(true);
+    }
+  });
+
+  it("stays in the tab order while it is invisible", async () => {
+    renderSection();
+    const buttons = await captureButtons();
+
+    for (const button of buttons) {
+      expect(button.classList.contains("opacity-0")).toBe(true);
+      // Measured rather than inferred from class names. `hidden` and
+      // `invisible` would drop the button out of the tab order and
+      // `group-focus-within` would then have nothing to fire on — but so
+      // would `inert`, `disabled`, an inline style, or a hidden
+      // ancestor, and a denylist of class names sees none of those.
+      // jsdom implements focus, so ask it.
+      button.focus();
+      expect(document.activeElement).toBe(button);
+    }
+  });
+
+  it("grows its hit area, not its box, where there is no hover to give", async () => {
+    // 44px across and 38px down, not 44 both ways: rows are 38px apart,
+    // so each pseudo-element overlaps its neighbour's by 6px and the
+    // later row wins. Recorded because the alternative — a 44px row —
+    // costs density the seek button would still not satisfy.
+    renderSection();
+    const buttons = await captureButtons();
+
+    for (const button of buttons) {
+      const classes = button.classList;
+      expect(classes.contains("pointer-coarse:opacity-100")).toBe(true);
+      // The target grows from a pseudo-element overhanging the box by
+      // 6px a side, not from a bigger box. A 44px button would be a
+      // 44px row (`items-start`), and the list is capped at `max-h-80`:
+      // on a phone that trades about a quarter of the visible cues for
+      // a rule about touch accuracy.
+      expect(classes.contains("relative")).toBe(true);
+      expect(classes.contains("pointer-coarse:before:absolute")).toBe(true);
+      expect(classes.contains("pointer-coarse:before:-inset-1.5")).toBe(true);
+      // The box itself stays 32px at every pointer type, which already
+      // clears the 24px floor for repeated icon-only controls (hako
+      // Prwd_iaXmCjWfY24KjFz2).
+      expect(classes.contains("h-8")).toBe(true);
+      expect(classes.contains("w-8")).toBe(true);
+      expect(classes.contains("pointer-coarse:h-11")).toBe(false);
+      expect(classes.contains("pointer-coarse:w-11")).toBe(false);
+    }
   });
 });

@@ -127,7 +127,7 @@
     "transcriptSourceExternal": "External",
     "transcriptRefine": "Clean up with AI",
     "transcriptRefinedBadge": "AI cleaned",
-    "addToCaptureBasket": "Add transcript excerpt to capture basket",
+    "transcriptCaptureCue": "Add the {time} line to the capture basket",
     "indexTitle": "Index Details",
     "clipTitle": "CLIP Frames",
     "more": "more",
@@ -219,7 +219,6 @@
   },
   "file": {
     "similarFiles": "Similar files",
-    "similarFilesDetect": "Find similar files",
     "similarFilesDetecting": "Searching...",
     "similarFilesEmpty": "No similar files found",
     "similarFilesUnavailable": "Similar file detection unavailable",

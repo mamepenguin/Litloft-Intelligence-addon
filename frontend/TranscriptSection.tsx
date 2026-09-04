@@ -375,7 +375,7 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
           return (
             <div
               key={cue.index}
-              className={`flex w-full items-start rounded-lg text-sm transition-colors hover:bg-bg-primary ${
+              className={`group/cue flex w-full items-start rounded-lg text-sm transition-colors hover:bg-bg-primary ${
                 cue.index === activeIndex
                   ? "bg-accent/10 text-accent"
                   : "text-text-primary"
@@ -400,12 +400,69 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
                   </span>
                 )}
               </button>
+              {/* One of these per cue, and a transcript runs to
+                  hundreds — drawn at all times they read as a grey rule
+                  down the right edge of the text they are meant to
+                  annotate. Revealed by the row instead, on the three
+                  signals that mean someone is working on that row:
+                  hovering it, focusing anything inside it (so the
+                  keyboard path opens with the pointer one), or having no
+                  hover to give in the first place.
+
+                  `opacity-0` and not `hidden` / `invisible`: those two
+                  take the button out of the tab order, and
+                  `group-focus-within` could then never fire.
+
+                  The accessible name carries the timestamp because the
+                  name is all a screen reader gets — several hundred
+                  identical "add to capture basket" leave no way to tell
+                  which line is about to be quoted (hako
+                  Prwd_iaXmCjWfY24KjFz2). It is the only name here: a
+                  `title` alongside it becomes the accessible
+                  *description*, which NVDA and JAWS read after the name,
+                  so the sentence would be announced twice.
+
+                  On a coarse pointer the target grows by overhanging
+                  the box rather than by enlarging it: a taller button
+                  would raise the row it sits in, and this list is capped
+                  at `max-h-80`, so every 12px costs roughly a quarter of
+                  the cues on a phone. Vertical space is scarcest exactly
+                  where the rule applies.
+
+                  That buys 44px across and **38px down**, not 44 both
+                  ways, and the difference is geometry rather than a
+                  wrong number. Rows sit 38px apart (36px row + 2px
+                  gap), so each `::before` overlaps its neighbour's by
+                  6px, and inside one stacking context the later row
+                  wins — every button keeps 6px above and 32px of its own
+                  height. A true 44px would need `pointer-coarse:min-h-11`
+                  on the row, at 8px per row of density. Not taken here,
+                  because the row's *primary* control — the seek button,
+                  32px on touch — would still miss the floor, so the
+                  spend would buy compliance for the secondary control
+                  only. That is a decision about the row, and it belongs
+                  with the row-action rule Phase 2 owes `DESIGN.md`.
+
+                  A device reporting `pointer: fine` with `hover: none`
+                  — a stylus, some TV browsers — matches neither trigger
+                  and reaches the button only by focusing it.
+                  `[@media(hover:none)]:opacity-100` does close that, and
+                  compiles here; it is left out because it compiles *here*
+                  and not in Tailwind 4.3, while `package.json` asks for
+                  `^4`. A class that stops emitting on a patch bump fails
+                  exactly the way this whole control already failed once:
+                  silently invisible. `not-hover` is not an alternative —
+                  it emits `:not(:hover)` alongside the media query, which
+                  would draw the button on every desktop row the pointer
+                  is not over. Both measured against the pinned compiler,
+                  not assumed. */}
               <button
                 type="button"
                 onClick={() => captureCue(cue)}
-                title={t("addToCaptureBasket")}
-                aria-label={t("addToCaptureBasket")}
-                className="m-0.5 inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-text-muted hover:bg-bg-elevated hover:text-text-primary"
+                aria-label={t("transcriptCaptureCue", {
+                  time: formatDuration(cue.start),
+                })}
+                className="relative m-0.5 inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-text-muted opacity-0 transition-opacity hover:bg-bg-elevated hover:text-text-primary group-hover/cue:opacity-100 group-focus-within/cue:opacity-100 pointer-coarse:opacity-100 pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5 pointer-coarse:before:content-['']"
               >
                 <Quote size={14} />
               </button>
