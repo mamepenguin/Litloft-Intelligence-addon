@@ -253,10 +253,9 @@ describe("IndexStatusWidget — idle queues are collapsed (ADM-1)", () => {
       }),
     );
     render(<IndexStatusWidget />);
-    await waitFor(() => expect(mockedStatus).toHaveBeenCalled());
     await disclosure();
 
-    expect(screen.getByText(label("whisper"))).toBeInTheDocument();
+    expect(await screen.findByText(label("whisper"))).toBeInTheDocument();
     expect(screen.getByText(label("summaries"))).toBeInTheDocument();
     expect(screen.getByText("Current activity")).toBeInTheDocument();
     for (const kind of ELEVEN_KINDS.filter((k) => k !== "whisper" && k !== "summaries")) {

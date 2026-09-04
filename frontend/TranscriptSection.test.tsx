@@ -85,6 +85,22 @@ function renderSection() {
   return render(<TranscriptSection fileId="abc" drive="family" />);
 }
 
+/**
+ * Wait for the highlight to reach a cue.
+ *
+ * Anything about following — the chip, the auto-scroll, suspending
+ * either — needs the transcript rendered *and* a cue active, and the two
+ * arrive on different ticks: the body from the transcript fetch, the
+ * highlight from the first clock sync. Acting in the gap is acting on a
+ * component that is not yet in the state under test, where doing nothing
+ * is the correct behaviour and reads as a bug.
+ */
+async function waitForActiveCue(container: HTMLElement): Promise<void> {
+  await waitFor(() =>
+    expect(container.querySelector('[aria-current="true"]')).not.toBeNull(),
+  );
+}
+
 describe("TranscriptSection — transcript refine UI", () => {
   beforeEach(() => {
     mockAddonStatus.features.transcript_refine = "manual";
@@ -356,6 +372,7 @@ describe("TranscriptSection — following without fighting the reader", () => {
       <TranscriptSection fileId="abc" drive="family" mediaController={mc} fillHeight />,
     );
     await screen.findByText("未修正の文章。");
+    await waitForActiveCue(utils.container);
     const list = utils.container.querySelector(".overflow-y-auto")!;
     return { ...utils, mc, state, list };
   }
@@ -490,6 +507,7 @@ describe("TranscriptSection — suspension actually stops the scrolling", () => 
       <TranscriptSection fileId="abc" drive="family" mediaController={mc} fillHeight />,
     );
     await screen.findByText("未修正の文章。");
+    await waitForActiveCue(utils.container);
     const list = utils.container.querySelector(".overflow-y-auto")! as HTMLElement;
     const scrollTo = vi.fn();
     list.scrollTo = scrollTo;
