@@ -61,12 +61,20 @@ jobs:
           path: core
 
       # The other three addons stay at the commits core pins; only this one is
-      # replaced. .git is dropped so the tree is a plain directory.
+      # replaced, and .git is dropped so the tree is a plain directory.
+      #
+      # No pipe here on purpose. A `run:` step's default shell on Linux is
+      # `bash -e {0}` — `pipefail` is only added when `shell: bash` is set
+      # explicitly — so `producer | consumer` reports only the consumer's
+      # status, and a half-copied tree would sail through as success.
       - name: Stand this commit in for the pinned submodule
+        shell: bash
         run: |
+          set -euo pipefail
           rm -rf core/addons/intelligence
           mkdir -p core/addons/intelligence
-          tar -C addon --exclude=.git -cf - . | tar -C core/addons/intelligence -xf -
+          cp -a addon/. core/addons/intelligence/
+          rm -rf core/addons/intelligence/.git
 
       - uses: pnpm/action-setup@v4
         with:
@@ -92,6 +100,20 @@ jobs:
       - name: Merge addon translations
         run: node scripts/merge-addon-messages.mjs
         working-directory: core/frontend
+
+      # A tree that failed to land costs nothing at collection time: vitest
+      # finds fewer files and reports every one of them passing. Ask the
+      # collector what it found rather than assuming this addon is in it.
+      - name: Fail if this addon's tests were not collected
+        shell: bash
+        working-directory: core/frontend
+        run: |
+          set -euo pipefail
+          collected="$(pnpm exec vitest list --filesOnly)"
+          printf '%s\n' "$collected" | grep -q '^src/addons/intelligence/' || {
+            echo "::error::vitest collected no tests from addons/intelligence"
+            exit 1
+          }
 
       - name: Test
         run: pnpm test
