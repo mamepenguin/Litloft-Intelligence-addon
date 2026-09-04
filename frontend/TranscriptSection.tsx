@@ -417,20 +417,34 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
                   name is all a screen reader gets — several hundred
                   identical "add to capture basket" leave no way to tell
                   which line is about to be quoted (hako
-                  Prwd_iaXmCjWfY24KjFz2). The tap target grows to 44px on
-                  coarse pointers only: that is the input the 44px rule
-                  is about, and spending it on every desktop row would
-                  add 12px to each of hundreds of rows. */}
+                  Prwd_iaXmCjWfY24KjFz2). It is the only name here: a
+                  `title` alongside it becomes the accessible
+                  *description*, which NVDA and JAWS read after the name,
+                  so the sentence would be announced twice.
+
+                  On a coarse pointer the 44px floor is met by growing
+                  the hit area and not the box — a taller button would
+                  raise the row it sits in, and this list is bounded at
+                  `max-h-80`, so on a phone every 12px costs about a
+                  quarter of the cues on screen. Vertical space is
+                  scarcest exactly where the rule applies.
+
+                  A device that reports `pointer: fine` *and* `hover:
+                  none` — a stylus, some TV browsers — matches neither
+                  trigger and reaches the button only by focusing it.
+                  Left as is deliberately: `[@media(hover:none)]` emits
+                  no CSS in this Tailwind, and `not-hover` compiles to
+                  `:not(:hover)` as well, which would keep the button
+                  drawn on every desktop row the pointer is not over —
+                  the whole thing this stops doing. Both were checked
+                  against the compiler, not assumed. */}
               <button
                 type="button"
                 onClick={() => captureCue(cue)}
-                title={t("transcriptCaptureCue", {
-                  time: formatDuration(cue.start),
-                })}
                 aria-label={t("transcriptCaptureCue", {
                   time: formatDuration(cue.start),
                 })}
-                className="m-0.5 inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-text-muted opacity-0 transition-opacity hover:bg-bg-elevated hover:text-text-primary group-hover/cue:opacity-100 group-focus-within/cue:opacity-100 pointer-coarse:h-11 pointer-coarse:w-11 pointer-coarse:opacity-100"
+                className="relative m-0.5 inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-text-muted opacity-0 transition-opacity hover:bg-bg-elevated hover:text-text-primary group-hover/cue:opacity-100 group-focus-within/cue:opacity-100 pointer-coarse:opacity-100 pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5 pointer-coarse:before:content-['']"
               >
                 <Quote size={14} />
               </button>

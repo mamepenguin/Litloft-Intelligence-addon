@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { getSimilarFiles } from "./api";
+import { getSimilarFiles, SIMILAR_FILES_LIMIT } from "./api";
 import type { SimilarFileItem } from "./api";
 
 interface SimilarFilesSectionProps {
@@ -21,12 +21,13 @@ type Status = "idle" | "loading" | "loaded" | "unavailable";
 // growing delays before surrendering to the unavailable state.
 const RETRY_DELAYS_MS = [6000, 12000];
 
-// Matches the `limit` `getSimilarFiles` asks for, so a full result set
+// One ghost per neighbour the request asks for, so a full result set
 // swaps in at exactly the height the ghosts reserved. A shorter set
 // shrinks the box, which reads as the answer arriving; a set that grew
 // past the reservation would push everything below it down, which is
-// the jump this exists to prevent.
-const GHOST_CARDS = 6;
+// the jump this exists to prevent. Taken from the request rather than
+// written out again — the two agreeing is the whole mechanism.
+const GHOST_CARDS = SIMILAR_FILES_LIMIT;
 
 export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSectionProps) {
   const t = useTranslations("file");
@@ -111,35 +112,31 @@ export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSecti
       </button>
 
       {isOpen && (
-        <div
-          id={`similar-files-${fileId}`}
-          className="mt-2"
-          aria-busy={status === "loading" || undefined}
-        >
+        <div id={`similar-files-${fileId}`} className="mt-2">
           {status === "loading" && (
-            <>
-              {/* Said once, to assistive tech only: the ghosts below
-                  carry the same news to anyone who can see them, and
-                  six announcements of "Searching" would not. */}
-              <p role="status" className="sr-only">
-                {t("similarFilesDetecting")}
-              </p>
-              <div
-                data-testid="similar-files-ghosts"
-                aria-hidden
-                className="grid grid-cols-2 gap-3 @lg:grid-cols-3"
-              >
-                {Array.from({ length: GHOST_CARDS }, (_, i) => (
-                  <div key={i} className="overflow-hidden rounded-lg bg-bg-card">
-                    <div className="aspect-video w-full animate-pulse bg-bg-elevated" />
-                    <div className="px-2 py-1.5">
-                      <div className="h-3 w-4/5 animate-pulse rounded-lg bg-bg-elevated" />
-                      <div className="mt-1 h-3 w-1/2 animate-pulse rounded-lg bg-bg-elevated" />
-                    </div>
+            <div
+              data-testid="similar-files-ghosts"
+              aria-hidden
+              className="grid grid-cols-2 gap-3 @lg:grid-cols-3"
+            >
+              {Array.from({ length: GHOST_CARDS }, (_, i) => (
+                <div key={i} className="overflow-hidden rounded-lg bg-bg-card">
+                  <div className="aspect-video w-full animate-pulse bg-bg-elevated" />
+                  {/* Sized against the real card's text block below, not
+                      guessed: a filename line (`text-xs`, 16px) plus the
+                      keyword chips (`mt-1`, then ~15px). Ghosts that are
+                      merely present do not do the job — the point is that
+                      the swap moves nothing. Reserving the taller of the
+                      two real shapes means a card without keywords
+                      shrinks the box rather than growing it, which pulls
+                      content up instead of shoving it down. */}
+                  <div className="px-2 py-1.5">
+                    <div className="h-4 w-4/5 animate-pulse rounded-lg bg-bg-elevated" />
+                    <div className="mt-1 h-[15px] w-1/2 animate-pulse rounded-lg bg-bg-elevated" />
                   </div>
-                ))}
-              </div>
-            </>
+                </div>
+              ))}
+            </div>
           )}
 
           {status === "unavailable" && (

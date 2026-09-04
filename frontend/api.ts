@@ -258,10 +258,20 @@ export async function getSearchStatus(
  * computed; the backend continues and caches the result, so a retry
  * a few seconds later succeeds instantly.
  */
+/**
+ * How many neighbours a similar-files request asks for.
+ *
+ * Exported because the section reserves exactly this many ghost cards
+ * while the answer is in flight, so a full result set swaps in at the
+ * height already taken. Two places agreeing by coincidence is how they
+ * drift; one constant is how they cannot.
+ */
+export const SIMILAR_FILES_LIMIT = 6;
+
 export async function getSimilarFiles(
   fileId: string,
   drive: string,
-  limit: number = 6,
+  limit: number = SIMILAR_FILES_LIMIT,
 ): Promise<SimilarFilesResponse> {
   const response = await fetchJSON<Omit<SimilarFilesResponse, "available">>(
     `${API_BASE}/addons/intelligence/similar/${fileId}?limit=${limit}`,

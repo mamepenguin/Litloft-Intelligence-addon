@@ -583,8 +583,10 @@ describe("TranscriptSection — per-row capture buttons", () => {
     ]);
     // The point of the timestamp is that the names differ.
     expect(new Set(names).size).toBe(names.length);
-    // The tooltip says the same thing as the accessible name.
-    expect(buttons.map((b) => b.getAttribute("title"))).toEqual(names);
+    // And the name is the only one. A `title` beside an `aria-label`
+    // becomes the accessible *description*, which NVDA and JAWS read
+    // after the name — the same sentence, twice.
+    expect(buttons.map((b) => b.getAttribute("title"))).toEqual([null, null]);
   });
 
   it("hangs the reveal on the row, not on the button alone", async () => {
@@ -592,12 +594,19 @@ describe("TranscriptSection — per-row capture buttons", () => {
     const buttons = await captureButtons();
 
     for (const button of buttons) {
-      const row = button.parentElement;
-      expect(row?.className).toContain("group/cue");
+      // `classList.contains` matches whole tokens. `className.toContain`
+      // would not: it also says yes to `pointer-coarse:opacity-0` when
+      // asked about `opacity-0`, so the assertions that matter most
+      // here would survive being broken.
+      expect(button.parentElement?.classList.contains("group/cue")).toBe(true);
       // Hover anywhere on the row, or focus the row's seek button, and
       // the quote button comes with it.
-      expect(button.className).toContain("group-hover/cue:opacity-100");
-      expect(button.className).toContain("group-focus-within/cue:opacity-100");
+      expect(
+        button.classList.contains("group-hover/cue:opacity-100"),
+      ).toBe(true);
+      expect(
+        button.classList.contains("group-focus-within/cue:opacity-100"),
+      ).toBe(true);
     }
   });
 
@@ -606,32 +615,42 @@ describe("TranscriptSection — per-row capture buttons", () => {
     const buttons = await captureButtons();
 
     for (const button of buttons) {
-      expect(button.className).toContain("opacity-0");
-      // `hidden` and `invisible` both drop the button out of the tab
-      // order, and `group-focus-within` would then have nothing to fire
-      // on — the keyboard path would be the one path that never reveals
-      // the control it needs.
-      expect(button.className).not.toMatch(/\b(hidden|invisible)\b/);
-      expect(button).not.toHaveAttribute("tabindex", "-1");
-      expect(button).not.toHaveAttribute("aria-hidden");
+      expect(button.classList.contains("opacity-0")).toBe(true);
+      // Measured rather than inferred from class names. `hidden` and
+      // `invisible` would drop the button out of the tab order and
+      // `group-focus-within` would then have nothing to fire on — but so
+      // would `inert`, `disabled`, an inline style, or a hidden
+      // ancestor, and a denylist of class names sees none of those.
+      // jsdom implements focus, so ask it.
+      button.focus();
+      expect(document.activeElement).toBe(button);
     }
   });
 
-  it("shows itself, at 44px, where there is no hover to give", async () => {
+  it("grows its hit area, not its box, where there is no hover to give", async () => {
     renderSection();
     const buttons = await captureButtons();
 
     for (const button of buttons) {
-      expect(button.className).toContain("pointer-coarse:opacity-100");
-      // 44px is the tap-target floor from the mobile sizing rules, and a
-      // coarse pointer is exactly the input it is about. Fine pointers
-      // keep the 32px box: hundreds of rows would pay 12px each, and
-      // 32px already clears the 24px floor for repeated icon-only
-      // controls (hako Prwd_iaXmCjWfY24KjFz2).
-      expect(button.className).toContain("pointer-coarse:h-11");
-      expect(button.className).toContain("pointer-coarse:w-11");
-      expect(button.className).toContain("h-8");
-      expect(button.className).toContain("w-8");
+      const classes = button.classList;
+      expect(classes.contains("pointer-coarse:opacity-100")).toBe(true);
+      // 44px of hit area, from a pseudo-element that overhangs the box
+      // by 6px on each side — not from a bigger box. The row is
+      // `items-start` around this button, so a 44px button is a 44px
+      // row, and the list is bounded at `max-h-80`: on a phone that
+      // trades about a quarter of the visible cues for a rule that is
+      // about touch accuracy. Vertical space is scarcest exactly where
+      // the rule applies.
+      expect(classes.contains("relative")).toBe(true);
+      expect(classes.contains("pointer-coarse:before:absolute")).toBe(true);
+      expect(classes.contains("pointer-coarse:before:-inset-1.5")).toBe(true);
+      // The box itself stays 32px at every pointer type, which already
+      // clears the 24px floor for repeated icon-only controls (hako
+      // Prwd_iaXmCjWfY24KjFz2).
+      expect(classes.contains("h-8")).toBe(true);
+      expect(classes.contains("w-8")).toBe(true);
+      expect(classes.contains("pointer-coarse:h-11")).toBe(false);
+      expect(classes.contains("pointer-coarse:w-11")).toBe(false);
     }
   });
 });
