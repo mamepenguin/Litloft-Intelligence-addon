@@ -216,12 +216,15 @@ describe("FindPage — chips from decomposed", () => {
     render(<FindPage />);
     await submitQuery("先週観た映画でSF");
 
-    await waitFor(() => expect(findFilesMock).toHaveBeenCalledTimes(1));
-
+    // The chips are rendered from the *response*, so waiting on the mock
+    // having been called does not wait for them: the call happens during
+    // the first commit and the wait is already satisfied when it runs.
+    // Wait for the chips themselves.
+    //
     // Find the time-range chip's × button. The chip carries a
     // ``data-slot="time_range"`` marker (or the aria-label mentions
     // the slot label) so we can target it deterministically.
-    const chips = screen.getAllByRole("button", { name: /×|remove|削除/i });
+    const chips = await screen.findAllByRole("button", { name: /×|remove|削除/i });
     // Identify the time_range chip — the one whose enclosing chip
     // element advertises the slot.
     const timeChip = chips.find((btn) => {
@@ -253,9 +256,9 @@ describe("FindPage — chips from decomposed", () => {
     render(<FindPage />);
     await submitQuery("SF");
 
-    await waitFor(() => expect(findFilesMock).toHaveBeenCalledTimes(1));
-
-    const chips = screen.getAllByRole("button", { name: /×|remove|削除/i });
+    // Same race as above: wait for the chips the response renders, not for
+    // the request that starts it.
+    const chips = await screen.findAllByRole("button", { name: /×|remove|削除/i });
     const semanticChip = chips.find((btn) => {
       const chipRoot = btn.closest("[data-slot]");
       return chipRoot?.getAttribute("data-slot") === "semantic_query";
