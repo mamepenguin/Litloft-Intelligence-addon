@@ -1,0 +1,138 @@
+# One rule governs every step in this file: the step's exit code is the verdict.
+#
+# No test command is piped into `tee`, a formatter, or a summariser; no step
+# carries `continue-on-error`; no run of vitest passes `--reporter=json`.
+# Vitest reports an unhandled rejection as `Errors 1 error` while printing every
+# test as passed, and exits 1 — and its JSON reporter does not carry those
+# errors at all. Reading the pass count instead of the exit status is what let
+# four core PRs merge broken. If you need more output from a failing job, make
+# the command itself louder; do not wrap it.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Nothing here writes to the repository; the cross-repository checkouts read
+# public repositories only.
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    # This addon is an independent service with its own `app` package and
+    # imports nothing from core, so its image builds from this checkout alone.
+    # (cloud-sync and media_import run in the core process and cannot do this.)
+    name: backend (pytest in the test image)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the test image
+        run: docker build -f Dockerfile.test -t intelligence-test .
+
+      - name: Test
+        run: docker run --rm intelligence-test
+
+  frontend:
+    # This addon's frontend has no runner of its own. Its components import
+    # core's (@/components, @/hooks, @/lib) and its tests are collected by
+    # core's vitest through the frontend/src/addons symlink. So the only way to
+    # test it is to assemble a core checkout with this commit standing in for
+    # the pinned submodule, and run core's suite.
+    #
+    # Core's default branch is what this commit is about to be pinned into, so
+    # that is what it is tested against. A core-side break turning this job red
+    # is the pairing being reported, not noise.
+    #
+    # The consequence to know before it bites: `develop` is resolved to its tip
+    # at run time, not to a fixed SHA, so this job's result is not reproducible.
+    # A pull request that changes nothing here can go red later because core
+    # moved. If a branch you have not touched fails in a core file, re-run the
+    # job — if core has since merged the fix, that is all it needs.
+    name: frontend (core vitest / tsc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: addon
+
+      - uses: actions/checkout@v4
+        with:
+          repository: mamepenguin/Litloft
+          ref: develop
+          submodules: recursive
+          path: core
+
+      # The other three addons stay at the commits core pins; only this one is
+      # replaced, and .git is dropped so the tree is a plain directory.
+      #
+      # No pipe here on purpose. A `run:` step's default shell on Linux is
+      # `bash -e {0}` — `pipefail` is only added when `shell: bash` is set
+      # explicitly — so `producer | consumer` reports only the consumer's
+      # status, and a half-copied tree would sail through as success.
+      - name: Stand this commit in for the pinned submodule
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf core/addons/intelligence
+          mkdir -p core/addons/intelligence
+          cp -a addon/. core/addons/intelligence/
+          rm -rf core/addons/intelligence/.git
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: core/frontend/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: core/frontend/pnpm-lock.yaml
+
+      # Creates the gitignored frontend/src/addons/* symlinks. Without them
+      # vitest collects no addon test and the suite is green for the wrong
+      # reason.
+      - name: Link addons into backend/ and frontend/
+        run: ./setup-addons.sh
+        working-directory: core
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: core/frontend
+
+      - name: Merge addon translations
+        run: node scripts/merge-addon-messages.mjs
+        working-directory: core/frontend
+
+      # A tree that failed to land costs nothing at collection time: vitest
+      # finds fewer files and reports every one of them passing. Ask the
+      # collector what it found rather than assuming this addon is in it.
+      - name: Fail if this addon's tests were not collected
+        shell: bash
+        working-directory: core/frontend
+        run: |
+          set -euo pipefail
+          collected="$(pnpm exec vitest list --filesOnly)"
+          printf '%s\n' "$collected" | grep -q '^src/addons/intelligence/' || {
+            echo "::error::vitest collected no tests from addons/intelligence"
+            exit 1
+          }
+
+      - name: Test
+        run: pnpm test
+        working-directory: core/frontend
+
+      # tsc follows the addon symlinks, so this type-checks this addon's
+      # sources against core's. eslint does not follow them, which is why it is
+      # not run here.
+      - name: Type-check
+        run: pnpm exec tsc --noEmit
+        working-directory: core/frontend
