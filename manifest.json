@@ -58,7 +58,9 @@
         "id": "clip-frames",
         "label": "CLIP Frames",
         "priority": 21
-      },
+      }
+    ],
+    "file-relations": [
       {
         "id": "similar-files",
         "label": "Similar Files",

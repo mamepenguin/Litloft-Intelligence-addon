@@ -97,13 +97,22 @@ export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSecti
     // iOS Safari. hako 7bFYOh3vFZP9EEuf9Ym_5.
     <div className="@container">
       {/* Collapsed by default, and the same disclosure shape as the
-          other two derived views. */}
+          other two derived views.
+
+          The weight is the group's, not a section's: this entry is in
+          core's `file-relations` slot, which draws it under one
+          "Related" heading beside core's own relations. At section
+          weight it matched the heading above it, so the two read as
+          sibling lists rather than as a group and its member.
+          `DESIGN.md` §The Related group holds the values — the other
+          member is in the core repository, so the table is the only
+          thing keeping the pair in step. */}
       <button
         type="button"
         onClick={handleToggle}
         aria-expanded={isOpen}
         aria-controls={`similar-files-${fileId}`}
-        className="flex w-full cursor-pointer items-center gap-2 text-sm font-semibold text-text-muted transition-colors hover:text-text-primary"
+        className="flex w-full cursor-pointer items-center gap-2 text-xs font-medium text-text-muted transition-colors hover:text-text-primary"
       >
         <span>{t("similarFiles")}{countLabel}</span>
         <span className="ml-auto" aria-hidden>

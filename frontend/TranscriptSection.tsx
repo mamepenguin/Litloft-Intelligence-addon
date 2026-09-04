@@ -16,6 +16,10 @@ import { useAddonStatus } from "@/components/AddonSlotsProvider";
 import type { MediaController } from "@/lib/mediaController";
 import { getMediaClockSnapshot, subscribeMediaClock } from "@/lib/mediaClock";
 import { addSourceCapture } from "@/lib/sourceCapture";
+import {
+  recallTranscriptScroll,
+  rememberTranscriptScroll,
+} from "./transcriptScroll";
 
 interface TranscriptSectionProps {
   fileId: string;
@@ -36,6 +40,30 @@ interface TranscriptSectionProps {
    * because filling the height there would mean filling the page.
    */
   fillHeight?: boolean;
+  /**
+   * The host has already written this panel's name above it.
+   *
+   * True in the inspector's tab strip, where the button the reader just
+   * pressed says "Transcript" — repeating it under the button spends a
+   * line saying what they can still see. False in the box below the
+   * player, which has no heading of its own, so the title is the only
+   * thing naming what the box holds.
+   */
+  labelledByHost?: boolean;
+  /**
+   * Whether this file has a transcript at all, reported to the host.
+   *
+   * The host draws a tab per `player-side` entry and cannot look inside
+   * one to find out whether it has anything — asking by name would be
+   * the core-to-addon dependency the rules forbid. Without an answer it
+   * assumes yes, which is what a video nobody has transcribed used to
+   * get: a Transcript tab opening on an empty panel.
+   *
+   * Answered `false` on mount and corrected when the fetches settle.
+   * The host keeps this component mounted while the answer is `false` —
+   * it is the thing giving the answer — so it can be taken back.
+   */
+  onAvailability?: (available: boolean) => void;
 }
 
 type Source = "chunks" | "words" | "external";
@@ -89,7 +117,17 @@ function parseVttCues(vtt: string): TranscriptChunkItem[] {
 
 const EMPTY_SUBTITLES: SubtitleInfo[] = [];
 
-export default function TranscriptSection({ fileId, drive, filename, fileType = "video", mediaController, subtitles = EMPTY_SUBTITLES, fillHeight = false }: TranscriptSectionProps) {
+export default function TranscriptSection({
+  fileId,
+  drive,
+  filename,
+  fileType = "video",
+  mediaController,
+  subtitles = EMPTY_SUBTITLES,
+  fillHeight = false,
+  labelledByHost = false,
+  onAvailability,
+}: TranscriptSectionProps) {
   const t = useTranslations("searchIndex");
   const addonStatus = useAddonStatus("intelligence");
   const refineFeature = addonStatus.features?.transcript_refine;
@@ -118,9 +156,17 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
   const wordsAvailable = whisperWordCues.length > 0;
   const externalAvailable = subtitles.length > 0 && externalCues.length > 0;
 
+  // All three fetches abandon a response that arrives after the file
+  // changed. The host reuses one mount across files and resets its own
+  // per-file state on the way; a late response landing after that would
+  // put one file's cues under another file's player, and — since the
+  // availability answer is derived from these — would tell the host the
+  // new file has a transcript because the old one did.
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     getFileTranscript(fileId, drive).then((res) => {
+      if (cancelled) return;
       if (res.available && res.chunks && res.chunks.length > 0) {
         setWhisperChunks(res.chunks);
         setWhisperLanguage(res.language || "");
@@ -129,13 +175,24 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
       }
       setLoading(false);
     });
+    return () => {
+      cancelled = true;
+    };
   }, [fileId, drive]);
 
   useEffect(() => {
+    let cancelled = false;
     fetch(`/api/addons/intelligence/files/${fileId}/subtitles.vtt`)
       .then((r) => (r.ok ? r.text() : ""))
-      .then((text) => setWhisperWordCues(text ? parseVttCues(text) : []))
-      .catch(() => setWhisperWordCues([]));
+      .then((text) => {
+        if (!cancelled) setWhisperWordCues(text ? parseVttCues(text) : []);
+      })
+      .catch(() => {
+        if (!cancelled) setWhisperWordCues([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [fileId]);
 
   useEffect(() => {
@@ -143,12 +200,20 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
       setExternalCues([]);
       return;
     }
+    let cancelled = false;
     const first = subtitles[0];
     setExternalLanguage(first.language || "");
     fetch(getSubtitleUrl(fileId, first.index))
       .then((r) => (r.ok ? r.text() : ""))
-      .then((text) => setExternalCues(text ? parseVttCues(text) : []))
-      .catch(() => setExternalCues([]));
+      .then((text) => {
+        if (!cancelled) setExternalCues(text ? parseVttCues(text) : []);
+      })
+      .catch(() => {
+        if (!cancelled) setExternalCues([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [fileId, subtitles]);
 
   // Reset `source` to the first available one whenever availability changes.
@@ -160,6 +225,25 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
     if (available.length === 0) return;
     if (!available.includes(source)) setSource(available[0]);
   }, [chunksAvailable, wordsAvailable, externalAvailable, source]);
+
+  const hasAnything = chunksAvailable || wordsAvailable || externalAvailable;
+
+  // Held in a ref so an inline arrow from the host — which is what a
+  // host naturally writes — does not re-fire this on every render of a
+  // component that re-renders on every clock tick. Core's own
+  // `ChaptersPanel` holds `onResolved` the same way.
+  const onAvailabilityRef = useRef(onAvailability);
+  useEffect(() => {
+    onAvailabilityRef.current = onAvailability;
+  });
+
+  // `false` first, because on mount nothing has arrived yet and the
+  // host's default is "assume it has something". Answering only when
+  // there is something to report would leave the empty tab exactly
+  // where it was: silence is what the host reads as yes.
+  useEffect(() => {
+    onAvailabilityRef.current?.(hasAnything);
+  }, [hasAnything]);
 
   const { cues, language } = useMemo(() => {
     if (source === "external") return { cues: externalCues, language: externalLanguage };
@@ -242,6 +326,73 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
     };
   }, [cues.length]);
 
+  // Current `following` for the save below, which runs from a DOM
+  // listener and on unmount — neither of which sees a re-rendered
+  // closure.
+  const followingRef = useRef(following);
+  useEffect(() => {
+    followingRef.current = following;
+  }, [following]);
+
+  const hasCues = cues.length > 0;
+
+  /**
+   * Put the reader back where they were.
+   *
+   * Waits for cues because `scrollTop` on an empty list is silently
+   * clamped to 0, so restoring before they render restores nothing.
+   *
+   * **Keyed on whether there is a list, not on how long it is.** The
+   * count changes when the reader switches source, and re-running then
+   * would take the position off them and pin them to an offset measured
+   * against a list that no longer exists — at best a no-op, at worst
+   * past the end of a shorter one. After the first restore the position
+   * is the reader's.
+   */
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || !hasCues) return;
+    const saved = recallTranscriptScroll(fileId);
+    if (!saved) return;
+    list.scrollTop = saved.top;
+    // Order matters: `following` is restored after the offset, and if it
+    // is false the auto-scroll effect returns early and leaves the
+    // offset alone. Restoring the offset without it would hand the
+    // reader back their place and then drag them off it.
+    setFollowing(saved.following);
+  }, [fileId, hasCues]);
+
+  /**
+   * Remember it, because a refetch cannot bring it back.
+   *
+   * Everything else this panel holds is re-derived when it mounts again
+   * — the cues, the language, the highlight. Where the reader had got
+   * to is not a fact about the file, so nothing re-derives it.
+   *
+   * On `scroll` rather than only on unmount: the unmount here is a
+   * bottom sheet collapsing, and reading the offset off an element
+   * whose ancestor is already being torn down is a worse bet than
+   * having written it down beforehand. The auto-scroll emits scroll
+   * events of its own and that is fine — unlike the follow-suspension
+   * above, this does not care who moved the list, only where it is now.
+   * The cleanup saves once more so that a change of `following` with no
+   * further scrolling is not lost.
+   */
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || !hasCues) return;
+    const save = () =>
+      rememberTranscriptScroll(fileId, {
+        top: list.scrollTop,
+        following: followingRef.current,
+      });
+    list.addEventListener("scroll", save, { passive: true });
+    return () => {
+      list.removeEventListener("scroll", save);
+      save();
+    };
+  }, [fileId, hasCues]);
+
   const resumeFollowing = useCallback(() => {
     setFollowing(true);
     scrollActiveIntoView();
@@ -295,7 +446,7 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
     }
   }, [fileId, drive, refining]);
 
-  if (loading || (!chunksAvailable && !wordsAvailable && !externalAvailable)) return null;
+  if (loading || !hasAnything) return null;
 
   const toggleOptions: { id: Source; label: string; available: boolean }[] = [
     { id: "chunks", label: t("transcriptSourceChunks"), available: chunksAvailable },
@@ -313,9 +464,20 @@ export default function TranscriptSection({ fileId, drive, filename, fileType = 
       // list then renders at full length and is silently clipped.
       className={fillHeight ? "flex min-h-0 flex-1 flex-col" : undefined}
     >
+      {/* The title goes when the host has already written it — the tab
+          the reader pressed says "Transcript", and saying it again
+          under the button costs a line of a panel whose whole value is
+          length. What stays either way is the row's other occupants:
+          the language, the count and the two controls are facts about
+          this transcript, not a second name for it. The row is never
+          empty, because the count is unconditional. */}
       <div className="mb-2 flex items-center gap-2 text-sm text-text-muted">
-        <FileText size={14} />
-        <span>{t("transcriptTitle")}</span>
+        {!labelledByHost && (
+          <>
+            <FileText size={14} />
+            <span>{t("transcriptTitle")}</span>
+          </>
+        )}
         {language && (
           <span className="rounded-lg bg-bg-card px-1.5 py-0.5 text-xs">
             {language}

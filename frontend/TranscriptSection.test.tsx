@@ -80,6 +80,57 @@ import {
   clearSourceCaptures,
   getSourceCaptures,
 } from "@/lib/sourceCapture";
+import {
+  clearTranscriptScroll,
+  recallTranscriptScroll,
+} from "@/addons/intelligence/transcriptScroll";
+
+/**
+ * The two-cue response the module mock is set up with, restated so a
+ * test that overrides it can put it back.
+ */
+const TRANSCRIPT_RESPONSE = {
+  available: true,
+  file_id: "abc",
+  drive: "family",
+  language: "ja",
+  chunks: [
+    {
+      index: 0,
+      text: "これは修正された文章です。",
+      start: 0,
+      end: 5,
+      refinedAt: "2026-04-15T00:00:00Z",
+      textOriginal: "これはげんぶんの文章です。",
+    },
+    { index: 1, text: "未修正の文章。", start: 5, end: 10 },
+  ],
+};
+
+async function transcriptApiMock() {
+  const apiMock = await import("@/addons/intelligence/api");
+  return apiMock.getFileTranscript as unknown as ReturnType<typeof vi.fn>;
+}
+
+/**
+ * One mock object is shared by every test in this file.
+ *
+ * A test that changes what it resolves to changes it for whatever runs
+ * next — and under the shuffled-order job that is not the test written
+ * below it. One test handing this file an untranscribed video was
+ * enough to time out eight tests in two other describes, and it stayed
+ * invisible in source order only because it happened to be near the end.
+ *
+ * `mockReset` and not merely `mockResolvedValue`: an unconsumed
+ * `mockResolvedValueOnce` would otherwise still be at the head of the
+ * queue when the next test asked.
+ */
+beforeEach(async () => {
+  const getFileTranscript = await transcriptApiMock();
+  getFileTranscript.mockReset();
+  getFileTranscript.mockResolvedValue(TRANSCRIPT_RESPONSE);
+});
+
 
 function renderSection() {
   return render(<TranscriptSection fileId="abc" drive="family" />);
@@ -105,6 +156,8 @@ describe("TranscriptSection — transcript refine UI", () => {
   beforeEach(() => {
     mockAddonStatus.features.transcript_refine = "manual";
     fetchMock.mockClear();
+    // Kept across mounts on purpose, so it is kept across tests too.
+    clearTranscriptScroll();
     clearSourceCaptures("family");
   });
 
@@ -219,6 +272,8 @@ describe("TranscriptSection — following playback", () => {
   beforeEach(() => {
     mockAddonStatus.features.transcript_refine = "manual";
     fetchMock.mockClear();
+    // Kept across mounts on purpose, so it is kept across tests too.
+    clearTranscriptScroll();
   });
 
   afterEach(() => {
@@ -281,6 +336,8 @@ describe("TranscriptSection — rail vs stacked form", () => {
   beforeEach(() => {
     mockAddonStatus.features.transcript_refine = "manual";
     fetchMock.mockClear();
+    // Kept across mounts on purpose, so it is kept across tests too.
+    clearTranscriptScroll();
   });
 
   afterEach(() => {
@@ -359,6 +416,8 @@ describe("TranscriptSection — following without fighting the reader", () => {
   beforeEach(() => {
     mockAddonStatus.features.transcript_refine = "manual";
     fetchMock.mockClear();
+    // Kept across mounts on purpose, so it is kept across tests too.
+    clearTranscriptScroll();
   });
 
   afterEach(() => {
@@ -458,6 +517,8 @@ describe("TranscriptSection — suspension actually stops the scrolling", () => 
   beforeEach(() => {
     mockAddonStatus.features.transcript_refine = "manual";
     fetchMock.mockClear();
+    // Kept across mounts on purpose, so it is kept across tests too.
+    clearTranscriptScroll();
   });
 
   afterEach(() => {
@@ -558,6 +619,8 @@ describe("TranscriptSection — per-row capture buttons", () => {
   beforeEach(() => {
     mockAddonStatus.features.transcript_refine = "manual";
     fetchMock.mockClear();
+    // Kept across mounts on purpose, so it is kept across tests too.
+    clearTranscriptScroll();
     clearSourceCaptures("family");
   });
 
@@ -675,5 +738,295 @@ describe("TranscriptSection — per-row capture buttons", () => {
       expect(seek).not.toBeNull();
       expect(seek!.classList.contains("pointer-coarse:min-h-11")).toBe(true);
     }
+  });
+});
+
+describe("TranscriptSection — telling the host whether there is anything", () => {
+  beforeEach(() => {
+    mockAddonStatus.features.transcript_refine = "manual";
+    fetchMock.mockClear();
+    clearTranscriptScroll();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("says no before it knows, because silence means yes to the host", async () => {
+    // The host draws a tab per entry and assumes one has something
+    // unless told otherwise — that is what keeps entries written before
+    // this signal working. So the first thing to say is "no": waiting
+    // until there is something to report would leave the empty tab
+    // exactly where it was.
+    const onAvailability = vi.fn();
+    render(
+      <TranscriptSection fileId="abc" drive="family" onAvailability={onAvailability} />,
+    );
+
+    expect(onAvailability).toHaveBeenCalledWith(false);
+    expect(onAvailability.mock.calls[0]).toEqual([false]);
+  });
+
+  it("says yes once the cues arrive", async () => {
+    const onAvailability = vi.fn();
+    render(
+      <TranscriptSection fileId="abc" drive="family" onAvailability={onAvailability} />,
+    );
+
+    await screen.findByText("未修正の文章。");
+    await waitFor(() => expect(onAvailability).toHaveBeenLastCalledWith(true));
+  });
+
+  it("stays at no for a file nobody has transcribed", async () => {
+    // The whole point. This file renders nothing, and before the signal
+    // existed it still grew a tab that opened on an empty panel.
+    const getFileTranscript = await transcriptApiMock();
+    getFileTranscript.mockResolvedValue({
+      available: false,
+      file_id: "abc",
+      drive: "family",
+      language: "",
+      chunks: [],
+    });
+    const onAvailability = vi.fn();
+    const { container } = render(
+      <TranscriptSection fileId="abc" drive="family" onAvailability={onAvailability} />,
+    );
+
+    await waitFor(() => expect(getFileTranscript).toHaveBeenCalled());
+    // Waiting on the fetch is not enough — the answer is derived a
+    // render later. Wait for the thing being asserted.
+    await waitFor(() => expect(container).toBeEmptyDOMElement());
+    expect(onAvailability.mock.calls.every(([v]) => v === false)).toBe(true);
+  });
+
+  it("does not re-answer when the host hands it a new closure", async () => {
+    // A host writing `onAvailability={(v) => setX(v)}` inline gives this
+    // a new function on every render, and this component re-renders on
+    // every clock tick. Re-firing on the prop would be a state write per
+    // tick, four times a second for the length of the video.
+    const onAvailability = vi.fn();
+    const { rerender } = render(
+      <TranscriptSection fileId="abc" drive="family" onAvailability={onAvailability} />,
+    );
+    await screen.findByText("未修正の文章。");
+    await waitFor(() => expect(onAvailability).toHaveBeenLastCalledWith(true));
+    const before = onAvailability.mock.calls.length;
+
+    rerender(
+      <TranscriptSection
+        fileId="abc"
+        drive="family"
+        onAvailability={(v: boolean) => onAvailability(v)}
+      />,
+    );
+
+    expect(onAvailability.mock.calls.length).toBe(before);
+  });
+});
+
+describe("TranscriptSection — whose name is on the panel", () => {
+  beforeEach(() => {
+    mockAddonStatus.features.transcript_refine = "manual";
+    fetchMock.mockClear();
+    clearTranscriptScroll();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("writes its own title where nothing else does", async () => {
+    // The box below the player has no heading, so this is the only
+    // thing saying what is in it.
+    render(<TranscriptSection fileId="abc" drive="family" />);
+
+    expect(await screen.findByText("Transcript")).toBeInTheDocument();
+  });
+
+  it("drops it when the host has already written it", async () => {
+    // In the tab strip the button the reader just pressed says it.
+    render(<TranscriptSection fileId="abc" drive="family" labelledByHost />);
+
+    await screen.findByText("未修正の文章。");
+    expect(screen.queryByText("Transcript")).toBeNull();
+  });
+
+  it("keeps the facts about the transcript either way", async () => {
+    // Only the name goes. The language, the count and the controls are
+    // facts about this transcript, not a second name for it.
+    const { container } = render(
+      <TranscriptSection fileId="abc" drive="family" labelledByHost />,
+    );
+
+    await screen.findByText("未修正の文章。");
+    expect(screen.getByText("ja")).toBeInTheDocument();
+    expect(screen.getByText("(2)")).toBeInTheDocument();
+    expect(container.querySelector(".mb-2")).not.toBeEmptyDOMElement();
+  });
+});
+
+describe("TranscriptSection — where the reader had got to", () => {
+  beforeEach(async () => {
+    mockAddonStatus.features.transcript_refine = "manual";
+    fetchMock.mockClear();
+    clearTranscriptScroll();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function scrollStubController(state: { currentTime: number }) {
+    return {
+      seek: vi.fn(),
+      play: vi.fn(),
+      pause: vi.fn(),
+      togglePlay: vi.fn(),
+      toggleMute: vi.fn(),
+      toggleFullscreen: vi.fn(),
+      getCurrentTime: () => state.currentTime,
+      getDuration: () => 10,
+      isPaused: () => false,
+      isMuted: () => false,
+      getVolume: () => 1,
+      setVolume: vi.fn(),
+      getPlaybackRate: () => 1,
+      setPlaybackRate: vi.fn(),
+      getBufferedFraction: () => 0,
+    };
+  }
+
+  const CHIP = "Back to current position";
+
+  /**
+   * Give the word-level source something to hold.
+   *
+   * Two available sources is what puts the source toggle on screen, and
+   * the toggle is the only thing in this panel that changes the cue
+   * count after it has settled.
+   */
+  function withWordCues() {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      // Three, where the chunk source has two. The restore effect is
+      // keyed on the cue count, so two sources of equal length would
+      // not re-run it and the switch would prove nothing.
+      text: async () =>
+        "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nfirst\n\n00:00:02.000 --> 00:00:04.000\nsecond\n\n00:00:04.000 --> 00:00:06.000\nthird\n",
+      json: async () => null,
+    } as Response);
+  }
+
+  /**
+   * Mount, scroll somewhere, unmount, mount again.
+   *
+   * That is the phone's bottom sheet collapsing and being raised: core
+   * mounts the drawer only while it is expanded, because vaul renders a
+   * modal Radix dialog and one left mounted at rest puts `aria-hidden`
+   * on the whole application. Everything else this panel holds comes
+   * back from the refetch; the offset does not.
+   */
+  async function mountAndScroll(fileId: string, top: number) {
+    const utils = render(<TranscriptSection fileId={fileId} drive="family" />);
+    await screen.findByText("未修正の文章。");
+    const list = utils.container.querySelector(".overflow-y-auto")! as HTMLElement;
+    list.scrollTop = top;
+    fireEvent.scroll(list);
+    return { utils, list };
+  }
+
+  async function remount(fileId: string) {
+    const utils = render(<TranscriptSection fileId={fileId} drive="family" />);
+    await screen.findByText("未修正の文章。");
+    return utils.container.querySelector(".overflow-y-auto")! as HTMLElement;
+  }
+
+  it("puts the reader back where they were", async () => {
+    const { utils } = await mountAndScroll("abc", 420);
+    utils.unmount();
+
+    expect((await remount("abc")).scrollTop).toBe(420);
+  });
+
+  it("keeps each file's place to itself", async () => {
+    // Keyed by file, so opening a second one and coming back does not
+    // land the reader at someone else's offset.
+    const { utils } = await mountAndScroll("abc", 420);
+    utils.unmount();
+
+    const other = await remount("def");
+    expect(other.scrollTop).toBe(0);
+  });
+
+  it("restores having taken over, not just the offset", async () => {
+    // Restoring the offset alone on a playing file hands the reader back
+    // their place and then, a second later, drags them to the cue that
+    // is playing — which is the state they left precisely by scrolling
+    // away from it. The chip is the component saying it has stopped
+    // following, and it is the only thing that shows the difference:
+    // the offset is identical either way at the moment of the restore.
+    const state = { currentTime: 1 };
+    const withPlayer = () =>
+      render(
+        <TranscriptSection
+          fileId="abc"
+          drive="family"
+          mediaController={scrollStubController(state)}
+        />,
+      );
+    const utils = withPlayer();
+    await screen.findByText("未修正の文章。");
+    const list = utils.container.querySelector(".overflow-y-auto")! as HTMLElement;
+    list.scrollTop = 300;
+    fireEvent.wheel(list);
+    fireEvent.scroll(list);
+    expect(await screen.findByRole("button", { name: CHIP })).toBeInTheDocument();
+    utils.unmount();
+
+    const back = withPlayer();
+    await screen.findByText("未修正の文章。");
+    const list2 = back.container.querySelector(".overflow-y-auto")! as HTMLElement;
+    expect(list2.scrollTop).toBe(300);
+    // Still suspended, so the auto-scroll will not take the offset back
+    // off them the moment playback moves on.
+    expect(await screen.findByRole("button", { name: CHIP })).toBeInTheDocument();
+  });
+
+  it("hands the position back to the reader once restored", async () => {
+    // Restoring happens when there is a list to restore into, not every
+    // time the list changes length. Switching source changes the length,
+    // and re-restoring there would pin the reader to an offset measured
+    // against the list they just left.
+    //
+    // The move here is deliberately not a `scroll` event: switching
+    // source replaces the list's contents, and the browser adjusting the
+    // offset for that is not the reader scrolling. It is also what makes
+    // the failure visible — a saved 10 would be restored as 10, and the
+    // two would be indistinguishable.
+    withWordCues();
+    const { utils } = await mountAndScroll("abc", 420);
+    utils.unmount();
+    const list = await remount("abc");
+    expect(list.scrollTop).toBe(420);
+    list.scrollTop = 10;
+
+    fireEvent.click(await screen.findByRole("button", { name: "Words" }));
+
+    expect(list.scrollTop).toBe(10);
+  });
+
+  it("forgets the oldest file rather than growing without limit", async () => {
+    // Module state nothing ever clears. A tab left open for a week
+    // browsing a large drive would otherwise keep an entry per file.
+    for (let i = 0; i < 21; i += 1) {
+      const { utils } = await mountAndScroll(`f${i}`, 100 + i);
+      utils.unmount();
+    }
+
+    expect(recallTranscriptScroll("f0")).toBeUndefined();
+    expect(recallTranscriptScroll("f1")).toEqual({ top: 101, following: true });
+    expect(recallTranscriptScroll("f20")).toEqual({ top: 120, following: true });
   });
 });
