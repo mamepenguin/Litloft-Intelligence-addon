@@ -230,11 +230,76 @@ describe("SimilarFilesSection", () => {
 
     rerender(<SimilarFilesSection fileId="f2" drive="media" />);
 
-    await waitFor(() =>
-      expect(header()).toHaveAttribute("aria-expanded", "false"),
-    );
+    // Asserted directly: the reset runs inside the rerender's own act,
+    // so it has already happened. A `waitFor` here would find its
+    // condition true on the first poll and return before anything else
+    // it was meant to settle — the shape this suite exists to avoid.
+    expect(header()).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("neighbour.mp4")).toBeNull();
     // The new file gets the same deal the old one did: nothing until asked.
     expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a slow answer that arrives after the reader moved to another file", async () => {
+    // The case the `requestIdRef` guard exists for, and the only one:
+    // the previous test changes the file with nothing in flight, so it
+    // passes with the guard deleted. This one holds the request open
+    // across the change.
+    //
+    // Without the guard: the file-change effect resets to idle and
+    // closed, then file A's response lands and writes `loaded` with A's
+    // neighbours. File B's header then reads "(1)", opening it shows
+    // another file's results, and it never refetches — opening only
+    // fetches from `idle`. Wrong data, silent, and permanent for as long
+    // as that file is open.
+    let settle: (value: unknown) => void = () => {};
+    vi.mocked(getSimilarFiles).mockReturnValue(
+      new Promise((resolve) => {
+        settle = resolve;
+      }) as never,
+    );
+
+    const { rerender } = renderSection("f1");
+    fireEvent.click(header());
+    await screen.findByTestId("similar-files-ghosts");
+
+    rerender(<SimilarFilesSection fileId="f2" drive="media" />);
+    await act(async () => {
+      settle({ results });
+    });
+
+    expect(header().textContent).not.toContain("(1)");
+    fireEvent.click(header());
+    expect(screen.queryByText("neighbour.mp4")).toBeNull();
+  });
+
+  it("drops one that arrives after a backoff, too", async () => {
+    // The same guard, at the other exit the retry loop can take: the
+    // sleep between attempts is where a slow file spends most of its
+    // time, so it is the likeliest moment for the reader to move on.
+    vi.mocked(getSimilarFiles).mockRejectedValueOnce(new Error("cold"));
+    vi.useFakeTimers();
+    try {
+      const { rerender } = renderSection("f1");
+      fireEvent.click(header());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      // In the backoff now, with a second attempt scheduled.
+      expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+
+      rerender(<SimilarFilesSection fileId="f2" drive="media" />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+
+      // The retired loop returns after its sleep instead of firing the
+      // next attempt against the file the reader has left.
+      expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+      expect(header()).toHaveAttribute("aria-expanded", "false");
+      expect(header().textContent).not.toContain("(");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

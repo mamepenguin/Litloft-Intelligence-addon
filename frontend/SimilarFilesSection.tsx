@@ -122,17 +122,32 @@ export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSecti
               {Array.from({ length: GHOST_CARDS }, (_, i) => (
                 <div key={i} className="overflow-hidden rounded-lg bg-bg-card">
                   <div className="aspect-video w-full animate-pulse bg-bg-elevated" />
-                  {/* Sized against the real card's text block below, not
-                      guessed: a filename line (`text-xs`, 16px) plus the
-                      keyword chips (`mt-1`, then ~15px). Ghosts that are
-                      merely present do not do the job — the point is that
-                      the swap moves nothing. Reserving the taller of the
-                      two real shapes means a card without keywords
-                      shrinks the box rather than growing it, which pulls
-                      content up instead of shoving it down. */}
+                  {/* The same elements as the real card's text block,
+                      with the text made transparent and the box filled —
+                      not bars of a height computed from the type scale.
+                      Ghosts that are merely present do not do the job:
+                      the point is that the swap moves nothing, and a
+                      height worked out by hand is a second copy of the
+                      real card's typography that nothing keeps in step.
+                      `text-[11px]` in particular sets font size and
+                      inherits its line height, so the arithmetic depends
+                      on a value neither file states. Sharing the classes
+                      makes the two heights equal by construction.
+
+                      The keyword row is drawn always, so a card that
+                      turns out to have no keywords shrinks the box
+                      rather than growing it — pulling the content below
+                      up, which is the direction that does not shove
+                      away what someone is already reading. */}
                   <div className="px-2 py-1.5">
-                    <div className="h-4 w-4/5 animate-pulse rounded-lg bg-bg-elevated" />
-                    <div className="mt-1 h-[15px] w-1/2 animate-pulse rounded-lg bg-bg-elevated" />
+                    <p className="w-4/5 animate-pulse truncate rounded-lg bg-bg-elevated text-xs text-transparent">
+                      &nbsp;
+                    </p>
+                    <div className="mt-1 flex flex-wrap gap-0.5">
+                      <span className="animate-pulse rounded-lg bg-bg-elevated px-1.5 py-px text-[11px] text-transparent">
+                        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+                      </span>
+                    </div>
                   </div>
                 </div>
               ))}

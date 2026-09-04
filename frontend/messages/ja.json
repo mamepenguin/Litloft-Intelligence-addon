@@ -222,7 +222,7 @@
     "similarFilesDetecting": "検出中...",
     "similarFilesEmpty": "似たファイルは見つかりませんでした",
     "similarFilesUnavailable": "似たファイル検出は利用できません",
-    "similarFilesRetry": "再検出",
+    "similarFilesRetry": "再試行",
     "suggestedTags": "AIタグ候補",
     "acceptTag": "タグ「{tag}」を追加",
     "acceptAllTags": "すべて追加",
