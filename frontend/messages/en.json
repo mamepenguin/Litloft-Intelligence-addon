@@ -1,5 +1,8 @@
 {
   "intelligence": {
+    "slots": {
+      "transcript": "Transcript"
+    },
     "policyFeatures": {
       "transcriptionCloud": {
         "label": "Allow cloud transcription",

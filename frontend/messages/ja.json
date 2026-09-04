@@ -1,5 +1,8 @@
 {
   "intelligence": {
+    "slots": {
+      "transcript": "文字起こし"
+    },
     "policyFeatures": {
       "transcriptionCloud": {
         "label": "クラウド文字起こしを許可",
