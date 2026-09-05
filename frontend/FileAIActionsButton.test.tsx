@@ -242,34 +242,3 @@ describe("FileAIActionsButton", () => {
   });
 });
 
-/**
- * The touch floor (UI redesign Phase 3, C2b).
- *
- * 00-basis's mobile sizing rule puts the floor at 44px, and this trigger
- * renders 32px tall (`py-1.5` around `text-sm`). It reaches the floor by
- * growing its own box on a coarse pointer rather than by hanging a
- * pseudo-element over its neighbours — `Button`'s recipe for that is written
- * for icon-only controls, where the 32px square is deliberate and the
- * arithmetic depends on it. This one carries a label.
- */
-describe("FileAIActionsButton — touch target", () => {
-  it("reaches the 44px floor on a coarse pointer", () => {
-    // The trigger only exists once a section offers something, so the
-    // offering is the setup rather than decoration — without it this would
-    // measure an empty container.
-    renderWithStack(
-      <>
-        <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active />
-        <FileAIActionsButton fileId="f1" />
-      </>,
-    );
-    const trigger = screen.getByRole("button", { name: "AI" });
-    const tokens = trigger.className.split(/\s+/);
-    // `min-h-11` is 2.75rem = 44px, and it is gated on `pointer-coarse` so a
-    // mouse still gets the 32px control. Both halves matter: the bare
-    // `min-h-11` would grow the button everywhere, and the bare
-    // `pointer-coarse:` prefix on something else would not grow it at all.
-    expect(tokens).toContain("pointer-coarse:min-h-11");
-    expect(tokens).not.toContain("min-h-11");
-  });
-});

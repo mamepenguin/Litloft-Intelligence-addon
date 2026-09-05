@@ -137,14 +137,21 @@ describe("PickupPage", () => {
  * (UI redesign Phase 3, C2b).
  */
 describe("PickupPage — page header", () => {
-  it("names itself once, and lets core choose the size", async () => {
+  it("names itself once, and puts the icon outside the name", async () => {
     const { container } = render(<PickupPage />);
     await screen.findByRole("heading", { level: 1 });
     const h1s = container.querySelectorAll("h1");
     expect(h1s).toHaveLength(1);
-    // DESIGN.md §3.2 gives H1 one size, and `PageHeader` is the only thing
-    // that writes it. This page already used `text-2xl`; what changes is that
-    // it no longer chooses.
     expect(h1s[0].className).toContain("text-2xl");
+    // This is what distinguishes `PageHeader` from a hand-written header that
+    // renders the same thing, and it is the one difference the component
+    // documents as load-bearing: the icon is a *sibling* of the `<h1>`, not a
+    // child, so it cannot reach the heading's accessible name. This page used
+    // to put `<Sparkles>` inside the heading.
+    //
+    // The `text-2xl` line above is not that check — this page already used
+    // `text-2xl`, so reverting it leaves that assertion green. What reddens on
+    // a revert is the line below.
+    expect(h1s[0].querySelector("svg")).toBeNull();
   });
 });

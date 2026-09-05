@@ -19,6 +19,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 import { ShortcutsProvider } from "@/components/ShortcutsProvider";
+import { accentFills } from "@/__tests__/helpers/accentFills";
 
 vi.mock("@/addons/intelligence/knowledgeBridge", () => ({
   distillToKnowledge: vi.fn(async () => ({ noteFileId: "n1", notePath: "n.md" })),
@@ -129,5 +130,29 @@ describe("KnowledgeSaveDialog — the confirm row", () => {
     // Non-empty, so the assertion cannot pass by both carrying nothing.
     expect(disabledTokens(submit).length).toBeGreaterThan(0);
     expect(disabledTokens(cancel)).toEqual(disabledTokens(submit));
+  });
+
+  it("spends one accent fill on the row", async () => {
+    // Each conversion in this pull request *chooses* a variant, and the choice
+    // is what nothing else pins: making the submit `secondary` leaves the row
+    // with no fill and making the cancel `primary` gives it two, and both are
+    // otherwise green everywhere. DESIGN.md §2.2 allows one, so one is what is
+    // asserted — exactly one, which catches the choice in both directions.
+    const { container } = withStack(
+      <KnowledgeSaveDialog
+        open
+        drive="notes"
+        fileId="f1"
+        content="# Body"
+        sourceFilename="talk.mp4"
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+    // Waiting on the button the assertion is about, not on the render that
+    // precedes it: the dialog loads its folder list before the row appears.
+    await screen.findByRole("button", { name: "Save" });
+    expect(accentFills(container)).toHaveLength(1);
+    expect(accentFills(container)[0]).toHaveTextContent("Save");
   });
 });

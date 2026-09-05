@@ -100,12 +100,7 @@ export default function FileAIActionsButton({ fileId }: FileAIActionsButtonProps
         ref={triggerRef}
         type="button"
         onClick={() => setOpen((s) => !s)}
-        // `pointer-coarse:min-h-11` is the 44px touch floor (00-basis, mobile
-        // sizing). The box itself, not an overhanging pseudo-element: that
-        // recipe is `Button`'s and is for icon-only controls, where growing
-        // the box would change a deliberate 32px square. This one carries a
-        // label, so it can simply be tall enough.
-        className="flex items-center gap-1.5 rounded-full bg-bg-card px-3 py-1.5 text-sm text-text-primary transition-colors hover:bg-bg-elevated pointer-coarse:min-h-11"
+        className="flex items-center gap-1.5 rounded-full bg-bg-card px-3 py-1.5 text-sm text-text-primary transition-colors hover:bg-bg-elevated"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={label}
