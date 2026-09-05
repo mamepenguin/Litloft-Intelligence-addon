@@ -245,7 +245,6 @@
     "chapterCandidatesActionError": "チャプターの操作に失敗しました。もう一度お試しください。",
     "chapterCandidatesGenerationFailed": "チャプター生成に失敗しました。もう一度作成してください。",
     "chapterCandidatesTokenBudget": "モデルが出力枠を使い切り、チャプターが返りませんでした。設定の llm.max_tokens を増やすか、思考に枠を使われている場合は llm.reasoning を disabled にしてください。",
-    "aiFolderActions": "AI",
     "aiFileActions": "AI",
     "generateFolderTags": "フォルダのAIタグ候補を作成",
     "tagsBatchQueued": "{queued}件を処理待ちに追加しました（{skipped}件はスキップ）",
@@ -307,7 +306,9 @@
     "visualIndexSceneFailed": "失敗",
     "visualIndexTranscriptExcerpt": "文字起こし",
     "visualIndexWaitingPrerequisite": "シーンのインデックス作成の完了を待っています。",
-    "visualIndexActionError": "ビジュアルインデックスの生成を開始できませんでした。"
+    "visualIndexActionError": "ビジュアルインデックスの生成を開始できませんでした。",
+    "tagsBatchError": "キューに追加できませんでした。再試行してください。",
+    "summariesBatchError": "キューに追加できませんでした。再試行してください。"
   },
   "detailedSummary": {
     "citations": {
