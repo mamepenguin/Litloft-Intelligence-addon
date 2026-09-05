@@ -747,11 +747,16 @@ describe("IntelligenceAskPage — page header, mode tabs and accent budget", () 
       HTMLTextAreaElement.prototype,
       "value",
     )!.set!;
-    const form = textarea.closest("form")!;
     await act(async () => {
       setter.call(textarea, "what is the plot?");
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
-      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    // The button, not a synthetic `submit` on the form. Dispatching on the
+    // form reaches the answered state even when the control that starts a
+    // question is disabled — so a test named for asking would pass on a
+    // screen where asking is impossible.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("ask-submit"));
     });
     await act(async () => {
       streamState.current.push({ kind: "keywords", keywords: "plot" });
@@ -806,19 +811,44 @@ describe("IntelligenceAskPage — page header, mode tabs and accent budget", () 
   it("spends its one accent fill on asking, with the answer on screen", async () => {
     // Measured in the answered state, not at rest. At rest only the submit
     // button exists and a budget of one would hold no matter what the save
-    // action wore; the two are on screen together exactly here, which is the
-    // state that was over budget.
+    // action wore; these two are on screen together here, and before this
+    // migration they were the two fills.
+    //
+    // It is not the state with the most fills. Opening the save dialog adds
+    // `AskSaveDialog`'s own primary button, which renders inside `container`
+    // because that dialog does not portal — so a click away, this counts two.
+    // Dialogs are outside the budget by this repository's existing practice:
+    // core's own `accent-budget.test.tsx` mocks `ConfirmDialog`, `MoveDialog`,
+    // `CollectionPicker` and `BatchRenameDialog` to `() => null`. The
+    // difference is that core makes that exclusion visible as mock lines and
+    // this one expresses it by not clicking, so it is written down here
+    // instead.
     const { container } = await answered();
     // The save action only exists once an answer has citations, so waiting on
     // it is waiting on the state this test is about rather than on the render
-    // that precedes it. Located by the dialog it opens, not by a label: the
-    // label is translated and would tie this to one catalogue.
-    const save = await screen.findByRole("button", {
-      name: (_name, el) => el.querySelector("svg.lucide-bookmark-plus") !== null,
-    });
-    expect(save).toBeInTheDocument();
+    // that precedes it. Found by `data-testid` for the reason the one on the
+    // thinking indicator gives a few hundred lines up — it survives both the
+    // translation catalogue and the icon library.
+    await screen.findByTestId("ask-save-note");
     expect(accentFills(container)).toHaveLength(1);
     // And it is the submit button that keeps it.
     expect(accentFills(container)[0]).toHaveAttribute("type", "submit");
+  });
+
+  it("does not repaint the submit button under the cursor while it is disabled", async () => {
+    // `Button` guards its hover colour behind `enabled:`, and `Button.tsx`
+    // says why: a bare `hover:` repaints a *disabled* button the moment the
+    // pointer rests on it, which tells the reader it is live. Both of this
+    // page's fills used to be written by hand with a bare `hover:`.
+    //
+    // **This does not pin that the button is core's `Button`.** A hand-written
+    // recipe that carries the guard passes it, measured. What is asserted is
+    // the guard, and the guard is a rule about which CSS exists — the one
+    // thing a class string can prove. Appearance is not claimed: jsdom loads
+    // no stylesheet, so nothing here observes a colour.
+    render(<IntelligenceAskPage />);
+    const submit = await screen.findByTestId("ask-submit");
+    expect(submit).toBeDisabled();
+    expect(submit.className).toContain("enabled:hover:");
   });
 });

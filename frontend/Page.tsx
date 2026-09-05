@@ -921,6 +921,7 @@ function IntelligenceAskPageInner() {
                 type="submit"
                 variant="primary"
                 size="sm"
+                data-testid="ask-submit"
                 disabled={!canSubmit}
               >
                 <Send size={12} /> {t("poweredByLlm")}
@@ -1117,6 +1118,7 @@ function IntelligenceAskPageInner() {
                     type="button"
                     variant="secondary"
                     size="sm"
+                    data-testid="ask-save-note"
                     onClick={() => setSaveDialogOpen(true)}
                   >
                     <BookmarkPlus size={12} />
