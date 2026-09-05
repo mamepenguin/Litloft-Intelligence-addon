@@ -96,13 +96,6 @@
         "priority": 5
       }
     ],
-    "folder-actions": [
-      {
-        "id": "folder-ai-actions",
-        "label": "AI",
-        "priority": 10
-      }
-    ],
     "file-detail-actions": [
       {
         "id": "file-ai-actions",
@@ -143,6 +136,13 @@
         "id": "index-details",
         "label": "Index Details",
         "priority": 30
+      }
+    ],
+    "folder-actions-menu": [
+      {
+        "id": "folder-ai-actions",
+        "label": "AI",
+        "priority": 10
       }
     ]
   },

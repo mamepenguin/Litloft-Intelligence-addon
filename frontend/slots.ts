@@ -21,7 +21,7 @@ export const slotComponents: Record<string, React.LazyExoticComponent<React.Comp
   "summary": lazy(() => import("./SummarySection")),
   "detailed-summary": lazy(() => import("./DetailedSummarySection")),
   "visual-description": lazy(() => import("./VisualDescriptionSection")),
-  "folder-ai-actions": lazy(() => import("./FolderAIActionsButton")),
+  "folder-ai-actions": lazy(() => import("./FolderAIActionsMenuItems")),
   "file-ai-actions": lazy(() => import("./FileAIActionsButton")),
   "folder-refine-transcripts": lazy(() => import("./FolderRefineButton")),
   "admin-transcription": lazy(() => import("./AdminTranscriptionSettingsSection")),
