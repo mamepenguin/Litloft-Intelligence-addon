@@ -59,6 +59,7 @@ vi.mock("../api", async () => {
 });
 
 import FindPage from "./find";
+import { accentFills } from "@/__tests__/helpers/accentFills";
 import type { FindResponse } from "../api";
 
 const fullResponse: FindResponse = {
@@ -376,5 +377,40 @@ describe("FindPage — empty / loading / error", () => {
     // wins (otherwise the user sees a contradictory "no results" +
     // "request failed" double surface).
     expect(screen.queryByTestId("find-empty")).toBeNull();
+  });
+});
+
+/**
+ * The page's own chrome, after adopting core's `PageHeader` and `PageTabs`
+ * (UI redesign Phase 3, C2a). The Ask page carries the same three.
+ */
+describe("FindPage — page header, mode tabs and accent budget", () => {
+  it("names itself once, and lets core choose the size", () => {
+    const { container } = render(<FindPage />);
+    const h1s = container.querySelectorAll("h1");
+    expect(h1s).toHaveLength(1);
+    expect(h1s[0].className).toContain("text-2xl");
+  });
+
+  it("marks the current mode the way a set of links does, and not twice", () => {
+    render(<FindPage />);
+    const find = screen.getByRole("link", { name: /find/i });
+    expect(find).toHaveAttribute("aria-current", "page");
+    expect(find).not.toHaveAttribute("aria-selected");
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+    const ask = screen.getByRole("link", { name: /ask/i });
+    expect(ask).not.toHaveAttribute("aria-current");
+  });
+
+  it("spends its one accent fill on searching", () => {
+    // Two before this migration: the submit button and the selected mode tab,
+    // which spent the screen's fill on saying which mode you are already
+    // looking at. `PageTabs` marks the selection with a border instead, so
+    // this also fails if the tab row goes back to filling.
+    const { container } = render(<FindPage />);
+    const fills = accentFills(container);
+    expect(fills).toHaveLength(1);
+    expect(fills[0]).toHaveAttribute("type", "submit");
   });
 });

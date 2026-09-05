@@ -107,6 +107,7 @@ vi.mock("@/addons/intelligence/api", async () => {
 
 // Import _after_ mocks are registered.
 import IntelligenceAskPage from "@/addons/intelligence/Page";
+import { accentFills } from "@/__tests__/helpers/accentFills";
 import {
   getIntelligenceStatus,
   parseSseFrame,
@@ -716,5 +717,108 @@ describe("IntelligenceAskPage — status probe fallback", () => {
     expect(
       await screen.findByText("LLM is not configured"),
     ).toBeInTheDocument();
+  });
+});
+
+/**
+ * The page's own chrome, after adopting core's `PageHeader` and `PageTabs`
+ * (UI redesign Phase 3, C2a).
+ *
+ * Three things this page used to say for itself and now takes from core: the
+ * heading and its size, the mode row's vocabulary, and how many accent fills
+ * the screen is allowed.
+ */
+describe("IntelligenceAskPage — page header, mode tabs and accent budget", () => {
+  beforeEach(() => {
+    streamState.current = makeController();
+    clearSourceCaptures("family");
+  });
+
+  afterEach(() => {
+    streamState.current.end();
+  });
+
+  async function answered() {
+    const utils = render(<IntelligenceAskPage />);
+    const textarea = (await screen.findByRole("textbox", {
+      name: /question input/i,
+    })) as HTMLTextAreaElement;
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!;
+    const form = textarea.closest("form")!;
+    await act(async () => {
+      setter.call(textarea, "what is the plot?");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await act(async () => {
+      streamState.current.push({ kind: "keywords", keywords: "plot" });
+      streamState.current.push({
+        kind: "citation",
+        index: 0,
+        citation: {
+          file_id: "file-a",
+          drive: "family",
+          filename: "a.md",
+          folder_path: "",
+          excerpt: "x",
+        },
+      });
+      streamState.current.push({ kind: "answer_chunk", delta: "an answer" });
+      streamState.current.push({ kind: "done" });
+      streamState.current.end();
+    });
+    return utils;
+  }
+
+  it("names itself once, and lets core choose the size", async () => {
+    const { container } = render(<IntelligenceAskPage />);
+    await screen.findByRole("textbox", { name: /question input/i });
+    const h1s = container.querySelectorAll("h1");
+    expect(h1s).toHaveLength(1);
+    // DESIGN.md §3.2 gives H1 one size, and `PageHeader` is the only thing
+    // that writes it. Asserting it here is what would catch this page going
+    // back to writing its own heading with its own `text-lg`.
+    expect(h1s[0].className).toContain("text-2xl");
+  });
+
+  it("marks the current mode the way a set of links does, and not twice", async () => {
+    render(<IntelligenceAskPage />);
+    const ask = await screen.findByRole("link", { name: /ask/i });
+    expect(ask).toHaveAttribute("aria-current", "page");
+    // Ask and Find are separate routes, so the row navigates. `role="tab"`
+    // promises a screen reader that activating it swaps a region in this
+    // view, which a `<Link>` does not do — and this row used to carry both
+    // that promise and `aria-current` at once. Media Import resolved the same
+    // pairing from the other end: its two views are one page, so it kept the
+    // tablist and dropped `aria-current`.
+    expect(ask).not.toHaveAttribute("aria-selected");
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+    // The other mode is present and is not marked current — without this the
+    // assertions above would pass on a row that had lost its second tab.
+    const find = screen.getByRole("link", { name: /find/i });
+    expect(find).not.toHaveAttribute("aria-current");
+  });
+
+  it("spends its one accent fill on asking, with the answer on screen", async () => {
+    // Measured in the answered state, not at rest. At rest only the submit
+    // button exists and a budget of one would hold no matter what the save
+    // action wore; the two are on screen together exactly here, which is the
+    // state that was over budget.
+    const { container } = await answered();
+    // The save action only exists once an answer has citations, so waiting on
+    // it is waiting on the state this test is about rather than on the render
+    // that precedes it. Located by the dialog it opens, not by a label: the
+    // label is translated and would tie this to one catalogue.
+    const save = await screen.findByRole("button", {
+      name: (_name, el) => el.querySelector("svg.lucide-bookmark-plus") !== null,
+    });
+    expect(save).toBeInTheDocument();
+    expect(accentFills(container)).toHaveLength(1);
+    // And it is the submit button that keeps it.
+    expect(accentFills(container)[0]).toHaveAttribute("type", "submit");
   });
 });

@@ -43,6 +43,8 @@ import { useSearchParams } from "next/navigation";
 import { AlertCircle, BookmarkPlus, Quote, Send, Sparkles, Square, X } from "lucide-react";
 
 import { useCurrentDrive } from "@/components/CurrentDriveProvider";
+import { Button } from "@/components/Button";
+import { PageHeader } from "@/components/PageHeader";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import { addSourceCapture } from "@/lib/sourceCapture";
 import ModeTabs from "./ModeTabs";
@@ -859,300 +861,314 @@ function IntelligenceAskPageInner() {
   );
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 sm:p-6">
-      <header className="flex items-center gap-2">
-        <Sparkles size={18} className="text-accent-teal" />
-        <h1 className="text-lg font-semibold text-text-primary">
-          {t("answerTitle")}
-        </h1>
-      </header>
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 py-4 sm:py-6">
+      <PageHeader
+        titleIcon={Sparkles}
+        title={t("answerTitle")}
+        tabs={
+          drive ? <ModeTabs current="ask" query={input} drive={drive} /> : undefined
+        }
+      />
 
-      {drive && <ModeTabs current="ask" query={input} drive={drive} />}
+      {/* `px-4`, matching PageHeader's own padding. The container carries the
+          vertical rhythm and each side pads itself horizontally, which is what
+          TrashView and MissingView already do — a container padding both axes
+          would leave the header inset 16px further than everything under it. */}
+      <div className="flex flex-col gap-4 px-4">
 
-      {ragAvailable === false && (
-        <div
-          role="alert"
-          className="flex items-start gap-2 rounded-lg border border-bg-border bg-bg-card p-3"
-        >
-          <AlertCircle
-            size={16}
-            className="mt-0.5 flex-shrink-0 text-text-muted"
+        {ragAvailable === false && (
+          <div
+            role="alert"
+            className="flex items-start gap-2 rounded-lg border border-bg-border bg-bg-card p-3"
+          >
+            <AlertCircle
+              size={16}
+              className="mt-0.5 flex-shrink-0 text-text-muted"
+            />
+            <p className="text-sm text-text-muted">{t("llmDisabled")}</p>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="flex flex-col gap-2">
+          <textarea
+            value={input}
+            onChange={handleInputChange}
+            onKeyDown={handleInputKeyDown}
+            onCompositionStart={() => setComposing(true)}
+            onCompositionEnd={() => setComposing(false)}
+            placeholder={seedQuery || ""}
+            rows={3}
+            disabled={ragAvailable === false}
+            className="w-full resize-y rounded-lg border border-bg-border bg-bg-card p-3 text-sm text-text-primary placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
+            aria-label="Question input"
           />
-          <p className="text-sm text-text-muted">{t("llmDisabled")}</p>
-        </div>
-      )}
-
-      <form onSubmit={handleSubmit} className="flex flex-col gap-2">
-        <textarea
-          value={input}
-          onChange={handleInputChange}
-          onKeyDown={handleInputKeyDown}
-          onCompositionStart={() => setComposing(true)}
-          onCompositionEnd={() => setComposing(false)}
-          placeholder={seedQuery || ""}
-          rows={3}
-          disabled={ragAvailable === false}
-          className="w-full resize-y rounded-lg border border-bg-border bg-bg-card p-3 text-sm text-text-primary placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
-          aria-label="Question input"
-        />
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-xs text-text-muted">
-            {state.kind === "streaming"
-              ? t("loading")
-              : t("loadingHint")}
-          </p>
-          {state.kind === "streaming" ? (
-            <button
-              type="button"
-              onClick={handleAbort}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-bg-border bg-bg-card px-3 py-1.5 text-xs font-medium text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
-            >
-              <Square size={12} /> {t("close")}
-            </button>
-          ) : (
-            <button
-              type="submit"
-              disabled={!canSubmit}
-              className="inline-flex items-center gap-1.5 rounded-2xl bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-sand disabled:text-warm-silver"
-            >
-              <Send size={12} /> {t("poweredByLlm")}
-            </button>
-          )}
-        </div>
-      </form>
-
-      {(state.kind === "streaming" || state.kind === "answered") &&
-        state.personalHistory != null &&
-        (() => {
-          // Personal-history pill. Three sub-states:
-          // * Stage A only (no personal signal in the query) → show
-          //   the decomposition's symbolic time/file-type hints if
-          //   any. Helps the user see *why* their query did not
-          //   trigger the personal narrowing.
-          // * Stage B engaged with N>0 → "先週観た 12 件から検索しています"
-          // * Stage B engaged with N=0 (graceful) → "該当なし、全件検索"
-          const ph = state.personalHistory;
-          const tr = ph.decomposed.time_range.label;
-          const scope = ph.decomposed.personal_scope;
-          // Skip the pill entirely when Stage A produced no signals
-          // at all — the pill would be empty noise.
-          if (
-            tr === "none"
-            && scope === "none"
-            && ph.decomposed.file_type_hint === "none"
-            && ph.expanded.length === 0
-          ) {
-            return null;
-          }
-          const chips: string[] = [];
-          if (ph.matchedFileCount != null) {
-            const verb = ph.scopeKind === "not_viewed"
-              ? t("personalHistoryNotViewed", { count: ph.matchedFileCount })
-              : t("personalHistoryViewed", { count: ph.matchedFileCount });
-            chips.push(verb);
-          } else if (scope !== "none") {
-            // Stage A said personal but Stage B was either skipped
-            // (no viewer) or fell back gracefully on empty.
-            chips.push(t("personalHistoryFallback"));
-          }
-          if (tr !== "none") {
-            chips.push(t(`timeRange.${tr}` as const));
-          }
-          if (ph.decomposed.file_type_hint !== "none") {
-            chips.push(t(`fileTypeHint.${ph.decomposed.file_type_hint}` as const));
-          }
-          if (ph.expanded.length > 0) {
-            chips.push(
-              t("categoryExpanded", { terms: ph.expanded.join(" / ") }),
-            );
-          }
-          return (
-            <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-accent/30 bg-accent/5 px-3 py-2 text-xs text-text-muted">
-              {chips.map((chip, i) => (
-                <span
-                  key={`${i}-${chip}`}
-                  className="rounded-lg bg-bg-card px-2 py-0.5"
-                >
-                  {chip}
-                </span>
-              ))}
-            </div>
-          );
-        })()}
-
-      {(state.kind === "streaming" || state.kind === "answered") &&
-        (() => {
-          // Hierarchical RAG Stage 2 clues supersede the raw
-          // keywords once they arrive — they are the actual queries
-          // we ran against the index. Until then we render the
-          // keyword string as chips by splitting on whitespace, so
-          // the layout stays identical across the keywords→clues
-          // transition (no jank, no remount).
-          const chips = state.clues && state.clues.length > 0
-            ? state.clues
-            : state.keywords
-              ? state.keywords.split(/\s+/).filter((c) => c.length > 0)
-              : [];
-          if (chips.length === 0) return null;
-          return (
-            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-bg-border bg-bg-elevated px-3 py-2 text-xs text-text-muted">
-              <Sparkles size={12} className="flex-shrink-0" />
-              {chips.map((chip, i) => (
-                <span
-                  key={`${i}-${chip}`}
-                  className="rounded-lg bg-bg-card px-2 py-0.5"
-                >
-                  {chip}
-                </span>
-              ))}
-            </div>
-          );
-        })()}
-
-      {state.kind === "error" && (
-        <div
-          role="alert"
-          className="flex items-start gap-2 rounded-lg border border-bg-border bg-bg-card p-3"
-        >
-          <AlertCircle
-            size={16}
-            className="mt-0.5 flex-shrink-0 text-text-muted"
-          />
-          <div className="min-w-0 flex-1">
-            <p className="text-sm text-text-primary">{state.message}</p>
-            {state.retryable && (
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs text-text-muted">
+              {state.kind === "streaming"
+                ? t("loading")
+                : t("loadingHint")}
+            </p>
+            {state.kind === "streaming" ? (
               <button
                 type="button"
-                onClick={() => {
-                  void runAsk(input);
-                }}
-                className="mt-2 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-muted hover:bg-bg-elevated hover:text-text-primary"
+                onClick={handleAbort}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-bg-border bg-bg-card px-3 py-1.5 text-xs font-medium text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
               >
-                {t("retryHint")}
+                <Square size={12} /> {t("close")}
               </button>
+            ) : (
+              <Button
+                type="submit"
+                variant="primary"
+                size="sm"
+                disabled={!canSubmit}
+              >
+                <Send size={12} /> {t("poweredByLlm")}
+              </Button>
             )}
           </div>
-          <button
-            type="button"
-            aria-label={t("close")}
-            onClick={() => setState({ kind: "idle" })}
-            className="flex-shrink-0 rounded-lg p-1 text-text-muted hover:bg-bg-elevated hover:text-text-primary"
-          >
-            <X size={12} />
-          </button>
-        </div>
-      )}
+        </form>
 
-      {(state.kind === "streaming" || state.kind === "answered") && (
-        <section
-          aria-live="polite"
-          className="rounded-lg border border-bg-border bg-bg-card p-4"
-        >
-          {state.kind === "streaming" && state.answerBuffer === "" ? (
-            // "Thinking" indicator — shown while retrieval / LLM
-            // warm-up is happening and no answer tokens have been
-            // emitted yet. Stable `data-testid` keeps the unit test
-            // decoupled from the visual / i18n choice.
-            <ThinkingIndicator label={t("thinking")} />
-          ) : (
-            <div className="text-base leading-relaxed text-text-primary">
-              <MarkdownPreview
-                source={
-                  state.kind === "streaming" ? state.answerBuffer : state.answer
-                }
-                chrome={false}
-                mermaid={false}
-                showFrontmatter={false}
-              />
-              {state.kind === "streaming" && (
-                <span
-                  aria-hidden="true"
-                  className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-accent align-baseline"
-                />
-              )}
-            </div>
-          )}
-          {state.kind === "answered" && state.tookMs != null && (
-            <p className="mt-2 text-[10px] text-text-muted/70">
-              {t("takenMs", { ms: state.tookMs })}
-            </p>
-          )}
-        </section>
-      )}
-
-      {((state.kind === "streaming" && state.citations.length > 0) ||
-        (state.kind === "answered" && state.citations.length > 0)) && (
-        <section>
-          <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-text-primary">
-              {t("citationsTitle")}
-            </h2>
-            {state.kind === "answered" && drive && (
-              savedNote ? (
-                <div className="flex items-center gap-1.5 text-xs text-accent-teal">
-                  <BookmarkPlus size={12} />
-                  <a
-                    href={`/drive/${encodeURIComponent(drive)}/addons/knowledge?edit=${encodeURIComponent(savedNote.fileId)}`}
-                    className="underline underline-offset-2 hover:opacity-80"
+        {(state.kind === "streaming" || state.kind === "answered") &&
+          state.personalHistory != null &&
+          (() => {
+            // Personal-history pill. Three sub-states:
+            // * Stage A only (no personal signal in the query) → show
+            //   the decomposition's symbolic time/file-type hints if
+            //   any. Helps the user see *why* their query did not
+            //   trigger the personal narrowing.
+            // * Stage B engaged with N>0 → "先週観た 12 件から検索しています"
+            // * Stage B engaged with N=0 (graceful) → "該当なし、全件検索"
+            const ph = state.personalHistory;
+            const tr = ph.decomposed.time_range.label;
+            const scope = ph.decomposed.personal_scope;
+            // Skip the pill entirely when Stage A produced no signals
+            // at all — the pill would be empty noise.
+            if (
+              tr === "none"
+              && scope === "none"
+              && ph.decomposed.file_type_hint === "none"
+              && ph.expanded.length === 0
+            ) {
+              return null;
+            }
+            const chips: string[] = [];
+            if (ph.matchedFileCount != null) {
+              const verb = ph.scopeKind === "not_viewed"
+                ? t("personalHistoryNotViewed", { count: ph.matchedFileCount })
+                : t("personalHistoryViewed", { count: ph.matchedFileCount });
+              chips.push(verb);
+            } else if (scope !== "none") {
+              // Stage A said personal but Stage B was either skipped
+              // (no viewer) or fell back gracefully on empty.
+              chips.push(t("personalHistoryFallback"));
+            }
+            if (tr !== "none") {
+              chips.push(t(`timeRange.${tr}` as const));
+            }
+            if (ph.decomposed.file_type_hint !== "none") {
+              chips.push(t(`fileTypeHint.${ph.decomposed.file_type_hint}` as const));
+            }
+            if (ph.expanded.length > 0) {
+              chips.push(
+                t("categoryExpanded", { terms: ph.expanded.join(" / ") }),
+              );
+            }
+            return (
+              <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-accent/30 bg-accent/5 px-3 py-2 text-xs text-text-muted">
+                {chips.map((chip, i) => (
+                  <span
+                    key={`${i}-${chip}`}
+                    className="rounded-lg bg-bg-card px-2 py-0.5"
                   >
-                    {t("saveSuccess")} — {t("openNote")}
-                  </a>
-                </div>
-              ) : (
+                    {chip}
+                  </span>
+                ))}
+              </div>
+            );
+          })()}
+
+        {(state.kind === "streaming" || state.kind === "answered") &&
+          (() => {
+            // Hierarchical RAG Stage 2 clues supersede the raw
+            // keywords once they arrive — they are the actual queries
+            // we ran against the index. Until then we render the
+            // keyword string as chips by splitting on whitespace, so
+            // the layout stays identical across the keywords→clues
+            // transition (no jank, no remount).
+            const chips = state.clues && state.clues.length > 0
+              ? state.clues
+              : state.keywords
+                ? state.keywords.split(/\s+/).filter((c) => c.length > 0)
+                : [];
+            if (chips.length === 0) return null;
+            return (
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-bg-border bg-bg-elevated px-3 py-2 text-xs text-text-muted">
+                <Sparkles size={12} className="flex-shrink-0" />
+                {chips.map((chip, i) => (
+                  <span
+                    key={`${i}-${chip}`}
+                    className="rounded-lg bg-bg-card px-2 py-0.5"
+                  >
+                    {chip}
+                  </span>
+                ))}
+              </div>
+            );
+          })()}
+
+        {state.kind === "error" && (
+          <div
+            role="alert"
+            className="flex items-start gap-2 rounded-lg border border-bg-border bg-bg-card p-3"
+          >
+            <AlertCircle
+              size={16}
+              className="mt-0.5 flex-shrink-0 text-text-muted"
+            />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm text-text-primary">{state.message}</p>
+              {state.retryable && (
                 <button
                   type="button"
-                  onClick={() => setSaveDialogOpen(true)}
-                  className="inline-flex items-center gap-1.5 rounded-2xl bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover"
+                  onClick={() => {
+                    void runAsk(input);
+                  }}
+                  className="mt-2 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-muted hover:bg-bg-elevated hover:text-text-primary"
                 >
-                  <BookmarkPlus size={12} />
-                  {t("saveToKnowledge")}
+                  {t("retryHint")}
                 </button>
-              )
-            )}
+              )}
+            </div>
+            <button
+              type="button"
+              aria-label={t("close")}
+              onClick={() => setState({ kind: "idle" })}
+              className="flex-shrink-0 rounded-lg p-1 text-text-muted hover:bg-bg-elevated hover:text-text-primary"
+            >
+              <X size={12} />
+            </button>
           </div>
-          <ul className="flex flex-col gap-2">
-            {state.citations.map((citation, i) => (
-              <li key={`${citation.file_id}-${i}`}>
-                <CitationCard
-                  index={i + 1}
-                  citation={citation}
-                  drive={drive ?? citation.drive}
-                />
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+        )}
 
-      {(state.kind === "streaming" || state.kind === "answered") &&
-        state.sources.length > 0 && (
+        {(state.kind === "streaming" || state.kind === "answered") && (
+          <section
+            aria-live="polite"
+            className="rounded-lg border border-bg-border bg-bg-card p-4"
+          >
+            {state.kind === "streaming" && state.answerBuffer === "" ? (
+              // "Thinking" indicator — shown while retrieval / LLM
+              // warm-up is happening and no answer tokens have been
+              // emitted yet. Stable `data-testid` keeps the unit test
+              // decoupled from the visual / i18n choice.
+              <ThinkingIndicator label={t("thinking")} />
+            ) : (
+              <div className="text-base leading-relaxed text-text-primary">
+                <MarkdownPreview
+                  source={
+                    state.kind === "streaming" ? state.answerBuffer : state.answer
+                  }
+                  chrome={false}
+                  mermaid={false}
+                  showFrontmatter={false}
+                />
+                {state.kind === "streaming" && (
+                  <span
+                    aria-hidden="true"
+                    className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-accent align-baseline"
+                  />
+                )}
+              </div>
+            )}
+            {state.kind === "answered" && state.tookMs != null && (
+              <p className="mt-2 text-[10px] text-text-muted/70">
+                {t("takenMs", { ms: state.tookMs })}
+              </p>
+            )}
+          </section>
+        )}
+
+        {((state.kind === "streaming" && state.citations.length > 0) ||
+          (state.kind === "answered" && state.citations.length > 0)) && (
           <section>
-            <h2 className="mb-2 text-xs font-semibold text-text-muted">
-              Sources
-            </h2>
-            <ul className="flex flex-wrap gap-2">
-              {state.sources.map((source) => (
-                <li key={source.file_id} className="min-w-0">
-                  <SourceCard source={source} />
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-text-primary">
+                {t("citationsTitle")}
+              </h2>
+              {/* The save action is deliberately not the accent fill.
+                  DESIGN.md §2.2 allows one per screen, and here it belongs to
+                  the thing the screen is for — asking. Saving an answer is a
+                  follow-up on what came back, and it sits on screen at the
+                  same time as the submit button, so the two were spending the
+                  budget twice. */}
+              {state.kind === "answered" && drive && (
+                savedNote ? (
+                  <div className="flex items-center gap-1.5 text-xs text-accent-teal">
+                    <BookmarkPlus size={12} />
+                    <a
+                      href={`/drive/${encodeURIComponent(drive)}/addons/knowledge?edit=${encodeURIComponent(savedNote.fileId)}`}
+                      className="underline underline-offset-2 hover:opacity-80"
+                    >
+                      {t("saveSuccess")} — {t("openNote")}
+                    </a>
+                  </div>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setSaveDialogOpen(true)}
+                  >
+                    <BookmarkPlus size={12} />
+                    {t("saveToKnowledge")}
+                  </Button>
+                )
+              )}
+            </div>
+            <ul className="flex flex-col gap-2">
+              {state.citations.map((citation, i) => (
+                <li key={`${citation.file_id}-${i}`}>
+                  <CitationCard
+                    index={i + 1}
+                    citation={citation}
+                    drive={drive ?? citation.drive}
+                  />
                 </li>
               ))}
             </ul>
           </section>
         )}
-      {state.kind === "answered" && drive && (
-        <AskSaveDialog
-          open={saveDialogOpen}
-          drive={drive}
-          defaultFilename={queryToFilename(state.keywords ?? input)}
-          content={buildAskNoteMarkdown(input, state.answer, state.citations)}
-          sourceFileIds={[...new Set(state.citations.map((c) => c.file_id))]}
-          onClose={() => setSaveDialogOpen(false)}
-          onSaved={(result) => {
-            setSaveDialogOpen(false);
-            setSavedNote({ fileId: result.noteFileId, path: result.notePath });
-          }}
-        />
-      )}
+
+        {(state.kind === "streaming" || state.kind === "answered") &&
+          state.sources.length > 0 && (
+            <section>
+              <h2 className="mb-2 text-xs font-semibold text-text-muted">
+                Sources
+              </h2>
+              <ul className="flex flex-wrap gap-2">
+                {state.sources.map((source) => (
+                  <li key={source.file_id} className="min-w-0">
+                    <SourceCard source={source} />
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+        {state.kind === "answered" && drive && (
+          <AskSaveDialog
+            open={saveDialogOpen}
+            drive={drive}
+            defaultFilename={queryToFilename(state.keywords ?? input)}
+            content={buildAskNoteMarkdown(input, state.answer, state.citations)}
+            sourceFileIds={[...new Set(state.citations.map((c) => c.file_id))]}
+            onClose={() => setSaveDialogOpen(false)}
+            onSaved={(result) => {
+              setSaveDialogOpen(false);
+              setSavedNote({ fileId: result.noteFileId, path: result.notePath });
+            }}
+          />
+        )}
+      </div>
     </div>
   );
 }
