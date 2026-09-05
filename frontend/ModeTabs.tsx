@@ -5,18 +5,36 @@
  *
  * Both modes are separate routes (`/addons/intelligence` and
  * `/addons/intelligence/find`) but share the same input experience:
- * clicking a tab navigates to the other route while preserving the
+ * choosing a tab navigates to the other route while preserving the
  * current query string as `?q=`. The destination page auto-fires its
  * pipeline on mount when `?q=` is non-empty.
  *
- * The component is presentational — it does not own the input value.
- * Parents pass the current input via `query` so the tab can attach it
- * to the destination URL.
+ * The row itself is core's `PageTabs`; what stays here is the pair of
+ * destinations and the query it carries across. Two things changed with the
+ * adoption, both core's contract rather than a local choice:
+ *
+ * - **No `role="tablist"` and no `aria-selected`.** These tabs navigate, and
+ *   `PageTabs` treats a navigating row as navigation: `role="tab"` promises a
+ *   screen reader that activating it swaps a panel in the same view, which a
+ *   `<Link>` does not do. The state a link in a set carries is
+ *   `aria-current="page"`, and this row used to carry both vocabularies at
+ *   once. Media Import's adoption resolved the same pairing from the other
+ *   end — its two views *are* one page, so it kept the tablist and dropped
+ *   `aria-current`.
+ * - **The selected tab is no longer `bg-accent text-white`.** DESIGN.md §2.2
+ *   allows one accent fill per screen, and spending it on saying which tab
+ *   you are already looking at leaves none for the thing the screen is for.
+ *   `PageTabs` marks the selection with a 2px border instead.
+ *
+ * The component is presentational — it does not own the input value. Parents
+ * pass the current input via `query` so the tab can attach it to the
+ * destination URL.
  */
 
-import Link from "next/link";
-import { useTranslations } from "next-intl";
 import { ListFilter, Sparkles } from "lucide-react";
+import { useTranslations } from "next-intl";
+
+import { PageTabs } from "@/components/PageTabs";
 
 interface ModeTabsProps {
   current: "ask" | "find";
@@ -29,54 +47,25 @@ export default function ModeTabs({ current, query, drive }: ModeTabsProps) {
   const trimmed = query.trim();
   const qParam = trimmed ? `?q=${encodeURIComponent(trimmed)}` : "";
   const driveSegment = encodeURIComponent(drive);
-  const askHref = `/drive/${driveSegment}/addons/intelligence${qParam}`;
-  const findHref = `/drive/${driveSegment}/addons/intelligence/find${qParam}`;
 
   return (
-    <nav
-      role="tablist"
-      aria-label={t("ariaLabel")}
-      className="inline-flex items-center gap-1 rounded-2xl bg-bg-card p-1 self-start"
-    >
-      <Tab
-        href={askHref}
-        active={current === "ask"}
-        icon={<Sparkles size={14} />}
-        label={t("ask")}
-      />
-      <Tab
-        href={findHref}
-        active={current === "find"}
-        icon={<ListFilter size={14} />}
-        label={t("find")}
-      />
-    </nav>
-  );
-}
-
-interface TabProps {
-  href: string;
-  active: boolean;
-  icon: React.ReactNode;
-  label: string;
-}
-
-function Tab({ href, active, icon, label }: TabProps) {
-  const baseClass =
-    "inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium transition-colors";
-  const stateClass = active
-    ? "bg-accent text-white"
-    : "text-text-muted hover:text-text-primary hover:bg-bg-elevated";
-  return (
-    <Link
-      href={href}
-      role="tab"
-      aria-selected={active}
-      aria-current={active ? "page" : undefined}
-      className={`${baseClass} ${stateClass}`}
-    >
-      {icon}
-      {label}
-    </Link>
+    <PageTabs
+      label={t("ariaLabel")}
+      current={current}
+      items={[
+        {
+          key: "ask",
+          label: t("ask"),
+          icon: Sparkles,
+          href: `/drive/${driveSegment}/addons/intelligence${qParam}`,
+        },
+        {
+          key: "find",
+          label: t("find"),
+          icon: ListFilter,
+          href: `/drive/${driveSegment}/addons/intelligence/find${qParam}`,
+        },
+      ]}
+    />
   );
 }

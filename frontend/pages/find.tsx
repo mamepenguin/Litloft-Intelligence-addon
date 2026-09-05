@@ -42,6 +42,8 @@ import type {
 } from "../api";
 import FindChip from "../FindChip";
 import type { FindChipSlot } from "../FindChip";
+import { Button } from "@/components/Button";
+import { PageHeader } from "@/components/PageHeader";
 import ModeTabs from "../ModeTabs";
 
 const FIND_LIMIT = 20;
@@ -253,107 +255,111 @@ function IntelligenceFindPageInner() {
   const chips = decomposed ? buildChips(decomposed, t) : [];
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 sm:p-6">
-      <header className="flex items-center gap-2">
-        <ListFilter size={18} className="text-accent-teal" />
-        <h1 className="text-lg font-semibold text-text-primary">
-          {t("title")}
-        </h1>
-      </header>
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 py-4 sm:py-6">
+      <PageHeader
+        titleIcon={ListFilter}
+        title={t("title")}
+        tabs={
+          drive ? <ModeTabs current="find" query={input} drive={drive} /> : undefined
+        }
+      />
 
-      {drive && <ModeTabs current="find" query={input} drive={drive} />}
+      {/* `px-4`, matching PageHeader's own padding — see the note on the Ask
+          page. */}
+      <div className="flex flex-col gap-4 px-4">
 
-      <form onSubmit={handleSubmit} className="flex items-center gap-2">
-        <input
-          type="text"
-          value={input}
-          onChange={handleInputChange}
-          onCompositionStart={() => setComposing(true)}
-          onCompositionEnd={() => setComposing(false)}
-          placeholder={t("placeholder")}
-          className="flex-1 rounded-2xl border border-bg-border bg-bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
-        />
-        <button
-          type="submit"
-          className="inline-flex items-center gap-1.5 rounded-2xl bg-accent px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-sand disabled:text-warm-silver"
-          disabled={state.kind === "loading" || input.trim().length === 0}
-        >
-          <Search size={12} /> {t("submit")}
-        </button>
-      </form>
-
-      {decomposed && chips.length > 0 && (
-        <div
-          data-testid="find-chips"
-          className="flex flex-wrap items-center gap-2"
-        >
-          {chips.map((chip) => (
-            <FindChip
-              key={chip.slot}
-              slot={chip.slot}
-              label={chip.label}
-              onRemove={() => handleChipRemove(chip.slot, decomposed)}
-            />
-          ))}
-          {decomposed.category_expansion.length > 0 && (
-            <span className="text-xs text-text-muted">
-              {t("categoryExpansion", {
-                terms: decomposed.category_expansion.join(" / "),
-              })}
-            </span>
-          )}
-        </div>
-      )}
-
-      {state.kind === "loading" && (
-        <div
-          data-testid="find-loading"
-          className="flex items-center justify-center py-8"
-          role="status"
-          aria-live="polite"
-        >
-          <div className="h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-          <span className="ml-2 text-sm text-text-muted">{t("loading")}</span>
-        </div>
-      )}
-
-      {state.kind === "error" && (
-        <div
-          data-testid="find-error"
-          role="alert"
-          className="flex items-start gap-2 rounded-xl border border-bg-border bg-bg-card p-3"
-        >
-          <AlertCircle
-            size={16}
-            className="mt-0.5 flex-shrink-0 text-danger"
+        <form onSubmit={handleSubmit} className="flex items-center gap-2">
+          <input
+            type="text"
+            value={input}
+            onChange={handleInputChange}
+            onCompositionStart={() => setComposing(true)}
+            onCompositionEnd={() => setComposing(false)}
+            placeholder={t("placeholder")}
+            className="flex-1 rounded-2xl border border-bg-border bg-bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
           />
-          <p className="text-sm text-text-primary">{state.message}</p>
-        </div>
-      )}
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={state.kind === "loading" || input.trim().length === 0}
+          >
+            <Search size={12} /> {t("submit")}
+          </Button>
+        </form>
 
-      {state.kind === "loaded" && (
-        <>
-          <p className="text-sm text-text-muted">
-            {t("totalCount", { count: state.response.total })}
-          </p>
-          {state.response.results.length === 0 ? (
-            <div
-              data-testid="find-empty"
-              className="rounded-xl border border-bg-border bg-bg-card p-6 text-center text-sm text-text-muted"
-            >
-              {t("empty")}
-            </div>
-          ) : (
-            <ul className="flex flex-col gap-2">
-              {state.response.results.map((entry) => (
-                <li key={entry.file_id}>
-                  <ResultCard entry={entry} />
-                </li>
-              ))}
-            </ul>
-          )}
-        </>
-      )}
+        {decomposed && chips.length > 0 && (
+          <div
+            data-testid="find-chips"
+            className="flex flex-wrap items-center gap-2"
+          >
+            {chips.map((chip) => (
+              <FindChip
+                key={chip.slot}
+                slot={chip.slot}
+                label={chip.label}
+                onRemove={() => handleChipRemove(chip.slot, decomposed)}
+              />
+            ))}
+            {decomposed.category_expansion.length > 0 && (
+              <span className="text-xs text-text-muted">
+                {t("categoryExpansion", {
+                  terms: decomposed.category_expansion.join(" / "),
+                })}
+              </span>
+            )}
+          </div>
+        )}
+
+        {state.kind === "loading" && (
+          <div
+            data-testid="find-loading"
+            className="flex items-center justify-center py-8"
+            role="status"
+            aria-live="polite"
+          >
+            <div className="h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+            <span className="ml-2 text-sm text-text-muted">{t("loading")}</span>
+          </div>
+        )}
+
+        {state.kind === "error" && (
+          <div
+            data-testid="find-error"
+            role="alert"
+            className="flex items-start gap-2 rounded-xl border border-bg-border bg-bg-card p-3"
+          >
+            <AlertCircle
+              size={16}
+              className="mt-0.5 flex-shrink-0 text-danger"
+            />
+            <p className="text-sm text-text-primary">{state.message}</p>
+          </div>
+        )}
+
+        {state.kind === "loaded" && (
+          <>
+            <p className="text-sm text-text-muted">
+              {t("totalCount", { count: state.response.total })}
+            </p>
+            {state.response.results.length === 0 ? (
+              <div
+                data-testid="find-empty"
+                className="rounded-xl border border-bg-border bg-bg-card p-6 text-center text-sm text-text-muted"
+              >
+                {t("empty")}
+              </div>
+            ) : (
+              <ul className="flex flex-col gap-2">
+                {state.response.results.map((entry) => (
+                  <li key={entry.file_id}>
+                    <ResultCard entry={entry} />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
