@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
+import { PageHeader } from "@/components/PageHeader";
 import { Sparkles } from "lucide-react";
 
 import { useCurrentDrive } from "@/components/CurrentDriveProvider";
@@ -108,46 +109,47 @@ export default function PickupPage() {
   const exhausted = total !== null && loadedRef.current >= total;
 
   return (
-    <div className="mx-auto w-full max-w-7xl px-4 py-6">
-      <header className="mb-6">
-        <h1 className="flex items-center gap-2 text-2xl font-bold text-text-primary">
-          <Sparkles size={22} className="text-text-muted" />
-          {t("pickup.heading")}
-        </h1>
-        <p className="mt-1 text-sm text-text-muted">
-          {t("pickup.description")}
-        </p>
-      </header>
+    <div className="mx-auto w-full max-w-7xl py-6">
+      <PageHeader
+        titleIcon={Sparkles}
+        title={t("pickup.heading")}
+        scope={t("pickup.description")}
+      />
 
-      {files.length > 0 && <FileGrid files={files} />}
+      {/* `px-4`, matching PageHeader's own padding — the container carries
+          the vertical rhythm and each side pads itself. */}
+      <div className="px-4">
 
-      {files.length === 0 && !loading && total !== null && (
-        <p className="py-12 text-center text-sm text-text-muted">
-          {t("pickup.empty")}
-        </p>
-      )}
+        {files.length > 0 && <FileGrid files={files} />}
 
-      {loading && (
-        <p className="py-6 text-center text-sm text-text-muted">
-          {t("pickup.loading")}
-        </p>
-      )}
+        {files.length === 0 && !loading && total !== null && (
+          <p className="py-12 text-center text-sm text-text-muted">
+            {t("pickup.empty")}
+          </p>
+        )}
 
-      {failed && !loading && (
-        <div className="py-6 text-center">
-          <button
-            type="button"
-            onClick={retry}
-            className="text-sm text-text-muted transition-colors hover:text-accent"
-          >
-            {t("pickup.retry")}
-          </button>
-        </div>
-      )}
+        {loading && (
+          <p className="py-6 text-center text-sm text-text-muted">
+            {t("pickup.loading")}
+          </p>
+        )}
 
-      {!exhausted && !failed && (
-        <div ref={sentinel} className="h-px" aria-hidden />
-      )}
+        {failed && !loading && (
+          <div className="py-6 text-center">
+            <button
+              type="button"
+              onClick={retry}
+              className="text-sm text-text-muted transition-colors hover:text-accent"
+            >
+              {t("pickup.retry")}
+            </button>
+          </div>
+        )}
+
+        {!exhausted && !failed && (
+          <div ref={sentinel} className="h-px" aria-hidden />
+        )}
+      </div>
     </div>
   );
 }

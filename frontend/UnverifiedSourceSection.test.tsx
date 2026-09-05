@@ -6,6 +6,7 @@ vi.mock("next-intl", () => ({
 }));
 
 import UnverifiedSourceSection from "./UnverifiedSourceSection";
+import { accentFills } from "@/__tests__/helpers/accentFills";
 
 function trustCall() {
   return (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.find(
@@ -94,5 +95,46 @@ describe("UnverifiedSourceSection", () => {
     // The panel is the question and nothing else. Evidence-gathering
     // the panel no longer fetches evidence of its own.
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+  });
+});
+
+/**
+ * The two buttons in this row, after C2b (UI redesign Phase 3).
+ *
+ * They share the `pending` flag, and before the conversion one faded with
+ * `disabled:opacity-50` while the other changed colour with
+ * `disabled:bg-sand` — the defect DESIGN.md §6 names, in one row, at one
+ * instant.
+ */
+describe("UnverifiedSourceSection — the decision row", () => {
+  const disabledTokens = (el: HTMLElement) =>
+    el.className.split(/\s+/).filter((t) => t.startsWith("disabled:")).sort();
+
+  it("gives both buttons the same disabled treatment", async () => {
+    render(
+      <UnverifiedSourceSection
+        fileId="f1" trustTier="unverified" trustReviewedAt={null}
+      />,
+    );
+    await screen.findByText("title");
+    const trust = screen.getByRole("button", { name: /trust/i });
+    const dismiss = screen.getByRole("button", { name: /dismiss/i });
+    expect(disabledTokens(trust).length).toBeGreaterThan(0);
+    expect(disabledTokens(dismiss)).toEqual(disabledTokens(trust));
+  });
+
+  it("spends one accent fill on the row", async () => {
+    // The variant each conversion chose is what nothing else pins. Making the
+    // dismiss `primary` puts two accent fills in one row — DESIGN.md §2.2
+    // allows one — and it is green everywhere otherwise. Exactly one, so the
+    // assertion catches the choice in both directions.
+    const { container } = render(
+      <UnverifiedSourceSection
+        fileId="f1" trustTier="unverified" trustReviewedAt={null}
+      />,
+    );
+    await screen.findByText("title");
+    expect(accentFills(container)).toHaveLength(1);
+    expect(accentFills(container)[0]).toHaveTextContent("trust");
   });
 });

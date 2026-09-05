@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { Button } from "@/components/Button";
 import { ShieldCheck, X } from "lucide-react";
 import { useTranslations } from "next-intl";
 
@@ -72,27 +73,27 @@ export default function UnverifiedSourceSection({
       <p className="mt-2 text-xs text-text-muted">{t("distilHint")}</p>
 
       <div className="mt-4 flex flex-wrap gap-2">
-        <button
+        <Button
+          variant="primary"
           onClick={() => rule("verified")}
           disabled={pending}
-          className="inline-flex items-center gap-1.5 rounded-2xl bg-accent px-3 py-2 text-sm text-white transition-colors hover:bg-accent-hover disabled:bg-sand disabled:text-warm-silver disabled:cursor-not-allowed"
         >
           <ShieldCheck size={16} />
           {t("trust")}
-        </button>
+        </Button>
         {/* Pressing this stamps ``trust_reviewed_at`` just as trusting
             does — the file leaves the "nobody has ruled" set and the
             panel does not come back. So the label says what the file
             becomes (unverified, reviewed), not "not for now", which
             promised a decision deferred that the write does not defer. */}
-        <button
+        <Button
+          variant="ghost"
           onClick={() => rule("unverified")}
           disabled={pending}
-          className="inline-flex items-center gap-1.5 rounded-2xl px-3 py-2 text-sm text-text-muted transition-colors hover:text-text-primary disabled:opacity-50"
         >
           <X size={16} />
           {t("dismiss")}
-        </button>
+        </Button>
       </div>
     </section>
   );

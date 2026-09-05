@@ -19,6 +19,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 import { ShortcutsProvider } from "@/components/ShortcutsProvider";
+import { accentFills } from "@/__tests__/helpers/accentFills";
 
 vi.mock("@/addons/intelligence/knowledgeBridge", () => ({
   distillToKnowledge: vi.fn(async () => ({ noteFileId: "n1", notePath: "n.md" })),
@@ -80,5 +81,78 @@ describe("KnowledgeSaveDialog", () => {
     );
     fireEvent.keyDown(document.body, { key: "Escape" });
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * One disabled treatment per row (DESIGN.md §6, UI redesign Phase 3, C2b).
+ *
+ * §6 names the defect precisely: two buttons in one row, driven by the same
+ * flag, wearing different disabled treatments — so the moment that flag turns
+ * they show two ways of being unavailable. This row is exactly that shape.
+ * Both buttons take `submitting`, and before C2b the cancel button faded with
+ * `disabled:opacity-50` while the submit button changed colour with
+ * `disabled:bg-sand`.
+ *
+ * Asserted as agreement between the two rather than as a fixed recipe: the
+ * defect is the difference, and pinning one spelling would go red on a change
+ * to `Button` that kept them consistent.
+ */
+describe("KnowledgeSaveDialog — the confirm row", () => {
+  const disabledTokens = (el: HTMLElement) =>
+    el.className
+      .split(/\s+/)
+      .filter((t) => t.startsWith("disabled:"))
+      .sort();
+
+  it("gives both buttons the same disabled treatment", async () => {
+    withStack(
+      <KnowledgeSaveDialog
+        open
+        drive="notes"
+        fileId="f1"
+        content="# Body"
+        sourceFilename="talk.mp4"
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("textbox");
+    // Exact accessible names, not a regular expression over the text. The
+    // dialog also holds a folder picker whose label begins "Save to:", and a
+    // loose `/save/i` matched that one first — a button with no disabled
+    // treatment at all, which made the comparison below pass against the
+    // wrong pair.
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    const submit = screen.getByRole("button", { name: "Save" });
+
+    // Non-empty, so the assertion cannot pass by both carrying nothing.
+    expect(disabledTokens(submit).length).toBeGreaterThan(0);
+    expect(disabledTokens(cancel)).toEqual(disabledTokens(submit));
+  });
+
+  it("spends one accent fill on the row", async () => {
+    // Each conversion in this pull request *chooses* a variant, and the choice
+    // is what nothing else pins: making the submit `secondary` leaves the row
+    // with no fill and making the cancel `primary` gives it two, and both are
+    // otherwise green everywhere. DESIGN.md §2.2 allows one, so one is what is
+    // asserted — exactly one, which catches the choice in both directions.
+    const { container } = withStack(
+      <KnowledgeSaveDialog
+        open
+        drive="notes"
+        fileId="f1"
+        content="# Body"
+        sourceFilename="talk.mp4"
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+    // Waiting on the button the assertion is about, not on the render that
+    // precedes it: the dialog loads its folder list before the row appears.
+    await screen.findByRole("button", { name: "Save" });
+    expect(accentFills(container)).toHaveLength(1);
+    expect(accentFills(container)[0]).toHaveTextContent("Save");
   });
 });
