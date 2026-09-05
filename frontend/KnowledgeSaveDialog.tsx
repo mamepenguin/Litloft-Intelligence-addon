@@ -19,6 +19,7 @@
  * event `core.file_active_summary.changed`).
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/Button";
 import { useTranslations } from "next-intl";
 import { X } from "lucide-react";
 
@@ -275,20 +276,20 @@ export function KnowledgeSaveDialog({
               </div>
             )}
             <div className="mt-2 flex justify-end gap-2">
-              <button
+              <Button
+                variant="secondary"
                 onClick={onClose}
                 disabled={submitting}
-                className="rounded-2xl bg-sand px-4 py-2 text-sm font-medium text-text-primary hover:bg-sand-hover disabled:opacity-50"
               >
                 {tc("cancel")}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="primary"
                 onClick={handleSubmit}
                 disabled={submitting || !filename.trim()}
-                className="rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:bg-sand disabled:text-warm-silver disabled:cursor-not-allowed"
               >
                 {submitting ? t("form.submitting") : t("form.submit")}
-              </button>
+              </Button>
             </div>
           </div>
         )}

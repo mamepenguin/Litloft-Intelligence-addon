@@ -8,6 +8,7 @@
 // never need to change them.
 
 import { useCallback, useEffect, useState } from "react";
+import { Button } from "@/components/Button";
 import { useTranslations } from "next-intl";
 
 const ENDPOINT = "/api/addons/intelligence/admin/rag";
@@ -241,14 +242,14 @@ export default function AdminRAGSettingsSection(): React.ReactElement {
       </div>
 
       <div className="mt-4 flex items-center gap-3">
-        <button
+        <Button
           type="button"
+          variant="primary"
           onClick={handleSave}
           disabled={saving}
-          className="rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-sand disabled:text-warm-silver"
         >
           {saving ? t("saving") : t("save")}
-        </button>
+        </Button>
         {savedOk && <span className="text-xs text-accent-teal">{t("saved")}</span>}
         {saveError && <span className="text-xs text-danger">{saveError}</span>}
       </div>

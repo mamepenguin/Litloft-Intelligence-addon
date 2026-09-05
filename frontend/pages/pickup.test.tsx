@@ -131,3 +131,20 @@ describe("PickupPage", () => {
     expect(screen.getByTestId("grid").textContent).not.toContain("v1");
   });
 });
+
+/**
+ * The page's heading, after adopting core's `PageHeader`
+ * (UI redesign Phase 3, C2b).
+ */
+describe("PickupPage — page header", () => {
+  it("names itself once, and lets core choose the size", async () => {
+    const { container } = render(<PickupPage />);
+    await screen.findByRole("heading", { level: 1 });
+    const h1s = container.querySelectorAll("h1");
+    expect(h1s).toHaveLength(1);
+    // DESIGN.md §3.2 gives H1 one size, and `PageHeader` is the only thing
+    // that writes it. This page already used `text-2xl`; what changes is that
+    // it no longer chooses.
+    expect(h1s[0].className).toContain("text-2xl");
+  });
+});

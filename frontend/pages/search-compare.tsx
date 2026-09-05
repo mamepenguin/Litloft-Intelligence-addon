@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { Button } from "@/components/Button";
+import { PageHeader } from "@/components/PageHeader";
 import {
   searchCompare,
   type SearchSourceCounts,
@@ -224,64 +226,75 @@ export default function SearchComparePage() {
   const cosineResults = showCutoff ? data.cosine : data.cosineNoCutoff;
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-8">
-      <h1 className="mb-4 text-lg font-bold text-text-primary">
-        Search Algorithm Comparison
-      </h1>
-      <p className="mb-4 text-xs text-text-muted">
-        RRF (Reciprocal Rank Fusion) vs Cosine Similarity scoring
-        {drive && <span className="ml-2">— drive: <span className="font-mono text-text-primary">{drive}</span></span>}
-      </p>
+    <div className="mx-auto max-w-6xl py-8">
+      <PageHeader
+        title="Search Algorithm Comparison"
+        scope={
+          <>
+            RRF (Reciprocal Rank Fusion) vs Cosine Similarity scoring
+            {drive && (
+              <span className="ml-2">
+                — drive:{" "}
+                <span className="font-mono text-text-primary">{drive}</span>
+              </span>
+            )}
+          </>
+        }
+      />
 
-      <div className="mb-6 flex gap-2">
-        <input
-          ref={inputRef}
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-          placeholder="Search query..."
-          className="flex-1 rounded-lg border border-bg-border bg-bg-primary px-3 py-2 text-sm text-text-primary placeholder-text-muted outline-none focus:border-focus-ring"
-        />
-        <button
-          onClick={handleSearch}
-          disabled={loading || !query.trim() || !drive}
-          className="rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white disabled:bg-sand disabled:text-warm-silver disabled:cursor-not-allowed"
-        >
-          {loading ? "..." : "Search"}
-        </button>
-      </div>
+      {/* `px-4`, matching PageHeader's own padding. */}
+      <div className="px-4">
 
-      {searched && (
-        <>
-          <SourceCountsBar counts={data.sourceCounts} />
-          <div className="mt-2 flex items-center gap-4">
-            <DiffSummary rrf={rrfResults} cosine={cosineResults} />
-            <label className="flex flex-shrink-0 items-center gap-1.5 text-xs text-text-muted">
-              <input
-                type="checkbox"
-                checked={showCutoff}
-                onChange={(e) => setShowCutoff(e.target.checked)}
-                className="accent-accent"
+        <div className="mb-6 flex gap-2">
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+            placeholder="Search query..."
+            className="flex-1 rounded-lg border border-bg-border bg-bg-primary px-3 py-2 text-sm text-text-primary placeholder-text-muted outline-none focus:border-focus-ring"
+          />
+          <Button
+            variant="primary"
+            onClick={handleSearch}
+            disabled={loading || !query.trim() || !drive}
+          >
+            {loading ? "..." : "Search"}
+          </Button>
+        </div>
+
+        {searched && (
+          <>
+            <SourceCountsBar counts={data.sourceCounts} />
+            <div className="mt-2 flex items-center gap-4">
+              <DiffSummary rrf={rrfResults} cosine={cosineResults} />
+              <label className="flex flex-shrink-0 items-center gap-1.5 text-xs text-text-muted">
+                <input
+                  type="checkbox"
+                  checked={showCutoff}
+                  onChange={(e) => setShowCutoff(e.target.checked)}
+                  className="accent-accent"
+                />
+                Score cutoff
+                {!showCutoff && data.rrf.length !== data.rrfNoCutoff.length && (
+                  <span className="text-[10px] text-accent-amber">
+                    (cutoff: RRF {data.rrf.length}/{data.rrfNoCutoff.length}, Cos {data.cosine.length}/{data.cosineNoCutoff.length})
+                  </span>
+                )}
+              </label>
+            </div>
+            <div className="mt-4 flex gap-4">
+              <ResultColumn title="RRF" results={rrfResults} total={rrfResults.length} />
+              <ResultColumn
+                title="Cosine Similarity"
+                results={cosineResults}
+                total={cosineResults.length}
               />
-              Score cutoff
-              {!showCutoff && data.rrf.length !== data.rrfNoCutoff.length && (
-                <span className="text-[10px] text-accent-amber">
-                  (cutoff: RRF {data.rrf.length}/{data.rrfNoCutoff.length}, Cos {data.cosine.length}/{data.cosineNoCutoff.length})
-                </span>
-              )}
-            </label>
-          </div>
-          <div className="mt-4 flex gap-4">
-            <ResultColumn title="RRF" results={rrfResults} total={rrfResults.length} />
-            <ResultColumn
-              title="Cosine Similarity"
-              results={cosineResults}
-              total={cosineResults.length}
-            />
-          </div>
-        </>
-      )}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

@@ -17,6 +17,7 @@
 // duplicating that UI.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/Button";
 import { useTranslations } from "next-intl";
 
 const ENDPOINT = "/api/addons/intelligence/admin/transcription";
@@ -367,14 +368,14 @@ export default function AdminTranscriptionSettingsSection(): React.ReactElement 
       </div>
 
       <div className="flex items-center gap-3">
-        <button
+        <Button
           type="button"
+          variant="primary"
           onClick={handleSave}
           disabled={saving || apiKeyMissing}
-          className="rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-sand disabled:text-warm-silver"
         >
           {saving ? t("saving") : t("save")}
-        </button>
+        </Button>
         {savedOk && (
           <span className="text-xs text-accent-teal">{t("saved")}</span>
         )}

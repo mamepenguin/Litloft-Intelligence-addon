@@ -20,6 +20,7 @@
 //       auto-adjusted
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/Button";
 import { useTranslations } from "next-intl";
 
 const ENDPOINT = "/api/addons/intelligence/admin/embedding";
@@ -337,22 +338,22 @@ export default function AdminEmbeddingSettingsSection(): React.ReactElement {
               <p className="mb-3 text-xs text-danger">{dialogError}</p>
             )}
             <div className="flex items-center justify-end gap-3">
-              <button
+              <Button
                 type="button"
+                variant="secondary"
                 onClick={handleCancel}
                 disabled={saving}
-                className="rounded-2xl bg-sand px-4 py-2 text-sm font-medium text-text-primary hover:bg-sand-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {t("confirm.cancel")}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                variant="primary"
                 onClick={handleConfirm}
                 disabled={saving}
-                className="rounded-2xl bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-sand disabled:text-warm-silver"
               >
                 {t("confirm.confirm")}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
