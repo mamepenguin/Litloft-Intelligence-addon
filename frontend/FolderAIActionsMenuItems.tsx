@@ -3,15 +3,15 @@
 /**
  * `folder-actions-menu` rows for the folder toolbar's `Add` menu.
  *
- * These were a labelled `AI ▾` button of their own, sitting on the toolbar
- * beside `Add`. 案 2 gives that bar four exposed controls plus a conditional
- * `Play`, and an addon's own dropdown is a fifth — the shape
- * `2026-08-30-file-actions-menu-addon-slot.md` §6 settles by having addons
- * draw `ActionMenuItem` rows the host cannot tell from its own.
+ * 案 2 gives that bar four exposed controls plus a conditional `Play`; an
+ * addon's own dropdown would be a fifth.
+ * `2026-08-30-file-actions-menu-addon-slot.md` §6 is the contract that
+ * avoids it — addons draw `ActionMenuItem` rows the host cannot tell from
+ * its own.
  *
- * The host closes its menu for us: none of these opens a dialog that would
- * unmount with it, unlike `IndexDetailsMenuItem`, which asks for the close
- * afterwards instead.
+ * The host closes its menu as soon as a row is pressed, unlike
+ * `IndexDetailsMenuItem`, which asks for the close only after its dialog is
+ * dismissed. Nothing here opens one.
  */
 
 import { useCallback, useState } from "react";
@@ -33,7 +33,22 @@ interface FolderAIActionsMenuItemsProps {
   onRequestClose?: () => void;
 }
 
-type Pending = "tags" | "summaries" | "vision" | null;
+type Action = "tags" | "summaries" | "vision";
+
+/**
+ * Which batches are running, at module scope rather than in state.
+ *
+ * The host unmounts these rows the moment one is pressed, so a guard held
+ * in this component is gone before the request it guards returns — and the
+ * next time the menu opens, a fresh instance starts with nothing in flight.
+ * These are batch LLM jobs; queueing one twice costs money.
+ *
+ * Keyed by drive as well as action, because two drives are two batches.
+ * Read during render, so reopening the menu while one is running draws that
+ * row disabled.
+ */
+const inFlight = new Set<string>();
+const keyFor = (action: Action, drive: string) => `${action}:${drive}`;
 
 export default function FolderAIActionsMenuItems({
   fileIds,
@@ -42,12 +57,27 @@ export default function FolderAIActionsMenuItems({
 }: FolderAIActionsMenuItemsProps) {
   const t = useTranslations("file");
   const toast = useToast();
-  const [pending, setPending] = useState<Pending>(null);
+  // Re-render once a batch settles, so a menu that is still open stops
+  // showing a row disabled when it no longer is.
+  const [, setTick] = useState(0);
+
+  const claim = useCallback(
+    (action: Action) => {
+      const key = keyFor(action, drive);
+      if (fileIds.length === 0 || inFlight.has(key)) return null;
+      inFlight.add(key);
+      return () => {
+        inFlight.delete(key);
+        setTick((n) => n + 1);
+      };
+    },
+    [drive, fileIds],
+  );
 
   const handleTags = useCallback(async () => {
-    if (fileIds.length === 0 || pending) return;
+    const done = claim("tags");
+    if (!done) return;
     onRequestClose?.();
-    setPending("tags");
     try {
       const result = await batchSuggestedTags(fileIds, drive);
       if (result.queued === 0 && result.skipped > 0) {
@@ -58,16 +88,18 @@ export default function FolderAIActionsMenuItems({
         );
       }
     } catch {
-      // non-critical
+      toast.error(
+        t("tagsBatchError", { defaultMessage: "Could not queue — please retry." }),
+      );
     } finally {
-      setPending(null);
+      done();
     }
-  }, [fileIds, drive, pending, t, toast, onRequestClose]);
+  }, [claim, drive, fileIds, t, toast, onRequestClose]);
 
   const handleSummaries = useCallback(async () => {
-    if (fileIds.length === 0 || pending) return;
+    const done = claim("summaries");
+    if (!done) return;
     onRequestClose?.();
-    setPending("summaries");
     try {
       const result = await batchSummaries(fileIds, drive);
       if (result.queued === 0 && result.skipped > 0) {
@@ -81,14 +113,16 @@ export default function FolderAIActionsMenuItems({
         );
       }
     } catch {
-      // non-critical
+      toast.error(
+        t("summariesBatchError", { defaultMessage: "Could not queue — please retry." }),
+      );
     } finally {
-      setPending(null);
+      done();
     }
-  }, [fileIds, drive, pending, t, toast, onRequestClose]);
+  }, [claim, drive, fileIds, t, toast, onRequestClose]);
 
   const handleVision = useCallback(async () => {
-    if (fileIds.length === 0 || pending) return;
+    if (fileIds.length === 0 || inFlight.has(keyFor("vision", drive))) return;
     onRequestClose?.();
     const confirmed = window.confirm(
       t("visionFolderConfirm", {
@@ -97,7 +131,9 @@ export default function FolderAIActionsMenuItems({
       }),
     );
     if (!confirmed) return;
-    setPending("vision");
+    // Claimed after the confirm, so declining holds nothing.
+    const done = claim("vision");
+    if (!done) return;
     try {
       const result = await generateFolderVisualDescription(drive, fileIds);
       toast.success(
@@ -108,9 +144,6 @@ export default function FolderAIActionsMenuItems({
       );
     } catch (e) {
       const info = (e as { info?: FolderVisualDescriptionTooManyError }).info;
-      // `toast.error`, where this used to be a plain message held for 8s
-      // instead of 5. The kind carries what the extra seconds were doing,
-      // and it carries it to a reader who has already looked away.
       if (info?.kind === "too_many_files") {
         toast.error(
           t("visionFolderTooMany", {
@@ -128,15 +161,15 @@ export default function FolderAIActionsMenuItems({
         );
       }
     } finally {
-      setPending(null);
+      done();
     }
-  }, [drive, fileIds, pending, t, toast, onRequestClose]);
+  }, [claim, drive, fileIds, t, toast, onRequestClose]);
 
   // Nothing to act on, so no rows — and `AddButton` hides the separator
   // above them with `empty:hidden` when that happens.
   if (fileIds.length === 0) return null;
 
-  const busy = pending !== null;
+  const busy = (action: Action) => inFlight.has(keyFor(action, drive));
 
   return (
     <>
@@ -144,13 +177,13 @@ export default function FolderAIActionsMenuItems({
         icon={Sparkles}
         label={t("generateFolderTags")}
         onClick={handleTags}
-        disabled={busy}
+        disabled={busy("tags")}
       />
       <ActionMenuItem
         icon={BookOpen}
         label={t("generateFolderSummaries")}
         onClick={handleSummaries}
-        disabled={busy}
+        disabled={busy("summaries")}
       />
       <ActionMenuItem
         icon={ImageIcon}
@@ -158,7 +191,7 @@ export default function FolderAIActionsMenuItems({
           defaultMessage: "Generate AI descriptions for folder images",
         })}
         onClick={handleVision}
-        disabled={busy}
+        disabled={busy("vision")}
       />
     </>
   );
