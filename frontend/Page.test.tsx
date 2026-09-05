@@ -816,13 +816,23 @@ describe("IntelligenceAskPage — page header, mode tabs and accent budget", () 
     //
     // It is not the state with the most fills. Opening the save dialog adds
     // `AskSaveDialog`'s own primary button, which renders inside `container`
-    // because that dialog does not portal — so a click away, this counts two.
-    // Dialogs are outside the budget by this repository's existing practice:
-    // core's own `accent-budget.test.tsx` mocks `ConfirmDialog`, `MoveDialog`,
-    // `CollectionPicker` and `BatchRenameDialog` to `() => null`. The
-    // difference is that core makes that exclusion visible as mock lines and
-    // this one expresses it by not clicking, so it is written down here
-    // instead.
+    // because that dialog does not portal — so one click away, this counts
+    // two.
+    //
+    // **There is no precedent either way.** An earlier version of this comment
+    // said dialogs are outside the budget by existing practice, citing the
+    // four `() => null` dialog mocks in core's `accent-budget.test.tsx`. Those
+    // mocks are real, and the inference from them is not: deleting all four
+    // leaves that suite green at the same count, because two of the dialogs
+    // return `null` unless opened and the other two carry no `bg-accent` at
+    // all. The comment above them says what they are for — scaffolding to get
+    // the drive root to draw — and names `Button` and `AddButton` as the only
+    // things deliberately left real. Core has never measured a dialog-open
+    // screen.
+    //
+    // So this measures the closed state as a choice, not as a convention: a
+    // dialog is a surface of its own, and `AskSaveDialog`'s primary button is
+    // C2b's to place.
     const { container } = await answered();
     // The save action only exists once an answer has citations, so waiting on
     // it is waiting on the state this test is about rather than on the render
@@ -848,7 +858,17 @@ describe("IntelligenceAskPage — page header, mode tabs and accent budget", () 
     // no stylesheet, so nothing here observes a colour.
     render(<IntelligenceAskPage />);
     const submit = await screen.findByTestId("ask-submit");
+    // Disabled because the input is empty — measured, not assumed: dropping
+    // the length condition from `canSubmit` reddens this, and dropping the
+    // `ragAvailable` one does not, so the probe has already resolved.
     expect(submit).toBeDisabled();
-    expect(submit.className).toContain("enabled:hover:");
+    // Tokens, and the absence of an unguarded one. `toContain` on the whole
+    // class string was the first version and it is a substring match: a
+    // `primary` variant carrying a bare `hover:bg-accent-hover` alongside an
+    // unrelated `enabled:hover:underline` passed it, with the very defect
+    // this test is named for live on the screen.
+    const tokens = submit.className.split(/\s+/);
+    expect(tokens).toContain("enabled:hover:bg-accent-hover");
+    expect(tokens.filter((t) => /^hover:bg-accent/.test(t))).toEqual([]);
   });
 });

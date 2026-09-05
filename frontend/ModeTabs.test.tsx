@@ -21,8 +21,17 @@ import ModeTabs from "./ModeTabs";
 const ASK = "/drive/family/addons/intelligence";
 const FIND = "/drive/family/addons/intelligence/find";
 
+/** The `?q=` a destination will actually read, rather than how it was spelt. */
+function queryOf(href: string): string | null {
+  return new URL(href, "http://x").searchParams.get("q");
+}
+
 function hrefs(current: "ask" | "find", query: string, drive = "family") {
   render(<ModeTabs current={current} query={query} drive={drive} />);
+  // Two, exactly. Naming the tabs one at a time says nothing about how many
+  // there are, and a third destination grown into this row would be invisible
+  // to every assertion below.
+  expect(screen.getAllByRole("link")).toHaveLength(2);
   return {
     ask: screen.getByRole("link", { name: /ask/i }).getAttribute("href"),
     find: screen.getByRole("link", { name: /find/i }).getAttribute("href"),
@@ -42,9 +51,17 @@ describe("ModeTabs", () => {
   it("carries the current query across the switch", () => {
     // The destination auto-fires its pipeline on mount when `?q=` is
     // non-empty, so losing this loses the question the reader just typed.
+    //
+    // Compared after decoding, because what the destination reads is what
+    // matters. Pinning the encoded spelling instead makes an equivalent
+    // implementation fail: `URLSearchParams` writes `+` for a space, which
+    // `useSearchParams()` decodes back to a space, and the first version of
+    // this test went red on it while the destination was unchanged.
     const { ask, find } = hrefs("ask", "what is the plot?");
-    expect(ask).toBe(`${ASK}?q=what%20is%20the%20plot%3F`);
-    expect(find).toBe(`${FIND}?q=what%20is%20the%20plot%3F`);
+    expect(queryOf(ask!)).toBe("what is the plot?");
+    expect(queryOf(find!)).toBe("what is the plot?");
+    expect(ask!.split("?")[0]).toBe(ASK);
+    expect(find!.split("?")[0]).toBe(FIND);
   });
 
   it("carries nothing when the query is only whitespace", () => {
@@ -59,14 +76,19 @@ describe("ModeTabs", () => {
     // link that silently goes somewhere else rather than an error.
     const { ask, find } = hrefs("ask", "", "家族 の #写真");
     const drive = encodeURIComponent("家族 の #写真");
+    // The whole string, and nothing after it: a `not.toContain("#")` beside
+    // this cannot change any verdict `toBe` does not already reach, which is
+    // the "sentence that reads like a second defence" `button-adoption.test.ts`
+    // names.
     expect(ask).toBe(`/drive/${drive}/addons/intelligence`);
     expect(find).toBe(`/drive/${drive}/addons/intelligence/find`);
-    expect(ask).not.toContain("#");
-    expect(ask).not.toContain(" ");
   });
 
   it("escapes the query too", () => {
+    // `&` and `=` would end the parameter early if they went in raw, so the
+    // decoded value is the thing to check — and it is checked through the same
+    // parser the destination uses.
     const { ask } = hrefs("ask", "a&b=c");
-    expect(ask).toBe(`${ASK}?q=a%26b%3Dc`);
+    expect(queryOf(ask!)).toBe("a&b=c");
   });
 });
