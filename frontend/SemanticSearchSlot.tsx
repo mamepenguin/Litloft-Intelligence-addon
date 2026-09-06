@@ -61,11 +61,9 @@ function PopupTimestampLink({
 }) {
   return (
     <button
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick(`/files/${fileId}?t=${Math.floor(seconds)}`);
-      }}
-      className="rounded-lg px-1 py-0.5 text-[10px] font-medium text-accent transition-colors hover:bg-accent/10"
+      type="button"
+      onClick={() => onClick(`/files/${fileId}?t=${Math.floor(seconds)}`)}
+      className="pointer-events-auto rounded-lg px-1 py-0.5 text-[10px] font-medium text-accent transition-colors hover:bg-accent/10"
     >
       {formatDuration(seconds)}
     </button>
@@ -106,11 +104,20 @@ function SemanticResultItem({
     )
     .slice(0, 5);
 
+  // The row opens the file and the timestamps open it at a moment, so the
+  // row cannot be one <button> around the others: a nested <button> is
+  // invalid HTML, and React says so on every render. The row is a plain
+  // box with the file action stretched across it; the timestamps sit in
+  // their own stacking context above that overlay, so a press lands on
+  // exactly one of them and neither has to cancel the other's bubble.
   return (
-    <button
-      onClick={() => onSelect(`/files/${result.file_id}`)}
-      className="flex w-full items-start gap-3 px-4 py-2.5 text-left transition-colors hover:bg-bg-elevated"
-    >
+    <div className="relative flex w-full items-start gap-3 px-4 py-2.5 text-left transition-colors hover:bg-bg-elevated">
+      <button
+        type="button"
+        onClick={() => onSelect(`/files/${result.file_id}`)}
+        aria-label={result.filename}
+        className="absolute inset-0"
+      />
       <img
         src={`/api/files/${result.file_id}/thumbnail`}
         alt=""
@@ -131,7 +138,12 @@ function SemanticResultItem({
           ))}
         </div>
         {timestamps.length > 0 && (
-          <div className="mt-1 flex flex-wrap gap-0.5">
+          // The wrapper is a full-width block, so its gaps and the space
+          // after the last timestamp would be dead: raised above the
+          // overlay, but with no handler of their own. It is raised for
+          // hit-testing and transparent to the pointer; only the buttons
+          // inside take clicks back.
+          <div className="pointer-events-none relative z-10 mt-1 flex flex-wrap gap-0.5">
             {timestamps.map((seg) => (
               <PopupTimestampLink
                 key={seg.time_range[0]}
@@ -148,7 +160,7 @@ function SemanticResultItem({
           </p>
         )}
       </div>
-    </button>
+    </div>
   );
 }
 
