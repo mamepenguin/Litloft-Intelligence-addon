@@ -36,7 +36,17 @@ interface PickupWidgetProps {
 export default function PickupWidget({ drive }: PickupWidgetProps) {
   const t = useTranslations("drive");
   const [files, setFiles] = useState<FileItem[]>([]);
-  const [total, setTotal] = useState(0);
+  // `null`, not `0`, until a fetch has answered. The row's link carries
+  // this number, and core's contract is that an unknown total means an
+  // unqualified "See all" rather than a claimed one — `DriveHome` says
+  // so where it threads the same field. With `0` the row spent its whole
+  // load saying "See all (0)" beside a set of skeletons.
+  //
+  // The reset in the effect below covers every load after the first, and
+  // is the half a test can see; this initial value covers the one frame
+  // before the effect runs, which React has committed past by the time a
+  // test can look.
+  const [total, setTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -49,6 +59,7 @@ export default function PickupWidget({ drive }: PickupWidgetProps) {
 
     const load = async () => {
       setLoading(true);
+      setTotal(null);
       try {
         const page = await fetchPickup(drive, {
           limit: CAROUSEL_LIMIT,
@@ -91,7 +102,7 @@ export default function PickupWidget({ drive }: PickupWidgetProps) {
       // The size of the feed, not of the day's window: the link leads to
       // the whole thing, and the number beside it has to be the number
       // the reader arrives at.
-      totalCount={total}
+      totalCount={total ?? undefined}
     />
   );
 }

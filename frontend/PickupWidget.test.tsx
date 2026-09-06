@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("@/addons/intelligence/api", () => ({
   fetchPickup: vi.fn(),
@@ -121,6 +121,60 @@ describe("PickupWidget", () => {
       expect(screen.getByTestId("see-all").textContent).toBe(
         "/drive/videos/addons/intelligence/pickup",
       ),
+    );
+  });
+
+  it("claims no number until it has one", async () => {
+    // The link is drawn from the first frame now that it is not gated on
+    // a total, so an initial `0` would spend the whole load saying
+    // "See all (0)" beside a row of skeletons. Core's contract is that
+    // an unknown total means an unqualified "See all" — `DriveHome`
+    // threads the same field as `undefined` for the same reason.
+    let resolve: (v: { file_ids: string[]; total: number }) => void = () => {};
+    mockFetch.mockReturnValue(
+      new Promise((r) => {
+        resolve = r;
+      }),
+    );
+
+    render(<PickupWidget drive="videos" />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("carousel").dataset.loading).toBe("true"),
+    );
+    expect(screen.getByTestId("total").textContent).toBe("");
+
+    await act(async () => {
+      resolve({ file_ids: ["a"], total: 300 });
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("total").textContent).toBe("300"),
+    );
+  });
+
+  it("drops the previous drive's count while the next one loads", async () => {
+    mockFetch.mockResolvedValueOnce({ file_ids: ["a"], total: 300 });
+    const { rerender } = render(<PickupWidget drive="videos" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("total").textContent).toBe("300"),
+    );
+
+    let resolve: (v: { file_ids: string[]; total: number }) => void = () => {};
+    mockFetch.mockReturnValue(
+      new Promise((r) => {
+        resolve = r;
+      }),
+    );
+    rerender(<PickupWidget drive="photos" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("total").textContent).toBe(""),
+    );
+
+    await act(async () => {
+      resolve({ file_ids: ["b"], total: 12 });
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("total").textContent).toBe("12"),
     );
   });
 
