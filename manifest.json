@@ -8,11 +8,6 @@
   "slots": {
     "search-modes": [
       {
-        "id": "semantic-search",
-        "label": "Semantic Search",
-        "priority": 10
-      },
-      {
         "id": "find-mode",
         "label": "Find",
         "priority": 15

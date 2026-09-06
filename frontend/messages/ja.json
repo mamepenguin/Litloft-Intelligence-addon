@@ -137,7 +137,6 @@
     "showMore": "もっと見る"
   },
   "askSearch": {
-    "button": "「{query}」についてAIに質問する",
     "loading": "回答を作成中...",
     "thinking": "回答を作成中…",
     "answerTitle": "AIの回答",
@@ -194,7 +193,6 @@
     "find": "Find"
   },
   "find": {
-    "button": "「{query}」でファイルを探す",
     "pageHeading": "Find: ファイルを探す",
     "pageDescription": "「{query}」に関連しそうなファイルを表示します",
     "pageCta": "Findページを開く",
@@ -209,19 +207,6 @@
     "chipPersonalViewed": "視聴済み",
     "chipPersonalNotViewed": "未視聴",
     "scope": "{drive} ドライブの {count} 件が対象です"
-  },
-  "search": {
-    "matchTranscript": "音声一致",
-    "matchTranscriptKeyword": "音声キーワード一致",
-    "matchClip": "映像一致",
-    "matchMetadata": "メタデータ",
-    "matchContent": "内容一致",
-    "matchTextContentKeyword": "内容キーワード一致",
-    "matchRetrievalKeywords": "キーワード",
-    "matchedPages": "p.{pages}",
-    "semanticResults": "セマンティック検索結果",
-    "semanticResultsDescription": "入力内容に近いファイルを表示します",
-    "score": "{score}%"
   },
   "file": {
     "similarFiles": "似たファイル",
@@ -581,5 +566,13 @@
       "providerFailed": "文字起こしに失敗しました: {error}",
       "openaiFileTooLarge": "OpenAI Whisper APIでは25MBを超えるファイルを処理できません。長時間の音声にはDeepgram / ElevenLabs Scribe / Groq / セルフホスト版Whisperなどを使ってください"
     }
+  },
+  "search": {
+    "matchTranscript": "音声一致",
+    "matchClip": "映像一致",
+    "matchMetadata": "メタデータ",
+    "matchContent": "内容一致",
+    "matchRetrievalKeywords": "キーワード",
+    "matchedPages": "p.{pages}"
   }
 }

@@ -5,17 +5,17 @@
  *
  * Spec: ``2026-04-30-intelligence-find-mode.md`` §3.1 (UI / モード切替).
  *
- * Mirrors the existing Ask handoff inside ``SemanticSearchSlot`` but
- * dedicated to Find. Renders only when:
+ * Renders only when:
  *  - ``intelligence.features.rag === true`` (Find depends on Stage A
  *    + C LLM calls, gated by the same flag as Ask), and
  *  - ``llm.enabled === true``, and
  *  - the user has typed a non-empty query (no point handing off with
  *    no seed).
  *
- * Page layout is a single right-aligned chip — Find is a side door
+ * The layout is a single right-aligned chip — Find is a side door
  * (handoff to a different page), so it stays visually subordinate to
- * the actual results on the search page.
+ * the actual results on the search page. Core mounts `search-modes`
+ * on the results page and nowhere else, so there is one form to draw.
  */
 
 import { useEffect, useState } from "react";
@@ -25,24 +25,17 @@ import { ListFilter } from "lucide-react";
 import { getIntelligenceStatus } from "./api";
 import { getEnabledAddons } from "@/lib/addons";
 
-type SlotContext = "popup" | "page";
-
 interface FindModeSlotProps {
   query: string;
   drive: string;
   filter: string;
   onSelect: (url: string) => void;
-  /** Layout mode. "popup" (default) = compact list row for the search
-   *  modal, "page" = prominent section heading + CTA card for the
-   *  /drive/<name>/search page. */
-  context?: SlotContext;
 }
 
 export default function FindModeSlot({
   query,
   drive,
   onSelect,
-  context = "popup",
 }: FindModeSlotProps) {
   const t = useTranslations("find");
   // ``ragGate`` is ``null`` when we have not finished probing yet,
@@ -91,32 +84,18 @@ export default function FindModeSlot({
 
   const href = `/drive/${encodeURIComponent(drive)}/addons/intelligence/find?q=${encodeURIComponent(trimmed)}`;
 
-  if (context === "page") {
-    return (
-      <div className="flex justify-end">
-        <button
-          type="button"
-          onClick={() => onSelect(href)}
-          aria-label={`Find: ${trimmed}`}
-          title={t("pageDescription", { query: trimmed })}
-          className="inline-flex items-center gap-1.5 rounded-full bg-sand px-3 py-1.5 text-xs font-medium text-text-primary transition-colors hover:bg-sand-hover"
-        >
-          <ListFilter size={14} className="flex-shrink-0 text-accent-teal" />
-          <span className="truncate">{t("pageCta")}</span>
-        </button>
-      </div>
-    );
-  }
-
   return (
-    <button
-      type="button"
-      onClick={() => onSelect(href)}
-      aria-label={`Find: ${trimmed}`}
-      className="flex w-full items-center gap-2 border-t border-bg-border px-4 py-2.5 text-left text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
-    >
-      <ListFilter size={12} className="flex-shrink-0 text-accent-teal" />
-      <span className="truncate">{t("button", { query: trimmed })}</span>
-    </button>
+    <div className="flex justify-end">
+      <button
+        type="button"
+        onClick={() => onSelect(href)}
+        aria-label={`Find: ${trimmed}`}
+        title={t("pageDescription", { query: trimmed })}
+        className="inline-flex items-center gap-1.5 rounded-full bg-sand px-3 py-1.5 text-xs font-medium text-text-primary transition-colors hover:bg-sand-hover"
+      >
+        <ListFilter size={14} className="flex-shrink-0 text-accent-teal" />
+        <span className="truncate">{t("pageCta")}</span>
+      </button>
+    </div>
   );
 }
