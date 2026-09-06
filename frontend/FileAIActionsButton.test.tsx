@@ -80,6 +80,29 @@ describe("FileAIActionsButton", () => {
     ).toBeInTheDocument();
   });
 
+  /**
+   * `docs/ADDON-DEVELOPMENT.md` puts the coarse-pointer floor on the entry
+   * rather than on the row it lands in: `.file-action-row-touch > *` grows
+   * the wrapper, and a wrapper at 44 around a button at 32 is still a 32px
+   * target. Six controls in that row cleared the floor and this one did
+   * not — the outcome `DESIGN.md` §Row Actions calls "buys nothing".
+   *
+   * `min-*` rather than a fixed box, because this trigger carries a label
+   * and 44px of width clips it wherever the word is longer than "AI".
+   */
+  it("clears the touch floor on both axes without boxing its label in", () => {
+    renderWithStack(
+      <>
+        <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active />
+        <FileAIActionsButton fileId="f1" />
+      </>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "AI" });
+    expect(trigger).toHaveClass("pointer-coarse:min-h-11", "pointer-coarse:min-w-11");
+    expect(trigger.className).not.toMatch(/pointer-coarse:[hw]-11\b/);
+  });
+
   it("runs the offering section's own callback", () => {
     let ran = 0;
     renderWithStack(

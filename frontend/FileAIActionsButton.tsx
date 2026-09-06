@@ -100,7 +100,14 @@ export default function FileAIActionsButton({ fileId }: FileAIActionsButtonProps
         ref={triggerRef}
         type="button"
         onClick={() => setOpen((s) => !s)}
-        className="flex items-center gap-1.5 rounded-full bg-bg-card px-3 py-1.5 text-sm text-text-primary transition-colors hover:bg-bg-elevated"
+        // The floor is the entry's own, not the row's. `.file-action-row-touch
+        // > *` grows the *wrapper* this button sits in, which leaves the
+        // button itself 59×32 where the pointer is coarse — the shape
+        // `DESIGN.md` §Row Actions calls "buys nothing", six controls at 44
+        // beside one that is not. `min-*`, not `h-11 w-11`: this trigger
+        // carries a label, and a fixed 44px box clips it in a locale whose
+        // word is longer than the icon.
+        className="flex items-center gap-1.5 rounded-full bg-bg-card px-3 py-1.5 text-sm text-text-primary transition-colors hover:bg-bg-elevated pointer-coarse:min-h-11 pointer-coarse:min-w-11"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={label}

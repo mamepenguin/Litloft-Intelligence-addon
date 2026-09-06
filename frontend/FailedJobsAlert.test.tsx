@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 vi.mock("@/addons/intelligence/api", () => ({
   getFailedJobs: vi.fn(),
@@ -102,14 +102,19 @@ describe("FailedJobsAlert", () => {
     vi.useFakeTimers();
     mockedFailedJobs.mockResolvedValue(page(2));
     render(<FailedJobsAlert />);
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(screen.getByRole("button", { name: /2 failed jobs/ })).toBeInTheDocument(),
     );
 
     mockedFailedJobs.mockResolvedValue(page(0));
-    await vi.advanceTimersByTimeAsync(10_000);
+    // The poll that this timer releases resolves inside `act`, not after
+    // it: the fetch lands a microtask later, and its `setState` was
+    // arriving with nothing holding the lock.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
 
-    await vi.waitFor(() => expect(screen.queryByRole("button")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("button")).toBeNull());
   });
 
   it("keeps an open modal on screen when the last job is cleared", async () => {
@@ -121,21 +126,26 @@ describe("FailedJobsAlert", () => {
     mockedFailedJobs.mockResolvedValue(page(2));
     render(<FailedJobsAlert />);
     fireEvent.click(
-      await vi.waitFor(() => screen.getByRole("button", { name: /2 failed jobs/ })),
+      await waitFor(() => screen.getByRole("button", { name: /2 failed jobs/ })),
     );
     expect(screen.getByTestId("failed-jobs-modal-stub")).toBeInTheDocument();
 
     mockedFailedJobs.mockResolvedValue(page(0));
-    await vi.advanceTimersByTimeAsync(10_000);
+    // The poll that this timer releases resolves inside `act`, not after
+    // it: the fetch lands a microtask later, and its `setState` was
+    // arriving with nothing holding the lock.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(screen.queryByRole("button", { name: /failed job/ })).toBeNull(),
     );
     expect(screen.getByTestId("failed-jobs-modal-stub")).toBeInTheDocument();
 
     // And it still closes when they say so.
     fireEvent.click(screen.getByText("close-modal"));
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(screen.queryByTestId("failed-jobs-modal-stub")).toBeNull(),
     );
   });

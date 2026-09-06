@@ -132,16 +132,30 @@ afterEach(() => {
   cleanup();
 });
 
+/**
+ * Submit, and let the request it starts finish inside `act`.
+ *
+ * `fireEvent` wraps the click and the `loading` state that follows it, but
+ * the response lands a microtask later — after this helper has returned —
+ * so every caller was updating state outside `act` and being told so on
+ * stderr. Ten of the fifteen tests here printed that warning, which is the
+ * noise a real ordering bug would have hidden in.
+ *
+ * `act(async …)` flushes those microtasks while it is still holding the
+ * lock, so the assertions below run against a settled tree.
+ */
 async function submitQuery(question: string) {
   const input = await screen.findByRole("textbox");
   fireEvent.change(input, { target: { value: question } });
   const form = (input as HTMLElement).closest("form");
-  if (form) {
-    fireEvent.submit(form);
-  } else {
-    const submit = screen.getByRole("button", { name: /search|送信|find/i });
-    fireEvent.click(submit);
-  }
+  await act(async () => {
+    if (form) {
+      fireEvent.submit(form);
+    } else {
+      const submit = screen.getByRole("button", { name: /search|送信|find/i });
+      fireEvent.click(submit);
+    }
+  });
 }
 
 describe("FindPage — input + submit", () => {
