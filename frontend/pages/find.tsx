@@ -44,6 +44,7 @@ import FindChip from "../FindChip";
 import type { FindChipSlot } from "../FindChip";
 import { Button } from "@/components/Button";
 import { PageHeader } from "@/components/PageHeader";
+import { DriveScopeLine } from "../DriveScopeLine";
 import ModeTabs from "../ModeTabs";
 
 const FIND_LIMIT = 20;
@@ -267,6 +268,8 @@ function IntelligenceFindPageInner() {
       {/* `px-4`, matching PageHeader's own padding — see the note on the Ask
           page. */}
       <div className="flex flex-col gap-4 px-4">
+
+        <DriveScopeLine drive={drive} />
 
         <form onSubmit={handleSubmit} className="flex items-center gap-2">
           <input

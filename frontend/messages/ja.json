@@ -140,8 +140,11 @@
     "button": "「{query}」についてAIに質問する",
     "loading": "回答を作成中...",
     "thinking": "回答を作成中…",
-    "loadingHint": "(数秒かかることがあります)",
     "answerTitle": "AIの回答",
+    "pageTitle": "ドライブに質問する",
+    "placeholder": "例: 先週観た映画で、宇宙の話をしていたのはどれ",
+    "submit": "質問する",
+    "privacyHint": "回答に数秒かかります。字幕や本文が LLM API に送られます。",
     "citationsTitle": "引用",
     "regenerate": "作り直す",
     "close": "閉じる",
@@ -152,7 +155,6 @@
     "retryHint": "再試行",
     "queryTooShort": "入力が短すぎます（3文字以上）",
     "takenMs": "{ms}msで作成",
-    "poweredByLlm": "AI",
     "personalHistoryViewed": "視聴履歴 {count} 件を対象に検索",
     "personalHistoryNotViewed": "未視聴 {count} 件を対象に検索",
     "personalHistoryFallback": "視聴履歴に一致しなかったため、すべてのファイルから検索します",
@@ -205,7 +207,8 @@
     "totalCount": "{count} 件見つかりました",
     "categoryExpansion": "関連語: {terms}",
     "chipPersonalViewed": "視聴済み",
-    "chipPersonalNotViewed": "未視聴"
+    "chipPersonalNotViewed": "未視聴",
+    "scope": "{drive} ドライブの {count} 件が対象です"
   },
   "search": {
     "matchTranscript": "音声一致",

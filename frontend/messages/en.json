@@ -140,8 +140,11 @@
     "button": "Ask AI about “{query}”",
     "loading": "Creating answer...",
     "thinking": "Creating answer…",
-    "loadingHint": "(may take a few seconds)",
     "answerTitle": "AI answer",
+    "pageTitle": "Ask this drive",
+    "placeholder": "e.g. which of last week's films talked about space",
+    "submit": "Ask",
+    "privacyHint": "Answers take a few seconds. Transcripts and text are sent to the LLM API.",
     "citationsTitle": "Citations",
     "regenerate": "Create again",
     "close": "Close",
@@ -152,7 +155,6 @@
     "retryHint": "Retry",
     "queryTooShort": "Input is too short (3 characters minimum)",
     "takenMs": "Created in {ms}ms",
-    "poweredByLlm": "AI",
     "personalHistoryViewed": "Searching {count} files you viewed",
     "personalHistoryNotViewed": "Searching {count} unwatched files",
     "personalHistoryFallback": "No viewing history matched, so all files will be searched",
@@ -205,7 +207,8 @@
     "totalCount": "{count} results",
     "categoryExpansion": "Related terms: {terms}",
     "chipPersonalViewed": "viewed",
-    "chipPersonalNotViewed": "not viewed"
+    "chipPersonalNotViewed": "not viewed",
+    "scope": "Asking across {count} files in {drive}"
   },
   "search": {
     "matchTranscript": "Transcript",

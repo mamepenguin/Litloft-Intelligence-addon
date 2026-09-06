@@ -765,6 +765,13 @@ describe("TranscriptSection — telling the host whether there is anything", () 
 
     expect(onAvailability).toHaveBeenCalledWith(false);
     expect(onAvailability.mock.calls[0]).toEqual([false]);
+
+    // The assertion above is about the first thing said, which is why it
+    // runs before anything settles. The fetch is still in flight though,
+    // and letting it land after the test ends put its `setState` outside
+    // `act` — the same shape as a test that releases a promise on its last
+    // line and returns.
+    await act(async () => {});
   });
 
   it("says yes once the cues arrive", async () => {

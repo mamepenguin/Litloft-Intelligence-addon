@@ -45,6 +45,7 @@ import { AlertCircle, BookmarkPlus, Quote, Send, Sparkles, Square, X } from "luc
 import { useCurrentDrive } from "@/components/CurrentDriveProvider";
 import { Button } from "@/components/Button";
 import { PageHeader } from "@/components/PageHeader";
+import { DriveScopeLine } from "./DriveScopeLine";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import { addSourceCapture } from "@/lib/sourceCapture";
 import ModeTabs from "./ModeTabs";
@@ -864,7 +865,11 @@ function IntelligenceAskPageInner() {
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 py-4 sm:py-6">
       <PageHeader
         titleIcon={Sparkles}
-        title={t("answerTitle")}
+        // Not `answerTitle`: that names the answer, and it was the page's
+        // heading — so the page announced "AI answer" before anything had
+        // been asked. It heads the answer section instead, which is where
+        // it is true, and only once there is an answer under it.
+        title={t("pageTitle")}
         tabs={
           drive ? <ModeTabs current="ask" query={input} drive={drive} /> : undefined
         }
@@ -889,6 +894,8 @@ function IntelligenceAskPageInner() {
           </div>
         )}
 
+        <DriveScopeLine drive={drive} />
+
         <form onSubmit={handleSubmit} className="flex flex-col gap-2">
           <textarea
             value={input}
@@ -896,7 +903,11 @@ function IntelligenceAskPageInner() {
             onKeyDown={handleInputKeyDown}
             onCompositionStart={() => setComposing(true)}
             onCompositionEnd={() => setComposing(false)}
-            placeholder={seedQuery || ""}
+            // An example, not the seed. The seed is already in `value`
+            // (see the `useState` above); putting it here as well meant a
+            // reader who pressed the button without typing sent an empty
+            // string while looking at their own question.
+            placeholder={t("placeholder")}
             rows={3}
             disabled={ragAvailable === false}
             className="w-full resize-y rounded-lg border border-bg-border bg-bg-card p-3 text-sm text-text-primary placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
@@ -906,7 +917,7 @@ function IntelligenceAskPageInner() {
             <p className="text-xs text-text-muted">
               {state.kind === "streaming"
                 ? t("loading")
-                : t("loadingHint")}
+                : t("privacyHint")}
             </p>
             {state.kind === "streaming" ? (
               <button
@@ -924,7 +935,7 @@ function IntelligenceAskPageInner() {
                 data-testid="ask-submit"
                 disabled={!canSubmit}
               >
-                <Send size={12} /> {t("poweredByLlm")}
+                <Send size={12} /> {t("submit")}
               </Button>
             )}
           </div>
@@ -1057,6 +1068,12 @@ function IntelligenceAskPageInner() {
             aria-live="polite"
             className="rounded-lg border border-bg-border bg-bg-card p-4"
           >
+            {/* The words that used to head the page, now heading the thing
+                they name, and only once it exists. An `<h2>`: the page's
+                `<h1>` is the question, this is the answer to it. */}
+            <h2 className="mb-2 text-sm font-semibold text-text-muted">
+              {t("answerTitle")}
+            </h2>
             {state.kind === "streaming" && state.answerBuffer === "" ? (
               // "Thinking" indicator — shown while retrieval / LLM
               // warm-up is happening and no answer tokens have been

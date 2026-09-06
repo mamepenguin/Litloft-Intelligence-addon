@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 vi.mock("@/addons/intelligence/api", () => ({
   refineFolderTranscripts: vi.fn().mockResolvedValue({
@@ -87,7 +87,15 @@ describe("FolderRefineButton", () => {
       ).toBeDisabled();
     });
 
-    resolveFn({ queued: 2, jobs: ["job-a", "job-b"] });
+    // Resolved inside `act`, and then asserted: letting the response land
+    // after the test ends put its `setState` outside `act`, and the line
+    // that released it proved nothing on its own.
+    await act(async () => {
+      resolveFn({ queued: 2, jobs: ["job-a", "job-b"] });
+    });
+    expect(
+      screen.getByRole("button", { name: /Clean up this folder's transcripts with AI/ })
+    ).toBeEnabled();
   });
 
   it("returns null when there are no file ids", () => {
