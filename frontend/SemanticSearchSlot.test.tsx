@@ -17,7 +17,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, cleanup, fireEvent } from "@testing-library/react";
 import React from "react";
 
 vi.mock("./api", async () => {
@@ -153,6 +153,71 @@ describe("SemanticSearchSlot", () => {
     expect(container.textContent).toBe("");
     expect(getEnabledAddons).not.toHaveBeenCalled();
     expect(semanticSearch).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The row used to be one <button> wrapping the per-timestamp <button>s.
+   * That is invalid HTML; React reported it on every render, and the noise
+   * was filed as an act() warning and left alone for a release.
+   *
+   * Two assertions, because either alone can be talked out of: the DOM one
+   * survives React changing its wording, and the console one catches the
+   * other nestings (<a> in <a>, <button> in <a>) the selector below would
+   * have to be extended for.
+   */
+  describe("the result row's click targets", () => {
+    const renderRow = async () => {
+      const nestingErrors: string[] = [];
+      const spy = vi
+        .spyOn(console, "error")
+        .mockImplementation((...args: unknown[]) => {
+          const text = args.map(String).join(" ");
+          if (/descendant of/.test(text)) nestingErrors.push(text);
+        });
+      const { container } = render(
+        <SemanticSearchSlot
+          query="space"
+          drive="family"
+          filter="all"
+          onSelect={onSelect}
+        />,
+      );
+      await waitFor(() => {
+        expect(screen.queryByText("sample-movie.mp4")).toBeInTheDocument();
+      });
+      spy.mockRestore();
+      return { container, nestingErrors };
+    };
+
+    let onSelect: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      onSelect = vi.fn();
+    });
+
+    it("does not nest one interactive element inside another", async () => {
+      const { container, nestingErrors } = await renderRow();
+
+      const nested = container.querySelectorAll(
+        "button button, button a, a button, a a",
+      );
+      expect([...nested].map((el) => el.outerHTML)).toEqual([]);
+      expect(nestingErrors).toEqual([]);
+    });
+
+    it("opens the file from the row and the moment from a timestamp", async () => {
+      await renderRow();
+
+      fireEvent.click(screen.getByRole("button", { name: "0:12" }));
+      expect(onSelect).toHaveBeenCalledWith("/files/f-1?t=12");
+
+      onSelect.mockClear();
+      // The row's own target carries the filename as its accessible name;
+      // it is the whole row minus the timestamps, so it has no text of
+      // its own to be named by.
+      fireEvent.click(screen.getByRole("button", { name: "sample-movie.mp4" }));
+      expect(onSelect).toHaveBeenCalledWith("/files/f-1");
+    });
   });
 
   it("renders nothing when intelligence is disabled for the drive in popup context", async () => {
