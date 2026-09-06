@@ -63,7 +63,7 @@ function PopupTimestampLink({
     <button
       type="button"
       onClick={() => onClick(`/files/${fileId}?t=${Math.floor(seconds)}`)}
-      className="rounded-lg px-1 py-0.5 text-[10px] font-medium text-accent transition-colors hover:bg-accent/10"
+      className="pointer-events-auto rounded-lg px-1 py-0.5 text-[10px] font-medium text-accent transition-colors hover:bg-accent/10"
     >
       {formatDuration(seconds)}
     </button>
@@ -138,7 +138,12 @@ function SemanticResultItem({
           ))}
         </div>
         {timestamps.length > 0 && (
-          <div className="relative z-10 mt-1 flex flex-wrap gap-0.5">
+          // The wrapper is a full-width block, so its gaps and the space
+          // after the last timestamp would be dead: raised above the
+          // overlay, but with no handler of their own. It is raised for
+          // hit-testing and transparent to the pointer; only the buttons
+          // inside take clicks back.
+          <div className="pointer-events-none relative z-10 mt-1 flex flex-wrap gap-0.5">
             {timestamps.map((seg) => (
               <PopupTimestampLink
                 key={seg.time_range[0]}

@@ -218,6 +218,20 @@ describe("SemanticSearchSlot", () => {
       fireEvent.click(screen.getByRole("button", { name: "sample-movie.mp4" }));
       expect(onSelect).toHaveBeenCalledWith("/files/f-1");
     });
+
+    it("leaves no dead strip where the timestamps are", async () => {
+      await renderRow();
+
+      // jsdom has no layout, so this is the contract rather than a hit
+      // test: the timestamp wrapper is a full-width block raised above
+      // the row's stretched action, and its gaps and trailing space are
+      // only clickable because it is transparent to the pointer and the
+      // buttons inside take events back.
+      const stamp = screen.getByRole("button", { name: "0:12" });
+      const wrapper = stamp.parentElement!;
+      expect(wrapper.className).toContain("pointer-events-none");
+      expect(stamp.className).toContain("pointer-events-auto");
+    });
   });
 
   it("renders nothing when intelligence is disabled for the drive in popup context", async () => {
