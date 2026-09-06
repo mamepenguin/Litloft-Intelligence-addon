@@ -84,13 +84,16 @@ describe("FileAIActionsButton", () => {
    * `docs/ADDON-DEVELOPMENT.md` puts the coarse-pointer floor on the entry
    * rather than on the row it lands in: `.file-action-row-touch > *` grows
    * the wrapper, and a wrapper at 44 around a button at 32 is still a 32px
-   * target. Six controls in that row cleared the floor and this one did
-   * not — the outcome `DESIGN.md` §Row Actions calls "buys nothing".
+   * target.
    *
-   * `min-*` rather than a fixed box, because this trigger carries a label
-   * and 44px of width clips it wherever the word is longer than "AI".
+   * **This pins a class, not a geometry.** jsdom lays nothing out, so no
+   * test in this repository can assert the 44px outcome; the arithmetic
+   * that says the class is the right one lives beside it in the component.
+   * `min-h`, not `h-11`, because the trigger carries a label — and no
+   * `min-w`, because padding and two icons put the width past the floor
+   * before the label is drawn.
    */
-  it("clears the touch floor on both axes without boxing its label in", () => {
+  it("clears the touch floor in the axis that needs it", () => {
     renderWithStack(
       <>
         <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active />
@@ -99,8 +102,10 @@ describe("FileAIActionsButton", () => {
     );
 
     const trigger = screen.getByRole("button", { name: "AI" });
-    expect(trigger).toHaveClass("pointer-coarse:min-h-11", "pointer-coarse:min-w-11");
-    expect(trigger.className).not.toMatch(/pointer-coarse:[hw]-11\b/);
+    expect(trigger).toHaveClass("pointer-coarse:min-h-11");
+    // Not a fixed box: `h-11` would clip the label in a locale whose word
+    // is longer than "AI".
+    expect(trigger.className).not.toMatch(/pointer-coarse:h-11\b/);
   });
 
   it("runs the offering section's own callback", () => {

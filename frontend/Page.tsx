@@ -867,7 +867,8 @@ function IntelligenceAskPageInner() {
         titleIcon={Sparkles}
         // Not `answerTitle`: that names the answer, and it was the page's
         // heading — so the page announced "AI answer" before anything had
-        // been asked. `answerTitle` still heads the answer section below.
+        // been asked. It heads the answer section instead, which is where
+        // it is true, and only once there is an answer under it.
         title={t("pageTitle")}
         tabs={
           drive ? <ModeTabs current="ask" query={input} drive={drive} /> : undefined
@@ -1067,6 +1068,12 @@ function IntelligenceAskPageInner() {
             aria-live="polite"
             className="rounded-lg border border-bg-border bg-bg-card p-4"
           >
+            {/* The words that used to head the page, now heading the thing
+                they name, and only once it exists. An `<h2>`: the page's
+                `<h1>` is the question, this is the answer to it. */}
+            <h2 className="mb-2 text-sm font-semibold text-text-muted">
+              {t("answerTitle")}
+            </h2>
             {state.kind === "streaming" && state.answerBuffer === "" ? (
               // "Thinking" indicator — shown while retrieval / LLM
               // warm-up is happening and no answer tokens have been

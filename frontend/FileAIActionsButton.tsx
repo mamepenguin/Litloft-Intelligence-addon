@@ -101,13 +101,22 @@ export default function FileAIActionsButton({ fileId }: FileAIActionsButtonProps
         type="button"
         onClick={() => setOpen((s) => !s)}
         // The floor is the entry's own, not the row's. `.file-action-row-touch
-        // > *` grows the *wrapper* this button sits in, which leaves the
-        // button itself 59×32 where the pointer is coarse — the shape
-        // `DESIGN.md` §Row Actions calls "buys nothing", six controls at 44
-        // beside one that is not. `min-*`, not `h-11 w-11`: this trigger
-        // carries a label, and a fixed 44px box clips it in a locale whose
-        // word is longer than the icon.
-        className="flex items-center gap-1.5 rounded-full bg-bg-card px-3 py-1.5 text-sm text-text-primary transition-colors hover:bg-bg-elevated pointer-coarse:min-h-11 pointer-coarse:min-w-11"
+        // > *` grows the *wrapper* this button sits in and centres it, so
+        // the wrapper reaches 44 while the button inside stays at its own
+        // height — `py-1.5` plus a 20px line box, which is 32.
+        //
+        // Height only. Width is already past the floor without any help:
+        // `px-3` and the two lucide icons come to 66px before the label,
+        // so a `min-w-11` would be a class that can never bind — and
+        // nothing here could tell, since jsdom lays nothing out and the
+        // test below can only ever pin the class string.
+        //
+        // Core's `globals.css` records this trigger at 44 and its siblings
+        // at 32, which is the opposite of what was measured here. The two
+        // are reconcilable — that number is the wrapper's, this one is the
+        // button's — but neither is reproducible from this repository, so
+        // it is recorded rather than asserted.
+        className="flex items-center gap-1.5 rounded-full bg-bg-card px-3 py-1.5 text-sm text-text-primary transition-colors hover:bg-bg-elevated pointer-coarse:min-h-11"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={label}

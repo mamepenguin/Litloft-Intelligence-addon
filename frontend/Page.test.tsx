@@ -29,6 +29,17 @@ vi.mock("next/navigation", () => ({
 }));
 
 // --- Mock CurrentDriveProvider (Page reads useCurrentDrive). ----
+// The scope line asks core which drives this viewer may open. Without this
+// the line never rendered in the Ask suite at all, so every assertion about
+// it — including its absence — was being made against a screen that could
+// not draw it.
+vi.mock("@/lib/api", () => ({
+  getDrives: vi.fn(async () => [
+    { name: "family", file_count: 619 },
+    { name: "work", file_count: 3 },
+  ]),
+}));
+
 vi.mock("@/components/CurrentDriveProvider", () => ({
   useCurrentDrive: () => "family",
 }));
@@ -301,7 +312,12 @@ describe("IntelligenceAskPage — progressive citations + thinking indicator", (
       });
     });
     await waitFor(() => {
-      expect(utils.container.querySelector("h2")).toHaveTextContent("Heading");
+      // By name, not by being the first `<h2>` in the container: the answer
+      // section now heads itself, so "the first h2" is that heading rather
+      // than anything the answer's Markdown produced.
+      expect(
+        screen.getByRole("heading", { level: 2, name: "Heading" }),
+      ).toBeInTheDocument();
     });
     expect(utils.container.querySelector("strong")).toHaveTextContent(
       "bold text",
@@ -802,6 +818,19 @@ describe("IntelligenceAskPage — page header, mode tabs and accent budget", () 
     expect(textarea.placeholder).toMatch(/^e\.g\./);
     expect(textarea.value).toBe("");
     expect(screen.getByTestId("ask-submit").textContent).toContain("Ask");
+  });
+
+  /**
+   * A-2 asks for the scope line on *both* pages. Deleting it from this one
+   * left the whole suite green, because nothing here had ever rendered it.
+   */
+  it("says which drive it will read, and how many files", async () => {
+    render(<IntelligenceAskPage />);
+    const scope = await screen.findByTestId("drive-scope");
+    // The count of the drive in context, not of the first one returned:
+    // both are in the response and only one is the subject.
+    expect(scope.textContent).toContain("619");
+    expect(scope.textContent).not.toContain("3 files");
   });
 
   it("says what it will send before it sends it", async () => {

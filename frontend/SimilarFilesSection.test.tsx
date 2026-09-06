@@ -240,6 +240,12 @@ describe("SimilarFilesSection", () => {
     expect(getSimilarFiles).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * The `act()` warning this test prints is intrinsic to its subject: the
+   * late response it is about lands, by construction, on a component that
+   * has moved on. Silencing it would mean asserting on a settled screen,
+   * which is the state this test exists to say cannot be reached.
+   */
   it("drops a slow answer that arrives after the reader moved to another file", async () => {
     // The case the `requestIdRef` guard exists for, and the only one:
     // the previous test changes the file with nothing in flight, so it

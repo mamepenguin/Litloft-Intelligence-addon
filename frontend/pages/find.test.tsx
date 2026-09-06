@@ -417,15 +417,28 @@ describe("FindPage — empty / loading / error", () => {
  * (UI redesign Phase 3, C2a). The Ask page carries the same three.
  */
 describe("FindPage — page header, mode tabs and accent budget", () => {
-  it("names itself once, and lets core choose the size", () => {
-    const { container } = render(<FindPage />);
+  /**
+   * Every test here renders the page and asserts synchronously, and the
+   * page asks core for its drive list on mount — so the response landed
+   * after the test ended, updating state with nothing holding the lock.
+   * The scope line's own arrival is the thing to wait for; waiting on it
+   * is also what makes these assertions run against the finished screen.
+   */
+  const renderSettled = async () => {
+    const utils = render(<FindPage />);
+    await screen.findByTestId("drive-scope");
+    return utils;
+  };
+
+  it("names itself once, and lets core choose the size", async () => {
+    const { container } = await renderSettled();
     const h1s = container.querySelectorAll("h1");
     expect(h1s).toHaveLength(1);
     expect(h1s[0].className).toContain("text-2xl");
   });
 
-  it("marks the current mode the way a set of links does, and not twice", () => {
-    render(<FindPage />);
+  it("marks the current mode the way a set of links does, and not twice", async () => {
+    await renderSettled();
     const find = screen.getByRole("link", { name: /find/i });
     expect(find).toHaveAttribute("aria-current", "page");
     expect(find).not.toHaveAttribute("aria-selected");
@@ -435,12 +448,12 @@ describe("FindPage — page header, mode tabs and accent budget", () => {
     expect(ask).not.toHaveAttribute("aria-current");
   });
 
-  it("spends its one accent fill on searching", () => {
+  it("spends its one accent fill on searching", async () => {
     // Two before this migration: the submit button and the selected mode tab,
     // which spent the screen's fill on saying which mode you are already
     // looking at. `PageTabs` marks the selection with a border instead, so
     // this also fails if the tab row goes back to filling.
-    const { container } = render(<FindPage />);
+    const { container } = await renderSettled();
     const fills = accentFills(container);
     expect(fills).toHaveLength(1);
     expect(fills[0]).toHaveAttribute("type", "submit");
