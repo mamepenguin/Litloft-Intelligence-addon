@@ -399,7 +399,11 @@ export default function IndexStatusWidget({ drive }: IndexStatusWidgetProps) {
   return (
     <div className="rounded-xl border border-bg-border bg-bg-card p-5">
       <div className="mb-4 flex items-center gap-2">
-        <Brain size={18} className="text-accent" />
+        {/* Muted, like every other card heading on the dashboard. A
+            heading is not a call to action and DESIGN.md §2.2 keeps the
+            accent for one; three cards in a row each tinting their own
+            glyph only made the column look like it was ranking them. */}
+        <Brain size={18} className="text-text-muted" />
         <h3 className="text-sm font-semibold text-text-primary">
           {t("title")}
         </h3>
