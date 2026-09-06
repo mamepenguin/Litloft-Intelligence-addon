@@ -568,13 +568,5 @@
       "providerFailed": "Transcription failed: {error}",
       "openaiFileTooLarge": "OpenAI Whisper API cannot process files over 25MB. For long audio, use Deepgram / ElevenLabs Scribe / Groq / self-hosted Whisper."
     }
-  },
-  "search": {
-    "matchTranscript": "Transcript",
-    "matchClip": "Visual",
-    "matchMetadata": "Metadata",
-    "matchContent": "Content",
-    "matchRetrievalKeywords": "Keyword",
-    "matchedPages": "p.{pages}"
   }
 }
