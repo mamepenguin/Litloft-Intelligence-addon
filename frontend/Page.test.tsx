@@ -23,8 +23,9 @@ import { render, screen, act, waitFor, fireEvent } from "@testing-library/react"
 import React from "react";
 
 // --- Mock next/navigation (Ask page reads useSearchParams + usePathname). ----
+const searchQuery = { current: "" };
 vi.mock("next/navigation", () => ({
-  useSearchParams: () => new URLSearchParams(""),
+  useSearchParams: () => new URLSearchParams(searchQuery.current),
   usePathname: () => "/drive/family/addons/intelligence",
 }));
 
@@ -807,6 +808,40 @@ describe("IntelligenceAskPage — page header, mode tabs and accent budget", () 
     // The answer's own heading keeps the old words, one level down, and
     // only once there is an answer under it.
     expect(screen.queryByText("AI answer")).toBeNull();
+  });
+
+  /**
+   * The seed reaches the box, which is the whole reason the placeholder is
+   * free to hold an example.
+   *
+   * That reasoning is written into the component, and nothing held it:
+   * seeding the state with `""` instead left every test green, and the
+   * page would then send an empty question while showing the reader the
+   * one they arrived with.
+   */
+  it("puts a ?q= seed in the box, ready to send", async () => {
+    searchQuery.current = "q=what did they decide";
+    try {
+      render(<IntelligenceAskPage />);
+      const textarea = (await screen.findByRole("textbox", {
+        name: /question input/i,
+      })) as HTMLTextAreaElement;
+
+      expect(textarea.value).toBe("what did they decide");
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("ask-submit"));
+      });
+      // The question is the first positional argument, and the assertion
+      // reads the last call: earlier tests in this file share the module
+      // mock, and `mock.calls[0]` would be whichever of them ran first
+      // under `--sequence.shuffle`.
+      const { askQuestionStream } = await import("@/addons/intelligence/api");
+      const calls = vi.mocked(askQuestionStream).mock.calls;
+      expect(calls[calls.length - 1][0]).toBe("what did they decide");
+    } finally {
+      searchQuery.current = "";
+    }
   });
 
   it("shows an example in the input, and a verb on the button", async () => {
