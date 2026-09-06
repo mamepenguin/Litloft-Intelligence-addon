@@ -105,7 +105,7 @@ export default function FolderAIActionsMenuItems({
       }
     } catch {
       toast.error(
-        t("tagsBatchError", { defaultMessage: "Could not queue — please retry." }),
+        t("tagsBatchError"),
       );
     } finally {
       done();
@@ -133,7 +133,7 @@ export default function FolderAIActionsMenuItems({
       }
     } catch {
       toast.error(
-        t("summariesBatchError", { defaultMessage: "Could not queue — please retry." }),
+        t("summariesBatchError"),
       );
     } finally {
       done();
@@ -150,27 +150,17 @@ export default function FolderAIActionsMenuItems({
     try {
       const result = await generateFolderVisualDescription(drive, fileIds);
       toast.success(
-        t("visionFolderQueued", {
-          queued: result.queued,
-          defaultMessage: "{queued} images queued",
-        }),
+        t("visionFolderQueued", { queued: result.queued }),
       );
     } catch (e) {
       const info = (e as { info?: FolderVisualDescriptionTooManyError }).info;
       if (info?.kind === "too_many_files") {
         toast.error(
-          t("visionFolderTooMany", {
-            max: info.max,
-            requested: info.requested,
-            defaultMessage:
-              "Too many files ({requested}). Max per batch: {max}.",
-          }),
+          t("visionFolderTooMany", { max: info.max, requested: info.requested }),
         );
       } else {
         toast.error(
-          t("visionFolderError", {
-            defaultMessage: "Failed to queue folder — please retry.",
-          }),
+          t("visionFolderError"),
         );
       }
     } finally {

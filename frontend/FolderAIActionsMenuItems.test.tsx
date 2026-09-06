@@ -38,8 +38,9 @@ const PROPS = { fileIds: ["a", "b"], drive: "family" };
 beforeEach(() => {
   vi.clearAllMocks();
   // Every row asks before it spends, so the tests about what gets queued
-  // have to answer. Stated here rather than left to a spy leaking out of
-  // whichever test ran first — `restoreMocks` is off, so one used to.
+  // have to answer. `restoreMocks` is off in this project, so a spy
+  // installed in one test stays installed for the next; stating the
+  // default here is what stops one test arming another.
   vi.spyOn(window, "confirm").mockReturnValue(true);
   api.batchSuggestedTags.mockResolvedValue({ queued: 2, skipped: 0 });
   api.batchSummaries.mockResolvedValue({ queued: 2, skipped: 0 });
@@ -229,9 +230,9 @@ describe("the folder AI actions in the Add menu", () => {
   });
 
   /**
-   * F-9. All three of these queue batch LLM jobs, and two of them used to
-   * go the moment the row was pressed. The question has to carry the
-   * number, because that is the part the reader cannot see: the rows act
+   * F-9. All three of these queue batch LLM jobs, so all three ask first.
+   * The question carries the number, because that is the part the reader
+   * cannot see: the rows act
    * on what the folder has loaded, which on a long folder is not the
    * folder.
    */
@@ -294,16 +295,12 @@ describe("the folder AI actions in the Add menu", () => {
         ),
       ).file as Record<string, string>;
 
-    const LABEL_KEYS = [
-      "generateFolderTags",
-      "generateFolderSummaries",
-      "visionFolderButton",
-    ];
-    const CONFIRM_KEYS = [
-      "tagsFolderConfirm",
-      "summariesFolderConfirm",
-      "visionFolderConfirm",
-    ];
+    // Derived from `ROWS`, not copied: `ROWS` is pinned to the component
+    // by the assertions above, and a second hand-written list is pinned to
+    // nothing — a row moving to another key would leave these assertions
+    // being made about a key nothing draws.
+    const LABEL_KEYS = ROWS.map(([label]) => label);
+    const CONFIRM_KEYS = ROWS.map(([, confirmKey]) => confirmKey);
 
     it.each(["ja", "en"] as const)("%s: one row, one question", (locale) => {
       const file = catalogue(locale);
@@ -320,6 +317,9 @@ describe("the folder AI actions in the Add menu", () => {
         // ...and the number is not here, where it would change under the
         // reader as they scroll.
         expect(file[key]).not.toMatch(/\d/);
+        // The trailing ellipsis is what tells the reader a question is
+        // coming, which is the other half of moving the count into it.
+        expect(file[key]).toMatch(/…$/);
       }
       for (const key of CONFIRM_KEYS) {
         // It is here instead, where it is read once and acted on.
@@ -342,9 +342,9 @@ describe("the folder AI actions in the Add menu", () => {
     expect(toast.success).not.toHaveBeenCalled();
     // The message, not just the count: collapsing the two branches into
     // one generic error kept the count at one.
-    // `stringContaining`, because the stub now appends the values a
-    // message was given; the two keys are still distinct, which is the
-    // distinction this line exists for.
+    // `stringContaining`, because the stub appends the values a message
+    // was given; the two keys are distinct, which is the distinction this
+    // line exists for.
     expect(toast.error).toHaveBeenCalledWith(
       expect.stringContaining(
         thrown instanceof Error ? "visionFolderError" : "visionFolderTooMany",
