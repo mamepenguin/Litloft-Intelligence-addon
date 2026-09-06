@@ -208,7 +208,7 @@
     "categoryExpansion": "Related terms: {terms}",
     "chipPersonalViewed": "viewed",
     "chipPersonalNotViewed": "not viewed",
-    "scope": "Asking across {count} files in {drive}"
+    "scope": "{count} files in {drive}"
   },
   "search": {
     "matchTranscript": "Transcript",
