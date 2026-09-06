@@ -234,7 +234,7 @@
     "chapterCandidatesGenerationFailed": "Chapter generation failed. Try creating them again.",
     "chapterCandidatesTokenBudget": "The model ran out of output budget before it finished, so no chapters came back. Raise llm.max_tokens, or set llm.reasoning to disabled if the provider is spending the budget on thinking.",
     "aiFileActions": "AI",
-    "generateFolderTags": "Create AI tag candidates for folder",
+    "generateFolderTags": "Create AI tag candidates…",
     "tagsBatchQueued": "Added {queued} files to the queue ({skipped} skipped)",
     "tagsBatchEmpty": "All files already have tag candidates",
     "summaryTitle": "AI summary",
@@ -244,7 +244,7 @@
     "summaryHide": "Hide",
     "summaryTruncatedNote": "(excerpts from long content)",
     "summaryInsufficientContent": "Not enough content to summarize",
-    "generateFolderSummaries": "Create AI summaries for folder",
+    "generateFolderSummaries": "Create AI summaries…",
     "summariesBatchQueued": "Added {queued} summaries to the queue ({skipped} skipped)",
     "summariesBatchEmpty": "All files already have summaries",
     "generateFolderTranscriptRefine": "Clean up this folder's transcripts with AI",
@@ -275,8 +275,8 @@
     "visionTokenBudget": "The description was cut off by the token limit. Raise llm.vision_max_tokens and try again.",
     "visionNotQueued": "The request could not be queued. Check the drive's addon policy and the intelligence logs.",
     "visionActionError": "Could not start description generation.",
-    "visionFolderButton": "Create descriptions for folder images",
-    "visionFolderConfirm": "Create descriptions for every image in this folder? LLM usage fees may apply.",
+    "visionFolderButton": "Create image descriptions…",
+    "visionFolderConfirm": "Create image descriptions for {count} files? LLM usage fees may apply.",
     "visionFolderQueued": "Added {queued} images to the queue",
     "visionFolderTooMany": "Too many images selected ({requested}). You can process up to {max} at once.",
     "visionFolderError": "Could not start folder processing. Please try again.",
@@ -296,7 +296,9 @@
     "visualIndexWaitingPrerequisite": "Waiting on scene indexing to finish before this can start.",
     "visualIndexActionError": "Could not start visual index generation.",
     "tagsBatchError": "Could not queue — please retry.",
-    "summariesBatchError": "Could not queue — please retry."
+    "summariesBatchError": "Could not queue — please retry.",
+    "tagsFolderConfirm": "Create AI tag candidates for {count} files? LLM usage fees may apply.",
+    "summariesFolderConfirm": "Create AI summaries for {count} files? LLM usage fees may apply."
   },
   "detailedSummary": {
     "citations": {

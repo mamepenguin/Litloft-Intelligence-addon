@@ -9,6 +9,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 const { toast, api } = vi.hoisted(() => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
@@ -19,8 +21,13 @@ const { toast, api } = vi.hoisted(() => ({
   },
 }));
 vi.mock("@/components/ToastProvider", () => ({ useToast: () => toast }));
+// Values as well as the key: the confirmations below are about the number
+// they carry, and a stub that drops it cannot tell 2 files from 619.
 vi.mock("next-intl", () => ({
-  useTranslations: () => (key: string) => key,
+  useTranslations:
+    () =>
+    (key: string, values?: Record<string, unknown>) =>
+      values ? `${key} ${JSON.stringify(values)}` : key,
 }));
 vi.mock("@/addons/intelligence/api", () => api);
 
@@ -30,11 +37,18 @@ const PROPS = { fileIds: ["a", "b"], drive: "family" };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Every row asks before it spends, so the tests about what gets queued
+  // have to answer. Stated here rather than left to a spy leaking out of
+  // whichever test ran first — `restoreMocks` is off, so one used to.
+  vi.spyOn(window, "confirm").mockReturnValue(true);
   api.batchSuggestedTags.mockResolvedValue({ queued: 2, skipped: 0 });
   api.batchSummaries.mockResolvedValue({ queued: 2, skipped: 0 });
   api.generateFolderVisualDescription.mockResolvedValue({ queued: 2 });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe("the folder AI actions in the Add menu", () => {
   it("draws menu rows, and nothing that is not one", () => {
@@ -214,13 +228,104 @@ describe("the folder AI actions in the Add menu", () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
-  it("confirms before spending on vision, and does nothing if declined", () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    render(<FolderAIActionsMenuItems {...PROPS} />);
-    fireEvent.click(screen.getByRole("menuitem", { name: "visionFolderButton" }));
+  /**
+   * F-9. All three of these queue batch LLM jobs, and two of them used to
+   * go the moment the row was pressed. The question has to carry the
+   * number, because that is the part the reader cannot see: the rows act
+   * on what the folder has loaded, which on a long folder is not the
+   * folder.
+   */
+  const ROWS = [
+    ["generateFolderTags", "tagsFolderConfirm", () => api.batchSuggestedTags],
+    ["generateFolderSummaries", "summariesFolderConfirm", () => api.batchSummaries],
+    ["visionFolderButton", "visionFolderConfirm", () => api.generateFolderVisualDescription],
+  ] as const;
+
+  it("asks about every row, not two of three", () => {
+    // The population, stated separately: three rows are drawn and three
+    // are listed here, so "they all ask" cannot be true of a short list.
+    const { container } = render(<FolderAIActionsMenuItems {...PROPS} />);
+    expect(container.querySelectorAll('[role="menuitem"]')).toHaveLength(ROWS.length);
+    expect(ROWS.map(([row]) => row)).toEqual(
+      [...container.querySelectorAll('[role="menuitem"]')].map((b) => b.textContent),
+    );
+  });
+
+  it.each(ROWS)("%s asks first, and says how many files", async (row, key) => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<FolderAIActionsMenuItems {...PROPS} fileIds={["a", "b", "c"]} />);
+    fireEvent.click(screen.getByRole("menuitem", { name: row }));
+
     expect(confirm).toHaveBeenCalledTimes(1);
-    expect(api.generateFolderVisualDescription).not.toHaveBeenCalled();
-    confirm.mockRestore();
+    const asked = confirm.mock.calls[0][0] as string;
+    expect(asked).toContain(key);
+    // Three files were handed in, so the question says three.
+    expect(asked).toContain('"count":3');
+  });
+
+  it.each(ROWS)("%s sends nothing when the reader declines", async (row, _key, api_) => {
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<FolderAIActionsMenuItems {...PROPS} />);
+    fireEvent.click(screen.getByRole("menuitem", { name: row }));
+    expect(api_()).not.toHaveBeenCalled();
+
+    // ...and it holds nothing on the way out. A guard claimed before the
+    // question would leave this row dead for the rest of the session.
+    vi.mocked(window.confirm).mockReturnValue(true);
+    cleanup();
+    render(<FolderAIActionsMenuItems {...PROPS} />);
+    fireEvent.click(screen.getByRole("menuitem", { name: row }));
+    await waitFor(() => expect(api_()).toHaveBeenCalledTimes(1));
+  });
+
+  /**
+   * The wording is a claim about the catalogue, not about the render: the
+   * stub above echoes keys, and the keys still say `Folder` because
+   * renaming them moves no text a reader sees. Both locales, because a
+   * label fixed in one language and not the other is the failure worth
+   * catching.
+   */
+  describe("the shipped labels", () => {
+    const catalogue = (locale: "ja" | "en") =>
+      JSON.parse(
+        readFileSync(
+          resolve(__dirname, `messages/${locale}.json`),
+          "utf8",
+        ),
+      ).file as Record<string, string>;
+
+    const LABEL_KEYS = [
+      "generateFolderTags",
+      "generateFolderSummaries",
+      "visionFolderButton",
+    ];
+    const CONFIRM_KEYS = [
+      "tagsFolderConfirm",
+      "summariesFolderConfirm",
+      "visionFolderConfirm",
+    ];
+
+    it.each(["ja", "en"] as const)("%s: one row, one question", (locale) => {
+      const file = catalogue(locale);
+      // Rule (7): every key named here resolves, so "none of them says
+      // folder" is not true of a set of missing keys.
+      for (const key of [...LABEL_KEYS, ...CONFIRM_KEYS]) {
+        expect(typeof file[key]).toBe("string");
+      }
+
+      for (const key of LABEL_KEYS) {
+        // The rows act on the rows the folder has loaded, so naming the
+        // folder claims more than they do...
+        expect(file[key]).not.toMatch(/folder|フォルダ/i);
+        // ...and the number is not here, where it would change under the
+        // reader as they scroll.
+        expect(file[key]).not.toMatch(/\d/);
+      }
+      for (const key of CONFIRM_KEYS) {
+        // It is here instead, where it is read once and acted on.
+        expect(file[key]).toContain("{count}");
+      }
+    });
   });
 
   it.each([
@@ -230,7 +335,6 @@ describe("the folder AI actions in the Add menu", () => {
     // These two used to be a plain message held for eight seconds rather
     // than five. `toast.error` carries that distinction by kind, which
     // reaches a reader who has already looked away from the menu.
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     api.generateFolderVisualDescription.mockRejectedValue(thrown);
     render(<FolderAIActionsMenuItems {...PROPS} />);
     fireEvent.click(screen.getByRole("menuitem", { name: "visionFolderButton" }));
@@ -238,8 +342,13 @@ describe("the folder AI actions in the Add menu", () => {
     expect(toast.success).not.toHaveBeenCalled();
     // The message, not just the count: collapsing the two branches into
     // one generic error kept the count at one.
+    // `stringContaining`, because the stub now appends the values a
+    // message was given; the two keys are still distinct, which is the
+    // distinction this line exists for.
     expect(toast.error).toHaveBeenCalledWith(
-      thrown instanceof Error ? "visionFolderError" : "visionFolderTooMany",
+      expect.stringContaining(
+        thrown instanceof Error ? "visionFolderError" : "visionFolderTooMany",
+      ),
     );
   });
 });
