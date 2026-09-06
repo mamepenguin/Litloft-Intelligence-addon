@@ -61,6 +61,19 @@ export default function FolderAIActionsMenuItems({
   // showing a row disabled when it no longer is.
   const [, setTick] = useState(0);
 
+  /**
+   * Ask before spending, and say how much.
+   *
+   * The count is `fileIds.length` — the rows the folder has loaded, which
+   * on a long folder is not the whole folder. That is why it is here and
+   * not in the label: a number in the menu would change as the reader
+   * scrolls, and the reader would have no reason to look at it again.
+   */
+  const confirmBatch = useCallback(
+    (key: string) => window.confirm(t(key, { count: fileIds.length })),
+    [fileIds, t],
+  );
+
   const claim = useCallback(
     (action: Action) => {
       const key = keyFor(action, drive);
@@ -75,9 +88,12 @@ export default function FolderAIActionsMenuItems({
   );
 
   const handleTags = useCallback(async () => {
+    if (fileIds.length === 0 || inFlight.has(keyFor("tags", drive))) return;
+    onRequestClose?.();
+    if (!confirmBatch("tagsFolderConfirm")) return;
+    // Claimed after the confirm, so declining holds nothing.
     const done = claim("tags");
     if (!done) return;
-    onRequestClose?.();
     try {
       const result = await batchSuggestedTags(fileIds, drive);
       if (result.queued === 0 && result.skipped > 0) {
@@ -89,17 +105,20 @@ export default function FolderAIActionsMenuItems({
       }
     } catch {
       toast.error(
-        t("tagsBatchError", { defaultMessage: "Could not queue — please retry." }),
+        t("tagsBatchError"),
       );
     } finally {
       done();
     }
-  }, [claim, drive, fileIds, t, toast, onRequestClose]);
+  }, [claim, confirmBatch, drive, fileIds, t, toast, onRequestClose]);
 
   const handleSummaries = useCallback(async () => {
+    if (fileIds.length === 0 || inFlight.has(keyFor("summaries", drive))) return;
+    onRequestClose?.();
+    if (!confirmBatch("summariesFolderConfirm")) return;
+    // Claimed after the confirm, so declining holds nothing.
     const done = claim("summaries");
     if (!done) return;
-    onRequestClose?.();
     try {
       const result = await batchSummaries(fileIds, drive);
       if (result.queued === 0 && result.skipped > 0) {
@@ -114,56 +133,40 @@ export default function FolderAIActionsMenuItems({
       }
     } catch {
       toast.error(
-        t("summariesBatchError", { defaultMessage: "Could not queue — please retry." }),
+        t("summariesBatchError"),
       );
     } finally {
       done();
     }
-  }, [claim, drive, fileIds, t, toast, onRequestClose]);
+  }, [claim, confirmBatch, drive, fileIds, t, toast, onRequestClose]);
 
   const handleVision = useCallback(async () => {
     if (fileIds.length === 0 || inFlight.has(keyFor("vision", drive))) return;
     onRequestClose?.();
-    const confirmed = window.confirm(
-      t("visionFolderConfirm", {
-        defaultMessage:
-          "Generate AI descriptions for every image in this folder? This may incur LLM costs.",
-      }),
-    );
-    if (!confirmed) return;
+    if (!confirmBatch("visionFolderConfirm")) return;
     // Claimed after the confirm, so declining holds nothing.
     const done = claim("vision");
     if (!done) return;
     try {
       const result = await generateFolderVisualDescription(drive, fileIds);
       toast.success(
-        t("visionFolderQueued", {
-          queued: result.queued,
-          defaultMessage: "{queued} images queued",
-        }),
+        t("visionFolderQueued", { queued: result.queued }),
       );
     } catch (e) {
       const info = (e as { info?: FolderVisualDescriptionTooManyError }).info;
       if (info?.kind === "too_many_files") {
         toast.error(
-          t("visionFolderTooMany", {
-            max: info.max,
-            requested: info.requested,
-            defaultMessage:
-              "Too many files ({requested}). Max per batch: {max}.",
-          }),
+          t("visionFolderTooMany", { max: info.max, requested: info.requested }),
         );
       } else {
         toast.error(
-          t("visionFolderError", {
-            defaultMessage: "Failed to queue folder — please retry.",
-          }),
+          t("visionFolderError"),
         );
       }
     } finally {
       done();
     }
-  }, [claim, drive, fileIds, t, toast, onRequestClose]);
+  }, [claim, confirmBatch, drive, fileIds, t, toast, onRequestClose]);
 
   // Nothing to act on, so no rows — and `AddButton` hides the separator
   // above them with `empty:hidden` when that happens.
@@ -187,9 +190,7 @@ export default function FolderAIActionsMenuItems({
       />
       <ActionMenuItem
         icon={ImageIcon}
-        label={t("visionFolderButton", {
-          defaultMessage: "Generate AI descriptions for folder images",
-        })}
+        label={t("visionFolderButton")}
         onClick={handleVision}
         disabled={busy("vision")}
       />

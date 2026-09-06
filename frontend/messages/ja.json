@@ -234,7 +234,7 @@
     "chapterCandidatesGenerationFailed": "チャプター生成に失敗しました。もう一度作成してください。",
     "chapterCandidatesTokenBudget": "モデルが出力枠を使い切り、チャプターが返りませんでした。設定の llm.max_tokens を増やすか、思考に枠を使われている場合は llm.reasoning を disabled にしてください。",
     "aiFileActions": "AI",
-    "generateFolderTags": "フォルダのAIタグ候補を作成",
+    "generateFolderTags": "AIタグ候補を作成…",
     "tagsBatchQueued": "{queued}件を処理待ちに追加しました（{skipped}件はスキップ）",
     "tagsBatchEmpty": "すべてのファイルにタグ候補があります",
     "summaryTitle": "AI要約",
@@ -244,7 +244,7 @@
     "summaryHide": "非表示",
     "summaryTruncatedNote": "（長文のため抜粋から要約）",
     "summaryInsufficientContent": "要約できる内容が足りません",
-    "generateFolderSummaries": "フォルダのAI要約を作成",
+    "generateFolderSummaries": "AI要約を作成…",
     "summariesBatchQueued": "{queued}件の要約を処理待ちに追加しました（{skipped}件はスキップ）",
     "summariesBatchEmpty": "すべてのファイルが要約済みです",
     "generateFolderTranscriptRefine": "このフォルダの文字起こしをAIで整える",
@@ -275,8 +275,8 @@
     "visionTokenBudget": "説明文がトークン上限で途中で切れました。llm.vision_max_tokens を上げて再試行してください。",
     "visionNotQueued": "リクエストを受け付けられませんでした。ドライブのアドオン設定と intelligence のログを確認してください。",
     "visionActionError": "説明の作成を開始できませんでした。",
-    "visionFolderButton": "フォルダ内の画像説明を作成",
-    "visionFolderConfirm": "このフォルダ内のすべての画像説明を作成しますか？LLMの利用料が発生する場合があります。",
+    "visionFolderButton": "画像説明を作成…",
+    "visionFolderConfirm": "{count} 件のファイルの画像説明を作成しますか？LLMの利用料が発生する場合があります。",
     "visionFolderQueued": "{queued} 件の画像を処理待ちに追加しました",
     "visionFolderTooMany": "選択した画像が多すぎます（{requested} 件）。一度に処理できるのは {max} 件までです。",
     "visionFolderError": "フォルダの処理を開始できませんでした。もう一度お試しください。",
@@ -296,7 +296,9 @@
     "visualIndexWaitingPrerequisite": "シーンのインデックス作成の完了を待っています。",
     "visualIndexActionError": "ビジュアルインデックスの生成を開始できませんでした。",
     "tagsBatchError": "キューに追加できませんでした。再試行してください。",
-    "summariesBatchError": "キューに追加できませんでした。再試行してください。"
+    "summariesBatchError": "キューに追加できませんでした。再試行してください。",
+    "tagsFolderConfirm": "{count} 件のファイルにAIタグ候補を作成しますか？LLMの利用料が発生する場合があります。",
+    "summariesFolderConfirm": "{count} 件のファイルにAI要約を作成しますか？LLMの利用料が発生する場合があります。"
   },
   "detailedSummary": {
     "citations": {
