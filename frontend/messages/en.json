@@ -142,6 +142,10 @@
     "thinking": "Creating answer…",
     "loadingHint": "(may take a few seconds)",
     "answerTitle": "AI answer",
+    "pageTitle": "Ask this drive",
+    "placeholder": "e.g. which of last week's films talked about space",
+    "submit": "Ask",
+    "privacyHint": "Answers take a few seconds. Transcripts and text are sent to the LLM API.",
     "citationsTitle": "Citations",
     "regenerate": "Create again",
     "close": "Close",
@@ -205,7 +209,8 @@
     "totalCount": "{count} results",
     "categoryExpansion": "Related terms: {terms}",
     "chipPersonalViewed": "viewed",
-    "chipPersonalNotViewed": "not viewed"
+    "chipPersonalNotViewed": "not viewed",
+    "scope": "Asking across {count} files in {drive}"
   },
   "search": {
     "matchTranscript": "Transcript",

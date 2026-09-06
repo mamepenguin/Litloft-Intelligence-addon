@@ -45,6 +45,12 @@ vi.mock("@/components/CurrentDriveProvider", () => ({
   useCurrentDrive: () => "family",
 }));
 
+// The scope line asks core which drives this viewer may open, and for how
+// many files each holds.
+vi.mock("@/lib/api", () => ({
+  getDrives: vi.fn(async () => [{ name: "family", file_count: 619 }]),
+}));
+
 // Mock the (yet-unimplemented) findFiles export. Using vi.hoisted so
 // the same fn instance is referenced from both the mock factory and
 // the test body — vi.mock factories are hoisted above imports.
@@ -157,6 +163,18 @@ async function submitQuery(question: string) {
     }
   });
 }
+
+/**
+ * A-2 asked for the scope line on *both* pages, not only on the one being
+ * redesigned: "no matches" and "looked in the wrong drive" read the same
+ * without it, and a drive is a hard boundary.
+ */
+describe("FindPage — what it is searching", () => {
+  it("says which drive and how many files", async () => {
+    render(<FindPage />);
+    expect(await screen.findByTestId("drive-scope")).toBeInTheDocument();
+  });
+});
 
 describe("FindPage — input + submit", () => {
   it("renders a query input and a submit affordance", async () => {

@@ -778,6 +778,39 @@ describe("IntelligenceAskPage — page header, mode tabs and accent budget", () 
     return utils;
   }
 
+  /**
+   * A-2: the page told the reader it was an "AI answer" before it had
+   * given one, offered its own `?q=` back as a placeholder, and put "AI" on
+   * the button where a verb belongs. Find, one tab away, does all three
+   * right — the point of this group is that the two now read the same.
+   */
+  it("names what the page is for, not what it will produce", async () => {
+    render(<IntelligenceAskPage />);
+    const heading = await screen.findByRole("heading", { level: 1 });
+    expect(heading.textContent).toContain("Ask this drive");
+    // The answer's own heading keeps the old words, one level down, and
+    // only once there is an answer under it.
+    expect(screen.queryByText("AI answer")).toBeNull();
+  });
+
+  it("shows an example in the input, and a verb on the button", async () => {
+    render(<IntelligenceAskPage />);
+    const textarea = (await screen.findByRole("textbox", {
+      name: /question input/i,
+    })) as HTMLTextAreaElement;
+
+    expect(textarea.placeholder).toMatch(/^e\.g\./);
+    expect(textarea.value).toBe("");
+    expect(screen.getByTestId("ask-submit").textContent).toContain("Ask");
+  });
+
+  it("says what it will send before it sends it", async () => {
+    render(<IntelligenceAskPage />);
+    // The privacy line the rules require of every feature that ships file
+    // content to an LLM API — `.claude/rules/design-decisions.md`.
+    expect(await screen.findByText(/LLM API/)).toBeInTheDocument();
+  });
+
   it("names itself once, and lets core choose the size", async () => {
     const { container } = render(<IntelligenceAskPage />);
     await screen.findByRole("textbox", { name: /question input/i });
