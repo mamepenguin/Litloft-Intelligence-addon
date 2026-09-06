@@ -5,8 +5,8 @@
  * Spec: ``2026-04-30-intelligence-find-mode.md`` §3.1 (UI / モード切替).
  *
  * Contract:
- *  - Mirrors the ``SemanticSearchSlot`` Ask handoff: emits a button that
- *    links to ``/drive/<drive>/addons/intelligence/find?q=<query>``.
+ *  - Emits a button that links to
+ *    ``/drive/<drive>/addons/intelligence/find?q=<query>``.
  *  - Renders only when ``intelligence.features.rag === true && llm.enabled``
  *    (same gate as the Ask page — Find depends on Stage A + C LLM calls).
  *  - Hidden when query is empty (no point linking with no seed).
@@ -166,64 +166,38 @@ describe("FindModeSlot", () => {
     });
   });
 
-  it("renders the popup layout (compact button) when context is undefined", async () => {
-    // Backwards-compat default: undefined context === popup.
+  it("draws one chip, whatever the caller passes", async () => {
+    // There is one mount of `search-modes` and it is the results page, so
+    // there is one form to draw. The extra prop is what a caller of the
+    // removed second form would still be handing over: it has to make no
+    // difference, or the second form is still reachable by accident.
     vi.mocked(getIntelligenceStatus).mockResolvedValue(enabledStatus as any);
 
-    render(
-      <FindModeSlot
-        query="SF 映画"
-        drive="family"
-        filter="all"
-        onSelect={() => {}}
-      />,
-    );
+    const props = { query: "SF 映画", drive: "family", filter: "all", onSelect: () => {} };
 
-    // Popup layout renders a single button labelled "Find: <query>" and
-    // does NOT render a section heading.
+    const { container } = render(<FindModeSlot {...props} />);
+    const chip = await screen.findByRole("button", { name: /find/i });
+    // Which form it is, not just that there is one: the results-page chip
+    // sits in a right-aligned wrapper and discloses the query on hover.
+    // The compact row this replaced had neither, so a second form coming
+    // back cannot pass as this one.
+    expect(chip.getAttribute("title")).toContain("SF 映画");
+    expect(chip.parentElement!.className).toContain("justify-end");
+    // A handoff to another page, so it does not take a heading on the
+    // page it is handing off from.
+    expect(screen.queryByRole("heading")).toBeNull();
+    const drawn = container.innerHTML;
+    cleanup();
+
+    // ...and the prop a caller of the removed second form would still be
+    // handing over changes nothing.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { container: withProp } = render(<FindModeSlot {...(props as any)} context="popup" />);
     await screen.findByRole("button", { name: /find/i });
-    expect(screen.queryByRole("heading")).toBeNull();
+    expect(withProp.innerHTML).toBe(drawn);
   });
 
-  it("renders the popup layout when context is explicitly 'popup'", async () => {
-    vi.mocked(getIntelligenceStatus).mockResolvedValue(enabledStatus as any);
-
-    render(
-      <FindModeSlot
-        query="SF 映画"
-        drive="family"
-        filter="all"
-        onSelect={() => {}}
-        context="popup"
-      />,
-    );
-
-    await screen.findByRole("button", { name: /find/i });
-    expect(screen.queryByRole("heading")).toBeNull();
-  });
-
-  it("renders the page layout (compact chip CTA) when context is 'page'", async () => {
-    vi.mocked(getIntelligenceStatus).mockResolvedValue(enabledStatus as any);
-
-    render(
-      <FindModeSlot
-        query="SF 映画"
-        drive="family"
-        filter="all"
-        onSelect={() => {}}
-        context="page"
-      />,
-    );
-
-    // Page layout is a right-aligned chip — Find is a handoff to
-    // a different page, so it must not consume a heading slot on
-    // the search results page.
-    const cta = await screen.findByRole("button", { name: /find/i });
-    expect(cta).toBeInTheDocument();
-    expect(screen.queryByRole("heading")).toBeNull();
-  });
-
-  it("page layout CTA still calls onSelect with the find URL", async () => {
+  it("the CTA calls onSelect with the find URL", async () => {
     vi.mocked(getIntelligenceStatus).mockResolvedValue(enabledStatus as any);
     const onSelect = vi.fn();
 
@@ -233,7 +207,6 @@ describe("FindModeSlot", () => {
         drive="家族"
         filter="all"
         onSelect={onSelect}
-        context="page"
       />,
     );
 

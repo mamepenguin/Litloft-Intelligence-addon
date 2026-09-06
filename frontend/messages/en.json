@@ -137,7 +137,6 @@
     "showMore": "Show more"
   },
   "askSearch": {
-    "button": "Ask AI about “{query}”",
     "loading": "Creating answer...",
     "thinking": "Creating answer…",
     "answerTitle": "AI answer",
@@ -194,7 +193,6 @@
     "find": "Find"
   },
   "find": {
-    "button": "Find files for “{query}”",
     "pageHeading": "Find: Search files",
     "pageDescription": "Shows files that may be related to “{query}”",
     "pageCta": "Open Find page",
@@ -209,19 +207,6 @@
     "chipPersonalViewed": "viewed",
     "chipPersonalNotViewed": "not viewed",
     "scope": "{count} files in {drive}"
-  },
-  "search": {
-    "matchTranscript": "Transcript",
-    "matchTranscriptKeyword": "Transcript (exact)",
-    "matchClip": "Visual",
-    "matchMetadata": "Metadata",
-    "matchContent": "Content",
-    "matchTextContentKeyword": "Content (exact)",
-    "matchRetrievalKeywords": "Keyword",
-    "matchedPages": "p.{pages}",
-    "semanticResults": "Semantic search results",
-    "semanticResultsDescription": "Files close to the entered text",
-    "score": "{score}%"
   },
   "file": {
     "similarFiles": "Similar files",
@@ -581,5 +566,13 @@
       "providerFailed": "Transcription failed: {error}",
       "openaiFileTooLarge": "OpenAI Whisper API cannot process files over 25MB. For long audio, use Deepgram / ElevenLabs Scribe / Groq / self-hosted Whisper."
     }
+  },
+  "search": {
+    "matchTranscript": "Transcript",
+    "matchClip": "Visual",
+    "matchMetadata": "Metadata",
+    "matchContent": "Content",
+    "matchRetrievalKeywords": "Keyword",
+    "matchedPages": "p.{pages}"
   }
 }
