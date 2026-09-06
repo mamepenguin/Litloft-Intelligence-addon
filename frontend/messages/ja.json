@@ -568,13 +568,5 @@
       "providerFailed": "文字起こしに失敗しました: {error}",
       "openaiFileTooLarge": "OpenAI Whisper APIでは25MBを超えるファイルを処理できません。長時間の音声にはDeepgram / ElevenLabs Scribe / Groq / セルフホスト版Whisperなどを使ってください"
     }
-  },
-  "search": {
-    "matchTranscript": "音声一致",
-    "matchClip": "映像一致",
-    "matchMetadata": "メタデータ",
-    "matchContent": "内容一致",
-    "matchRetrievalKeywords": "キーワード",
-    "matchedPages": "p.{pages}"
   }
 }
