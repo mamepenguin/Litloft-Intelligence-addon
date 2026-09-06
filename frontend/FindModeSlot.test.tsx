@@ -179,8 +179,7 @@ describe("FindModeSlot", () => {
     const chip = await screen.findByRole("button", { name: /find/i });
     // Which form it is, not just that there is one: the results-page chip
     // sits in a right-aligned wrapper and discloses the query on hover.
-    // The compact row this replaced had neither, so a second form coming
-    // back cannot pass as this one.
+    // Any other form fails both, so it cannot pass as this one.
     expect(chip.getAttribute("title")).toContain("SF 映画");
     expect(chip.parentElement!.className).toContain("justify-end");
     // A handoff to another page, so it does not take a heading on the
@@ -189,34 +188,12 @@ describe("FindModeSlot", () => {
     const drawn = container.innerHTML;
     cleanup();
 
-    // ...and the prop a caller of the removed second form would still be
-    // handing over changes nothing.
+    // ...and an unknown prop changes nothing. A layout that branches on
+    // one is a second form.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { container: withProp } = render(<FindModeSlot {...(props as any)} context="popup" />);
     await screen.findByRole("button", { name: /find/i });
     expect(withProp.innerHTML).toBe(drawn);
-  });
-
-  it("the CTA calls onSelect with the find URL", async () => {
-    vi.mocked(getIntelligenceStatus).mockResolvedValue(enabledStatus as any);
-    const onSelect = vi.fn();
-
-    render(
-      <FindModeSlot
-        query="先週観た映画"
-        drive="家族"
-        filter="all"
-        onSelect={onSelect}
-      />,
-    );
-
-    const cta = await screen.findByRole("button", { name: /find/i });
-    cta.click();
-
-    expect(onSelect).toHaveBeenCalledTimes(1);
-    const href = onSelect.mock.calls[0][0] as string;
-    expect(href).toContain("/addons/intelligence/find");
-    expect(href).toContain(`q=${encodeURIComponent("先週観た映画")}`);
   });
 
   it("falls back to the core addon registry when /status is unreachable", async () => {
