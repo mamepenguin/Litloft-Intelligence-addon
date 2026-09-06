@@ -34,13 +34,16 @@ vi.mock("@/components/CarouselSection", () => ({
     files,
     loading,
     seeAllHref,
+    totalCount,
   }: {
     files: { id: string }[];
     loading: boolean;
     seeAllHref?: string;
+    totalCount?: number;
   }) => (
     <div data-testid="carousel" data-loading={String(loading)}>
       <span data-testid="see-all">{seeAllHref ?? ""}</span>
+      <span data-testid="total">{totalCount ?? ""}</span>
       {files.map((f) => (
         <span key={f.id} data-testid="card">
           {f.id}
@@ -92,7 +95,7 @@ describe("PickupWidget", () => {
     );
   });
 
-  it("links to the feed once there is enough behind it", async () => {
+  it("links to the feed whenever there is one", async () => {
     mockFetch.mockResolvedValue({ file_ids: ["a"], total: 40 });
 
     render(<PickupWidget drive="videos" />);
@@ -104,13 +107,33 @@ describe("PickupWidget", () => {
     );
   });
 
-  it("hides the link when the feed is too short to be worth a page", async () => {
-    mockFetch.mockResolvedValue({ file_ids: ["a"], total: 39 });
+  it("links to it below forty too, where the row cannot show it all", async () => {
+    // The link used to appear only at forty, back when the row drew all
+    // twelve of the day's window and forty was the smallest feed the
+    // page was worth opening for. The row draws four on a phone now, so
+    // that gate left the other twenty-one of a twenty-five-file feed
+    // with no way to reach them.
+    mockFetch.mockResolvedValue({ file_ids: ["a"], total: 25 });
 
     render(<PickupWidget drive="videos" />);
 
-    await waitFor(() => expect(screen.getByTestId("carousel")).toBeTruthy());
-    expect(screen.getByTestId("see-all").textContent).toBe("");
+    await waitFor(() =>
+      expect(screen.getByTestId("see-all").textContent).toBe(
+        "/drive/videos/addons/intelligence/pickup",
+      ),
+    );
+  });
+
+  it("puts the size of the feed on the link, not the size of the window", async () => {
+    // The row is handed the day's twelve; the link leads to all 300, and
+    // the number beside it has to be the number the reader arrives at.
+    mockFetch.mockResolvedValue({ file_ids: ["a", "b"], total: 300 });
+
+    render(<PickupWidget drive="videos" />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("total").textContent).toBe("300"),
+    );
   });
 
   it("percent-encodes a non-ASCII drive in the link", async () => {
