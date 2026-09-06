@@ -10,8 +10,13 @@
  * appeared at all. Twelve sampled from the top forty track the
  * proportions the weighting intends.
  *
- * The link through to the full feed appears only once there is enough
- * behind it to be worth the trip.
+ * The row draws as many of the day's twelve as fit its width, so the
+ * link through to the full feed is the only way to the rest — it is
+ * offered whenever there is a feed at all, and the count on it says how
+ * much is behind it. It used to appear only above forty, back when the
+ * row drew all twelve and forty was the smallest feed the page was
+ * worth opening for; with the row showing four on a phone, that gate
+ * left twenty files unreachable.
  */
 
 import { useEffect, useState } from "react";
@@ -21,9 +26,6 @@ import { batchGetFiles } from "@/lib/api";
 import type { FileItem } from "@/types";
 import { CarouselSection } from "@/components/CarouselSection";
 import { fetchPickup } from "./api";
-
-/** Below this the feed page has too little to show; carousel only. */
-const FEED_MIN_STOCK = 40;
 
 const CAROUSEL_LIMIT = 12;
 
@@ -75,10 +77,9 @@ export default function PickupWidget({ drive }: PickupWidgetProps) {
 
   if (!loading && files.length === 0) return null;
 
-  const seeAllHref =
-    drive && total >= FEED_MIN_STOCK
-      ? `/drive/${encodeURIComponent(drive)}/addons/intelligence/pickup`
-      : undefined;
+  const seeAllHref = drive
+    ? `/drive/${encodeURIComponent(drive)}/addons/intelligence/pickup`
+    : undefined;
 
   return (
     <CarouselSection
@@ -87,6 +88,10 @@ export default function PickupWidget({ drive }: PickupWidgetProps) {
       files={files}
       loading={loading}
       seeAllHref={seeAllHref}
+      // The size of the feed, not of the day's window: the link leads to
+      // the whole thing, and the number beside it has to be the number
+      // the reader arrives at.
+      totalCount={total}
     />
   );
 }
