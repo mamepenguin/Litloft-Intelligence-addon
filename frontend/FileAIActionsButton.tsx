@@ -28,6 +28,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 
 import { useFileAiActions, type FileAiActionKind } from "./fileAiActions";
+import { DismissScrim } from "@/components/DismissScrim";
 import { useShortcuts } from "@/hooks/useShortcuts";
 import { OVERLAY_PRIORITY } from "@/lib/shortcuts";
 
@@ -127,15 +128,34 @@ export default function FileAIActionsButton({ fileId }: FileAIActionsButtonProps
       </button>
 
       {open && (
-        <>
-          <div
-            className="fixed inset-0 z-30 bg-black/30 sm:bg-transparent"
-            aria-hidden="true"
-            onClick={() => setOpen(false)}
-          />
+        <DismissScrim
+          onDismiss={() => setOpen(false)}
+          // No tint, and the tier is all this box is: core's primitive
+          // dismisses on a press outside the menu and swallows the click
+          // that press produces, so nothing here depends on the scrim
+          // being the element a tap reaches. Which matters twice over in
+          // the Bottom Sheet, where `fixed inset-0` resolves against
+          // vaul's transform and covers the drawer rather than the page.
+          className="fixed inset-0 z-30"
+        >
           <div
             role="menu"
-            className="fixed inset-x-2 bottom-4 z-40 max-h-[60vh] overflow-y-auto rounded-2xl border border-bg-border bg-bg-primary py-1 shadow-lg animate-fade-in-scale sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:top-full sm:mt-1 sm:max-h-none sm:min-w-[240px] sm:overflow-visible sm:origin-top-left"
+            // Anchored to the trigger at every width, like `FileActions`
+            // beside it in the same row — not a `fixed … bottom-4` sheet
+            // below `sm`.
+            //
+            // On a phone this row is drawn *inside* the Bottom Sheet, and
+            // `Drawer.Content` carries a transform: a `fixed` box there
+            // resolves against the drawer, not the viewport. The drawer
+            // hangs below the fold by however far vaul has translated it,
+            // so a menu pinned to "the bottom of the screen" landed below
+            // the screen. Measured before this change, at 500x819: the
+            // menu's top was 1008 — 189px past the bottom edge.
+            //
+            // Anchoring removes the question rather than answering it:
+            // `absolute` resolves against the wrapper above, which is on
+            // screen wherever the sheet is.
+            className="absolute left-0 top-full z-30 mt-1 max-h-[60vh] min-w-[240px] overflow-y-auto rounded-2xl border border-bg-border bg-bg-primary py-1 shadow-lg animate-fade-in-scale origin-top-left"
           >
             {actions.map((action) => {
               const Icon = ACTION_ICON[action.kind];
@@ -154,7 +174,7 @@ export default function FileAIActionsButton({ fileId }: FileAIActionsButtonProps
               );
             })}
           </div>
-        </>
+        </DismissScrim>
       )}
     </div>
   );

@@ -256,6 +256,67 @@ describe("FileAIActionsButton", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("closes on a press outside it, without pressing what is under it", () => {
+    // Core's `DismissScrim` rather than a hand-written scrim: the press
+    // outside closes the menu and the `click` that press produces is
+    // swallowed before the page sees it. This file was the last popup in
+    // the tree still dismissing on its own scrim's click, which only
+    // works while that scrim is the box a tap reaches.
+    //
+    // jsdom hit-tests nothing, so this is a claim about event order, not
+    // about which element a real tap lands on.
+    const page = document.createElement("button");
+    let pressed = 0;
+    page.addEventListener("click", () => {
+      pressed += 1;
+    });
+    document.body.appendChild(page);
+
+    renderWithStack(
+      <>
+        <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active />
+        <FileAIActionsButton fileId="f1" />
+      </>,
+    );
+    const trigger = screen.getByRole("button", { name: "AI" });
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.pointerDown(page);
+    fireEvent.click(page);
+
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(pressed).toBe(0);
+    page.remove();
+  });
+
+  it("anchors the menu to the trigger rather than to the screen", () => {
+    // The Bottom Sheet is why. This row is drawn inside `Drawer.Content`,
+    // which carries a transform, so a `fixed` box there resolves against
+    // the drawer instead of the viewport — and the drawer hangs below the
+    // fold by however far vaul has translated it. The menu used to be
+    // `fixed inset-x-2 bottom-4` below `sm` and landed off the bottom of
+    // the screen; `absolute` resolves against the wrapper, which is on
+    // screen wherever the sheet is.
+    //
+    // A spelling check, and it says so: jsdom lays nothing out, so what
+    // is asserted is the class list. The geometry is measured in core's
+    // `e2e-components/popup-dismiss.spec.ts`, in a real browser, inside a
+    // real sheet.
+    renderWithStack(
+      <>
+        <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active />
+        <FileAIActionsButton fileId="f1" />
+      </>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+
+    const menu = screen.getByRole("menu");
+    expect(menu.className.split(/\s+/)).toContain("absolute");
+    expect(menu.className).not.toMatch(/(^|\s|:)fixed(\s|$)/);
+    expect(menu.className).not.toMatch(/bottom-4/);
+  });
+
   it("uses no emoji", () => {
     renderWithStack(
       <>
