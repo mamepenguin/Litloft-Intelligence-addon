@@ -15,7 +15,13 @@
  * With nothing missing there is no button at all.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { useTranslations } from "next-intl";
 import {
   BookOpen,
@@ -31,6 +37,9 @@ import { useFileAiActions, type FileAiActionKind } from "./fileAiActions";
 import { DismissScrim } from "@/components/DismissScrim";
 import { useShortcuts } from "@/hooks/useShortcuts";
 import { OVERLAY_PRIORITY } from "@/lib/shortcuts";
+
+/** `mt-1` / `mb-1`: the same 4px whichever way the menu hangs. */
+const MENU_GAP_PX = 4;
 
 /** Same icon the section itself uses, so the menu previews the result. */
 const ACTION_ICON: Record<FileAiActionKind, LucideIcon> = {
@@ -49,6 +58,16 @@ export default function FileAIActionsButton({ fileId }: FileAIActionsButtonProps
   const t = useTranslations("file");
   const actions = useFileAiActions(fileId);
   const [open, setOpen] = useState(false);
+  /**
+   * Which way the menu hangs, measured rather than declared.
+   *
+   * `false` until the box is read, which is the direction the menu takes
+   * everywhere it has room — and the one a trigger with room for neither
+   * keeps.
+   */
+  const [openUp, setOpenUp] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
   // Closing on Escape rather than only on the scrim: the row also lives
@@ -90,13 +109,83 @@ export default function FileAIActionsButton({ fileId }: FileAIActionsButtonProps
     run();
   }, []);
 
+  useLayoutEffect(() => {
+    if (!open) return;
+
+    const measure = () => {
+      const wrapper = wrapperRef.current;
+      const menu = menuRef.current;
+      if (!wrapper || !menu) return;
+
+      const trigger = wrapper.getBoundingClientRect();
+      const menuHeight = menu.getBoundingClientRect().height;
+
+      // The first ancestor that clips this menu, or the viewport.
+      //
+      // The walk stops at a `fixed` ancestor because such a box is laid
+      // out against the viewport, so nothing above it clips what is
+      // inside — and that is the case this exists for: at rest the file
+      // detail draws this row in the sheet's 56px resting strip, which
+      // core's `MobileInspectorSheet` positions `fixed bottom-0`. There
+      // is nothing below the trigger there, so a menu that could only
+      // hang downward hung off the bottom of the screen.
+      //
+      // Core's `FileActions` — the `[...]` beside this button in the same
+      // row — carries the full version of this walk, including the case
+      // where an `absolute` ancestor takes the chain out of the DOM
+      // parentage for a stretch. That case cannot arise from here: every
+      // ancestor between this wrapper and the strip is in flow. When core
+      // extracts the walk into a hook of its own, this is its first
+      // caller.
+      let frame: { top: number; bottom: number } | null = null;
+      for (let el = wrapper.parentElement; el; el = el.parentElement) {
+        const { overflowX, overflowY, position } = getComputedStyle(el);
+        if (/auto|scroll|hidden/.test(overflowX + overflowY)) {
+          const box = el.getBoundingClientRect();
+          frame = { top: box.top, bottom: box.bottom };
+          break;
+        }
+        if (position === "fixed") break;
+      }
+
+      // `visualViewport` rather than `innerHeight`: an on-screen keyboard
+      // moves what can be seen without moving the layout viewport.
+      const bounds = frame ?? {
+        top: 0,
+        bottom: window.visualViewport?.height ?? window.innerHeight,
+      };
+
+      // The gap is the same 4px in both directions, so it decides only
+      // whether the menu fits below at all and cancels out of the
+      // comparison. Flips only when above is the better of the two, so a
+      // trigger with room for neither keeps the direction the menu reads
+      // as everywhere else.
+      const spaceBelow = bounds.bottom - trigger.bottom;
+      const spaceAbove = trigger.top - bounds.top;
+      setOpenUp(menuHeight + MENU_GAP_PX > spaceBelow && spaceAbove > spaceBelow);
+    };
+
+    measure();
+
+    // The list can lose an entry while the menu is open — a section that
+    // finishes generating withdraws its offer — and that changes the
+    // height the decision was made on. Flipping cannot re-enter this:
+    // `bottom-full mb-1` and `top-full mt-1` move the box, they do not
+    // resize it.
+    const menu = menuRef.current;
+    if (!menu || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(menu);
+    return () => observer.disconnect();
+  }, [open, actions.length]);
+
   if (actions.length === 0) return null;
 
   const busy = actions.some((action) => action.busy);
   const label = t("aiFileActions", { defaultMessage: "AI" });
 
   return (
-    <div className="relative flex items-center">
+    <div ref={wrapperRef} className="relative flex items-center">
       <button
         ref={triggerRef}
         type="button"
@@ -139,10 +228,11 @@ export default function FileAIActionsButton({ fileId }: FileAIActionsButtonProps
           className="fixed inset-0 z-30"
         >
           <div
+            ref={menuRef}
             role="menu"
             // Anchored to the trigger at every width, like `FileActions`
-            // beside it in the same row — not a `fixed … bottom-4` sheet
-            // below `sm`.
+            // beside it in the same row — and, like it, in the direction
+            // the box says there is room for.
             //
             // On a phone this row is drawn *inside* the Bottom Sheet, and
             // `Drawer.Content` carries a transform: a `fixed` box there
@@ -155,7 +245,9 @@ export default function FileAIActionsButton({ fileId }: FileAIActionsButtonProps
             // Anchoring removes the question rather than answering it:
             // `absolute` resolves against the wrapper above, which is on
             // screen wherever the sheet is.
-            className="absolute left-0 top-full z-30 mt-1 max-h-[60vh] min-w-[240px] overflow-y-auto rounded-2xl border border-bg-border bg-bg-primary py-1 shadow-lg animate-fade-in-scale origin-top-left"
+            className={`absolute left-0 z-30 max-h-[60vh] min-w-[240px] overflow-y-auto rounded-2xl border border-bg-border bg-bg-primary py-1 shadow-lg animate-fade-in-scale ${
+              openUp ? "bottom-full mb-1 origin-bottom-left" : "top-full mt-1 origin-top-left"
+            }`}
           >
             {actions.map((action) => {
               const Icon = ACTION_ICON[action.kind];
