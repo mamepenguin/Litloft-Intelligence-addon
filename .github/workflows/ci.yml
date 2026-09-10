@@ -38,8 +38,21 @@ jobs:
       - name: Build the test image
         run: docker build -f Dockerfile.test -t intelligence-test .
 
+      # `pytest.ini` turns measurement on; the floor is added only here.
+      #
+      # `PYTEST_ADDOPTS` rather than a command after the image name, for two
+      # reasons. `docker run --rm intelligence-test --cov-fail-under=64.78`
+      # *replaces* the CMD and the container never starts (`exec:
+      # "--cov-fail-under=64.78": executable file not found in $PATH`), and
+      # spelling the whole pytest command here again would let the CMD and
+      # this step drift apart. `PYTEST_ADDOPTS` appends, so the CMD stays the
+      # single description of what runs.
+      #
+      # The floor is the measured total, not a rounded-down one: a margin's
+      # only use is absorbing a regression in silence, which is the thing the
+      # floor exists to catch. Moving it is a deliberate edit, up or down.
       - name: Test
-        run: docker run --rm intelligence-test
+        run: docker run --rm -e PYTEST_ADDOPTS=--cov-fail-under=64.78 intelligence-test
 
   frontend:
     # This addon's frontend has no runner of its own. Its components import
