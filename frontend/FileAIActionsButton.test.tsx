@@ -9,7 +9,7 @@
  * no intelligence at all.
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, render, screen, fireEvent } from "@testing-library/react";
 
 import FileAIActionsButton from "@/addons/intelligence/FileAIActionsButton";
@@ -49,6 +49,10 @@ function Offering({
 
 beforeEach(() => {
   resetFileAiActions();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 /**
@@ -290,6 +294,134 @@ describe("FileAIActionsButton", () => {
     page.remove();
   });
 
+  /**
+   * Boxes for the direction decision, which jsdom lays out as zeros.
+   *
+   * The wrapper is the one element with `relative` in this tree, and the
+   * menu is the one with `role="menu"`; everything else keeps jsdom's
+   * own answer, which is what makes the ancestor walk fall through to
+   * the viewport — the resting strip's case, since the strip is `fixed`
+   * and nothing above it clips.
+   */
+  function withBoxes(
+    trigger: { top: number; bottom: number },
+    menuHeight: number,
+    viewportHeight: number,
+  ) {
+    const original = Element.prototype.getBoundingClientRect;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        if (this.classList.contains("relative")) {
+          return { ...trigger, left: 0, right: 100, height: trigger.bottom - trigger.top } as DOMRect;
+        }
+        if (this.getAttribute("role") === "menu") {
+          return { height: menuHeight, top: 0, bottom: menuHeight } as DOMRect;
+        }
+        // An ancestor states its own box, so a case that puts one in the
+        // chain does not also have to be handed to the mock separately.
+        const box = this.getAttribute("data-box");
+        if (box) return JSON.parse(box) as DOMRect;
+        return original.call(this);
+      },
+    );
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      value: viewportHeight,
+    });
+  }
+
+  function openMenuWith(
+    trigger: { top: number; bottom: number },
+    menuHeight: number,
+    viewportHeight: number,
+  ): HTMLElement {
+    withBoxes(trigger, menuHeight, viewportHeight);
+    renderWithStack(
+      <>
+        <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active />
+        <FileAIActionsButton fileId="f1" />
+      </>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+    return screen.getByRole("menu");
+  }
+
+  it("hangs upward when the row it is in sits on the bottom edge", () => {
+    // The state the file detail is in when it opens: the sheet is
+    // collapsed and this row is drawn in its 56px resting strip, which
+    // core positions `fixed bottom-0`. There is nothing below the trigger
+    // there — measured on the running stack at 500x639, the trigger's
+    // bottom was 629.5 against a 639 viewport, and a menu hanging down
+    // showed 5.5px of 82.
+    //
+    // jsdom lays nothing out, so the boxes are stated: what is asserted
+    // is the decision the numbers produce, not a geometry this
+    // environment could measure. Core's `e2e-components` draws the same
+    // strip in a real browser.
+    const menu = openMenuWith({ top: 593.5, bottom: 629.5 }, 82, 639);
+
+    expect(menu.className).toContain("bottom-full");
+    expect(menu.className).not.toContain("top-full");
+  });
+
+  it("hangs downward when there is room below it", () => {
+    // The other side, and the direction the menu reads as everywhere
+    // else: the expanded sheet and the desktop rail both leave room.
+    const menu = openMenuWith({ top: 200, bottom: 240 }, 82, 800);
+
+    expect(menu.className).toContain("top-full");
+    expect(menu.className).not.toContain("bottom-full");
+  });
+
+  it("keeps hanging downward when neither side has room", () => {
+    // A trigger with nothing either way keeps the direction it has
+    // everywhere else rather than flipping into an equally bad one —
+    // `spaceAbove > spaceBelow` is what makes the flip an improvement
+    // rather than a coin toss.
+    const menu = openMenuWith({ top: 10, bottom: 50 }, 400, 60);
+
+    expect(menu.className).toContain("top-full");
+  });
+
+  it("stops the walk at the strip, not at the scroller the strip is drawn over", () => {
+    // The `fixed` stop, which is the half of the walk the boxes above do
+    // not reach: with no ancestors between the wrapper and the document,
+    // the frame falls through to the viewport either way.
+    //
+    // Here the strip is drawn over a scroller — the page behind it — and
+    // that scroller has room below the trigger. A walk that did not stop
+    // at the strip would take the scroller's box, conclude there is room,
+    // and hang the menu off the bottom of the screen again. A `fixed` box
+    // is laid out against the viewport, so nothing above it clips what is
+    // inside it.
+    withBoxes({ top: 593.5, bottom: 629.5 }, 82, 639);
+    render(
+      <ShortcutsProvider>
+        <div
+          // `overflowY` rather than the `overflow` shorthand: jsdom does
+          // not expand the shorthand into the longhands the walk reads.
+          style={{ overflowY: "auto" }}
+          // Room below the trigger, which is what makes this case
+          // discriminate: the frame the walk picks decides the answer.
+          data-box='{"top":0,"bottom":2000}'
+        >
+          <div style={{ position: "fixed", bottom: "0px" }}>
+            <Offering
+              fileId="f1"
+              kind="summary"
+              labelKey="summaryGenerate"
+              active
+            />
+            <FileAIActionsButton fileId="f1" />
+          </div>
+        </div>
+      </ShortcutsProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+
+    expect(screen.getByRole("menu").className).toContain("bottom-full");
+  });
+
   it("anchors the menu to the trigger rather than to the screen", () => {
     // The Bottom Sheet is why. This row is drawn inside `Drawer.Content`,
     // which carries a transform, so a `fixed` box there resolves against
@@ -315,6 +447,12 @@ describe("FileAIActionsButton", () => {
     expect(menu.className.split(/\s+/)).toContain("absolute");
     expect(menu.className).not.toMatch(/(^|\s|:)fixed(\s|$)/);
     expect(menu.className).not.toMatch(/bottom-4/);
+    // One direction or the other, never both and never neither: the two
+    // cases above say which, this says the class list can only be in one
+    // of the two states they describe.
+    expect(
+      [menu.className.includes("top-full"), menu.className.includes("bottom-full")],
+    ).toEqual([true, false]);
   });
 
   it("uses no emoji", () => {
