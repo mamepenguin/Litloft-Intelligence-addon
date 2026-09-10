@@ -412,6 +412,63 @@ describe("FileAIActionsButton", () => {
     expect(menu.className).toContain("right-0");
   });
 
+  it("counts the gap when it asks whether the menu fits below", () => {
+    // `MENU_GAP_PX` is added to the height before the comparison, so a
+    // menu that fits below by less than the gap has to flip. Without the
+    // term the boxes below keep the menu downward and it is drawn into
+    // the 4px that separates it from its trigger.
+    //
+    // 82 + 4 = 86 against 84 below and 500 above: down is short by two
+    // pixels, and only the gap says so.
+    const menu = openMenuWith({ top: 500, bottom: 536 }, 82, 620);
+
+    expect(menu.className).toContain("bottom-full");
+  });
+
+  it("keeps an absolute detour out of the frame", () => {
+    // The walk skips an `overflow` ancestor while it is outside the
+    // menu's containing-block chain — the stretch an `absolute` box takes
+    // it out of — and resumes at the next positioned one. Core's
+    // `FileActions` carries the same guard and this is the case that
+    // separates the two behaviours: without it the scroller below is
+    // taken as the frame, which has no room, and the menu flips.
+    //
+    // The scroller states its own box through `data-box`, and the
+    // `absolute` box between it and the wrapper is what the guard is
+    // about. Its numbers are chosen so the two answers differ: inside
+    // that scroller the trigger has 4px below it and 100 above, so a walk
+    // that stopped there would flip; the viewport has 764 below, so the
+    // walk that skips it does not. A scroller with more room below than
+    // above would give the same answer either way and measure nothing.
+    withBoxes({ top: 100, bottom: 136 }, 82, 900);
+    render(
+      <ShortcutsProvider>
+        {/* The scroller the detour has to skip. It is short and sits
+            above the trigger, so a walk that stopped here would find no
+            room below and flip. */}
+        <div style={{ overflowY: "auto" }} data-box='{"top":0,"bottom":140,"left":0,"right":300}'>
+          {/* The `absolute` box that takes the chain out of the
+              scroller's containing block. */}
+          <div style={{ position: "absolute" }}>
+            <Offering
+              fileId="f1"
+              kind="summary"
+              labelKey="summaryGenerate"
+              active
+            />
+            <FileAIActionsButton fileId="f1" />
+          </div>
+        </div>
+      </ShortcutsProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+
+    // The frame falls through to the viewport, which has 764 below the
+    // trigger, so the menu keeps its downward direction.
+    expect(screen.getByRole("menu").className).toContain("top-full");
+    expect(screen.getByRole("menu").className).not.toContain("bottom-full");
+  });
+
   it("hangs upward when the row it is in sits on the bottom edge", () => {
     // The state the file detail is in when it opens: the sheet is
     // collapsed and this row is drawn in its 56px resting strip, which
