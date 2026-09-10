@@ -304,7 +304,7 @@ describe("FileAIActionsButton", () => {
    * and nothing above it clips.
    */
   function withBoxes(
-    trigger: { top: number; bottom: number },
+    trigger: { top: number; bottom: number; left?: number; right?: number },
     menuHeight: number,
     viewportHeight: number,
   ) {
@@ -312,7 +312,16 @@ describe("FileAIActionsButton", () => {
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
       function (this: Element) {
         if (this.classList.contains("relative")) {
-          return { ...trigger, left: 0, right: 100, height: trigger.bottom - trigger.top } as DOMRect;
+          // `left`/`right` default to a trigger hard against the left
+          // edge, which is where every case written before the
+          // horizontal axis existed put it. A case that cares states
+          // them.
+          return {
+            ...trigger,
+            left: trigger.left ?? 0,
+            right: trigger.right ?? 100,
+            height: trigger.bottom - trigger.top,
+          } as DOMRect;
         }
         if (this.getAttribute("role") === "menu") {
           return { height: menuHeight, top: 0, bottom: menuHeight } as DOMRect;
@@ -331,7 +340,7 @@ describe("FileAIActionsButton", () => {
   }
 
   function openMenuWith(
-    trigger: { top: number; bottom: number },
+    trigger: { top: number; bottom: number; left?: number; right?: number },
     menuHeight: number,
     viewportHeight: number,
   ): HTMLElement {
@@ -345,6 +354,63 @@ describe("FileAIActionsButton", () => {
     fireEvent.click(screen.getByRole("button", { name: "AI" }));
     return screen.getByRole("menu");
   }
+
+  /**
+   * The horizontal axis, which is the one the row's own placement decides.
+   *
+   * `FileDetailContainer` builds the sheet's resting strip as the file's
+   * name with `flex-1` followed by a `flex-shrink-0` action row, so this
+   * button is drawn near the *right* edge at every phone width — its
+   * distance from that edge is set by the row's furniture, not by the
+   * viewport. A menu that always hung rightward from the trigger's left
+   * edge therefore ran off the screen by the same amount whatever the
+   * phone: measured in a real browser at 393x727, 134px of a 240px menu.
+   *
+   * jsdom lays nothing out, so the boxes are stated and what is asserted
+   * is the decision they produce. The geometry is core's
+   * `e2e-components`.
+   */
+  it("hangs leftward from a trigger drawn at the right of the row", () => {
+    // 393px phone, the trigger where the strip's furniture puts it.
+    // 328 − 240 = 88, which clears the frame's left edge, so the menu
+    // takes the room to its left and stays on screen.
+    const menu = openMenuWith(
+      { top: 681, bottom: 718, left: 290, right: 328 },
+      82,
+      727,
+    );
+
+    expect(menu.className).toContain("right-0");
+    expect(menu.className).not.toContain("left-0");
+  });
+
+  it("hangs rightward when there is not room to its left", () => {
+    // The other side of the same rule, and the case the old constant was
+    // right about: a trigger near the left edge has nowhere to hang
+    // leftward, so it goes the other way. 100 − 240 = −140, past the
+    // frame's left edge.
+    const menu = openMenuWith(
+      { top: 200, bottom: 236, left: 8, right: 100 },
+      82,
+      727,
+    );
+
+    expect(menu.className).toContain("left-0");
+    expect(menu.className).not.toContain("right-0");
+  });
+
+  it("decides the two axes independently", () => {
+    // The pair the strip actually produces: no room below *and* no room
+    // to the right. A single flag would have to pick one of them.
+    const menu = openMenuWith(
+      { top: 681, bottom: 718, left: 290, right: 328 },
+      82,
+      727,
+    );
+
+    expect(menu.className).toContain("bottom-full");
+    expect(menu.className).toContain("right-0");
+  });
 
   it("hangs upward when the row it is in sits on the bottom edge", () => {
     // The state the file detail is in when it opens: the sheet is

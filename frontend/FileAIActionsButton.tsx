@@ -41,6 +41,18 @@ import { OVERLAY_PRIORITY } from "@/lib/shortcuts";
 /** `mt-1` / `mb-1`: the same 4px whichever way the menu hangs. */
 const MENU_GAP_PX = 4;
 
+/**
+ * The menu's width, and it has to be written here because `min-w-[240px]`
+ * on the box below is what sets it: the decision is made before the box
+ * has laid out in the direction being decided, so it cannot be read off
+ * the element the way the height is.
+ *
+ * Core's `FileActions` carries the same pair for the same reason with its
+ * own number (160). When unit J extracts the walk, the width is the
+ * caller's and the rule is the hook's.
+ */
+const MENU_WIDTH_PX = 240;
+
 /** Same icon the section itself uses, so the menu previews the result. */
 const ACTION_ICON: Record<FileAiActionKind, LucideIcon> = {
   tags: Sparkles,
@@ -66,6 +78,7 @@ export default function FileAIActionsButton({ fileId }: FileAIActionsButtonProps
    * keeps.
    */
   const [openUp, setOpenUp] = useState(false);
+  const [alignLeft, setAlignLeft] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -118,6 +131,11 @@ export default function FileAIActionsButton({ fileId }: FileAIActionsButtonProps
       if (!wrapper || !menu) return;
 
       const trigger = wrapper.getBoundingClientRect();
+      // The rect, and it is the layout box because this menu no longer
+      // animates — see the class list below. While it carried
+      // `animate-fade-in-scale`, this read happened mid-animation and an
+      // 82px menu measured 77.9, so the `+ MENU_GAP_PX` the line below
+      // adds was cancelled by a scale nobody was accounting for.
       const menuHeight = menu.getBoundingClientRect().height;
 
       // The first ancestor that clips this menu, or the viewport.
@@ -130,38 +148,63 @@ export default function FileAIActionsButton({ fileId }: FileAIActionsButtonProps
       // is nothing below the trigger there, so a menu that could only
       // hang downward hung off the bottom of the screen.
       //
-      // Core's `FileActions` — the `[...]` beside this button in the same
-      // row — carries the full version of this walk, including the case
-      // where an `absolute` ancestor takes the chain out of the DOM
-      // parentage for a stretch. That case cannot arise from here: every
-      // ancestor between this wrapper and the strip is in flow. When core
-      // extracts the walk into a hook of its own, this is its first
-      // caller.
-      let frame: { top: number; bottom: number } | null = null;
+      // **The same walk core's `FileActions` runs**, line for line —
+      // the `[...]` beside this button in the same row. It was a subset
+      // of that walk before: it read only the vertical edges and left out
+      // the `absolute` detour, on the argument that the detour cannot
+      // arise from here. Whether it can or not, the two being one walk is
+      // what lets unit J lift it into a hook without first having to
+      // decide which version was right. When it does, this is a caller
+      // and the two constants above are the caller's.
+      let bounds: { left: number; top: number; bottom: number } | null = null;
+      let inAbsoluteDetour = false;
       for (let el = wrapper.parentElement; el; el = el.parentElement) {
         const { overflowX, overflowY, position } = getComputedStyle(el);
-        if (/auto|scroll|hidden/.test(overflowX + overflowY)) {
+        const positioned =
+          position === "relative" ||
+          position === "absolute" ||
+          position === "fixed" ||
+          position === "sticky";
+        if (
+          (positioned || !inAbsoluteDetour) &&
+          /auto|scroll|hidden/.test(overflowX + overflowY)
+        ) {
           const box = el.getBoundingClientRect();
-          frame = { top: box.top, bottom: box.bottom };
+          bounds = { left: box.left, top: box.top, bottom: box.bottom };
           break;
         }
         if (position === "fixed") break;
+        if (positioned) inAbsoluteDetour = position === "absolute";
       }
 
       // `visualViewport` rather than `innerHeight`: an on-screen keyboard
       // moves what can be seen without moving the layout viewport.
-      const bounds = frame ?? {
+      const frame = bounds ?? {
+        left: 0,
         top: 0,
         bottom: window.visualViewport?.height ?? window.innerHeight,
       };
+
+      // The horizontal axis, and the same rule core's `FileActions` uses:
+      // hang leftward from the trigger's right edge unless that would
+      // cross the frame's left edge, in which case hang rightward from
+      // its left edge instead.
+      //
+      // The default matters here rather than being a coin toss. This row
+      // is drawn at the *right* of the sheet's strip — the file's name
+      // takes the width with `flex-1` and the action row is
+      // `flex-shrink-0` after it — so a menu that always hung rightward
+      // ran off the screen by more than a third of itself at every phone
+      // width, which is what this replaces.
+      setAlignLeft(trigger.right - MENU_WIDTH_PX < frame.left);
 
       // The gap is the same 4px in both directions, so it decides only
       // whether the menu fits below at all and cancels out of the
       // comparison. Flips only when above is the better of the two, so a
       // trigger with room for neither keeps the direction the menu reads
       // as everywhere else.
-      const spaceBelow = bounds.bottom - trigger.bottom;
-      const spaceAbove = trigger.top - bounds.top;
+      const spaceBelow = frame.bottom - trigger.bottom;
+      const spaceAbove = trigger.top - frame.top;
       setOpenUp(menuHeight + MENU_GAP_PX > spaceBelow && spaceAbove > spaceBelow);
     };
 
@@ -231,8 +274,11 @@ export default function FileAIActionsButton({ fileId }: FileAIActionsButtonProps
             ref={menuRef}
             role="menu"
             // Anchored to the trigger at every width, like `FileActions`
-            // beside it in the same row — and, like it, in the direction
-            // the box says there is room for.
+            // beside it in the same row — and, like it, on **both axes**
+            // in the direction the box says there is room for. The
+            // vertical half alone left the menu hanging a third of its
+            // width off the right edge of every phone, because the row
+            // this button sits in is drawn at the right of the strip.
             //
             // On a phone this row is drawn *inside* the Bottom Sheet, and
             // `Drawer.Content` carries a transform: a `fixed` box there
@@ -245,9 +291,17 @@ export default function FileAIActionsButton({ fileId }: FileAIActionsButtonProps
             // Anchoring removes the question rather than answering it:
             // `absolute` resolves against the wrapper above, which is on
             // screen wherever the sheet is.
-            className={`absolute left-0 z-30 max-h-[60vh] min-w-[240px] overflow-y-auto rounded-2xl border border-bg-border bg-bg-primary py-1 shadow-lg animate-fade-in-scale ${
-              openUp ? "bottom-full mb-1 origin-bottom-left" : "top-full mt-1 origin-top-left"
-            }`}
+            // **No entry animation**, which is a change and not an
+            // omission. `DESIGN.md` §Animation files `animate-fade-in-scale`
+            // under modals and dialogs; core's `FileActions` — the only
+            // other menu that measures its own height to pick a direction
+            // — carries none. A menu that scales from 0.95 while being
+            // measured reports a height it never has, and this is the one
+            // place in the tree where that lands in a decision rather than
+            // only on the eye.
+            className={`absolute z-30 max-h-[60vh] min-w-[240px] overflow-y-auto rounded-2xl border border-bg-border bg-bg-primary py-1 shadow-lg ${
+              openUp ? "bottom-full mb-1" : "top-full mt-1"
+            } ${alignLeft ? "left-0" : "right-0"}`}
           >
             {actions.map((action) => {
               const Icon = ACTION_ICON[action.kind];
