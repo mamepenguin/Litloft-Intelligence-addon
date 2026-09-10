@@ -130,9 +130,18 @@ jobs:
         run: pnpm test
         working-directory: core/frontend
 
-      # tsc follows the addon symlinks, so this type-checks this addon's
-      # sources against core's. eslint does not follow them, which is why it is
-      # not run here.
+      # tsc reads this addon's sources through `frontend/src/addons/<name>`
+      # and type-checks them against core's.
+      #
+      # eslint is not run here, and the reason is not that it cannot see these
+      # files: core's `frontend/eslint.config.mjs` ignores `src/addons/**`, so
+      # running it would lint core and say nothing about this addon. Nothing
+      # lints these files anywhere — this repository has no eslint config and
+      # no package.json — which makes tsc the whole of the static checking
+      # they get. (It used to be true that eslint could not reach them, when
+      # core linked each addon in as one directory symlink and eslint would
+      # not descend it. Core now builds that directory for real, so the
+      # exclusion is a declaration rather than an accident.)
       - name: Type-check
         run: pnpm exec tsc --noEmit
         working-directory: core/frontend
