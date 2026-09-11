@@ -6,11 +6,14 @@
 #
 # The pins are load-bearing now that `pytest.ini` carries a coverage floor.
 # What the gate decides is a function of coverage.py's `should_fail_under` and
-# of how pytest-cov threads `--cov-precision` into it, and those differ across
-# versions: measured, at precision 0 this package's floor of 65 prints
-# `FAIL ... not reached` and still exits 0, while at precision 2 it refuses
-# correctly. A floor whose verdict depends on an unpinned dependency is not a
-# floor, so `coverage` is pinned directly rather than left to pytest-cov's range.
+# of how pytest-cov threads `--cov-precision` into it, and both differ across
+# versions. `pytest.ini` carries the bracket that was measured against these
+# exact pins; it is not repeated here, because two copies of one measurement rot
+# apart and the copy nobody re-runs is the one that goes false.
+#
+# A floor whose verdict depends on an unpinned dependency is not a floor, so
+# `coverage` is pinned directly rather than left to pytest-cov's range —
+# `should_fail_under` lives in coverage.py, not in pytest-cov.
 pytest==9.1.1
 pytest-asyncio==1.4.0
 pytest-cov==7.1.0
