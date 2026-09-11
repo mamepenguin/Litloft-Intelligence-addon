@@ -71,15 +71,6 @@ async def _to_response_model(result: Any) -> SearchResponseModel:
     )
 
 
-@router.get("/debug/search")
-async def debug_search_endpoint(
-    q: str = Query(..., min_length=1, description="Search query"),
-) -> dict:
-    """Debug search: returns raw scores from each search system."""
-    from app.debug import debug_search
-    result = debug_search(q)
-    return result.model_dump()
-
 
 @router.get("/search", response_model=SearchResponseModel)
 async def search_endpoint(

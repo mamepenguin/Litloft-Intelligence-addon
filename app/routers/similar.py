@@ -20,9 +20,16 @@ async def similar_files_endpoint(
     drive: str = Depends(require_drive),
 ) -> SimilarFilesResponse:
     """Find files similar to ``file_id`` within the request's drive."""
-    from app.database import get_search_db
+    from app.database import get_search_db_read
     from app.models import IndexedFile
 
+    # The read session, not ``get_search_db``: the write session takes a
+    # blocking ``threading.Lock``, this handler is ``async def`` and so runs on
+    # the single event-loop thread, and refine holds that lock across a whole
+    # WhisperX alignment. Waiting on it here stops every other request in the
+    # addon, not just this one. ``find_similar`` runs the same query two lines
+    # below through the same read session.
+    #
     # ``find_similar`` restricts the *results* to ``drive`` but looks the
     # source row up without one, so a caller holding two drives could rank
     # this drive's files against a file in the other and read that file's
@@ -34,7 +41,7 @@ async def similar_files_endpoint(
     # which answers with an empty result. Raising here instead would turn
     # "indexing has not reached this file yet" into an error the caller
     # retries and then reports as unavailable.
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         source = (
             session.query(IndexedFile)
             .filter(
@@ -87,10 +94,10 @@ async def debug_similar_endpoint(
         _find_similar_by_embedding,
         _select_embedding_types,
     )
-    from app.database import get_search_db
+    from app.database import get_search_db_read
     from app.models import IndexedFile
 
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         source = (
             session.query(IndexedFile)
             .filter(
