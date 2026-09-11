@@ -89,9 +89,10 @@ jobs:
   frontend:
     # This addon's frontend has no runner of its own. Its components import
     # core's (@/components, @/hooks, @/lib) and its tests are collected by
-    # core's vitest through the frontend/src/addons symlink. So the only way to
-    # test it is to assemble a core checkout with this commit standing in for
-    # the pinned submodule, and run core's suite.
+    # core's vitest through `frontend/src/addons/<name>/`, which
+    # `setup-addons.sh` builds as a real directory holding one symlink per
+    # file. So the only way to test it is to assemble a core checkout with this
+    # commit standing in for the pinned submodule, and run core's suite.
     #
     # Core's default branch is what this commit is about to be pinned into, so
     # that is what it is tested against. A core-side break turning this job red
@@ -142,9 +143,11 @@ jobs:
           cache: pnpm
           cache-dependency-path: core/frontend/pnpm-lock.yaml
 
-      # Creates the gitignored frontend/src/addons/* symlinks. Without them
-      # vitest collects no addon test and the suite is green for the wrong
-      # reason.
+      # Builds the gitignored `frontend/src/addons/<name>/`: a real directory
+      # holding one symlink per file, rather than a symlink to the addon's
+      # `frontend/`, because a tool that walks a tree descends the first and
+      # not the second. Without it vitest collects no addon test and the suite
+      # is green for the wrong reason.
       - name: Link addons into backend/ and frontend/
         run: ./setup-addons.sh
         working-directory: core
