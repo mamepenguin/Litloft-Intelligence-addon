@@ -25,8 +25,12 @@ RUN pip install --no-cache-dir \
     sqlalchemy pyyaml numpy openai httpx \
     fastapi pydantic jinja2 \
     google-genai regex \
-    beautifulsoup4 html2text lxml \
-    pytest pytest-asyncio pytest-cov
+    beautifulsoup4 html2text lxml
+
+# Pinned, because `pytest.ini`'s coverage floor is only as reproducible as the
+# tool that evaluates it. See the file.
+COPY requirements-test.txt .
+RUN pip install --no-cache-dir -r requirements-test.txt
 
 # Phase 2C: dev-only deps for the transcription eval harness. Kept
 # out of the production Dockerfile so the runtime image stays slim.
