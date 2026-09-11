@@ -80,8 +80,9 @@ def index(monkeypatch, tmp_path):
 
     # Both the handler and ``find_similar`` read through the read session;
     # they resolve it from different modules, so both are pointed here.
-    # ``get_search_db`` — the write session — is deliberately NOT patched:
-    # ``test_the_write_lock_is_not_taken`` relies on it staying unusable.
+    # ``get_search_db`` — the write session — is left alone here;
+    # ``test_the_write_lock_is_not_taken`` replaces it with a raising stub of
+    # its own, so that reaching for it fails on its own terms.
     monkeypatch.setattr(database_mod, "get_search_db_read", _session)
     monkeypatch.setattr(search_mod, "get_search_db_read", _session)
 
@@ -209,15 +210,25 @@ async def test_the_check_runs_before_any_work(index, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_the_write_lock_is_not_taken(index):
-    """The lookup uses the read session, and the fixture proves it by omission.
+async def test_the_write_lock_is_not_taken(index, monkeypatch):
+    """The lookup goes through the read session — asserted, not inferred.
 
-    ``get_search_db`` takes a blocking ``threading.Lock``. This handler is
-    ``async def``, so waiting on it stops the addon's whole event loop — refine
-    holds the same lock across a WhisperX alignment. The fixture patches only
-    the read session, so a handler that reached for the write one would open
-    the real database instead of the fixture's and find no rows.
+    ``get_search_db`` acquires a blocking ``threading.Lock``. This handler is
+    ``async def``, so waiting on that lock stops the addon's whole event loop,
+    and refine holds it across a WhisperX alignment.
+
+    The write factory is replaced with something that fails loudly rather than
+    left alone: in a test process ``_SearchSession`` is ``None``, so a handler
+    that reached for the write session would raise ``RuntimeError("Search
+    database not initialized")`` and this test would still go red — for a
+    reason that has nothing to do with the lock, and that would disappear the
+    moment anything in the suite initialised the database.
     """
+    def _forbidden(*args, **kwargs):
+        raise AssertionError("the write session was opened on an async handler")
+
+    monkeypatch.setattr(database_mod, "get_search_db", _forbidden)
+
     result = await similar_files_endpoint(
         file_id="home_src", limit=6, drive=HOME_DRIVE,
     )
