@@ -51,8 +51,46 @@ jobs:
       # The floor is the measured total, not a rounded-down one: a margin's
       # only use is absorbing a regression in silence, which is the thing the
       # floor exists to catch. Moving it is a deliberate edit, up or down.
+      # The floor travels in `PYTEST_ADDOPTS` because it appends to the image's
+      # CMD (a command after the image name *replaces* the CMD and the
+      # container never starts). But a misspelled variable name is silent: the
+      # suite passes, nothing is gated, and the log looks normal.
+      #
+      # So the same variable also carries `--cov-report=json`. If it does not
+      # take effect, the report is not written either, and the step below fails
+      # on the missing file instead of succeeding for the wrong reason. The
+      # check then prints the precise total, which the terminal report rounds.
       - name: Test
-        run: docker run --rm -e PYTEST_ADDOPTS=--cov-fail-under=64.78 intelligence-test
+        shell: bash
+        env:
+          COV_FLOOR: "64.78"
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cov"
+          docker run --rm -v "$RUNNER_TEMP/cov:/out" \
+            -e PYTEST_ADDOPTS="--cov-fail-under=$COV_FLOOR --cov-report=json:/out/cov.json" \
+            intelligence-test
+
+      - name: Verify the floor was applied
+        shell: bash
+        env:
+          COV_FLOOR: "64.78"
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/cov/cov.json"
+          if [ ! -f "$report" ]; then
+            echo "::error::$report was not written — PYTEST_ADDOPTS did not reach pytest,"
+            echo "::error::which means --cov-fail-under did not either and nothing was gated."
+            exit 1
+          fi
+          python3 - "$report" "$COV_FLOOR" <<'PY'
+          import json, sys
+          report, floor = sys.argv[1], float(sys.argv[2])
+          total = json.load(open(report))["totals"]["percent_covered"]
+          print(f"coverage {total:.4f}% against a floor of {floor}%")
+          if total < floor:
+              sys.exit(f"::error::{total:.4f}% is below {floor}% and the run did not fail — the floor is not being enforced")
+          PY
 
   frontend:
     # This addon's frontend has no runner of its own. Its components import

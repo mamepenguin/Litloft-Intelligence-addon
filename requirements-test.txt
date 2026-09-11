@@ -1,2 +1,17 @@
-pytest==8.3.5
-pytest-asyncio==0.25.3
+# Test-only dependencies, pinned.
+#
+# `Dockerfile.test` installs this file; nothing else does. It used to exist
+# without being referenced anywhere, pinning a pytest the image did not install
+# and omitting pytest-cov entirely.
+#
+# The pins are load-bearing now that `pytest.ini` carries a coverage floor.
+# What the gate decides is a function of coverage.py's `should_fail_under` and
+# of how pytest-cov threads `--cov-precision` into it, and those differ across
+# versions: measured, at precision 0 this package's floor of 65 prints
+# `FAIL ... not reached` and still exits 0, while at precision 2 it refuses
+# correctly. A floor whose verdict depends on an unpinned dependency is not a
+# floor, so `coverage` is pinned directly rather than left to pytest-cov's range.
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0
+coverage==7.15.4
