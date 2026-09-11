@@ -266,17 +266,6 @@
         "response_filter": null
       },
       {
-        "path": "/index-details",
-        "methods": [
-          "GET"
-        ],
-        "drive_optional": true,
-        "pre_check": {
-          "type": "admin"
-        },
-        "response_filter": null
-      },
-      {
         "path": "/similar/{file_id}",
         "methods": [
           "GET"
@@ -300,13 +289,6 @@
           "type": "file_access",
           "param": "file_id"
         },
-        "response_filter": null
-      },
-      {
-        "path": "/debug/search",
-        "methods": [
-          "GET"
-        ],
         "response_filter": null
       },
       {
@@ -356,17 +338,6 @@
       },
       {
         "path": "/files/{file_id}/clip-timestamps",
-        "methods": [
-          "GET"
-        ],
-        "pre_check": {
-          "type": "file_access",
-          "param": "file_id"
-        },
-        "response_filter": null
-      },
-      {
-        "path": "/files/{file_id}/clip-analysis",
         "methods": [
           "GET"
         ],
@@ -772,19 +743,6 @@
       },
       {
         "path": "/refine/files/{file_id}",
-        "methods": [
-          "POST"
-        ],
-        "pre_check": {
-          "type": "file_access",
-          "param": "file_id"
-        },
-        "addon_feature": "transcript_refine",
-        "require_drive": true,
-        "response_filter": null
-      },
-      {
-        "path": "/refine/files/{file_id}/revert",
         "methods": [
           "POST"
         ],
