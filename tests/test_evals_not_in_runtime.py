@@ -150,6 +150,11 @@ def test_the_scan_covers_the_modules_it_claims_to():
         ("app.routers.files", "from ..evals import stages"),
         ("app.routers.files", "from ..evals.stages import run"),
         ("app.config", "from .evals import stages"),
+        # ...including with no module name at all, where the target is only in
+        # `node.names`. `from . import service` is the ordinary way a barrel
+        # `__init__.py` is written, so this is the common spelling on the axis
+        # below rather than an exotic one.
+        ("app.routers.files", "from .. import evals"),
         # ...and from a package's __init__.py, which resolves one level
         # differently. These are the cases the list first went without, and
         # `app/rag/__init__.py` with `from ..evals import config` is a working
@@ -159,19 +164,53 @@ def test_the_scan_covers_the_modules_it_claims_to():
         ("app.rag.__init__", "from ..evals.stages import run"),
         ("app.routers.__init__", "from ..evals import config"),
         ("app.rag.tools.__init__", "from ...evals import config"),
+        ("app.__init__", "from . import evals"),
     ],
 )
 def test_the_scan_detects_an_import(module, source):
-    """Each spelling an import can take, confirmed to be caught.
+    """Every cell of the matrix below, confirmed to be caught.
 
     Without this, the test above asserts that a function returns empty — which
     it would also do if it had stopped looking.
 
-    **The importing module is a parameter, not a backdrop.** A relative import
-    resolves against both ends, so "every spelling" means every combination of
-    syntax *and* the kind of file it sits in, and there are two kinds: a plain
-    module and a package's `__init__.py`. A list covering only the first reads
-    as complete — it enumerates every syntax — while missing an entire axis.
+    **This is not "every spelling an import can take".** That phrasing invites
+    the question "are you sure?" and cannot answer it, because the set of
+    things a reader can imagine is not closed. What is closed, and what this
+    holds, is narrower and checkable:
+
+        no import of an eval harness that is visible in the source tree.
+
+    The matrix has three axes and they are exhaustive for that claim:
+
+    1. **Statement.** The grammar has exactly two import statements — read out
+       of it rather than recalled: `[c.__name__ for c in ast.stmt.__subclasses__()
+       if "Import" in c.__name__]` is `['Import', 'ImportFrom']`.
+    2. **Shape of `ImportFrom`.** `node.level` is zero or not (absolute or
+       relative), and `node.module` is present or not (`from ..evals import x`
+       against `from .. import evals`) — and when it is absent the target name
+       is only in `node.names`, which is a separate branch of the resolution.
+    3. **Importing file.** A plain module or a package's `__init__.py`, because
+       a relative import resolves against the importer's package and those two
+       differ by one level.
+
+    Three things deliberately outside it, so their absence is not a gap:
+
+    - **Aliases.** `import app.evals.stages as s` is the `Import` cell already;
+      the scan keys on `alias.name`, the module path, never on the bound name,
+      so `as` cannot hide a target.
+    - **Position.** Nested in a function, a class, a `try`, an `if` — covered by
+      construction, since the scan is `ast.walk` over the whole module rather
+      than a pass over top-level statements.
+    - **Namespace packages.** A directory with no `__init__.py` is covered by
+      construction too: `_shipped_modules` enumerates from paths, not from what
+      is importable.
+
+    And one thing genuinely out of scope, for a reason rather than by omission:
+    a module name assembled at run time — `exec`, string concatenation, an
+    `importlib` call on a computed name. Those are not spellings this refuses;
+    they are names that do not exist until the process runs, so no reader of the
+    source can see them either. `.coveragerc`'s exclusion rests on what the
+    source says, and so does this.
     """
     assert _imports_of(source, module), f"not detected: {source!r}"
 
