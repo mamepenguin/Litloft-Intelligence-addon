@@ -71,26 +71,20 @@ jobs:
             -e PYTEST_ADDOPTS="--cov-fail-under=$COV_FLOOR --cov-report=json:/out/cov.json" \
             intelligence-test
 
-      - name: Verify the floor was applied
+      # The floor is a lower bound, and a lower bound cannot see the
+      # denominator shrink — the percentage goes *up*. So the population is
+      # compared too, as a set, against an independent walk of this checkout.
+      # `scripts/check-coverage-population.py` says what that catches and what
+      # the previous shape — filtering the report the report came from — could
+      # not.
+      - name: Verify the floor was applied, over the right population
         shell: bash
         env:
           COV_FLOOR: "64.78"
         run: |
           set -euo pipefail
           report="$RUNNER_TEMP/cov/cov.json"
-          if [ ! -f "$report" ]; then
-            echo "::error::$report was not written — PYTEST_ADDOPTS did not reach pytest,"
-            echo "::error::which means --cov-fail-under did not either and nothing was gated."
-            exit 1
-          fi
-          python3 - "$report" "$COV_FLOOR" <<'PY'
-          import json, sys
-          report, floor = sys.argv[1], float(sys.argv[2])
-          total = json.load(open(report))["totals"]["percent_covered"]
-          print(f"coverage {total:.4f}% against a floor of {floor}%")
-          if total < floor:
-              sys.exit(f"::error::{total:.4f}% is below {floor}% and the run did not fail — the floor is not being enforced")
-          PY
+          python3 scripts/check-coverage-population.py "$report" "$COV_FLOOR"
 
   frontend:
     # This addon's frontend has no runner of its own. Its components import
