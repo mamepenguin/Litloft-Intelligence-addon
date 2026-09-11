@@ -20,6 +20,32 @@ async def similar_files_endpoint(
     drive: str = Depends(require_drive),
 ) -> SimilarFilesResponse:
     """Find files similar to ``file_id`` within the request's drive."""
+    from app.database import get_search_db
+    from app.models import IndexedFile
+
+    # ``find_similar`` restricts the *results* to ``drive`` but looks the
+    # source row up without one, so a caller holding two drives could rank
+    # this drive's files against a file in the other and read that file's
+    # keyword bag back out of ``source_keywords``. The source has to be in
+    # the requested drive as well, which is what the debug route below
+    # already asserts.
+    #
+    # A source that is not indexed at all is left to ``find_similar``,
+    # which answers with an empty result. Raising here instead would turn
+    # "indexing has not reached this file yet" into an error the caller
+    # retries and then reports as unavailable.
+    with get_search_db() as session:
+        source = (
+            session.query(IndexedFile)
+            .filter(
+                IndexedFile.file_id == file_id,
+                IndexedFile.active.is_(True),
+            )
+            .first()
+        )
+        if source is not None:
+            assert_file_in_drive(source.drive, drive)
+
     try:
         search_result = find_similar(file_id=file_id, limit=limit, drive=drive)
     except Exception as e:
