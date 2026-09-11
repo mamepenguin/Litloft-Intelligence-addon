@@ -1,4 +1,4 @@
-"""The eval harnesses are excluded from the coverage denominator on the claim
+r"""The eval harnesses are excluded from the coverage denominator on the claim
 that nothing this addon ships imports them. This holds that claim.
 
 `.coveragerc` drops `app/evals/`, `app/evals_citations/` and
@@ -16,6 +16,18 @@ allowed to exist, so it is held by something that fails.
 The scan is over the source, not over anything the coverage run produced. A
 detector built from the report would inherit the same blindness for the same
 reason.
+
+One thing to know before trusting a grep instead of this: relative imports
+(`from ..evals import config`) resolve against the importing module's package,
+so what they mean depends on where the file sits, and a package's `__init__.py`
+resolves one level differently from a plain module beside it. This package is
+absolute-imports throughout — `grep -rnE '^\s*from \.+' app/` over the shipped
+trees returns nothing — so that has never mattered here in practice. It is
+worth stating which of those two facts is doing the work: **the scan below
+handles relative imports because the guarantee has to hold for code nobody has
+written yet, not because the tree contains any.** A gap in it would have been a
+gap in the guarantee while the grep stayed at zero, which is exactly the kind of
+defect that survives review.
 """
 
 from __future__ import annotations
@@ -47,8 +59,13 @@ def _imports_of(source: str, module: str) -> set[str]:
             if name == target or name.startswith(f"{target}."):
                 found.add(name)
 
-    parts = module.split(".")
-    package = parts if module.endswith(".__init__") else parts[:-1]
+    # `parts[:-1]` for every module, including a package's `__init__.py`.
+    # `_shipped_modules` names that one `app.rag.__init__`, so dropping the last
+    # segment already yields its package, `app.rag` — the thing a relative
+    # import resolves against. A special case here reads as though `__init__`
+    # needed one and silently resolved `from ..evals` in `app/rag/__init__.py`
+    # to `app.rag.evals`, which matches nothing.
+    package = module.split(".")[:-1]
 
     tree = ast.parse(source)
     for node in ast.walk(tree):
@@ -121,16 +138,27 @@ def test_the_scan_covers_the_modules_it_claims_to():
 @pytest.mark.parametrize(
     "module, source",
     [
+        # Absolute, where the importing module cannot matter.
         ("app.routers.files", "import app.evals.stages"),
         ("app.routers.files", "from app.evals import stages"),
         ("app.routers.files", "from app.evals.stages import run"),
         ("app.routers.files", "from app import evals"),
-        ("app.routers.files", "from ..evals import stages"),
-        ("app.routers.files", "from ..evals.stages import run"),
-        ("app.config", "from .evals import stages"),
         ("app.routers.files", "import app.evals_citations.runner"),
         ("app.routers.files", "from app.evals_transcription import metrics"),
         ("app.routers.files", 'importlib.import_module("app.evals.stages")'),
+        # Relative, from a plain module...
+        ("app.routers.files", "from ..evals import stages"),
+        ("app.routers.files", "from ..evals.stages import run"),
+        ("app.config", "from .evals import stages"),
+        # ...and from a package's __init__.py, which resolves one level
+        # differently. These are the cases the list first went without, and
+        # `app/rag/__init__.py` with `from ..evals import config` is a working
+        # import of a module that exists.
+        ("app.__init__", "from .evals import config"),
+        ("app.rag.__init__", "from ..evals import config"),
+        ("app.rag.__init__", "from ..evals.stages import run"),
+        ("app.routers.__init__", "from ..evals import config"),
+        ("app.rag.tools.__init__", "from ...evals import config"),
     ],
 )
 def test_the_scan_detects_an_import(module, source):
@@ -138,6 +166,12 @@ def test_the_scan_detects_an_import(module, source):
 
     Without this, the test above asserts that a function returns empty — which
     it would also do if it had stopped looking.
+
+    **The importing module is a parameter, not a backdrop.** A relative import
+    resolves against both ends, so "every spelling" means every combination of
+    syntax *and* the kind of file it sits in, and there are two kinds: a plain
+    module and a package's `__init__.py`. A list covering only the first reads
+    as complete — it enumerates every syntax — while missing an entire axis.
     """
     assert _imports_of(source, module), f"not detected: {source!r}"
 
