@@ -66,10 +66,28 @@ SKIP_DIRS = {"__pycache__", "tests"}
 # `.py` today, which is why the walk and the report agree at 142. One dropped
 # into any of them would never reach coverage.py, and nothing said so before.
 
+# Trees under `app/` that are NOT the code this addon ships, and so are not in
+# the denominator: the evaluation harnesses, each with its own `__main__.py`,
+# reached from nothing the service imports. `.coveragerc` keeps them out of the
+# report and this list keeps them out of the walk, so the two agree.
+#
+# Written out one tree at a time to mirror `.coveragerc` exactly. Neither side
+# uses a wildcard over `app/evals*`, because a wildcard would take in a fourth
+# tree without anyone deciding to.
+#
+# What these lines assume — that nothing shipped imports them — is held by
+# `tests/test_evals_not_in_runtime.py`. This file cannot hold it: excluding a
+# tree from both sides keeps them consistent whatever the import graph does.
+EXCLUDED_TREES = (
+    "app/evals/",
+    "app/evals_citations/",
+    "app/evals_transcription/",
+)
+
 # Files on disk that the report is right not to contain, declared by name with a
-# reason. Empty here, measured: the walk and the report agree at 142 files.
-# Adding an entry is a claim that coverage.py is correct to omit that file — it
-# is not a way to silence a disagreement.
+# reason. Empty here, measured: outside the excluded trees, the walk and the
+# report agree at 117 files. Adding an entry is a claim that coverage.py is
+# correct to omit that file — it is not a way to silence a disagreement.
 NOT_MEASURED: list[str] = []
 
 
@@ -111,6 +129,9 @@ def main(argv: list[str]) -> int:
             print("::error::so its agreement with the report would mean nothing.")
             return 1
         declared |= production_sources(root, prefix)
+    declared = {
+        p for p in declared if not p.startswith(EXCLUDED_TREES)
+    }
     declared -= set(NOT_MEASURED)
 
     missing = sorted(declared - measured)
@@ -128,8 +149,9 @@ def main(argv: list[str]) -> int:
         for path in unexpected:
             print(f"::error::  - {path}")
         print("::error::Tests inside the measured package inflate the total with files that")
-        print("::error::cannot fail to be covered. Anything else means NOT_MEASURED is stale,")
-        print("::error::or the walk's predicates no longer match what --cov selects.")
+        print("::error::cannot fail to be covered. A file under one of EXCLUDED_TREES means")
+        print("::error::.coveragerc's omit is not matching. Anything else means NOT_MEASURED")
+        print("::error::is stale, or the walk no longer matches what --cov selects.")
     if missing or unexpected:
         return 1
 

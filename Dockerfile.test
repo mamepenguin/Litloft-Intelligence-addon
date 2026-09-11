@@ -46,6 +46,8 @@ RUN pip install --no-cache-dir pillow
 COPY app/ ./app/
 COPY tests/ ./tests/
 COPY pytest.ini .
+# The measured population; see the file for what it omits and why.
+COPY .coveragerc .
 # manifest.json is needed by tests/test_admin_manifest_parity.py, which
 # asserts every /admin/* route in app/routers/admin.py is paired with
 # an admin-gated entry in the host-proxy manifest.

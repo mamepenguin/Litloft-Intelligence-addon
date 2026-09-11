@@ -1,0 +1,39 @@
+# The measured population for `--cov=app`.
+#
+# The denominator is the code this addon ships. Three trees under `app/` are
+# not that: they are the evaluation harnesses, run by hand during development
+# and reached from nothing the service imports. `app/rag/keyword_filter.py`
+# says so at the point where it declines to depend on one:
+#
+#     # Shared dir with text_match.py; defined here to avoid app/rag depending
+#     # on app/evals (eval is dev-time only and shouldn't be in the runtime
+#     # import graph).
+#
+# Each has its own `__main__.py` and is invoked as `python -m app.evals...`.
+# Measured: of 142 modules under `app/`, 117 are reachable from `app.main` by
+# a static walk of the import graph, and the 25 unreachable ones are exactly
+# these three trees.
+#
+# Why they cannot stay in the denominator: 2676 statements at 33.3% dilute the
+# figure that is supposed to protect the shipped code. Adding tests to an eval
+# harness would raise the total, so shipped coverage could fall and the floor
+# would not notice. Measured, branch-inclusive: 64.7805% over everything,
+# 69.6458% over the shipped code alone.
+#
+# Listed one tree per line, NOT as `app/evals*/*`. That wildcard matches all
+# three today (measured) and would silently swallow a fourth tree added later.
+# What is excluded from a denominator is declared, so that adding to it is an
+# edit somebody reviews.
+#
+# The claim these three lines rest on — that nothing shipped imports them — is
+# not self-evident and does not stay true on its own. It is held by
+# `tests/test_evals_not_in_runtime.py`, which fails if any module outside these
+# trees imports one. Without that, an import added tomorrow would leave the
+# exclusion here still consistent with the walk in
+# `scripts/check-coverage-population.py`, and only the justification would
+# become false.
+[run]
+omit =
+    app/evals/*
+    app/evals_citations/*
+    app/evals_transcription/*

@@ -41,9 +41,9 @@ jobs:
       # `pytest.ini` turns measurement on; the floor is added only here.
       #
       # `PYTEST_ADDOPTS` rather than a command after the image name, for two
-      # reasons. `docker run --rm intelligence-test --cov-fail-under=64.78`
+      # reasons. `docker run --rm intelligence-test --cov-fail-under=69.64`
       # *replaces* the CMD and the container never starts (`exec:
-      # "--cov-fail-under=64.78": executable file not found in $PATH`), and
+      # "--cov-fail-under=69.64": executable file not found in $PATH`), and
       # spelling the whole pytest command here again would let the CMD and
       # this step drift apart. `PYTEST_ADDOPTS` appends, so the CMD stays the
       # single description of what runs.
@@ -63,7 +63,7 @@ jobs:
       - name: Test
         shell: bash
         env:
-          COV_FLOOR: "64.78"
+          COV_FLOOR: "69.64"
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/cov"
@@ -80,7 +80,7 @@ jobs:
       - name: Verify the floor was applied, over the right population
         shell: bash
         env:
-          COV_FLOOR: "64.78"
+          COV_FLOOR: "69.64"
         run: |
           set -euo pipefail
           report="$RUNNER_TEMP/cov/cov.json"
