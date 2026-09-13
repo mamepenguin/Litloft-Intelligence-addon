@@ -888,6 +888,19 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
       expect(hostScrollTo).toHaveBeenCalledWith({ top: 545, behavior: "smooth" });
     });
 
+    it("brings it back after being shown, hidden and shown again", async () => {
+      const { hostScrollTo } = await setup();
+      await resize(4000);
+      screen.getByTestId("tall").hidden = true;
+      await resize(0);
+      hostScrollTo.mockClear();
+
+      screen.getByTestId("tall").hidden = false;
+      await resize(4000);
+
+      expect(hostScrollTo).toHaveBeenCalledWith({ top: 545, behavior: "smooth" });
+    });
+
     it("leaves the scroller where the reader put it once following is off", async () => {
       const { hostScrollTo, list } = await setup({ hidden: true });
       await resize(0);
