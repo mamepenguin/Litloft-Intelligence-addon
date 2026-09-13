@@ -1655,6 +1655,39 @@ describe("TranscriptSection — where the reader had got to", () => {
       expect(list.scrollTop).toBe(550);
     });
 
+    it("does not give up the place for an input that scrolled nothing", async () => {
+      const list = await mounted();
+      // A wheel up, or a pull down, at the top: no scroll follows.
+      fireEvent.wheel(list);
+      fireEvent.touchMove(list);
+
+      await act(async () =>
+        answerSubtitles(
+          vttResponse(vttOf([0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((t) => [t, t + 1, `sub${t}`]))),
+        ),
+      );
+      await screen.findByText("sub7");
+      await act(async () => {});
+
+      expect(list.scrollTop).toBe(730);
+    });
+
+    it("lets a scroll with no wheel or touch stand too, as the keyboard makes", async () => {
+      const list = await mounted();
+      list.scrollTop = 150;
+      fireEvent.scroll(list);
+
+      await act(async () =>
+        answerSubtitles(
+          vttResponse(vttOf([0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((t) => [t, t + 1, `sub${t}`]))),
+        ),
+      );
+      await screen.findByText("sub7");
+      await act(async () => {});
+
+      expect(list.scrollTop).toBe(550);
+    });
+
     it("puts the reader back on what is shown once it answers with nothing", async () => {
       const list = await mounted();
       expect(list.scrollTop).toBe(0);
@@ -2167,6 +2200,23 @@ describe("TranscriptSection — where the reader had got to", () => {
       host.scrollTop = 50;
       fireEvent.scroll(host);
       screen.getByTestId("panel").hidden = false;
+      await resize(4000);
+
+      expect(host.scrollTop).toBe(LIST_AT + 150);
+    });
+
+    it("puts the place back even if a scroll lands between showing and noticing it", async () => {
+      const { host } = await mountInHost(false);
+      await resize(4000);
+      host.scrollTop = LIST_AT + 150;
+      fireEvent.scroll(host);
+
+      screen.getByTestId("panel").hidden = true;
+      await resize(0);
+      host.scrollTop = 50;
+      screen.getByTestId("panel").hidden = false;
+      // The browser reports the other tab's offset before the list's size.
+      fireEvent.scroll(host);
       await resize(4000);
 
       expect(host.scrollTop).toBe(LIST_AT + 150);

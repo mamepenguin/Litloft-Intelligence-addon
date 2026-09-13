@@ -337,6 +337,9 @@ export default function TranscriptSection({
       if (list && !list.closest("[hidden]") && !putBackPendingRef.current) {
         placeRef.current = readPlace(list) ?? placeRef.current;
         putBackPendingRef.current = true;
+        // This put-back is for rows a render away; a scroll before it runs
+        // is not the reader reading the old ones.
+        awaitingChosenRef.current = false;
       }
       // The highlight indexes the old rows until the clock syncs again, and
       // would otherwise name a row at another time as the playing one.
@@ -446,11 +449,7 @@ export default function TranscriptSection({
     const scroller = scrollingBoxOf(list);
     const shown = () => !list.closest("[hidden]");
     const suspend = () => {
-      if (!shown()) return;
-      setFollowing(false);
-      // The reader has taken their place into their own hands; putting
-      // back an older one later would undo that.
-      putBackPendingRef.current = false;
+      if (shown()) setFollowing(false);
     };
     // A finger or a pen does not drag a scrollbar; landing on the box
     // itself is a tap on its padding.
@@ -606,7 +605,15 @@ export default function TranscriptSection({
         ...(chosenSourceRef.current ? { source: chosenSourceRef.current } : {}),
       });
     const onScroll = () => {
-      if (list.closest("[hidden]") || putBackPendingRef.current) return;
+      if (list.closest("[hidden]")) return;
+      if (putBackPendingRef.current) {
+        // Waiting on the source the reader chose, the rows shown meanwhile
+        // are theirs to read, and moving them is a place of their own that
+        // an older one must not replace. Any other pending put-back is a
+        // render from running, and a scroll then is not the reader's.
+        if (!awaitingChosenRef.current) return;
+        putBackPendingRef.current = false;
+      }
       placeRef.current = readPlace(list) ?? placeRef.current;
       save();
     };
