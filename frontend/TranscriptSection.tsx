@@ -18,6 +18,7 @@ import { getMediaClockSnapshot, subscribeMediaClock } from "@/lib/mediaClock";
 import { addSourceCapture } from "@/lib/sourceCapture";
 import {
   recallTranscriptScroll,
+  type TranscriptPlace,
   rememberTranscriptScroll,
 } from "./transcriptScroll";
 
@@ -129,14 +130,36 @@ function scrollingBoxOf(list: HTMLElement): HTMLElement {
   return list.closest<HTMLElement>("[data-inspector-scroller]") ?? list;
 }
 
-/** Where the top of `list` sits in the content of `scroller`, in px. */
-function listOffsetIn(list: HTMLElement, scroller: HTMLElement): number {
-  if (scroller === list) return 0;
-  return (
-    list.getBoundingClientRect().top -
-    scroller.getBoundingClientRect().top +
-    scroller.scrollTop
-  );
+/** The first line of `scroller` the reader can see, in viewport px. */
+function viewTopOf(list: HTMLElement, scroller: HTMLElement): number {
+  if (scroller === list) return list.getBoundingClientRect().top;
+  return scroller.getBoundingClientRect().top + stripCoverOf(list);
+}
+
+function cueRows(list: HTMLElement): HTMLElement[] {
+  return Array.from(list.querySelectorAll<HTMLElement>("[data-cue-start]"));
+}
+
+function readPlace(list: HTMLElement): TranscriptPlace | null {
+  const viewTop = viewTopOf(list, scrollingBoxOf(list));
+  for (const row of cueRows(list)) {
+    const rect = row.getBoundingClientRect();
+    if (rect.bottom > viewTop) {
+      return { at: Number(row.dataset.cueStart), into: viewTop - rect.top };
+    }
+  }
+  return null;
+}
+
+function applyPlace(list: HTMLElement, place: TranscriptPlace): void {
+  const rows = cueRows(list);
+  if (rows.length === 0) return;
+  const row =
+    [...rows].reverse().find((r) => Number(r.dataset.cueStart) <= place.at) ??
+    rows[0];
+  const scroller = scrollingBoxOf(list);
+  const viewTop = viewTopOf(list, scroller);
+  scroller.scrollTop += row.getBoundingClientRect().top - (viewTop - place.into);
 }
 
 /** How far down the host's pinned strip covers its scroller. */
@@ -175,6 +198,9 @@ export default function TranscriptSection({
   const [externalLanguage, setExternalLanguage] = useState("");
   const [loading, setLoading] = useState(true);
   const [source, setSource] = useState<Source>("chunks");
+  // Until the reader picks one, the source follows what is available: a
+  // source that answered first is not a choice.
+  const [sourceChosen, setSourceChosen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   // Whether the highlight is still allowed to drag the list around.
   // Reading ahead has to win over following, or the reader is pulled
@@ -261,8 +287,17 @@ export default function TranscriptSection({
     if (wordsAvailable) available.push("words");
     if (externalAvailable) available.push("external");
     if (available.length === 0) return;
-    if (!available.includes(source)) setSource(available[0]);
-  }, [chunksAvailable, wordsAvailable, externalAvailable, source]);
+    if (!sourceChosen ? source !== available[0] : !available.includes(source)) {
+      // Rows starting at other times are about to replace these, so the
+      // reader's row is read now and put back once they have.
+      const list = listRef.current;
+      if (list && !list.closest("[hidden]") && !putBackPendingRef.current) {
+        placeRef.current = readPlace(list) ?? placeRef.current;
+        putBackPendingRef.current = true;
+      }
+      setSource(available[0]);
+    }
+  }, [chunksAvailable, wordsAvailable, externalAvailable, source, sourceChosen]);
 
   const hasAnything = chunksAvailable || wordsAvailable || externalAvailable;
 
@@ -394,18 +429,30 @@ export default function TranscriptSection({
     followingRef.current = following;
   }, [following]);
 
-  // A place recalled for this file that could not be applied yet, because
-  // the host was not showing the panel.
-  const pendingPlaceRef = useRef<number | null>(null);
+  // The reader's last seen place in this file, and whether it still has to
+  // be put back: after a mount, and after the host hid the panel.
+  const placeRef = useRef<TranscriptPlace | null>(null);
+  const putBackPendingRef = useRef(false);
 
-  const applyPendingPlace = useCallback((list: HTMLElement): boolean => {
-    const top = pendingPlaceRef.current;
-    if (top === null || list.closest("[hidden]")) return false;
-    const scroller = scrollingBoxOf(list);
-    scroller.scrollTop = listOffsetIn(list, scroller) + top;
-    pendingPlaceRef.current = null;
-    return true;
-  }, []);
+  /**
+   * While following a cue that is playing, "back" is that cue, not the
+   * place the reader last saw: that place was only ever where following
+   * had taken them.
+   */
+  const putBack = useCallback(
+    (list: HTMLElement): boolean => {
+      if (!putBackPendingRef.current) return false;
+      if (list.closest("[hidden]")) return false;
+      putBackPendingRef.current = false;
+      if (followingRef.current && activeRef.current) {
+        scrollActiveIntoView();
+      } else if (placeRef.current) {
+        applyPlace(list, placeRef.current);
+      }
+      return true;
+    },
+    [scrollActiveIntoView],
+  );
 
   /**
    * A cue that changed while the host hid this panel was not scrolled to,
@@ -419,15 +466,18 @@ export default function TranscriptSection({
     let height = list.getBoundingClientRect().height;
     const observer = new ResizeObserver((entries) => {
       const next = entries[entries.length - 1]?.contentRect.height ?? 0;
+      const hidden = height > 0 && next === 0;
       const revealed = height === 0 && next > 0;
       height = next;
+      // In the sheet another tab moves the shared scroller while this one
+      // is hidden, so the place has to be put back, not just kept.
+      if (hidden) putBackPendingRef.current = true;
       if (!revealed) return;
-      if (applyPendingPlace(list)) return;
-      if (followingRef.current) scrollActiveIntoView();
+      if (!putBack(list) && followingRef.current) scrollActiveIntoView();
     });
     observer.observe(list);
     return () => observer.disconnect();
-  }, [listEl, scrollActiveIntoView, applyPendingPlace]);
+  }, [listEl, scrollActiveIntoView, putBack]);
 
   const hasCues = cues.length > 0;
 
@@ -436,7 +486,7 @@ export default function TranscriptSection({
    *
    * **Keyed on the list element, not on how many cues it holds.** The count
    * changes when the reader switches source, and re-running then would take
-   * the position off them. The element is what appears once loading ends,
+   * the place off them. The element is what appears once loading ends,
    * which can be after the count has stopped changing.
    *
    * A file with nothing remembered starts out following: a suspension on
@@ -447,36 +497,42 @@ export default function TranscriptSection({
     if (!list) return;
     const saved = recallTranscriptScroll(fileId);
     setFollowing(saved ? saved.following : true);
-    pendingPlaceRef.current = saved ? saved.top : null;
-    applyPendingPlace(list);
-  }, [fileId, listEl, applyPendingPlace]);
+    followingRef.current = saved ? saved.following : true;
+    placeRef.current = saved?.place ?? null;
+    putBackPendingRef.current = true;
+    putBack(list);
+  }, [fileId, listEl, putBack]);
+
+  // A source that arrives later can replace the rows under the reader.
+  useEffect(() => {
+    if (listEl) putBack(listEl);
+  }, [listEl, cues, putBack]);
 
   /**
    * Remember it, because a refetch cannot bring it back.
    *
-   * Written as the reader scrolls, and measured in the list: in the sheet
-   * the box that scrolls is shared with the other tabs, so its own offset
-   * means nothing to this panel, and a scroll while another tab is shown
-   * is not the reader's place in the transcript.
+   * Written as the reader scrolls, and only while the panel is shown and
+   * nothing is waiting to be put back: in the sheet the box that scrolls is
+   * shared with the other tabs, and a scroll there is not the reader's
+   * place in the transcript.
    *
    * The cleanup writes the last place seen rather than reading one: a
    * browser detaches the list before passive cleanups run, and a detached
-   * element reads 0. It is still needed, because `following` can change
-   * with no scroll — clicking a cue resumes it.
+   * element has no position. It is still needed, because `following` can
+   * change with no scroll — clicking a cue resumes it.
    */
   useEffect(() => {
     const list = listEl;
     if (!list) return;
     const scroller = scrollingBoxOf(list);
-    let place = recallTranscriptScroll(fileId)?.top ?? 0;
     const save = () =>
       rememberTranscriptScroll(fileId, {
-        top: place,
+        place: placeRef.current,
         following: followingRef.current,
       });
     const onScroll = () => {
-      if (list.closest("[hidden]") || pendingPlaceRef.current !== null) return;
-      place = scroller.scrollTop - listOffsetIn(list, scroller);
+      if (list.closest("[hidden]") || putBackPendingRef.current) return;
+      placeRef.current = readPlace(list) ?? placeRef.current;
       save();
     };
     scroller.addEventListener("scroll", onScroll, { passive: true });
@@ -583,7 +639,10 @@ export default function TranscriptSection({
               <button
                 key={opt.id}
                 type="button"
-                onClick={() => setSource(opt.id)}
+                onClick={() => {
+                  setSourceChosen(true);
+                  setSource(opt.id);
+                }}
                 className={`rounded-lg px-1.5 py-0.5 ${source === opt.id ? "bg-accent text-white" : "bg-bg-card"}`}
               >
                 {opt.label}
@@ -639,6 +698,7 @@ export default function TranscriptSection({
           return (
             <div
               key={cue.index}
+              data-cue-start={cue.start}
               // 44px of row on a coarse pointer, and 32px on a fine one.
               // The floor is from the mobile sizing rules, so it is about
               // touch and says nothing against a dense desktop list —
