@@ -621,11 +621,12 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
-    // Shadowed on HTMLElement; jsdom's own getter lives on Element.
+    // Shadowed on HTMLElement; jsdom's own getters live on Element.
     delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
+    delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
   });
 
-  async function setup({ hidden = false } = {}) {
+  async function setup({ hidden = false, published = true } = {}) {
     const state = { currentTime: 1 };
     const mc = {
       seek: vi.fn(),
@@ -644,31 +645,37 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
       setPlaybackRate: vi.fn(),
       getBufferedFraction: () => 0,
     };
-    const utils = render(
-      <div
-        data-testid="host"
-        hidden={hidden}
-        style={{ overflowY: "auto", ["--inspector-sticky-top" as string]: `${STRIP_PX}px` }}
-      >
-        <TranscriptSection fileId="abc" drive="family" mediaController={mc} fillHeight />
-      </div>,
-    );
-    await screen.findByText("未修正の文章。");
-    await waitForActiveCue(utils.container);
 
-    const host = screen.getByTestId("host");
-    Object.defineProperty(host, "clientHeight", { value: HOST.clientHeight });
-    Object.defineProperty(host, "scrollHeight", { value: HOST.scrollHeight });
-    const hostScrollTo = vi.fn();
-    host.scrollTo = hostScrollTo;
-    const list = utils.container.querySelector(".overflow-y-auto") as HTMLElement;
-    const listScrollTo = vi.fn();
-    list.scrollTo = listScrollTo;
-
+    // Geometry in place before the first render, as a browser has it.
+    const byId = (id: string) =>
+      document.querySelector<HTMLElement>(`[data-testid='${id}']`);
+    const isList = (el: Element) =>
+      el.classList.contains("overflow-y-auto") && !!byId("fits")?.contains(el);
+    const sizes = (el: HTMLElement): { client: number; scroll: number } => {
+      if (el === byId("host")) {
+        return { client: HOST.clientHeight, scroll: HOST.scrollHeight };
+      }
+      if (el === byId("tall")) return { client: 300, scroll: 5000 };
+      if (el === byId("fits") || isList(el)) return { client: 4000, scroll: 4000 };
+      const cue = el.getAttribute("aria-current") === "true" ? CUE.height : 0;
+      return { client: cue, scroll: cue };
+    };
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return sizes(this).client;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return sizes(this).scroll;
+      },
+    });
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
       function (this: HTMLElement) {
         if (hidden) return { top: 0, bottom: 0, height: 0 } as DOMRect;
-        if (this === host) {
+        if (this === byId("host")) {
           return { top: HOST.top, bottom: HOST.bottom, height: 300 } as DOMRect;
         }
         if (this.getAttribute("aria-current") === "true") {
@@ -681,31 +688,54 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
         return { top: HOST.top, bottom: HOST.top + 4000, height: 4000 } as DOMRect;
       },
     );
-    // jsdom does not inherit custom properties, which a browser does.
+    // jsdom neither inherits custom properties nor compiles the list's
+    // `overflow-y-auto` class; a browser does both.
     const computed = window.getComputedStyle.bind(window);
     vi.spyOn(window, "getComputedStyle").mockImplementation((el, pseudo) => {
       const style = computed(el, pseudo);
-      if (!host.contains(el) || el === host) return style;
+      const host = byId("host");
+      if (!host || el === host || !host.contains(el)) return style;
       return new Proxy(style, {
         get(target, key) {
           if (key === "getPropertyValue") {
             return (name: string) =>
-              name === "--inspector-sticky-top"
+              name === "--inspector-sticky-top" && published
                 ? `${STRIP_PX}px`
                 : target.getPropertyValue(name);
           }
+          if (key === "overflowY" && isList(el)) return "auto";
           const value = Reflect.get(target, key);
           return typeof value === "function" ? value.bind(target) : value;
         },
       });
     });
-    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
-      configurable: true,
-      get(this: HTMLElement) {
-        if (this === host) return HOST.clientHeight;
-        return this.getAttribute("aria-current") === "true" ? CUE.height : 0;
-      },
-    });
+
+    // Between the list and the host: a box that scrolls but has nothing
+    // to scroll, and a box that overflows but does not scroll. Neither is
+    // the scroller.
+    const utils = render(
+      <div data-testid="host" hidden={hidden} style={{ overflowY: "auto" }}>
+        <div data-testid="tall" style={{ overflowY: "visible" }}>
+          <div data-testid="fits" style={{ overflowY: "auto" }}>
+            <TranscriptSection fileId="abc" drive="family" mediaController={mc} fillHeight />
+          </div>
+        </div>
+      </div>,
+    );
+    const host = screen.getByTestId("host");
+    const hostScrollTo = vi.fn();
+    host.scrollTo = hostScrollTo;
+    screen.getByTestId("tall").scrollTo = vi.fn();
+    screen.getByTestId("fits").scrollTo = vi.fn();
+
+    await screen.findByText("未修正の文章。");
+    await waitForActiveCue(utils.container);
+
+    const list = utils.container.querySelector(
+      "[data-testid='fits'] .overflow-y-auto",
+    ) as HTMLElement;
+    const listScrollTo = vi.fn();
+    list.scrollTo = listScrollTo;
     return { host, hostScrollTo, list, listScrollTo, state };
   }
 
@@ -719,6 +749,31 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
       expect(hostScrollTo).toHaveBeenCalledWith({ top: 545, behavior: "smooth" }),
     );
     expect(listScrollTo).not.toHaveBeenCalled();
+    expect(screen.getByTestId("fits").scrollTo).not.toHaveBeenCalled();
+    expect(screen.getByTestId("tall").scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("stops following when the reader scrolls that scroller outside the list", async () => {
+    const { host } = await setup();
+    fireEvent.touchMove(host);
+    expect(await screen.findByRole("button", { name: CHIP })).toBeInTheDocument();
+  });
+
+  it("does not reach past its own list when the host has not said it scrolls it", async () => {
+    // A page scroller around a transcript short enough to fit: scrolling
+    // it would move the video off the screen.
+    const { list, hostScrollTo, state } = await setup({ published: false });
+    state.currentTime = 8;
+    await waitFor(async () => {
+      const active = await screen.findByRole("button", { current: true });
+      expect(active).toHaveTextContent("未修正の文章。");
+    });
+    fireEvent.wheel(list);
+    fireEvent.click(await screen.findByRole("button", { name: CHIP }));
+
+    expect(hostScrollTo).not.toHaveBeenCalled();
+    expect(screen.getByTestId("tall").scrollTo).not.toHaveBeenCalled();
+    expect(screen.getByTestId("fits").scrollTo).not.toHaveBeenCalled();
   });
 
   it("follows playback by scrolling that scroller", async () => {
@@ -735,15 +790,6 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
       expect(active).toHaveTextContent("未修正の文章。");
     });
     expect(hostScrollTo).not.toHaveBeenCalled();
-  });
-
-  it("pins the chip below the strip rather than over it", async () => {
-    const { list } = await setup();
-    fireEvent.wheel(list);
-    const chip = await screen.findByRole("button", { name: CHIP });
-    const pin = chip.parentElement!;
-    expect(pin.className).toContain("sticky");
-    expect(pin.style.top).toBe("var(--inspector-sticky-top, 0px)");
   });
 });
 

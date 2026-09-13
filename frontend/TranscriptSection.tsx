@@ -117,12 +117,25 @@ function parseVttCues(vtt: string): TranscriptChunkItem[] {
 
 const EMPTY_SUBTITLES: SubtitleInfo[] = [];
 
+const STICKY_TOP = "--inspector-sticky-top";
+
 /**
- * The nearest box that actually scrolls, starting with `el` itself; `el`
- * when nothing does.
+ * How far down the host's pinned strip covers the box that scrolls the
+ * list, or `null` when the list scrolls itself.
+ *
+ * Only a host that publishes the variable scrolls the list for it. Without
+ * that, a list short enough not to overflow would otherwise hand the job to
+ * whatever encloses it, which on the page is the canvas holding the video.
  */
-function scrollingBoxOf(el: HTMLElement): HTMLElement {
-  for (let node: HTMLElement | null = el; node; node = node.parentElement) {
+function hostCoverOf(list: HTMLElement): number | null {
+  const value = getComputedStyle(list).getPropertyValue(STICKY_TOP).trim();
+  return value === "" ? null : Number.parseFloat(value) || 0;
+}
+
+/** The box that scrolls `list`: the list, or the host's scroller around it. */
+function scrollingBoxOf(list: HTMLElement): HTMLElement {
+  if (hostCoverOf(list) === null) return list;
+  for (let node = list.parentElement; node; node = node.parentElement) {
     const { overflowY } = getComputedStyle(node);
     if (
       (overflowY === "auto" || overflowY === "scroll") &&
@@ -131,7 +144,7 @@ function scrollingBoxOf(el: HTMLElement): HTMLElement {
       return node;
     }
   }
-  return el;
+  return list;
 }
 
 export default function TranscriptSection({
@@ -301,17 +314,9 @@ export default function TranscriptSection({
     // looking at instead.
     if (target.closest("[hidden]")) return;
     // Scroll one box — avoid scrollIntoView, which bubbles up and moves
-    // the page away from the video. That box is the list when the host
-    // gives it a height, and whatever encloses it when the host does not.
+    // the page away from the video.
     const scroller = scrollingBoxOf(list);
-    // Enclosed, the list scrolls under the host's pinned strip, so the
-    // part of the scroller that shows the list starts below it.
-    const covered =
-      scroller === list
-        ? 0
-        : Number.parseFloat(
-            getComputedStyle(list).getPropertyValue("--inspector-sticky-top"),
-          ) || 0;
+    const covered = scroller === list ? 0 : (hostCoverOf(list) ?? 0);
     const scrollerRect = scroller.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
     const viewTop = scrollerRect.top + covered;
@@ -345,17 +350,20 @@ export default function TranscriptSection({
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;
+    // The box that gets scrolled is the one the reader can scroll, from
+    // anywhere on it — the host's strip and gutters included.
+    const scroller = scrollingBoxOf(list);
     const suspend = () => setFollowing(false);
     const suspendOnScrollbar = (event: PointerEvent) => {
-      if (event.target === list) setFollowing(false);
+      if (event.target === scroller) setFollowing(false);
     };
-    list.addEventListener("wheel", suspend, { passive: true });
-    list.addEventListener("touchmove", suspend, { passive: true });
-    list.addEventListener("pointerdown", suspendOnScrollbar);
+    scroller.addEventListener("wheel", suspend, { passive: true });
+    scroller.addEventListener("touchmove", suspend, { passive: true });
+    scroller.addEventListener("pointerdown", suspendOnScrollbar);
     return () => {
-      list.removeEventListener("wheel", suspend);
-      list.removeEventListener("touchmove", suspend);
-      list.removeEventListener("pointerdown", suspendOnScrollbar);
+      scroller.removeEventListener("wheel", suspend);
+      scroller.removeEventListener("touchmove", suspend);
+      scroller.removeEventListener("pointerdown", suspendOnScrollbar);
     };
   }, [cues.length]);
 
