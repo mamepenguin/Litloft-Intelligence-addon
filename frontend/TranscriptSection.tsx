@@ -154,12 +154,21 @@ function readPlace(list: HTMLElement): TranscriptPlace | null {
 function applyPlace(list: HTMLElement, place: TranscriptPlace): void {
   const rows = cueRows(list);
   if (rows.length === 0) return;
-  const row =
-    [...rows].reverse().find((r) => Number(r.dataset.cueStart) <= place.at) ??
-    rows[0];
+  const startOf = (r: HTMLElement) => Number(r.dataset.cueStart);
+  // The latest start at or before the place, and the first row with it:
+  // subtitles often start two lines together.
+  const latest = rows.reduce<number | null>((best, r) => {
+    const start = startOf(r);
+    return start <= place.at && (best === null || start > best) ? start : best;
+  }, null);
+  const row = latest === null ? rows[0] : rows.find((r) => startOf(r) === latest)!;
+  const rect = row.getBoundingClientRect();
+  // A row laid out shorter than before cannot hold the old distance into
+  // it; carrying it over would land on the row after.
+  const into = rect.height > 0 ? Math.min(place.into, rect.height - 1) : place.into;
   const scroller = scrollingBoxOf(list);
   const viewTop = viewTopOf(list, scroller);
-  scroller.scrollTop += row.getBoundingClientRect().top - (viewTop - place.into);
+  scroller.scrollTop += rect.top - (viewTop - into);
 }
 
 /** How far down the host's pinned strip covers its scroller. */
@@ -199,8 +208,19 @@ export default function TranscriptSection({
   const [loading, setLoading] = useState(true);
   const [source, setSource] = useState<Source>("chunks");
   // Until the reader picks one, the source follows what is available: a
-  // source that answered first is not a choice.
-  const [sourceChosen, setSourceChosen] = useState(false);
+  // source that answered first is not a choice. The pick is per file.
+  const [chosenSource, setChosenSource] = useState<Source | null>(
+    () => (recallTranscriptScroll(fileId)?.source as Source | undefined) ?? null,
+  );
+  const chosenSourceRef = useRef(chosenSource);
+  useEffect(() => {
+    chosenSourceRef.current = chosenSource;
+  }, [chosenSource]);
+  useEffect(() => {
+    setChosenSource(
+      (recallTranscriptScroll(fileId)?.source as Source | undefined) ?? null,
+    );
+  }, [fileId]);
   const [activeIndex, setActiveIndex] = useState(-1);
   // Whether the highlight is still allowed to drag the list around.
   // Reading ahead has to win over following, or the reader is pulled
@@ -287,7 +307,9 @@ export default function TranscriptSection({
     if (wordsAvailable) available.push("words");
     if (externalAvailable) available.push("external");
     if (available.length === 0) return;
-    if (!sourceChosen ? source !== available[0] : !available.includes(source)) {
+    const wanted =
+      chosenSource && available.includes(chosenSource) ? chosenSource : available[0];
+    if (source !== wanted) {
       // Rows starting at other times are about to replace these, so the
       // reader's row is read now and put back once they have.
       const list = listRef.current;
@@ -295,9 +317,12 @@ export default function TranscriptSection({
         placeRef.current = readPlace(list) ?? placeRef.current;
         putBackPendingRef.current = true;
       }
-      setSource(available[0]);
+      // The highlight indexes the old rows until the clock syncs again, and
+      // would otherwise name a row at another time as the playing one.
+      setActiveIndex(-1);
+      setSource(wanted);
     }
-  }, [chunksAvailable, wordsAvailable, externalAvailable, source, sourceChosen]);
+  }, [chunksAvailable, wordsAvailable, externalAvailable, source, chosenSource]);
 
   const hasAnything = chunksAvailable || wordsAvailable || externalAvailable;
 
@@ -529,6 +554,7 @@ export default function TranscriptSection({
       rememberTranscriptScroll(fileId, {
         place: placeRef.current,
         following: followingRef.current,
+        ...(chosenSourceRef.current ? { source: chosenSourceRef.current } : {}),
       });
     const onScroll = () => {
       if (list.closest("[hidden]") || putBackPendingRef.current) return;
@@ -640,7 +666,7 @@ export default function TranscriptSection({
                 key={opt.id}
                 type="button"
                 onClick={() => {
-                  setSourceChosen(true);
+                  setChosenSource(opt.id);
                   setSource(opt.id);
                 }}
                 className={`rounded-lg px-1.5 py-0.5 ${source === opt.id ? "bg-accent text-white" : "bg-bg-card"}`}

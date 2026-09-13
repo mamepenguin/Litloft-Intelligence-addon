@@ -41,6 +41,8 @@ export interface TranscriptScrollState {
   place: TranscriptPlace | null;
   /** Whether the highlight was still allowed to drag the list around. */
   following: boolean;
+  /** The source the reader picked, when they picked one. */
+  source?: string;
 }
 
 /**
