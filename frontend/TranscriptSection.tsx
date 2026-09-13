@@ -117,34 +117,25 @@ function parseVttCues(vtt: string): TranscriptChunkItem[] {
 
 const EMPTY_SUBTITLES: SubtitleInfo[] = [];
 
-const STICKY_TOP = "--inspector-sticky-top";
-
 /**
- * How far down the host's pinned strip covers the box that scrolls the
- * list, or `null` when the list scrolls itself.
+ * The box that scrolls `list`: the host's scroller when the host has
+ * marked one around it, and otherwise the list itself.
  *
- * Only a host that publishes the variable scrolls the list for it. Without
- * that, a list short enough not to overflow would otherwise hand the job to
- * whatever encloses it, which on the page is the canvas holding the video.
+ * Asked of the host rather than guessed from which ancestor overflows: on
+ * the file page the box around a short list is the canvas holding the
+ * video, and in the sheet the scroller may not overflow yet when asked.
  */
-function hostCoverOf(list: HTMLElement): number | null {
-  const value = getComputedStyle(list).getPropertyValue(STICKY_TOP).trim();
-  return value === "" ? null : Number.parseFloat(value) || 0;
+function scrollingBoxOf(list: HTMLElement): HTMLElement {
+  return list.closest<HTMLElement>("[data-inspector-scroller]") ?? list;
 }
 
-/** The box that scrolls `list`: the list, or the host's scroller around it. */
-function scrollingBoxOf(list: HTMLElement): HTMLElement {
-  if (hostCoverOf(list) === null) return list;
-  for (let node = list.parentElement; node; node = node.parentElement) {
-    const { overflowY } = getComputedStyle(node);
-    if (
-      (overflowY === "auto" || overflowY === "scroll") &&
-      node.scrollHeight > node.clientHeight
-    ) {
-      return node;
-    }
-  }
-  return list;
+/** How far down the host's pinned strip covers its scroller. */
+function stripCoverOf(list: HTMLElement): number {
+  return (
+    Number.parseFloat(
+      getComputedStyle(list).getPropertyValue("--inspector-sticky-top"),
+    ) || 0
+  );
 }
 
 export default function TranscriptSection({
@@ -180,7 +171,14 @@ export default function TranscriptSection({
   // back every few seconds.
   const [following, setFollowing] = useState(true);
   const activeRef = useRef<HTMLButtonElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  // State as well as a ref: the list mounts only once loading ends, which
+  // can be after the cue count it is keyed on has stopped changing.
+  const [listEl, setListEl] = useState<HTMLDivElement | null>(null);
+  const attachList = useCallback((node: HTMLDivElement | null) => {
+    listRef.current = node;
+    setListEl(node);
+  }, []);
 
   const chunksAvailable = whisperChunks.length > 0;
   const wordsAvailable = whisperWordCues.length > 0;
@@ -316,7 +314,7 @@ export default function TranscriptSection({
     // Scroll one box — avoid scrollIntoView, which bubbles up and moves
     // the page away from the video.
     const scroller = scrollingBoxOf(list);
-    const covered = scroller === list ? 0 : (hostCoverOf(list) ?? 0);
+    const covered = scroller === list ? 0 : stripCoverOf(list);
     const scrollerRect = scroller.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
     const viewTop = scrollerRect.top + covered;
@@ -348,14 +346,25 @@ export default function TranscriptSection({
    * cue, which resumes following rather than suspending it.
    */
   useEffect(() => {
-    const list = listRef.current;
+    const list = listEl;
     if (!list) return;
     // The box that gets scrolled is the one the reader can scroll, from
-    // anywhere on it — the host's strip and gutters included.
+    // anywhere on it — the host's strip and gutters included. The host's
+    // scroller is shared with the other tabs, so it only counts while the
+    // transcript is the one shown.
     const scroller = scrollingBoxOf(list);
-    const suspend = () => setFollowing(false);
+    const shown = () => !list.closest("[hidden]");
+    const suspend = () => {
+      if (shown()) setFollowing(false);
+    };
+    // A finger or a pen does not drag a scrollbar; landing on the box
+    // itself is a tap on its padding.
     const suspendOnScrollbar = (event: PointerEvent) => {
-      if (event.target === scroller) setFollowing(false);
+      const dragsScrollbars =
+        event.pointerType !== "touch" && event.pointerType !== "pen";
+      if (dragsScrollbars && event.target === scroller && shown()) {
+        setFollowing(false);
+      }
     };
     scroller.addEventListener("wheel", suspend, { passive: true });
     scroller.addEventListener("touchmove", suspend, { passive: true });
@@ -365,7 +374,7 @@ export default function TranscriptSection({
       scroller.removeEventListener("touchmove", suspend);
       scroller.removeEventListener("pointerdown", suspendOnScrollbar);
     };
-  }, [cues.length]);
+  }, [listEl]);
 
   // Current `following` for the save below, which runs from a DOM
   // listener and on unmount — neither of which sees a re-rendered
@@ -588,7 +597,7 @@ export default function TranscriptSection({
           </div>
         )}
       <div
-        ref={listRef}
+        ref={attachList}
         className={`space-y-0.5 overflow-y-auto rounded-lg bg-bg-card p-2 ${
           fillHeight ? "min-h-0 flex-1" : "max-h-80"
         }`}

@@ -19,6 +19,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   act,
   cleanup,
+  createEvent,
   fireEvent,
   render,
   screen,
@@ -603,6 +604,66 @@ describe("TranscriptSection — suspension actually stops the scrolling", () => 
   });
 });
 
+describe("TranscriptSection — a list that appears after its cues", () => {
+  beforeEach(() => {
+    mockAddonStatus.features.transcript_refine = "manual";
+    clearTranscriptScroll();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("still stops following when the reader scrolls it", async () => {
+    // Word cues of the same count arrive while the transcript is still
+    // loading, so the cue count is already final when the list mounts.
+    let release: (value: typeof TRANSCRIPT_RESPONSE) => void = () => undefined;
+    const getFileTranscript = await transcriptApiMock();
+    getFileTranscript.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        "WEBVTT\n\n00:00:00.000 --> 00:00:05.000\nfirst\n\n00:00:05.000 --> 00:00:10.000\nsecond\n",
+      json: async () => null,
+    } as Response);
+    const state = { currentTime: 1 };
+    const mc = {
+      seek: vi.fn(),
+      play: vi.fn(),
+      pause: vi.fn(),
+      togglePlay: vi.fn(),
+      toggleMute: vi.fn(),
+      toggleFullscreen: vi.fn(),
+      getCurrentTime: () => state.currentTime,
+      getDuration: () => 10,
+      isPaused: () => false,
+      isMuted: () => false,
+      getVolume: () => 1,
+      setVolume: vi.fn(),
+      getPlaybackRate: () => 1,
+      setPlaybackRate: vi.fn(),
+      getBufferedFraction: () => 0,
+    };
+    const utils = render(
+      <TranscriptSection fileId="abc" drive="family" mediaController={mc} fillHeight />,
+    );
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    await act(async () => release(TRANSCRIPT_RESPONSE));
+    await screen.findByText("second");
+    await waitForActiveCue(utils.container);
+
+    fireEvent.wheel(utils.container.querySelector(".overflow-y-auto")!);
+    expect(
+      await screen.findByRole("button", { name: "Back to current position" }),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("TranscriptSection — in a host whose scroller encloses the list", () => {
   // The column form of the inspector: the list grows to its full length
   // and the box around the whole inspector is what scrolls, with the tab
@@ -626,7 +687,11 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
     delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
   });
 
-  async function setup({ hidden = false, published = true } = {}) {
+  async function setup({
+    hidden = false,
+    published = true,
+    hostOverflows = true,
+  } = {}) {
     const state = { currentTime: 1 };
     const mc = {
       seek: vi.fn(),
@@ -653,7 +718,10 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
       el.classList.contains("overflow-y-auto") && !!byId("fits")?.contains(el);
     const sizes = (el: HTMLElement): { client: number; scroll: number } => {
       if (el === byId("host")) {
-        return { client: HOST.clientHeight, scroll: HOST.scrollHeight };
+        return {
+          client: HOST.clientHeight,
+          scroll: hostOverflows ? HOST.scrollHeight : HOST.clientHeight,
+        };
       }
       if (el === byId("tall")) return { client: 300, scroll: 5000 };
       if (el === byId("fits") || isList(el)) return { client: 4000, scroll: 4000 };
@@ -714,7 +782,12 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
     // to scroll, and a box that overflows but does not scroll. Neither is
     // the scroller.
     const utils = render(
-      <div data-testid="host" hidden={hidden} style={{ overflowY: "auto" }}>
+      <div
+        data-testid="host"
+        data-inspector-scroller={published ? "" : undefined}
+        hidden={hidden}
+        style={{ overflowY: "auto" }}
+      >
         <div data-testid="tall" style={{ overflowY: "visible" }}>
           <div data-testid="fits" style={{ overflowY: "auto" }}>
             <TranscriptSection fileId="abc" drive="family" mediaController={mc} fillHeight />
@@ -756,6 +829,38 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
   it("stops following when the reader scrolls that scroller outside the list", async () => {
     const { host } = await setup();
     fireEvent.touchMove(host);
+    expect(await screen.findByRole("button", { name: CHIP })).toBeInTheDocument();
+  });
+
+  it("finds that scroller even when it had nothing to scroll as the cues arrived", async () => {
+    // The sheet opens on another tab, which may not fill it.
+    const { host } = await setup({ hostOverflows: false });
+    fireEvent.touchMove(host);
+    expect(await screen.findByRole("button", { name: CHIP })).toBeInTheDocument();
+  });
+
+  it("keeps following when that scroller is scrolled while the transcript is not shown", async () => {
+    const { host } = await setup({ hidden: true });
+    fireEvent.touchMove(host);
+    fireEvent.wheel(host);
+    host.hidden = false;
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(screen.queryByRole("button", { name: CHIP })).toBeNull();
+  });
+
+  it("takes a mouse press on that scroller as a scrollbar drag, and a touch as nothing", async () => {
+    const { host } = await setup();
+    // jsdom has no PointerEvent, so the init cannot carry the type.
+    const press = (pointerType: string) => {
+      const event = createEvent.pointerDown(host);
+      Object.defineProperty(event, "pointerType", { value: pointerType });
+      fireEvent(host, event);
+    };
+    press("touch");
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(screen.queryByRole("button", { name: CHIP })).toBeNull();
+
+    press("mouse");
     expect(await screen.findByRole("button", { name: CHIP })).toBeInTheDocument();
   });
 
