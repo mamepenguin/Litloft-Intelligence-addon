@@ -5,6 +5,13 @@
   "type": "external_service",
   "scope": "drive",
   "href": "/drive/{drive}/addons/intelligence",
+  "navigation": {
+    "label": "Ask",
+    "i18n_key": "intelligence.nav.label",
+    "icon": "message-circle-question",
+    "placement": "primary",
+    "priority": 10
+  },
   "slots": {
     "search-modes": [
       {

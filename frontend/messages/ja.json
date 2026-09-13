@@ -1,5 +1,8 @@
 {
   "intelligence": {
+    "nav": {
+      "label": "質問"
+    },
     "slots": {
       "transcript": "文字起こし"
     },
