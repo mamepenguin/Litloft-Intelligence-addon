@@ -142,10 +142,15 @@ function cueRows(list: HTMLElement): HTMLElement[] {
 
 function readPlace(list: HTMLElement): TranscriptPlace | null {
   const viewTop = viewTopOf(list, scrollingBoxOf(list));
-  for (const row of cueRows(list)) {
+  const rows = cueRows(list);
+  for (const [index, row] of rows.entries()) {
     const rect = row.getBoundingClientRect();
     if (rect.bottom > viewTop) {
-      return { at: Number(row.dataset.cueStart), into: viewTop - rect.top };
+      const at = Number(row.dataset.cueStart);
+      const nth = rows
+        .slice(0, index)
+        .filter((r) => Number(r.dataset.cueStart) === at).length;
+      return { at, into: viewTop - rect.top, ...(nth > 0 ? { nth } : {}) };
     }
   }
   return null;
@@ -155,13 +160,17 @@ function applyPlace(list: HTMLElement, place: TranscriptPlace): void {
   const rows = cueRows(list);
   if (rows.length === 0) return;
   const startOf = (r: HTMLElement) => Number(r.dataset.cueStart);
-  // The latest start at or before the place, and the first row with it:
-  // subtitles often start two lines together.
+  // The latest start at or before the place; subtitles often start two
+  // lines together, and `nth` says which of them.
   const latest = rows.reduce<number | null>((best, r) => {
     const start = startOf(r);
     return start <= place.at && (best === null || start > best) ? start : best;
   }, null);
-  const row = latest === null ? rows[0] : rows.find((r) => startOf(r) === latest)!;
+  const together = latest === null ? [] : rows.filter((r) => startOf(r) === latest);
+  const row =
+    together.length === 0
+      ? rows[0]
+      : together[Math.min(place.at === latest ? (place.nth ?? 0) : 0, together.length - 1)];
   const rect = row.getBoundingClientRect();
   // A row laid out shorter than before cannot hold the old distance into
   // it; carrying it over would land on the row after.
@@ -204,6 +213,9 @@ export default function TranscriptSection({
   const [whisperLanguage, setWhisperLanguage] = useState("");
   const [whisperWordCues, setWhisperWordCues] = useState<TranscriptChunkItem[]>([]);
   const [externalCues, setExternalCues] = useState<TranscriptChunkItem[]>([]);
+  // Whether each subtitle fetch has answered, found or not.
+  const [wordsSettled, setWordsSettled] = useState(false);
+  const [externalSettled, setExternalSettled] = useState(false);
   const [externalLanguage, setExternalLanguage] = useState("");
   const [loading, setLoading] = useState(true);
   const [source, setSource] = useState<Source>("chunks");
@@ -266,6 +278,7 @@ export default function TranscriptSection({
 
   useEffect(() => {
     let cancelled = false;
+    setWordsSettled(false);
     fetch(`/api/addons/intelligence/files/${fileId}/subtitles.vtt`)
       .then((r) => (r.ok ? r.text() : ""))
       .then((text) => {
@@ -273,6 +286,9 @@ export default function TranscriptSection({
       })
       .catch(() => {
         if (!cancelled) setWhisperWordCues([]);
+      })
+      .finally(() => {
+        if (!cancelled) setWordsSettled(true);
       });
     return () => {
       cancelled = true;
@@ -282,9 +298,11 @@ export default function TranscriptSection({
   useEffect(() => {
     if (subtitles.length === 0) {
       setExternalCues([]);
+      setExternalSettled(true);
       return;
     }
     let cancelled = false;
+    setExternalSettled(false);
     const first = subtitles[0];
     setExternalLanguage(first.language || "");
     fetch(getSubtitleUrl(fileId, first.index))
@@ -294,6 +312,9 @@ export default function TranscriptSection({
       })
       .catch(() => {
         if (!cancelled) setExternalCues([]);
+      })
+      .finally(() => {
+        if (!cancelled) setExternalSettled(true);
       });
     return () => {
       cancelled = true;
@@ -454,6 +475,30 @@ export default function TranscriptSection({
     followingRef.current = following;
   }, [following]);
 
+  // A source the reader chose that has not answered yet: the rows shown
+  // meanwhile are another source's, and a place laid on them would be read
+  // back off them, coarser, when the chosen one arrives.
+  const settledOf: Record<Source, boolean> = {
+    chunks: !loading,
+    words: wordsSettled,
+    external: externalSettled,
+  };
+  const availableOf: Record<Source, boolean> = {
+    chunks: chunksAvailable,
+    words: wordsAvailable,
+    external: externalAvailable,
+  };
+  // Also while it has arrived but is not on screen yet: the switch to it is
+  // a render behind its arrival.
+  const awaitingChosen =
+    chosenSource !== null &&
+    source !== chosenSource &&
+    (!settledOf[chosenSource] || availableOf[chosenSource]);
+  const awaitingChosenRef = useRef(awaitingChosen);
+  useEffect(() => {
+    awaitingChosenRef.current = awaitingChosen;
+  }, [awaitingChosen]);
+
   // The reader's last seen place in this file, and whether it still has to
   // be put back: after a mount, and after the host hid the panel.
   const placeRef = useRef<TranscriptPlace | null>(null);
@@ -467,7 +512,7 @@ export default function TranscriptSection({
   const putBack = useCallback(
     (list: HTMLElement): boolean => {
       if (!putBackPendingRef.current) return false;
-      if (list.closest("[hidden]")) return false;
+      if (list.closest("[hidden]") || awaitingChosenRef.current) return false;
       putBackPendingRef.current = false;
       if (followingRef.current && activeRef.current) {
         scrollActiveIntoView();
@@ -531,7 +576,7 @@ export default function TranscriptSection({
   // A source that arrives later can replace the rows under the reader.
   useEffect(() => {
     if (listEl) putBack(listEl);
-  }, [listEl, cues, putBack]);
+  }, [listEl, cues, awaitingChosen, putBack]);
 
   /**
    * Remember it, because a refetch cannot bring it back.

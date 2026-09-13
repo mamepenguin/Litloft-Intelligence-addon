@@ -34,6 +34,8 @@
 export interface TranscriptPlace {
   at: number;
   into: number;
+  /** Which of the rows starting at `at` it was, when more than one does. */
+  nth?: number;
 }
 
 export interface TranscriptScrollState {

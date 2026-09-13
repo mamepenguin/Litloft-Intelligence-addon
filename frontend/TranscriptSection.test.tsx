@@ -1575,6 +1575,87 @@ describe("TranscriptSection — where the reader had got to", () => {
     ).toBe(130);
   });
 
+  it("waits for the source the reader chose before putting them back on it", async () => {
+    rememberTranscriptScroll("abc", {
+      place: { at: 7, into: 30 },
+      following: false,
+      source: "external",
+    });
+    let releaseSubtitles: (r: Response) => void = () => undefined;
+    fetchMock.mockImplementation((url: string) =>
+      String(url).includes("subtitles.vtt")
+        ? Promise.resolve(FETCH_MISS as Response)
+        : new Promise<Response>((resolve) => {
+            releaseSubtitles = resolve;
+          }),
+    );
+    const subtitles = [{ index: 0, language: "en", format: "vtt", label: "English" }];
+    const utils = render(<TranscriptSection fileId="abc" drive="family" subtitles={subtitles} />);
+    await screen.findByText("未修正の文章。");
+    await act(async () => {});
+
+    await act(async () =>
+      releaseSubtitles(
+        vttResponse(vttOf([0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((t) => [t, t + 1, `sub${t}`]))),
+      ),
+    );
+    await screen.findByText("sub7");
+    await act(async () => {});
+
+    // 30px into the subtitle that starts at 7s.
+    expect(
+      (utils.container.querySelector(".overflow-y-auto") as HTMLElement).scrollTop,
+    ).toBe(730);
+  });
+
+  it("shows what there is when the source the reader chose is not there for this file", async () => {
+    rememberTranscriptScroll("abc", {
+      place: { at: 5, into: 20 },
+      following: false,
+      source: "words",
+    });
+    const utils = render(<TranscriptSection fileId="abc" drive="family" />);
+    expect(await screen.findByText("未修正の文章。")).toBeInTheDocument();
+    await act(async () => {});
+    // And the reader is put back on it rather than kept waiting.
+    expect(
+      (utils.container.querySelector(".overflow-y-auto") as HTMLElement).scrollTop,
+    ).toBe(120);
+  });
+
+  it("puts a reader on the second of two rows that start together back on the second", async () => {
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(
+        vttResponse(
+          vttOf([
+            [0, 5, "sign"],
+            [5, 8, "speaker one"],
+            [5, 8, "speaker two"],
+            [8, 10, "after"],
+          ]),
+        ),
+      ),
+    );
+    const getFileTranscript = await transcriptApiMock();
+    getFileTranscript.mockResolvedValue({ available: false });
+    const subtitles = [{ index: 0, language: "en", format: "vtt", label: "English" }];
+    const first = render(<TranscriptSection fileId="abc" drive="family" subtitles={subtitles} />);
+    await screen.findByText("speaker two");
+    await act(async () => {});
+    const list = first.container.querySelector(".overflow-y-auto") as HTMLElement;
+    // 30px into "speaker two".
+    list.scrollTop = 230;
+    fireEvent.scroll(list);
+    first.unmount();
+
+    const again = render(<TranscriptSection fileId="abc" drive="family" subtitles={subtitles} />);
+    await screen.findByText("speaker two");
+    await act(async () => {});
+    expect(
+      (again.container.querySelector(".overflow-y-auto") as HTMLElement).scrollTop,
+    ).toBe(230);
+  });
+
   it("comes back on the source the reader chose, and does not take it to another file", async () => {
     fetchMock.mockImplementation((url: string) =>
       Promise.resolve(
