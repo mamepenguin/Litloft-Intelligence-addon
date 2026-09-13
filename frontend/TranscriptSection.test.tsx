@@ -603,6 +603,150 @@ describe("TranscriptSection — suspension actually stops the scrolling", () => 
   });
 });
 
+describe("TranscriptSection — in a host whose scroller encloses the list", () => {
+  // The column form of the inspector: the list grows to its full length
+  // and the box around the whole inspector is what scrolls, with the tab
+  // strip pinned over its top 40px.
+  const HOST = { top: 100, bottom: 400, clientHeight: 300, scrollHeight: 3000 };
+  const STRIP_PX = 40;
+  const CUE = { top: 800, height: 30 };
+  const CHIP = "Back to current position";
+
+  beforeEach(() => {
+    mockAddonStatus.features.transcript_refine = "manual";
+    fetchMock.mockClear();
+    clearTranscriptScroll();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    // Shadowed on HTMLElement; jsdom's own getter lives on Element.
+    delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
+  });
+
+  async function setup({ hidden = false } = {}) {
+    const state = { currentTime: 1 };
+    const mc = {
+      seek: vi.fn(),
+      play: vi.fn(),
+      pause: vi.fn(),
+      togglePlay: vi.fn(),
+      toggleMute: vi.fn(),
+      toggleFullscreen: vi.fn(),
+      getCurrentTime: () => state.currentTime,
+      getDuration: () => 10,
+      isPaused: () => false,
+      isMuted: () => false,
+      getVolume: () => 1,
+      setVolume: vi.fn(),
+      getPlaybackRate: () => 1,
+      setPlaybackRate: vi.fn(),
+      getBufferedFraction: () => 0,
+    };
+    const utils = render(
+      <div
+        data-testid="host"
+        hidden={hidden}
+        style={{ overflowY: "auto", ["--inspector-sticky-top" as string]: `${STRIP_PX}px` }}
+      >
+        <TranscriptSection fileId="abc" drive="family" mediaController={mc} fillHeight />
+      </div>,
+    );
+    await screen.findByText("未修正の文章。");
+    await waitForActiveCue(utils.container);
+
+    const host = screen.getByTestId("host");
+    Object.defineProperty(host, "clientHeight", { value: HOST.clientHeight });
+    Object.defineProperty(host, "scrollHeight", { value: HOST.scrollHeight });
+    const hostScrollTo = vi.fn();
+    host.scrollTo = hostScrollTo;
+    const list = utils.container.querySelector(".overflow-y-auto") as HTMLElement;
+    const listScrollTo = vi.fn();
+    list.scrollTo = listScrollTo;
+
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        if (hidden) return { top: 0, bottom: 0, height: 0 } as DOMRect;
+        if (this === host) {
+          return { top: HOST.top, bottom: HOST.bottom, height: 300 } as DOMRect;
+        }
+        if (this.getAttribute("aria-current") === "true") {
+          return {
+            top: CUE.top,
+            bottom: CUE.top + CUE.height,
+            height: CUE.height,
+          } as DOMRect;
+        }
+        return { top: HOST.top, bottom: HOST.top + 4000, height: 4000 } as DOMRect;
+      },
+    );
+    // jsdom does not inherit custom properties, which a browser does.
+    const computed = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation((el, pseudo) => {
+      const style = computed(el, pseudo);
+      if (!host.contains(el) || el === host) return style;
+      return new Proxy(style, {
+        get(target, key) {
+          if (key === "getPropertyValue") {
+            return (name: string) =>
+              name === "--inspector-sticky-top"
+                ? `${STRIP_PX}px`
+                : target.getPropertyValue(name);
+          }
+          const value = Reflect.get(target, key);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (this === host) return HOST.clientHeight;
+        return this.getAttribute("aria-current") === "true" ? CUE.height : 0;
+      },
+    });
+    return { host, hostScrollTo, list, listScrollTo, state };
+  }
+
+  it("scrolls that scroller back to the cue, centred below the strip", async () => {
+    const { list, hostScrollTo, listScrollTo } = await setup();
+    fireEvent.wheel(list);
+    fireEvent.click(await screen.findByRole("button", { name: CHIP }));
+
+    // 700px down the host, less the strip, less half of what is left.
+    await waitFor(() =>
+      expect(hostScrollTo).toHaveBeenCalledWith({ top: 545, behavior: "smooth" }),
+    );
+    expect(listScrollTo).not.toHaveBeenCalled();
+  });
+
+  it("follows playback by scrolling that scroller", async () => {
+    const { hostScrollTo, state } = await setup();
+    state.currentTime = 8;
+    await waitFor(() => expect(hostScrollTo).toHaveBeenCalled());
+  });
+
+  it("leaves it alone while the transcript is not shown", async () => {
+    const { hostScrollTo, state } = await setup({ hidden: true });
+    state.currentTime = 8;
+    await waitFor(async () => {
+      const active = await screen.findByRole("button", { current: true, hidden: true });
+      expect(active).toHaveTextContent("未修正の文章。");
+    });
+    expect(hostScrollTo).not.toHaveBeenCalled();
+  });
+
+  it("pins the chip below the strip rather than over it", async () => {
+    const { list } = await setup();
+    fireEvent.wheel(list);
+    const chip = await screen.findByRole("button", { name: CHIP });
+    const pin = chip.parentElement!;
+    expect(pin.className).toContain("sticky");
+    expect(pin.style.top).toBe("var(--inspector-sticky-top, 0px)");
+  });
+});
+
 // M-3. A transcript is hundreds of rows long, and until now every one
 // of them drew the same quote button at all times: a grey rule down the
 // right edge of the text it annotates, and — to a screen reader — the

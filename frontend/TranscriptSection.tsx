@@ -117,6 +117,23 @@ function parseVttCues(vtt: string): TranscriptChunkItem[] {
 
 const EMPTY_SUBTITLES: SubtitleInfo[] = [];
 
+/**
+ * The nearest box that actually scrolls, starting with `el` itself; `el`
+ * when nothing does.
+ */
+function scrollingBoxOf(el: HTMLElement): HTMLElement {
+  for (let node: HTMLElement | null = el; node; node = node.parentElement) {
+    const { overflowY } = getComputedStyle(node);
+    if (
+      (overflowY === "auto" || overflowY === "scroll") &&
+      node.scrollHeight > node.clientHeight
+    ) {
+      return node;
+    }
+  }
+  return el;
+}
+
 export default function TranscriptSection({
   fileId,
   drive,
@@ -279,16 +296,32 @@ export default function TranscriptSection({
     const list = listRef.current;
     const target = activeRef.current;
     if (!list || !target) return;
-    // Scroll only the transcript container — avoid scrollIntoView, which
-    // bubbles up and moves the page away from the video.
-    const listRect = list.getBoundingClientRect();
+    // A panel the host is not showing has no position to aim at, and
+    // scrolling an enclosing box for it would move what the reader is
+    // looking at instead.
+    if (target.closest("[hidden]")) return;
+    // Scroll one box — avoid scrollIntoView, which bubbles up and moves
+    // the page away from the video. That box is the list when the host
+    // gives it a height, and whatever encloses it when the host does not.
+    const scroller = scrollingBoxOf(list);
+    // Enclosed, the list scrolls under the host's pinned strip, so the
+    // part of the scroller that shows the list starts below it.
+    const covered =
+      scroller === list
+        ? 0
+        : Number.parseFloat(
+            getComputedStyle(list).getPropertyValue("--inspector-sticky-top"),
+          ) || 0;
+    const scrollerRect = scroller.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
-    const above = targetRect.top < listRect.top;
-    const below = targetRect.bottom > listRect.bottom;
+    const viewTop = scrollerRect.top + covered;
+    const above = targetRect.top < viewTop;
+    const below = targetRect.bottom > scrollerRect.bottom;
     if (!above && !below) return;
-    const targetOffset = targetRect.top - listRect.top + list.scrollTop;
-    const nextTop = targetOffset - (list.clientHeight - target.clientHeight) / 2;
-    list.scrollTo({ top: nextTop, behavior: "smooth" });
+    const targetOffset = targetRect.top - viewTop + scroller.scrollTop;
+    const nextTop =
+      targetOffset - (scroller.clientHeight - covered - target.clientHeight) / 2;
+    scroller.scrollTo({ top: nextTop, behavior: "smooth" });
   }, []);
 
   useEffect(() => {
@@ -529,13 +562,22 @@ export default function TranscriptSection({
         {/* Only offered when there is somewhere to go back to: with no
             cue playing, "current position" means nothing. */}
         {!following && activeIndex >= 0 && (
-          <button
-            type="button"
-            onClick={resumeFollowing}
-            className="absolute inset-x-0 top-1 z-10 mx-auto w-fit rounded-full bg-accent px-3 py-1 text-xs font-medium text-white shadow-card hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          // A row of no height, so the list does not move when it appears.
+          // Sticky rather than absolute: when the host's scroller encloses
+          // the list, an absolute chip scrolls away with the rows and over
+          // the host's pinned strip.
+          <div
+            className="pointer-events-none sticky z-[5] flex h-0 justify-center"
+            style={{ top: "var(--inspector-sticky-top, 0px)" }}
           >
-            {t("transcriptResumeFollowing")}
-          </button>
+            <button
+              type="button"
+              onClick={resumeFollowing}
+              className="pointer-events-auto mt-1 h-fit w-fit rounded-full bg-accent px-3 py-1 text-xs font-medium text-white shadow-card hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            >
+              {t("transcriptResumeFollowing")}
+            </button>
+          </div>
         )}
       <div
         ref={listRef}
