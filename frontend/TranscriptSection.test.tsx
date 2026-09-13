@@ -742,7 +742,9 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
     });
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
       function (this: HTMLElement) {
-        if (hidden) return { top: 0, bottom: 0, height: 0 } as DOMRect;
+        if (this.closest("[hidden]")) {
+          return { top: 0, bottom: 0, height: 0 } as DOMRect;
+        }
         if (this === byId("host")) {
           return { top: HOST.top, bottom: HOST.bottom, height: 300 } as DOMRect;
         }
@@ -785,10 +787,10 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
       <div
         data-testid="host"
         data-inspector-scroller={published ? "" : undefined}
-        hidden={hidden}
         style={{ overflowY: "auto" }}
       >
-        <div data-testid="tall" style={{ overflowY: "visible" }}>
+        {/* Where the host puts `hidden`: on a panel inside its scroller. */}
+        <div data-testid="tall" hidden={hidden} style={{ overflowY: "visible" }}>
           <div data-testid="fits" style={{ overflowY: "auto" }}>
             <TranscriptSection fileId="abc" drive="family" mediaController={mc} fillHeight />
           </div>
@@ -843,9 +845,73 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
     const { host } = await setup({ hidden: true });
     fireEvent.touchMove(host);
     fireEvent.wheel(host);
-    host.hidden = false;
+    const press = createEvent.pointerDown(host);
+    Object.defineProperty(press, "pointerType", { value: "mouse" });
+    fireEvent(host, press);
+    screen.getByTestId("tall").hidden = false;
     await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
     expect(screen.queryByRole("button", { name: CHIP })).toBeNull();
+  });
+
+  describe("shown again after another tab moved the scroller", () => {
+    const sizeCallbacks: Array<(entries: { contentRect: { height: number } }[]) => void> = [];
+    const original = (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
+
+    beforeEach(() => {
+      sizeCallbacks.length = 0;
+      (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
+        constructor(cb: (typeof sizeCallbacks)[number]) {
+          sizeCallbacks.push(cb);
+        }
+        observe() {}
+        disconnect() {}
+      };
+    });
+
+    afterEach(() => {
+      (globalThis as { ResizeObserver?: unknown }).ResizeObserver = original;
+    });
+
+    const resize = (height: number) =>
+      act(() => {
+        for (const cb of sizeCallbacks) cb([{ contentRect: { height } }]);
+      });
+
+    it("brings the playing cue back into view while following", async () => {
+      const { hostScrollTo } = await setup({ hidden: true });
+      await resize(0);
+      hostScrollTo.mockClear();
+
+      screen.getByTestId("tall").hidden = false;
+      await resize(4000);
+
+      expect(hostScrollTo).toHaveBeenCalledWith({ top: 545, behavior: "smooth" });
+    });
+
+    it("leaves the scroller where the reader put it once following is off", async () => {
+      const { hostScrollTo, list } = await setup({ hidden: true });
+      await resize(0);
+      screen.getByTestId("tall").hidden = false;
+      await resize(4000);
+      fireEvent.wheel(list);
+      await screen.findByRole("button", { name: CHIP });
+      hostScrollTo.mockClear();
+
+      screen.getByTestId("tall").hidden = true;
+      await resize(0);
+      screen.getByTestId("tall").hidden = false;
+      await resize(4000);
+
+      expect(hostScrollTo).not.toHaveBeenCalled();
+    });
+
+    it("does not re-aim on a change of size that was not a reveal", async () => {
+      const { hostScrollTo } = await setup();
+      await resize(4000);
+      hostScrollTo.mockClear();
+      await resize(4200);
+      expect(hostScrollTo).not.toHaveBeenCalled();
+    });
   });
 
   it("takes a mouse press on that scroller as a scrollbar drag, and a touch as nothing", async () => {
@@ -857,6 +923,7 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
       fireEvent(host, event);
     };
     press("touch");
+    press("pen");
     await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
     expect(screen.queryByRole("button", { name: CHIP })).toBeNull();
 

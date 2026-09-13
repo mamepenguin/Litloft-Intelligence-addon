@@ -384,6 +384,26 @@ export default function TranscriptSection({
     followingRef.current = following;
   }, [following]);
 
+  /**
+   * A cue that changed while the host hid this panel was not scrolled to,
+   * and in the sheet another tab may have moved the shared scroller since.
+   * Revealing changes nothing the follow effect depends on, so the reveal
+   * itself — the list going from no height to some — re-aims.
+   */
+  useEffect(() => {
+    const list = listEl;
+    if (!list || typeof ResizeObserver === "undefined") return;
+    let height = list.getBoundingClientRect().height;
+    const observer = new ResizeObserver((entries) => {
+      const next = entries[entries.length - 1]?.contentRect.height ?? 0;
+      const revealed = height === 0 && next > 0;
+      height = next;
+      if (revealed && followingRef.current) scrollActiveIntoView();
+    });
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [listEl, scrollActiveIntoView]);
+
   const hasCues = cues.length > 0;
 
   /**
