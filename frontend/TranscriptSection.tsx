@@ -446,7 +446,11 @@ export default function TranscriptSection({
     const scroller = scrollingBoxOf(list);
     const shown = () => !list.closest("[hidden]");
     const suspend = () => {
-      if (shown()) setFollowing(false);
+      if (!shown()) return;
+      setFollowing(false);
+      // The reader has taken their place into their own hands; putting
+      // back an older one later would undo that.
+      putBackPendingRef.current = false;
     };
     // A finger or a pen does not drag a scrollbar; landing on the box
     // itself is a tap on its padding.

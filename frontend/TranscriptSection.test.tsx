@@ -1608,6 +1608,109 @@ describe("TranscriptSection — where the reader had got to", () => {
     ).toBe(730);
   });
 
+  describe("while the source the reader chose has not answered", () => {
+    const subtitles = [{ index: 0, language: "en", format: "vtt", label: "English" }];
+    let answerSubtitles: (r: Response) => void = () => undefined;
+
+    beforeEach(() => {
+      rememberTranscriptScroll("abc", {
+        place: { at: 7, into: 30 },
+        following: false,
+        source: "external",
+      });
+      fetchMock.mockImplementation((url: string) =>
+        String(url).includes("subtitles.vtt")
+          ? Promise.resolve(FETCH_MISS as Response)
+          : new Promise<Response>((resolve) => {
+              answerSubtitles = resolve;
+            }),
+      );
+    });
+
+    async function mounted() {
+      const utils = render(
+        <TranscriptSection fileId="abc" drive="family" subtitles={subtitles} />,
+      );
+      await screen.findByText("未修正の文章。");
+      await act(async () => {});
+      return utils.container.querySelector(".overflow-y-auto") as HTMLElement;
+    }
+
+    it("lets the reader's own scrolling stand when it arrives", async () => {
+      const list = await mounted();
+      fireEvent.wheel(list);
+      list.scrollTop = 150;
+      fireEvent.scroll(list);
+
+      await act(async () =>
+        answerSubtitles(
+          vttResponse(vttOf([0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((t) => [t, t + 1, `sub${t}`]))),
+        ),
+      );
+      await screen.findByText("sub7");
+      await act(async () => {});
+
+      // 50px into the text chunk at 5s is where the reader was; laid onto
+      // the subtitles, that is 50px into the subtitle at 5s.
+      expect(list.scrollTop).toBe(550);
+    });
+
+    it("puts the reader back on what is shown once it answers with nothing", async () => {
+      const list = await mounted();
+      expect(list.scrollTop).toBe(0);
+
+      await act(async () => answerSubtitles(FETCH_MISS as Response));
+      await act(async () => {});
+
+      // 30px into the text chunk at 5s, the latest start before 7s.
+      expect(list.scrollTop).toBe(130);
+    });
+  });
+
+  it("puts the reader back when the file has no subtitles to wait for", async () => {
+    rememberTranscriptScroll("abc", {
+      place: { at: 7, into: 30 },
+      following: false,
+      source: "external",
+    });
+    const utils = render(<TranscriptSection fileId="abc" drive="family" />);
+    await screen.findByText("未修正の文章。");
+    await act(async () => {});
+    expect(
+      (utils.container.querySelector(".overflow-y-auto") as HTMLElement).scrollTop,
+    ).toBe(130);
+  });
+
+  it("puts the reader on the last of the rows starting together when fewer are left", async () => {
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(
+        vttResponse(
+          vttOf([
+            [0, 5, "sign"],
+            [5, 8, "speaker one"],
+            [5, 8, "speaker two"],
+            [8, 10, "after"],
+          ]),
+        ),
+      ),
+    );
+    const getFileTranscript = await transcriptApiMock();
+    getFileTranscript.mockResolvedValue({ available: false });
+    rememberTranscriptScroll("abc", { place: { at: 5, into: 30, nth: 4 }, following: false });
+    const utils = render(
+      <TranscriptSection
+        fileId="abc"
+        drive="family"
+        subtitles={[{ index: 0, language: "en", format: "vtt", label: "English" }]}
+      />,
+    );
+    await screen.findByText("speaker two");
+    await act(async () => {});
+    expect(
+      (utils.container.querySelector(".overflow-y-auto") as HTMLElement).scrollTop,
+    ).toBe(230);
+  });
+
   it("shows what there is when the source the reader chose is not there for this file", async () => {
     rememberTranscriptScroll("abc", {
       place: { at: 5, into: 20 },
