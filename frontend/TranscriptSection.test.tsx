@@ -19,6 +19,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   act,
   cleanup,
+  createEvent,
   fireEvent,
   render,
   screen,
@@ -600,6 +601,380 @@ describe("TranscriptSection — suspension actually stops the scrolling", () => 
 
     // The highlight moved on; the list did not.
     expect(scrollTo).not.toHaveBeenCalled();
+  });
+});
+
+describe("TranscriptSection — a list that appears after its cues", () => {
+  beforeEach(() => {
+    mockAddonStatus.features.transcript_refine = "manual";
+    clearTranscriptScroll();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("still stops following when the reader scrolls it", async () => {
+    // Word cues of the same count arrive while the transcript is still
+    // loading, so the cue count is already final when the list mounts.
+    let release: (value: typeof TRANSCRIPT_RESPONSE) => void = () => undefined;
+    const getFileTranscript = await transcriptApiMock();
+    getFileTranscript.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        "WEBVTT\n\n00:00:00.000 --> 00:00:05.000\nfirst\n\n00:00:05.000 --> 00:00:10.000\nsecond\n",
+      json: async () => null,
+    } as Response);
+    const state = { currentTime: 1 };
+    const mc = {
+      seek: vi.fn(),
+      play: vi.fn(),
+      pause: vi.fn(),
+      togglePlay: vi.fn(),
+      toggleMute: vi.fn(),
+      toggleFullscreen: vi.fn(),
+      getCurrentTime: () => state.currentTime,
+      getDuration: () => 10,
+      isPaused: () => false,
+      isMuted: () => false,
+      getVolume: () => 1,
+      setVolume: vi.fn(),
+      getPlaybackRate: () => 1,
+      setPlaybackRate: vi.fn(),
+      getBufferedFraction: () => 0,
+    };
+    const utils = render(
+      <TranscriptSection fileId="abc" drive="family" mediaController={mc} fillHeight />,
+    );
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    await act(async () => release(TRANSCRIPT_RESPONSE));
+    await screen.findByText("second");
+    await waitForActiveCue(utils.container);
+
+    fireEvent.wheel(utils.container.querySelector(".overflow-y-auto")!);
+    expect(
+      await screen.findByRole("button", { name: "Back to current position" }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("TranscriptSection — in a host whose scroller encloses the list", () => {
+  // The column form of the inspector: the list grows to its full length
+  // and the box around the whole inspector is what scrolls, with the tab
+  // strip pinned over its top 40px.
+  const HOST = { top: 100, bottom: 400, clientHeight: 300, scrollHeight: 3000 };
+  const STRIP_PX = 40;
+  const CUE = { top: 800, height: 30 };
+  const CHIP = "Back to current position";
+
+  beforeEach(() => {
+    mockAddonStatus.features.transcript_refine = "manual";
+    fetchMock.mockClear();
+    clearTranscriptScroll();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    // Shadowed on HTMLElement; jsdom's own getters live on Element.
+    delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
+    delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
+  });
+
+  async function setup({
+    hidden = false,
+    published = true,
+    hostOverflows = true,
+  } = {}) {
+    const state = { currentTime: 1 };
+    const mc = {
+      seek: vi.fn(),
+      play: vi.fn(),
+      pause: vi.fn(),
+      togglePlay: vi.fn(),
+      toggleMute: vi.fn(),
+      toggleFullscreen: vi.fn(),
+      getCurrentTime: () => state.currentTime,
+      getDuration: () => 10,
+      isPaused: () => false,
+      isMuted: () => false,
+      getVolume: () => 1,
+      setVolume: vi.fn(),
+      getPlaybackRate: () => 1,
+      setPlaybackRate: vi.fn(),
+      getBufferedFraction: () => 0,
+    };
+
+    // Geometry in place before the first render, as a browser has it.
+    const byId = (id: string) =>
+      document.querySelector<HTMLElement>(`[data-testid='${id}']`);
+    const isList = (el: Element) =>
+      el.classList.contains("overflow-y-auto") && !!byId("fits")?.contains(el);
+    const sizes = (el: HTMLElement): { client: number; scroll: number } => {
+      if (el === byId("host")) {
+        return {
+          client: HOST.clientHeight,
+          scroll: hostOverflows ? HOST.scrollHeight : HOST.clientHeight,
+        };
+      }
+      if (el === byId("tall")) return { client: 300, scroll: 5000 };
+      if (el === byId("fits") || isList(el)) return { client: 4000, scroll: 4000 };
+      const cue = el.getAttribute("aria-current") === "true" ? CUE.height : 0;
+      return { client: cue, scroll: cue };
+    };
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return sizes(this).client;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return sizes(this).scroll;
+      },
+    });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        if (this.closest("[hidden]")) {
+          return { top: 0, bottom: 0, height: 0 } as DOMRect;
+        }
+        if (this === byId("host")) {
+          return { top: HOST.top, bottom: HOST.bottom, height: 300 } as DOMRect;
+        }
+        if (this.getAttribute("aria-current") === "true") {
+          return {
+            top: CUE.top,
+            bottom: CUE.top + CUE.height,
+            height: CUE.height,
+          } as DOMRect;
+        }
+        return { top: HOST.top, bottom: HOST.top + 4000, height: 4000 } as DOMRect;
+      },
+    );
+    // jsdom neither inherits custom properties nor compiles the list's
+    // `overflow-y-auto` class; a browser does both.
+    const computed = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation((el, pseudo) => {
+      const style = computed(el, pseudo);
+      const host = byId("host");
+      if (!host || el === host || !host.contains(el)) return style;
+      return new Proxy(style, {
+        get(target, key) {
+          if (key === "getPropertyValue") {
+            return (name: string) =>
+              name === "--inspector-sticky-top" && published
+                ? `${STRIP_PX}px`
+                : target.getPropertyValue(name);
+          }
+          if (key === "overflowY" && isList(el)) return "auto";
+          const value = Reflect.get(target, key);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    });
+
+    // Between the list and the host: a box that scrolls but has nothing
+    // to scroll, and a box that overflows but does not scroll. Neither is
+    // the scroller.
+    const utils = render(
+      <div
+        data-testid="host"
+        data-inspector-scroller={published ? "" : undefined}
+        style={{ overflowY: "auto" }}
+      >
+        {/* Where the host puts `hidden`: on a panel inside its scroller. */}
+        <div data-testid="tall" hidden={hidden} style={{ overflowY: "visible" }}>
+          <div data-testid="fits" style={{ overflowY: "auto" }}>
+            <TranscriptSection fileId="abc" drive="family" mediaController={mc} fillHeight />
+          </div>
+        </div>
+      </div>,
+    );
+    const host = screen.getByTestId("host");
+    const hostScrollTo = vi.fn();
+    host.scrollTo = hostScrollTo;
+    screen.getByTestId("tall").scrollTo = vi.fn();
+    screen.getByTestId("fits").scrollTo = vi.fn();
+
+    await screen.findByText("未修正の文章。");
+    await waitForActiveCue(utils.container);
+
+    const list = utils.container.querySelector(
+      "[data-testid='fits'] .overflow-y-auto",
+    ) as HTMLElement;
+    const listScrollTo = vi.fn();
+    list.scrollTo = listScrollTo;
+    return { host, hostScrollTo, list, listScrollTo, state };
+  }
+
+  it("scrolls that scroller back to the cue, centred below the strip", async () => {
+    const { list, hostScrollTo, listScrollTo } = await setup();
+    fireEvent.wheel(list);
+    fireEvent.click(await screen.findByRole("button", { name: CHIP }));
+
+    // 700px down the host, less the strip, less half of what is left.
+    await waitFor(() =>
+      expect(hostScrollTo).toHaveBeenCalledWith({ top: 545, behavior: "smooth" }),
+    );
+    expect(listScrollTo).not.toHaveBeenCalled();
+    expect(screen.getByTestId("fits").scrollTo).not.toHaveBeenCalled();
+    expect(screen.getByTestId("tall").scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("stops following when the reader scrolls that scroller outside the list", async () => {
+    const { host } = await setup();
+    fireEvent.touchMove(host);
+    expect(await screen.findByRole("button", { name: CHIP })).toBeInTheDocument();
+  });
+
+  it("finds that scroller even when it had nothing to scroll as the cues arrived", async () => {
+    // The sheet opens on another tab, which may not fill it.
+    const { host } = await setup({ hostOverflows: false });
+    fireEvent.touchMove(host);
+    expect(await screen.findByRole("button", { name: CHIP })).toBeInTheDocument();
+  });
+
+  it("keeps following when that scroller is scrolled while the transcript is not shown", async () => {
+    const { host } = await setup({ hidden: true });
+    fireEvent.touchMove(host);
+    fireEvent.wheel(host);
+    const press = createEvent.pointerDown(host);
+    Object.defineProperty(press, "pointerType", { value: "mouse" });
+    fireEvent(host, press);
+    screen.getByTestId("tall").hidden = false;
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(screen.queryByRole("button", { name: CHIP })).toBeNull();
+  });
+
+  describe("shown again after another tab moved the scroller", () => {
+    const sizeCallbacks: Array<(entries: { contentRect: { height: number } }[]) => void> = [];
+    const original = (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
+
+    beforeEach(() => {
+      sizeCallbacks.length = 0;
+      (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
+        constructor(cb: (typeof sizeCallbacks)[number]) {
+          sizeCallbacks.push(cb);
+        }
+        observe() {}
+        disconnect() {}
+      };
+    });
+
+    afterEach(() => {
+      (globalThis as { ResizeObserver?: unknown }).ResizeObserver = original;
+    });
+
+    const resize = (height: number) =>
+      act(() => {
+        for (const cb of sizeCallbacks) cb([{ contentRect: { height } }]);
+      });
+
+    it("brings the playing cue back into view while following", async () => {
+      const { hostScrollTo } = await setup({ hidden: true });
+      await resize(0);
+      hostScrollTo.mockClear();
+
+      screen.getByTestId("tall").hidden = false;
+      await resize(4000);
+
+      expect(hostScrollTo).toHaveBeenCalledWith({ top: 545, behavior: "smooth" });
+    });
+
+    it("brings it back after being shown, hidden and shown again", async () => {
+      const { hostScrollTo } = await setup();
+      await resize(4000);
+      screen.getByTestId("tall").hidden = true;
+      await resize(0);
+      hostScrollTo.mockClear();
+
+      screen.getByTestId("tall").hidden = false;
+      await resize(4000);
+
+      expect(hostScrollTo).toHaveBeenCalledWith({ top: 545, behavior: "smooth" });
+    });
+
+    it("leaves the scroller where the reader put it once following is off", async () => {
+      const { hostScrollTo, list } = await setup({ hidden: true });
+      await resize(0);
+      screen.getByTestId("tall").hidden = false;
+      await resize(4000);
+      fireEvent.wheel(list);
+      await screen.findByRole("button", { name: CHIP });
+      hostScrollTo.mockClear();
+
+      screen.getByTestId("tall").hidden = true;
+      await resize(0);
+      screen.getByTestId("tall").hidden = false;
+      await resize(4000);
+
+      expect(hostScrollTo).not.toHaveBeenCalled();
+    });
+
+    it("does not re-aim on a change of size that was not a reveal", async () => {
+      const { hostScrollTo } = await setup();
+      await resize(4000);
+      hostScrollTo.mockClear();
+      await resize(4200);
+      expect(hostScrollTo).not.toHaveBeenCalled();
+    });
+  });
+
+  it("takes a mouse press on that scroller as a scrollbar drag, and a touch as nothing", async () => {
+    const { host } = await setup();
+    // jsdom has no PointerEvent, so the init cannot carry the type.
+    const press = (pointerType: string) => {
+      const event = createEvent.pointerDown(host);
+      Object.defineProperty(event, "pointerType", { value: pointerType });
+      fireEvent(host, event);
+    };
+    press("touch");
+    press("pen");
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(screen.queryByRole("button", { name: CHIP })).toBeNull();
+
+    press("mouse");
+    expect(await screen.findByRole("button", { name: CHIP })).toBeInTheDocument();
+  });
+
+  it("does not reach past its own list when the host has not said it scrolls it", async () => {
+    // A page scroller around a transcript short enough to fit: scrolling
+    // it would move the video off the screen.
+    const { list, hostScrollTo, state } = await setup({ published: false });
+    state.currentTime = 8;
+    await waitFor(async () => {
+      const active = await screen.findByRole("button", { current: true });
+      expect(active).toHaveTextContent("未修正の文章。");
+    });
+    fireEvent.wheel(list);
+    fireEvent.click(await screen.findByRole("button", { name: CHIP }));
+
+    expect(hostScrollTo).not.toHaveBeenCalled();
+    expect(screen.getByTestId("tall").scrollTo).not.toHaveBeenCalled();
+    expect(screen.getByTestId("fits").scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("follows playback by scrolling that scroller", async () => {
+    const { hostScrollTo, state } = await setup();
+    state.currentTime = 8;
+    await waitFor(() => expect(hostScrollTo).toHaveBeenCalled());
+  });
+
+  it("leaves it alone while the transcript is not shown", async () => {
+    const { hostScrollTo, state } = await setup({ hidden: true });
+    state.currentTime = 8;
+    await waitFor(async () => {
+      const active = await screen.findByRole("button", { current: true, hidden: true });
+      expect(active).toHaveTextContent("未修正の文章。");
+    });
+    expect(hostScrollTo).not.toHaveBeenCalled();
   });
 });
 

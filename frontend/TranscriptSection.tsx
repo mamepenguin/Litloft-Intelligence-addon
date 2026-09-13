@@ -117,6 +117,27 @@ function parseVttCues(vtt: string): TranscriptChunkItem[] {
 
 const EMPTY_SUBTITLES: SubtitleInfo[] = [];
 
+/**
+ * The box that scrolls `list`: the host's scroller when the host has
+ * marked one around it, and otherwise the list itself.
+ *
+ * Asked of the host rather than guessed from which ancestor overflows: on
+ * the file page the box around a short list is the canvas holding the
+ * video, and in the sheet the scroller may not overflow yet when asked.
+ */
+function scrollingBoxOf(list: HTMLElement): HTMLElement {
+  return list.closest<HTMLElement>("[data-inspector-scroller]") ?? list;
+}
+
+/** How far down the host's pinned strip covers its scroller. */
+function stripCoverOf(list: HTMLElement): number {
+  return (
+    Number.parseFloat(
+      getComputedStyle(list).getPropertyValue("--inspector-sticky-top"),
+    ) || 0
+  );
+}
+
 export default function TranscriptSection({
   fileId,
   drive,
@@ -150,7 +171,14 @@ export default function TranscriptSection({
   // back every few seconds.
   const [following, setFollowing] = useState(true);
   const activeRef = useRef<HTMLButtonElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  // State as well as a ref: the list mounts only once loading ends, which
+  // can be after the cue count it is keyed on has stopped changing.
+  const [listEl, setListEl] = useState<HTMLDivElement | null>(null);
+  const attachList = useCallback((node: HTMLDivElement | null) => {
+    listRef.current = node;
+    setListEl(node);
+  }, []);
 
   const chunksAvailable = whisperChunks.length > 0;
   const wordsAvailable = whisperWordCues.length > 0;
@@ -279,16 +307,24 @@ export default function TranscriptSection({
     const list = listRef.current;
     const target = activeRef.current;
     if (!list || !target) return;
-    // Scroll only the transcript container — avoid scrollIntoView, which
-    // bubbles up and moves the page away from the video.
-    const listRect = list.getBoundingClientRect();
+    // A panel the host is not showing has no position to aim at, and
+    // scrolling an enclosing box for it would move what the reader is
+    // looking at instead.
+    if (target.closest("[hidden]")) return;
+    // Scroll one box — avoid scrollIntoView, which bubbles up and moves
+    // the page away from the video.
+    const scroller = scrollingBoxOf(list);
+    const covered = scroller === list ? 0 : stripCoverOf(list);
+    const scrollerRect = scroller.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
-    const above = targetRect.top < listRect.top;
-    const below = targetRect.bottom > listRect.bottom;
+    const viewTop = scrollerRect.top + covered;
+    const above = targetRect.top < viewTop;
+    const below = targetRect.bottom > scrollerRect.bottom;
     if (!above && !below) return;
-    const targetOffset = targetRect.top - listRect.top + list.scrollTop;
-    const nextTop = targetOffset - (list.clientHeight - target.clientHeight) / 2;
-    list.scrollTo({ top: nextTop, behavior: "smooth" });
+    const targetOffset = targetRect.top - viewTop + scroller.scrollTop;
+    const nextTop =
+      targetOffset - (scroller.clientHeight - covered - target.clientHeight) / 2;
+    scroller.scrollTo({ top: nextTop, behavior: "smooth" });
   }, []);
 
   useEffect(() => {
@@ -310,21 +346,35 @@ export default function TranscriptSection({
    * cue, which resumes following rather than suspending it.
    */
   useEffect(() => {
-    const list = listRef.current;
+    const list = listEl;
     if (!list) return;
-    const suspend = () => setFollowing(false);
+    // The box that gets scrolled is the one the reader can scroll, from
+    // anywhere on it — the host's strip and gutters included. The host's
+    // scroller is shared with the other tabs, so it only counts while the
+    // transcript is the one shown.
+    const scroller = scrollingBoxOf(list);
+    const shown = () => !list.closest("[hidden]");
+    const suspend = () => {
+      if (shown()) setFollowing(false);
+    };
+    // A finger or a pen does not drag a scrollbar; landing on the box
+    // itself is a tap on its padding.
     const suspendOnScrollbar = (event: PointerEvent) => {
-      if (event.target === list) setFollowing(false);
+      const dragsScrollbars =
+        event.pointerType !== "touch" && event.pointerType !== "pen";
+      if (dragsScrollbars && event.target === scroller && shown()) {
+        setFollowing(false);
+      }
     };
-    list.addEventListener("wheel", suspend, { passive: true });
-    list.addEventListener("touchmove", suspend, { passive: true });
-    list.addEventListener("pointerdown", suspendOnScrollbar);
+    scroller.addEventListener("wheel", suspend, { passive: true });
+    scroller.addEventListener("touchmove", suspend, { passive: true });
+    scroller.addEventListener("pointerdown", suspendOnScrollbar);
     return () => {
-      list.removeEventListener("wheel", suspend);
-      list.removeEventListener("touchmove", suspend);
-      list.removeEventListener("pointerdown", suspendOnScrollbar);
+      scroller.removeEventListener("wheel", suspend);
+      scroller.removeEventListener("touchmove", suspend);
+      scroller.removeEventListener("pointerdown", suspendOnScrollbar);
     };
-  }, [cues.length]);
+  }, [listEl]);
 
   // Current `following` for the save below, which runs from a DOM
   // listener and on unmount — neither of which sees a re-rendered
@@ -333,6 +383,26 @@ export default function TranscriptSection({
   useEffect(() => {
     followingRef.current = following;
   }, [following]);
+
+  /**
+   * A cue that changed while the host hid this panel was not scrolled to,
+   * and in the sheet another tab may have moved the shared scroller since.
+   * Revealing changes nothing the follow effect depends on, so the reveal
+   * itself — the list going from no height to some — re-aims.
+   */
+  useEffect(() => {
+    const list = listEl;
+    if (!list || typeof ResizeObserver === "undefined") return;
+    let height = list.getBoundingClientRect().height;
+    const observer = new ResizeObserver((entries) => {
+      const next = entries[entries.length - 1]?.contentRect.height ?? 0;
+      const revealed = height === 0 && next > 0;
+      height = next;
+      if (revealed && followingRef.current) scrollActiveIntoView();
+    });
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [listEl, scrollActiveIntoView]);
 
   const hasCues = cues.length > 0;
 
@@ -529,16 +599,25 @@ export default function TranscriptSection({
         {/* Only offered when there is somewhere to go back to: with no
             cue playing, "current position" means nothing. */}
         {!following && activeIndex >= 0 && (
-          <button
-            type="button"
-            onClick={resumeFollowing}
-            className="absolute inset-x-0 top-1 z-10 mx-auto w-fit rounded-full bg-accent px-3 py-1 text-xs font-medium text-white shadow-card hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          // A row of no height, so the list does not move when it appears.
+          // Sticky rather than absolute: when the host's scroller encloses
+          // the list, an absolute chip scrolls away with the rows and over
+          // the host's pinned strip.
+          <div
+            className="pointer-events-none sticky z-[5] flex h-0 justify-center"
+            style={{ top: "var(--inspector-sticky-top, 0px)" }}
           >
-            {t("transcriptResumeFollowing")}
-          </button>
+            <button
+              type="button"
+              onClick={resumeFollowing}
+              className="pointer-events-auto mt-1 h-fit w-fit rounded-full bg-accent px-3 py-1 text-xs font-medium text-white shadow-card hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            >
+              {t("transcriptResumeFollowing")}
+            </button>
+          </div>
         )}
       <div
-        ref={listRef}
+        ref={attachList}
         className={`space-y-0.5 overflow-y-auto rounded-lg bg-bg-card p-2 ${
           fillHeight ? "min-h-0 flex-1" : "max-h-80"
         }`}
