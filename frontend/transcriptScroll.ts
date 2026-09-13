@@ -24,11 +24,27 @@
  * on a change, and the only reader is the next mount for the same file.
  */
 
+/**
+ * The row at the top of what the reader could see, by its start time, and
+ * how far into that row they were, in px.
+ *
+ * A time rather than an offset: the same place is a different offset in
+ * another source (text chunks, words, subtitles) and at another width.
+ */
+export interface TranscriptPlace {
+  at: number;
+  into: number;
+  /** Which of the rows starting at `at` it was, when more than one does. */
+  nth?: number;
+}
+
 export interface TranscriptScrollState {
-  /** `scrollTop` of the cue list, in px. */
-  top: number;
+  /** `null` when the reader's place was never seen. */
+  place: TranscriptPlace | null;
   /** Whether the highlight was still allowed to drag the list around. */
   following: boolean;
+  /** The source the reader picked, when they picked one. */
+  source?: string;
 }
 
 /**

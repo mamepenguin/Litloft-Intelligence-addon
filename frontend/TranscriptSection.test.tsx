@@ -100,6 +100,7 @@ import {
 import {
   clearTranscriptScroll,
   recallTranscriptScroll,
+  rememberTranscriptScroll,
 } from "@/addons/intelligence/transcriptScroll";
 
 async function transcriptApiMock() {
@@ -654,7 +655,8 @@ describe("TranscriptSection — a list that appears after its cues", () => {
     );
     await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
     await act(async () => release(TRANSCRIPT_RESPONSE));
-    await screen.findByText("second");
+    // The text chunks, which replace the word cues nobody chose.
+    await screen.findByText("未修正の文章。");
     await waitForActiveCue(utils.container);
 
     fireEvent.wheel(utils.container.querySelector(".overflow-y-auto")!);
@@ -1272,6 +1274,17 @@ describe("TranscriptSection — whose name is on the panel", () => {
   });
 });
 
+const vttResponse = (text: string) =>
+  ({ ok: true, status: 200, text: async () => text, json: async () => null }) as Response;
+const vttOf = (cues: Array<[number, number, string]>) =>
+  "WEBVTT\n\n" +
+  cues
+    .map(([from, to, text]) => {
+      const t = (n: number) => `00:00:${n.toFixed(3).padStart(6, "0")}`;
+      return `${t(from)} --> ${t(to)}\n${text}\n`;
+    })
+    .join("\n");
+
 describe("TranscriptSection — where the reader had got to", () => {
   beforeEach(async () => {
     mockAddonStatus.features.transcript_refine = "manual";
@@ -1350,6 +1363,32 @@ describe("TranscriptSection — where the reader had got to", () => {
    * for what you are about to depend on, not for the thing that starts
    * it.
    */
+  /**
+   * jsdom lays nothing out. Rows 100px high from the list's top, moved by
+   * its `scrollTop`; a hidden panel has no box.
+   */
+  let ROW_PX = 100;
+  beforeEach(() => {
+    ROW_PX = 100;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        const zero = { top: 0, bottom: 0, height: 0 } as DOMRect;
+        if (this.closest("[hidden]")) return zero;
+        if (this.dataset.cueStart === undefined) {
+          return { top: 0, bottom: 300, height: 300 } as DOMRect;
+        }
+        const list = this.parentElement!;
+        const index = Array.from(list.querySelectorAll("[data-cue-start]")).indexOf(this);
+        const top = index * ROW_PX - list.scrollTop;
+        return { top, bottom: top + ROW_PX, height: ROW_PX } as DOMRect;
+      },
+    );
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   async function readyList(container: HTMLElement): Promise<HTMLElement> {
     await screen.findByText("未修正の文章。");
     await act(async () => {});
@@ -1370,16 +1409,449 @@ describe("TranscriptSection — where the reader had got to", () => {
   }
 
   it("puts the reader back where they were", async () => {
-    const { utils } = await mountAndScroll("abc", 420);
+    const { utils } = await mountAndScroll("abc", 150);
     utils.unmount();
 
-    expect((await remount("abc")).scrollTop).toBe(420);
+    expect((await remount("abc")).scrollTop).toBe(150);
+  });
+
+  it("puts the reader back on the same row when rows are another height", async () => {
+    // Another width, or another source: the offset differs, the row does not.
+    const { utils } = await mountAndScroll("abc", 150);
+    utils.unmount();
+    ROW_PX = 60;
+
+    // 50px into the second row, which now starts 60px down.
+    expect((await remount("abc")).scrollTop).toBe(110);
+  });
+
+  it("keeps the reader on the same row when a source arriving later replaces the one shown", async () => {
+    // No text chunks: subtitles answer first and are shown, then the word
+    // cues arrive and take over, with rows that start at other times.
+    const { utils } = await mountAndScroll("abc", 150);
+    utils.unmount();
+
+    const getFileTranscript = await transcriptApiMock();
+    getFileTranscript.mockResolvedValue({ available: false });
+    let releaseWords: (r: Response) => void = () => undefined;
+    const vtt = (text: string) =>
+      ({ ok: true, status: 200, text: async () => text, json: async () => null }) as Response;
+    fetchMock.mockImplementation((url: string) =>
+      String(url).includes("subtitles.vtt")
+        ? new Promise<Response>((resolve) => {
+            releaseWords = resolve;
+          })
+        : Promise.resolve(
+            vtt(
+              "WEBVTT\n\n00:00:00.000 --> 00:00:02.500\nsub one\n\n00:00:02.500 --> 00:00:05.000\nsub two\n\n00:00:05.000 --> 00:00:07.500\nsub three\n\n00:00:07.500 --> 00:00:10.000\nsub four\n",
+            ),
+          ),
+    );
+    const again = render(
+      <TranscriptSection
+        fileId="abc"
+        drive="family"
+        subtitles={[{ index: 0, language: "en", format: "vtt", label: "English" }]}
+      />,
+    );
+    await screen.findByText("sub three");
+    await act(async () => {});
+    const list = again.container.querySelector(".overflow-y-auto") as HTMLElement;
+    // 50px into "sub three", the row that starts at 5s.
+    expect(list.scrollTop).toBe(250);
+    // The reader moves on to 30px into "sub four" (7.5s). A browser
+    // delivers the scroll event a frame later, which may be after the
+    // words have arrived.
+    list.scrollTop = 330;
+
+    await act(async () =>
+      releaseWords(
+        vtt(
+          "WEBVTT\n\n00:00:00.000 --> 00:00:05.000\nword one\n\n00:00:05.000 --> 00:00:10.000\nword two\n",
+        ),
+      ),
+    );
+    await screen.findByText("word two");
+    await act(async () => {});
+
+    // 30px into "word two", which covers 7.5s.
+    expect(list.scrollTop).toBe(130);
+  });
+
+  it("keeps the reader's row when the rows are replaced while following a cue", async () => {
+    // Following, with the playhead in a pause the incoming word cues do not
+    // cover, so there is no playing cue to go to on the new rows.
+    const getFileTranscript = await transcriptApiMock();
+    getFileTranscript.mockResolvedValue({ available: false });
+    let releaseWords: (r: Response) => void = () => undefined;
+    fetchMock.mockImplementation((url: string) =>
+      String(url).includes("subtitles.vtt")
+        ? new Promise<Response>((resolve) => {
+            releaseWords = resolve;
+          })
+        : Promise.resolve(
+            vttResponse(
+              vttOf([0, 2, 4, 6, 8, 10].map((t, i) => [t, t + 2, `s${i}`])),
+            ),
+          ),
+    );
+    const state = { currentTime: 8.5 };
+    const utils = render(
+      <TranscriptSection
+        fileId="abc"
+        drive="family"
+        mediaController={scrollStubController(state)}
+        subtitles={[{ index: 0, language: "en", format: "vtt", label: "English" }]}
+      />,
+    );
+    await screen.findByText("s4");
+    await waitForActiveCue(utils.container);
+    const list = utils.container.querySelector(".overflow-y-auto") as HTMLElement;
+    // 50px into s3, which starts at 6s.
+    list.scrollTop = 350;
+    fireEvent.scroll(list);
+
+    await act(async () =>
+      releaseWords(
+        vttResponse(
+          vttOf([
+            ...[0, 1, 2, 3, 4, 5, 6, 7].map((t): [number, number, string] => [t, t + 1, `w${t}`]),
+            [9, 10, "w9"],
+          ]),
+        ),
+      ),
+    );
+    await screen.findByText("w9");
+    await act(async () => {});
+
+    // 50px into w6, the word cue that starts at 6s.
+    expect(list.scrollTop).toBe(650);
+  });
+
+  it("keeps the row when it is now shorter than how far into it the reader was", async () => {
+    const { utils } = await mountAndScroll("abc", 180);
+    utils.unmount();
+    ROW_PX = 60;
+
+    // As far into the second row as it goes, not onto a row after it.
+    expect((await remount("abc")).scrollTop).toBe(60 + 59);
+  });
+
+  it("puts the reader on the first row when their place came before every row", async () => {
+    rememberTranscriptScroll("abc", { place: { at: -3, into: 20 }, following: true });
+    expect((await remount("abc")).scrollTop).toBe(20);
+  });
+
+  it("puts the reader on the first of two rows that start together", async () => {
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(
+        vttResponse(
+          vttOf([
+            [0, 5, "sign"],
+            [5, 8, "speaker one"],
+            [5, 8, "speaker two"],
+            [8, 10, "after"],
+          ]),
+        ),
+      ),
+    );
+    const getFileTranscript = await transcriptApiMock();
+    getFileTranscript.mockResolvedValue({ available: false });
+    const subtitles = [{ index: 0, language: "en", format: "vtt", label: "English" }];
+    const first = render(<TranscriptSection fileId="abc" drive="family" subtitles={subtitles} />);
+    await screen.findByText("speaker two");
+    await act(async () => {});
+    const list = first.container.querySelector(".overflow-y-auto") as HTMLElement;
+    // 30px into "speaker one".
+    list.scrollTop = 130;
+    fireEvent.scroll(list);
+    first.unmount();
+
+    const again = render(<TranscriptSection fileId="abc" drive="family" subtitles={subtitles} />);
+    await screen.findByText("speaker two");
+    await act(async () => {});
+    expect(
+      (again.container.querySelector(".overflow-y-auto") as HTMLElement).scrollTop,
+    ).toBe(130);
+  });
+
+  it("waits for the source the reader chose before putting them back on it", async () => {
+    rememberTranscriptScroll("abc", {
+      place: { at: 7, into: 30 },
+      following: false,
+      source: "external",
+    });
+    let releaseSubtitles: (r: Response) => void = () => undefined;
+    fetchMock.mockImplementation((url: string) =>
+      String(url).includes("subtitles.vtt")
+        ? Promise.resolve(FETCH_MISS as Response)
+        : new Promise<Response>((resolve) => {
+            releaseSubtitles = resolve;
+          }),
+    );
+    const subtitles = [{ index: 0, language: "en", format: "vtt", label: "English" }];
+    const utils = render(<TranscriptSection fileId="abc" drive="family" subtitles={subtitles} />);
+    await screen.findByText("未修正の文章。");
+    await act(async () => {});
+
+    await act(async () =>
+      releaseSubtitles(
+        vttResponse(vttOf([0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((t) => [t, t + 1, `sub${t}`]))),
+      ),
+    );
+    await screen.findByText("sub7");
+    await act(async () => {});
+
+    // 30px into the subtitle that starts at 7s.
+    expect(
+      (utils.container.querySelector(".overflow-y-auto") as HTMLElement).scrollTop,
+    ).toBe(730);
+  });
+
+  describe("while the source the reader chose has not answered", () => {
+    const subtitles = [{ index: 0, language: "en", format: "vtt", label: "English" }];
+    let answerSubtitles: (r: Response) => void = () => undefined;
+
+    beforeEach(() => {
+      rememberTranscriptScroll("abc", {
+        place: { at: 7, into: 30 },
+        following: false,
+        source: "external",
+      });
+      fetchMock.mockImplementation((url: string) =>
+        String(url).includes("subtitles.vtt")
+          ? Promise.resolve(FETCH_MISS as Response)
+          : new Promise<Response>((resolve) => {
+              answerSubtitles = resolve;
+            }),
+      );
+    });
+
+    async function mounted() {
+      const utils = render(
+        <TranscriptSection fileId="abc" drive="family" subtitles={subtitles} />,
+      );
+      await screen.findByText("未修正の文章。");
+      await act(async () => {});
+      return utils.container.querySelector(".overflow-y-auto") as HTMLElement;
+    }
+
+    it("lets the reader's own scrolling stand when it arrives", async () => {
+      const list = await mounted();
+      fireEvent.wheel(list);
+      list.scrollTop = 150;
+      fireEvent.scroll(list);
+
+      await act(async () =>
+        answerSubtitles(
+          vttResponse(vttOf([0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((t) => [t, t + 1, `sub${t}`]))),
+        ),
+      );
+      await screen.findByText("sub7");
+      await act(async () => {});
+
+      // 50px into the text chunk at 5s is where the reader was; laid onto
+      // the subtitles, that is 50px into the subtitle at 5s.
+      expect(list.scrollTop).toBe(550);
+    });
+
+    it("does not give up the place for an input that scrolled nothing", async () => {
+      const list = await mounted();
+      // A wheel up, or a pull down, at the top: no scroll follows.
+      fireEvent.wheel(list);
+      fireEvent.touchMove(list);
+
+      await act(async () =>
+        answerSubtitles(
+          vttResponse(vttOf([0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((t) => [t, t + 1, `sub${t}`]))),
+        ),
+      );
+      await screen.findByText("sub7");
+      await act(async () => {});
+
+      expect(list.scrollTop).toBe(730);
+    });
+
+    it("lets a scroll with no wheel or touch stand too, as the keyboard makes", async () => {
+      const list = await mounted();
+      list.scrollTop = 150;
+      fireEvent.scroll(list);
+
+      await act(async () =>
+        answerSubtitles(
+          vttResponse(vttOf([0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((t) => [t, t + 1, `sub${t}`]))),
+        ),
+      );
+      await screen.findByText("sub7");
+      await act(async () => {});
+
+      expect(list.scrollTop).toBe(550);
+    });
+
+    it("puts the reader back on what is shown once it answers with nothing", async () => {
+      const list = await mounted();
+      expect(list.scrollTop).toBe(0);
+
+      await act(async () => answerSubtitles(FETCH_MISS as Response));
+      await act(async () => {});
+
+      // 30px into the text chunk at 5s, the latest start before 7s.
+      expect(list.scrollTop).toBe(130);
+    });
+  });
+
+  it("puts the reader back when the file has no subtitles to wait for", async () => {
+    rememberTranscriptScroll("abc", {
+      place: { at: 7, into: 30 },
+      following: false,
+      source: "external",
+    });
+    const utils = render(<TranscriptSection fileId="abc" drive="family" />);
+    await screen.findByText("未修正の文章。");
+    await act(async () => {});
+    expect(
+      (utils.container.querySelector(".overflow-y-auto") as HTMLElement).scrollTop,
+    ).toBe(130);
+  });
+
+  it("puts the reader on the last of the rows starting together when fewer are left", async () => {
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(
+        vttResponse(
+          vttOf([
+            [0, 5, "sign"],
+            [5, 8, "speaker one"],
+            [5, 8, "speaker two"],
+            [8, 10, "after"],
+          ]),
+        ),
+      ),
+    );
+    const getFileTranscript = await transcriptApiMock();
+    getFileTranscript.mockResolvedValue({ available: false });
+    rememberTranscriptScroll("abc", { place: { at: 5, into: 30, nth: 4 }, following: false });
+    const utils = render(
+      <TranscriptSection
+        fileId="abc"
+        drive="family"
+        subtitles={[{ index: 0, language: "en", format: "vtt", label: "English" }]}
+      />,
+    );
+    await screen.findByText("speaker two");
+    await act(async () => {});
+    expect(
+      (utils.container.querySelector(".overflow-y-auto") as HTMLElement).scrollTop,
+    ).toBe(230);
+  });
+
+  it("shows what there is when the source the reader chose is not there for this file", async () => {
+    rememberTranscriptScroll("abc", {
+      place: { at: 5, into: 20 },
+      following: false,
+      source: "words",
+    });
+    const utils = render(<TranscriptSection fileId="abc" drive="family" />);
+    expect(await screen.findByText("未修正の文章。")).toBeInTheDocument();
+    await act(async () => {});
+    // And the reader is put back on it rather than kept waiting.
+    expect(
+      (utils.container.querySelector(".overflow-y-auto") as HTMLElement).scrollTop,
+    ).toBe(120);
+  });
+
+  it("puts a reader on the second of two rows that start together back on the second", async () => {
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(
+        vttResponse(
+          vttOf([
+            [0, 5, "sign"],
+            [5, 8, "speaker one"],
+            [5, 8, "speaker two"],
+            [8, 10, "after"],
+          ]),
+        ),
+      ),
+    );
+    const getFileTranscript = await transcriptApiMock();
+    getFileTranscript.mockResolvedValue({ available: false });
+    const subtitles = [{ index: 0, language: "en", format: "vtt", label: "English" }];
+    const first = render(<TranscriptSection fileId="abc" drive="family" subtitles={subtitles} />);
+    await screen.findByText("speaker two");
+    await act(async () => {});
+    const list = first.container.querySelector(".overflow-y-auto") as HTMLElement;
+    // 30px into "speaker two".
+    list.scrollTop = 230;
+    fireEvent.scroll(list);
+    first.unmount();
+
+    const again = render(<TranscriptSection fileId="abc" drive="family" subtitles={subtitles} />);
+    await screen.findByText("speaker two");
+    await act(async () => {});
+    expect(
+      (again.container.querySelector(".overflow-y-auto") as HTMLElement).scrollTop,
+    ).toBe(230);
+  });
+
+  it("comes back on the source the reader chose, and does not take it to another file", async () => {
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        String(url).includes("subtitles.vtt")
+          ? FETCH_MISS
+          : vttResponse(vttOf([[0, 5, "subtitle one"], [5, 10, "subtitle two"]])),
+      ),
+    );
+    const subtitles = [{ index: 0, language: "en", format: "vtt", label: "English" }];
+    const first = render(<TranscriptSection fileId="abc" drive="family" subtitles={subtitles} />);
+    await screen.findByText("未修正の文章。");
+    fireEvent.click(await screen.findByRole("button", { name: "External" }));
+    await screen.findByText("subtitle two");
+    first.unmount();
+
+    const again = render(<TranscriptSection fileId="abc" drive="family" subtitles={subtitles} />);
+    expect(await screen.findByText("subtitle two")).toBeInTheDocument();
+
+    again.rerender(<TranscriptSection fileId="def" drive="family" subtitles={subtitles} />);
+    expect(await screen.findByText("未修正の文章。")).toBeInTheDocument();
+    expect(screen.queryByText("subtitle two")).toBeNull();
+  });
+
+  it("shows the text chunks, not subtitles that merely answered first", async () => {
+    let release: (value: typeof TRANSCRIPT_RESPONSE) => void = () => undefined;
+    const getFileTranscript = await transcriptApiMock();
+    getFileTranscript.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        "WEBVTT\n\n00:00:00.000 --> 00:00:05.000\nsubtitle one\n\n00:00:05.000 --> 00:00:10.000\nsubtitle two\n",
+      json: async () => null,
+    } as Response);
+    render(
+      <TranscriptSection
+        fileId="abc"
+        drive="family"
+        subtitles={[{ index: 0, language: "en", format: "vtt", label: "English" }]}
+      />,
+    );
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    await act(async () => release(TRANSCRIPT_RESPONSE));
+
+    expect(await screen.findByText("未修正の文章。")).toBeInTheDocument();
+    expect(screen.queryByText("subtitle two")).toBeNull();
+
+    // Once the reader picks one, it stays theirs.
+    fireEvent.click(screen.getByRole("button", { name: "External" }));
+    expect(await screen.findByText("subtitle two")).toBeInTheDocument();
   });
 
   it("keeps each file's place to itself", async () => {
     // Keyed by file, so opening a second one and coming back does not
     // land the reader at someone else's offset.
-    const { utils } = await mountAndScroll("abc", 420);
+    const { utils } = await mountAndScroll("abc", 150);
     utils.unmount();
 
     const other = await remount("def");
@@ -1404,7 +1876,7 @@ describe("TranscriptSection — where the reader had got to", () => {
       );
     const utils = withPlayer();
     const list = await readyList(utils.container);
-    list.scrollTop = 300;
+    list.scrollTop = 130;
     fireEvent.wheel(list);
     fireEvent.scroll(list);
     expect(await screen.findByRole("button", { name: CHIP })).toBeInTheDocument();
@@ -1412,7 +1884,7 @@ describe("TranscriptSection — where the reader had got to", () => {
 
     const back = withPlayer();
     const list2 = await readyList(back.container);
-    expect(list2.scrollTop).toBe(300);
+    expect(list2.scrollTop).toBe(130);
     // Still suspended, so the auto-scroll will not take the offset back
     // off them the moment playback moves on.
     expect(await screen.findByRole("button", { name: CHIP })).toBeInTheDocument();
@@ -1430,10 +1902,10 @@ describe("TranscriptSection — where the reader had got to", () => {
     // the failure visible — a saved 10 would be restored as 10, and the
     // two would be indistinguishable.
     withWordCues();
-    const { utils } = await mountAndScroll("abc", 420);
+    const { utils } = await mountAndScroll("abc", 150);
     utils.unmount();
     const list = await remount("abc");
-    expect(list.scrollTop).toBe(420);
+    expect(list.scrollTop).toBe(150);
     list.scrollTop = 10;
 
     fireEvent.click(await screen.findByRole("button", { name: "Words" }));
@@ -1452,10 +1924,13 @@ describe("TranscriptSection — where the reader had got to", () => {
     const utils = render(<TranscriptSection fileId="abc" drive="family" />);
     const list = await readyList(utils.container);
 
-    list.scrollTop = 275;
+    list.scrollTop = 120;
     fireEvent.scroll(list);
 
-    expect(recallTranscriptScroll("abc")).toEqual({ top: 275, following: true });
+    expect(recallTranscriptScroll("abc")).toEqual({
+      place: { at: 5, into: 20 },
+      following: true,
+    });
   });
 
   it("catches a change of mind that moved nothing", async () => {
@@ -1473,10 +1948,13 @@ describe("TranscriptSection — where the reader had got to", () => {
       />,
     );
     const list = await readyList(utils.container);
-    list.scrollTop = 275;
+    list.scrollTop = 120;
     fireEvent.wheel(list);
     fireEvent.scroll(list);
-    expect(recallTranscriptScroll("abc")).toEqual({ top: 275, following: false });
+    expect(recallTranscriptScroll("abc")).toEqual({
+      place: { at: 5, into: 20 },
+      following: false,
+    });
 
     // Jumping to a cue is a statement about where they want to be, so it
     // resumes following — and moves no scrollbar in jsdom.
@@ -1497,14 +1975,15 @@ describe("TranscriptSection — where the reader had got to", () => {
       utils.unmount();
     }
     // Touch the oldest again, then push one more in.
-    const { utils: revisit } = await mountAndScroll("f0", 999);
+    const { utils: revisit } = await mountAndScroll("f0", 199);
     revisit.unmount();
     const { utils: last } = await mountAndScroll("f20", 120);
     last.unmount();
 
-    expect(recallTranscriptScroll("f0")).toEqual({ top: 999, following: true });
+    const at = (into: number) => ({ place: { at: 5, into }, following: true });
+    expect(recallTranscriptScroll("f0")).toEqual(at(99));
     expect(recallTranscriptScroll("f1")).toBeUndefined();
-    expect(recallTranscriptScroll("f20")).toEqual({ top: 120, following: true });
+    expect(recallTranscriptScroll("f20")).toEqual(at(20));
   });
 
   it("forgets the oldest file rather than growing without limit", async () => {
@@ -1515,9 +1994,245 @@ describe("TranscriptSection — where the reader had got to", () => {
       utils.unmount();
     }
 
+    const at = (into: number) => ({ place: { at: 5, into }, following: true });
     expect(recallTranscriptScroll("f0")).toBeUndefined();
-    expect(recallTranscriptScroll("f1")).toEqual({ top: 101, following: true });
-    expect(recallTranscriptScroll("f20")).toEqual({ top: 120, following: true });
+    expect(recallTranscriptScroll("f1")).toEqual(at(1));
+    expect(recallTranscriptScroll("f20")).toEqual(at(20));
+  });
+
+  it("keeps the place when the list can no longer be read on the way out", async () => {
+    // A browser detaches the list before passive cleanups run, and a
+    // detached element reads a `scrollTop` of 0.
+    const { utils, list } = await mountAndScroll("abc", 150);
+    let top = list.scrollTop;
+    Object.defineProperty(list, "scrollTop", {
+      configurable: true,
+      get: () => (list.isConnected ? top : 0),
+      set: (value: number) => {
+        top = value;
+      },
+    });
+    utils.unmount();
+
+    expect(recallTranscriptScroll("abc")?.place).toEqual({ at: 5, into: 50 });
+  });
+
+  it("puts the reader back even when the list appears after its cues", async () => {
+    const { utils } = await mountAndScroll("abc", 150);
+    utils.unmount();
+
+    // Word cues of the same count arrive while the transcript loads, so
+    // the list mounts after there were already cues.
+    let release: (value: typeof TRANSCRIPT_RESPONSE) => void = () => undefined;
+    const getFileTranscript = await transcriptApiMock();
+    getFileTranscript.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        // Rows that start elsewhere than the text chunks, so a place laid on
+        // them before the chunks replace them lands on another offset.
+        "WEBVTT\n\n00:00:00.000 --> 00:00:02.500\nfirst\n\n00:00:02.500 --> 00:00:05.000\nsecond\n\n00:00:05.000 --> 00:00:07.500\nthird\n\n00:00:07.500 --> 00:00:10.000\nfourth\n",
+      json: async () => null,
+    } as Response);
+    const again = render(<TranscriptSection fileId="abc" drive="family" />);
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    await act(async () => release(TRANSCRIPT_RESPONSE));
+    // The text chunks, which replace the word cues nobody chose.
+    await screen.findByText("未修正の文章。");
+    await act(async () => {});
+
+    expect(
+      (again.container.querySelector(".overflow-y-auto") as HTMLElement).scrollTop,
+    ).toBe(150);
+  });
+
+  it("does not carry having taken over into a file with nothing remembered", async () => {
+    const state = { currentTime: 1 };
+    const mc = scrollStubController(state);
+    const utils = render(
+      <TranscriptSection fileId="abc" drive="family" mediaController={mc} />,
+    );
+    const list = await readyList(utils.container);
+    await waitForActiveCue(utils.container);
+    fireEvent.wheel(list);
+    await screen.findByRole("button", { name: "Back to current position" });
+
+    utils.rerender(
+      <TranscriptSection fileId="def" drive="family" mediaController={mc} />,
+    );
+    await readyList(utils.container);
+    await waitForActiveCue(utils.container);
+
+    expect(
+      screen.queryByRole("button", { name: "Back to current position" }),
+    ).toBeNull();
+  });
+
+  describe("in a host whose scroller encloses the list", () => {
+    // The list starts 600px down the host's content.
+    const LIST_AT = 600;
+    const sizeCallbacks: Array<(entries: { contentRect: { height: number } }[]) => void> = [];
+    const original = (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
+
+    beforeEach(() => {
+      sizeCallbacks.length = 0;
+      (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
+        constructor(cb: (typeof sizeCallbacks)[number]) {
+          sizeCallbacks.push(cb);
+        }
+        observe() {}
+        disconnect() {}
+      };
+      vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+        function (this: HTMLElement) {
+          const host = this.closest<HTMLElement>("[data-inspector-scroller]");
+          if (this.closest("[hidden]") || !host) {
+            return { top: 0, bottom: 0, height: 0 } as DOMRect;
+          }
+          if (this === host) return { top: 100, bottom: 400, height: 300 } as DOMRect;
+          const listTop = 100 + LIST_AT - host.scrollTop;
+          if (this.dataset.cueStart === undefined) {
+            return { top: listTop, bottom: listTop + 4000, height: 4000 } as DOMRect;
+          }
+          const rows = Array.from(host.querySelectorAll("[data-cue-start]"));
+          const top = listTop + rows.indexOf(this) * 100;
+          return { top, bottom: top + 100, height: 100 } as DOMRect;
+        },
+      );
+    });
+
+    afterEach(() => {
+      (globalThis as { ResizeObserver?: unknown }).ResizeObserver = original;
+      vi.restoreAllMocks();
+    });
+
+    const resize = (height: number) =>
+      act(() => {
+        for (const cb of sizeCallbacks) cb([{ contentRect: { height } }]);
+      });
+
+    async function mountInHost(
+      hidden: boolean,
+      mediaController?: ReturnType<typeof scrollStubController>,
+    ) {
+      const utils = render(
+        <div data-testid="host" data-inspector-scroller="">
+          <div data-testid="panel" hidden={hidden}>
+            <TranscriptSection
+              fileId="abc"
+              drive="family"
+              mediaController={mediaController}
+            />
+          </div>
+        </div>,
+      );
+      await screen.findByText("未修正の文章。");
+      await act(async () => {});
+      return { utils, host: screen.getByTestId("host") };
+    }
+
+    it("remembers the place in the list, not the scroller's own offset", async () => {
+      const { host } = await mountInHost(false);
+      host.scrollTop = LIST_AT + 150;
+      fireEvent.scroll(host);
+
+      expect(recallTranscriptScroll("abc")?.place).toEqual({ at: 5, into: 50 });
+    });
+
+    it("waits until the transcript is shown to put the reader back", async () => {
+      const first = await mountInHost(false);
+      first.host.scrollTop = LIST_AT + 150;
+      fireEvent.scroll(first.host);
+      first.utils.unmount();
+
+      const { host } = await mountInHost(true);
+      await resize(0);
+      expect(host.scrollTop).toBe(0);
+
+      screen.getByTestId("panel").hidden = false;
+      await resize(4000);
+      expect(host.scrollTop).toBe(LIST_AT + 150);
+    });
+
+    it("goes to the playing cue, not the last place, when that place was following", async () => {
+      rememberTranscriptScroll("abc", { place: { at: 0, into: 0 }, following: true });
+      const { host } = await mountInHost(true, scrollStubController({ currentTime: 7 }));
+      const hostScrollTo = vi.fn();
+      host.scrollTo = hostScrollTo;
+      await resize(0);
+      await waitFor(() =>
+        expect(host.querySelector('[aria-current="true"]')).not.toBeNull(),
+      );
+
+      screen.getByTestId("panel").hidden = false;
+      await resize(4000);
+
+      expect(hostScrollTo).toHaveBeenCalled();
+    });
+
+    it("keeps the place through a mount that was never shown", async () => {
+      const first = await mountInHost(false);
+      first.host.scrollTop = LIST_AT + 150;
+      fireEvent.scroll(first.host);
+      first.utils.unmount();
+      (await mountInHost(true)).utils.unmount();
+
+      const { host } = await mountInHost(true);
+      await resize(0);
+      screen.getByTestId("panel").hidden = false;
+      await resize(4000);
+      expect(host.scrollTop).toBe(LIST_AT + 150);
+    });
+
+    it("puts the place back after another tab moved the scroller, without a remount", async () => {
+      const { host } = await mountInHost(false);
+      await resize(4000);
+      host.scrollTop = LIST_AT + 150;
+      fireEvent.scroll(host);
+
+      screen.getByTestId("panel").hidden = true;
+      await resize(0);
+      host.scrollTop = 50;
+      fireEvent.scroll(host);
+      screen.getByTestId("panel").hidden = false;
+      await resize(4000);
+
+      expect(host.scrollTop).toBe(LIST_AT + 150);
+    });
+
+    it("puts the place back even if a scroll lands between showing and noticing it", async () => {
+      const { host } = await mountInHost(false);
+      await resize(4000);
+      host.scrollTop = LIST_AT + 150;
+      fireEvent.scroll(host);
+
+      screen.getByTestId("panel").hidden = true;
+      await resize(0);
+      host.scrollTop = 50;
+      screen.getByTestId("panel").hidden = false;
+      // The browser reports the other tab's offset before the list's size.
+      fireEvent.scroll(host);
+      await resize(4000);
+
+      expect(host.scrollTop).toBe(LIST_AT + 150);
+    });
+
+    it("does not write down where another tab left the scroller", async () => {
+      const { host } = await mountInHost(false);
+      host.scrollTop = LIST_AT + 150;
+      fireEvent.scroll(host);
+
+      screen.getByTestId("panel").hidden = true;
+      host.scrollTop = 50;
+      fireEvent.scroll(host);
+
+      expect(recallTranscriptScroll("abc")?.place).toEqual({ at: 5, into: 50 });
+    });
   });
 });
 
