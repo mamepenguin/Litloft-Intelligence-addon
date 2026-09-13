@@ -1519,6 +1519,163 @@ describe("TranscriptSection — where the reader had got to", () => {
     expect(recallTranscriptScroll("f1")).toEqual({ top: 101, following: true });
     expect(recallTranscriptScroll("f20")).toEqual({ top: 120, following: true });
   });
+
+  it("keeps the place when the list can no longer be read on the way out", async () => {
+    // A browser detaches the list before passive cleanups run, and a
+    // detached element reads a `scrollTop` of 0.
+    const { utils, list } = await mountAndScroll("abc", 420);
+    let top = list.scrollTop;
+    Object.defineProperty(list, "scrollTop", {
+      configurable: true,
+      get: () => (list.isConnected ? top : 0),
+      set: (value: number) => {
+        top = value;
+      },
+    });
+    utils.unmount();
+
+    expect(recallTranscriptScroll("abc")?.top).toBe(420);
+  });
+
+  it("puts the reader back even when the list appears after its cues", async () => {
+    const { utils } = await mountAndScroll("abc", 420);
+    utils.unmount();
+
+    // Word cues of the same count arrive while the transcript loads, so
+    // the list mounts after there were already cues.
+    let release: (value: typeof TRANSCRIPT_RESPONSE) => void = () => undefined;
+    const getFileTranscript = await transcriptApiMock();
+    getFileTranscript.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        "WEBVTT\n\n00:00:00.000 --> 00:00:05.000\nfirst\n\n00:00:05.000 --> 00:00:10.000\nsecond\n",
+      json: async () => null,
+    } as Response);
+    const again = render(<TranscriptSection fileId="abc" drive="family" />);
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    await act(async () => release(TRANSCRIPT_RESPONSE));
+    await screen.findByText("second");
+    await act(async () => {});
+
+    expect(
+      (again.container.querySelector(".overflow-y-auto") as HTMLElement).scrollTop,
+    ).toBe(420);
+  });
+
+  it("does not carry having taken over into a file with nothing remembered", async () => {
+    const state = { currentTime: 1 };
+    const mc = scrollStubController(state);
+    const utils = render(
+      <TranscriptSection fileId="abc" drive="family" mediaController={mc} />,
+    );
+    const list = await readyList(utils.container);
+    await waitForActiveCue(utils.container);
+    fireEvent.wheel(list);
+    await screen.findByRole("button", { name: "Back to current position" });
+
+    utils.rerender(
+      <TranscriptSection fileId="def" drive="family" mediaController={mc} />,
+    );
+    await readyList(utils.container);
+    await waitForActiveCue(utils.container);
+
+    expect(
+      screen.queryByRole("button", { name: "Back to current position" }),
+    ).toBeNull();
+  });
+
+  describe("in a host whose scroller encloses the list", () => {
+    // The list starts 600px down the host's content.
+    const LIST_AT = 600;
+    const sizeCallbacks: Array<(entries: { contentRect: { height: number } }[]) => void> = [];
+    const original = (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
+
+    beforeEach(() => {
+      sizeCallbacks.length = 0;
+      (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
+        constructor(cb: (typeof sizeCallbacks)[number]) {
+          sizeCallbacks.push(cb);
+        }
+        observe() {}
+        disconnect() {}
+      };
+      vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+        function (this: HTMLElement) {
+          const host = this.closest<HTMLElement>("[data-inspector-scroller]");
+          if (this.closest("[hidden]") || !host) {
+            return { top: 0, bottom: 0, height: 0 } as DOMRect;
+          }
+          if (this === host) return { top: 100, bottom: 400, height: 300 } as DOMRect;
+          const top = 100 + LIST_AT - host.scrollTop;
+          return { top, bottom: top + 4000, height: 4000 } as DOMRect;
+        },
+      );
+    });
+
+    afterEach(() => {
+      (globalThis as { ResizeObserver?: unknown }).ResizeObserver = original;
+      vi.restoreAllMocks();
+    });
+
+    const resize = (height: number) =>
+      act(() => {
+        for (const cb of sizeCallbacks) cb([{ contentRect: { height } }]);
+      });
+
+    async function mountInHost(hidden: boolean) {
+      const utils = render(
+        <div data-testid="host" data-inspector-scroller="">
+          <div data-testid="panel" hidden={hidden}>
+            <TranscriptSection fileId="abc" drive="family" />
+          </div>
+        </div>,
+      );
+      await screen.findByText("未修正の文章。");
+      await act(async () => {});
+      return { utils, host: screen.getByTestId("host") };
+    }
+
+    it("remembers the place in the list, not the scroller's own offset", async () => {
+      const { host } = await mountInHost(false);
+      host.scrollTop = LIST_AT + 400;
+      fireEvent.scroll(host);
+
+      expect(recallTranscriptScroll("abc")?.top).toBe(400);
+    });
+
+    it("waits until the transcript is shown to put the reader back", async () => {
+      const first = await mountInHost(false);
+      first.host.scrollTop = LIST_AT + 400;
+      fireEvent.scroll(first.host);
+      first.utils.unmount();
+
+      const { host } = await mountInHost(true);
+      await resize(0);
+      expect(host.scrollTop).toBe(0);
+
+      screen.getByTestId("panel").hidden = false;
+      await resize(4000);
+      expect(host.scrollTop).toBe(LIST_AT + 400);
+    });
+
+    it("does not write down where another tab left the scroller", async () => {
+      const { host } = await mountInHost(false);
+      host.scrollTop = LIST_AT + 400;
+      fireEvent.scroll(host);
+
+      screen.getByTestId("panel").hidden = true;
+      host.scrollTop = 50;
+      fireEvent.scroll(host);
+
+      expect(recallTranscriptScroll("abc")?.top).toBe(400);
+    });
+  });
 });
 
 describe("TranscriptSection — a response that arrives too late", () => {

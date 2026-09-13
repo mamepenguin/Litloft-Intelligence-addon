@@ -129,6 +129,16 @@ function scrollingBoxOf(list: HTMLElement): HTMLElement {
   return list.closest<HTMLElement>("[data-inspector-scroller]") ?? list;
 }
 
+/** Where the top of `list` sits in the content of `scroller`, in px. */
+function listOffsetIn(list: HTMLElement, scroller: HTMLElement): number {
+  if (scroller === list) return 0;
+  return (
+    list.getBoundingClientRect().top -
+    scroller.getBoundingClientRect().top +
+    scroller.scrollTop
+  );
+}
+
 /** How far down the host's pinned strip covers its scroller. */
 function stripCoverOf(list: HTMLElement): number {
   return (
@@ -384,6 +394,19 @@ export default function TranscriptSection({
     followingRef.current = following;
   }, [following]);
 
+  // A place recalled for this file that could not be applied yet, because
+  // the host was not showing the panel.
+  const pendingPlaceRef = useRef<number | null>(null);
+
+  const applyPendingPlace = useCallback((list: HTMLElement): boolean => {
+    const top = pendingPlaceRef.current;
+    if (top === null || list.closest("[hidden]")) return false;
+    const scroller = scrollingBoxOf(list);
+    scroller.scrollTop = listOffsetIn(list, scroller) + top;
+    pendingPlaceRef.current = null;
+    return true;
+  }, []);
+
   /**
    * A cue that changed while the host hid this panel was not scrolled to,
    * and in the sheet another tab may have moved the shared scroller since.
@@ -398,81 +421,70 @@ export default function TranscriptSection({
       const next = entries[entries.length - 1]?.contentRect.height ?? 0;
       const revealed = height === 0 && next > 0;
       height = next;
-      if (revealed && followingRef.current) scrollActiveIntoView();
+      if (!revealed) return;
+      if (applyPendingPlace(list)) return;
+      if (followingRef.current) scrollActiveIntoView();
     });
     observer.observe(list);
     return () => observer.disconnect();
-  }, [listEl, scrollActiveIntoView]);
+  }, [listEl, scrollActiveIntoView, applyPendingPlace]);
 
   const hasCues = cues.length > 0;
 
   /**
    * Put the reader back where they were.
    *
-   * Waits for cues because `scrollTop` on an empty list is silently
-   * clamped to 0, so restoring before they render restores nothing.
+   * **Keyed on the list element, not on how many cues it holds.** The count
+   * changes when the reader switches source, and re-running then would take
+   * the position off them. The element is what appears once loading ends,
+   * which can be after the count has stopped changing.
    *
-   * **Keyed on whether there is a list, not on how long it is.** The
-   * count changes when the reader switches source, and re-running then
-   * would take the position off them and pin them to an offset measured
-   * against a list that no longer exists — at best a no-op, at worst
-   * past the end of a shorter one. After the first restore the position
-   * is the reader's.
+   * A file with nothing remembered starts out following: a suspension on
+   * the previous file under the same mount says nothing about this one.
    */
   useEffect(() => {
-    const list = listRef.current;
-    if (!list || !hasCues) return;
+    const list = listEl;
+    if (!list) return;
     const saved = recallTranscriptScroll(fileId);
-    if (!saved) return;
-    // Both, together. Not an ordering constraint — `setFollowing` is a
-    // state setter queued for the next render, so the auto-scroll effect
-    // sees the restored value whichever line runs first. It is that
-    // restoring the offset *without* it would hand the reader back their
-    // place and then, a second later, drag them to the cue that is
-    // playing: the state they left by scrolling away from it.
-    list.scrollTop = saved.top;
-    setFollowing(saved.following);
-  }, [fileId, hasCues]);
+    setFollowing(saved ? saved.following : true);
+    pendingPlaceRef.current = saved ? saved.top : null;
+    applyPendingPlace(list);
+  }, [fileId, listEl, applyPendingPlace]);
 
   /**
    * Remember it, because a refetch cannot bring it back.
    *
-   * Everything else this panel holds is re-derived when it mounts again
-   * — the cues, the language, the highlight. Where the reader had got
-   * to is not a fact about the file, so nothing re-derives it.
+   * Written as the reader scrolls, and measured in the list: in the sheet
+   * the box that scrolls is shared with the other tabs, so its own offset
+   * means nothing to this panel, and a scroll while another tab is shown
+   * is not the reader's place in the transcript.
    *
-   * Two strands, and each covers what the other cannot.
-   *
-   * The `scroll` listener writes it down as it happens. That is the one
-   * that matters in a browser: `useEffect` cleanups are passive, so on
-   * unmount they run *after* React has detached the subtree, and
-   * `scrollTop` on a detached element reads 0. jsdom keeps the value,
-   * which is why a test cannot show this — the same class of blind spot
-   * `mediaDetailTheaterCss.test.ts` exists for.
-   *
-   * The cleanup save covers the reverse: `following` can change with no
-   * scroll of the reader's — clicking a cue resumes it — and there is
-   * no event for that. It is also what saves file A's position when the
-   * host swaps the file under one mount rather than unmounting.
-   *
-   * The auto-scroll emits scroll events of its own and that is fine:
-   * unlike the follow-suspension above, this does not care who moved the
-   * list, only where it is now.
+   * The cleanup writes the last place seen rather than reading one: a
+   * browser detaches the list before passive cleanups run, and a detached
+   * element reads 0. It is still needed, because `following` can change
+   * with no scroll — clicking a cue resumes it.
    */
   useEffect(() => {
-    const list = listRef.current;
-    if (!list || !hasCues) return;
+    const list = listEl;
+    if (!list) return;
+    const scroller = scrollingBoxOf(list);
+    let place = recallTranscriptScroll(fileId)?.top ?? 0;
     const save = () =>
       rememberTranscriptScroll(fileId, {
-        top: list.scrollTop,
+        top: place,
         following: followingRef.current,
       });
-    list.addEventListener("scroll", save, { passive: true });
-    return () => {
-      list.removeEventListener("scroll", save);
+    const onScroll = () => {
+      if (list.closest("[hidden]") || pendingPlaceRef.current !== null) return;
+      place = scroller.scrollTop - listOffsetIn(list, scroller);
       save();
     };
-  }, [fileId, hasCues]);
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      scroller.removeEventListener("scroll", onScroll);
+      save();
+    };
+  }, [fileId, listEl]);
 
   const resumeFollowing = useCallback(() => {
     setFollowing(true);
