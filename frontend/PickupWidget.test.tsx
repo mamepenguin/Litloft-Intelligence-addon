@@ -64,6 +64,28 @@ function file(id: string) {
   return { id, filename: `${id}.mp4` } as never;
 }
 
+/** Watches the container from before the first render, so a row drawn for one frame is counted. */
+function renderObserved(ui: React.ReactElement) {
+  const container = document.body.appendChild(document.createElement("div"));
+  const records: MutationRecord[] = [];
+  const observer = new MutationObserver((batch) => records.push(...batch));
+  observer.observe(container, { childList: true, subtree: true });
+  const result = render(ui, { container });
+  return {
+    ...result,
+    added: () => {
+      records.push(...observer.takeRecords());
+      return records.reduce((n, r) => n + r.addedNodes.length, 0);
+    },
+  };
+}
+
+function settle() {
+  return act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockBatch.mockImplementation(async (ids: string[]) => ids.map(file) as never);
@@ -124,58 +146,73 @@ describe("PickupWidget", () => {
     );
   });
 
-  it("claims no number until it has one", async () => {
-    // The link is drawn from the first frame now that it is not gated on
-    // a total, so an initial `0` would spend the whole load saying
-    // "See all (0)" beside a row of skeletons. Core's contract is that
-    // an unknown total means an unqualified "See all" — `DriveHome`
-    // threads the same field as `undefined` for the same reason.
-    let resolve: (v: { file_ids: string[]; total: number }) => void = () => {};
+  it("draws nothing until the feed answers, then a loading row with its count", async () => {
+    let answer: (v: { file_ids: string[]; total: number }) => void = () => {};
     mockFetch.mockReturnValue(
       new Promise((r) => {
-        resolve = r;
+        answer = r;
+      }),
+    );
+    let files: (v: never) => void = () => {};
+    mockBatch.mockReturnValue(
+      new Promise((r) => {
+        files = r;
       }),
     );
 
-    render(<PickupWidget drive="videos" />);
-
-    await waitFor(() =>
-      expect(screen.getByTestId("carousel").dataset.loading).toBe("true"),
-    );
-    expect(screen.getByTestId("total").textContent).toBe("");
+    const { container, added } = renderObserved(<PickupWidget drive="videos" />);
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(added()).toBe(0);
+    expect(container.firstChild).toBeNull();
 
     await act(async () => {
-      resolve({ file_ids: ["a"], total: 300 });
+      answer({ file_ids: ["a"], total: 300 });
     });
-    await waitFor(() =>
-      expect(screen.getByTestId("total").textContent).toBe("300"),
-    );
+    expect(screen.getByTestId("carousel").dataset.loading).toBe("true");
+    expect(screen.getByTestId("total").textContent).toBe("300");
+    expect(screen.queryAllByTestId("card")).toEqual([]);
+
+    await act(async () => {
+      files([file("a")] as never);
+    });
+    expect(screen.getByTestId("carousel").dataset.loading).toBe("false");
+    expect(screen.getAllByTestId("card").map((c) => c.textContent)).toEqual(["a"]);
   });
 
-  it("drops the previous drive's count while the next one loads", async () => {
+  it("draws nothing for the next drive until it answers, and none of the previous one's files", async () => {
     mockFetch.mockResolvedValueOnce({ file_ids: ["a"], total: 300 });
-    const { rerender } = render(<PickupWidget drive="videos" />);
+    const { container, rerender } = render(<PickupWidget drive="videos" />);
     await waitFor(() =>
       expect(screen.getByTestId("total").textContent).toBe("300"),
     );
 
-    let resolve: (v: { file_ids: string[]; total: number }) => void = () => {};
+    let answer: (v: { file_ids: string[]; total: number }) => void = () => {};
     mockFetch.mockReturnValue(
       new Promise((r) => {
-        resolve = r;
+        answer = r;
+      }),
+    );
+    let files: (v: never) => void = () => {};
+    mockBatch.mockReturnValue(
+      new Promise((r) => {
+        files = r;
       }),
     );
     rerender(<PickupWidget drive="photos" />);
-    await waitFor(() =>
-      expect(screen.getByTestId("total").textContent).toBe(""),
-    );
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+    expect(container.firstChild).toBeNull();
 
     await act(async () => {
-      resolve({ file_ids: ["b"], total: 12 });
+      answer({ file_ids: ["b"], total: 12 });
     });
-    await waitFor(() =>
-      expect(screen.getByTestId("total").textContent).toBe("12"),
-    );
+    expect(screen.getByTestId("total").textContent).toBe("12");
+    expect(screen.queryAllByTestId("card")).toEqual([]);
+
+    await act(async () => {
+      files([file("b")] as never);
+    });
+    expect(screen.getAllByTestId("card").map((c) => c.textContent)).toEqual(["b"]);
   });
 
   it("puts the size of the feed on the link, not the size of the window", async () => {
@@ -202,13 +239,28 @@ describe("PickupWidget", () => {
     );
   });
 
-  it("renders nothing when the feed is empty", async () => {
+  it("never draws anything when the feed is empty, and does not ask for files", async () => {
     mockFetch.mockResolvedValue({ file_ids: [], total: 0 });
+    mockBatch.mockReturnValue(new Promise(() => {}));
 
-    const { container } = render(<PickupWidget drive="videos" />);
+    const { container, added } = renderObserved(<PickupWidget drive="videos" />);
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1));
+    await settle();
 
-    await waitFor(() => expect(container.firstChild).toBeNull());
+    expect(added()).toBe(0);
+    expect(container.firstChild).toBeNull();
     expect(mockBatch).not.toHaveBeenCalled();
+  });
+
+  it("never draws anything when the request fails", async () => {
+    mockFetch.mockRejectedValue(new Error("boom"));
+
+    const { container, added } = renderObserved(<PickupWidget drive="videos" />);
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1));
+    await settle();
+
+    expect(added()).toBe(0);
+    expect(container.firstChild).toBeNull();
   });
 
   it("renders nothing without a drive", async () => {
@@ -218,11 +270,4 @@ describe("PickupWidget", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("survives a failing request without throwing", async () => {
-    mockFetch.mockRejectedValue(new Error("boom"));
-
-    const { container } = render(<PickupWidget drive="videos" />);
-
-    await waitFor(() => expect(container.firstChild).toBeNull());
-  });
 });
