@@ -11,6 +11,7 @@ import {
 } from "../api";
 import { formatDuration } from "@/lib/format";
 import { useCurrentDrive } from "@/components/CurrentDriveProvider";
+import { useImeKeyGuard } from "@/lib/ime";
 
 function ResultCard({ result, rank }: { result: SemanticSearchResult; rank: number }) {
   const timestamps = result.segments
@@ -201,6 +202,7 @@ export default function SearchComparePage() {
   const [searched, setSearched] = useState(false);
   const [showCutoff, setShowCutoff] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
+  const ime = useImeKeyGuard();
 
   const handleSearch = useCallback(async () => {
     const q = query.trim();
@@ -251,7 +253,11 @@ export default function SearchComparePage() {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+            onCompositionEnd={ime.onCompositionEnd}
+            onKeyDown={(e) => {
+              if (ime.isImeKeystroke(e)) return;
+              if (e.key === "Enter") void handleSearch();
+            }}
             placeholder="Search query..."
             className="flex-1 rounded-lg border border-bg-border bg-bg-primary px-3 py-2 text-sm text-text-primary placeholder-text-muted outline-none focus:border-focus-ring"
           />
