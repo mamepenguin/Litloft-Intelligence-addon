@@ -1,7 +1,7 @@
-"""``?type=markdown`` / ``?type=pdf`` reach semantic search.
+"""``?type=text`` / ``?type=pdf`` reach semantic search.
 
 Core's toolbar names eight kinds — the six flat ``file_type`` values
-plus ``markdown`` and ``pdf`` nested under ``document``. ``IndexedFile``
+plus ``text`` and ``pdf`` nested under ``document``. ``IndexedFile``
 is a snapshot carrying the flat column, so the old
 ``file_type == file_type`` predicate matched **nothing** for those two.
 That failure was silent: the semantic half of the result list emptied
@@ -52,6 +52,12 @@ ROWS = [
     # about. The extension is the only thing that names it.
     ("note0000mime", "plan.MD", "document", ""),
     ("note0000long", "readme.markdown", "document", ""),
+    ("note000plain", "todo.txt", "document", "text/plain"),
+    ("note0000TXT0", "LOG.TXT", "document", ""),
+    # ``text/plain`` without a text extension: source code and logs.
+    ("code0000cccc", "main.c", "document", "text/plain"),
+    ("code0000perl", "tool.pl", "document", "text/plain"),
+    ("log0000plain", "server.log", "document", "text/plain"),
     ("pdf00000mime", "invoice.pdf", "document", "application/pdf"),
     ("pdf00000ext0", "scan.PDF", "document", ""),
     ("doc00000othr", "notes.docx", "document",
@@ -127,16 +133,25 @@ def test_no_filter_returns_everything(search_db):
     assert _search(None) == {file_id for file_id, *_ in ROWS}
 
 
-def test_markdown_finds_the_mime_and_the_extension(search_db):
+TEXT = {
+    "note0000mark",
+    "note0000mime",
+    "note0000long",
+    "note000plain",
+    "note0000TXT0",
+    "note0000othr",
+}
+
+
+def test_text_finds_the_mime_and_the_extension(search_db):
     # ``note0000othr`` is in here on its name alone, with a file_type
     # of ``other``: the nested branch does not require the row to also
     # be a document. See the comment on that row.
-    assert _search("markdown") == {
-        "note0000mark",
-        "note0000mime",
-        "note0000long",
-        "note0000othr",
-    }
+    assert _search("text") == TEXT
+
+
+def test_the_old_markdown_kind_reads_as_text(search_db):
+    assert _search("markdown") == TEXT
 
 
 def test_pdf_finds_the_mime_and_the_extension(search_db):
@@ -148,7 +163,8 @@ def test_extension_match_is_case_insensitive(search_db):
     # separately because a ``LIKE`` without ``lower()`` passes every
     # other assertion here on SQLite and fails on a case-sensitive
     # collation.
-    assert "note0000mime" in _search("markdown")
+    assert "note0000mime" in _search("text")
+    assert "note0000TXT0" in _search("text")
     assert "pdf00000ext0" in _search("pdf")
 
 
@@ -164,6 +180,11 @@ def test_document_is_the_flat_kind_and_nothing_more(search_db):
         "note0000mark",
         "note0000mime",
         "note0000long",
+        "note000plain",
+        "note0000TXT0",
+        "code0000cccc",
+        "code0000perl",
+        "log0000plain",
         "pdf00000mime",
         "pdf00000ext0",
         "doc00000othr",
