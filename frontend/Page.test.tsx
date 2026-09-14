@@ -120,6 +120,7 @@ vi.mock("@/addons/intelligence/api", async () => {
 // Import _after_ mocks are registered.
 import IntelligenceAskPage from "@/addons/intelligence/Page";
 import { accentFills } from "@/__tests__/helpers/accentFills";
+import { COMPOSITION_GRACE_MS } from "@/lib/ime";
 import {
   getIntelligenceStatus,
   parseSseFrame,
@@ -967,5 +968,79 @@ describe("IntelligenceAskPage — page header, mode tabs and accent budget", () 
     const tokens = submit.className.split(/\s+/);
     expect(tokens).toContain("enabled:hover:bg-accent-hover");
     expect(tokens.filter((t) => /^hover:bg-accent/.test(t))).toEqual([]);
+  });
+});
+
+describe("IntelligenceAskPage — IME composition", () => {
+  beforeEach(() => {
+    streamState.current = makeController();
+  });
+
+  let now: ReturnType<typeof vi.spyOn> | null = null;
+
+  afterEach(() => {
+    streamState.current.end();
+    now?.mockRestore();
+    now = null;
+  });
+
+  async function renderReady(question: string) {
+    const { askQuestionStream } = await import("@/addons/intelligence/api");
+    vi.mocked(askQuestionStream).mockClear();
+    render(<IntelligenceAskPage />);
+    const textarea = (await screen.findByRole("textbox", {
+      name: /question input/i,
+    })) as HTMLTextAreaElement;
+    fireEvent.compositionStart(textarea);
+    fireEvent.change(textarea, { target: { value: question } });
+    fireEvent.compositionEnd(textarea, { data: question });
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId("ask-submit") as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    return { textarea, ask: vi.mocked(askQuestionStream) };
+  }
+
+  it("does not ask on the Enter that confirms a conversion", async () => {
+    now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const { textarea, ask } = await renderReady("計画の結論は");
+    now.mockReturnValue(1_000_000 + COMPOSITION_GRACE_MS - 1);
+
+    fireEvent.keyDown(textarea, { key: "Enter", keyCode: 13 });
+
+    expect(ask).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("計画の結論は");
+  });
+
+  it("does not ask on an Enter the IME still owns", async () => {
+    const { textarea, ask } = await renderReady("計画の結論は");
+    fireEvent.compositionStart(textarea);
+
+    fireEvent.keyDown(textarea, { key: "Enter", isComposing: true });
+    fireEvent.keyDown(textarea, { key: "Enter", keyCode: 229 });
+
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("asks once on an Enter pressed after the grace window", async () => {
+    now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const { textarea, ask } = await renderReady("計画の結論は");
+    now.mockReturnValue(1_000_000 + COMPOSITION_GRACE_MS);
+
+    fireEvent.keyDown(textarea, { key: "Enter", keyCode: 13 });
+
+    await waitFor(() => expect(ask).toHaveBeenCalledTimes(1));
+    expect(ask.mock.calls[0][0]).toBe("計画の結論は");
+  });
+
+  it("does not ask on Shift+Enter after the grace window", async () => {
+    now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const { textarea, ask } = await renderReady("計画の結論は");
+    now.mockReturnValue(1_000_000 + COMPOSITION_GRACE_MS);
+
+    fireEvent.keyDown(textarea, { key: "Enter", keyCode: 13, shiftKey: true });
+
+    expect(ask).not.toHaveBeenCalled();
   });
 });

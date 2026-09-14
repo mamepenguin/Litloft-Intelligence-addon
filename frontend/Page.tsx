@@ -43,6 +43,7 @@ import { useSearchParams } from "next/navigation";
 import { AlertCircle, BookmarkPlus, Quote, Send, Sparkles, Square, X } from "lucide-react";
 
 import { useCurrentDrive } from "@/components/CurrentDriveProvider";
+import { useImeKeyGuard } from "@/lib/ime";
 import { Button } from "@/components/Button";
 import { PageHeader } from "@/components/PageHeader";
 import { DriveScopeLine } from "./DriveScopeLine";
@@ -377,7 +378,7 @@ function IntelligenceAskPageInner() {
   const [input, setInput] = useState(seedQuery);
   const [state, setState] = useState<AskState>({ kind: "idle" });
   const [ragAvailable, setRagAvailable] = useState<boolean | null>(null);
-  const [composing, setComposing] = useState(false);
+  const ime = useImeKeyGuard();
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [savedNote, setSavedNote] = useState<{ fileId: string; path: string } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -835,9 +836,7 @@ function IntelligenceAskPageInner() {
 
   const handleInputKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-      // Skip while IME composition is active (e.g. Japanese conversion),
-      // otherwise the conversion-confirming Enter would submit the form.
-      if (composing) return;
+      if (ime.isImeKeystroke(e)) return;
       // Enter submits; Shift+Enter inserts a newline. Matches the
       // convention used by the main search input.
       if (e.key === "Enter" && !e.shiftKey) {
@@ -845,7 +844,7 @@ function IntelligenceAskPageInner() {
         if (canSubmit) void runAsk(input);
       }
     },
-    [canSubmit, composing, input, runAsk],
+    [canSubmit, ime, input, runAsk],
   );
 
   const handleAbort = useCallback(() => {
@@ -901,8 +900,7 @@ function IntelligenceAskPageInner() {
             value={input}
             onChange={handleInputChange}
             onKeyDown={handleInputKeyDown}
-            onCompositionStart={() => setComposing(true)}
-            onCompositionEnd={() => setComposing(false)}
+            onCompositionEnd={ime.onCompositionEnd}
             // An example, not the seed. The seed is already in `value`
             // (see the `useState` above); putting it here as well meant a
             // reader who pressed the button without typing sent an empty
