@@ -196,22 +196,28 @@ def test_flat_kinds_are_unchanged(search_db):
 
 
 def test_every_find_hint_names_a_kind_that_can_match(search_db):
-    # Find's query decomposer has its own label set, and "text" is not
-    # a ``File.file_type`` — core files text documents as ``document``.
-    # Passing it through narrowed every Find hinted that way to nothing,
-    # silently. Seeded rows cover one file of each kind a hint can name,
-    # so a label that cannot match anything fails here.
+    # Find's query decomposer has its own label set. Its "text" asks for
+    # text documents in general, so it maps to the whole of ``document``
+    # (PDFs and office files included), not to the narrower ``text`` kind.
     from app.rag.query_decomposer import _FILE_TYPE_LABELS
     from app.rag.service import _find_kind_for_hint
 
-    unmatched = []
-    for label in sorted(_FILE_TYPE_LABELS):
-        kind = _find_kind_for_hint(label)
-        if kind is None:
-            continue  # "none" means no filter, which is not a failure
-        if not _search(kind):
-            unmatched.append(f"{label} -> {kind}")
-    assert unmatched == []
+    assert {label: _find_kind_for_hint(label) for label in _FILE_TYPE_LABELS} == {
+        "video": "video",
+        "audio": "audio",
+        "image": "image",
+        "text": "document",
+        "none": None,
+    }
+    assert _search(_find_kind_for_hint("text")) == _search("document")
+    assert _search("document") - TEXT == {
+        "code0000cccc",
+        "code0000perl",
+        "log0000plain",
+        "pdf00000mime",
+        "pdf00000ext0",
+        "doc00000othr",
+    }
 
 
 def test_unknown_kind_returns_nothing_rather_than_everything(search_db):
