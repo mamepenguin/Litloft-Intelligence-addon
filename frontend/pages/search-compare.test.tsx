@@ -45,7 +45,9 @@ describe("SearchComparePage IME composition", () => {
   });
 
   it("does not search on an Enter the IME still owns", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
     const input = renderWithConvertedQuery("会議の記録");
+    now.mockReturnValue(1_000_000 + COMPOSITION_GRACE_MS);
     fireEvent.compositionStart(input);
 
     fireEvent.keyDown(input, { key: "Enter", isComposing: true });

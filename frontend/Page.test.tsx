@@ -1014,7 +1014,9 @@ describe("IntelligenceAskPage — IME composition", () => {
   });
 
   it("does not ask on an Enter the IME still owns", async () => {
+    now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
     const { textarea, ask } = await renderReady("計画の結論は");
+    now.mockReturnValue(1_000_000 + COMPOSITION_GRACE_MS);
     fireEvent.compositionStart(textarea);
 
     fireEvent.keyDown(textarea, { key: "Enter", isComposing: true });
