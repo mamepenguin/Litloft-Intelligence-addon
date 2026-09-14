@@ -1,7 +1,7 @@
-"""``?type=markdown`` / ``?type=pdf`` reach semantic search.
+"""``?type=text`` / ``?type=pdf`` reach semantic search.
 
 Core's toolbar names eight kinds — the six flat ``file_type`` values
-plus ``markdown`` and ``pdf`` nested under ``document``. ``IndexedFile``
+plus ``text`` and ``pdf`` nested under ``document``. ``IndexedFile``
 is a snapshot carrying the flat column, so the old
 ``file_type == file_type`` predicate matched **nothing** for those two.
 That failure was silent: the semantic half of the result list emptied
@@ -52,6 +52,12 @@ ROWS = [
     # about. The extension is the only thing that names it.
     ("note0000mime", "plan.MD", "document", ""),
     ("note0000long", "readme.markdown", "document", ""),
+    ("note000plain", "todo.txt", "document", "text/plain"),
+    ("note0000TXT0", "LOG.TXT", "document", ""),
+    # ``text/plain`` without a text extension: source code and logs.
+    ("code0000cccc", "main.c", "document", "text/plain"),
+    ("code0000perl", "tool.pl", "document", "text/plain"),
+    ("log0000plain", "server.log", "document", "text/plain"),
     ("pdf00000mime", "invoice.pdf", "document", "application/pdf"),
     ("pdf00000ext0", "scan.PDF", "document", ""),
     ("doc00000othr", "notes.docx", "document",
@@ -127,16 +133,25 @@ def test_no_filter_returns_everything(search_db):
     assert _search(None) == {file_id for file_id, *_ in ROWS}
 
 
-def test_markdown_finds_the_mime_and_the_extension(search_db):
+TEXT = {
+    "note0000mark",
+    "note0000mime",
+    "note0000long",
+    "note000plain",
+    "note0000TXT0",
+    "note0000othr",
+}
+
+
+def test_text_finds_the_mime_and_the_extension(search_db):
     # ``note0000othr`` is in here on its name alone, with a file_type
     # of ``other``: the nested branch does not require the row to also
     # be a document. See the comment on that row.
-    assert _search("markdown") == {
-        "note0000mark",
-        "note0000mime",
-        "note0000long",
-        "note0000othr",
-    }
+    assert _search("text") == TEXT
+
+
+def test_the_old_markdown_kind_reads_as_text(search_db):
+    assert _search("markdown") == TEXT
 
 
 def test_pdf_finds_the_mime_and_the_extension(search_db):
@@ -148,7 +163,8 @@ def test_extension_match_is_case_insensitive(search_db):
     # separately because a ``LIKE`` without ``lower()`` passes every
     # other assertion here on SQLite and fails on a case-sensitive
     # collation.
-    assert "note0000mime" in _search("markdown")
+    assert "note0000mime" in _search("text")
+    assert "note0000TXT0" in _search("text")
     assert "pdf00000ext0" in _search("pdf")
 
 
@@ -164,6 +180,11 @@ def test_document_is_the_flat_kind_and_nothing_more(search_db):
         "note0000mark",
         "note0000mime",
         "note0000long",
+        "note000plain",
+        "note0000TXT0",
+        "code0000cccc",
+        "code0000perl",
+        "log0000plain",
         "pdf00000mime",
         "pdf00000ext0",
         "doc00000othr",
@@ -175,22 +196,28 @@ def test_flat_kinds_are_unchanged(search_db):
 
 
 def test_every_find_hint_names_a_kind_that_can_match(search_db):
-    # Find's query decomposer has its own label set, and "text" is not
-    # a ``File.file_type`` — core files text documents as ``document``.
-    # Passing it through narrowed every Find hinted that way to nothing,
-    # silently. Seeded rows cover one file of each kind a hint can name,
-    # so a label that cannot match anything fails here.
+    # Find's query decomposer has its own label set. Its "text" asks for
+    # text documents in general, so it maps to the whole of ``document``
+    # (PDFs and office files included), not to the narrower ``text`` kind.
     from app.rag.query_decomposer import _FILE_TYPE_LABELS
     from app.rag.service import _find_kind_for_hint
 
-    unmatched = []
-    for label in sorted(_FILE_TYPE_LABELS):
-        kind = _find_kind_for_hint(label)
-        if kind is None:
-            continue  # "none" means no filter, which is not a failure
-        if not _search(kind):
-            unmatched.append(f"{label} -> {kind}")
-    assert unmatched == []
+    assert {label: _find_kind_for_hint(label) for label in _FILE_TYPE_LABELS} == {
+        "video": "video",
+        "audio": "audio",
+        "image": "image",
+        "text": "document",
+        "none": None,
+    }
+    assert _search(_find_kind_for_hint("text")) == _search("document")
+    assert _search("document") - TEXT == {
+        "code0000cccc",
+        "code0000perl",
+        "log0000plain",
+        "pdf00000mime",
+        "pdf00000ext0",
+        "doc00000othr",
+    }
 
 
 def test_unknown_kind_returns_nothing_rather_than_everything(search_db):

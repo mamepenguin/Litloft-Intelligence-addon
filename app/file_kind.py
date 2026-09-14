@@ -1,10 +1,10 @@
 """The core's file-kind vocabulary, applied to ``IndexedFile``.
 
 Core's ``?type=`` filter names eight kinds — the six flat ``file_type``
-values plus ``markdown`` and ``pdf`` nested under ``document`` — and the
+values plus ``text`` and ``pdf`` nested under ``document`` — and the
 search toolbar is the same control as the folder toolbar. ``IndexedFile``
 is a snapshot of core's ``File`` and carries the flat ``file_type``
-column, so ``file_type == "markdown"`` matches nothing at all: not an
+column, so ``file_type == "text"`` matches nothing at all: not an
 error, just an empty result, which reads as "semantic search found
 nothing about this" rather than "this filter cannot be honoured here".
 
@@ -29,14 +29,20 @@ from sqlalchemy import func, or_
 from app.models import IndexedFile
 
 # Parity-checked against core's ``_KIND_MIMES`` / ``_KIND_SUFFIXES``.
+# ``text/plain`` is deliberately absent: the runtime's ``mimetypes`` gives
+# it to ``.c`` / ``.h`` / ``.pl`` too, which would file source code as text.
 KIND_MIMES: dict[str, tuple[str, ...]] = {
-    "markdown": ("text/markdown",),
+    "text": ("text/markdown",),
     "pdf": ("application/pdf",),
 }
 KIND_SUFFIXES: dict[str, tuple[str, ...]] = {
-    "markdown": (".md", ".markdown"),
+    "text": (".md", ".markdown", ".txt"),
     "pdf": (".pdf",),
 }
+
+# Old spellings still arriving from saved URLs. Kept out of the tables above
+# so they stay identical to core's.
+_RENAMED_KINDS = {"markdown": "text"}
 
 
 def apply_kind_filter(query, kind: str | None):
@@ -49,6 +55,7 @@ def apply_kind_filter(query, kind: str | None):
     if not kind:
         return query
 
+    kind = _RENAMED_KINDS.get(kind, kind)
     mimes = KIND_MIMES.get(kind)
     if mimes is None:
         return query.filter(IndexedFile.file_type == kind)
