@@ -36,16 +36,6 @@ interface PickupWidgetProps {
 export default function PickupWidget({ drive }: PickupWidgetProps) {
   const t = useTranslations("drive");
   const [files, setFiles] = useState<FileItem[]>([]);
-  // `null`, not `0`, until a fetch has answered. The row's link carries
-  // this number, and core's contract is that an unknown total means an
-  // unqualified "See all" rather than a claimed one — `DriveHome` says
-  // so where it threads the same field. With `0` the row spent its whole
-  // load saying "See all (0)" beside a set of skeletons.
-  //
-  // The reset in the effect below covers every load after the first, and
-  // is the half a test can see; this initial value covers the one frame
-  // before the effect runs, which React has committed past by the time a
-  // test can look.
   const [total, setTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -60,6 +50,7 @@ export default function PickupWidget({ drive }: PickupWidgetProps) {
     const load = async () => {
       setLoading(true);
       setTotal(null);
+      setFiles([]);
       try {
         const page = await fetchPickup(drive, {
           limit: CAROUSEL_LIMIT,
@@ -86,7 +77,9 @@ export default function PickupWidget({ drive }: PickupWidgetProps) {
     };
   }, [drive]);
 
-  if (!loading && files.length === 0) return null;
+  // Nothing until the feed has answered: on a drive with no pickup, a
+  // skeleton row that then vanishes is a section that was never there.
+  if (total === null || (!loading && files.length === 0)) return null;
 
   const seeAllHref = drive
     ? `/drive/${encodeURIComponent(drive)}/addons/intelligence/pickup`
