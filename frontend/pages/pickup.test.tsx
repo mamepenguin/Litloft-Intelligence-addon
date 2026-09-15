@@ -154,4 +154,10 @@ describe("PickupPage — page header", () => {
     // a revert is the line below.
     expect(h1s[0].querySelector("svg")).toBeNull();
   });
+
+  it("wears the wide column", async () => {
+    render(<PickupPage />);
+    const heading = await screen.findByRole("heading", { level: 1 });
+    expect(heading.closest("header")!.parentElement?.getAttribute("data-page-frame")).toBe("wide");
+  });
 });

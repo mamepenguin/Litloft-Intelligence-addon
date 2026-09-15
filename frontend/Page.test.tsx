@@ -864,11 +864,13 @@ describe("IntelligenceAskPage — page header, mode tabs and accent budget", () 
    */
   it("says which drive it will read, and how many files", async () => {
     render(<IntelligenceAskPage />);
-    const scope = await screen.findByTestId("drive-scope");
+    // The line shows the drive at once and the count when it arrives, so the
+    // wait is for the count.
+    const scope = await screen.findByText(/619/, { selector: "[data-testid='drive-scope']" });
     // The count of the drive in context, not of the first one returned:
     // both are in the response and only one is the subject.
-    expect(scope.textContent).toContain("619");
-    expect(scope.textContent).not.toContain("3 files");
+    expect(scope.textContent).toContain("family");
+    expect(scope.textContent).not.toContain("3 items");
   });
 
   it("says what it will send before it sends it", async () => {

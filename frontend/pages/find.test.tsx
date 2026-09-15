@@ -172,7 +172,8 @@ async function submitQuery(question: string) {
 describe("FindPage — what it is searching", () => {
   it("says which drive and how many files", async () => {
     render(<FindPage />);
-    expect(await screen.findByTestId("drive-scope")).toBeInTheDocument();
+    const scope = await screen.findByText(/619/, { selector: "[data-testid='drive-scope']" });
+    expect(scope.textContent).toContain("family");
   });
 });
 
@@ -417,16 +418,9 @@ describe("FindPage — empty / loading / error", () => {
  * (UI redesign Phase 3, C2a). The Ask page carries the same three.
  */
 describe("FindPage — page header, mode tabs and accent budget", () => {
-  /**
-   * Every test here renders the page and asserts synchronously, and the
-   * page asks core for its drive list on mount — so the response landed
-   * after the test ended, updating state with nothing holding the lock.
-   * The scope line's own arrival is the thing to wait for; waiting on it
-   * is also what makes these assertions run against the finished screen.
-   */
   const renderSettled = async () => {
     const utils = render(<FindPage />);
-    await screen.findByTestId("drive-scope");
+    await screen.findByText(/619/, { selector: "[data-testid='drive-scope']" });
     return utils;
   };
 
