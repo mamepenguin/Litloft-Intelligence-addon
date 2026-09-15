@@ -1,16 +1,8 @@
-/**
- * The folder AI actions, as rows of the `Add` menu.
- *
- * 案 2 leaves the folder toolbar four exposed controls plus a conditional
- * `Play`; an addon's own dropdown would be a fifth, and
- * `folder-actions-menu` is the contract for putting the rows inside the
- * host's menu instead.
- */
-
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const { toast, api } = vi.hoisted(() => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
@@ -51,7 +43,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("the folder AI actions in the Add menu", () => {
+describe("the folder AI actions", () => {
   it("draws menu rows, and nothing that is not one", () => {
     // The whole point of the move. Asserted as "every button here is a
     // row", not as "there is no [aria-haspopup] and no role=menu": a plain
@@ -74,8 +66,6 @@ describe("the folder AI actions in the Add menu", () => {
   });
 
   it("renders nothing when the folder has no files", () => {
-    // `AddButton`'s separator is `empty:hidden`, so drawing nothing is
-    // what takes the rule away with the rows.
     const { container } = render(
       <FolderAIActionsMenuItems {...PROPS} fileIds={[]} />,
     );
@@ -126,11 +116,8 @@ describe("the folder AI actions in the Add menu", () => {
   });
 
   it("refuses a second claim even from a copy that has not re-rendered", async () => {
-    // Not hypothetical: `FolderToolbar` draws its left group once per
-    // breakpoint, so two live `AddButton`s — and two live copies of these
-    // rows — are in the DOM at the same time. Only the copy that was
-    // pressed re-renders, so the other one's row is still enabled, and the
-    // `disabled` attribute cannot be what stops it.
+    // Only the copy that was pressed re-renders, so the other one's row is
+    // still enabled, and the `disabled` attribute cannot be what stops it.
     let resolve!: (v: unknown) => void;
     api.batchSuggestedTags.mockReturnValue(new Promise((r) => { resolve = r; }));
 
@@ -326,6 +313,19 @@ describe("the folder AI actions in the Add menu", () => {
         expect(file[key]).toContain("{count}");
       }
     });
+  });
+
+  it("is declared in the folder toolbar's … menu, not in Add", () => {
+    const slots = JSON.parse(
+      readFileSync(
+        resolve(dirname(realpathSync(fileURLToPath(import.meta.url))), "../manifest.json"),
+        "utf8",
+      ),
+    ).slots as Record<string, Array<{ id: string }>>;
+    const holders = Object.entries(slots)
+      .filter(([, entries]) => entries.some((e) => e.id === "folder-ai-actions"))
+      .map(([slot]) => slot);
+    expect(holders).toEqual(["folder-bulk-actions-menu"]);
   });
 
   it.each([
