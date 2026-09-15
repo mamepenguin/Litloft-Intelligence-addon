@@ -1,14 +1,6 @@
 "use client";
 
 /**
- * `folder-actions-menu` rows for the folder toolbar's `Add` menu.
- *
- * 案 2 gives that bar four exposed controls plus a conditional `Play`; an
- * addon's own dropdown would be a fifth.
- * `2026-08-30-file-actions-menu-addon-slot.md` §6 is the contract that
- * avoids it — addons draw `ActionMenuItem` rows the host cannot tell from
- * its own.
- *
  * The host closes its menu as soon as a row is pressed, unlike
  * `IndexDetailsMenuItem`, which asks for the close only after its dialog is
  * dismissed. Nothing here opens one.
@@ -168,8 +160,6 @@ export default function FolderAIActionsMenuItems({
     }
   }, [claim, confirmBatch, drive, fileIds, t, toast, onRequestClose]);
 
-  // Nothing to act on, so no rows — and `AddButton` hides the separator
-  // above them with `empty:hidden` when that happens.
   if (fileIds.length === 0) return null;
 
   const busy = (action: Action) => inFlight.has(keyFor(action, drive));

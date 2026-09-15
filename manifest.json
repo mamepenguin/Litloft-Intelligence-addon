@@ -140,7 +140,7 @@
         "priority": 30
       }
     ],
-    "folder-actions-menu": [
+    "folder-bulk-actions-menu": [
       {
         "id": "folder-ai-actions",
         "label": "AI",
