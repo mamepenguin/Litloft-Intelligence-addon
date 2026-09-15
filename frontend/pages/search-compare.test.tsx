@@ -33,6 +33,14 @@ function renderWithConvertedQuery(query: string) {
   return input;
 }
 
+describe("SearchComparePage frame", () => {
+  it("wears the wide column", () => {
+    render(<SearchComparePage />);
+    const heading = screen.getByRole("heading", { level: 1 });
+    expect(heading.closest("header")!.parentElement?.getAttribute("data-page-frame")).toBe("wide");
+  });
+});
+
 describe("SearchComparePage IME composition", () => {
   it("does not search on the Enter that confirms a conversion", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);

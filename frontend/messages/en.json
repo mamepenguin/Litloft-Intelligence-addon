@@ -143,7 +143,6 @@
     "loading": "Creating answer...",
     "thinking": "Creating answer…",
     "answerTitle": "AI answer",
-    "pageTitle": "Ask this drive",
     "placeholder": "e.g. which of last week's films talked about space",
     "submit": "Ask",
     "privacyHint": "Answers take a few seconds. Transcripts and text are sent to the LLM API.",
@@ -199,7 +198,6 @@
     "pageHeading": "Find: Search files",
     "pageDescription": "Shows files that may be related to “{query}”",
     "pageCta": "Open Find page",
-    "title": "Find files",
     "placeholder": "e.g. sci-fi-ish movies I watched last week",
     "submit": "Find",
     "loading": "Searching…",
@@ -208,8 +206,7 @@
     "totalCount": "{count} results",
     "categoryExpansion": "Related terms: {terms}",
     "chipPersonalViewed": "viewed",
-    "chipPersonalNotViewed": "not viewed",
-    "scope": "{count} files in {drive}"
+    "chipPersonalNotViewed": "not viewed"
   },
   "file": {
     "similarFiles": "Similar files",

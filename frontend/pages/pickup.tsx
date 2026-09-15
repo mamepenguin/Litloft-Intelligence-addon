@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
+import { PageFrame } from "@/components/PageFrame";
 import { PageHeader } from "@/components/PageHeader";
 import { Sparkles } from "lucide-react";
 
@@ -109,16 +110,18 @@ export default function PickupPage() {
   const exhausted = total !== null && loadedRef.current >= total;
 
   return (
-    <div className="mx-auto w-full max-w-7xl py-6">
-      <PageHeader
-        titleIcon={Sparkles}
-        title={t("pickup.heading")}
-        scope={t("pickup.description")}
-      />
-
-      {/* `px-4`, matching PageHeader's own padding — the container carries
-          the vertical rhythm and each side pads itself. */}
-      <div className="px-4">
+    <PageFrame
+      width="wide"
+      header={
+        <PageHeader
+          titleIcon={Sparkles}
+          title={t("pickup.heading")}
+          scope={t("pickup.description")}
+        />
+      }
+    >
+      {/* `px-4`, matching PageHeader's own padding. */}
+      <div className="px-4 pb-6">
 
         {files.length > 0 && <FileGrid files={files} />}
 
@@ -150,6 +153,6 @@ export default function PickupPage() {
           <div ref={sentinel} className="h-px" aria-hidden />
         )}
       </div>
-    </div>
+    </PageFrame>
   );
 }

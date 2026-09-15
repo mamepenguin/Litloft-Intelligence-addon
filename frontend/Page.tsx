@@ -45,11 +45,10 @@ import { AlertCircle, BookmarkPlus, Quote, Send, Sparkles, Square, X } from "luc
 import { useCurrentDrive } from "@/components/CurrentDriveProvider";
 import { useImeKeyGuard } from "@/lib/ime";
 import { Button } from "@/components/Button";
-import { PageHeader } from "@/components/PageHeader";
-import { DriveScopeLine } from "./DriveScopeLine";
+import { PageFrame } from "@/components/PageFrame";
+import { AskFindHeader } from "./AskFindHeader";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import { addSourceCapture } from "@/lib/sourceCapture";
-import ModeTabs from "./ModeTabs";
 import {
   askQuestionStream,
   getIntelligenceStatus,
@@ -861,24 +860,12 @@ function IntelligenceAskPageInner() {
   );
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 py-4 sm:py-6">
-      <PageHeader
-        titleIcon={Sparkles}
-        // Not `answerTitle`: that names the answer, and it was the page's
-        // heading — so the page announced "AI answer" before anything had
-        // been asked. It heads the answer section instead, which is where
-        // it is true, and only once there is an answer under it.
-        title={t("pageTitle")}
-        tabs={
-          drive ? <ModeTabs current="ask" query={input} drive={drive} /> : undefined
-        }
-      />
-
-      {/* `px-4`, matching PageHeader's own padding. The container carries the
-          vertical rhythm and each side pads itself horizontally, which is what
-          TrashView and MissingView already do — a container padding both axes
-          would leave the header inset 16px further than everything under it. */}
-      <div className="flex flex-col gap-4 px-4">
+    <PageFrame
+      width="reading"
+      header={<AskFindHeader current="ask" query={input} drive={drive} />}
+    >
+      {/* `px-4`, matching PageHeader's own padding. */}
+      <div className="flex flex-col gap-4 px-4 pb-6 pt-2">
 
         {ragAvailable === false && (
           <div
@@ -892,8 +879,6 @@ function IntelligenceAskPageInner() {
             <p className="text-sm text-text-muted">{t("llmDisabled")}</p>
           </div>
         )}
-
-        <DriveScopeLine drive={drive} />
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-2">
           <textarea
@@ -1186,7 +1171,7 @@ function IntelligenceAskPageInner() {
           />
         )}
       </div>
-    </div>
+    </PageFrame>
   );
 }
 

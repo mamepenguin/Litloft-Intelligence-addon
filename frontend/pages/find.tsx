@@ -30,7 +30,7 @@ import {
 } from "react";
 import { useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
-import { AlertCircle, ListFilter, Search } from "lucide-react";
+import { AlertCircle, Search } from "lucide-react";
 
 import { useCurrentDrive } from "@/components/CurrentDriveProvider";
 import { findFiles } from "../api";
@@ -43,9 +43,8 @@ import type {
 import FindChip from "../FindChip";
 import type { FindChipSlot } from "../FindChip";
 import { Button } from "@/components/Button";
-import { PageHeader } from "@/components/PageHeader";
-import { DriveScopeLine } from "../DriveScopeLine";
-import ModeTabs from "../ModeTabs";
+import { PageFrame } from "@/components/PageFrame";
+import { AskFindHeader } from "../AskFindHeader";
 
 const FIND_LIMIT = 20;
 
@@ -256,21 +255,12 @@ function IntelligenceFindPageInner() {
   const chips = decomposed ? buildChips(decomposed, t) : [];
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 py-4 sm:py-6">
-      <PageHeader
-        titleIcon={ListFilter}
-        title={t("title")}
-        tabs={
-          drive ? <ModeTabs current="find" query={input} drive={drive} /> : undefined
-        }
-      />
-
-      {/* `px-4`, matching PageHeader's own padding — see the note on the Ask
-          page. */}
-      <div className="flex flex-col gap-4 px-4">
-
-        <DriveScopeLine drive={drive} />
-
+    <PageFrame
+      width="reading"
+      header={<AskFindHeader current="find" query={input} drive={drive} />}
+    >
+      {/* `px-4`, matching PageHeader's own padding. */}
+      <div className="flex flex-col gap-4 px-4 pb-6 pt-2">
         <form onSubmit={handleSubmit} className="flex items-center gap-2">
           <input
             type="text"
@@ -363,7 +353,7 @@ function IntelligenceFindPageInner() {
           </>
         )}
       </div>
-    </div>
+    </PageFrame>
   );
 }
 

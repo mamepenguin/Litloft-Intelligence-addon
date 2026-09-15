@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import { Button } from "@/components/Button";
+import { PageFrame } from "@/components/PageFrame";
 import { PageHeader } from "@/components/PageHeader";
 import {
   searchCompare,
@@ -228,7 +229,9 @@ export default function SearchComparePage() {
   const cosineResults = showCutoff ? data.cosine : data.cosineNoCutoff;
 
   return (
-    <div className="mx-auto max-w-6xl py-8">
+    <PageFrame
+      width="wide"
+      header={
       <PageHeader
         title="Search Algorithm Comparison"
         scope={
@@ -243,9 +246,10 @@ export default function SearchComparePage() {
           </>
         }
       />
-
+      }
+    >
       {/* `px-4`, matching PageHeader's own padding. */}
-      <div className="px-4">
+      <div className="px-4 pb-8">
 
         <div className="mb-6 flex gap-2">
           <input
@@ -301,6 +305,6 @@ export default function SearchComparePage() {
           </>
         )}
       </div>
-    </div>
+    </PageFrame>
   );
 }
