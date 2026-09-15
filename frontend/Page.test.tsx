@@ -805,7 +805,9 @@ describe("IntelligenceAskPage — page header, mode tabs and accent budget", () 
   it("names what the page is for, not what it will produce", async () => {
     render(<IntelligenceAskPage />);
     const heading = await screen.findByRole("heading", { level: 1 });
-    expect(heading.textContent).toContain("Ask this drive");
+    // The sidebar row's own label, the same one Find's tab carries.
+    expect(heading.textContent).toBe("Ask");
+    expect(heading.closest("header")!.parentElement?.getAttribute("data-page-frame")).toBe("reading");
     // The answer's own heading keeps the old words, one level down, and
     // only once there is an answer under it.
     expect(screen.queryByText("AI answer")).toBeNull();

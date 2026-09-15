@@ -143,7 +143,6 @@
     "loading": "回答を作成中...",
     "thinking": "回答を作成中…",
     "answerTitle": "AIの回答",
-    "pageTitle": "ドライブに質問する",
     "placeholder": "例: 先週観た映画で、宇宙の話をしていたのはどれ",
     "submit": "質問する",
     "privacyHint": "回答に数秒かかります。字幕や本文が LLM API に送られます。",
@@ -199,7 +198,6 @@
     "pageHeading": "Find: ファイルを探す",
     "pageDescription": "「{query}」に関連しそうなファイルを表示します",
     "pageCta": "Findページを開く",
-    "title": "ファイルを探す",
     "placeholder": "例: 先週観たSFっぽい映画",
     "submit": "探す",
     "loading": "検索中…",
@@ -208,8 +206,7 @@
     "totalCount": "{count} 件見つかりました",
     "categoryExpansion": "関連語: {terms}",
     "chipPersonalViewed": "視聴済み",
-    "chipPersonalNotViewed": "未視聴",
-    "scope": "{drive} ドライブの {count} 件が対象です"
+    "chipPersonalNotViewed": "未視聴"
   },
   "file": {
     "similarFiles": "似たファイル",

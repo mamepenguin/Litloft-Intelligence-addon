@@ -430,6 +430,13 @@ describe("FindPage — page header, mode tabs and accent budget", () => {
     return utils;
   };
 
+  it("keeps Ask's title and reading column, so switching tabs moves nothing", async () => {
+    await renderSettled();
+    const heading = screen.getByRole("heading", { level: 1 });
+    expect(heading.textContent).toBe("Ask");
+    expect(heading.closest("header")!.parentElement?.getAttribute("data-page-frame")).toBe("reading");
+  });
+
   it("names itself once, and lets core choose the size", async () => {
     const { container } = await renderSettled();
     const h1s = container.querySelectorAll("h1");
