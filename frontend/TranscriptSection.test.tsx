@@ -1239,14 +1239,12 @@ describe("TranscriptSection — whose name is on the panel", () => {
     expect(screen.queryByText("Transcript")).toBeNull();
   });
 
-  it("keeps the facts about the transcript either way", async () => {
-    // Only the name goes. The language and the count are facts about
-    // this transcript, not a second name for it.
-    render(<TranscriptSection fileId="abc" drive="family" labelledByHost />);
+  it("shows neither the detected language nor the cue count", async () => {
+    render(<TranscriptSection fileId="abc" drive="family" />);
 
     await screen.findByText("未修正の文章。");
-    expect(screen.getByText("ja")).toBeInTheDocument();
-    expect(screen.getByText("(2)")).toBeInTheDocument();
+    expect(screen.queryByText("ja")).toBeNull();
+    expect(screen.queryByText("(2)")).toBeNull();
   });
 
   it("keeps the controls too, which is the half that would go quietly", async () => {

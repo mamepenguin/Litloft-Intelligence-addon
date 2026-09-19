@@ -210,13 +210,11 @@ export default function TranscriptSection({
     refineFeature !== false && refineFeature !== "false" && refineFeature !== undefined;
   const [refining, setRefining] = useState(false);
   const [whisperChunks, setWhisperChunks] = useState<TranscriptChunkItem[]>([]);
-  const [whisperLanguage, setWhisperLanguage] = useState("");
   const [whisperWordCues, setWhisperWordCues] = useState<TranscriptChunkItem[]>([]);
   const [externalCues, setExternalCues] = useState<TranscriptChunkItem[]>([]);
   // Whether each subtitle fetch has answered, found or not.
   const [wordsSettled, setWordsSettled] = useState(false);
   const [externalSettled, setExternalSettled] = useState(false);
-  const [externalLanguage, setExternalLanguage] = useState("");
   const [loading, setLoading] = useState(true);
   const [source, setSource] = useState<Source>("chunks");
   // Until the reader picks one, the source follows what is available: a
@@ -265,7 +263,6 @@ export default function TranscriptSection({
       if (cancelled) return;
       if (res.available && res.chunks && res.chunks.length > 0) {
         setWhisperChunks(res.chunks);
-        setWhisperLanguage(res.language || "");
       } else {
         setWhisperChunks([]);
       }
@@ -304,7 +301,6 @@ export default function TranscriptSection({
     let cancelled = false;
     setExternalSettled(false);
     const first = subtitles[0];
-    setExternalLanguage(first.language || "");
     fetch(getSubtitleUrl(fileId, first.index))
       .then((r) => (r.ok ? r.text() : ""))
       .then((text) => {
@@ -367,11 +363,11 @@ export default function TranscriptSection({
     onAvailabilityRef.current?.(hasAnything);
   }, [hasAnything]);
 
-  const { cues, language } = useMemo(() => {
-    if (source === "external") return { cues: externalCues, language: externalLanguage };
-    if (source === "words") return { cues: whisperWordCues, language: whisperLanguage };
-    return { cues: whisperChunks, language: whisperLanguage };
-  }, [source, externalCues, externalLanguage, whisperWordCues, whisperChunks, whisperLanguage]);
+  const cues = useMemo(() => {
+    if (source === "external") return externalCues;
+    if (source === "words") return whisperWordCues;
+    return whisperChunks;
+  }, [source, externalCues, whisperWordCues, whisperChunks]);
 
   useEffect(() => {
     // The highlight used to bind `timeupdate` on an HTMLVideoElement,
@@ -698,25 +694,16 @@ export default function TranscriptSection({
       {/* The title goes when the host has already written it — the tab
           the reader pressed says "Transcript", and saying it again
           under the button costs a line of a panel whose whole value is
-          length. What stays either way is the row's other occupants:
-          the language, the count and the two controls are facts about
-          this transcript, not a second name for it. The row is never
-          empty, because the count is unconditional. */}
-      <div className="mb-2 flex items-center gap-2 text-sm text-text-muted">
+          length. */}
+      <div className="mb-2 flex items-center gap-2 text-sm text-text-muted empty:hidden">
         {!labelledByHost && (
           <>
             <FileText size={14} />
             <span>{t("transcriptTitle")}</span>
           </>
         )}
-        {language && (
-          <span className="rounded-lg bg-bg-card px-1.5 py-0.5 text-xs">
-            {language}
-          </span>
-        )}
-        <span className="text-xs">({cues.length})</span>
         {showToggle && (
-          <div className="ml-2 flex gap-1 text-xs">
+          <div className="flex gap-1 text-xs">
             {visibleOptions.map((opt) => (
               <button
                 key={opt.id}
