@@ -1,7 +1,0 @@
-Filename: f.mp4
-Type: video
-Title: 別タイトル
-Description: 説明文。
-Metadata tags: tag1, tag2
-本文ここ。
-Existing tags: existing1, existing2
