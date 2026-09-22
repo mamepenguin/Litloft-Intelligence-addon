@@ -1,9 +1,0 @@
-Filename: test.mp4
-Type: video
-Title: 別のタイトル
-Description: テスト動画の説明文。
-
-Note: The following is an excerpt from a long piece of content, sampled from the beginning, middle, and end.
-
---- Content ---
-本文。

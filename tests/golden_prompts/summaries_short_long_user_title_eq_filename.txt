@@ -1,5 +1,0 @@
-Filename: same.mp4
-Type: video
-
---- Content ---
-ctx

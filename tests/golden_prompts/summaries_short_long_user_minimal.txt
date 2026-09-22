@@ -1,5 +1,0 @@
-Filename: test.mp4
-Type: video
-
---- Content ---
-ここに本文。

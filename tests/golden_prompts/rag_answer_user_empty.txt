@@ -1,4 +1,0 @@
-Question: クエリだ
-
-Context:
-(no context available)
