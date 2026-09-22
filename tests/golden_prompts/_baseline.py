@@ -85,17 +85,9 @@ def _patch_settings(output_language: str):
 
 
 def capture_summaries() -> None:
-    from app.workers import summaries
+    from app.prompt_loader import render
 
-    for lang in ("ja", "en", "auto"):
-        with _patch_settings(lang):
-            out = summaries._build_system_prompt()
-        _write(f"summaries_short_long_system_{lang}.txt", out)
-
-    for lang in ("ja", "en", "auto"):
-        with _patch_settings(lang):
-            out = summaries._build_detailed_system_prompt()
-        _write(f"summaries_detailed_system_{lang}.txt", out)
+    _write("summaries_common_rules.txt", render("summaries/_common_rules.jinja2"))
 
 
 def main() -> None:
