@@ -237,34 +237,80 @@ class TestPerDrivePolicy:
 class TestCrossDriveIsolation:
     """A caller in drive A must not refine files that live in drive B."""
 
-    @pytest.mark.asyncio
-    async def test_other_drive_file_id_returns_404(
-        self, feature_manual, monkeypatch
-    ):
-        # Simulate _fetch_indexed_file's drive filter: the file_id exists
-        # but only in a different drive, so the query returns None.
-        session = MagicMock()
-        session.query.return_value.filter.return_value.first.return_value = None
+    @pytest.fixture()
+    def two_drive_db(self, tmp_path):
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
 
-        class _Ctx:
-            def __enter__(self):
-                return session
-            def __exit__(self, *a):
-                return False
+        from app.database import Base
+        from app.models import IndexedFile, TranscriptChunk
 
-        monkeypatch.setattr(
-            "app.routers.refine.get_search_db", lambda: _Ctx()
-        )
+        engine = create_engine(f"sqlite:///{tmp_path / 'search.db'}")
+        Base.metadata.create_all(engine)
+        session = sessionmaker(bind=engine)()
+        for file_id, drive in (("own-file", "family"), ("other-file", "other")):
+            session.add(
+                IndexedFile(
+                    file_id=file_id,
+                    drive=drive,
+                    filename="v.mp4",
+                    file_path="v.mp4",
+                    file_type="video",
+                    mime_type="video/mp4",
+                    file_size=1,
+                    active=True,
+                )
+            )
+            session.add(
+                TranscriptChunk(
+                    file_id=file_id,
+                    chunk_index=0,
+                    text="hello",
+                    language="en",
+                    timestamp_start=0.0,
+                    timestamp_end=1.0,
+                )
+            )
+        session.commit()
+        yield session
+        session.close()
+
+    @staticmethod
+    def _patch(monkeypatch, session):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _ctx():
+            yield session
+
+        monkeypatch.setattr("app.routers.refine.get_search_db", _ctx)
         monkeypatch.setattr(
             "app.routers.refine.is_feature_enabled",
             AsyncMock(return_value=True),
         )
 
+    @pytest.mark.asyncio
+    async def test_other_drive_file_id_returns_404(
+        self, feature_manual, two_drive_db, monkeypatch
+    ):
+        self._patch(monkeypatch, two_drive_db)
+
         with pytest.raises(HTTPException) as exc:
-            # file_id belongs to 'other', caller header says 'family'
-            await refine_file(file_id="other-drive-file", drive="family")
+            await refine_file(file_id="other-file", drive="family")
 
         assert exc.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_own_drive_file_id_is_accepted(
+        self, feature_manual, two_drive_db, monkeypatch
+    ):
+        """Without this, dropping the drive filter is indistinguishable
+        from the endpoint refusing every file."""
+        self._patch(monkeypatch, two_drive_db)
+
+        result = await refine_file(file_id="own-file", drive="family")
+
+        assert result["chunk_count"] == 1
 
 
 class TestFolderBodyValidation:

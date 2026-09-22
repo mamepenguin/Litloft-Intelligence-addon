@@ -471,18 +471,31 @@ class TestVttEndpointOrderingInvariant:
     def test_vtt_endpoint_orders_by_timestamp_not_insertion_order(
         self, real_session, monkeypatch
     ):
-        """Insert rows in shuffled timestamp order via bulk_insert path,
-        then build the VTT and check cues come out time-sorted.
+        """Rows inserted out of time order must come back time-sorted.
 
-        The current endpoint uses ``ORDER BY word_index`` — when
-        word_index doesn't match insertion-order or timestamp-order,
-        the output is scrambled. With word_index removed, the endpoint
-        MUST sort by timestamp_start.
+        The rows carry no ``word_index``; ordering by insertion or by
+        rowid would scramble the cues.
         """
-        from app.models import TranscriptWord as TW
-        from app.subtitle_builder import build_vtt
+        import asyncio
+        from contextlib import contextmanager
+
+        import app.database as database
+        from app.models import IndexedFile, TranscriptWord as TW
+        from app.routers.files import get_subtitles_vtt
 
         fid = "filevtt0"
+        real_session.add(
+            IndexedFile(
+                file_id=fid,
+                drive="Videos",
+                filename="v.mp4",
+                file_path="v.mp4",
+                file_type="video",
+                mime_type="video/mp4",
+                file_size=1,
+                active=True,
+            )
+        )
         # Shuffled insertion order: ts 5.0, 1.0, 3.0.
         real_session.bulk_insert_mappings(
             TW,
@@ -512,24 +525,15 @@ class TestVttEndpointOrderingInvariant:
         )
         real_session.commit()
 
-        # Post-fix endpoint query: ORDER BY timestamp_start (+id tiebreak).
-        rows = real_session.execute(
-            sql_text(
-                "SELECT text, timestamp_start, timestamp_end "
-                "FROM transcript_words WHERE file_id = :fid "
-                "ORDER BY timestamp_start, id"
-            ),
-            {"fid": fid},
-        ).fetchall()
+        @contextmanager
+        def _search_db():
+            yield real_session
 
-        words = [
-            {"text": r[0], "timestamp_start": r[1], "timestamp_end": r[2]}
-            for r in rows
-        ]
-        vtt = build_vtt(words, language="en")
+        monkeypatch.setattr(database, "get_search_db", _search_db)
 
-        # Find the order in which 'first', 'second', 'third' appear in
-        # the rendered VTT body.
+        response = asyncio.run(get_subtitles_vtt(fid))
+        vtt = response.body.decode("utf-8")
+
         positions = {
             tag: vtt.find(tag) for tag in ("first", "second", "third")
         }
@@ -537,13 +541,3 @@ class TestVttEndpointOrderingInvariant:
         assert positions["first"] < positions["second"] < positions["third"], (
             f"VTT cues are not ordered by timestamp:\n{vtt}"
         )
-
-
-# The previous ``TestUniqueTimestamps`` class was removed as part of
-# the clamp-in-aligner refactor. The "unique timestamp_start per file"
-# invariant was over-claimed: back-to-back ASR segments and zero-
-# duration units can legitimately share a ``timestamp_start`` while
-# remaining distinct rows. The weaker, exact invariant — "chunk N
-# realign cannot damage chunk N+1's rows" — is covered by
-# ``TestNoOverflowIntoNeighborChunk`` above. Aligner-window clamp
-# behaviour itself is covered in ``tests/test_refine_aligner.py``.
