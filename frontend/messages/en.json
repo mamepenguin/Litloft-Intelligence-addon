@@ -418,7 +418,7 @@
         },
         "transcript_refine": {
           "label": "AI transcript cleanup",
-          "help": "Cleans up transcripts with an LLM, including punctuation and homophone fixes. Originals are kept and can always be restored. Full transcripts are sent to the LLM API."
+          "help": "Cleans up transcripts with an LLM, including punctuation and homophone fixes. This cannot be undone: getting the original back means transcribing the file again. Full transcripts are sent to the LLM API."
         },
         "vision_describe": {
           "label": "AI image description",
