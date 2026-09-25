@@ -27,6 +27,9 @@ vi.mock("@/addons/intelligence/api", () => ({
   getCitationChunkExcerpt: vi.fn(),
 }));
 
+const copyTextMock = vi.hoisted(() => vi.fn<(text: string) => Promise<boolean>>());
+vi.mock("@/lib/copyText", () => ({ copyText: copyTextMock }));
+
 import { DetailedSummaryCitationPopover } from "@/addons/intelligence/DetailedSummaryCitationPopover";
 import { CitationInlinePanel } from "@/addons/intelligence/CitationInlinePanel";
 import {
@@ -190,6 +193,31 @@ describe("DetailedSummaryCitationPopover (dot marker)", () => {
 });
 
 describe("CitationInlinePanel (in-flow accordion)", () => {
+  it("copies the excerpt with its context through copyText", async () => {
+    copyTextMock.mockResolvedValue(true);
+    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        chunk_id: "c1",
+        file_id: "f1",
+        prefix: "前の文。",
+        target: "抜粋。",
+        suffix: "次の文。",
+        start_time: 42,
+        end_time: 46,
+        page: null,
+      });
+    renderMarkerWithPanel({ citation: linkedCitation });
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Clear source citation|根拠が明確/ }),
+      );
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: /Copy excerpt/ }));
+
+    expect(copyTextMock).toHaveBeenCalledWith("前の文。抜粋。次の文。");
+  });
+
   it("does not render the panel until the marker is clicked (Verify ON)", async () => {
     renderMarkerWithPanel({ citation: linkedCitation });
     await waitFor(() => {
