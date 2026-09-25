@@ -28,6 +28,7 @@ import { PlayCircle, Copy } from "lucide-react";
 import { useCitationRail, CITATION_STRONG_THRESHOLD } from "./CitationRailContext";
 import type { CitationFetchState } from "./CitationRailContext";
 import type { CitationChunkExcerpt, DetailedSummaryCitation } from "./api";
+import { copyText } from "@/lib/copyText";
 import type { MediaController } from "@/lib/mediaController";
 
 interface CitationInlinePanelProps {
@@ -288,12 +289,8 @@ function InlineExcerptBody({
     const text = [excerpt.prefix, excerpt.target, excerpt.suffix]
       .filter(Boolean)
       .join("");
-    try {
-      void navigator.clipboard?.writeText(text);
-    } catch {
-      // Clipboard unavailable — silent fail is fine for a convenience
-      // shortcut.
-    }
+    // A refused copy stays silent: the excerpt is on screen above the button.
+    void copyText(text);
   };
 
   const locator = (() => {
