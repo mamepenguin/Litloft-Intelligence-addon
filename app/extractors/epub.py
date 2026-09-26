@@ -71,6 +71,17 @@ class _Refused(Exception):
     pass
 
 
+class _ByteBudget:
+    """Decompressed bytes one book may still read, across all of its members."""
+
+    def __init__(self, total: int) -> None:
+        self.left = total
+
+    @property
+    def spent(self) -> bool:
+        return self.left <= 0
+
+
 class EpubExtractor(ContentExtractor):
     """Extracts text content from EPUB books, one numbered section at a time."""
 
@@ -83,16 +94,17 @@ class EpubExtractor(ContentExtractor):
         try:
             with zipfile.ZipFile(file_path) as zf:
                 entries = {decode_zip_filename(info): info for info in zf.infolist()}
-                spine = _read_book(zf, entries)
+                budget = _ByteBudget(BOOK_MAX_BYTES)
+                spine = _read_book(zf, entries, budget)
                 if spine is None:
                     return empty
                 book = replace(
                     spine,
                     sections=spine.sections[:SECTION_MAX],
-                    encrypted=_encrypted_paths(zf, entries),
+                    encrypted=_encrypted_paths(zf, entries, budget),
                 )
-                toc_titles = _toc_titles(zf, entries, book)
-                chunks, headings = _extract_sections(zf, entries, book, toc_titles)
+                toc_titles = _toc_titles(zf, entries, book, budget)
+                chunks, headings = _extract_sections(zf, entries, book, toc_titles, budget)
         except Exception as e:
             logger.warning("EPUB could not be opened %s: %s", file_path, e)
             return empty
@@ -113,9 +125,18 @@ def _namespace(tag: str) -> str | None:
     return tag[1:].split("}", 1)[0] if tag.startswith("{") else None
 
 
-def _read_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo, cap: int) -> bytes | None:
-    with zf.open(info) as f:
-        data = f.read(cap + 1)
+def _read_member(
+    zf: zipfile.ZipFile, info: zipfile.ZipInfo, cap: int, budget: _ByteBudget,
+) -> bytes | None:
+    # A read that raises (bad CRC, broken deflate stream) is charged the
+    # cap + 1 bytes it asked for: how much it decompressed is not known.
+    charge = cap + 1
+    try:
+        with zf.open(info) as f:
+            data = f.read(cap + 1)
+        charge = len(data)
+    finally:
+        budget.left -= charge
     return None if len(data) > cap else data
 
 
@@ -208,20 +229,23 @@ def _children(
 
 
 def _read_xml_member(
-    zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo], path: str | None,
+    zf: zipfile.ZipFile,
+    entries: dict[str, zipfile.ZipInfo],
+    path: str | None,
+    budget: _ByteBudget,
 ) -> bytes | None:
     info = entries.get(path) if path else None
-    return None if info is None else _read_member(zf, info, XML_MAX_BYTES)
+    return None if info is None else _read_member(zf, info, XML_MAX_BYTES, budget)
 
 
 def _read_book(
-    zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo],
+    zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo], budget: _ByteBudget,
 ) -> _Book | None:
-    container_data = _read_xml_member(zf, entries, "META-INF/container.xml")
+    container_data = _read_xml_member(zf, entries, "META-INF/container.xml", budget)
     if container_data is None:
         return None
     opf_path = _opf_path(_parse_strict(container_data)[0])
-    opf_data = _read_xml_member(zf, entries, opf_path)
+    opf_data = _read_xml_member(zf, entries, opf_path, budget)
     if opf_path is None or opf_data is None:
         return None
     package, root_namespaces = _parse_strict(opf_data)
@@ -276,12 +300,12 @@ def _read_book(
 
 
 def _encrypted_paths(
-    zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo],
+    zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo], budget: _ByteBudget,
 ) -> frozenset[str] | None:
     if _ENCRYPTION_PATH not in entries:
         return frozenset()
     try:
-        data = _read_xml_member(zf, entries, _ENCRYPTION_PATH)
+        data = _read_xml_member(zf, entries, _ENCRYPTION_PATH, budget)
         if data is None:
             return None
         root, _ = _parse_strict(data)
@@ -333,14 +357,17 @@ def _ncx_entries(data: bytes, base_dir: str) -> list[tuple[str | None, str | Non
 
 
 def _toc_titles(
-    zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo], book: _Book,
+    zf: zipfile.ZipFile,
+    entries: dict[str, zipfile.ZipInfo],
+    book: _Book,
+    budget: _ByteBudget,
 ) -> dict[int, str]:
     toc: list[tuple[str | None, str | None]] = []
     for path, parse in ((book.nav_path, _nav_entries), (book.ncx_path, _ncx_entries)):
         if not book.readable(path):
             continue
         try:
-            data = _read_xml_member(zf, entries, path)
+            data = _read_xml_member(zf, entries, path, budget)
             if data is None:
                 continue
             _refuse_entities(data)
@@ -374,24 +401,23 @@ def _extract_sections(
     entries: dict[str, zipfile.ZipInfo],
     book: _Book,
     toc_titles: dict[int, str],
+    budget: _ByteBudget,
 ) -> tuple[list[TextChunk], dict[int, str]]:
     chunk_config = config.settings.indexing.text_chunking
     first_toc_section = min(toc_titles, default=None)
-    budget = TEXT_MAX_CHARS
-    bytes_left = BOOK_MAX_BYTES
+    chars_left = TEXT_MAX_CHARS
     chunks: list[TextChunk] = []
     headings: dict[int, str] = {}
     for section in book.sections:
-        if bytes_left <= 0:
+        if budget.spent:
             break
         wants_heading = first_toc_section is None or section.number < first_toc_section
-        wants_text = not section.is_nav and budget > 0
+        wants_text = not section.is_nav and chars_left > 0
         info = entries.get(section.path) if book.readable(section.path) else None
         if info is None or not section.is_html or not (wants_heading or wants_text):
             continue
         try:
-            data = _read_member(zf, info, SECTION_MAX_BYTES)
-            bytes_left -= SECTION_MAX_BYTES + 1 if data is None else len(data)
+            data = _read_member(zf, info, SECTION_MAX_BYTES, budget)
             if data is None:
                 continue
             _refuse_entities(data)
@@ -402,8 +428,8 @@ def _extract_sections(
                 continue
             markdown = html_to_markdown(
                 data, ignore_links=True, drop_tags=_RUBY_ANNOTATION_TAGS,
-            ).strip()[:budget]
-            budget -= len(markdown)
+            ).strip()[:chars_left]
+            chars_left -= len(markdown)
             pieces = ContentExtractor.chunk_text(
                 markdown,
                 max_size=chunk_config.max_chunk_size,

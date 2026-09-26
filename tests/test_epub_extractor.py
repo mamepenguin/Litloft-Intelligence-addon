@@ -733,34 +733,59 @@ def test_toc_over_cap_skipped_rest_indexed(tmp_path, monkeypatch) -> None:
     assert result.section_titles == ()
 
 
-_REPEATED_MEMBER = xhtml("<p>MARK-body</p>" + "<div><span></span></div>" * 50)
+# Large next to the container, package and nav, which the byte budget also pays for.
+_REPEATED_MEMBER = xhtml("<h1>Head</h1><p>MARK-body</p>" + "<div><span></span></div>" * 500)
+_MEMBER_BYTES = len(_REPEATED_MEMBER.encode())
+
+
+def _break_crc(path: Path, name: str) -> None:
+    data = bytearray(path.read_bytes())
+    wanted = name.encode()
+    offset = data.find(b"PK\x01\x02")
+    while offset != -1:
+        length = int.from_bytes(data[offset + 28:offset + 30], "little")
+        if bytes(data[offset + 46:offset + 46 + length]) == wanted:
+            data[offset + 16] ^= 0xFF
+        offset = data.find(b"PK\x01\x02", offset + 4)
+    path.write_bytes(bytes(data))
 
 
 @pytest.mark.parametrize(
-    ("caps", "expected_reads", "expected_pages"),
+    ("caps", "with_toc", "bad_crc", "expected_reads", "expected_pages"),
     [
-        ({"BOOK_MAX_BYTES": 3 * len(_REPEATED_MEMBER.encode())}, 3, {1, 2, 3}),
-        ({"TEXT_MAX_CHARS": 5}, 1, {1}),
-        ({"SECTION_MAX_BYTES": 100, "BOOK_MAX_BYTES": 2 * 101}, 2, set()),
+        ({"BOOK_MAX_BYTES": 3 * _MEMBER_BYTES}, True, False, 3, {1, 2, 3}),
+        ({"TEXT_MAX_CHARS": 5}, True, False, 1, {1}),
+        (
+            {"SECTION_MAX_BYTES": _MEMBER_BYTES - 1, "BOOK_MAX_BYTES": 2 * _MEMBER_BYTES},
+            True, False, 2, set(),
+        ),
+        ({"TEXT_MAX_CHARS": 5, "BOOK_MAX_BYTES": 3 * _MEMBER_BYTES}, False, False, 3, {1}),
+        (
+            {"SECTION_MAX_BYTES": _MEMBER_BYTES, "BOOK_MAX_BYTES": 3 * _MEMBER_BYTES},
+            True, True, 3, set(),
+        ),
     ],
 )
 def test_book_budget_stops_further_reads(
-    tmp_path, monkeypatch, caps, expected_reads, expected_pages,
+    tmp_path, monkeypatch, caps, with_toc, bad_crc, expected_reads, expected_pages,
 ) -> None:
     import zipfile
 
     for name, value in caps.items():
         monkeypatch.setattr(epub_module, name, value)
     nav = nav_doc([("s.xhtml", "Only title")])
+    toc = [Item("nav", "nav.xhtml", nav, properties="nav")] if with_toc else []
     path = make_epub(
         tmp_path / "b.epub",
         [
-            Item("nav", "nav.xhtml", nav, properties="nav"),
+            *toc,
             Item("s0", "s.xhtml", _REPEATED_MEMBER),
             *(Item(f"s{i}", "s.xhtml", None) for i in range(1, 10)),
         ],
         spine=[f"s{i}" for i in range(10)],
     )
+    if bad_crc:
+        _break_crc(path, "OEBPS/s.xhtml")
     opened: list[str] = []
     original_open = zipfile.ZipFile.open
 
