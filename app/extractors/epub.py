@@ -31,6 +31,7 @@ XML_MAX_BYTES = 1024 * 1024
 SECTION_MAX_BYTES = 5 * 1024 * 1024
 TEXT_MAX_CHARS = 2_000_000
 SECTION_MAX = 2_000
+BOOK_MAX_BYTES = 20 * 1024 * 1024
 TITLE_MAX = 200
 
 _ENCRYPTION_PATH = "META-INF/encryption.xml"
@@ -377,9 +378,12 @@ def _extract_sections(
     chunk_config = config.settings.indexing.text_chunking
     first_toc_section = min(toc_titles, default=None)
     budget = TEXT_MAX_CHARS
+    bytes_left = BOOK_MAX_BYTES
     chunks: list[TextChunk] = []
     headings: dict[int, str] = {}
     for section in book.sections:
+        if bytes_left <= 0:
+            break
         wants_heading = first_toc_section is None or section.number < first_toc_section
         wants_text = not section.is_nav and budget > 0
         info = entries.get(section.path) if book.readable(section.path) else None
@@ -387,6 +391,7 @@ def _extract_sections(
             continue
         try:
             data = _read_member(zf, info, SECTION_MAX_BYTES)
+            bytes_left -= SECTION_MAX_BYTES + 1 if data is None else len(data)
             if data is None:
                 continue
             _refuse_entities(data)

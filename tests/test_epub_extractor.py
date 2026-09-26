@@ -505,7 +505,8 @@ def test_caps_are_declared() -> None:
         epub_module.TEXT_MAX_CHARS,
         epub_module.SECTION_MAX,
         epub_module.TITLE_MAX,
-    ) == (1024 * 1024, 5 * 1024 * 1024, 2_000_000, 2_000, 200)
+        epub_module.BOOK_MAX_BYTES,
+    ) == (1024 * 1024, 5 * 1024 * 1024, 2_000_000, 2_000, 200, 20 * 1024 * 1024)
 
 
 def test_entity_declaration_in_section_is_refused(tmp_path) -> None:
@@ -656,6 +657,49 @@ def test_toc_over_cap_skipped_rest_indexed(tmp_path, monkeypatch) -> None:
 
     assert _marks(result) == {(1, "MARK-one"), (2, "MARK-two")}
     assert result.section_titles == ()
+
+
+_REPEATED_MEMBER = xhtml("<p>MARK-body</p>" + "<div><span></span></div>" * 50)
+
+
+@pytest.mark.parametrize(
+    ("caps", "expected_reads", "expected_pages"),
+    [
+        ({"BOOK_MAX_BYTES": 3 * len(_REPEATED_MEMBER.encode())}, 3, {1, 2, 3}),
+        ({"TEXT_MAX_CHARS": 5}, 1, {1}),
+        ({"SECTION_MAX_BYTES": 100, "BOOK_MAX_BYTES": 2 * 101}, 2, set()),
+    ],
+)
+def test_book_budget_stops_further_reads(
+    tmp_path, monkeypatch, caps, expected_reads, expected_pages,
+) -> None:
+    import zipfile
+
+    for name, value in caps.items():
+        monkeypatch.setattr(epub_module, name, value)
+    nav = nav_doc([("s.xhtml", "Only title")])
+    path = make_epub(
+        tmp_path / "b.epub",
+        [
+            Item("nav", "nav.xhtml", nav, properties="nav"),
+            Item("s0", "s.xhtml", _REPEATED_MEMBER),
+            *(Item(f"s{i}", "s.xhtml", None) for i in range(1, 10)),
+        ],
+        spine=[f"s{i}" for i in range(10)],
+    )
+    opened: list[str] = []
+    original_open = zipfile.ZipFile.open
+
+    def spy_open(self, name, *args, **kwargs):
+        opened.append(name if isinstance(name, str) else name.filename)
+        return original_open(self, name, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", spy_open)
+
+    result = _extract(path)
+
+    assert opened.count("OEBPS/s.xhtml") == expected_reads
+    assert {c.page for c in result.chunks} == expected_pages
 
 
 def test_book_text_cap_stops_and_keeps_extracted(tmp_path, monkeypatch) -> None:
