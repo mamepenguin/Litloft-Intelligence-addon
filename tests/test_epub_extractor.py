@@ -334,3 +334,119 @@ def test_title_drops_ruby_readings(tmp_path) -> None:
     )
 
     assert _extract(path).section_titles == ((1, "前書き漢字"), (2, "漢字の章"))
+
+
+# ---------------------------------------------------------------------------
+# Body text
+# ---------------------------------------------------------------------------
+
+
+def _chunk_texts(result: ExtractionResult) -> list[tuple[int | None, str]]:
+    return [(c.page, c.text) for c in result.chunks]
+
+
+def test_ruby_readings_dropped_base_kept(tmp_path) -> None:
+    body = (
+        "<p><ruby>吾輩<rp>（</rp><rt>わがはい</rt><rp>）</rp></ruby>は"
+        "<ruby>猫<rt>ねこ</rt></ruby>である。</p>"
+    )
+    path = make_epub(tmp_path / "b.epub", [Item("c1", "c1.xhtml", xhtml(body))])
+
+    assert _chunk_texts(_extract(path)) == [(1, "吾輩は猫である。")]
+
+
+def test_note_links_do_not_put_paths_in_text(tmp_path) -> None:
+    body = '<p>A claim<a href="notes.xhtml#n1" epub:type="noteref">1</a> stands.</p>'
+    path = make_epub(tmp_path / "b.epub", [Item("c1", "text/c1.xhtml", xhtml(body))])
+
+    assert _chunk_texts(_extract(path)) == [(1, "A claim1 stands.")]
+
+
+def test_script_style_stripped(tmp_path) -> None:
+    body = (
+        "<style>.x { color: red }</style><script>var secret = 1;</script>"
+        "<noscript>fallback</noscript><p>Visible text.</p>"
+    )
+    path = make_epub(tmp_path / "b.epub", [Item("c1", "c1.xhtml", xhtml(body))])
+
+    assert _chunk_texts(_extract(path)) == [(1, "Visible text.")]
+
+
+def test_nav_document_not_indexed(tmp_path) -> None:
+    path = make_epub(
+        tmp_path / "b.epub",
+        [
+            Item("nav", "nav.xhtml", nav_doc([("c1.xhtml", "MARK-navlabel")]),
+                 properties="nav"),
+            Item("c1", "c1.xhtml", _section("MARK-one")),
+        ],
+        spine=["nav", "c1"],
+    )
+
+    result = _extract(path)
+
+    assert _marks(result) == {(2, "MARK-one")}
+    assert result.page_count == 2
+
+
+def test_image_spine_item_counted_not_indexed(tmp_path) -> None:
+    path = make_epub(
+        tmp_path / "b.epub",
+        [
+            Item("img", "cover.svg", '<svg xmlns="http://www.w3.org/2000/svg">'
+                 "<text>MARK-svg</text></svg>", media_type="image/svg+xml"),
+            Item("c1", "c1.xhtml", _section("MARK-one")),
+        ],
+        spine=["img", "c1"],
+    )
+
+    result = _extract(path)
+
+    assert _marks(result) == {(2, "MARK-one")}
+    assert result.page_count == 2
+
+
+def test_every_chunk_page_is_its_section_number(tmp_path) -> None:
+    items = [
+        Item(f"c{n}", f"c{n}.xhtml", xhtml("".join(
+            f"<p>Word{n} sentence number {k}.</p>" for k in range(60)
+        )))
+        for n in (1, 2, 3)
+    ]
+    path = make_epub(tmp_path / "b.epub", items)
+
+    result = _extract(path)
+
+    for chunk in result.chunks:
+        words = set(re.findall(r"Word(\d)", chunk.text))
+        assert words == {str(chunk.page)}
+    assert {c.page for c in result.chunks} == {1, 2, 3}
+
+
+def test_chunk_size_follows_config(tmp_path, monkeypatch) -> None:
+    from dataclasses import replace
+
+    from app.config import TextChunkingConfig
+
+    settings = config.settings
+    monkeypatch.setattr(
+        config,
+        "settings",
+        replace(
+            settings,
+            indexing=replace(
+                settings.indexing,
+                text_chunking=TextChunkingConfig(max_chunk_size=20, overlap=0),
+            ),
+        ),
+    )
+    path = make_epub(
+        tmp_path / "b.epub",
+        [Item("c1", "c1.xhtml", xhtml("<p>One two three four five six seven eight</p>"))],
+    )
+
+    assert _chunk_texts(_extract(path)) == [
+        (1, "One two three four"),
+        (1, "five six seven"),
+        (1, "eight"),
+    ]
