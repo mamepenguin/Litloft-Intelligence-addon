@@ -21,6 +21,7 @@ from app.extractors.html import (  # noqa: E402
     EXTRACTOR_NAME,
     MAX_HTML_BYTES,
     HtmlExtractor,
+    html_to_markdown,
 )
 
 
@@ -220,3 +221,52 @@ def test_japanese_utf8_preserved(tmp_path: Path) -> None:
     combined = " ".join(c.text for c in result.chunks)
     assert "日本語" in combined
     assert "テキスト" in combined
+
+
+_LINKED_HTML = """
+<html><body>
+  <h1>Links</h1>
+  <p>See <a href="notes.xhtml#n1">the note</a> for more.</p>
+  <p><ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby></p>
+  <script>var hidden = 1;</script>
+</body></html>
+"""
+
+
+def test_html_to_markdown_keeps_link_urls_by_default() -> None:
+    markdown = html_to_markdown(_LINKED_HTML)
+
+    assert "[the note](notes.xhtml#n1)" in markdown
+    assert "hidden" not in markdown
+
+
+def test_html_to_markdown_ignore_links_keeps_anchor_text_only() -> None:
+    markdown = html_to_markdown(_LINKED_HTML, ignore_links=True)
+
+    assert "See the note for more." in markdown
+    assert "notes.xhtml" not in markdown
+
+
+def test_html_to_markdown_drops_extra_tags() -> None:
+    kept = html_to_markdown(_LINKED_HTML)
+    dropped = html_to_markdown(_LINKED_HTML, drop_tags=("rt", "rp"))
+
+    assert "かんじ" in kept
+    assert "漢字" in dropped
+    assert "かんじ" not in dropped
+    assert "漢字(" not in dropped
+    assert "hidden" not in dropped
+
+
+def test_html_extractor_output_unchanged(tmp_path: Path) -> None:
+    file_path = _write(tmp_path, "links.html", _LINKED_HTML)
+
+    result = HtmlExtractor().extract(file_path)
+
+    assert [(c.text, c.page, c.metadata) for c in result.chunks] == [
+        (
+            "See [the note](notes.xhtml#n1) for more.\n\n漢字(かんじ)",
+            None,
+            "section: Links",
+        ),
+    ]
