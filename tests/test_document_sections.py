@@ -31,14 +31,9 @@ def engine(tmp_path):
         connect_args={"check_same_thread": False},
     )
     event.listen(engine, "connect", _enable_fks)
-    # The table under test comes from the migration, not from the ORM.
-    Base.metadata.create_all(
-        engine,
-        tables=[
-            t for t in Base.metadata.sorted_tables
-            if t.name != "document_sections"
-        ],
-    )
+    # The order ``init_search_db`` runs: the ORM creates the table, then the
+    # migration's ``IF NOT EXISTS`` finds it already there.
+    Base.metadata.create_all(engine)
     with engine.begin() as conn:
         _create_document_sections_table(conn)
     return engine
@@ -105,8 +100,8 @@ def test_fresh_schema_columns(engine) -> None:
         ]
 
     assert cols == [
-        ("file_id", "TEXT", False),
-        ("page", "INTEGER", False),
+        ("file_id", "VARCHAR(12)", True),
+        ("page", "INTEGER", True),
         ("title", "TEXT", True),
     ]
 

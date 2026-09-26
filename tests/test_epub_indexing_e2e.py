@@ -28,10 +28,7 @@ def search_db(tmp_path, monkeypatch):
         connect_args={"check_same_thread": False},
     )
     event.listen(engine, "connect", _enable_fks)
-    Base.metadata.create_all(
-        engine,
-        tables=[t for t in Base.metadata.sorted_tables if t.name != "document_sections"],
-    )
+    Base.metadata.create_all(engine)
     with engine.begin() as conn:
         _create_pdf_markdown_table(conn)
         _create_document_sections_table(conn)
