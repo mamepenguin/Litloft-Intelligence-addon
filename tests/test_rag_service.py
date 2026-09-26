@@ -1153,6 +1153,39 @@ class TestEpubSectionLocations:
             "section 5", "Chapter Five",
         )
 
+    def test_pdf_section_marker_is_not_trusted(self, titles) -> None:
+        from app.rag.parser import Citation
+        from app.rag.service import _to_citation_dict
+
+        result = _to_citation_dict(
+            Citation(file_id="doc", quote="the cited passage", relevance=0.9,
+                     location="section 3"),
+            [_document("doc", "application/pdf", 5)],
+        )
+
+        assert (result["segment_location"], result["section_title"]) == ("page 5", None)
+        assert titles == []
+
+    @pytest.mark.parametrize(
+        ("mime", "location"),
+        [("application/epub+zip", "page 3"), ("application/pdf", "section 3")],
+    )
+    def test_wrong_kind_marker_is_dropped_when_nothing_locates_it(
+        self, titles, mime, location,
+    ) -> None:
+        from app.rag.parser import Citation
+        from app.rag.service import _to_citation_dict
+
+        source = _document("f", mime, 5)
+        bare = RetrievedFile(**{**source.__dict__, "segments": ()})
+
+        result = _to_citation_dict(
+            Citation(file_id="f", quote="q", relevance=0.9, location=location),
+            [bare],
+        )
+
+        assert result["segment_location"] is None
+
     def test_pdf_page_marker_is_kept(self, titles) -> None:
         from app.rag.parser import Citation
         from app.rag.service import _to_citation_dict

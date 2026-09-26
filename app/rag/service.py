@@ -352,18 +352,20 @@ def _to_citation_dict(
     # fall through to the candidate-segment lookup so the frontend gets
     # a seekable timestamp rather than a ?highlight= anchor.
     raw_loc = citation.location or ""
-    # A book has no pages: a "page N" the model wrote for one is not trusted.
+    # A book has no pages and nothing else has sections: a marker of the
+    # other kind is not trusted, since it would build the wrong landing URL.
+    is_book = source_file is not None and source_file.mime_type == EPUB_MIME
+    wrong_kind_re = _PAGE_MARKER_RE if is_book else _SECTION_MARKER_RE
     distrusted = (
         source_file is not None
-        and source_file.mime_type == EPUB_MIME
-        and _PAGE_MARKER_RE.match(raw_loc.strip()) is not None
+        and wrong_kind_re.match(raw_loc.strip()) is not None
     )
     if raw_loc and _is_location_marker(raw_loc) and not distrusted:
         segment_location = raw_loc
     else:
         segment_location = _segment_location_for(
             citation.file_id, candidates, quote, contexts=contexts
-        ) or (raw_loc if raw_loc else None)
+        ) or (raw_loc if raw_loc and not distrusted else None)
 
     if source_file is None:
         # Defensive: parser already dropped unknown file_ids, but guard
