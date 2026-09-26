@@ -433,6 +433,67 @@ describe("CitationInlinePanel (in-flow accordion)", () => {
     });
   });
 
+  async function openWithExcerpt(excerpt: Record<string, unknown>) {
+    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        chunk_id: "c1",
+        file_id: "f1",
+        prefix: "",
+        target: "章の本文。",
+        suffix: "",
+        start_time: null,
+        end_time: null,
+        ...excerpt,
+      });
+    renderMarkerWithPanel({ citation: linkedCitation });
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Clear source citation|根拠が明確/ }),
+      );
+    });
+    return (await screen.findByText("章の本文。")).closest("button")!;
+  }
+
+  it("shows the section title, never Page N", async () => {
+    const card = await openWithExcerpt({
+      page: null, section: 3, section_title: "Chapter Three",
+    });
+
+    expect(card).toHaveTextContent("Chapter Three");
+    expect(card).not.toHaveTextContent(/p\.\s?3|Page 3|Section 3/);
+  });
+
+  it("shows the numbered section label without a title", async () => {
+    const card = await openWithExcerpt({ page: null, section: 3, section_title: null });
+
+    expect(card).toHaveTextContent("Section 3");
+    expect(card).not.toHaveTextContent(/p\.\s?3|Page 3/);
+  });
+
+  it("section jump navigates to ?section=", async () => {
+    const assign = vi.fn();
+    vi.stubGlobal("location", { ...window.location, assign });
+    try {
+      const card = await openWithExcerpt({
+        page: null, section: 3, section_title: "Chapter Three",
+      });
+
+      expect(card).not.toBeDisabled();
+      fireEvent.click(card);
+
+      expect(assign.mock.calls).toEqual([["/files/f1?section=3"]]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("pdf excerpt still shows p.N", async () => {
+    const card = await openWithExcerpt({ page: 4, section: null, section_title: null });
+
+    expect(card).toHaveTextContent("p.4");
+    expect(card).toBeDisabled();
+  });
+
   it("does not open a panel for a no-citation segment", async () => {
     renderMarkerWithPanel({ citation: unlinkedCitation });
     await new Promise((r) => setTimeout(r, 0));

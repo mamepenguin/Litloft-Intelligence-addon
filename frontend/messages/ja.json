@@ -180,7 +180,8 @@
     "saveToKnowledge": "Markdownで保存",
     "saveSuccess": "Markdownを保存しました",
     "openNote": "ノートを開く",
-    "addToCaptureBasket": "引用バスケットに追加"
+    "addToCaptureBasket": "引用バスケットに追加",
+    "citationSection": "セクション {section}"
   },
   "askSave": {
     "title": "Markdownで保存",
@@ -314,6 +315,7 @@
       "error": "抜粋の取得に失敗しました",
       "noExcerpt": "抜粋はありません",
       "pageLabel": "p.{page}",
+      "sectionLabel": "セクション {section}",
       "jump": "ジャンプ",
       "copyExcerpt": "抜粋をコピー",
       "openFile": "元ファイルを開く"

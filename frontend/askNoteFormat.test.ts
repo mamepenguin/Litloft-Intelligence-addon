@@ -24,12 +24,20 @@ function makeCitation(overrides: Partial<Citation> = {}): Citation {
 describe("parseSegmentLocation", () => {
   it("parses m:ss timestamp", () => {
     const r = parseSegmentLocation("12:34");
-    expect(r).toEqual({ label: "12:34", seconds: 754, page: null, verbatim: null });
+    expect(r).toEqual({ label: "12:34", seconds: 754, page: null, section: null, verbatim: null });
   });
 
   it("parses page N", () => {
     const r = parseSegmentLocation("page 5");
-    expect(r).toEqual({ label: "page 5", seconds: null, page: 5, verbatim: null });
+    expect(r).toEqual({ label: "page 5", seconds: null, page: 5, section: null, verbatim: null });
+  });
+
+  it('parses "section 3"', () => {
+    expect(parseSegmentLocation("section 3")).toEqual({
+      label: "section 3", seconds: null, page: null, section: 3, verbatim: null,
+    });
+    expect(parseSegmentLocation("Section 12")?.section).toBe(12);
+    expect(parseSegmentLocation("section 0")?.section).toBeNull();
   });
 
   it("ignores chunk N sentinel", () => {
@@ -53,6 +61,11 @@ describe("citationToLoftUrl", () => {
   it("appends ?page= for page segment_location", () => {
     const c = makeCitation({ segment_location: "page 4" });
     expect(citationToLoftUrl(c)).toBe("loft://abc123def456?page=4");
+  });
+
+  it("builds loft ?section=", () => {
+    const c = makeCitation({ segment_location: "section 3" });
+    expect(citationToLoftUrl(c)).toBe("loft://abc123def456?section=3");
   });
 
   it("returns base loft URL when no segment_location", () => {
@@ -228,5 +241,22 @@ describe("queryToFilename", () => {
     const r = queryToFilename(long);
     // 60 chars of "a" + ".md" suffix
     expect(r.length).toBe(63);
+  });
+});
+
+describe("formatCitationListItem — EPUB sections", () => {
+  it("labels a section citation with its title", () => {
+    const book = makeCitation({
+      filename: "novel.epub",
+      file_type: "document",
+      segment_location: "section 3",
+    });
+
+    expect(formatCitationListItem({ ...book, section_title: "第三章 旅立ち" })).toBe(
+      "- [novel.epub](loft://abc123def456?section=3) — 第三章 旅立ち",
+    );
+    expect(formatCitationListItem({ ...book, section_title: null })).toBe(
+      "- [novel.epub](loft://abc123def456?section=3) — section 3",
+    );
   });
 });

@@ -180,7 +180,8 @@
     "saveToKnowledge": "Save as Markdown",
     "saveSuccess": "Markdown saved",
     "openNote": "Open note",
-    "addToCaptureBasket": "Add citation to capture basket"
+    "addToCaptureBasket": "Add citation to capture basket",
+    "citationSection": "Section {section}"
   },
   "askSave": {
     "title": "Save as Markdown",
@@ -314,6 +315,7 @@
       "error": "Failed to load excerpt",
       "noExcerpt": "No excerpt available",
       "pageLabel": "p.{page}",
+      "sectionLabel": "Section {section}",
       "jump": "Jump",
       "copyExcerpt": "Copy excerpt",
       "openFile": "Open file"

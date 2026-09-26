@@ -223,6 +223,9 @@ function buildCitationUrl(citation: Citation): string {
   if (parsed?.page != null) {
     return `${base}?page=${parsed.page}`;
   }
+  if (parsed?.section != null) {
+    return `${base}?section=${parsed.section}`;
+  }
   if (parsed?.verbatim) {
     return `${base}?highlight=${encodeURIComponent(parsed.verbatim)}`;
   }
@@ -296,7 +299,9 @@ function CitationCard({
             </span>
             {parsed && !parsed.verbatim && (
               <span className="flex-shrink-0 rounded-lg px-1 py-0.5 text-[10px] font-medium text-accent">
-                {parsed.label}
+                {parsed.section != null
+                  ? citation.section_title || t("citationSection", { section: parsed.section })
+                  : parsed.label}
               </span>
             )}
           </div>

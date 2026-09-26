@@ -524,6 +524,67 @@ describe("IntelligenceAskPage — progressive citations + thinking indicator", (
     });
   });
 
+  async function pushBookCitations(citations: Citation[]) {
+    await act(async () => {
+      streamState.current.push({ kind: "keywords", keywords: "x" });
+      streamState.current.push({ kind: "sources", sources: [] });
+      streamState.current.push({ kind: "answer_chunk", delta: "From the book [1]." });
+      citations.forEach((citation, i) => {
+        streamState.current.push({ kind: "citation", citation, index: i + 1 });
+      });
+    });
+  }
+
+  const bookCitation = (overrides: Partial<Citation>): Citation => ({
+    ...sampleCitation(1),
+    file_id: "book-1",
+    filename: "novel.epub",
+    segment_location: "section 3",
+    ...overrides,
+  });
+
+  it("builds ?section= for section citations", async () => {
+    await mountAndStart();
+    await pushBookCitations([bookCitation({ section_title: "Chapter Three" })]);
+
+    const link = (await screen.findByText("novel.epub")).closest("a");
+    expect(link?.getAttribute("href")).toBe("/files/book-1?section=3");
+
+    await act(async () => {
+      streamState.current.push({ kind: "done" });
+      streamState.current.end();
+    });
+  });
+
+  it("shows the section title as the citation label", async () => {
+    await mountAndStart();
+    await pushBookCitations([bookCitation({ section_title: "Chapter Three" })]);
+
+    const link = (await screen.findByText("novel.epub")).closest("a")!;
+    expect(link).toHaveTextContent("Chapter Three");
+    expect(link).not.toHaveTextContent("section 3");
+    expect(link).not.toHaveTextContent(/p\.\s?3|Page 3/);
+
+    await act(async () => {
+      streamState.current.push({ kind: "done" });
+      streamState.current.end();
+    });
+  });
+
+  it("falls back to the numbered section label", async () => {
+    await mountAndStart();
+    await pushBookCitations([bookCitation({ section_title: null })]);
+
+    const link = (await screen.findByText("novel.epub")).closest("a")!;
+    expect(link).toHaveTextContent("Section 3");
+    expect(link).not.toHaveTextContent(/p\.\s?3|Page 3/);
+
+    await act(async () => {
+      streamState.current.push({ kind: "done" });
+      streamState.current.end();
+    });
+  });
+
   it("prefers verbatim segment_location over citation.quote for highlight", async () => {
     // Local LLMs (Ollama / Qwen / Gemma) commonly ignore the
     // `location: '0:45' | 'page 3'` instruction and put a verbatim

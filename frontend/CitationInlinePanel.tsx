@@ -260,6 +260,7 @@ function InlineExcerptBody({
     if (excerpt.start_time != null && mediaController) return false;
     if (excerpt.start_time != null && videoRef?.current) return false;
     if (onJump && excerpt) return false;
+    if (excerpt.section != null) return false;
     return true;
   })();
 
@@ -267,6 +268,10 @@ function InlineExcerptBody({
     if (onJump) {
       const handled = onJump(excerpt);
       if (handled) return;
+    }
+    if (excerpt.section != null) {
+      window.location.assign(`/files/${excerpt.file_id}?section=${excerpt.section}`);
+      return;
     }
     if (excerpt.start_time != null) {
       // Prefer the unified controller when available — works for both
@@ -295,6 +300,15 @@ function InlineExcerptBody({
 
   const locator = (() => {
     if (excerpt.start_time != null) return formatTimestamp(excerpt.start_time);
+    if (excerpt.section != null) {
+      return (
+        excerpt.section_title ||
+        t("citations.sectionLabel", {
+          defaultMessage: "Section {section}",
+          section: excerpt.section,
+        })
+      );
+    }
     if (excerpt.page != null) {
       return t("citations.pageLabel", {
         defaultMessage: "Page {page}",

@@ -15,6 +15,7 @@ export interface ParsedSegmentLocation {
   label: string;
   seconds: number | null;
   page: number | null;
+  section: number | null;
   verbatim: string | null;
 }
 
@@ -27,21 +28,26 @@ export function parseSegmentLocation(
     const m = parseInt(timeMatch[1], 10);
     const s = parseInt(timeMatch[2], 10);
     if (Number.isFinite(m) && Number.isFinite(s)) {
-      return { label: loc, seconds: m * 60 + s, page: null, verbatim: null };
+      return { label: loc, seconds: m * 60 + s, page: null, section: null, verbatim: null };
     }
   }
   const pageMatch = loc.match(/^page\s+(\d+)$/i);
   if (pageMatch) {
     const p = parseInt(pageMatch[1], 10);
     if (Number.isFinite(p) && p > 0) {
-      return { label: loc, seconds: null, page: p, verbatim: null };
+      return { label: loc, seconds: null, page: p, section: null, verbatim: null };
     }
   }
+  const sectionMatch = loc.match(/^section\s+(\d+)$/i);
+  if (sectionMatch) {
+    const n = parseInt(sectionMatch[1], 10);
+    return { label: loc, seconds: null, page: null, section: n > 0 ? n : null, verbatim: null };
+  }
   if (/^chunk\s+\d+$/i.test(loc)) {
-    return { label: loc, seconds: null, page: null, verbatim: null };
+    return { label: loc, seconds: null, page: null, section: null, verbatim: null };
   }
   const verbatim = loc.trim().length >= 12 ? loc.trim() : null;
-  return { label: loc, seconds: null, page: null, verbatim };
+  return { label: loc, seconds: null, page: null, section: null, verbatim };
 }
 
 export function citationToLoftUrl(citation: Citation): string {
@@ -51,6 +57,7 @@ export function citationToLoftUrl(citation: Citation): string {
   const base = `loft://${citation.file_id}`;
   if (parsed?.seconds != null) return `${base}?t=${parsed.seconds}`;
   if (parsed?.page != null) return `${base}?page=${parsed.page}`;
+  if (parsed?.section != null) return `${base}?section=${parsed.section}`;
   return base;
 }
 
@@ -78,7 +85,8 @@ export function formatCitationListItem(citation: Citation): string {
   const loc = parseSegmentLocation(
     (citation as Citation & { segment_location?: string | null }).segment_location ?? null,
   );
-  const locLabel = loc?.label ? ` — ${loc.label}` : "";
+  const label = (loc?.section != null && citation.section_title) || loc?.label;
+  const locLabel = label ? ` — ${label}` : "";
   if (isMarkdownCitation(citation)) {
     const basename = basenameWithoutMd(citation.filename);
     return `- [[${basename}]]${locLabel}`;
