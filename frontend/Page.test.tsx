@@ -268,17 +268,29 @@ describe("IntelligenceAskPage — progressive citations + thinking indicator", (
     });
   });
 
-  it("adds an Ask citation to the capture basket", async () => {
+  it.each([
+    {
+      overrides: { file_type: "video", segment_location: "1:05" },
+      locator: { seconds: 65, label: "1:05" },
+    },
+    {
+      overrides: { segment_location: "section 3", section_title: "Chapter Three" },
+      locator: { label: "Chapter Three" },
+    },
+    {
+      overrides: { segment_location: "section 3", section_title: null },
+      locator: { label: "Section 3" },
+    },
+  ])("adds an Ask citation to the capture basket ($locator.label)", async ({
+    overrides,
+    locator,
+  }) => {
     await mountAndStart();
     await act(async () => {
       streamState.current.push({ kind: "answer_chunk", delta: "Answer" });
       streamState.current.push({
         kind: "citation",
-        citation: {
-          ...sampleCitation(1),
-          file_type: "video",
-          segment_location: "1:05",
-        },
+        citation: { ...sampleCitation(1), ...overrides },
         index: 1,
       });
     });
@@ -294,7 +306,7 @@ describe("IntelligenceAskPage — progressive citations + thinking indicator", (
         sourceFileId: "file-1",
         kind: "ask_citation",
         quote: "Quote for citation 1",
-        locator: expect.objectContaining({ seconds: 65, label: "1:05" }),
+        locator: expect.objectContaining(locator),
       }),
     ]);
     await act(async () => {

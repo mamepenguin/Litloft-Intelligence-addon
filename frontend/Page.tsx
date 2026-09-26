@@ -254,6 +254,10 @@ function CitationCard({
   // image citations only because the user can verify them visually).
   // See `Wewd0UyArEW49kE3UCUY6` for the design rationale.
   const isImage = citation.file_type === "image";
+  const locationLabel =
+    parsed?.section != null
+      ? citation.section_title || t("citationSection", { section: parsed.section })
+      : parsed?.label;
   const capture = () => {
     addSourceCapture({
       drive,
@@ -265,7 +269,7 @@ function CitationCard({
         ? {
             seconds: parsed.seconds ?? undefined,
             page: parsed.page ?? undefined,
-            label: parsed.label,
+            label: locationLabel,
           }
         : undefined,
       quote: parsed?.verbatim ?? citation.quote,
@@ -299,9 +303,7 @@ function CitationCard({
             </span>
             {parsed && !parsed.verbatim && (
               <span className="flex-shrink-0 rounded-lg px-1 py-0.5 text-[10px] font-medium text-accent">
-                {parsed.section != null
-                  ? citation.section_title || t("citationSection", { section: parsed.section })
-                  : parsed.label}
+                {locationLabel}
               </span>
             )}
           </div>
