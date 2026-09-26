@@ -182,3 +182,155 @@ def test_hrefs_resolve_against_the_opf_directory(tmp_path) -> None:
     result = _extract(path)
 
     assert _marks(result) == {(1, "MARK-one"), (2, "MARK-two")}
+
+
+# ---------------------------------------------------------------------------
+# Titles
+# ---------------------------------------------------------------------------
+
+
+def _heading(level: int, text: str, mark: str = "") -> str:
+    return xhtml(f"<h{level}>{text}</h{level}><p>body {mark}</p>")
+
+
+def test_nav_titles_first_entry_wins(tmp_path) -> None:
+    nav = nav_doc(
+        [
+            ("../text/c1.xhtml", "Chapter One"),
+            ("../text/c1.xhtml#s2", "Section 1.2"),
+            ("../text/c2.xhtml#top", "Chapter Two"),
+            ("../text/missing.xhtml", "Not in spine"),
+        ],
+        extra_navs=(
+            '<nav epub:type="landmarks"><ol>'
+            '<li><a href="../text/c2.xhtml">Landmark</a></li></ol></nav>'
+        ),
+    )
+    path = make_epub(
+        tmp_path / "b.epub",
+        [
+            Item("nav", "nav/toc.xhtml", nav, properties="nav"),
+            Item("c1", "text/c1.xhtml", _section("MARK-one")),
+            Item("c2", "text/c2.xhtml", _section("MARK-two")),
+        ],
+        spine=["c1", "c2"],
+    )
+
+    assert _extract(path).section_titles == ((1, "Chapter One"), (2, "Chapter Two"))
+
+
+@pytest.mark.parametrize("spine_toc", ["ncx", None])
+def test_ncx_used_when_no_nav(tmp_path, spine_toc) -> None:
+    path = make_epub(
+        tmp_path / "b.epub",
+        [
+            Item("ncx", "toc.ncx", ncx_doc([("c1.xhtml", "One"), ("c2.xhtml#x", "Two")]),
+                 media_type="application/x-dtbncx+xml"),
+            Item("c1", "c1.xhtml", _section("MARK-one")),
+            Item("c2", "c2.xhtml", _section("MARK-two")),
+        ],
+        spine=["c1", "c2"],
+        spine_toc=spine_toc,
+    )
+
+    assert _extract(path).section_titles == ((1, "One"), (2, "Two"))
+
+
+def test_ncx_used_when_nav_has_no_toc(tmp_path) -> None:
+    nav = xhtml('<nav epub:type="landmarks"><ol><li><a href="c1.xhtml">L</a></li></ol></nav>')
+    path = make_epub(
+        tmp_path / "b.epub",
+        [
+            Item("nav", "nav.xhtml", nav, properties="nav"),
+            Item("ncx", "toc.ncx", ncx_doc([("c1.xhtml", "From NCX")]),
+                 media_type="application/x-dtbncx+xml"),
+            Item("c1", "c1.xhtml", _section("MARK-one")),
+        ],
+        spine=["c1"],
+        spine_toc="ncx",
+    )
+
+    assert _extract(path).section_titles == ((1, "From NCX"),)
+
+
+def test_untitled_section_inherits_preceding_toc_title(tmp_path) -> None:
+    nav = nav_doc([("c1.xhtml", "One"), ("c3.xhtml", "Three")])
+    path = make_epub(
+        tmp_path / "b.epub",
+        [
+            Item("nav", "nav.xhtml", nav, properties="nav"),
+            *(Item(f"c{i}", f"c{i}.xhtml", _heading(1, f"Heading {i}")) for i in range(1, 5)),
+        ],
+        spine=["c1", "c2", "c3", "c4"],
+    )
+
+    assert _extract(path).section_titles == (
+        (1, "One"), (2, "One"), (3, "Three"), (4, "Three"),
+    )
+
+
+def test_section_before_first_toc_entry_uses_heading(tmp_path) -> None:
+    nav = nav_doc([("c3.xhtml", "One")])
+    path = make_epub(
+        tmp_path / "b.epub",
+        [
+            Item("nav", "nav.xhtml", nav, properties="nav"),
+            Item("c1", "c1.xhtml", _section("MARK-cover")),
+            Item("c2", "c2.xhtml", xhtml("<p>intro</p><h3>Title Page</h3><h1>Later</h1>")),
+            Item("c3", "c3.xhtml", _heading(1, "Chapter heading")),
+            Item("c4", "c4.xhtml", _heading(1, "Ignored heading")),
+        ],
+        spine=["c1", "c2", "c3", "c4"],
+    )
+
+    assert _extract(path).section_titles == (
+        (2, "Title Page"), (3, "One"), (4, "One"),
+    )
+
+
+def test_no_toc_no_heading_no_title_row(tmp_path) -> None:
+    path = make_epub(
+        tmp_path / "b.epub",
+        [
+            Item("c1", "c1.xhtml", _section("MARK-one")),
+            Item("c2", "c2.xhtml", _section("MARK-two")),
+        ],
+    )
+
+    result = _extract(path)
+
+    assert result.section_titles == ()
+    assert _marks(result) == {(1, "MARK-one"), (2, "MARK-two")}
+
+
+def test_title_whitespace_collapsed_and_capped_at_200(tmp_path) -> None:
+    label = "  Long \n\t title  " + "x" * 300
+    nav = nav_doc([("c1.xhtml", label), ("c2.xhtml", " \n ")])
+    path = make_epub(
+        tmp_path / "b.epub",
+        [
+            Item("nav", "nav.xhtml", nav, properties="nav"),
+            Item("c1", "c1.xhtml", _section("MARK-one")),
+            Item("c2", "c2.xhtml", _section("MARK-two")),
+        ],
+        spine=["c1", "c2"],
+    )
+
+    expected = "Long title " + "x" * 189
+    assert _extract(path).section_titles == ((1, expected), (2, expected))
+
+
+def test_title_drops_ruby_readings(tmp_path) -> None:
+    ruby = "<ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby>"
+    nav = nav_doc([("c2.xhtml", f"{ruby}の章")])
+    path = make_epub(
+        tmp_path / "b.epub",
+        [
+            Item("nav", "nav.xhtml", nav, properties="nav"),
+            Item("c1", "c1.xhtml", _heading(2, f"前書き{ruby}")),
+            Item("c2", "c2.xhtml", _section("MARK-two")),
+        ],
+        spine=["c1", "c2"],
+    )
+
+    assert _extract(path).section_titles == ((1, "前書き漢字"), (2, "漢字の章"))
