@@ -59,6 +59,7 @@ TEXT_MIMES = frozenset({
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     # HTML / XHTML (spec 2026-05-12-html-indexing)
     "text/html", "application/xhtml+xml",
+    "application/epub+zip",
 })
 
 
