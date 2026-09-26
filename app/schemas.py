@@ -471,6 +471,8 @@ class ChunkExcerptResponse(BaseModel):
     start_time: float | None = None
     end_time: float | None = None
     page: int | None = None
+    section: int | None = None
+    section_title: str | None = None
 
 
 class DetailedSummaryEditRequest(BaseModel):
