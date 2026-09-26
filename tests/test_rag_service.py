@@ -1048,3 +1048,146 @@ class TestQuoteFromContexts:
 
         assert len(quote) <= 101  # 100 chars + "…"
         assert quote.endswith("…")
+
+
+# ---------------------------------------------------------------------------
+# EPUB sections in Ask locations
+# ---------------------------------------------------------------------------
+
+
+def _document(file_id: str, mime: str, page: int) -> RetrievedFile:
+    match = MatchInfo(
+        match_type="text_content", text="the cited passage", score=0.8,
+        page=page, chunk_index=page + 40,
+    )
+    return RetrievedFile(
+        file_id=file_id, drive="Books", filename=f"{file_id}.bin",
+        file_type="document", mime_type=mime, title=None, description=None,
+        score=0.9, match_types=("text_content",),
+        segments=(SegmentGroup(time_range=None, matches=(match,)),),
+    )
+
+
+def _snippet_context(file_id: str, located: list[tuple[str, str]]) -> FileContext:
+    return FileContext(
+        file_id=file_id, filename="f", drive="Books", file_type="document",
+        title=None, description=None,
+        snippets=tuple(
+            ContextSnippet(source="text_content", text=text, location=loc)
+            for loc, text in located
+        ),
+        total_chars=10,
+    )
+
+
+@pytest.fixture()
+def titles(monkeypatch):
+    rows = {("book", 2): "Chapter Two", ("book", 5): "Chapter Five"}
+    asked: list[tuple[str, int | None]] = []
+
+    def _title(file_id: str, page: int | None) -> str | None:
+        asked.append((file_id, page))
+        return rows.get((file_id, page))
+
+    monkeypatch.setattr("app.rag.service.section_title", _title)
+    return asked
+
+
+class TestEpubSectionLocations:
+    def test_section_marker_is_recognised(self) -> None:
+        from app.rag.service import _is_location_marker
+
+        assert [
+            _is_location_marker(loc)
+            for loc in ("section 3", "Section  12", " section 7 ", "section", "section 3a")
+        ] == [True, True, True, False, False]
+
+    def test_segment_location_for_epub_is_section(self) -> None:
+        from app.rag.service import _segment_location_for
+
+        candidates = [_document("book", "application/epub+zip", 4)]
+
+        assert _segment_location_for("book", candidates, "cited passage") == "section 4"
+
+    def test_segment_location_for_pdf_is_page(self) -> None:
+        from app.rag.service import _segment_location_for
+
+        candidates = [_document("doc", "application/pdf", 4)]
+
+        assert _segment_location_for("doc", candidates, "cited passage") == "page 4"
+
+    def test_location_section_3_does_not_pick_section_30(self) -> None:
+        from app.rag.service import _quote_from_contexts
+
+        ctx = _snippet_context("book", [("section 30", "thirty"), ("section 3", "three")])
+
+        assert _quote_from_contexts("book", [ctx], location="section 3") == "three"
+
+    def test_location_page_3_does_not_pick_page_30(self) -> None:
+        from app.rag.service import _quote_from_contexts
+
+        ctx = _snippet_context("doc", [("page 30", "thirty"), ("page 3", "three")])
+
+        assert _quote_from_contexts("doc", [ctx], location="page 3") == "three"
+
+    def test_existing_timestamp_location_still_matches(self) -> None:
+        from app.rag.service import _quote_from_contexts
+
+        ctx = _snippet_context(
+            "vid", [("10:45", "later"), ("transcript @ 0:45", "embedded")],
+        )
+
+        assert _quote_from_contexts("vid", [ctx], location="0:45") == "embedded"
+
+    def test_epub_page_marker_is_not_trusted(self, titles) -> None:
+        from app.rag.parser import Citation
+        from app.rag.service import _to_citation_dict
+
+        result = _to_citation_dict(
+            Citation(file_id="book", quote="the cited passage", relevance=0.9,
+                     location="page 3"),
+            [_document("book", "application/epub+zip", 5)],
+        )
+
+        assert (result["segment_location"], result["section_title"]) == (
+            "section 5", "Chapter Five",
+        )
+
+    def test_pdf_page_marker_is_kept(self, titles) -> None:
+        from app.rag.parser import Citation
+        from app.rag.service import _to_citation_dict
+
+        result = _to_citation_dict(
+            Citation(file_id="doc", quote="q", relevance=0.9, location="page 3"),
+            [_document("doc", "application/pdf", 5)],
+        )
+
+        assert (result["segment_location"], result["section_title"]) == ("page 3", None)
+        assert titles == []
+
+    def test_citation_carries_section_title(self, titles) -> None:
+        from app.rag.parser import Citation
+        from app.rag.service import _to_citation_dict
+        from app.schemas import CitationModel
+
+        result = _to_citation_dict(
+            Citation(file_id="book", quote="q", relevance=0.9, location="section 2"),
+            [_document("book", "application/epub+zip", 5)],
+        )
+
+        assert (result["segment_location"], result["section_title"]) == (
+            "section 2", "Chapter Two",
+        )
+        assert titles == [("book", 2)]
+        assert CitationModel(**result).section_title == "Chapter Two"
+
+    def test_citation_section_title_null_without_row(self, titles) -> None:
+        from app.rag.parser import Citation
+        from app.rag.service import _to_citation_dict
+
+        result = _to_citation_dict(
+            Citation(file_id="book", quote="q", relevance=0.9, location="section 9"),
+            [_document("book", "application/epub+zip", 5)],
+        )
+
+        assert (result["segment_location"], result["section_title"]) == ("section 9", None)

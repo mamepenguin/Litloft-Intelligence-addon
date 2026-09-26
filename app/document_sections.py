@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
-from app.database import get_search_db
+from app.database import get_search_db_read
 
 EPUB_MIME = "application/epub+zip"
 
@@ -58,5 +58,5 @@ def load_section_titles(
 def section_title(file_id: str, page: int | None) -> str | None:
     if page is None:
         return None
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         return load_section_titles(session, [(file_id, page)]).get((file_id, page))

@@ -63,7 +63,7 @@ def patched_db(session_factory, monkeypatch):
         finally:
             session.close()
 
-    monkeypatch.setattr("app.document_sections.get_search_db", _get_search_db)
+    monkeypatch.setattr("app.document_sections.get_search_db_read", _get_search_db)
     return _get_search_db
 
 
