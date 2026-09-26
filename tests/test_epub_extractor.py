@@ -231,6 +231,22 @@ def test_nav_titles_first_entry_wins(tmp_path) -> None:
     assert _extract(path).section_titles == ((1, "Chapter One"), (2, "Chapter Two"))
 
 
+def test_toc_target_maps_to_first_occurrence_of_a_repeated_file(tmp_path) -> None:
+    nav = nav_doc([("c2.xhtml", "Two"), ("c1.xhtml", "One")])
+    path = make_epub(
+        tmp_path / "b.epub",
+        [
+            Item("nav", "nav.xhtml", nav, properties="nav"),
+            Item("c1", "c1.xhtml", _section("MARK-one")),
+            Item("c2", "c2.xhtml", _section("MARK-two")),
+            Item("c1again", "c1.xhtml", None),
+        ],
+        spine=["c1", "c2", "c1again"],
+    )
+
+    assert _extract(path).section_titles == ((1, "One"), (2, "Two"), (3, "Two"))
+
+
 @pytest.mark.parametrize("spine_toc", ["ncx", None])
 def test_ncx_used_when_no_nav(tmp_path, spine_toc) -> None:
     path = make_epub(
@@ -348,14 +364,24 @@ def test_title_whitespace_collapsed_and_capped_at_200(tmp_path) -> None:
     assert _extract(path).section_titles == ((1, expected), (2, expected))
 
 
-def test_title_drops_ruby_readings(tmp_path) -> None:
-    ruby = "<ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby>"
-    nav = nav_doc([("c2.xhtml", f"{ruby}の章")])
+_RUBY = "<ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby>"
+
+
+@pytest.mark.parametrize(
+    "toc",
+    [
+        Item("nav", "nav.xhtml", nav_doc([("c2.xhtml", f"{_RUBY}の章")]), properties="nav"),
+        Item("ncx", "toc.ncx", ncx_doc([("c2.xhtml", "@RUBY@の章")]).replace("@RUBY@", _RUBY),
+             media_type="application/x-dtbncx+xml"),
+    ],
+    ids=["nav", "ncx"],
+)
+def test_title_drops_ruby_readings(tmp_path, toc) -> None:
     path = make_epub(
         tmp_path / "b.epub",
         [
-            Item("nav", "nav.xhtml", nav, properties="nav"),
-            Item("c1", "c1.xhtml", _heading(2, f"前書き{ruby}")),
+            toc,
+            Item("c1", "c1.xhtml", _heading(2, f"前書き{_RUBY}")),
             Item("c2", "c2.xhtml", _section("MARK-two")),
         ],
         spine=["c1", "c2"],

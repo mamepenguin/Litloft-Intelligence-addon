@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import zipfile
 
+import pytest
+
 from app.utils.zip_names import decode_zip_filename
 
 
@@ -11,10 +13,9 @@ def _info(filename: str, flag_bits: int = 0) -> zipfile.ZipInfo:
     return info
 
 
-def test_utf8_flag_kept() -> None:
-    info = _info("本文/第一章.xhtml", flag_bits=0x800)
-
-    assert decode_zip_filename(info) == "本文/第一章.xhtml"
+@pytest.mark.parametrize("name", ["本文/第一章.xhtml", "Übersicht.xhtml"])
+def test_utf8_flag_kept(name: str) -> None:
+    assert decode_zip_filename(_info(name, flag_bits=0x800)) == name
 
 
 def test_cp932_name_redecoded() -> None:
