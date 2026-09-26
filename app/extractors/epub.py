@@ -13,7 +13,7 @@ import logging
 import posixpath
 import warnings
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import unquote
 from xml.etree import ElementTree
 from xml.parsers import expat
@@ -29,8 +29,11 @@ EXTRACTOR_NAME = "epub"
 
 XML_MAX_BYTES = 1024 * 1024
 SECTION_MAX_BYTES = 5 * 1024 * 1024
+TEXT_MAX_CHARS = 2_000_000
+SECTION_MAX = 2_000
 TITLE_MAX = 200
 
+_ENCRYPTION_PATH = "META-INF/encryption.xml"
 _OPF_MEDIA_TYPE = "application/oebps-package+xml"
 _OPF_NS = "http://www.idpf.org/2007/opf"
 _NCX_MEDIA_TYPE = "application/x-dtbncx+xml"
@@ -56,6 +59,11 @@ class _Book:
     sections: tuple[_Section, ...]
     nav_path: str | None
     ncx_path: str | None
+    # None when encryption.xml exists but cannot be read: nothing is readable.
+    encrypted: frozenset[str] | None = frozenset()
+
+    def readable(self, path: str | None) -> bool:
+        return path is not None and self.encrypted is not None and path not in self.encrypted
 
 
 class _Refused(Exception):
@@ -74,7 +82,14 @@ class EpubExtractor(ContentExtractor):
         try:
             with zipfile.ZipFile(file_path) as zf:
                 entries = {decode_zip_filename(info): info for info in zf.infolist()}
-                book = _read_book(zf, entries)
+                spine = _read_book(zf, entries)
+                if spine is None:
+                    return empty
+                book = replace(
+                    spine,
+                    sections=spine.sections[:SECTION_MAX],
+                    encrypted=_encrypted_paths(zf, entries),
+                )
                 toc_titles = _toc_titles(zf, entries, book)
                 chunks, headings = _extract_sections(zf, entries, book, toc_titles)
         except Exception as e:
@@ -84,7 +99,7 @@ class EpubExtractor(ContentExtractor):
             chunks=chunks,
             markdown=None,
             extractor=EXTRACTOR_NAME,
-            page_count=len(book.sections),
+            page_count=len(spine.sections),
             section_titles=_assign_titles(book, toc_titles, headings),
         )
 
@@ -198,15 +213,16 @@ def _read_xml_member(
     return None if info is None else _read_member(zf, info, XML_MAX_BYTES)
 
 
-def _read_book(zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo]) -> _Book:
-    empty = _Book(sections=(), nav_path=None, ncx_path=None)
+def _read_book(
+    zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo],
+) -> _Book | None:
     container_data = _read_xml_member(zf, entries, "META-INF/container.xml")
     if container_data is None:
-        return empty
+        return None
     opf_path = _opf_path(_parse_strict(container_data)[0])
     opf_data = _read_xml_member(zf, entries, opf_path)
     if opf_path is None or opf_data is None:
-        return empty
+        return None
     package, root_namespaces = _parse_strict(opf_data)
 
     # foliate filters by the OPF namespace only when the package declares it.
@@ -258,6 +274,28 @@ def _read_book(zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo]) -> _Boo
     )
 
 
+def _encrypted_paths(
+    zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo],
+) -> frozenset[str] | None:
+    if _ENCRYPTION_PATH not in entries:
+        return frozenset()
+    try:
+        data = _read_xml_member(zf, entries, _ENCRYPTION_PATH)
+        if data is None:
+            return None
+        root, _ = _parse_strict(data)
+    except Exception as e:
+        logger.warning("EPUB encryption.xml unreadable, skipping every section: %s", e)
+        return None
+    return frozenset(
+        path
+        for el in root.iter()
+        if isinstance(el.tag, str) and _local(el.tag) == "CipherReference"
+        for path in (_resolve("", el.get("URI", "")),)
+        if path is not None
+    )
+
+
 def _nav_entries(data: bytes, base_dir: str) -> list[tuple[str | None, str | None]]:
     soup = _soup(data, _pick_parser())
     toc = next(
@@ -298,6 +336,8 @@ def _toc_titles(
 ) -> dict[int, str]:
     toc: list[tuple[str | None, str | None]] = []
     for path, parse in ((book.nav_path, _nav_entries), (book.ncx_path, _ncx_entries)):
+        if not book.readable(path):
+            continue
         try:
             data = _read_xml_member(zf, entries, path)
             if data is None:
@@ -336,27 +376,29 @@ def _extract_sections(
 ) -> tuple[list[TextChunk], dict[int, str]]:
     chunk_config = config.settings.indexing.text_chunking
     first_toc_section = min(toc_titles, default=None)
+    budget = TEXT_MAX_CHARS
     chunks: list[TextChunk] = []
     headings: dict[int, str] = {}
     for section in book.sections:
         wants_heading = first_toc_section is None or section.number < first_toc_section
-        info = entries.get(section.path) if section.path else None
-        if info is None or not section.is_html:
-            continue
-        if section.is_nav and not wants_heading:
+        wants_text = not section.is_nav and budget > 0
+        info = entries.get(section.path) if book.readable(section.path) else None
+        if info is None or not section.is_html or not (wants_heading or wants_text):
             continue
         try:
             data = _read_member(zf, info, SECTION_MAX_BYTES)
             if data is None:
                 continue
+            _refuse_entities(data)
             heading = _first_heading(data) if wants_heading else None
             if heading:
                 headings = {**headings, section.number: heading}
-            if section.is_nav:
+            if not wants_text:
                 continue
             markdown = html_to_markdown(
                 data, ignore_links=True, drop_tags=_RUBY_ANNOTATION_TAGS,
-            )
+            ).strip()[:budget]
+            budget -= len(markdown)
             pieces = ContentExtractor.chunk_text(
                 markdown,
                 max_size=chunk_config.max_chunk_size,
