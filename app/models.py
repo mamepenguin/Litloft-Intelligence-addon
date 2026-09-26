@@ -405,6 +405,24 @@ class PdfMarkdown(Base):
     )
 
 
+class DocumentSection(Base):
+    """Title of one section of a sectioned document (an EPUB spine item).
+
+    ``page`` is the 1-based section number that the file's chunks carry
+    in their own ``page`` column. Only titled sections have a row.
+    """
+
+    __tablename__ = "document_sections"
+
+    file_id: Mapped[str] = mapped_column(
+        String(12),
+        ForeignKey("indexed_files.file_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    page: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class JobRecord(Base):
     """Per-attempt history row for transcription / embedding / summary jobs.
 
