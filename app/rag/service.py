@@ -379,7 +379,7 @@ def _to_citation_dict(
             "quote": quote,
             "relevance": citation.relevance,
             "segment_location": segment_location or None,
-            "section_title": _citation_section_title(citation.file_id, segment_location),
+            "section_title": None,
         }
 
     return {

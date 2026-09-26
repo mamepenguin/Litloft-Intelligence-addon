@@ -1198,29 +1198,28 @@ class TestEpubSectionLocations:
         assert (result["segment_location"], result["section_title"]) == ("page 3", None)
         assert titles == []
 
-    def test_citation_carries_section_title(self, titles) -> None:
+    @pytest.mark.parametrize(
+        ("candidate_id", "location", "expected_title", "expected_lookups"),
+        [
+            ("book", "section 2", "Chapter Two", [("book", 2)]),
+            ("book", "section 9", None, [("book", 9)]),
+            ("other", "section 2", None, []),
+        ],
+    )
+    def test_citation_section_title(
+        self, titles, candidate_id, location, expected_title, expected_lookups,
+    ) -> None:
         from app.rag.parser import Citation
         from app.rag.service import _to_citation_dict
         from app.schemas import CitationModel
 
         result = _to_citation_dict(
-            Citation(file_id="book", quote="q", relevance=0.9, location="section 2"),
-            [_document("book", "application/epub+zip", 5)],
+            Citation(file_id="book", quote="q", relevance=0.9, location=location),
+            [_document(candidate_id, "application/epub+zip", 5)],
         )
 
         assert (result["segment_location"], result["section_title"]) == (
-            "section 2", "Chapter Two",
+            location, expected_title,
         )
-        assert titles == [("book", 2)]
-        assert CitationModel(**result).section_title == "Chapter Two"
-
-    def test_citation_section_title_null_without_row(self, titles) -> None:
-        from app.rag.parser import Citation
-        from app.rag.service import _to_citation_dict
-
-        result = _to_citation_dict(
-            Citation(file_id="book", quote="q", relevance=0.9, location="section 9"),
-            [_document("book", "application/epub+zip", 5)],
-        )
-
-        assert (result["segment_location"], result["section_title"]) == ("section 9", None)
+        assert titles == expected_lookups
+        assert CitationModel(**result).section_title == expected_title
