@@ -204,6 +204,10 @@ def init_search_db() -> None:
         _create_pdf_markdown_table(conn)
         conn.commit()
 
+    with _search_engine.connect() as conn:
+        _create_document_sections_table(conn)
+        conn.commit()
+
     # Backfill file_insights from existing detailed_summary rows.
     # Runs BEFORE the Step 2b column drop so the legacy data is
     # captured in file_insights before the source columns vanish.
@@ -1693,6 +1697,20 @@ def _create_pdf_markdown_table(conn: object) -> None:
         "  extractor TEXT NOT NULL,"
         "  generated_at TIMESTAMP NOT NULL,"
         "  updated_at TIMESTAMP NOT NULL,"
+        "  FOREIGN KEY (file_id) REFERENCES indexed_files(file_id)"
+        "    ON DELETE CASCADE"
+        ")"
+    ))
+
+
+def _create_document_sections_table(conn: object) -> None:
+    """Create ``document_sections`` (one title per titled section) if missing."""
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS document_sections ("
+        "  file_id TEXT,"
+        "  page INTEGER,"
+        "  title TEXT NOT NULL,"
+        "  PRIMARY KEY (file_id, page),"
         "  FOREIGN KEY (file_id) REFERENCES indexed_files(file_id)"
         "    ON DELETE CASCADE"
         ")"

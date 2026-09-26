@@ -1246,3 +1246,175 @@ class TestBuildResultsFileIdScope:
         ids = {r.file_id for r in results}
         # Cutoff may drop the lowest, but at least ``a`` survives.
         assert "a" in ids
+
+
+# ---------------------------------------------------------------------------
+# Chunk index and EPUB section titles
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def real_search_db(tmp_path, monkeypatch):
+    """Real SQLite behind ``get_search_db_read`` / ``get_search_engine``."""
+    from contextlib import contextmanager
+
+    from sqlalchemy import create_engine, event, text
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database import Base
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'search.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    event.listen(
+        engine, "connect",
+        lambda dbapi_conn, _: dbapi_conn.execute("PRAGMA foreign_keys=ON"),
+    )
+    Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE VIRTUAL TABLE fts_text_content "
+            "USING fts5(file_id, chunk_index, page, text, tokenize='trigram')"
+        ))
+    Session = sessionmaker(bind=engine, expire_on_commit=False)
+
+    @contextmanager
+    def _read():
+        session = Session()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    monkeypatch.setattr("app.search.get_search_db_read", _read)
+    monkeypatch.setattr("app.search.get_search_engine", lambda: engine)
+    return engine
+
+
+def _add_file(engine, file_id: str, mime: str) -> None:
+    from sqlalchemy.orm import Session
+
+    from app.models import IndexedFile
+
+    with Session(engine) as session:
+        session.add(IndexedFile(
+            file_id=file_id, drive="d1", filename=f"{file_id}.bin",
+            file_path=f"/d/{file_id}", file_type="document", mime_type=mime,
+            file_size=1, active=True,
+        ))
+        session.commit()
+
+
+class TestChunkIndexAndSections:
+    def test_text_content_keyword_match_carries_chunk_index(self, real_search_db) -> None:
+        from sqlalchemy import text
+
+        from app.search import _keyword_search_text_content
+
+        _add_file(real_search_db, "book", "application/epub+zip")
+        with real_search_db.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO fts_text_content (file_id, chunk_index, page, text) "
+                "VALUES ('book', '3', '7', 'the quick brown fox')"
+            ))
+
+        matches = _keyword_search_text_content("brown", 10)
+
+        assert [(m.file_id, m.chunk_index, m.page) for m in matches] == [("book", 3, 7)]
+
+    def test_text_vector_match_carries_chunk_index(self, real_search_db, monkeypatch) -> None:
+        from sqlalchemy.orm import Session
+
+        from app.models import Embedding
+        from app.search import _vector_search_text
+
+        with Session(real_search_db) as session:
+            session.add(Embedding(
+                id="e1", file_id="book", embedding_type="text_content",
+                page=9, chunk_index=4, content_preview="p", vector_table="vec_text",
+            ))
+            session.commit()
+
+        rows = MagicMock()
+        rows.fetchall.return_value = [("e1", 0.1)]
+        conn = MagicMock()
+        conn.execute.return_value = rows
+        engine = MagicMock()
+        engine.connect.return_value.__enter__.return_value = conn
+        monkeypatch.setattr("app.search.get_search_engine", lambda: engine)
+
+        import numpy as np
+
+        matches = _vector_search_text(np.zeros(4, dtype=np.float32), 10, mode="recall")
+
+        assert [(m.embedding_id, m.chunk_index, m.page) for m in matches] == [("e1", 4, 9)]
+
+    @staticmethod
+    def _inputs():
+        vector = _VectorMatch(
+            embedding_id="e1", file_id="book", score=0.9,
+            embedding_type="text_content", content_preview="v",
+            timestamp_start=None, timestamp_end=None, page=2, chunk_index=6,
+        )
+        keyword = _TextContentKeywordMatch(
+            file_id="book", score=0.8, text="k", page=3, chunk_index=11,
+        )
+        return vector, keyword
+
+    @pytest.mark.parametrize(
+        "combine",
+        [
+            pytest.param(lambda **kw: _combine_scores_rrf(**kw, k=60), id="rrf"),
+            pytest.param(lambda **kw: _combine_scores_cosine(**kw), id="cosine"),
+        ],
+    )
+    def test_combined_matchinfo_carries_chunk_index(self, combine) -> None:
+        vector, keyword = self._inputs()
+
+        scores = combine(
+            text_matches=[vector], clip_matches=[], keyword_matches=[],
+            transcript_keyword_matches=[], text_content_keyword_matches=[keyword],
+        )
+
+        assert sorted(
+            (m.text, m.page, m.chunk_index) for m in scores["book"].matches
+        ) == [("k", 3, 11), ("v", 2, 6)]
+
+    def test_build_results_loads_titles_for_epub_matches_only(self, real_search_db) -> None:
+        from sqlalchemy import text
+
+        from app.search import _build_results
+
+        _add_file(real_search_db, "book", "application/epub+zip")
+        _add_file(real_search_db, "doc", "application/pdf")
+        with real_search_db.begin() as conn:
+            for fid, page, title in (
+                ("book", 2, "Two"), ("book", 3, "Three"), ("doc", 2, "Not a book"),
+            ):
+                conn.execute(
+                    text("INSERT INTO document_sections (file_id, page, title) "
+                         "VALUES (:f, :p, :t)"),
+                    {"f": fid, "p": page, "t": title},
+                )
+
+        def _score(fid: str, pages: list[int | None]) -> _FileScore:
+            return _FileScore(
+                file_id=fid, combined_score=1.0,
+                matches=[
+                    MatchInfo(match_type="text_content", text=f"t{p}", score=0.5, page=p)
+                    for p in pages
+                ],
+                match_types={"text_content"},
+            )
+
+        results = _build_results(
+            file_scores={"book": _score("book", [2, None, 5]), "doc": _score("doc", [2])},
+            file_type=None, drive=None, limit=10, skip_cutoff=True,
+        )
+
+        by_id = {r.file_id: r for r in results}
+        assert by_id["book"].mime_type == "application/epub+zip"
+        assert by_id["book"].section_titles == ((2, "Two"),)
+        assert by_id["doc"].mime_type == "application/pdf"
+        assert by_id["doc"].section_titles == ()

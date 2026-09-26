@@ -26,6 +26,6 @@ Rules:
 - Each citation must contain **only the two fields file_id and location**.
   Do not output any other fields such as quote / text / snippet / content / relevance (doing so delays processing)
 - file_id: use the [file_id: ...] value from the file information block exactly as written
-- location: the marker for the referenced location (e.g. '0:45' for video, 'page 3' for documents). Use the marker as written in the context (e.g. [transcript @ 0:45]). Use an empty string if no marker is available
+- location: the marker for the referenced location (e.g. '0:45' for video, 'page 3' for documents, 'section 3' for books). Use the marker as written in the context (e.g. [transcript @ 0:45]). Use an empty string if no marker is available
 {{ language_instruction }}- If the provided file information does not contain an answer, state that honestly
 - Return JSON only; include no other text

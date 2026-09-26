@@ -14,6 +14,8 @@ class SearchResultSegmentMatch(BaseModel):
     text: str
     score: float
     page: int | None = None
+    section: int | None = None
+    section_title: str | None = None
 
 
 class SearchResultSegment(BaseModel):
@@ -469,6 +471,8 @@ class ChunkExcerptResponse(BaseModel):
     start_time: float | None = None
     end_time: float | None = None
     page: int | None = None
+    section: int | None = None
+    section_title: str | None = None
 
 
 class DetailedSummaryEditRequest(BaseModel):
@@ -530,7 +534,8 @@ class CitationModel(BaseModel):
     file_type: str
     quote: str
     relevance: float
-    segment_location: str | None = None  # e.g. "0:45" or "page 3"
+    segment_location: str | None = None  # e.g. "0:45", "page 3" or "section 3"
+    section_title: str | None = None
 
 
 class SourceModel(BaseModel):

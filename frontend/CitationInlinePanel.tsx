@@ -23,6 +23,7 @@
  */
 
 import { useTranslations } from "next-intl";
+import { useRouter } from "next/navigation";
 import { PlayCircle, Copy } from "lucide-react";
 
 import { useCitationRail, CITATION_STRONG_THRESHOLD } from "./CitationRailContext";
@@ -217,6 +218,7 @@ function InlineExcerptBody({
   onJump?: (excerpt: CitationChunkExcerpt) => boolean | void;
 }) {
   const t = useTranslations("detailedSummary");
+  const router = useRouter();
 
   if (state.kind === "loading") {
     return (
@@ -260,6 +262,7 @@ function InlineExcerptBody({
     if (excerpt.start_time != null && mediaController) return false;
     if (excerpt.start_time != null && videoRef?.current) return false;
     if (onJump && excerpt) return false;
+    if (excerpt.section != null) return false;
     return true;
   })();
 
@@ -267,6 +270,10 @@ function InlineExcerptBody({
     if (onJump) {
       const handled = onJump(excerpt);
       if (handled) return;
+    }
+    if (excerpt.section != null) {
+      router.push(`/files/${excerpt.file_id}?section=${excerpt.section}`);
+      return;
     }
     if (excerpt.start_time != null) {
       // Prefer the unified controller when available — works for both
@@ -295,6 +302,15 @@ function InlineExcerptBody({
 
   const locator = (() => {
     if (excerpt.start_time != null) return formatTimestamp(excerpt.start_time);
+    if (excerpt.section != null) {
+      return (
+        excerpt.section_title ||
+        t("citations.sectionLabel", {
+          defaultMessage: "Section {section}",
+          section: excerpt.section,
+        })
+      );
+    }
     if (excerpt.page != null) {
       return t("citations.pageLabel", {
         defaultMessage: "Page {page}",

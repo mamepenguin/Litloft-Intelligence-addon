@@ -34,6 +34,7 @@ from typing import Any, Literal
 from app.config import settings
 from app.credentials import CallerCredential
 from app.dependencies import get_llm_client
+from app.document_sections import EPUB_MIME, section_title
 from app.rag.agentic import (
     AgenticAnswer,
     agentic_capability_supported,
@@ -97,7 +98,11 @@ class AnswerResponse:
     agentic_telemetry: AgenticTelemetry | None = None
 
 
-_LOCATION_MARKER_RE = re.compile(r"^\d+:\d{2,}$|^page\s+\d+$|^chunk\s+\d+$", re.IGNORECASE)
+_LOCATION_MARKER_RE = re.compile(
+    r"^\d+:\d{2,}$|^page\s+\d+$|^section\s+\d+$|^chunk\s+\d+$", re.IGNORECASE,
+)
+_PAGE_MARKER_RE = re.compile(r"^page\s+\d+$", re.IGNORECASE)
+_SECTION_MARKER_RE = re.compile(r"^section\s+(\d+)$", re.IGNORECASE)
 
 
 def _is_location_marker(loc: str) -> bool:
@@ -157,7 +162,8 @@ def _segment_location_for(
             seconds = int(max(0.0, best_match.timestamp_start))
             return f"{seconds // 60}:{seconds % 60:02d}"
         if best_match.page is not None:
-            return f"page {best_match.page}"
+            page_word = "section" if candidate.mime_type == EPUB_MIME else "page"
+            return f"{page_word} {best_match.page}"
         break
 
     # Fallback: vector-selected document chunks have no MatchInfo entry.
@@ -290,13 +296,9 @@ def _quote_from_contexts(
         if location:
             for snippet in snippets:
                 snippet_loc = snippet.location or ""
-                # Accept exact match or substring match so
-                # "0:45" matches a snippet tagged "0:45" even when
-                # the location happens to be embedded in a longer
-                # label like "transcript @ 0:45".
-                if snippet_loc == location or (
-                    snippet_loc and location in snippet_loc
-                ):
+                # "0:45" also matches a snippet labelled "transcript @ 0:45",
+                # but only as a whole token: "section 3" is not "section 30".
+                if snippet_loc and _contains_token(snippet_loc, location):
                     chosen = snippet
                     break
 
@@ -305,6 +307,17 @@ def _quote_from_contexts(
             text = text[:max_chars].rstrip() + "…"
         return text
     return ""
+
+
+def _contains_token(label: str, token: str) -> bool:
+    return re.search(
+        rf"(?<![\w:]){re.escape(token.strip())}(?![\w:])", label,
+    ) is not None
+
+
+def _citation_section_title(file_id: str, location: str | None) -> str | None:
+    match = _SECTION_MARKER_RE.match((location or "").strip())
+    return section_title(file_id, int(match.group(1))) if match else None
 
 
 def _to_citation_dict(
@@ -339,12 +352,20 @@ def _to_citation_dict(
     # fall through to the candidate-segment lookup so the frontend gets
     # a seekable timestamp rather than a ?highlight= anchor.
     raw_loc = citation.location or ""
-    if raw_loc and _is_location_marker(raw_loc):
+    # A book has no pages and nothing else has sections: a marker of the
+    # other kind is not trusted, since it would build the wrong landing URL.
+    is_book = source_file is not None and source_file.mime_type == EPUB_MIME
+    wrong_kind_re = _PAGE_MARKER_RE if is_book else _SECTION_MARKER_RE
+    distrusted = (
+        source_file is not None
+        and wrong_kind_re.match(raw_loc.strip()) is not None
+    )
+    if raw_loc and _is_location_marker(raw_loc) and not distrusted:
         segment_location = raw_loc
     else:
         segment_location = _segment_location_for(
             citation.file_id, candidates, quote, contexts=contexts
-        ) or (raw_loc if raw_loc else None)
+        ) or (raw_loc if raw_loc and not distrusted else None)
 
     if source_file is None:
         # Defensive: parser already dropped unknown file_ids, but guard
@@ -358,6 +379,7 @@ def _to_citation_dict(
             "quote": quote,
             "relevance": citation.relevance,
             "segment_location": segment_location or None,
+            "section_title": None,
         }
 
     return {
@@ -368,6 +390,7 @@ def _to_citation_dict(
         "quote": quote,
         "relevance": citation.relevance,
         "segment_location": segment_location,
+        "section_title": _citation_section_title(citation.file_id, segment_location),
     }
 
 

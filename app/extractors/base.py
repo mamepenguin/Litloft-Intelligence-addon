@@ -42,12 +42,15 @@ class ExtractionResult:
             for formats with no native pagination (plain text, Markdown,
             etc.). Used by the indexing pipeline when persisting the
             ``pdf_markdown`` row.
+        section_titles: ``(section number, title)`` pairs for sectioned
+            formats (EPUB), matching the chunks' ``page`` values.
     """
 
     chunks: list[TextChunk] = field(default_factory=list)
     markdown: str | None = None
     extractor: str = ""
     page_count: int | None = None
+    section_titles: tuple[tuple[int, str], ...] = ()
 
 
 class ContentExtractor:

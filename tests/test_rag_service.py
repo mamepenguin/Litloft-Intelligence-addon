@@ -1048,3 +1048,153 @@ class TestQuoteFromContexts:
 
         assert len(quote) <= 101  # 100 chars + "…"
         assert quote.endswith("…")
+
+
+# ---------------------------------------------------------------------------
+# EPUB sections in Ask locations
+# ---------------------------------------------------------------------------
+
+
+def _document(file_id: str, mime: str, page: int) -> RetrievedFile:
+    match = MatchInfo(
+        match_type="text_content", text="the cited passage", score=0.8,
+        page=page, chunk_index=page + 40,
+    )
+    return RetrievedFile(
+        file_id=file_id, drive="Books", filename=f"{file_id}.bin",
+        file_type="document", mime_type=mime, title=None, description=None,
+        score=0.9, match_types=("text_content",),
+        segments=(SegmentGroup(time_range=None, matches=(match,)),),
+    )
+
+
+def _snippet_context(file_id: str, located: list[tuple[str, str]]) -> FileContext:
+    return FileContext(
+        file_id=file_id, filename="f", drive="Books", file_type="document",
+        title=None, description=None,
+        snippets=tuple(
+            ContextSnippet(source="text_content", text=text, location=loc)
+            for loc, text in located
+        ),
+        total_chars=10,
+    )
+
+
+@pytest.fixture()
+def titles(monkeypatch):
+    rows = {("book", 2): "Chapter Two", ("book", 5): "Chapter Five"}
+    asked: list[tuple[str, int | None]] = []
+
+    def _title(file_id: str, page: int | None) -> str | None:
+        asked.append((file_id, page))
+        return rows.get((file_id, page))
+
+    monkeypatch.setattr("app.rag.service.section_title", _title)
+    return asked
+
+
+class TestEpubSectionLocations:
+    def test_section_marker_is_recognised(self) -> None:
+        from app.rag.service import _is_location_marker
+
+        assert [
+            _is_location_marker(loc)
+            for loc in ("section 3", "Section  12", " section 7 ", "section", "section 3a")
+        ] == [True, True, True, False, False]
+
+    @pytest.mark.parametrize(
+        ("snippets", "location", "expected"),
+        [
+            pytest.param(
+                [("section 30", "thirty"), ("section 3", "three")], "section 3", "three",
+                id="section-3-not-30",
+            ),
+            pytest.param(
+                [("page 30", "thirty"), ("page 3", "three")], "page 3", "three",
+                id="page-3-not-30",
+            ),
+            pytest.param(
+                [("10:45", "later"), ("transcript @ 0:45", "embedded")], "0:45", "embedded",
+                id="timestamp-inside-a-label",
+            ),
+        ],
+    )
+    def test_location_selects_snippet_by_whole_token(self, snippets, location, expected) -> None:
+        from app.rag.service import _quote_from_contexts
+
+        ctx = _snippet_context("f", snippets)
+
+        assert _quote_from_contexts("f", [ctx], location=location) == expected
+
+    @pytest.mark.parametrize(
+        ("mime", "location", "expected_location", "expected_title"),
+        [
+            pytest.param("application/epub+zip", "page 3", "section 5", "Chapter Five",
+                         id="page-on-epub-not-trusted"),
+            pytest.param("application/pdf", "section 3", "page 5", None,
+                         id="section-on-pdf-not-trusted"),
+            pytest.param("application/pdf", "page 3", "page 3", None,
+                         id="page-on-pdf-kept"),
+        ],
+    )
+    def test_location_marker_is_trusted_only_for_its_kind(
+        self, titles, mime, location, expected_location, expected_title,
+    ) -> None:
+        from app.rag.parser import Citation
+        from app.rag.service import _to_citation_dict
+
+        result = _to_citation_dict(
+            Citation(file_id="book", quote="the cited passage", relevance=0.9,
+                     location=location),
+            [_document("book", mime, 5)],
+        )
+
+        assert (result["segment_location"], result["section_title"]) == (
+            expected_location, expected_title,
+        )
+
+    @pytest.mark.parametrize(
+        ("mime", "location"),
+        [("application/epub+zip", "page 3"), ("application/pdf", "section 3")],
+    )
+    def test_wrong_kind_marker_is_dropped_when_nothing_locates_it(
+        self, titles, mime, location,
+    ) -> None:
+        from app.rag.parser import Citation
+        from app.rag.service import _to_citation_dict
+
+        source = _document("f", mime, 5)
+        bare = RetrievedFile(**{**source.__dict__, "segments": ()})
+
+        result = _to_citation_dict(
+            Citation(file_id="f", quote="q", relevance=0.9, location=location),
+            [bare],
+        )
+
+        assert result["segment_location"] is None
+
+    @pytest.mark.parametrize(
+        ("candidate_id", "location", "expected_title", "expected_lookups"),
+        [
+            ("book", "section 2", "Chapter Two", [("book", 2)]),
+            ("book", "section 9", None, [("book", 9)]),
+            ("other", "section 2", None, []),
+        ],
+    )
+    def test_citation_section_title(
+        self, titles, candidate_id, location, expected_title, expected_lookups,
+    ) -> None:
+        from app.rag.parser import Citation
+        from app.rag.service import _to_citation_dict
+        from app.schemas import CitationModel
+
+        result = _to_citation_dict(
+            Citation(file_id="book", quote="q", relevance=0.9, location=location),
+            [_document(candidate_id, "application/epub+zip", 5)],
+        )
+
+        assert (result["segment_location"], result["section_title"]) == (
+            location, expected_title,
+        )
+        assert titles == expected_lookups
+        assert CitationModel(**result).section_title == expected_title

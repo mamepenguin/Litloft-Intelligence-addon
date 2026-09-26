@@ -24,6 +24,7 @@ from sqlalchemy import text as sql_text
 
 from app.config import RagConfig
 from app.database import get_search_db
+from app.document_sections import EPUB_MIME
 from app.models import Embedding, TranscriptChunk
 from app.rag.keyword_filter import filter_keywords
 from app.rag.retriever import RetrievedFile
@@ -804,7 +805,8 @@ def _collect_document_snippets(
         # Use the PDF page number of the target chunk when available so
         # the citation location reads "page N" instead of "chunk N".
         page = next((c[2] for c in chunks if c[0] == chunk_idx), None)
-        location = f"page {page}" if page is not None else f"chunk {chunk_idx}"
+        page_word = "section" if candidate.mime_type == EPUB_MIME else "page"
+        location = f"{page_word} {page}" if page is not None else f"chunk {chunk_idx}"
         snippets = [
             *snippets,
             ContextSnippet(
@@ -847,7 +849,7 @@ def _collect_document_snippets(
     # for the LLM to interpret.
     for segment in candidate.segments:
         for match in segment.matches:
-            chunk_idx = match.page if match.page is not None else 0
+            chunk_idx = match.chunk_index if match.chunk_index is not None else 0
             _emit(chunk_idx, "text_content", expand=True)
 
     return snippets

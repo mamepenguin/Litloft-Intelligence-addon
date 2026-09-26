@@ -268,17 +268,29 @@ describe("IntelligenceAskPage — progressive citations + thinking indicator", (
     });
   });
 
-  it("adds an Ask citation to the capture basket", async () => {
+  it.each([
+    {
+      overrides: { file_type: "video", segment_location: "1:05" },
+      locator: { seconds: 65, label: "1:05" },
+    },
+    {
+      overrides: { segment_location: "section 3", section_title: "Chapter Three" },
+      locator: { label: "Chapter Three" },
+    },
+    {
+      overrides: { segment_location: "section 3", section_title: null },
+      locator: { label: "Section 3" },
+    },
+  ])("adds an Ask citation to the capture basket ($locator.label)", async ({
+    overrides,
+    locator,
+  }) => {
     await mountAndStart();
     await act(async () => {
       streamState.current.push({ kind: "answer_chunk", delta: "Answer" });
       streamState.current.push({
         kind: "citation",
-        citation: {
-          ...sampleCitation(1),
-          file_type: "video",
-          segment_location: "1:05",
-        },
+        citation: { ...sampleCitation(1), ...overrides },
         index: 1,
       });
     });
@@ -294,7 +306,7 @@ describe("IntelligenceAskPage — progressive citations + thinking indicator", (
         sourceFileId: "file-1",
         kind: "ask_citation",
         quote: "Quote for citation 1",
-        locator: expect.objectContaining({ seconds: 65, label: "1:05" }),
+        locator: expect.objectContaining(locator),
       }),
     ]);
     await act(async () => {
@@ -523,6 +535,46 @@ describe("IntelligenceAskPage — progressive citations + thinking indicator", (
       streamState.current.end();
     });
   });
+
+  async function pushBookCitations(citations: Citation[]) {
+    await act(async () => {
+      streamState.current.push({ kind: "keywords", keywords: "x" });
+      streamState.current.push({ kind: "sources", sources: [] });
+      streamState.current.push({ kind: "answer_chunk", delta: "From the book [1]." });
+      citations.forEach((citation, i) => {
+        streamState.current.push({ kind: "citation", citation, index: i + 1 });
+      });
+    });
+  }
+
+  const bookCitation = (overrides: Partial<Citation>): Citation => ({
+    ...sampleCitation(1),
+    file_id: "book-1",
+    filename: "novel.epub",
+    segment_location: "section 3",
+    ...overrides,
+  });
+
+  it.each([
+    { sectionTitle: "Chapter Three", label: "Chapter Three", absent: /section 3|p\.\s?3|Page 3/ },
+    { sectionTitle: null, label: "Section 3", absent: /p\.\s?3|Page 3/ },
+  ])(
+    "links a book citation to ?section= and labels it $label",
+    async ({ sectionTitle, label, absent }) => {
+      await mountAndStart();
+      await pushBookCitations([bookCitation({ section_title: sectionTitle })]);
+
+      const link = (await screen.findByText("novel.epub")).closest("a")!;
+      expect(link.getAttribute("href")).toBe("/files/book-1?section=3");
+      expect(link).toHaveTextContent(label);
+      expect(link).not.toHaveTextContent(absent);
+
+      await act(async () => {
+        streamState.current.push({ kind: "done" });
+        streamState.current.end();
+      });
+    },
+  );
 
   it("prefers verbatim segment_location over citation.quote for highlight", async () => {
     // Local LLMs (Ollama / Qwen / Gemma) commonly ignore the

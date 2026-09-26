@@ -10,6 +10,7 @@ from sqlalchemy import text as sql_text
 
 from app.config import settings
 from app.dependencies import get_auto_tags_worker, get_index_manager
+from app.document_sections import EPUB_MIME, load_section_titles
 from app.drive_context import assert_file_in_drive, require_drive
 from app.schemas import (
     BatchSuggestedTagsRequest,
@@ -62,6 +63,7 @@ def _get_indexed_file_or_404(file_id: str, drive: str) -> dict[str, Any]:
             "filename": indexed.filename,
             "file_path": indexed.file_path,
             "file_type": indexed.file_type,
+            "mime_type": indexed.mime_type,
             "metadata_indexed": indexed.metadata_indexed,
             "clip_indexed": indexed.clip_indexed,
             "whisper_indexed": indexed.whisper_indexed,
@@ -596,7 +598,8 @@ async def get_chunk_excerpt(
     # Confirms file exists and belongs to the caller's drive. Raises
     # 404 otherwise — never leaks the existence of files in other
     # drives.
-    _get_indexed_file_or_404(file_id, drive)
+    indexed = _get_indexed_file_or_404(file_id, drive)
+    is_book = indexed["mime_type"] == EPUB_MIME
 
     from app.database import get_search_db
     from app.models import TranscriptChunk
@@ -683,13 +686,19 @@ async def get_chunk_excerpt(
             {"fid": file_id, "idx": chunk_index + 1},
         ).fetchone()
 
-    target_text = target[0] or ""
-    page_raw = target[1]
-    page: int | None
-    try:
-        page = int(page_raw) if page_raw not in (None, "") else None
-    except (TypeError, ValueError):
-        page = None
+        target_text = target[0] or ""
+        page_raw = target[1]
+        page: int | None
+        try:
+            page = int(page_raw) if page_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            page = None
+
+        title = (
+            load_section_titles(db, [(file_id, page)]).get((file_id, page))
+            if is_book and page is not None
+            else None
+        )
 
     prefix, target_out, suffix = _compose_excerpt(
         target_text,
@@ -705,7 +714,9 @@ async def get_chunk_excerpt(
         suffix=suffix,
         start_time=None,
         end_time=None,
-        page=page,
+        page=None if is_book else page,
+        section=page if is_book else None,
+        section_title=title,
     )
 
 

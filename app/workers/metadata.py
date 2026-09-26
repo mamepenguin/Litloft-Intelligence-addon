@@ -17,7 +17,9 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_search_db, upsert_fts_text_content, validate_vector_table
+from app.document_sections import replace_document_sections
 from app.extractors.base import ExtractionResult
+from app.extractors.epub import EpubExtractor
 from app.extractors.html import HtmlExtractor
 from app.extractors.office import OfficeExtractor
 from app.extractors.pdf import PdfExtractor
@@ -28,7 +30,9 @@ from app.workers.embedder import embed_passages
 logger = logging.getLogger(__name__)
 
 # Content extractors (instantiated once)
-_extractors = [TextExtractor(), PdfExtractor(), OfficeExtractor(), HtmlExtractor()]
+_extractors = [
+    TextExtractor(), PdfExtractor(), OfficeExtractor(), HtmlExtractor(), EpubExtractor(),
+]
 
 # Cap for the persisted PDF Markdown body. Anything larger is dropped
 # from the ``pdf_markdown`` table (chunks/embeddings are still stored).
@@ -336,6 +340,7 @@ def index_text_content(file_id: str) -> bool:
             # row from a prior re-index. markdown=None (fitz fallback /
             # non-PDF) is a no-op inside the helper.
             _upsert_pdf_markdown(session, file_id, result)
+            replace_document_sections(session, file_id, result.section_titles)
             file.text_indexed = True
             return True
 
@@ -383,6 +388,7 @@ def index_text_content(file_id: str) -> bool:
             for idx, chunk in enumerate(chunks)
         ]
         upsert_fts_text_content(session, file_id, fts_chunks)
+        replace_document_sections(session, file_id, result.section_titles)
 
         _upsert_pdf_markdown(session, file_id, result)
 

@@ -264,6 +264,23 @@ class Stage3SingleRun:
     forced_answer: bool | None = None
 
 
+def _location_matches_hint(loc: str, hint: SegmentHint) -> bool:
+    """``m:ss`` against a time hint; ``page N`` or ``section N`` against a page hint."""
+    if hint.time_range is not None and ":" in loc:
+        try:
+            mm, ss = loc.split(":", 1)
+            seconds = int(mm) * 60 + int(ss)
+        except ValueError:
+            return False
+        lo, hi = hint.time_range
+        # Allow a 30s window (matches transcript_window_seconds default).
+        return lo - 30 <= seconds <= hi + 30
+    words = loc.lower().split()
+    if hint.page is not None and len(words) == 2 and words[0] in ("page", "section"):
+        return words[1].isdigit() and int(words[1]) == hint.page
+    return False
+
+
 async def run_stage3_once(
     case: Case,
     resolved: list[ResolvedGroundTruth],
@@ -312,26 +329,8 @@ async def run_stage3_once(
             continue
         seg_total += 1
         loc = (c.get("segment_location") or "").strip()
-        if not loc:
-            continue
-        # segment_location is "m:ss" for time hints, "page N" for page hints.
-        if hint.time_range is not None and ":" in loc:
-            try:
-                mm, ss = loc.split(":", 1)
-                seconds = int(mm) * 60 + int(ss)
-            except ValueError:
-                continue
-            lo, hi = hint.time_range
-            # Allow a 30s window (matches transcript_window_seconds default).
-            if lo - 30 <= seconds <= hi + 30:
-                seg_hits += 1
-        elif hint.page is not None and loc.lower().startswith("page"):
-            try:
-                page_num = int(loc.split()[-1])
-            except (ValueError, IndexError):
-                continue
-            if page_num == hint.page:
-                seg_hits += 1
+        if loc and _location_matches_hint(loc, hint):
+            seg_hits += 1
     seg_match = (seg_hits / seg_total) if seg_total > 0 else None
 
     telemetry = response.agentic_telemetry

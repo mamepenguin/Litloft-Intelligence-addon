@@ -195,6 +195,31 @@ def _seed_document_chunks(engine, file_id: str, chunks: list[tuple[int, str, int
             })
 
 
+def _seed_epub(engine, titles: list[tuple[int, str]]) -> None:
+    session = sessionmaker(bind=engine, expire_on_commit=False)()
+    try:
+        session.add(IndexedFile(
+            file_id="book789",
+            drive="drive1",
+            filename="novel.epub",
+            file_path="/drives/drive1/novel.epub",
+            file_type="document",
+            mime_type="application/epub+zip",
+            file_size=300,
+            active=True,
+        ))
+        session.commit()
+    finally:
+        session.close()
+    with engine.begin() as conn:
+        for page, title in titles:
+            conn.execute(
+                text("INSERT INTO document_sections (file_id, page, title) "
+                     "VALUES ('book789', :p, :t)"),
+                {"p": page, "t": title},
+            )
+
+
 # ---------------------------------------------------------------------------
 # _parse_chunk_id — pure function
 # ---------------------------------------------------------------------------
@@ -403,6 +428,28 @@ class TestDocumentExcerpt:
         assert result.target == "The target paragraph."
         assert result.prefix == "Intro paragraph. "
         assert result.suffix == " Conclusion paragraph."
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("chunk_id", "expected"),
+        [
+            pytest.param("document:1", (None, 3, "Chapter Three"), id="titled"),
+            pytest.param("document:0", (None, 2, None), id="untitled"),
+        ],
+    )
+    async def test_epub_excerpt_names_its_section(
+        self, search_db, feature_enabled, chunk_id, expected,
+    ):
+        engine, _ = search_db
+        _seed_epub(engine, titles=[(3, "Chapter Three"), (4, "Chapter Four")])
+        _seed_document_chunks(engine, "book789", [
+            (0, "Before.", 2),
+            (1, "The cited passage.", 3),
+        ])
+
+        result = await get_chunk_excerpt("book789", chunk_id, "drive1")
+
+        assert (result.page, result.section, result.section_title) == expected
 
     @pytest.mark.asyncio
     async def test_page_null_when_extractor_did_not_provide(self, search_db, feature_enabled):

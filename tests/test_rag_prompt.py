@@ -252,3 +252,10 @@ class TestBuildUserPrompt:
         result = build_user_prompt("これは日本語の質問？", contexts)
 
         assert "これは日本語の質問？" in result
+
+
+def test_answer_prompt_names_section_marker():
+    prompt = build_system_prompt("auto")
+
+    assert "'section 3'" in prompt
+    assert "'page 3'" in prompt

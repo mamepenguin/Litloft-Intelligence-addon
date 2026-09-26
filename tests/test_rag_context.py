@@ -80,13 +80,15 @@ def _retrieved_document(
     description: str = "Doc Description",
     score: float = 0.9,
     chunk_indices: tuple[int, ...] = (3,),
+    mime_type: str | None = "application/pdf",
 ) -> RetrievedFile:
     matches = tuple(
         MatchInfo(
             match_type="text_content",
             text=f"fragment {i}",
             score=0.8,
-            page=i,
+            page=i + 100,
+            chunk_index=i,
         )
         for i in chunk_indices
     )
@@ -96,6 +98,7 @@ def _retrieved_document(
         drive="Docs",
         filename="report.pdf",
         file_type="document",
+        mime_type=mime_type,
         title=title,
         description=description,
         score=score,
@@ -309,6 +312,34 @@ class TestBuildFileContextDocument:
         build_file_context(candidate, RagConfig())
 
         assert fetch_spy.called
+
+
+class TestDocumentKeywordChunkAndLocation:
+    _AROUND = [
+        (2, "Earlier.", 7),
+        (3, "The match.", 8),
+        (4, "Later.", 8),
+    ]
+
+    @pytest.mark.parametrize(
+        ("mime", "expected"),
+        [("application/epub+zip", ["section 8"]), ("application/pdf", ["page 8"])],
+    )
+    def test_keyword_snippet_is_the_matched_chunk_located_by_kind(
+        self, monkeypatch, mime, expected,
+    ):
+        monkeypatch.setattr(
+            "app.rag.context._fetch_document_chunks_around",
+            MagicMock(return_value=self._AROUND),
+        )
+
+        ctx = build_file_context(
+            _retrieved_document(chunk_indices=(3,), mime_type=mime), RagConfig(),
+        )
+
+        assert [
+            s.location for s in ctx.snippets if s.source == "text_content"
+        ] == expected
 
 
 # ---------------------------------------------------------------------------

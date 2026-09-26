@@ -699,8 +699,7 @@ export async function getDetailedSummaryCitations(
  * Concatenating the three strings reproduces the flat single-line
  * rendering used before the split was introduced. `start_time` is
  * non-null for audio/video chunks; the UI uses it to seek the
- * <video>/<audio> element. `page` is non-null for document chunks
- * (pdf/epub) and drives the text-preview scroll.
+ * <video>/<audio> element.
  */
 export interface CitationChunkExcerpt {
   chunk_id: string;
@@ -711,6 +710,9 @@ export interface CitationChunkExcerpt {
   start_time: number | null;
   end_time: number | null;
   page: number | null;
+  /** EPUB chunks carry their section here and leave `page` null. */
+  section: number | null;
+  section_title: string | null;
 }
 
 export async function getCitationChunkExcerpt(
@@ -1100,6 +1102,7 @@ export interface Citation {
   quote: string;
   relevance: number;
   segment_location: string | null;
+  section_title?: string | null;
 }
 
 export interface Source {

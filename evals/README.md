@@ -64,7 +64,7 @@ ground_truth_files:
   - path: "docs/tech_paper.md"
   - path: "docs/chapter3.md"
     segment_hint:
-      page: 3                   # 文書 (ページ)
+      page: 3                   # 文書 (ページ)。EPUB はセクション番号
 
 must_mention: []
 
@@ -75,7 +75,7 @@ notes: |
 ### segment_hint の使い方
 
 - `time_range`: 正解が含まれる区間 (秒)。IoU ≥ 0.3 で segment_recall ヒット判定
-- `page`: 文書の正解ページ。完全一致で判定
+- `page`: 文書の正解ページ (EPUB はセクション番号)。引用の `page N` / `section N` と完全一致で判定
 - 省略すれば **file 粒度** だけで評価される。まずは省略、必要になったら付ける
 
 ### グローバル blocklist との関係

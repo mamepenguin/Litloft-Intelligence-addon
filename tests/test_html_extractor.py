@@ -220,3 +220,27 @@ def test_japanese_utf8_preserved(tmp_path: Path) -> None:
     combined = " ".join(c.text for c in result.chunks)
     assert "日本語" in combined
     assert "テキスト" in combined
+
+
+_LINKED_HTML = """
+<html><body>
+  <h1>Links</h1>
+  <p>See <a href="notes.xhtml#n1">the note</a> for more.</p>
+  <p><ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby></p>
+  <script>var hidden = 1;</script>
+</body></html>
+"""
+
+
+def test_html_extractor_output_unchanged(tmp_path: Path) -> None:
+    file_path = _write(tmp_path, "links.html", _LINKED_HTML)
+
+    result = HtmlExtractor().extract(file_path)
+
+    assert [(c.text, c.page, c.metadata) for c in result.chunks] == [
+        (
+            "See [the note](notes.xhtml#n1) for more.\n\n漢字(かんじ)",
+            None,
+            "section: Links",
+        ),
+    ]

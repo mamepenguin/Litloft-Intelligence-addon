@@ -23,6 +23,11 @@ import {
 import { NextIntlClientProvider } from "next-intl";
 import React from "react";
 
+const routerPush = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: routerPush }),
+}));
+
 vi.mock("@/addons/intelligence/api", () => ({
   getCitationChunkExcerpt: vi.fn(),
 }));
@@ -431,6 +436,61 @@ describe("CitationInlinePanel (in-flow accordion)", () => {
         container.querySelector('[data-citation-panel="weak"]'),
       ).not.toBeNull();
     });
+  });
+
+  async function openWithExcerpt(excerpt: Record<string, unknown>) {
+    (getCitationChunkExcerpt as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({
+        chunk_id: "c1",
+        file_id: "f1",
+        prefix: "",
+        target: "章の本文。",
+        suffix: "",
+        start_time: null,
+        end_time: null,
+        ...excerpt,
+      });
+    renderMarkerWithPanel({ citation: linkedCitation });
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Clear source citation|根拠が明確/ }),
+      );
+    });
+    return (await screen.findByText("章の本文。")).closest("button")!;
+  }
+
+  it.each([
+    {
+      excerpt: { page: null, section: 3, section_title: "Chapter Three" },
+      shows: "Chapter Three",
+      never: /p\.\s?3|Page 3|Section 3/,
+    },
+    {
+      excerpt: { page: null, section: 3, section_title: null },
+      shows: "Section 3",
+      never: /p\.\s?3|Page 3/,
+    },
+    {
+      excerpt: { page: 4, section: null, section_title: null },
+      shows: "p.4",
+      never: /Section/,
+    },
+  ])("labels the excerpt card $shows", async ({ excerpt, shows, never }) => {
+    const card = await openWithExcerpt(excerpt);
+
+    expect(card).toHaveTextContent(shows);
+    expect(card).not.toHaveTextContent(never);
+  });
+
+  it("section jump navigates to ?section=", async () => {
+    const card = await openWithExcerpt({
+      page: null, section: 3, section_title: "Chapter Three",
+    });
+
+    expect(card).not.toBeDisabled();
+    fireEvent.click(card);
+
+    expect(routerPush.mock.calls).toEqual([["/files/f1?section=3"]]);
   });
 
   it("does not open a panel for a no-citation segment", async () => {

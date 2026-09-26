@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
+import warnings
 from pathlib import Path
 
 import app.config as config
@@ -61,7 +62,7 @@ class HtmlExtractor(ContentExtractor):
             return empty
 
         try:
-            markdown = _html_to_markdown(raw)
+            markdown = html_to_markdown(raw)
         except Exception as e:
             logger.warning("HTML parse failed for %s: %s", file_path, e)
             return ExtractionResult(chunks=[], markdown=None, extractor="html_error")
@@ -78,22 +79,29 @@ class HtmlExtractor(ContentExtractor):
         return ExtractionResult(chunks=chunks, markdown=None, extractor=EXTRACTOR_NAME)
 
 
-def _html_to_markdown(html: str) -> str:
-    """Strip script/style/noscript and convert HTML body to Markdown."""
-    from bs4 import BeautifulSoup
+def html_to_markdown(
+    html: str | bytes,
+    *,
+    ignore_links: bool = False,
+    drop_tags: tuple[str, ...] = (),
+) -> str:
+    """Strip script/style/noscript (plus ``drop_tags``) and convert to Markdown."""
+    from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
     import html2text
 
     parser = _pick_parser()
-    soup = BeautifulSoup(html, parser)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", XMLParsedAsHTMLWarning)
+        soup = BeautifulSoup(html, parser)
 
-    for tag_name in _STRIP_TAGS:
+    for tag_name in (*_STRIP_TAGS, *drop_tags):
         for tag in soup.find_all(tag_name):
             tag.decompose()
 
     converter = html2text.HTML2Text()
     converter.body_width = 0  # Don't wrap; chunker handles size
     converter.ignore_images = True  # Image alts add little signal
-    converter.ignore_links = False  # Anchor text retains topical meaning
+    converter.ignore_links = ignore_links
     return converter.handle(str(soup))
 
 
