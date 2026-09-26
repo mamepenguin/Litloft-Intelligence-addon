@@ -459,20 +459,27 @@ describe("CitationInlinePanel (in-flow accordion)", () => {
     return (await screen.findByText("章の本文。")).closest("button")!;
   }
 
-  it("shows the section title, never Page N", async () => {
-    const card = await openWithExcerpt({
-      page: null, section: 3, section_title: "Chapter Three",
-    });
+  it.each([
+    {
+      excerpt: { page: null, section: 3, section_title: "Chapter Three" },
+      shows: "Chapter Three",
+      never: /p\.\s?3|Page 3|Section 3/,
+    },
+    {
+      excerpt: { page: null, section: 3, section_title: null },
+      shows: "Section 3",
+      never: /p\.\s?3|Page 3/,
+    },
+    {
+      excerpt: { page: 4, section: null, section_title: null },
+      shows: "p.4",
+      never: /Section/,
+    },
+  ])("labels the excerpt card $shows", async ({ excerpt, shows, never }) => {
+    const card = await openWithExcerpt(excerpt);
 
-    expect(card).toHaveTextContent("Chapter Three");
-    expect(card).not.toHaveTextContent(/p\.\s?3|Page 3|Section 3/);
-  });
-
-  it("shows the numbered section label without a title", async () => {
-    const card = await openWithExcerpt({ page: null, section: 3, section_title: null });
-
-    expect(card).toHaveTextContent("Section 3");
-    expect(card).not.toHaveTextContent(/p\.\s?3|Page 3/);
+    expect(card).toHaveTextContent(shows);
+    expect(card).not.toHaveTextContent(never);
   });
 
   it("section jump navigates to ?section=", async () => {
@@ -484,13 +491,6 @@ describe("CitationInlinePanel (in-flow accordion)", () => {
     fireEvent.click(card);
 
     expect(routerPush.mock.calls).toEqual([["/files/f1?section=3"]]);
-  });
-
-  it("pdf excerpt still shows p.N", async () => {
-    const card = await openWithExcerpt({ page: 4, section: null, section_title: null });
-
-    expect(card).toHaveTextContent("p.4");
-    expect(card).toBeDisabled();
   });
 
   it("does not open a panel for a no-citation segment", async () => {

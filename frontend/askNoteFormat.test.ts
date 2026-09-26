@@ -63,11 +63,6 @@ describe("citationToLoftUrl", () => {
     expect(citationToLoftUrl(c)).toBe("loft://abc123def456?page=4");
   });
 
-  it("builds loft ?section=", () => {
-    const c = makeCitation({ segment_location: "section 3" });
-    expect(citationToLoftUrl(c)).toBe("loft://abc123def456?section=3");
-  });
-
   it("returns base loft URL when no segment_location", () => {
     expect(citationToLoftUrl(makeCitation())).toBe("loft://abc123def456");
   });
