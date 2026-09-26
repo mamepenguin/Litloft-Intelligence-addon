@@ -523,26 +523,64 @@ def test_entity_declaration_in_section_is_refused(tmp_path) -> None:
     assert result.page_count == 2
 
 
-def test_entity_declaration_in_nav_falls_back_to_ncx(tmp_path) -> None:
-    nav = (
-        '<?xml version="1.0"?><!DOCTYPE html [<!ENTITY t "Expanded">]>'
-        '<html xmlns="http://www.w3.org/1999/xhtml" '
-        'xmlns:epub="http://www.idpf.org/2007/ops"><body>'
-        '<nav epub:type="toc"><ol><li><a href="c1.xhtml">&t;</a></li></ol></nav>'
-        "</body></html>"
-    )
+def _expanding_ncx_entries(data: bytes, base_dir: str) -> list[tuple[str | None, str | None]]:
+    # Stands in for an NCX parser that expands internal entities, so the
+    # test does not depend on bs4 happening to drop an internal subset.
+    from lxml import etree
+
+    root = etree.fromstring(data, etree.XMLParser(resolve_entities=True, no_network=True))
+    return [
+        (
+            epub_module._resolve(base_dir, point.xpath("string(*[local-name()='content']/@src)")),
+            point.xpath("normalize-space(*[local-name()='navLabel'])") or None,
+        )
+        for point in root.xpath("//*[local-name()='navPoint']")
+    ]
+
+
+_ENTITY_NAV = (
+    '<?xml version="1.0"?><!DOCTYPE html [<!ENTITY t "Expanded">]>'
+    '<html xmlns="http://www.w3.org/1999/xhtml" '
+    'xmlns:epub="http://www.idpf.org/2007/ops"><body>'
+    '<nav epub:type="toc"><ol><li><a href="c1.xhtml">&t;</a></li></ol></nav>'
+    "</body></html>"
+)
+_ENTITY_NCX = (
+    '<?xml version="1.0"?><!DOCTYPE ncx [<!ENTITY t "Expanded">]>'
+    '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><navMap>'
+    '<navPoint id="p1"><navLabel><text>&t;</text></navLabel>'
+    '<content src="c1.xhtml"/></navPoint></navMap></ncx>'
+)
+
+
+@pytest.mark.parametrize(
+    ("toc_items", "expected"),
+    [
+        (
+            [
+                Item("nav", "nav.xhtml", _ENTITY_NAV, properties="nav"),
+                Item("ncx", "toc.ncx", ncx_doc([("c1.xhtml", "From NCX")]),
+                     media_type="application/x-dtbncx+xml"),
+            ],
+            ((1, "From NCX"),),
+        ),
+        (
+            [Item("ncx", "toc.ncx", _ENTITY_NCX, media_type="application/x-dtbncx+xml")],
+            ((1, "Heading"),),
+        ),
+    ],
+)
+def test_toc_declaring_an_entity_gives_no_title(
+    tmp_path, monkeypatch, toc_items, expected,
+) -> None:
+    monkeypatch.setattr(epub_module, "_ncx_entries", _expanding_ncx_entries)
     path = make_epub(
         tmp_path / "b.epub",
-        [
-            Item("nav", "nav.xhtml", nav, properties="nav"),
-            Item("ncx", "toc.ncx", ncx_doc([("c1.xhtml", "From NCX")]),
-                 media_type="application/x-dtbncx+xml"),
-            Item("c1", "c1.xhtml", _section("MARK-one")),
-        ],
+        [*toc_items, Item("c1", "c1.xhtml", xhtml("<h1>Heading</h1><p>MARK-one</p>"))],
         spine=["c1"],
     )
 
-    assert _extract(path).section_titles == ((1, "From NCX"),)
+    assert _extract(path).section_titles == expected
 
 
 @pytest.mark.parametrize("doctype", ["<!DOCTYPE html>", XHTML_DOCTYPE])
