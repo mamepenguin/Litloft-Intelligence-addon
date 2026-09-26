@@ -588,23 +588,19 @@ def _break_crc(path: Path, name: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("caps", "with_toc", "bad_crc", "expected_reads", "expected_pages"),
+    ("caps", "with_toc", "expected_reads", "expected_pages"),
     [
-        ({"BOOK_MAX_BYTES": 3 * _MEMBER_BYTES}, True, False, 3, {1, 2, 3}),
-        ({"TEXT_MAX_CHARS": 5}, True, False, 1, {1}),
+        ({"BOOK_MAX_BYTES": 3 * _MEMBER_BYTES}, True, 3, {1, 2, 3}),
+        ({"TEXT_MAX_CHARS": 5}, True, 1, {1}),
         (
             {"SECTION_MAX_BYTES": _MEMBER_BYTES - 1, "BOOK_MAX_BYTES": 2 * _MEMBER_BYTES},
-            True, False, 2, set(),
+            True, 2, set(),
         ),
-        ({"TEXT_MAX_CHARS": 5, "BOOK_MAX_BYTES": 3 * _MEMBER_BYTES}, False, False, 3, {1}),
-        (
-            {"SECTION_MAX_BYTES": _MEMBER_BYTES, "BOOK_MAX_BYTES": 3 * _MEMBER_BYTES},
-            True, True, 3, set(),
-        ),
+        ({"TEXT_MAX_CHARS": 5, "BOOK_MAX_BYTES": 3 * _MEMBER_BYTES}, False, 3, {1}),
     ],
 )
 def test_book_budget_stops_further_reads(
-    tmp_path, monkeypatch, caps, with_toc, bad_crc, expected_reads, expected_pages,
+    tmp_path, monkeypatch, caps, with_toc, expected_reads, expected_pages,
 ) -> None:
     import zipfile
 
@@ -621,8 +617,6 @@ def test_book_budget_stops_further_reads(
         ],
         spine=[f"s{i}" for i in range(10)],
     )
-    if bad_crc:
-        _break_crc(path, "OEBPS/s.xhtml")
     opened: list[str] = []
     original_open = zipfile.ZipFile.open
 
@@ -763,6 +757,24 @@ def _with_container(container: str):
     return build
 
 
+def _member_unreadable(member: str, how: str):
+    # Everything else in the book reads fine, so an empty result also shows
+    # that what was read before the failure was not kept.
+    def build(tmp_path: Path) -> Path:
+        nav = nav_doc([("c1.xhtml", "One"), ("c2.xhtml", "Two")])
+        path = make_epub(
+            tmp_path / "b.epub",
+            [Item("nav", "nav.xhtml", nav, properties="nav"), *_two_sections(_section("MARK-one"))],
+            spine=["c1", "c2"],
+            extra={"META-INF/encryption.xml": _encryption_xml("OEBPS/font.otf")},
+            encrypted_members=(member,) if how == "zip-encrypted" else (),
+        )
+        if how == "bad-crc":
+            _break_crc(path, member)
+        return path
+    return build
+
+
 def _opf_with_doctype(tmp_path: Path) -> Path:
     items = _two_sections(_section("MARK-one"))
     opf = opf_xml(items, ["c1", "c2"]).replace(
@@ -797,6 +809,15 @@ _LAUGHS_CONTAINER = (
         ),
         pytest.param(_with_container(_LAUGHS_CONTAINER), id="billion-laughs-container"),
         pytest.param(_opf_with_doctype, id="opf-with-doctype"),
+        *(
+            pytest.param(_member_unreadable(member, how), id=f"{how}-{name}")
+            for member, name in (
+                ("OEBPS/c2.xhtml", "section"),
+                ("OEBPS/nav.xhtml", "nav"),
+                ("META-INF/encryption.xml", "encryption-xml"),
+            )
+            for how in ("zip-encrypted", "bad-crc")
+        ),
     ],
 )
 def test_unopenable_book_returns_empty(tmp_path, build) -> None:
@@ -804,42 +825,38 @@ def test_unopenable_book_returns_empty(tmp_path, build) -> None:
 
 
 @pytest.mark.parametrize(
-    ("first", "caps", "encrypted", "expected"),
+    ("first", "caps", "expected"),
     [
         pytest.param(
             '<?xml version="1.0"?><!DOCTYPE html [<!ENTITY x "MARK-expanded">]>'
             '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>&x; MARK-one</p>'
             "</body></html>",
-            {}, (), {(2, "MARK-two")},
+            {}, {(2, "MARK-two")},
             id="entity-declaration-refused",
         ),
         pytest.param(
-            "<<not xml>> <p>MARK-one</p>", {}, (), {(2, "MARK-two")},
+            "<<not xml>> <p>MARK-one</p>", {}, {(2, "MARK-two")},
             id="malformed-before-root",
         ),
         pytest.param(
-            _section("MARK-one"), {}, ("OEBPS/c1.xhtml",), {(2, "MARK-two")},
-            id="zip-encrypted-member",
-        ),
-        pytest.param(
-            xhtml("<p>MARK-one</p>" + "<p>x</p>" * 300), {"SECTION_MAX_BYTES": 2000}, (),
+            xhtml("<p>MARK-one</p>" + "<p>x</p>" * 300), {"SECTION_MAX_BYTES": 2000},
             {(2, "MARK-two")},
             id="member-over-cap",
         ),
         pytest.param(
             '<html xmlns="http://www.w3.org/1999/xhtml"><body>'
             "<p>MARK-one&nbsp;and a stray & here</p><p>unclosed</body></html>",
-            {}, (), {(1, "MARK-one"), (2, "MARK-two")},
+            {}, {(1, "MARK-one"), (2, "MARK-two")},
             id="malformed-after-root-still-indexed",
         ),
     ],
 )
 def test_failing_section_loses_only_itself(
-    tmp_path, monkeypatch, first, caps, encrypted, expected,
+    tmp_path, monkeypatch, first, caps, expected,
 ) -> None:
     for name, value in caps.items():
         monkeypatch.setattr(epub_module, name, value)
-    path = make_epub(tmp_path / "b.epub", _two_sections(first), encrypted_members=encrypted)
+    path = make_epub(tmp_path / "b.epub", _two_sections(first))
 
     result = _extract(path)
 

@@ -128,15 +128,9 @@ def _namespace(tag: str) -> str | None:
 def _read_member(
     zf: zipfile.ZipFile, info: zipfile.ZipInfo, cap: int, budget: _ByteBudget,
 ) -> bytes | None:
-    # A read that raises (bad CRC, broken deflate stream) is charged the
-    # cap + 1 bytes it asked for: how much it decompressed is not known.
-    charge = cap + 1
-    try:
-        with zf.open(info) as f:
-            data = f.read(cap + 1)
-        charge = len(data)
-    finally:
-        budget.left -= charge
+    with zf.open(info) as f:
+        data = f.read(cap + 1)
+    budget.left -= len(data)
     return None if len(data) > cap else data
 
 
@@ -304,10 +298,10 @@ def _encrypted_paths(
 ) -> frozenset[str] | None:
     if _ENCRYPTION_PATH not in entries:
         return frozenset()
+    data = _read_xml_member(zf, entries, _ENCRYPTION_PATH, budget)
+    if data is None:
+        return None
     try:
-        data = _read_xml_member(zf, entries, _ENCRYPTION_PATH, budget)
-        if data is None:
-            return None
         root, _ = _parse_strict(data)
     except Exception as e:
         logger.warning("EPUB encryption.xml unreadable, skipping every section: %s", e)
@@ -366,10 +360,10 @@ def _toc_titles(
     for path, parse in ((book.nav_path, _nav_entries), (book.ncx_path, _ncx_entries)):
         if not book.readable(path):
             continue
+        data = _read_xml_member(zf, entries, path, budget)
+        if data is None:
+            continue
         try:
-            data = _read_xml_member(zf, entries, path, budget)
-            if data is None:
-                continue
             _refuse_entities(data)
             toc = [(p, t) for p, t in parse(data, posixpath.dirname(path)) if p and t]
         except Exception as e:
@@ -416,10 +410,10 @@ def _extract_sections(
         info = entries.get(section.path) if book.readable(section.path) else None
         if info is None or not section.is_html or not (wants_heading or wants_text):
             continue
+        data = _read_member(zf, info, SECTION_MAX_BYTES, budget)
+        if data is None:
+            continue
         try:
-            data = _read_member(zf, info, SECTION_MAX_BYTES, budget)
-            if data is None:
-                continue
             _refuse_entities(data)
             heading = _first_heading(data) if wants_heading else None
             if heading:
