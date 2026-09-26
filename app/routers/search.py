@@ -6,6 +6,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 
+from app.document_sections import EPUB_MIME
 from app.drive_context import require_drive
 from app.file_hydrate import hydrate_files
 from app.schemas import (
@@ -50,12 +51,7 @@ async def _to_response_model(result: Any) -> SearchResponseModel:
                             list(s.time_range) if s.time_range else None
                         ),
                         matches=[
-                            SearchResultSegmentMatch(
-                                type=m.match_type,
-                                text=m.text,
-                                score=round(m.score, 4),
-                                page=m.page,
-                            )
+                            _segment_match(m, r.mime_type, dict(r.section_titles))
                             for m in s.matches
                         ],
                     )
@@ -70,6 +66,24 @@ async def _to_response_model(result: Any) -> SearchResponseModel:
         service_version=result.service_version,
     )
 
+
+def _segment_match(
+    m: Any, mime_type: str | None, section_titles: dict[int, str],
+) -> SearchResultSegmentMatch:
+    if mime_type != EPUB_MIME:
+        return SearchResultSegmentMatch(
+            type=m.match_type, text=m.text, score=round(m.score, 4), page=m.page,
+        )
+    # An EPUB chunk keeps its section number in ``page``; on the wire it is
+    # a section, never a page.
+    return SearchResultSegmentMatch(
+        type=m.match_type,
+        text=m.text,
+        score=round(m.score, 4),
+        page=None,
+        section=m.page,
+        section_title=section_titles.get(m.page) if m.page is not None else None,
+    )
 
 
 @router.get("/search", response_model=SearchResponseModel)

@@ -14,6 +14,8 @@ class SearchResultSegmentMatch(BaseModel):
     text: str
     score: float
     page: int | None = None
+    section: int | None = None
+    section_title: str | None = None
 
 
 class SearchResultSegment(BaseModel):

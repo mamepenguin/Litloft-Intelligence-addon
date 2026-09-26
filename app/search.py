@@ -18,6 +18,7 @@ from app.config import settings
 from concurrent.futures import ThreadPoolExecutor
 
 from app.database import get_search_db, get_search_db_read, get_search_engine, validate_vector_table
+from app.document_sections import EPUB_MIME, load_section_titles
 from app.file_kind import apply_kind_filter
 from app.models import Embedding, IndexedFile, TranscriptChunk
 from app.workers.clip import embed_text_clip
@@ -119,6 +120,7 @@ class MatchInfo:
     timestamp_start: float | None = None
     timestamp_end: float | None = None
     page: int | None = None
+    chunk_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -140,6 +142,9 @@ class SearchResult:
     score: float
     match_types: tuple[str, ...]
     segments: tuple[SegmentGroup, ...]
+    mime_type: str | None = None
+    # ``(page, title)`` for the matched sections of a sectioned document.
+    section_titles: tuple[tuple[int, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -412,6 +417,7 @@ class _VectorMatch:
     timestamp_start: float | None
     timestamp_end: float | None
     page: int | None = None
+    chunk_index: int | None = None
 
 
 def _vector_search_text(
@@ -542,6 +548,7 @@ def _vector_search_text(
                     timestamp_start=emb.timestamp_start,
                     timestamp_end=emb.timestamp_end,
                     page=emb.page,
+                    chunk_index=emb.chunk_index,
                 ),
             ]
 
@@ -690,6 +697,7 @@ def _vector_search_clip(
                     timestamp_start=emb.timestamp_start,
                     timestamp_end=emb.timestamp_end,
                     page=emb.page,
+                    chunk_index=emb.chunk_index,
                 ),
             ]
 
@@ -731,6 +739,7 @@ class _TextContentKeywordMatch:
     score: float
     text: str
     page: int | None
+    chunk_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1104,6 +1113,7 @@ def _keyword_search_text_content(
                 score=min(row[4] / normalizer, 1.0),
                 text=row[3][:200],
                 page=page_num,
+                chunk_index=int(row[1]) if str(row[1]).isdigit() else None,
             ),
         ]
 
@@ -1220,6 +1230,7 @@ def _combine_scores_rrf(
             timestamp_start=m.timestamp_start,
             timestamp_end=m.timestamp_end,
             page=m.page,
+            chunk_index=m.chunk_index,
         ))
 
     for m in clip_matches:
@@ -1232,6 +1243,7 @@ def _combine_scores_rrf(
             timestamp_start=m.timestamp_start,
             timestamp_end=m.timestamp_end,
             page=m.page,
+            chunk_index=m.chunk_index,
         ))
 
     for m in keyword_matches:
@@ -1254,6 +1266,7 @@ def _combine_scores_rrf(
             text=m.text,
             score=m.score,
             page=m.page,
+            chunk_index=m.chunk_index,
         ))
 
     # SIRA retrieval-keywords hits: contribute a chip-only entry. The
@@ -1400,6 +1413,16 @@ def _build_results(
             query = query.filter(IndexedFile.drive == drive)
 
         files = {f.file_id: f for f in query.all()}
+        titles = load_section_titles(
+            session,
+            [
+                (file_id, m.page)
+                for file_id, fs in file_scores.items()
+                if file_id in files and files[file_id].mime_type == EPUB_MIME
+                for m in fs.matches
+                if m.page is not None
+            ],
+        )
 
     results: list[SearchResult] = []
 
@@ -1418,6 +1441,12 @@ def _build_results(
             score=fs.combined_score,
             match_types=tuple(sorted(fs.match_types)),
             segments=tuple(segments),
+            mime_type=file.mime_type,
+            section_titles=tuple(sorted(
+                (page, title)
+                for (fid, page), title in titles.items()
+                if fid == file_id
+            )),
         )
         results = [*results, result]
 
@@ -2223,6 +2252,7 @@ def _combine_scores_cosine(
             timestamp_start=m.timestamp_start,
             timestamp_end=m.timestamp_end,
             page=m.page,
+            chunk_index=m.chunk_index,
         ))
         weight = getattr(search_config, _TYPE_WEIGHTS.get(m.embedding_type, ""), 1.0)
         weighted = m.score * weight
@@ -2242,6 +2272,7 @@ def _combine_scores_cosine(
             timestamp_start=m.timestamp_start,
             timestamp_end=m.timestamp_end,
             page=m.page,
+            chunk_index=m.chunk_index,
         ))
         weight = getattr(
             search_config,
@@ -2276,6 +2307,7 @@ def _combine_scores_cosine(
             text=m.text,
             score=m.score,
             page=m.page,
+            chunk_index=m.chunk_index,
         ))
         src = file_source_best["text_content_keyword"]
         src[m.file_id] = max(src.get(m.file_id, 0.0), m.score)
