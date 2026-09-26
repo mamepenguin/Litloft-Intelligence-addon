@@ -23,6 +23,7 @@
  */
 
 import { useTranslations } from "next-intl";
+import { useRouter } from "next/navigation";
 import { PlayCircle, Copy } from "lucide-react";
 
 import { useCitationRail, CITATION_STRONG_THRESHOLD } from "./CitationRailContext";
@@ -217,6 +218,7 @@ function InlineExcerptBody({
   onJump?: (excerpt: CitationChunkExcerpt) => boolean | void;
 }) {
   const t = useTranslations("detailedSummary");
+  const router = useRouter();
 
   if (state.kind === "loading") {
     return (
@@ -270,7 +272,7 @@ function InlineExcerptBody({
       if (handled) return;
     }
     if (excerpt.section != null) {
-      window.location.assign(`/files/${excerpt.file_id}?section=${excerpt.section}`);
+      router.push(`/files/${excerpt.file_id}?section=${excerpt.section}`);
       return;
     }
     if (excerpt.start_time != null) {

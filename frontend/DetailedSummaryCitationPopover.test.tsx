@@ -23,6 +23,11 @@ import {
 import { NextIntlClientProvider } from "next-intl";
 import React from "react";
 
+const routerPush = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: routerPush }),
+}));
+
 vi.mock("@/addons/intelligence/api", () => ({
   getCitationChunkExcerpt: vi.fn(),
 }));
@@ -471,20 +476,14 @@ describe("CitationInlinePanel (in-flow accordion)", () => {
   });
 
   it("section jump navigates to ?section=", async () => {
-    const assign = vi.fn();
-    vi.stubGlobal("location", { ...window.location, assign });
-    try {
-      const card = await openWithExcerpt({
-        page: null, section: 3, section_title: "Chapter Three",
-      });
+    const card = await openWithExcerpt({
+      page: null, section: 3, section_title: "Chapter Three",
+    });
 
-      expect(card).not.toBeDisabled();
-      fireEvent.click(card);
+    expect(card).not.toBeDisabled();
+    fireEvent.click(card);
 
-      expect(assign.mock.calls).toEqual([["/files/f1?section=3"]]);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    expect(routerPush.mock.calls).toEqual([["/files/f1?section=3"]]);
   });
 
   it("pdf excerpt still shows p.N", async () => {
