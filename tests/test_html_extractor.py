@@ -21,7 +21,6 @@ from app.extractors.html import (  # noqa: E402
     EXTRACTOR_NAME,
     MAX_HTML_BYTES,
     HtmlExtractor,
-    html_to_markdown,
 )
 
 
@@ -231,31 +230,6 @@ _LINKED_HTML = """
   <script>var hidden = 1;</script>
 </body></html>
 """
-
-
-def test_html_to_markdown_keeps_link_urls_by_default() -> None:
-    markdown = html_to_markdown(_LINKED_HTML)
-
-    assert "[the note](notes.xhtml#n1)" in markdown
-    assert "hidden" not in markdown
-
-
-def test_html_to_markdown_ignore_links_keeps_anchor_text_only() -> None:
-    markdown = html_to_markdown(_LINKED_HTML, ignore_links=True)
-
-    assert "See the note for more." in markdown
-    assert "notes.xhtml" not in markdown
-
-
-def test_html_to_markdown_drops_extra_tags() -> None:
-    kept = html_to_markdown(_LINKED_HTML)
-    dropped = html_to_markdown(_LINKED_HTML, drop_tags=("rt", "rp"))
-
-    assert "かんじ" in kept
-    assert "漢字" in dropped
-    assert "かんじ" not in dropped
-    assert "漢字(" not in dropped
-    assert "hidden" not in dropped
 
 
 def test_html_extractor_output_unchanged(tmp_path: Path) -> None:

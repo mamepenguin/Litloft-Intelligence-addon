@@ -1362,23 +1362,17 @@ class TestChunkIndexAndSections:
         )
         return vector, keyword
 
-    def test_rrf_matchinfo_carries_chunk_index(self) -> None:
+    @pytest.mark.parametrize(
+        "combine",
+        [
+            pytest.param(lambda **kw: _combine_scores_rrf(**kw, k=60), id="rrf"),
+            pytest.param(lambda **kw: _combine_scores_cosine(**kw), id="cosine"),
+        ],
+    )
+    def test_combined_matchinfo_carries_chunk_index(self, combine) -> None:
         vector, keyword = self._inputs()
 
-        scores = _combine_scores_rrf(
-            text_matches=[vector], clip_matches=[], keyword_matches=[],
-            transcript_keyword_matches=[], text_content_keyword_matches=[keyword],
-            k=60,
-        )
-
-        assert sorted(
-            (m.text, m.page, m.chunk_index) for m in scores["book"].matches
-        ) == [("k", 3, 11), ("v", 2, 6)]
-
-    def test_cosine_matchinfo_carries_chunk_index(self) -> None:
-        vector, keyword = self._inputs()
-
-        scores = _combine_scores_cosine(
+        scores = combine(
             text_matches=[vector], clip_matches=[], keyword_matches=[],
             transcript_keyword_matches=[], text_content_keyword_matches=[keyword],
         )

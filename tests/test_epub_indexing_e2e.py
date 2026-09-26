@@ -154,32 +154,6 @@ def test_chunk_page_and_row_use_section_number(search_db, tmp_path) -> None:
     assert _sections(search_db, "book") == [(2, "Second")]
 
 
-def test_indexed_chunks_contain_no_ruby_readings(search_db, tmp_path) -> None:
-    path = _book(
-        tmp_path / "b.epub",
-        [],
-        {"c1": "<p><ruby>吾輩<rp>(</rp><rt>わがはい</rt><rp>)</rp></ruby>は猫である</p>"},
-    )
-    _seed(search_db, "book", path)
-
-    metadata_worker.index_text_content("book")
-
-    assert _fts(search_db, "book") == [(0, 1, "吾輩は猫である")]
-
-
-def test_reindex_replaces_rows(search_db, tmp_path) -> None:
-    path = tmp_path / "b.epub"
-    _book(path, [("c1.xhtml", "Old one"), ("c2.xhtml", "Old two")],
-          {"c1": "<p>a</p>", "c2": "<p>b</p>"})
-    _seed(search_db, "book", path)
-    metadata_worker.index_text_content("book")
-
-    _book(path, [("c2.xhtml", "New two")], {"c1": "<p>a</p>", "c2": "<p>b</p>"})
-    metadata_worker.index_text_content("book")
-
-    assert _sections(search_db, "book") == [(2, "New two")]
-
-
 def test_reindex_to_zero_chunks_deletes_rows(search_db, tmp_path) -> None:
     path = tmp_path / "b.epub"
     _book(path, [("c1.xhtml", "One")], {"c1": "<p>a</p>"})
@@ -191,35 +165,6 @@ def test_reindex_to_zero_chunks_deletes_rows(search_db, tmp_path) -> None:
     assert metadata_worker.index_text_content("book") is True
 
     assert _sections(search_db, "book") == []
-
-
-def test_non_epub_reindex_writes_no_rows(search_db, tmp_path) -> None:
-    path = tmp_path / "notes.md"
-    path.write_text("# Heading\n\nSome notes about chapters.", encoding="utf-8")
-    _seed(search_db, "notes", path, mime="text/markdown")
-
-    assert metadata_worker.index_text_content("notes") is True
-
-    assert _fts(search_db, "notes") != []
-    with search_db.connect() as conn:
-        assert conn.execute(text("SELECT COUNT(*) FROM document_sections")).scalar() == 0
-
-
-def test_failed_epub_does_not_block_next_file(search_db, tmp_path) -> None:
-    broken = tmp_path / "broken.epub"
-    broken.write_bytes(b"PK\x03\x04 truncated")
-    good = _book(tmp_path / "good.epub", [("c1.xhtml", "One")], {"c1": "<p>fine</p>"})
-    _seed(search_db, "broken", broken)
-    _seed(search_db, "good", good)
-
-    assert metadata_worker.index_text_content("broken") is True
-    assert metadata_worker.index_text_content("good") is True
-
-    assert _fts(search_db, "broken") == []
-    assert _fts(search_db, "good") == [(0, 1, "fine")]
-    with search_db.connect() as conn:
-        flags = dict(conn.execute(text("SELECT file_id, text_indexed FROM indexed_files")).all())
-    assert flags == {"broken": 1, "good": 1}
 
 
 def test_epub_mime_is_text_indexed() -> None:

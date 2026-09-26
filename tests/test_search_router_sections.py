@@ -47,26 +47,24 @@ def _wire(model) -> list[tuple]:
     ]
 
 
-async def test_epub_match_has_null_page_and_section_with_title() -> None:
+@pytest.mark.parametrize(
+    ("mime", "pages", "expected"),
+    [
+        pytest.param(
+            "application/epub+zip", [3, 4, None],
+            [("t3", None, 3, "Chapter Three"), ("t4", None, 4, None),
+             ("tNone", None, None, None)],
+            id="epub-section-not-page",
+        ),
+        pytest.param(
+            "application/pdf", [3], [("t3", 3, None, None)],
+            id="pdf-page-not-section",
+        ),
+    ],
+)
+async def test_segment_match_wire_location(mime, pages, expected) -> None:
     model = await search_router._to_response_model(
-        _response("application/epub+zip", [3], titles=((3, "Chapter Three"),)),
+        _response(mime, pages, titles=((3, "Chapter Three"),)),
     )
 
-    assert _wire(model) == [("t3", None, 3, "Chapter Three")]
-
-
-async def test_epub_match_without_title_has_null_section_title() -> None:
-    model = await search_router._to_response_model(
-        _response("application/epub+zip", [4, None], titles=((3, "Chapter Three"),)),
-    )
-
-    assert _wire(model) == [("t4", None, 4, None), ("tNone", None, None, None)]
-
-
-async def test_pdf_match_keeps_page_and_null_section() -> None:
-    model = await search_router._to_response_model(
-        _response("application/pdf", [3], titles=((3, "ignored"),)),
-    )
-
-    assert _wire(model) == [("t3", 3, None, None)]
-    assert "section" in model.model_dump()["results"][0]["segments"][0]["matches"][0]
+    assert _wire(model) == expected

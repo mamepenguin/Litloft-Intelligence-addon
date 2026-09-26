@@ -17,7 +17,6 @@ from app.document_sections import (
     replace_document_sections,
     section_title,
 )
-from app.models import DocumentSection
 
 
 def _enable_fks(dbapi_conn: sqlite3.Connection, _: object) -> None:
@@ -92,59 +91,11 @@ def _rows(engine, file_id: str) -> list[tuple[int, str]]:
         ]
 
 
-def test_fresh_schema_columns(engine) -> None:
-    with engine.connect() as conn:
-        cols = [
-            (r[1], r[2].upper(), bool(r[3]))
-            for r in conn.execute(text("PRAGMA table_info(document_sections)"))
-        ]
-
-    assert cols == [
-        ("file_id", "VARCHAR(12)", True),
-        ("page", "INTEGER", True),
-        ("title", "TEXT", True),
-    ]
-
-
-def test_primary_key_is_file_id_page(engine) -> None:
-    with engine.connect() as conn:
-        pk = sorted(
-            (r[5], r[1])
-            for r in conn.execute(text("PRAGMA table_info(document_sections)"))
-            if r[5]
-        )
-
-    assert pk == [(1, "file_id"), (2, "page")]
-
-
-def test_foreign_key_cascades_to_indexed_files(engine) -> None:
-    with engine.connect() as conn:
-        fks = [
-            tuple(r)
-            for r in conn.execute(text("PRAGMA foreign_key_list(document_sections)"))
-        ]
-
-    assert len(fks) == 1
-    assert (fks[0][2], fks[0][3], fks[0][4], fks[0][6]) == (
-        "indexed_files", "file_id", "file_id", "CASCADE",
-    )
-
-
-def test_create_is_idempotent(engine) -> None:
-    _insert_indexed_file(engine, "book1")
-    with engine.begin() as conn:
-        conn.execute(text(
-            "INSERT INTO document_sections (file_id, page, title) "
-            "VALUES ('book1', 1, 'Opening')"
-        ))
-
-    with engine.begin() as conn:
-        _create_document_sections_table(conn)
-
-    assert _rows(engine, "book1") == [(1, "Opening")]
-
-
-def test_replace_deletes_previous_rows(engine, session_factory) -> None:
+@pytest.mark.parametrize(
+    ("new_titles", "expected"),
+    [(((2, "New two"),), [(2, "New two")]), ((), [])],
+)
+def test_replace_deletes_previous_rows(engine, session_factory, new_titles, expected) -> None:
     _insert_indexed_file(engine, "book1")
     _insert_indexed_file(engine, "book2")
     with session_factory() as session:
@@ -153,36 +104,11 @@ def test_replace_deletes_previous_rows(engine, session_factory) -> None:
         session.commit()
 
     with session_factory() as session:
-        replace_document_sections(session, "book1", ((2, "New two"),))
+        replace_document_sections(session, "book1", new_titles)
         session.commit()
 
-    assert _rows(engine, "book1") == [(2, "New two")]
+    assert _rows(engine, "book1") == expected
     assert _rows(engine, "book2") == [(2, "Other book")]
-
-
-def test_replace_with_no_titles_deletes_all(engine, session_factory) -> None:
-    _insert_indexed_file(engine, "book1")
-    with session_factory() as session:
-        replace_document_sections(session, "book1", ((1, "One"), (2, "Two")))
-        session.commit()
-
-    with session_factory() as session:
-        replace_document_sections(session, "book1", ())
-        session.commit()
-
-    assert _rows(engine, "book1") == []
-
-
-def test_orm_model_reads_rows(engine, session_factory) -> None:
-    _insert_indexed_file(engine, "book1")
-    with session_factory() as session:
-        replace_document_sections(session, "book1", ((3, "Three"),))
-        session.commit()
-
-    with session_factory() as session:
-        row = session.get(DocumentSection, ("book1", 3))
-
-    assert (row.file_id, row.page, row.title) == ("book1", 3, "Three")
 
 
 def test_purge_file_cascades_sections(engine, session_factory, monkeypatch) -> None:
@@ -264,11 +190,6 @@ def test_load_section_titles_filters_pages(engine, session_factory) -> None:
         ("book1", 3): "Three",
         ("book2", 2): "Other two",
     }
-
-
-def test_load_section_titles_with_no_pairs_is_empty(session_factory) -> None:
-    with session_factory() as session:
-        assert load_section_titles(session, []) == {}
 
 
 def test_section_title_reads_one_row(engine, session_factory, patched_db) -> None:

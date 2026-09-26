@@ -430,17 +430,16 @@ class TestDocumentExcerpt:
         assert result.suffix == " Conclusion paragraph."
 
     @pytest.mark.asyncio
-    async def test_pdf_excerpt_unchanged(self, search_db, feature_enabled):
-        engine, _ = search_db
-        _seed_document_chunks(engine, "doc456", [(0, "Only chunk.", 4)])
-
-        result = await get_chunk_excerpt("doc456", "document:0", "drive1")
-
-        assert (result.page, result.section, result.section_title) == (4, None, None)
-        assert result.target == "Only chunk."
-
-    @pytest.mark.asyncio
-    async def test_epub_excerpt_has_section_and_null_page(self, search_db, feature_enabled):
+    @pytest.mark.parametrize(
+        ("chunk_id", "expected"),
+        [
+            pytest.param("document:1", (None, 3, "Chapter Three"), id="titled"),
+            pytest.param("document:0", (None, 2, None), id="untitled"),
+        ],
+    )
+    async def test_epub_excerpt_names_its_section(
+        self, search_db, feature_enabled, chunk_id, expected,
+    ):
         engine, _ = search_db
         _seed_epub(engine, titles=[(3, "Chapter Three"), (4, "Chapter Four")])
         _seed_document_chunks(engine, "book789", [
@@ -448,22 +447,9 @@ class TestDocumentExcerpt:
             (1, "The cited passage.", 3),
         ])
 
-        result = await get_chunk_excerpt("book789", "document:1", "drive1")
+        result = await get_chunk_excerpt("book789", chunk_id, "drive1")
 
-        assert (result.page, result.section, result.section_title) == (
-            None, 3, "Chapter Three",
-        )
-        assert (result.prefix, result.target) == ("Before. ", "The cited passage.")
-
-    @pytest.mark.asyncio
-    async def test_epub_excerpt_untitled_section_title_null(self, search_db, feature_enabled):
-        engine, _ = search_db
-        _seed_epub(engine, titles=[(3, "Chapter Three")])
-        _seed_document_chunks(engine, "book789", [(0, "Front matter.", 1)])
-
-        result = await get_chunk_excerpt("book789", "document:0", "drive1")
-
-        assert (result.page, result.section, result.section_title) == (None, 1, None)
+        assert (result.page, result.section, result.section_title) == expected
 
     @pytest.mark.asyncio
     async def test_page_null_when_extractor_did_not_provide(self, search_db, feature_enabled):

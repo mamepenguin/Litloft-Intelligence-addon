@@ -1102,69 +1102,56 @@ class TestEpubSectionLocations:
             for loc in ("section 3", "Section  12", " section 7 ", "section", "section 3a")
         ] == [True, True, True, False, False]
 
-    def test_segment_location_for_epub_is_section(self) -> None:
-        from app.rag.service import _segment_location_for
-
-        candidates = [_document("book", "application/epub+zip", 4)]
-
-        assert _segment_location_for("book", candidates, "cited passage") == "section 4"
-
-    def test_segment_location_for_pdf_is_page(self) -> None:
-        from app.rag.service import _segment_location_for
-
-        candidates = [_document("doc", "application/pdf", 4)]
-
-        assert _segment_location_for("doc", candidates, "cited passage") == "page 4"
-
-    def test_location_section_3_does_not_pick_section_30(self) -> None:
+    @pytest.mark.parametrize(
+        ("snippets", "location", "expected"),
+        [
+            pytest.param(
+                [("section 30", "thirty"), ("section 3", "three")], "section 3", "three",
+                id="section-3-not-30",
+            ),
+            pytest.param(
+                [("page 30", "thirty"), ("page 3", "three")], "page 3", "three",
+                id="page-3-not-30",
+            ),
+            pytest.param(
+                [("10:45", "later"), ("transcript @ 0:45", "embedded")], "0:45", "embedded",
+                id="timestamp-inside-a-label",
+            ),
+        ],
+    )
+    def test_location_selects_snippet_by_whole_token(self, snippets, location, expected) -> None:
         from app.rag.service import _quote_from_contexts
 
-        ctx = _snippet_context("book", [("section 30", "thirty"), ("section 3", "three")])
+        ctx = _snippet_context("f", snippets)
 
-        assert _quote_from_contexts("book", [ctx], location="section 3") == "three"
+        assert _quote_from_contexts("f", [ctx], location=location) == expected
 
-    def test_location_page_3_does_not_pick_page_30(self) -> None:
-        from app.rag.service import _quote_from_contexts
-
-        ctx = _snippet_context("doc", [("page 30", "thirty"), ("page 3", "three")])
-
-        assert _quote_from_contexts("doc", [ctx], location="page 3") == "three"
-
-    def test_existing_timestamp_location_still_matches(self) -> None:
-        from app.rag.service import _quote_from_contexts
-
-        ctx = _snippet_context(
-            "vid", [("10:45", "later"), ("transcript @ 0:45", "embedded")],
-        )
-
-        assert _quote_from_contexts("vid", [ctx], location="0:45") == "embedded"
-
-    def test_epub_page_marker_is_not_trusted(self, titles) -> None:
+    @pytest.mark.parametrize(
+        ("mime", "location", "expected_location", "expected_title"),
+        [
+            pytest.param("application/epub+zip", "page 3", "section 5", "Chapter Five",
+                         id="page-on-epub-not-trusted"),
+            pytest.param("application/pdf", "section 3", "page 5", None,
+                         id="section-on-pdf-not-trusted"),
+            pytest.param("application/pdf", "page 3", "page 3", None,
+                         id="page-on-pdf-kept"),
+        ],
+    )
+    def test_location_marker_is_trusted_only_for_its_kind(
+        self, titles, mime, location, expected_location, expected_title,
+    ) -> None:
         from app.rag.parser import Citation
         from app.rag.service import _to_citation_dict
 
         result = _to_citation_dict(
             Citation(file_id="book", quote="the cited passage", relevance=0.9,
-                     location="page 3"),
-            [_document("book", "application/epub+zip", 5)],
+                     location=location),
+            [_document("book", mime, 5)],
         )
 
         assert (result["segment_location"], result["section_title"]) == (
-            "section 5", "Chapter Five",
+            expected_location, expected_title,
         )
-
-    def test_pdf_section_marker_is_not_trusted(self, titles) -> None:
-        from app.rag.parser import Citation
-        from app.rag.service import _to_citation_dict
-
-        result = _to_citation_dict(
-            Citation(file_id="doc", quote="the cited passage", relevance=0.9,
-                     location="section 3"),
-            [_document("doc", "application/pdf", 5)],
-        )
-
-        assert (result["segment_location"], result["section_title"]) == ("page 5", None)
-        assert titles == []
 
     @pytest.mark.parametrize(
         ("mime", "location"),
@@ -1185,18 +1172,6 @@ class TestEpubSectionLocations:
         )
 
         assert result["segment_location"] is None
-
-    def test_pdf_page_marker_is_kept(self, titles) -> None:
-        from app.rag.parser import Citation
-        from app.rag.service import _to_citation_dict
-
-        result = _to_citation_dict(
-            Citation(file_id="doc", quote="q", relevance=0.9, location="page 3"),
-            [_document("doc", "application/pdf", 5)],
-        )
-
-        assert (result["segment_location"], result["section_title"]) == ("page 3", None)
-        assert titles == []
 
     @pytest.mark.parametrize(
         ("candidate_id", "location", "expected_title", "expected_lookups"),

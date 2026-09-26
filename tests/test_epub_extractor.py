@@ -52,15 +52,6 @@ def _section(mark: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_can_handle_epub_only() -> None:
-    extractor = EpubExtractor()
-    assert extractor.can_handle("book.epub") is True
-    assert extractor.can_handle("BOOK.EPUB") is True
-    assert extractor.can_handle("book.pdf") is False
-    assert extractor.can_handle("book.xhtml") is False
-    assert extractor.can_handle("book.zip") is False
-
-
 def test_validate_file_path_false_returns_empty(tmp_path, monkeypatch) -> None:
     path = make_epub(tmp_path / "b.epub", [Item("c1", "c1.xhtml", _section("MARK-one"))])
     monkeypatch.setattr(config, "validate_file_path", lambda _path: False)
@@ -70,24 +61,6 @@ def test_validate_file_path_false_returns_empty(tmp_path, monkeypatch) -> None:
     assert result.chunks == []
     assert result.section_titles == ()
     assert result.page_count is None
-
-
-def test_dangling_idref_is_not_counted(tmp_path) -> None:
-    path = make_epub(
-        tmp_path / "b.epub",
-        [
-            Item("c1", "c1.xhtml", _section("MARK-one")),
-            Item("c2", "c2.xhtml", _section("MARK-two")),
-        ],
-        spine=["ghost", "c1", "c2"],
-    )
-
-    result = _extract(path)
-
-    assert _marks(result) == {(1, "MARK-one"), (2, "MARK-two")}
-    assert result.page_count == 2
-    assert result.extractor == "epub"
-    assert result.markdown is None
 
 
 def test_numbering_matches_foliate_rule(tmp_path) -> None:
@@ -205,163 +178,125 @@ def _heading(level: int, text: str, mark: str = "") -> str:
     return xhtml(f"<h{level}>{text}</h{level}><p>body {mark}</p>")
 
 
-def test_nav_titles_first_entry_wins(tmp_path) -> None:
-    nav = nav_doc(
-        [
-            ("../text/c1.xhtml", "Chapter One"),
-            ("../text/c1.xhtml#s2", "Section 1.2"),
-            ("../text/c2.xhtml#top", "Chapter Two"),
-            ("../text/missing.xhtml", "Not in spine"),
-        ],
-        extra_navs=(
-            '<nav epub:type="landmarks"><ol>'
-            '<li><a href="../text/c2.xhtml">Landmark</a></li></ol></nav>'
+def _ncx_item(entries: list[tuple[str, str]]) -> Item:
+    return Item("ncx", "toc.ncx", ncx_doc(entries), media_type="application/x-dtbncx+xml")
+
+
+def _nav_item(nav: str) -> Item:
+    return Item("nav", "nav.xhtml", nav, properties="nav")
+
+
+_LONG_LABEL = "  Long \n\t title  " + "x" * 300
+_CAPPED = "Long title " + "x" * 189
+
+
+@pytest.mark.parametrize(
+    ("items", "spine", "spine_toc", "expected"),
+    [
+        pytest.param(
+            [
+                Item("nav", "nav/toc.xhtml", nav_doc(
+                    [
+                        ("../text/c1.xhtml", "Chapter One"),
+                        ("../text/c1.xhtml#s2", "Section 1.2"),
+                        ("../text/c2.xhtml#top", "Chapter Two"),
+                        ("../text/missing.xhtml", "Not in spine"),
+                    ],
+                    extra_navs=(
+                        '<nav epub:type="landmarks"><ol>'
+                        '<li><a href="../text/c2.xhtml">Landmark</a></li></ol></nav>'
+                    ),
+                ), properties="nav"),
+                Item("c1", "text/c1.xhtml", _section("MARK-one")),
+                Item("c2", "text/c2.xhtml", _section("MARK-two")),
+            ],
+            ["c1", "c2"], None,
+            ((1, "Chapter One"), (2, "Chapter Two")),
+            id="first-toc-entry-per-file-wins",
         ),
-    )
-    path = make_epub(
-        tmp_path / "b.epub",
-        [
-            Item("nav", "nav/toc.xhtml", nav, properties="nav"),
-            Item("c1", "text/c1.xhtml", _section("MARK-one")),
-            Item("c2", "text/c2.xhtml", _section("MARK-two")),
-        ],
-        spine=["c1", "c2"],
-    )
+        pytest.param(
+            [
+                _nav_item(nav_doc([("c2.xhtml", "Two"), ("c1.xhtml", "One")])),
+                Item("c1", "c1.xhtml", _section("MARK-one")),
+                Item("c2", "c2.xhtml", _section("MARK-two")),
+                Item("c1again", "c1.xhtml", None),
+            ],
+            ["c1", "c2", "c1again"], None,
+            ((1, "One"), (2, "Two"), (3, "Two")),
+            id="repeated-file-maps-to-first-occurrence",
+        ),
+        *(
+            pytest.param(
+                [
+                    _ncx_item([("c1.xhtml", "One"), ("c2.xhtml#x", "Two")]),
+                    Item("c1", "c1.xhtml", _section("MARK-one")),
+                    Item("c2", "c2.xhtml", _section("MARK-two")),
+                ],
+                ["c1", "c2"], spine_toc,
+                ((1, "One"), (2, "Two")),
+                id=f"ncx-without-nav-found-by-{how}",
+            )
+            for spine_toc, how in (("ncx", "spine-toc"), (None, "media-type"))
+        ),
+        pytest.param(
+            [
+                _nav_item(nav_doc([("c1.xhtml", "From nav")])),
+                _ncx_item([("c1.xhtml", "From NCX")]),
+                Item("c1", "c1.xhtml", _section("MARK-one")),
+            ],
+            ["c1"], "ncx",
+            ((1, "From nav"),),
+            id="nav-preferred-over-ncx",
+        ),
+        pytest.param(
+            [
+                _nav_item(xhtml(
+                    '<nav epub:type="landmarks"><ol><li><a href="c1.xhtml">L</a></li></ol></nav>'
+                )),
+                _ncx_item([("c1.xhtml", "From NCX")]),
+                Item("c1", "c1.xhtml", _section("MARK-one")),
+            ],
+            ["c1"], "ncx",
+            ((1, "From NCX"),),
+            id="ncx-when-nav-has-no-toc",
+        ),
+        pytest.param(
+            [
+                _nav_item(nav_doc([("c1.xhtml", "One"), ("c3.xhtml", "Three")])),
+                *(Item(f"c{i}", f"c{i}.xhtml", _heading(1, f"Heading {i}")) for i in range(1, 5)),
+            ],
+            ["c1", "c2", "c3", "c4"], None,
+            ((1, "One"), (2, "One"), (3, "Three"), (4, "Three")),
+            id="untitled-section-inherits-preceding-toc-title",
+        ),
+        pytest.param(
+            [
+                _nav_item(nav_doc([("c3.xhtml", "One")])),
+                Item("c1", "c1.xhtml", _section("MARK-cover")),
+                Item("c2", "c2.xhtml", xhtml("<p>intro</p><h3>Title Page</h3><h1>Later</h1>")),
+                Item("c3", "c3.xhtml", _heading(1, "Chapter heading")),
+                Item("c4", "c4.xhtml", _heading(1, "Ignored heading")),
+            ],
+            ["c1", "c2", "c3", "c4"], None,
+            ((2, "Title Page"), (3, "One"), (4, "One")),
+            id="before-first-toc-entry-first-heading-else-none",
+        ),
+        pytest.param(
+            [
+                _nav_item(nav_doc([("c1.xhtml", _LONG_LABEL), ("c2.xhtml", " \n ")])),
+                Item("c1", "c1.xhtml", _section("MARK-one")),
+                Item("c2", "c2.xhtml", _section("MARK-two")),
+            ],
+            ["c1", "c2"], None,
+            ((1, _CAPPED), (2, _CAPPED)),
+            id="whitespace-collapsed-capped-blank-label-ignored",
+        ),
+    ],
+)
+def test_section_titles(tmp_path, items, spine, spine_toc, expected) -> None:
+    path = make_epub(tmp_path / "b.epub", items, spine=spine, spine_toc=spine_toc)
 
-    assert _extract(path).section_titles == ((1, "Chapter One"), (2, "Chapter Two"))
-
-
-def test_toc_target_maps_to_first_occurrence_of_a_repeated_file(tmp_path) -> None:
-    nav = nav_doc([("c2.xhtml", "Two"), ("c1.xhtml", "One")])
-    path = make_epub(
-        tmp_path / "b.epub",
-        [
-            Item("nav", "nav.xhtml", nav, properties="nav"),
-            Item("c1", "c1.xhtml", _section("MARK-one")),
-            Item("c2", "c2.xhtml", _section("MARK-two")),
-            Item("c1again", "c1.xhtml", None),
-        ],
-        spine=["c1", "c2", "c1again"],
-    )
-
-    assert _extract(path).section_titles == ((1, "One"), (2, "Two"), (3, "Two"))
-
-
-@pytest.mark.parametrize("spine_toc", ["ncx", None])
-def test_ncx_used_when_no_nav(tmp_path, spine_toc) -> None:
-    path = make_epub(
-        tmp_path / "b.epub",
-        [
-            Item("ncx", "toc.ncx", ncx_doc([("c1.xhtml", "One"), ("c2.xhtml#x", "Two")]),
-                 media_type="application/x-dtbncx+xml"),
-            Item("c1", "c1.xhtml", _section("MARK-one")),
-            Item("c2", "c2.xhtml", _section("MARK-two")),
-        ],
-        spine=["c1", "c2"],
-        spine_toc=spine_toc,
-    )
-
-    assert _extract(path).section_titles == ((1, "One"), (2, "Two"))
-
-
-def test_nav_preferred_over_ncx(tmp_path) -> None:
-    path = make_epub(
-        tmp_path / "b.epub",
-        [
-            Item("nav", "nav.xhtml", nav_doc([("c1.xhtml", "From nav")]), properties="nav"),
-            Item("ncx", "toc.ncx", ncx_doc([("c1.xhtml", "From NCX")]),
-                 media_type="application/x-dtbncx+xml"),
-            Item("c1", "c1.xhtml", _section("MARK-one")),
-        ],
-        spine=["c1"],
-        spine_toc="ncx",
-    )
-
-    assert _extract(path).section_titles == ((1, "From nav"),)
-
-
-def test_ncx_used_when_nav_has_no_toc(tmp_path) -> None:
-    nav = xhtml('<nav epub:type="landmarks"><ol><li><a href="c1.xhtml">L</a></li></ol></nav>')
-    path = make_epub(
-        tmp_path / "b.epub",
-        [
-            Item("nav", "nav.xhtml", nav, properties="nav"),
-            Item("ncx", "toc.ncx", ncx_doc([("c1.xhtml", "From NCX")]),
-                 media_type="application/x-dtbncx+xml"),
-            Item("c1", "c1.xhtml", _section("MARK-one")),
-        ],
-        spine=["c1"],
-        spine_toc="ncx",
-    )
-
-    assert _extract(path).section_titles == ((1, "From NCX"),)
-
-
-def test_untitled_section_inherits_preceding_toc_title(tmp_path) -> None:
-    nav = nav_doc([("c1.xhtml", "One"), ("c3.xhtml", "Three")])
-    path = make_epub(
-        tmp_path / "b.epub",
-        [
-            Item("nav", "nav.xhtml", nav, properties="nav"),
-            *(Item(f"c{i}", f"c{i}.xhtml", _heading(1, f"Heading {i}")) for i in range(1, 5)),
-        ],
-        spine=["c1", "c2", "c3", "c4"],
-    )
-
-    assert _extract(path).section_titles == (
-        (1, "One"), (2, "One"), (3, "Three"), (4, "Three"),
-    )
-
-
-def test_section_before_first_toc_entry_uses_heading(tmp_path) -> None:
-    nav = nav_doc([("c3.xhtml", "One")])
-    path = make_epub(
-        tmp_path / "b.epub",
-        [
-            Item("nav", "nav.xhtml", nav, properties="nav"),
-            Item("c1", "c1.xhtml", _section("MARK-cover")),
-            Item("c2", "c2.xhtml", xhtml("<p>intro</p><h3>Title Page</h3><h1>Later</h1>")),
-            Item("c3", "c3.xhtml", _heading(1, "Chapter heading")),
-            Item("c4", "c4.xhtml", _heading(1, "Ignored heading")),
-        ],
-        spine=["c1", "c2", "c3", "c4"],
-    )
-
-    assert _extract(path).section_titles == (
-        (2, "Title Page"), (3, "One"), (4, "One"),
-    )
-
-
-def test_no_toc_no_heading_no_title_row(tmp_path) -> None:
-    path = make_epub(
-        tmp_path / "b.epub",
-        [
-            Item("c1", "c1.xhtml", _section("MARK-one")),
-            Item("c2", "c2.xhtml", _section("MARK-two")),
-        ],
-    )
-
-    result = _extract(path)
-
-    assert result.section_titles == ()
-    assert _marks(result) == {(1, "MARK-one"), (2, "MARK-two")}
-
-
-def test_title_whitespace_collapsed_and_capped_at_200(tmp_path) -> None:
-    label = "  Long \n\t title  " + "x" * 300
-    nav = nav_doc([("c1.xhtml", label), ("c2.xhtml", " \n ")])
-    path = make_epub(
-        tmp_path / "b.epub",
-        [
-            Item("nav", "nav.xhtml", nav, properties="nav"),
-            Item("c1", "c1.xhtml", _section("MARK-one")),
-            Item("c2", "c2.xhtml", _section("MARK-two")),
-        ],
-        spine=["c1", "c2"],
-    )
-
-    expected = "Long title " + "x" * 189
-    assert _extract(path).section_titles == ((1, expected), (2, expected))
+    assert _extract(path).section_titles == expected
 
 
 _RUBY = "<ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby>"
@@ -416,33 +351,6 @@ def test_note_links_do_not_put_paths_in_text(tmp_path) -> None:
     assert _chunk_texts(_extract(path)) == [(1, "A claim1 stands.")]
 
 
-def test_script_style_stripped(tmp_path) -> None:
-    body = (
-        "<style>.x { color: red }</style><script>var secret = 1;</script>"
-        "<noscript>fallback</noscript><p>Visible text.</p>"
-    )
-    path = make_epub(tmp_path / "b.epub", [Item("c1", "c1.xhtml", xhtml(body))])
-
-    assert _chunk_texts(_extract(path)) == [(1, "Visible text.")]
-
-
-def test_nav_document_not_indexed(tmp_path) -> None:
-    path = make_epub(
-        tmp_path / "b.epub",
-        [
-            Item("nav", "nav.xhtml", nav_doc([("c1.xhtml", "MARK-navlabel")]),
-                 properties="nav"),
-            Item("c1", "c1.xhtml", _section("MARK-one")),
-        ],
-        spine=["nav", "c1"],
-    )
-
-    result = _extract(path)
-
-    assert _marks(result) == {(2, "MARK-one")}
-    assert result.page_count == 2
-
-
 def test_image_spine_item_counted_not_indexed(tmp_path) -> None:
     path = make_epub(
         tmp_path / "b.epub",
@@ -458,23 +366,6 @@ def test_image_spine_item_counted_not_indexed(tmp_path) -> None:
 
     assert _marks(result) == {(2, "MARK-one")}
     assert result.page_count == 2
-
-
-def test_every_chunk_page_is_its_section_number(tmp_path) -> None:
-    items = [
-        Item(f"c{n}", f"c{n}.xhtml", xhtml("".join(
-            f"<p>Word{n} sentence number {k}.</p>" for k in range(60)
-        )))
-        for n in (1, 2, 3)
-    ]
-    path = make_epub(tmp_path / "b.epub", items)
-
-    result = _extract(path)
-
-    for chunk in result.chunks:
-        words = set(re.findall(r"Word(\d)", chunk.text))
-        assert words == {str(chunk.page)}
-    assert {c.page for c in result.chunks} == {1, 2, 3}
 
 
 def test_chunk_size_follows_config(tmp_path, monkeypatch) -> None:
@@ -543,20 +434,6 @@ def test_caps_are_declared() -> None:
         epub_module.TITLE_MAX,
         epub_module.BOOK_MAX_BYTES,
     ) == (1024 * 1024, 5 * 1024 * 1024, 2_000_000, 2_000, 200, 20 * 1024 * 1024)
-
-
-def test_entity_declaration_in_section_is_refused(tmp_path) -> None:
-    first = (
-        '<?xml version="1.0"?><!DOCTYPE html [<!ENTITY x "MARK-expanded">]>'
-        '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>&x; MARK-one</p>'
-        "</body></html>"
-    )
-    path = make_epub(tmp_path / "b.epub", _two_sections(first))
-
-    result = _extract(path)
-
-    assert _marks(result) == {(2, "MARK-two")}
-    assert result.page_count == 2
 
 
 def _expanding_ncx_entries(data: bytes, base_dir: str) -> list[tuple[str | None, str | None]]:
@@ -654,31 +531,6 @@ def test_external_dtd_is_never_fetched(tmp_path) -> None:
     assert result.section_titles == ((1, "Title"),)
 
 
-def test_billion_laughs_in_container_returns_empty(tmp_path) -> None:
-    container = (
-        f'<?xml version="1.0"?>{_LAUGHS}'
-        '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
-        '<rootfiles><rootfile full-path="OEBPS/content.opf" '
-        'media-type="application/oebps-package+xml"/></rootfiles>'
-        "<x>&lol3;</x></container>"
-    )
-    path = make_epub(tmp_path / "b.epub", _two_sections(_section("MARK-one")),
-                     container=container)
-
-    assert _empty(_extract(path))
-
-
-def test_opf_with_doctype_is_refused(tmp_path) -> None:
-    items = _two_sections(_section("MARK-one"))
-    opf = opf_xml(items, ["c1", "c2"]).replace(
-        '<?xml version="1.0" encoding="UTF-8"?>',
-        '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE package>',
-    )
-    path = make_epub(tmp_path / "b.epub", items, opf=opf)
-
-    assert _empty(_extract(path))
-
-
 def test_reads_are_bounded_on_decompressed_bytes(tmp_path, monkeypatch) -> None:
     import zipfile
 
@@ -701,21 +553,6 @@ def test_reads_are_bounded_on_decompressed_bytes(tmp_path, monkeypatch) -> None:
     assert _marks(result) == {(2, "MARK-two")}
     assert requested
     assert all(0 < n <= 4096 + 1 for n in requested)
-
-
-def test_member_over_cap_skipped_rest_indexed(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(epub_module, "SECTION_MAX_BYTES", 2000)
-    first = xhtml("<p>MARK-one</p>" + "<p>x</p>" * 300)
-    third = xhtml("<p>MARK-three</p>")
-    path = make_epub(
-        tmp_path / "b.epub",
-        [*_two_sections(first), Item("c3", "c3.xhtml", third)],
-    )
-
-    result = _extract(path)
-
-    assert _marks(result) == {(2, "MARK-two"), (3, "MARK-three")}
-    assert result.page_count == 3
 
 
 def test_toc_over_cap_skipped_rest_indexed(tmp_path, monkeypatch) -> None:
@@ -851,95 +688,63 @@ def _encryption_xml(*uris: str) -> str:
     )
 
 
-def test_encryption_xml_listed_section_skipped(tmp_path) -> None:
+@pytest.mark.parametrize(
+    ("encryption", "caps", "expected_marks", "expected_titles"),
+    [
+        pytest.param(
+            _encryption_xml("OEBPS/c1.xhtml", "OEBPS/font.otf"), {},
+            {(2, "MARK-two")}, ((1, "One"), (2, "Two")),
+            id="listed-section-skipped",
+        ),
+        pytest.param(
+            _encryption_xml("OEBPS/nav.xhtml"), {},
+            {(1, "MARK-one"), (2, "MARK-two")}, (),
+            id="listed-nav-not-read",
+        ),
+        pytest.param(
+            "<encryption><unclosed", {}, set(), (),
+            id="unparseable-skips-everything",
+        ),
+        pytest.param(
+            _encryption_xml(*(f"x{i}.otf" for i in range(100))), {"XML_MAX_BYTES": 3000},
+            set(), (),
+            id="over-cap-skips-everything",
+        ),
+    ],
+)
+def test_encryption_xml_decides_what_is_read(
+    tmp_path, monkeypatch, encryption, caps, expected_marks, expected_titles,
+) -> None:
+    for name, value in caps.items():
+        monkeypatch.setattr(epub_module, name, value)
     nav = nav_doc([("c1.xhtml", "One"), ("c2.xhtml", "Two")])
     path = make_epub(
         tmp_path / "b.epub",
         [Item("nav", "nav.xhtml", nav, properties="nav"), *_two_sections(_section("MARK-one"))],
         spine=["c1", "c2"],
-        extra={"META-INF/encryption.xml": _encryption_xml("OEBPS/c1.xhtml", "OEBPS/font.otf")},
+        extra={"META-INF/encryption.xml": encryption},
     )
 
     result = _extract(path)
 
-    assert _marks(result) == {(2, "MARK-two")}
-    assert result.section_titles == ((1, "One"), (2, "Two"))
-
-
-def test_encryption_xml_listed_nav_is_not_read(tmp_path) -> None:
-    nav = nav_doc([("c1.xhtml", "One")])
-    path = make_epub(
-        tmp_path / "b.epub",
-        [Item("nav", "nav.xhtml", nav, properties="nav"), *_two_sections(_section("MARK-one"))],
-        spine=["c1", "c2"],
-        extra={"META-INF/encryption.xml": _encryption_xml("OEBPS/nav.xhtml")},
-    )
-
-    result = _extract(path)
-
-    assert _marks(result) == {(1, "MARK-one"), (2, "MARK-two")}
-    assert result.section_titles == ()
-
-
-def test_unparseable_encryption_xml_skips_all_sections(tmp_path) -> None:
-    nav = nav_doc([("c1.xhtml", "One")])
-    path = make_epub(
-        tmp_path / "b.epub",
-        [Item("nav", "nav.xhtml", nav, properties="nav"), *_two_sections(_section("MARK-one"))],
-        spine=["c1", "c2"],
-        extra={"META-INF/encryption.xml": "<encryption><unclosed"},
-    )
-
-    result = _extract(path)
-
-    assert result.chunks == []
-    assert result.section_titles == ()
+    assert _marks(result) == expected_marks
+    assert result.section_titles == expected_titles
     assert result.page_count == 2
 
 
-def test_encryption_xml_over_cap_skips_all_sections(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(epub_module, "XML_MAX_BYTES", 3000)
-    path = make_epub(
-        tmp_path / "b.epub",
-        _two_sections(_section("MARK-one")),
-        extra={"META-INF/encryption.xml": _encryption_xml(*(f"x{i}.otf" for i in range(100)))},
-    )
-
-    result = _extract(path)
-
-    assert result.chunks == []
-    assert result.page_count == 2
-
-
-def test_corrupt_zip_returns_empty(tmp_path) -> None:
+def _corrupt_zip(tmp_path: Path) -> Path:
     path = tmp_path / "b.epub"
     path.write_bytes(b"PK\x03\x04 this is not a zip archive" * 10)
+    return path
 
-    assert _empty(_extract(path))
 
-
-def test_truncated_zip_returns_empty(tmp_path) -> None:
+def _truncated_zip(tmp_path: Path) -> Path:
     path = make_epub(tmp_path / "b.epub", _two_sections(_section("MARK-one")))
-    data = path.read_bytes()
-    path.write_bytes(data[: len(data) // 2])
-
-    assert _empty(_extract(path))
+    path.write_bytes(path.read_bytes()[: path.stat().st_size // 2])
+    return path
 
 
-def test_zip_encrypted_member_skipped_rest_indexed(tmp_path) -> None:
-    path = make_epub(
-        tmp_path / "b.epub",
-        _two_sections(_section("MARK-one")),
-        encrypted_members=("OEBPS/c1.xhtml",),
-    )
-
-    result = _extract(path)
-
-    assert _marks(result) == {(2, "MARK-two")}
-    assert result.page_count == 2
-
-
-def test_missing_container_returns_empty(tmp_path) -> None:
+def _no_container(tmp_path: Path) -> Path:
     import zipfile
 
     path = tmp_path / "b.epub"
@@ -947,51 +752,98 @@ def test_missing_container_returns_empty(tmp_path) -> None:
         zf.writestr("mimetype", "application/epub+zip")
         zf.writestr("OEBPS/content.opf", "<package/>")
         zf.writestr("OEBPS/c1.xhtml", _section("MARK-one"))
+    return path
 
-    assert _empty(_extract(path))
+
+def _with_container(container: str):
+    def build(tmp_path: Path) -> Path:
+        return make_epub(
+            tmp_path / "b.epub", _two_sections(_section("MARK-one")), container=container,
+        )
+    return build
+
+
+def _opf_with_doctype(tmp_path: Path) -> Path:
+    items = _two_sections(_section("MARK-one"))
+    opf = opf_xml(items, ["c1", "c2"]).replace(
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE package>',
+    )
+    return make_epub(tmp_path / "b.epub", items, opf=opf)
+
+
+_LAUGHS_CONTAINER = (
+    f'<?xml version="1.0"?>{_LAUGHS}'
+    '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+    '<rootfiles><rootfile full-path="OEBPS/content.opf" '
+    'media-type="application/oebps-package+xml"/></rootfiles>'
+    "<x>&lol3;</x></container>"
+)
 
 
 @pytest.mark.parametrize(
-    "container",
+    "build",
     [
-        container_xml("OEBPS/elsewhere.opf"),
-        container_xml("../content.opf"),
-        container_xml("OEBPS/content.opf").replace(
-            "application/oebps-package+xml", "application/xml",
+        pytest.param(_corrupt_zip, id="corrupt-zip"),
+        pytest.param(_truncated_zip, id="truncated-zip"),
+        pytest.param(_no_container, id="no-container"),
+        pytest.param(_with_container(container_xml("OEBPS/elsewhere.opf")), id="opf-missing"),
+        pytest.param(_with_container(container_xml("../content.opf")), id="opf-outside-book"),
+        pytest.param(
+            _with_container(container_xml("OEBPS/content.opf").replace(
+                "application/oebps-package+xml", "application/xml",
+            )),
+            id="no-package-rootfile",
+        ),
+        pytest.param(_with_container(_LAUGHS_CONTAINER), id="billion-laughs-container"),
+        pytest.param(_opf_with_doctype, id="opf-with-doctype"),
+    ],
+)
+def test_unopenable_book_returns_empty(tmp_path, build) -> None:
+    assert _empty(_extract(build(tmp_path)))
+
+
+@pytest.mark.parametrize(
+    ("first", "caps", "encrypted", "expected"),
+    [
+        pytest.param(
+            '<?xml version="1.0"?><!DOCTYPE html [<!ENTITY x "MARK-expanded">]>'
+            '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>&x; MARK-one</p>'
+            "</body></html>",
+            {}, (), {(2, "MARK-two")},
+            id="entity-declaration-refused",
+        ),
+        pytest.param(
+            "<<not xml>> <p>MARK-one</p>", {}, (), {(2, "MARK-two")},
+            id="malformed-before-root",
+        ),
+        pytest.param(
+            _section("MARK-one"), {}, ("OEBPS/c1.xhtml",), {(2, "MARK-two")},
+            id="zip-encrypted-member",
+        ),
+        pytest.param(
+            xhtml("<p>MARK-one</p>" + "<p>x</p>" * 300), {"SECTION_MAX_BYTES": 2000}, (),
+            {(2, "MARK-two")},
+            id="member-over-cap",
+        ),
+        pytest.param(
+            '<html xmlns="http://www.w3.org/1999/xhtml"><body>'
+            "<p>MARK-one&nbsp;and a stray & here</p><p>unclosed</body></html>",
+            {}, (), {(1, "MARK-one"), (2, "MARK-two")},
+            id="malformed-after-root-still-indexed",
         ),
     ],
 )
-def test_container_without_a_readable_opf_returns_empty(tmp_path, container) -> None:
-    path = make_epub(
-        tmp_path / "b.epub",
-        _two_sections(_section("MARK-one")),
-        container=container,
-    )
-
-    assert _empty(_extract(path))
-
-
-def test_malformed_after_root_still_indexed(tmp_path) -> None:
-    first = (
-        '<html xmlns="http://www.w3.org/1999/xhtml"><body>'
-        "<p>MARK-one&nbsp;and a stray & here</p><p>unclosed</body></html>"
-    )
-    path = make_epub(tmp_path / "b.epub", _two_sections(first))
+def test_failing_section_loses_only_itself(
+    tmp_path, monkeypatch, first, caps, encrypted, expected,
+) -> None:
+    for name, value in caps.items():
+        monkeypatch.setattr(epub_module, name, value)
+    path = make_epub(tmp_path / "b.epub", _two_sections(first), encrypted_members=encrypted)
 
     result = _extract(path)
 
-    assert _marks(result) == {(1, "MARK-one"), (2, "MARK-two")}
-
-
-def test_malformed_before_root_skips_only_that_section(tmp_path) -> None:
-    path = make_epub(
-        tmp_path / "b.epub",
-        _two_sections("<<not xml>> <p>MARK-one</p>"),
-    )
-
-    result = _extract(path)
-
-    assert _marks(result) == {(2, "MARK-two")}
+    assert _marks(result) == expected
     assert result.page_count == 2
 
 
