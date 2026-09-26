@@ -171,19 +171,29 @@ def test_numbering_without_opf_namespace_matches_local_names(tmp_path) -> None:
     assert _marks(result) == {(1, "MARK-one"), (2, "MARK-two")}
 
 
-def test_hrefs_resolve_against_the_opf_directory(tmp_path) -> None:
+@pytest.mark.parametrize(
+    ("opf_dir", "href", "member"),
+    [
+        ("item/standard", "text/c1.xhtml", "item/standard/text/c1.xhtml"),
+        ("OEBPS", "chapter%201.xhtml", "OEBPS/chapter 1.xhtml"),
+    ],
+)
+def test_hrefs_resolve_against_the_opf_directory(tmp_path, opf_dir, href, member) -> None:
     path = make_epub(
         tmp_path / "b.epub",
         [
-            Item("c1", "text/c1.xhtml", _section("MARK-one")),
-            Item("c2", "text/c2.xhtml", _section("MARK-two")),
+            Item("nav", "nav.xhtml", nav_doc([(href, "Title")]), properties="nav"),
+            Item("c1", href, None),
         ],
-        opf_dir="item/standard",
+        spine=["c1"],
+        opf_dir=opf_dir,
+        extra={member: _section("MARK-one")},
     )
 
     result = _extract(path)
 
-    assert _marks(result) == {(1, "MARK-one"), (2, "MARK-two")}
+    assert _marks(result) == {(1, "MARK-one")}
+    assert result.section_titles == ((1, "Title"),)
 
 
 # ---------------------------------------------------------------------------
