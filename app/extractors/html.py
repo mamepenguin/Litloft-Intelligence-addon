@@ -80,7 +80,7 @@ class HtmlExtractor(ContentExtractor):
 
 
 def html_to_markdown(
-    html: str,
+    html: str | bytes,
     *,
     ignore_links: bool = False,
     drop_tags: tuple[str, ...] = (),
