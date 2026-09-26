@@ -808,11 +808,21 @@ def test_missing_container_returns_empty(tmp_path) -> None:
     assert _empty(_extract(path))
 
 
-def test_container_naming_a_missing_opf_returns_empty(tmp_path) -> None:
+@pytest.mark.parametrize(
+    "container",
+    [
+        container_xml("OEBPS/elsewhere.opf"),
+        container_xml("../content.opf"),
+        container_xml("OEBPS/content.opf").replace(
+            "application/oebps-package+xml", "application/xml",
+        ),
+    ],
+)
+def test_container_without_a_readable_opf_returns_empty(tmp_path, container) -> None:
     path = make_epub(
         tmp_path / "b.epub",
         _two_sections(_section("MARK-one")),
-        container=container_xml("OEBPS/elsewhere.opf"),
+        container=container,
     )
 
     assert _empty(_extract(path))
