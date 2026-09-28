@@ -62,7 +62,7 @@ import {
   regenerateDetailedSummary,
   revertDetailedSummary,
 } from "./api";
-import { useOfferFileAiAction } from "./fileAiActions";
+import { useOfferIntelligenceAction } from "./offerIntelligenceAction";
 import type {
   CitationChunkExcerpt,
   DetailedSummaryCitation,
@@ -392,7 +392,7 @@ export default function DetailedSummarySection({
   // Everything below this line that is not a real state — a run in
   // flight, a failure, too little text — was a heading offering to make
   // something. That offer belongs in the action row's "AI" menu.
-  useOfferFileAiAction({
+  useOfferIntelligenceAction({
     fileId,
     kind: "detailedSummary",
     labelKey: "detailedSummaryGenerate",

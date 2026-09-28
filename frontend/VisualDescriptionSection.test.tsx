@@ -20,7 +20,7 @@ vi.mock("@/lib/api", () => ({
 
 import VisualDescriptionSection from "@/addons/intelligence/VisualDescriptionSection";
 import FileAIActionsButton from "@/addons/intelligence/FileAIActionsButton";
-import { resetFileAiActions } from "@/addons/intelligence/fileAiActions";
+import { resetFileAiActions } from "@/lib/fileAiActions";
 import {
   getVisualDescription,
   generateVisualDescription,

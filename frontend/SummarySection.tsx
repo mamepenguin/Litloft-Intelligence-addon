@@ -19,7 +19,7 @@ import {
   revertSummary,
 } from "./api";
 import type { SummaryResponse } from "./api";
-import { useOfferFileAiAction } from "./fileAiActions";
+import { useOfferIntelligenceAction } from "./offerIntelligenceAction";
 import { GeneratingRow } from "./GeneratingRow";
 
 interface SummarySectionProps {
@@ -147,7 +147,7 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
   // here are the states that report something real — too little text to
   // work with, a run in flight, a failure. "You could make one" is not
   // one of those, and it was the only thing most files ever showed.
-  useOfferFileAiAction({
+  useOfferIntelligenceAction({
     fileId,
     kind: "summary",
     labelKey: "summaryGenerate",

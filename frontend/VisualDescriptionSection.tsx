@@ -21,7 +21,7 @@ import type {
   VisualDescriptionResponse,
   VisualDescriptionStatus,
 } from "./api";
-import { useOfferFileAiAction } from "./fileAiActions";
+import { useOfferIntelligenceAction } from "./offerIntelligenceAction";
 import { GeneratingRow } from "./GeneratingRow";
 
 interface VisualDescriptionSectionProps {
@@ -187,7 +187,7 @@ export default function VisualDescriptionSection({
   // Never attempted: the heading and its button were the whole section,
   // on every image in the drive. The offer moves to the action row's
   // "AI" menu and the heading waits for a description to head.
-  useOfferFileAiAction({
+  useOfferIntelligenceAction({
     fileId,
     kind: "visualDescription",
     labelKey: "visionGenerate",
