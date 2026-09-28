@@ -322,6 +322,21 @@ describe("FileAIActionsButton", () => {
     },
   );
 
+  it("pulses the icon while any one of several entries is busy", () => {
+    renderWithStack(
+      <>
+        <Offering fileId="f1" kind="tags" labelKey="generateTags" active busy />
+        <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active />
+        <FileAIActionsButton fileId="f1" />
+      </>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "AI" });
+    expect(trigger.querySelector("svg")?.getAttribute("class")).toContain(
+      "animate-pulse",
+    );
+  });
+
   it("runs the entry that was chosen, not its neighbour", () => {
     const tags = vi.fn();
     const foreign = vi.fn();
