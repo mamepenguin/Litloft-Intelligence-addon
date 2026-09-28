@@ -300,16 +300,43 @@ describe("FileAIActionsButton", () => {
     expect(screen.queryByRole("button", { name: "AI" })).toBeNull();
   });
 
-  it("disables an entry whose run is already in flight", () => {
+  it.each([true, false])(
+    "with busy=%s, disables the entry and pulses the icon only while busy",
+    (busy) => {
+      renderWithStack(
+        <>
+          <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active busy={busy} />
+          <FileAIActionsButton fileId="f1" />
+        </>,
+      );
+
+      const trigger = screen.getByRole("button", { name: "AI" });
+      expect(trigger.querySelector("svg")?.getAttribute("class")).toEqual(
+        busy
+          ? expect.stringContaining("animate-pulse")
+          : expect.not.stringContaining("animate-pulse"),
+      );
+      fireEvent.click(trigger);
+      if (busy) expect(screen.getByRole("menuitem")).toBeDisabled();
+      else expect(screen.getByRole("menuitem")).toBeEnabled();
+    },
+  );
+
+  it("runs the entry that was chosen, not its neighbour", () => {
+    const tags = vi.fn();
+    const foreign = vi.fn();
     renderWithStack(
       <>
-        <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active busy />
+        <Offering fileId="f1" kind="tags" labelKey="generateTags" active onRun={tags} />
+        <ForeignOffering fileId="f1" onRun={foreign} />
         <FileAIActionsButton fileId="f1" />
       </>,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "AI" }));
-    expect(screen.getByRole("menuitem")).toBeDisabled();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Transcribe" }));
+    expect(foreign).toHaveBeenCalledTimes(1);
+    expect(tags).not.toHaveBeenCalled();
   });
 
   it("closes on Escape", () => {
