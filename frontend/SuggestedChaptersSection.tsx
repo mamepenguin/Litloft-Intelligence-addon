@@ -25,7 +25,7 @@ import {
   getSuggestedChapters,
 } from "./api";
 import type { SuggestedChaptersResponse } from "./api";
-import { useOfferFileAiAction } from "./fileAiActions";
+import { useOfferIntelligenceAction } from "./offerIntelligenceAction";
 import { GeneratingRow } from "./GeneratingRow";
 
 interface SuggestedChaptersSectionProps {
@@ -183,7 +183,7 @@ export default function SuggestedChaptersSection({
   // video in the drive. The offer moves to the action row's "AI" menu;
   // approved candidates are already visible in the core chapter rail,
   // so their acknowledgement row goes with it.
-  useOfferFileAiAction({
+  useOfferIntelligenceAction({
     fileId,
     kind: "chapters",
     labelKey: status === "accepted" || status === "dismissed"

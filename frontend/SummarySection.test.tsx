@@ -26,7 +26,7 @@ vi.mock("@/addons/intelligence/api", () => ({
 
 import SummarySection from "@/addons/intelligence/SummarySection";
 import FileAIActionsButton from "@/addons/intelligence/FileAIActionsButton";
-import { resetFileAiActions } from "@/addons/intelligence/fileAiActions";
+import { resetFileAiActions } from "@/lib/fileAiActions";
 import {
   editSummary,
   getSummary,

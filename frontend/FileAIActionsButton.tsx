@@ -23,17 +23,9 @@ import {
   useState,
 } from "react";
 import { useTranslations } from "next-intl";
-import {
-  BookOpen,
-  ChevronDown,
-  FileText,
-  Image as ImageIcon,
-  ListVideo,
-  Sparkles,
-} from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { ChevronDown, Sparkles } from "lucide-react";
 
-import { useFileAiActions, type FileAiActionKind } from "./fileAiActions";
+import { useFileAiActions } from "@/lib/fileAiActions";
 import { DismissScrim } from "@/components/DismissScrim";
 import { useShortcuts } from "@/hooks/useShortcuts";
 import { OVERLAY_PRIORITY } from "@/lib/shortcuts";
@@ -52,15 +44,6 @@ const MENU_GAP_PX = 4;
  * caller's and the rule is the hook's.
  */
 const MENU_WIDTH_PX = 240;
-
-/** Same icon the section itself uses, so the menu previews the result. */
-const ACTION_ICON: Record<FileAiActionKind, LucideIcon> = {
-  tags: Sparkles,
-  summary: BookOpen,
-  detailedSummary: FileText,
-  chapters: ListVideo,
-  visualDescription: ImageIcon,
-};
 
 interface FileAIActionsButtonProps {
   fileId: string;
@@ -304,10 +287,10 @@ export default function FileAIActionsButton({ fileId }: FileAIActionsButtonProps
             } ${alignLeft ? "left-0" : "right-0"}`}
           >
             {actions.map((action) => {
-              const Icon = ACTION_ICON[action.kind];
+              const Icon = action.icon;
               return (
                 <button
-                  key={action.kind}
+                  key={action.id}
                   type="button"
                   role="menuitem"
                   disabled={action.busy}
@@ -315,7 +298,7 @@ export default function FileAIActionsButton({ fileId }: FileAIActionsButtonProps
                   className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-text-primary transition-colors hover:bg-bg-elevated disabled:opacity-50"
                 >
                   <Icon size={16} className="flex-shrink-0 text-text-muted" />
-                  <span className="flex-1">{t(action.labelKey)}</span>
+                  <span className="flex-1">{action.label}</span>
                 </button>
               );
             })}

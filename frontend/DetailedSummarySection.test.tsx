@@ -84,7 +84,7 @@ import DetailedSummarySection, {
   parseSections,
 } from "@/addons/intelligence/DetailedSummarySection";
 import FileAIActionsButton from "@/addons/intelligence/FileAIActionsButton";
-import { resetFileAiActions } from "@/addons/intelligence/fileAiActions";
+import { resetFileAiActions } from "@/lib/fileAiActions";
 import {
   editDetailedSummarySection,
   getDetailedSummary,

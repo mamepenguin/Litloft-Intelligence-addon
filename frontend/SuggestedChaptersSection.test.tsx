@@ -52,7 +52,7 @@ vi.mock("@/hooks/useWebSocket", () => ({
 
 import SuggestedChaptersSection from "@/addons/intelligence/SuggestedChaptersSection";
 import FileAIActionsButton from "@/addons/intelligence/FileAIActionsButton";
-import { resetFileAiActions } from "@/addons/intelligence/fileAiActions";
+import { resetFileAiActions } from "@/lib/fileAiActions";
 import {
   approveSuggestedChapters,
   dismissSuggestedChapters,

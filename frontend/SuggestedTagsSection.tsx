@@ -7,7 +7,7 @@ import { getSuggestedTags, dismissSuggestedTags, regenerateSuggestedTags } from 
 import type { SuggestedTagsResponse } from "./api";
 import { fetchJSON } from "@/lib/api";
 import { ConflictError, saveFileTags } from "@/lib/tags";
-import { useOfferFileAiAction } from "./fileAiActions";
+import { useOfferIntelligenceAction } from "./offerIntelligenceAction";
 import { GeneratingRow } from "./GeneratingRow";
 import type { FileItem } from "@/types";
 
@@ -162,7 +162,7 @@ export default function SuggestedTagsSection({ fileId, drive }: SuggestedTagsSec
   // generated. The offer to (re)generate belongs to the action row's
   // "AI" menu; a heading and a button here would be a section about
   // something that does not exist yet.
-  useOfferFileAiAction({
+  useOfferIntelligenceAction({
     fileId,
     kind: "tags",
     labelKey: "generateTags",

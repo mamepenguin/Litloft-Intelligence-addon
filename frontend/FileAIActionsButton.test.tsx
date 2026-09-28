@@ -14,11 +14,13 @@ import { act, render, screen, fireEvent } from "@testing-library/react";
 
 import FileAIActionsButton from "@/addons/intelligence/FileAIActionsButton";
 import { ShortcutsProvider } from "@/components/ShortcutsProvider";
+import { Captions } from "lucide-react";
+
+import { resetFileAiActions, useOfferFileAiAction } from "@/lib/fileAiActions";
 import {
-  resetFileAiActions,
-  useOfferFileAiAction,
-  type FileAiActionKind,
-} from "@/addons/intelligence/fileAiActions";
+  useOfferIntelligenceAction,
+  type IntelligenceAiActionKind,
+} from "@/addons/intelligence/offerIntelligenceAction";
 
 /** Stands in for a section: offers one action while `active` holds. */
 function Offering({
@@ -30,18 +32,38 @@ function Offering({
   onRun,
 }: {
   fileId: string;
-  kind: FileAiActionKind;
+  kind: IntelligenceAiActionKind;
   labelKey: string;
   active: boolean;
   busy?: boolean;
   onRun?: () => void;
 }) {
-  useOfferFileAiAction({
+  useOfferIntelligenceAction({
     fileId,
     kind,
     labelKey,
     active,
     busy,
+    run: () => onRun?.(),
+  });
+  return null;
+}
+
+/** An offer from outside intelligence, made straight to core's store. */
+function ForeignOffering({
+  fileId,
+  onRun,
+}: {
+  fileId: string;
+  onRun?: () => void;
+}) {
+  useOfferFileAiAction({
+    fileId,
+    id: "other.transcribe",
+    label: "Transcribe",
+    icon: Captions,
+    order: 100,
+    active: true,
     run: () => onRun?.(),
   });
   return null;
@@ -136,10 +158,12 @@ describe("FileAIActionsButton", () => {
     expect(screen.queryByRole("menuitem")).toBeNull();
   });
 
-  it("keeps a fixed order regardless of which section registers first", () => {
+  it("keeps a fixed order and icon regardless of which section registers first", () => {
     renderWithStack(
       <>
+        <Offering fileId="f1" kind="visualDescription" labelKey="visionGenerate" active />
         <Offering fileId="f1" kind="chapters" labelKey="generateChapters" active />
+        <Offering fileId="f1" kind="detailedSummary" labelKey="detailedSummaryGenerate" active />
         <Offering fileId="f1" kind="tags" labelKey="generateTags" active />
         <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active />
         <FileAIActionsButton fileId="f1" />
@@ -147,12 +171,57 @@ describe("FileAIActionsButton", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "AI" }));
-    const labels = screen.getAllByRole("menuitem").map((el) => el.textContent);
-    expect(labels).toEqual([
+    const items = screen.getAllByRole("menuitem");
+    expect(items.map((el) => el.textContent)).toEqual([
       "Create AI tag candidates",
       "Create AI summary",
+      "Create detailed summary",
       "Create AI chapter candidates",
+      "Create description",
     ]);
+    expect(
+      items.map((el) => el.querySelector("svg")?.getAttribute("class")),
+    ).toEqual([
+      expect.stringContaining("lucide-sparkles"),
+      expect.stringContaining("lucide-book-open"),
+      expect.stringContaining("lucide-file-text"),
+      expect.stringContaining("lucide-list-video"),
+      expect.stringContaining("lucide-image"),
+    ]);
+  });
+
+  it("lists another provider's offer by its order, with its own label and icon", () => {
+    renderWithStack(
+      <>
+        <ForeignOffering fileId="f1" />
+        <Offering fileId="f1" kind="tags" labelKey="generateTags" active />
+        <FileAIActionsButton fileId="f1" />
+      </>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+    const items = screen.getAllByRole("menuitem");
+    expect(items.map((el) => el.textContent)).toEqual([
+      "Create AI tag candidates",
+      "Transcribe",
+    ]);
+    expect(items[1].querySelector("svg")?.getAttribute("class")).toContain(
+      "lucide-captions",
+    );
+  });
+
+  it("stays when only another provider is offering", () => {
+    const onRun = vi.fn();
+    renderWithStack(
+      <>
+        <ForeignOffering fileId="f1" onRun={onRun} />
+        <FileAIActionsButton fileId="f1" />
+      </>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Transcribe" }));
+    expect(onRun).toHaveBeenCalledTimes(1);
   });
 
   it("drops an entry when its section withdraws the offer", () => {
@@ -231,16 +300,58 @@ describe("FileAIActionsButton", () => {
     expect(screen.queryByRole("button", { name: "AI" })).toBeNull();
   });
 
-  it("disables an entry whose run is already in flight", () => {
+  it.each([true, false])(
+    "with busy=%s, disables the entry and pulses the icon only while busy",
+    (busy) => {
+      renderWithStack(
+        <>
+          <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active busy={busy} />
+          <FileAIActionsButton fileId="f1" />
+        </>,
+      );
+
+      const trigger = screen.getByRole("button", { name: "AI" });
+      expect(trigger.querySelector("svg")?.getAttribute("class")).toEqual(
+        busy
+          ? expect.stringContaining("animate-pulse")
+          : expect.not.stringContaining("animate-pulse"),
+      );
+      fireEvent.click(trigger);
+      if (busy) expect(screen.getByRole("menuitem")).toBeDisabled();
+      else expect(screen.getByRole("menuitem")).toBeEnabled();
+    },
+  );
+
+  it("pulses the icon while any one of several entries is busy", () => {
     renderWithStack(
       <>
-        <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active busy />
+        <Offering fileId="f1" kind="tags" labelKey="generateTags" active busy />
+        <Offering fileId="f1" kind="summary" labelKey="summaryGenerate" active />
+        <FileAIActionsButton fileId="f1" />
+      </>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "AI" });
+    expect(trigger.querySelector("svg")?.getAttribute("class")).toContain(
+      "animate-pulse",
+    );
+  });
+
+  it("runs the entry that was chosen, not its neighbour", () => {
+    const tags = vi.fn();
+    const foreign = vi.fn();
+    renderWithStack(
+      <>
+        <Offering fileId="f1" kind="tags" labelKey="generateTags" active onRun={tags} />
+        <ForeignOffering fileId="f1" onRun={foreign} />
         <FileAIActionsButton fileId="f1" />
       </>,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "AI" }));
-    expect(screen.getByRole("menuitem")).toBeDisabled();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Transcribe" }));
+    expect(foreign).toHaveBeenCalledTimes(1);
+    expect(tags).not.toHaveBeenCalled();
   });
 
   it("closes on Escape", () => {

@@ -41,7 +41,7 @@ vi.mock("./api", () => ({
 
 import SuggestedTagsSection from "@/addons/intelligence/SuggestedTagsSection";
 import FileAIActionsButton from "@/addons/intelligence/FileAIActionsButton";
-import { resetFileAiActions } from "@/addons/intelligence/fileAiActions";
+import { resetFileAiActions } from "@/lib/fileAiActions";
 import { fetchJSON } from "@/lib/api";
 import { getSuggestedTags, regenerateSuggestedTags } from "@/addons/intelligence/api";
 import { saveFileTags } from "@/lib/tags";
