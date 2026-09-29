@@ -24,6 +24,7 @@ import re
 from typing import Iterable
 
 from app.credentials import CallerCredential
+from app.file_hydrate import hydrate_files
 from app.rag.retriever import _filter_file_ids_via_internal_api
 
 logger = logging.getLogger(__name__)
@@ -53,20 +54,32 @@ def is_valid_kind(kind: object) -> bool:
 
 
 async def ensure_access(
-    file_ids: Iterable[str], credential: CallerCredential | None
+    file_ids: Iterable[str],
+    credential: CallerCredential | None,
+    *,
+    drive: str | None,
 ) -> set[str]:
-    """Return the subset of ``file_ids`` the caller is allowed to see.
+    """Return the subset of ``file_ids`` the caller may see in ``drive``.
 
-    Thin re-export of the retriever's internal helper. Centralised so
-    every tool has one obvious choice — and so a future refactor that
-    renames or tightens the helper updates the tools together.
+    A viewer who has unlocked several drives can see all of them, so the
+    host's access filter alone lets an Ask on one drive read another.
+    ``drive`` is required so no tool can omit it; ``None`` (tests, global
+    callers) skips only the drive check. A file core does not report,
+    including on a hydrate failure, is dropped.
     """
     ids = [fid for fid in file_ids if isinstance(fid, str) and fid]
     if not ids:
         return set()
-    return await _filter_file_ids_via_internal_api(
+    allowed = await _filter_file_ids_via_internal_api(
         file_ids=ids, credential=credential
     )
+    if drive is None or not allowed:
+        return allowed
+    hydrated = await hydrate_files(sorted(allowed))
+    return {
+        fid for fid in allowed
+        if (hydrated.get(fid) or {}).get("drive") == drive
+    }
 
 
 __all__ = [

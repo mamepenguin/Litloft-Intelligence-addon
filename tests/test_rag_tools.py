@@ -41,7 +41,7 @@ def _allow_all_access(monkeypatch: pytest.MonkeyPatch) -> None:
     the denial path patch ``ensure_access`` explicitly.
     """
 
-    async def _allow(file_ids, credential=None):
+    async def _allow(file_ids, credential=None, *, drive):
         return {fid for fid in file_ids if isinstance(fid, str)}
 
     monkeypatch.setattr(
@@ -360,7 +360,7 @@ async def test_get_file_chunks_access_denied_returns_not_found(
 ) -> None:
     """LLM-supplied file_id outside the viewer's access must 'not_found'."""
 
-    async def _deny(file_ids, credential=None):
+    async def _deny(file_ids, credential=None, *, drive):
         return set()
 
     monkeypatch.setattr(
@@ -506,7 +506,7 @@ async def test_get_file_detail_access_denied_returns_not_found(
 ) -> None:
     from app.rag.tools.get_file_detail import get_file_detail
 
-    async def _deny(file_ids, credential=None):
+    async def _deny(file_ids, credential=None, *, drive):
         return set()
 
     monkeypatch.setattr(
@@ -658,10 +658,10 @@ async def test_get_related_files_filters_cross_drive_output(
         {"id": 2, "file_id_a": "FORBIDDEN", "file_id_b": "F", "kind": "see"},
     ]
 
-    async def _access(file_ids, credential=None):
-        # Input access (file_id='F') goes through; output filtered.
-        ids = set(file_ids)
-        return ids & {"F", "ALLOWED"}
+    drive_of = {"F": "d", "ALLOWED": "d", "FORBIDDEN": "other"}
+
+    async def _access(file_ids, credential=None, *, drive):
+        return {fid for fid in file_ids if drive is None or drive_of[fid] == drive}
 
     monkeypatch.setattr(
         "app.rag.tools.get_related_files.ensure_access", _access
@@ -680,7 +680,7 @@ async def test_get_related_files_filters_cross_drive_output(
         "app.rag.tools.get_related_files.httpx.AsyncClient",
         return_value=client,
     ):
-        ctx = ToolContext()
+        ctx = ToolContext(drive="d")
         env = await get_related_files(context=ctx, file_id="F")
 
     rel_ids = {r["file_id"] for r in env.payload["relations"]}
@@ -704,7 +704,7 @@ async def test_get_related_files_access_denied(
 ) -> None:
     from app.rag.tools.get_related_files import get_related_files
 
-    async def _deny(file_ids, credential=None):
+    async def _deny(file_ids, credential=None, *, drive):
         return set()
 
     monkeypatch.setattr(
@@ -808,3 +808,71 @@ async def test_get_file_detail_merges_sources() -> None:
     assert "auto_tags" not in payload
     assert "detailed_summary" not in payload
     assert ctx.tool_returned_file_ids == {"F"}
+
+
+# ---------------------------------------------------------------------------
+# Drive scope of the access gate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("drive", "host_allows", "hydrated", "expected"),
+    [
+        ("d", {"A", "B", "C"}, {"A": "d", "B": "other"}, {"A"}),
+        ("d", {"A", "B", "C"}, {"A": "d"}, {"A"}),
+        ("d", {"A", "B", "C"}, {}, set()),
+        ("d", {"A"}, {"A": "d", "B": "d", "C": "d"}, {"A"}),
+        (None, {"A", "B", "C"}, {"A": "d", "B": "other"}, {"A", "B", "C"}),
+    ],
+)
+async def test_ensure_access_keeps_only_files_in_the_asks_drive(
+    monkeypatch: pytest.MonkeyPatch,
+    drive: str | None,
+    host_allows: set[str],
+    hydrated: dict[str, str],
+    expected: set[str],
+) -> None:
+    from app.rag.tools import _access
+
+    async def _host(file_ids, credential):
+        return set(host_allows)
+
+    async def _hydrate(file_ids):
+        return {fid: {"id": fid, "drive": d} for fid, d in hydrated.items()}
+
+    monkeypatch.setattr(_access, "_filter_file_ids_via_internal_api", _host)
+    monkeypatch.setattr(_access, "hydrate_files", _hydrate)
+
+    allowed = await _access.ensure_access(["A", "B", "C"], None, drive=drive)
+
+    assert allowed == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "module",
+    ["get_file_detail", "get_file_chunks", "get_related_files"],
+)
+async def test_every_file_tool_gates_on_the_asks_drive(
+    monkeypatch: pytest.MonkeyPatch, module: str
+) -> None:
+    import importlib
+
+    tool_module = importlib.import_module(f"app.rag.tools.{module}")
+    seen: list[str | None] = []
+
+    async def _deny(file_ids, credential=None, *, drive):
+        seen.append(drive)
+        return set()
+
+    monkeypatch.setattr(tool_module, "ensure_access", _deny)
+    tool = getattr(tool_module, module)
+    kwargs: dict[str, Any] = {"context": ToolContext(drive="d"), "file_id": "F"}
+    if module == "get_file_chunks":
+        kwargs["type"] = "transcript"
+
+    env = await tool(**kwargs)
+
+    assert env.payload["error"] == "not_found"
+    assert seen == ["d"]

@@ -335,7 +335,9 @@ async def get_file_chunks(
     # Access gate. Note that for type='text' the host's /content
     # endpoint trusts the shared secret only — without this check, the
     # LLM could exfiltrate any .md / .txt body on the box.
-    allowed = await ensure_access([file_id], credential=context.credential)
+    allowed = await ensure_access(
+        [file_id], credential=context.credential, drive=context.drive
+    )
     if file_id not in allowed:
         return ToolResultEnvelope(
             payload={"file_id": file_id, "error": "not_found"},
