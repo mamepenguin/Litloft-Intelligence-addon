@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app import policy_client
-from app.config import LLMConfig
+from app.config import LLMConfig, LLMConfigError, parse_llm_config
 from app.llm import LLMClient, OllamaLLMClient, create_llm_client
 from app.llm_overrides import PROVIDER_ENUM
 
@@ -43,9 +43,10 @@ _PROFILE_ONLY_KEYS = ("offhost", "agentic", "api_key_env")
 # Never inherited from the top-level ``llm`` section: a profile that omitted
 # its endpoint would otherwise send to, and with the key of, another one.
 _CONNECTION_FIELDS = ("provider", "base_url", "api_key", "model", "vision_model")
-_PROFILE_FIELDS = frozenset(
-    f.name for f in dataclasses.fields(LLMConfig)
-) - {"api_key", "agentic_models", "agentic_mode", "agentic_min_capability"}
+_PROFILE_KEYS = (
+    frozenset(f.name for f in dataclasses.fields(LLMConfig))
+    - {"api_key", "agentic_models", "agentic_mode", "agentic_min_capability"}
+) | set(_PROFILE_ONLY_KEYS)
 
 
 @dataclass(frozen=True)
@@ -190,46 +191,30 @@ def _build_profile(
     provider = raw.get("provider")
     if provider not in PROVIDER_ENUM:
         raise _RoutingError(f"llm.profiles.{name}.provider {provider!r} is not one of {PROVIDER_ENUM}")
+    unknown = set(raw) - _PROFILE_KEYS
+    if unknown:
+        raise _RoutingError(f"llm.profiles.{name} has unknown keys {sorted(unknown)}")
     for key in ("offhost", "agentic"):
         if key in raw and not isinstance(raw[key], bool):
             raise _RoutingError(f"llm.profiles.{name}.{key} must be true or false")
-
-    knobs = {
-        f.name: getattr(base, f.name)
-        for f in dataclasses.fields(LLMConfig)
-        if f.name not in _CONNECTION_FIELDS
-    }
-    defaults = LLMConfig()
-    for key, value in raw.items():
-        if key in _PROFILE_ONLY_KEYS:
-            continue
-        if key not in _PROFILE_FIELDS:
-            raise _RoutingError(f"llm.profiles.{name}.{key} is not a profile setting")
-        if not _same_kind(value, getattr(defaults, key)):
-            raise _RoutingError(f"llm.profiles.{name}.{key} has the wrong type")
-        knobs[key] = value
-
     api_key_env = raw.get("api_key_env")
     if api_key_env is not None and (not isinstance(api_key_env, str) or not api_key_env):
         raise _RoutingError(f"llm.profiles.{name}.api_key_env must be a string")
-    knobs["api_key"] = environ.get(api_key_env, "") if api_key_env else ""
+
+    knobs = dataclasses.replace(base, **{f: getattr(LLMConfig(), f) for f in _CONNECTION_FIELDS})
+    values = {k: v for k, v in raw.items() if k not in _PROFILE_ONLY_KEYS}
+    values["api_key"] = environ.get(api_key_env, "") if api_key_env else ""
+    try:
+        config = parse_llm_config(values, base=knobs)
+    except LLMConfigError as exc:
+        raise _RoutingError(f"llm.profiles.{name}: {exc}") from exc
     return LLMProfile(
         name=name,
-        config=LLMConfig(**knobs),
+        config=config,
         offhost=raw.get("offhost") is not False,
         agentic=raw.get("agentic") is True,
         api_key_env=api_key_env or "",
     )
-
-
-def _same_kind(value: object, default: object) -> bool:
-    if isinstance(default, bool):
-        return isinstance(value, bool)
-    if isinstance(default, float):
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
-    if isinstance(default, int):
-        return isinstance(value, int) and not isinstance(value, bool)
-    return isinstance(value, type(default))
 
 
 # ---------------------------------------------------------------------------
@@ -279,13 +264,6 @@ def _client_for(active: _Active, profile: LLMProfile) -> LLMClient | OllamaLLMCl
     return client
 
 
-def _usable(profile: LLMProfile, *, vision: bool) -> bool:
-    config = profile.config
-    if config.provider == "disabled" or not config.model.strip():
-        return False
-    return not vision or bool(config.vision_model.strip())
-
-
 async def resolve(
     drive: str, feature: str, *, vision: bool = False
 ) -> Resolved | Skip | Defer:
@@ -307,6 +285,7 @@ async def resolve(
                 return Skip(f"{CLOUD_POLICY_FEATURE} is off for {drive!r}")
             profile = routing.profiles[routing.local_fallback]
 
-    if not _usable(profile, vision=vision):
+    client = _client_for(active, profile)
+    if not client.enabled or (vision and not profile.config.vision_model.strip()):
         return Skip(f"profile {profile.name!r} cannot serve {feature}")
-    return Resolved(profile=profile, client=_client_for(active, profile))
+    return Resolved(profile=profile, client=client)

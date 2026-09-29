@@ -183,9 +183,9 @@ async def test_lookup_feature_does_not_cache_a_malformed_body(monkeypatch):
     monkeypatch.setattr(
         policy_client.httpx,
         "AsyncClient",
-        _client_returning((200, {"default": False, "features": {}})),
+        _client_returning((200, {"default": True, "features": {}})),
     )
-    assert await policy_client.lookup_feature("d", "llm_cloud") == "denied"
+    assert await policy_client.lookup_feature("d", "llm_cloud") == "allowed"
 
 
 @pytest.mark.asyncio

@@ -128,7 +128,11 @@ def test_profile_never_inherits_the_top_level_endpoint_or_key(
         (lambda s: s["profiles"]["local"].update(vision_model=None), "vision_model"),
         (lambda s: s["profiles"]["local"].update(temperature="hot"), "temperature"),
         (lambda s: s["profiles"]["local"].update(max_tokens=True), "max_tokens"),
-        (lambda s: s["profiles"]["local"].update(offhost="no"), "offhost"),
+        (lambda s: s["profiles"]["cloud"].update(offhost="no"), "offhost"),
+        (lambda s: s["profiles"]["cloud"].update(agentic="yes"), "agentic"),
+        (lambda s: s["profiles"]["cloud"].update(modle="x"), "modle"),
+        (lambda s: s["profiles"].update(cloud="not a mapping"), "cloud"),
+        (lambda s: s.update(routing=[]), "routing"),
         (lambda s: s["profiles"]["local"].update(api_key="inline"), "api_key"),
         (lambda s: s["profiles"]["cloud"].update(api_key_env=""), "api_key_env"),
     ],
@@ -141,6 +145,38 @@ def test_invalid_routing_disables_every_profile_and_says_why(mutate, needle) -> 
 
     assert routing.profiles == {}
     assert routing.error is not None and needle in routing.error
+
+
+def test_named_but_unset_key_env_gives_no_key() -> None:
+    routing = build_routing(_section(), BASE, environ={"LLM_API_KEY": "top-key"})
+
+    assert routing.profiles["cloud"].config.api_key == ""
+
+
+@pytest.mark.parametrize(
+    ("patch", "field", "expected"),
+    [
+        ({"temperature": 0}, "temperature", 0),
+        ({"request_timeout_seconds": 60}, "request_timeout_seconds", 60),
+        ({"reasoning": "auto"}, "reasoning", "auto"),
+        ({"reasoning": "bogus"}, "reasoning", "disabled"),
+        ({"output_language": "en"}, "output_language", "en"),
+    ],
+)
+def test_profile_values_go_through_the_llm_config_parser(patch, field, expected) -> None:
+    section = _section()
+    section["profiles"]["cloud"].update(patch)
+
+    routing = build_routing(section, BASE, environ={})
+
+    assert routing.error is None
+    assert getattr(routing.profiles["cloud"].config, field) == expected
+
+
+def test_agentic_is_off_unless_declared() -> None:
+    routing = build_routing(_section(), BASE, environ={})
+
+    assert routing.profiles["cloud"].agentic is False
 
 
 def test_single_profile_needs_no_default() -> None:
@@ -254,7 +290,7 @@ async def test_unassigned_feature_uses_the_default_profile(policy) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "profile_patch",
-    [{"provider": "disabled"}, {"model": ""}],
+    [{"provider": "disabled"}, {"model": ""}, {"base_url": ""}],
 )
 async def test_unusable_profile_skips(policy, profile_patch) -> None:
     section = _section(features={"summaries": "local"})
@@ -373,8 +409,37 @@ def test_manifest_declares_the_policy_features() -> None:
 
     manifest = json.loads((Path(__file__).parent.parent / "manifest.json").read_text())
 
-    assert {f["name"]: f["default"] for f in manifest["policy_features"]} == {
-        "transcription_cloud": True,
-        "chapter_suggestions": True,
-        "llm_cloud": True,
+    assert {
+        f["name"]: (f["default"], f["i18n_key"]) for f in manifest["policy_features"]
+    } == {
+        "transcription_cloud": (True, "intelligence.policyFeatures.transcriptionCloud"),
+        "chapter_suggestions": (True, "intelligence.policyFeatures.chapterSuggestions"),
+        "llm_cloud": (True, "intelligence.policyFeatures.llmCloud"),
     }
+
+
+@pytest.mark.parametrize(
+    ("llm", "provider", "offhost"),
+    [
+        ({"provider": "ollama", "model": "m", "offhost": False}, "ollama", False),
+        ({"provider": "ollama", "model": "m"}, "ollama", True),
+        ({"provider": "ollama", "model": 123}, "disabled", True),
+    ],
+)
+def test_load_settings_legacy_section(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, llm, provider, offhost
+) -> None:
+    import yaml
+
+    from app import config
+
+    config_file = tmp_path / "search-config.yml"
+    config_file.write_text(yaml.safe_dump({"llm": llm}))
+    monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
+    monkeypatch.setattr(config, "settings", config.load_settings())
+    llm_routing.set_routing(None)
+
+    profile = llm_routing.current_routing().profiles["default"]
+
+    assert (profile.config.provider, profile.offhost) == (provider, offhost)
