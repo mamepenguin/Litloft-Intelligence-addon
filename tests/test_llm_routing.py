@@ -8,6 +8,7 @@ import pytest
 
 from app import llm_routing
 from app.config import LLMConfig
+from app.llm import OllamaLLMClient
 from app.llm_routing import Defer, Resolved, Skip, build_routing
 
 BASE = LLMConfig(
@@ -82,14 +83,32 @@ def test_profile_without_offhost_is_treated_as_offhost() -> None:
     assert routing.profiles["cloud"].offhost is True
 
 
-def test_profile_inherits_unset_knobs_and_reads_its_own_key_env() -> None:
+def test_profile_inherits_tuning_knobs_only() -> None:
     routing = build_routing(_section(), BASE, environ={"CLOUD_KEY": "k-cloud"})
 
     cloud = routing.profiles["cloud"].config
     assert cloud.model == "gpt-mini"
     assert cloud.temperature == 0.3
     assert cloud.api_key == "k-cloud"
-    assert routing.profiles["local"].config.api_key == "base-key"
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [
+        ("base_url", ""),
+        ("model", ""),
+        ("vision_model", ""),
+        ("api_key", ""),
+    ],
+)
+def test_profile_never_inherits_the_top_level_endpoint_or_key(
+    field: str, expected: str
+) -> None:
+    section = {"profiles": {"bare": {"provider": "ollama", "offhost": False}}}
+
+    routing = build_routing(section, BASE, environ={"LLM_API_KEY": "top-key"})
+
+    assert getattr(routing.profiles["bare"].config, field) == expected
 
 
 @pytest.mark.parametrize(
@@ -103,6 +122,15 @@ def test_profile_inherits_unset_knobs_and_reads_its_own_key_env() -> None:
         (lambda s: s["profiles"].update({"Bad Name": dict(LOCAL)}), "Bad Name"),
         (lambda s: s["profiles"]["local"].update(provider="nope"), "provider"),
         (lambda s: s.update(profiles={}), "profiles"),
+        (lambda s: s["profiles"]["local"].pop("provider"), "provider"),
+        (lambda s: s["profiles"]["local"].update(model=123), "model"),
+        (lambda s: s["profiles"]["local"].update(model=None), "model"),
+        (lambda s: s["profiles"]["local"].update(vision_model=None), "vision_model"),
+        (lambda s: s["profiles"]["local"].update(temperature="hot"), "temperature"),
+        (lambda s: s["profiles"]["local"].update(max_tokens=True), "max_tokens"),
+        (lambda s: s["profiles"]["local"].update(offhost="no"), "offhost"),
+        (lambda s: s["profiles"]["local"].update(api_key="inline"), "api_key"),
+        (lambda s: s["profiles"]["cloud"].update(api_key_env=""), "api_key_env"),
     ],
 )
 def test_invalid_routing_disables_every_profile_and_says_why(mutate, needle) -> None:
@@ -266,3 +294,87 @@ async def test_swapping_routing_drops_cached_clients(policy) -> None:
 
     assert isinstance(after, Resolved)
     assert after.client is not first.client
+
+
+@pytest.mark.asyncio
+async def test_swap_during_a_policy_lookup_never_hands_out_the_old_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(_section(features={"summaries": "cloud"}))
+    replacement = _section(features={"summaries": "cloud"})
+    replacement["profiles"]["cloud"] = dict(LOCAL)
+    replacement["routing"].pop("local_fallback")
+
+    async def _lookup_then_swap(drive: str, feature: str) -> str:
+        _install(replacement)
+        return "allowed"
+
+    monkeypatch.setattr(llm_routing.policy_client, "lookup_feature", _lookup_then_swap)
+    await llm_routing.resolve("d", "summaries")
+
+    after = await llm_routing.resolve("d", "summaries")
+
+    assert isinstance(after, Resolved)
+    assert isinstance(after.client, OllamaLLMClient)
+
+
+def test_load_settings_builds_routing_from_yaml_and_v1_overrides(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    import json
+
+    import yaml
+
+    from app import config
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    config_file = tmp_path / "search-config.yml"
+    config_file.write_text(yaml.safe_dump({"llm": {"provider": "ollama", "model": "yaml-model"}}))
+    (data_dir / "llm-overrides.json").write_text(
+        json.dumps({"schema_version": 1, "model": "gui-model"})
+    )
+    monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
+    monkeypatch.setattr(config, "settings", config.load_settings())
+    llm_routing.set_routing(None)
+
+    routing = llm_routing.current_routing()
+
+    assert list(routing.profiles) == ["default"]
+    assert routing.profiles["default"].config.model == "gui-model"
+    assert routing.profiles["default"].config.provider == "ollama"
+
+
+def test_load_settings_passes_profiles_from_yaml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    import yaml
+
+    from app import config
+
+    config_file = tmp_path / "search-config.yml"
+    config_file.write_text(yaml.safe_dump({"llm": _section(features={"rag": "cloud"})}))
+    monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
+    monkeypatch.setattr(config, "settings", config.load_settings())
+    llm_routing.set_routing(None)
+
+    routing = llm_routing.current_routing()
+
+    assert set(routing.profiles) == {"local", "cloud"}
+    assert routing.features == {"rag": "cloud"}
+    assert routing.local_fallback == "local"
+
+
+def test_manifest_declares_the_policy_features() -> None:
+    import json
+    from pathlib import Path
+
+    manifest = json.loads((Path(__file__).parent.parent / "manifest.json").read_text())
+
+    assert {f["name"]: f["default"] for f in manifest["policy_features"]} == {
+        "transcription_cloud": True,
+        "chapter_suggestions": True,
+        "llm_cloud": True,
+    }

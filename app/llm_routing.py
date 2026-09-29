@@ -36,10 +36,16 @@ LLM_FEATURES = (
 )
 CLOUD_POLICY_FEATURE = "llm_cloud"
 LEGACY_PROFILE = "default"
-DEFAULT_API_KEY_ENV = "LLM_API_KEY"
+LEGACY_API_KEY_ENV = "LLM_API_KEY"
 
 _PROFILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 _PROFILE_ONLY_KEYS = ("offhost", "agentic", "api_key_env")
+# Never inherited from the top-level ``llm`` section: a profile that omitted
+# its endpoint would otherwise send to, and with the key of, another one.
+_CONNECTION_FIELDS = ("provider", "base_url", "api_key", "model", "vision_model")
+_PROFILE_FIELDS = frozenset(
+    f.name for f in dataclasses.fields(LLMConfig)
+) - {"api_key", "agentic_models", "agentic_mode", "agentic_min_capability"}
 
 
 @dataclass(frozen=True)
@@ -104,7 +110,7 @@ def build_routing(
             config=base,
             offhost=llm_section.get("offhost") is not False,
             agentic=False,
-            api_key_env=DEFAULT_API_KEY_ENV,
+            api_key_env=LEGACY_API_KEY_ENV,
         )
         return LLMRouting(
             profiles={LEGACY_PROFILE: profile},
@@ -181,32 +187,62 @@ def _build_profile(
         raise _RoutingError(f"invalid profile name {name!r}")
     if not isinstance(raw, dict):
         raise _RoutingError(f"llm.profiles.{name} must be a mapping")
-    provider = raw.get("provider", base.provider)
+    provider = raw.get("provider")
     if provider not in PROVIDER_ENUM:
         raise _RoutingError(f"llm.profiles.{name}.provider {provider!r} is not one of {PROVIDER_ENUM}")
+    for key in ("offhost", "agentic"):
+        if key in raw and not isinstance(raw[key], bool):
+            raise _RoutingError(f"llm.profiles.{name}.{key} must be true or false")
 
-    config_fields = {f.name for f in dataclasses.fields(LLMConfig)}
-    overrides = {k: v for k, v in raw.items() if k in config_fields and k != "api_key"}
+    knobs = {
+        f.name: getattr(base, f.name)
+        for f in dataclasses.fields(LLMConfig)
+        if f.name not in _CONNECTION_FIELDS
+    }
+    defaults = LLMConfig()
+    for key, value in raw.items():
+        if key in _PROFILE_ONLY_KEYS:
+            continue
+        if key not in _PROFILE_FIELDS:
+            raise _RoutingError(f"llm.profiles.{name}.{key} is not a profile setting")
+        if not _same_kind(value, getattr(defaults, key)):
+            raise _RoutingError(f"llm.profiles.{name}.{key} has the wrong type")
+        knobs[key] = value
+
     api_key_env = raw.get("api_key_env")
-    if api_key_env is not None:
-        if not isinstance(api_key_env, str) or not api_key_env:
-            raise _RoutingError(f"llm.profiles.{name}.api_key_env must be a string")
-        overrides["api_key"] = environ.get(api_key_env, "")
+    if api_key_env is not None and (not isinstance(api_key_env, str) or not api_key_env):
+        raise _RoutingError(f"llm.profiles.{name}.api_key_env must be a string")
+    knobs["api_key"] = environ.get(api_key_env, "") if api_key_env else ""
     return LLMProfile(
         name=name,
-        config=dataclasses.replace(base, **overrides),
+        config=LLMConfig(**knobs),
         offhost=raw.get("offhost") is not False,
         agentic=raw.get("agentic") is True,
-        api_key_env=api_key_env or DEFAULT_API_KEY_ENV,
+        api_key_env=api_key_env or "",
     )
+
+
+def _same_kind(value: object, default: object) -> bool:
+    if isinstance(default, bool):
+        return isinstance(value, bool)
+    if isinstance(default, float):
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if isinstance(default, int):
+        return isinstance(value, int) and not isinstance(value, bool)
+    return isinstance(value, type(default))
 
 
 # ---------------------------------------------------------------------------
 # Current routing and resolution
 # ---------------------------------------------------------------------------
 
-_routing: LLMRouting | None = None
-_clients: dict[str, LLMClient | OllamaLLMClient] = {}
+@dataclass(frozen=True)
+class _Active:
+    routing: LLMRouting
+    clients: dict[str, LLMClient | OllamaLLMClient]
+
+
+_active: _Active | None = None
 
 
 def _load_from_settings() -> LLMRouting:
@@ -215,11 +251,15 @@ def _load_from_settings() -> LLMRouting:
     return build_routing(config.settings.llm_section, config.settings.llm, os.environ)
 
 
+def _current() -> _Active:
+    global _active
+    if _active is None:
+        _active = _Active(routing=_load_from_settings(), clients={})
+    return _active
+
+
 def current_routing() -> LLMRouting:
-    global _routing
-    if _routing is None:
-        _routing = _load_from_settings()
-    return _routing
+    return _current().routing
 
 
 def set_routing(routing: LLMRouting | None) -> None:
@@ -227,16 +267,15 @@ def set_routing(routing: LLMRouting | None) -> None:
 
     A job that already resolved keeps the client it was handed.
     """
-    global _routing, _clients
-    _routing = routing
-    _clients = {}
+    global _active
+    _active = None if routing is None else _Active(routing=routing, clients={})
 
 
-def _client_for(profile: LLMProfile) -> LLMClient | OllamaLLMClient:
-    client = _clients.get(profile.name)
+def _client_for(active: _Active, profile: LLMProfile) -> LLMClient | OllamaLLMClient:
+    client = active.clients.get(profile.name)
     if client is None:
         client = create_llm_client(profile.config)
-        _clients[profile.name] = client
+        active.clients[profile.name] = client
     return client
 
 
@@ -252,7 +291,8 @@ async def resolve(
 ) -> Resolved | Skip | Defer:
     if feature not in LLM_FEATURES:
         raise ValueError(f"unknown LLM feature {feature!r}")
-    routing = current_routing()
+    active = _current()
+    routing = active.routing
     name = routing.features.get(feature, routing.default)
     if name is None:
         return Skip(routing.error or "no LLM profile configured")
@@ -269,4 +309,4 @@ async def resolve(
 
     if not _usable(profile, vision=vision):
         return Skip(f"profile {profile.name!r} cannot serve {feature}")
-    return Resolved(profile=profile, client=_client_for(profile))
+    return Resolved(profile=profile, client=_client_for(active, profile))
