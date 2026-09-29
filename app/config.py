@@ -723,6 +723,9 @@ class Settings:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     features: FeaturesConfig = field(default_factory=FeaturesConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    # The raw ``profiles`` / ``routing`` / ``offhost`` keys of the ``llm``
+    # section; ``app.llm_routing`` builds profiles from them over ``llm``.
+    llm_section: dict[str, Any] = field(default_factory=dict)
     summaries: SummariesConfig = field(default_factory=SummariesConfig)
     rag: RagConfig = field(default_factory=RagConfig)
     transcription: TranscriptionConfig = field(default_factory=TranscriptionConfig)
@@ -1084,6 +1087,11 @@ def load_settings() -> Settings:
         memory=_parse_nested(config_data, "memory", MemoryConfig),
         features=features_config,
         llm=llm_config,
+        llm_section={
+            k: llm_merged[k]
+            for k in ("profiles", "routing", "offhost")
+            if k in llm_merged
+        },
         summaries=_parse_nested(config_data, "summaries", SummariesConfig),
         rag=rag_config,
         transcription=_parse_transcription(config_data),

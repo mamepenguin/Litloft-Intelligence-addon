@@ -38,7 +38,7 @@ import asyncio
 import logging
 import os
 import time
-from typing import Final
+from typing import Final, Literal
 from urllib.parse import quote  # noqa: F401  (kept for parity with prior import surface)
 
 import httpx
@@ -199,9 +199,74 @@ async def is_feature_enabled(
     return _resolve_failure(default_on_failure, drive=drive, feature=feature)
 
 
+PolicyVerdict = Literal["allowed", "denied", "unknown"]
+
+# Separate from ``_cache``: ``is_feature_enabled`` caches its fail-open
+# reading of a malformed body as True, which must never read as "allowed".
+_strict_cache: dict[tuple[str, str], tuple[float, bool]] = {}
+
+
+def _strict_verdict(payload: object, feature: str) -> PolicyVerdict:
+    if not isinstance(payload, dict):
+        return "unknown"
+    features = payload.get("features")
+    if not isinstance(features, dict):
+        return "unknown"
+    if feature in features:
+        return "allowed" if features[feature] is True else "denied"
+    default = payload.get("default")
+    if not isinstance(default, bool):
+        return "unknown"
+    return "allowed" if default else "denied"
+
+
+async def lookup_feature(drive: str, feature: str) -> PolicyVerdict:
+    """Look up ``feature`` for ``drive`` without collapsing failure into a bool.
+
+    For gates that must neither send on failure nor treat failure as the
+    owner's answer: ``unknown`` (transport error, unexpected status or
+    shape) is never cached, so the caller can defer and ask again.
+    """
+    global _observed_healthy
+
+    key = (drive, feature)
+    now = time.monotonic()
+    cached = _strict_cache.get(key)
+    if cached and cached[0] > now:
+        return "allowed" if cached[1] else "denied"
+
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
+            resp = await client.get(
+                f"{_base_url()}/drive-policy",
+                params={"drive": drive, "addon": _ADDON_NAME},
+            )
+    except httpx.HTTPError as e:
+        logger.warning(
+            "policy-client: lookup failed for drive=%s feature=%s: %s",
+            drive, feature, type(e).__name__,
+        )
+        return "unknown"
+
+    if resp.status_code == 404:
+        _strict_cache[key] = (now + _TTL_SECONDS, False)
+        return "denied"
+    if resp.status_code != 200:
+        return "unknown"
+    _observed_healthy = True
+    try:
+        verdict = _strict_verdict(resp.json(), feature)
+    except ValueError:
+        return "unknown"
+    if verdict != "unknown":
+        _strict_cache[key] = (now + _TTL_SECONDS, verdict == "allowed")
+    return verdict
+
+
 def reset_cache() -> None:
     """Drop every cached policy entry — for tests and explicit reloads."""
     _cache.clear()
+    _strict_cache.clear()
 
 
 def _reset_grace_period_for_tests() -> None:
