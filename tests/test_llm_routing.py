@@ -17,7 +17,7 @@ BASE = LLMConfig(
     api_key="base-key",
     model="base-model",
     vision_model="base-vision",
-    temperature=0.3,
+    temperature=0.7,
 )
 
 LOCAL = {
@@ -88,7 +88,7 @@ def test_profile_inherits_tuning_knobs_only() -> None:
 
     cloud = routing.profiles["cloud"].config
     assert cloud.model == "gpt-mini"
-    assert cloud.temperature == 0.3
+    assert cloud.temperature == 0.7
     assert cloud.api_key == "k-cloud"
 
 
@@ -124,15 +124,15 @@ def test_profile_never_inherits_the_top_level_endpoint_or_key(
         (lambda s: s.update(profiles={}), "profiles"),
         (lambda s: s["profiles"]["local"].pop("provider"), "provider"),
         (lambda s: s["profiles"]["local"].update(model=123), "model"),
-        (lambda s: s["profiles"]["local"].update(model=None), "model"),
-        (lambda s: s["profiles"]["local"].update(vision_model=None), "vision_model"),
         (lambda s: s["profiles"]["local"].update(temperature="hot"), "temperature"),
         (lambda s: s["profiles"]["local"].update(max_tokens=True), "max_tokens"),
         (lambda s: s["profiles"]["cloud"].update(offhost="no"), "offhost"),
         (lambda s: s["profiles"]["cloud"].update(agentic="yes"), "agentic"),
         (lambda s: s["profiles"]["cloud"].update(modle="x"), "modle"),
         (lambda s: s["profiles"].update(cloud="not a mapping"), "cloud"),
-        (lambda s: s.update(routing=[]), "routing"),
+        (lambda s: s.update(routing=[]), "llm.routing must be a mapping"),
+        (lambda s: s.update(routing="x"), "llm.routing must be a mapping"),
+        (lambda s: s["routing"].update(features=[]), "features must be a mapping"),
         (lambda s: s["profiles"]["local"].update(api_key="inline"), "api_key"),
         (lambda s: s["profiles"]["cloud"].update(api_key_env=""), "api_key_env"),
     ],
@@ -171,6 +171,15 @@ def test_profile_values_go_through_the_llm_config_parser(patch, field, expected)
 
     assert routing.error is None
     assert getattr(routing.profiles["cloud"].config, field) == expected
+
+
+def test_null_routing_keys_count_as_absent() -> None:
+    section = {"profiles": {"local": dict(LOCAL)}, "routing": None}
+
+    routing = build_routing(section, BASE, environ={})
+
+    assert routing.error is None
+    assert routing.features == {}
 
 
 def test_agentic_is_off_unless_declared() -> None:
@@ -424,6 +433,11 @@ def test_manifest_declares_the_policy_features() -> None:
         ({"provider": "ollama", "model": "m", "offhost": False}, "ollama", False),
         ({"provider": "ollama", "model": "m"}, "ollama", True),
         ({"provider": "ollama", "model": 123}, "disabled", True),
+        ({"provider": "ollama", "model": "m", "api_key": None}, "ollama", True),
+        ({"provider": "ollama", "model": "m", "vision_model": None}, "ollama", True),
+        ({"provider": "ollama", "model": "m", "reasoning": None}, "ollama", True),
+        ({"provider": "ollama", "model": "m", "agentic_models": None}, "ollama", True),
+        ({"provider": "ollama", "model": "m", "agentic_models": "x"}, "ollama", True),
     ],
 )
 def test_load_settings_legacy_section(
@@ -443,3 +457,4 @@ def test_load_settings_legacy_section(
     profile = llm_routing.current_routing().profiles["default"]
 
     assert (profile.config.provider, profile.offhost) == (provider, offhost)
+

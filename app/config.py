@@ -949,9 +949,7 @@ def _same_kind(value: object, default: object) -> bool:
     return isinstance(value, type(default))
 
 
-def _coerce_agentic_models(raw: object) -> tuple[AgenticModelEntry, ...]:
-    if not isinstance(raw, list):
-        raise LLMConfigError("agentic_models must be a list")
+def _coerce_agentic_models(raw: list[Any]) -> tuple[AgenticModelEntry, ...]:
     coerced: list[AgenticModelEntry] = []
     for entry in raw:
         if not isinstance(entry, dict):
@@ -974,17 +972,20 @@ def parse_llm_config(
 ) -> "LLMConfig":
     """Build an ``LLMConfig`` from ``raw`` over ``base`` (field defaults when None).
 
-    Keys that are not ``LLMConfig`` fields are ignored. A value of the wrong
-    type raises :class:`LLMConfigError`.
+    Keys that are not ``LLMConfig`` fields, and null values (a YAML key left
+    blank), are treated as absent. A value of the wrong type raises
+    :class:`LLMConfigError`.
     """
     start = base if base is not None else LLMConfig()
     defaults = LLMConfig()
     values = {f.name: getattr(start, f.name) for f in dataclasses.fields(LLMConfig)}
     for name in values:
-        if name not in raw:
+        value = raw.get(name)
+        if value is None:
             continue
-        value = raw[name]
         if name == "agentic_models":
+            if not isinstance(value, list):
+                continue
             value = _coerce_agentic_models(value)
         elif name == "reasoning" and value not in LLM_REASONING_ENUM:
             # A typo behaves like an absent key rather than like a third mode.

@@ -138,9 +138,7 @@ def _build_profiles_routing(
         for name, raw in raw_profiles.items()
     }
 
-    raw_routing = llm_section.get("routing") or {}
-    if not isinstance(raw_routing, dict):
-        raise _RoutingError("llm.routing must be a mapping")
+    raw_routing = _mapping(llm_section.get("routing"), "llm.routing")
 
     default = raw_routing.get("default")
     if default is None and len(profiles) == 1:
@@ -157,9 +155,7 @@ def _build_profiles_routing(
                 f"llm.routing.local_fallback {local_fallback!r} must be offhost: false"
             )
 
-    raw_features = raw_routing.get("features") or {}
-    if not isinstance(raw_features, dict):
-        raise _RoutingError("llm.routing.features must be a mapping")
+    raw_features = _mapping(raw_routing.get("features"), "llm.routing.features")
     for feature, name in raw_features.items():
         if feature not in LLM_FEATURES:
             raise _RoutingError(f"llm.routing.features has unknown feature {feature!r}")
@@ -171,6 +167,14 @@ def _build_profiles_routing(
         local_fallback=local_fallback,
         features=dict(raw_features),
     )
+
+
+def _mapping(value: object, where: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise _RoutingError(f"{where} must be a mapping")
+    return value
 
 
 def _require_profile(profiles: Mapping[str, LLMProfile], name: object, where: str) -> None:
