@@ -35,14 +35,21 @@ def bind_llm(
     factory,
     *,
     model: str = "test-llm",
-    agentic: bool = False,
+    agentic: bool | None = None,
     config: LLMConfig | None = None,
 ) -> None:
     """Serve ``factory()`` as the Ask's client and as every drive's resolve.
 
     ``factory`` raising ``RuntimeError`` stands for "no client"; a client
-    whose ``enabled`` is False resolves to ``Skip``.
+    whose ``enabled`` is False resolves to ``Skip``. With ``config`` and no
+    ``agentic``, the profile is agentic by the legacy allowlist rule.
     """
+    if agentic is None:
+        from app.rag.agentic import agentic_capability_supported
+
+        agentic = config is not None and agentic_capability_supported(
+            config.model, config
+        )
 
     def _client():
         try:

@@ -108,11 +108,13 @@ def build_routing(
     profiles at all, so every LLM feature skips rather than guessing.
     """
     if "profiles" not in llm_section:
+        from app.rag.agentic import agentic_capability_supported
+
         profile = LLMProfile(
             name=LEGACY_PROFILE,
             config=base,
             offhost=llm_section.get("offhost") is not False,
-            agentic=False,
+            agentic=agentic_capability_supported(base.model, base),
             api_key_env=LEGACY_API_KEY_ENV,
         )
         return LLMRouting(

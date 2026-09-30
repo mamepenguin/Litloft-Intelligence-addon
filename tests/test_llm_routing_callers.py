@@ -455,10 +455,10 @@ async def test_the_service_binds_its_profile_for_the_helpers_only_while_it_runs(
 
 
 @pytest.mark.parametrize(
-    ("agentic", "allowlisted", "expected"),
-    [(True, False, True), (False, True, True), (False, False, False)],
+    ("agentic", "mode", "expected"),
+    [(True, "auto", True), (True, "off", False), (False, "auto", False)],
 )
-def test_the_agentic_gate_reads_the_bound_profile(agentic, allowlisted, expected) -> None:
+def test_the_agentic_gate_reads_the_bound_profile(agentic, mode, expected) -> None:
     from app.config import AgenticModelEntry
     from app.rag import service
 
@@ -466,8 +466,8 @@ def test_the_agentic_gate_reads_the_bound_profile(agentic, allowlisted, expected
         provider="openai_compatible",
         base_url="http://llm.test/v1",
         model="m",
-        agentic_mode="auto",
-        agentic_models=(AgenticModelEntry(name="m"),) if allowlisted else (),
+        agentic_mode=mode,
+        agentic_models=(AgenticModelEntry(name="m"),),
     )
     client = MagicMock()
     client.enabled = True
@@ -475,3 +475,100 @@ def test_the_agentic_gate_reads_the_bound_profile(agentic, allowlisted, expected
 
     with llm_routing.bound(resolved_with(client, agentic=agentic, config=config)):
         assert service._agentic_gate_open(force_legacy_rag=False) is expected
+
+
+@pytest.mark.asyncio
+async def test_the_stream_binds_its_profile_for_every_step(monkeypatch) -> None:
+    from app.rag import service
+
+    client = MagicMock()
+
+    async def _inner(*args, **kwargs):
+        yield llm_routing.bound_client()
+        yield llm_routing.bound_client()
+
+    monkeypatch.setattr(service, "_stream_answer", _inner)
+
+    seen = [e async for e in service.stream_answer("q", None, resolved=resolved_with(client))]
+
+    assert (seen, llm_routing.bound_client()) == ([client, client], None)
+
+
+@pytest.mark.asyncio
+async def test_a_stream_closed_from_another_context_does_not_raise(monkeypatch) -> None:
+    import asyncio
+
+    from app.rag import service
+
+    closed: list = []
+
+    async def _inner(*args, **kwargs):
+        try:
+            yield 1
+            yield 2
+        finally:
+            closed.append(llm_routing.bound_client())
+
+    monkeypatch.setattr(service, "_stream_answer", _inner)
+    client = MagicMock()
+    stream = service.stream_answer("q", None, resolved=resolved_with(client))
+
+    first = await asyncio.create_task(anext(stream))
+    await stream.aclose()
+
+    assert (first, closed) == (1, [client])
+
+
+@pytest.mark.asyncio
+async def test_find_binds_its_profile_for_the_helpers(monkeypatch) -> None:
+    from app.rag import service
+
+    client = MagicMock()
+    seen: list = []
+
+    async def _inner(*args, **kwargs):
+        seen.append(llm_routing.bound_client())
+        return {}
+
+    monkeypatch.setattr(service, "_find_files", _inner)
+
+    await service.find_files("q", DRIVE, resolved=resolved_with(client))
+
+    assert seen == [client]
+
+
+@pytest.mark.asyncio
+async def test_the_agentic_loop_is_given_the_asks_drive(monkeypatch) -> None:
+    from app.rag import service
+
+    loop = AsyncMock()
+    monkeypatch.setattr(service, "run_agentic_loop", loop)
+
+    with llm_routing.bound(resolved_with(MagicMock(), agentic=True)):
+        await service._run_agentic(
+            query="q", credential=None, drive=DRIVE, viewer_id=None, temperature=None
+        )
+
+    assert loop.await_args.kwargs["drive"] == DRIVE
+
+
+@pytest.mark.asyncio
+async def test_the_eval_runner_runs_every_stage_with_the_rag_profile_bound(
+    monkeypatch,
+) -> None:
+    from app.evals import __main__ as runner
+
+    client = MagicMock()
+    monkeypatch.setattr(
+        llm_routing, "resolve_without_ceiling", lambda feature: resolved_with(client)
+    )
+    seen: list = []
+
+    async def _run(args):
+        seen.append(llm_routing.bound_client())
+        return 0
+
+    monkeypatch.setattr(runner, "_run", _run)
+
+    assert await runner._run_routed(MagicMock()) == 0
+    assert seen == [client]

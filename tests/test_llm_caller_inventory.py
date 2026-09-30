@@ -74,3 +74,52 @@ def test_only_output_language_is_read_from_the_llm_settings() -> None:
                 readers.add(rel)
 
     assert readers == {"app/llm_routing.py", "app/routers/admin.py"}
+
+
+def test_only_known_modules_import_the_client_types() -> None:
+    imported: dict[str, set[str]] = {}
+    for rel, tree in _sources():
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "app.llm":
+                for alias in node.names:
+                    if alias.name in {"LLMClient", "OllamaLLMClient", "create_llm_client"}:
+                        imported.setdefault(alias.name, set()).add(rel)
+
+    assert imported == {
+        "create_llm_client": {"app/llm_routing.py"},
+        "OllamaLLMClient": {"app/llm_routing.py"},
+        # Type annotations only.
+        "LLMClient": {
+            "app/llm_routing.py",
+            "app/rag/agentic.py",
+            "app/workers/chapter_suggestions.py",
+        },
+    }
+
+
+def test_nothing_reaches_into_the_resolver_or_the_eval_runner() -> None:
+    reached: set[tuple[str, str]] = set()
+    for rel, tree in _sources():
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if module == "app.evals" or module.startswith("app.evals."):
+                    reached.add((rel, module))
+                if module == "app.llm_routing":
+                    reached.update(
+                        (rel, alias.name) for alias in node.names if alias.name.startswith("_")
+                    )
+            elif isinstance(node, ast.Import):
+                reached.update(
+                    (rel, alias.name) for alias in node.names if alias.name.startswith("app.evals")
+                )
+            elif (
+                isinstance(node, ast.Attribute)
+                and node.attr.startswith("_")
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "llm_routing"
+                and rel != "app/llm_routing.py"
+            ):
+                reached.add((rel, node.attr))
+
+    assert reached == set()

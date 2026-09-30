@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 import pytest
@@ -517,3 +518,71 @@ def test_resolve_without_ceiling_ignores_the_drive_policy(policy) -> None:
 
     assert isinstance(result, Resolved) and result.profile.name == "cloud"
     assert policy.asked == []
+
+
+@pytest.mark.parametrize(
+    ("mode", "allowlist", "expected"),
+    [
+        ("auto", ("base-model",), True),
+        ("auto", ("other",), False),
+        ("off", ("base-model",), False),
+    ],
+)
+def test_the_legacy_profile_is_agentic_by_the_allowlist(mode, allowlist, expected) -> None:
+    from app.config import AgenticModelEntry
+
+    base = dataclasses.replace(
+        BASE,
+        agentic_mode=mode,
+        agentic_models=tuple(AgenticModelEntry(name=n) for n in allowlist),
+    )
+
+    routing = build_routing({}, base, environ={})
+
+    assert routing.profiles["default"].agentic is expected
+
+
+def test_a_profile_is_not_agentic_by_the_inherited_allowlist() -> None:
+    from app.config import AgenticModelEntry
+
+    base = dataclasses.replace(
+        BASE, agentic_mode="auto", agentic_models=(AgenticModelEntry(name="gpt-mini"),)
+    )
+
+    routing = build_routing(_section(), base, environ={})
+
+    assert routing.profiles["cloud"].agentic is False
+
+
+@pytest.mark.parametrize(
+    ("patch", "vision"),
+    [({"provider": "disabled"}, False), ({"vision_model": ""}, True)],
+)
+def test_resolve_without_ceiling_skips_an_unusable_profile(policy, patch, vision) -> None:
+    section = _section(features={"vision_describe": "cloud"})
+    section["profiles"]["cloud"].update(patch)
+    _install(section)
+
+    assert isinstance(
+        llm_routing.resolve_without_ceiling("vision_describe", vision=vision), Skip
+    )
+
+
+@pytest.mark.parametrize(
+    ("section", "expected"),
+    [
+        (_section(default="cloud"), ("openai_compatible", "gpt-mini", True)),
+        (
+            {"profiles": {"off": {**LOCAL, "provider": "disabled"}}},
+            ("disabled", "qwen3:14b", False),
+        ),
+    ],
+)
+def test_status_reports_the_default_profile(section, expected) -> None:
+    from app.main import _llm_status
+
+    _install(section)
+
+    status = _llm_status()
+
+    assert (status.provider, status.model, status.enabled) == expected

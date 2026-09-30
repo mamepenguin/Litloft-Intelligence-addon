@@ -38,7 +38,6 @@ from app.llm_routing import Resolved
 from app.document_sections import EPUB_MIME, section_title
 from app.rag.agentic import (
     AgenticAnswer,
-    agentic_capability_supported,
     compute_token_budget,
     get_agentic_model_entry,
     run_agentic_loop,
@@ -982,10 +981,10 @@ def _language_instruction() -> str:
 def _agentic_gate_open(*, force_legacy_rag: bool) -> bool:
     """Single source of truth for "should we activate the agentic loop?".
 
-    The gate fails closed: any unmet precondition (eval bypass flag, a
-    profile neither marked ``agentic`` nor on the ``agentic_models``
-    allowlist, LLM disabled, client lacks chat_with_tools) returns False
-    and the caller falls through to legacy. Shared between
+    The gate fails closed: any unmet precondition (eval bypass flag,
+    ``agentic_mode=off``, a profile not marked ``agentic``, LLM disabled,
+    client lacks chat_with_tools) returns False and the caller falls
+    through to legacy. Shared between
     ``answer_question`` and ``stream_answer`` so the two surfaces never
     drift on activation rules.
     """
@@ -993,10 +992,7 @@ def _agentic_gate_open(*, force_legacy_rag: bool) -> bool:
     if force_legacy_rag or resolved is None:
         return False
     profile = resolved.profile
-    if not (
-        profile.agentic
-        or agentic_capability_supported(profile.config.model, profile.config)
-    ):
+    if profile.config.agentic_mode == "off" or not profile.agentic:
         return False
     llm_client = resolved.client
     if not getattr(llm_client, "enabled", False):
@@ -2303,9 +2299,20 @@ async def stream_answer(
     *args: Any, resolved: Resolved, **kwargs: Any
 ) -> AsyncIterator[AnswerEvent]:
     """Run :func:`_stream_answer` with ``resolved`` as the Ask's LLM."""
-    with llm_routing.bound(resolved):
-        async for event in _stream_answer(*args, **kwargs):
+    # Bound per step, not across ``yield``: the consumer may resume or
+    # close the stream from another context, and a reset there raises.
+    stream = _stream_answer(*args, **kwargs)
+    try:
+        while True:
+            with llm_routing.bound(resolved):
+                try:
+                    event = await anext(stream)
+                except StopAsyncIteration:
+                    return
             yield event
+    finally:
+        with llm_routing.bound(resolved):
+            await stream.aclose()
 
 
 async def find_files(*args: Any, resolved: Resolved, **kwargs: Any) -> dict[str, Any]:

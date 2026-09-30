@@ -194,13 +194,25 @@ async def _run(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_routed(args: argparse.Namespace) -> int:
+    """Run every stage with the rag profile bound, as an Ask would be."""
+    from app import llm_routing
+
+    routed = llm_routing.resolve_without_ceiling("rag")
+    if not isinstance(routed, llm_routing.Resolved):
+        print(f"No LLM profile serves rag: {routed.reason}", file=sys.stderr)
+        return 2
+    with llm_routing.bound(routed):
+        return await _run(args)
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     args = build_parser().parse_args(argv)
-    return asyncio.run(_run(args))
+    return asyncio.run(_run_routed(args))
 
 
 if __name__ == "__main__":

@@ -442,6 +442,17 @@ app.include_router(video_visual.router)
 app.include_router(admin.router)
 
 
+def _llm_status() -> LLMStatus:
+    """The default profile: the one every unassigned feature uses."""
+    profile, enabled = llm_routing.default_status()
+    return LLMStatus(
+        provider=profile.config.provider if profile else "disabled",
+        model=profile.config.model if profile else "",
+        enabled=enabled,
+        output_language=settings.llm.output_language,
+    )
+
+
 @app.get("/status", response_model=StatusResponse, tags=["status"])
 def status_endpoint() -> StatusResponse:
     """Get current service and indexing status.
@@ -457,8 +468,6 @@ def status_endpoint() -> StatusResponse:
     manager = dependencies.get_index_manager()
     index_status = manager.get_index_status()
     queue_status = manager.get_queue_status()
-
-    llm_profile, llm_enabled = llm_routing.default_status()
 
     # Per-task breakdown for the dashboard. Index manager owns the four
     # core indexing types (metadata / clip / whisper / text_content).
@@ -561,12 +570,7 @@ def status_endpoint() -> StatusResponse:
             chapter_suggestions=settings.features.chapter_suggestions,
             video_visual_index=settings.features.video_visual_index,
         ),
-        llm=LLMStatus(
-            provider=llm_profile.config.provider if llm_profile else "disabled",
-            model=llm_profile.config.model if llm_profile else "",
-            enabled=llm_enabled,
-            output_language=settings.llm.output_language,
-        ),
+        llm=_llm_status(),
     )
 
 
