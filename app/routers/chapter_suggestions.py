@@ -11,7 +11,8 @@ from sqlalchemy import text as sql_text
 
 from app.config import settings
 from app.database import get_search_db
-from app.dependencies import get_chapter_suggestions_worker, get_llm_client
+from app.dependencies import get_chapter_suggestions_worker
+from app.routers.llm_gate import require_llm
 from app.drive_context import require_drive
 from app.routers.files import _get_indexed_file_or_404
 from app.schemas import ChapterSuggestionsResponse, MessageResponse
@@ -79,8 +80,7 @@ async def generate_chapter_suggestions(
     if settings.features.chapter_suggestions == "false":
         raise HTTPException(status_code=400, detail="Chapter suggestions disabled")
     await _require_allowed(file_id, drive)
-    if not get_llm_client().enabled:
-        raise HTTPException(status_code=400, detail="LLM is not enabled")
+    await require_llm(drive, "chapter_suggestions")
     with get_search_db() as session:
         has_transcript = session.execute(sql_text(
             "SELECT 1 FROM transcript_chunks WHERE file_id=:fid LIMIT 1"

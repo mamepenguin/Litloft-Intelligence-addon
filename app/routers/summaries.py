@@ -35,7 +35,9 @@ from sqlalchemy import text as sql_text
 
 from app.config import settings
 from app.database import get_search_db
-from app.dependencies import get_llm_client, get_summaries_worker
+from app.dependencies import get_summaries_worker
+from app.llm_routing import Resolved
+from app.routers.llm_gate import require_llm
 from app.drive_context import assert_file_in_drive, require_drive
 from app.models import IndexedFile, generate_insight_id
 from app.schemas import (
@@ -147,21 +149,17 @@ async def _reembed_metadata_after_summary_change(file_id: str) -> None:
 router = APIRouter(tags=["summaries"])
 
 
-def _require_llm_enabled() -> None:
-    """Raise 400 if summaries feature or LLM client is not available.
+async def _require_llm_enabled(drive: str) -> Resolved:
+    """Raise 400 unless summaries are on and an LLM serves this drive.
 
-    This is the ONLY gate between a router request and the summaries
-    worker queue. main.py only starts the worker's run() loop when
-    `features.summaries != "false" AND llm_client.enabled`; if a future
-    code path bypasses this guard, enqueued items would never drain.
-    Keep this check aligned with the worker-start condition in main.py.
+    The worker resolves again per job; this rejects a request that could
+    never drain before anything is queued.
     """
     if settings.features.summaries == "false":
         raise HTTPException(
             status_code=400, detail="Summaries feature is disabled"
         )
-    if not get_llm_client().enabled:
-        raise HTTPException(status_code=400, detail="LLM is not enabled")
+    return await require_llm(drive, "summaries")
 
 
 def _require_detailed_feature_enabled() -> None:
@@ -178,15 +176,14 @@ def _require_detailed_feature_enabled() -> None:
         )
 
 
-def _require_detailed_enabled() -> None:
-    """Raise 400 if detailed_summaries feature or LLM is unavailable.
+async def _require_detailed_enabled(drive: str) -> Resolved:
+    """Raise 400 unless detailed summaries are on and an LLM serves this drive.
 
     Independent of ``features.summaries`` so operators can enable the
     long-form variant without the short/long pair (or vice versa).
     """
     _require_detailed_feature_enabled()
-    if not get_llm_client().enabled:
-        raise HTTPException(status_code=400, detail="LLM is not enabled")
+    return await require_llm(drive, "detailed_summaries")
 
 
 @router.get("/files/{file_id}/summary", response_model=SummaryResponse)
@@ -261,7 +258,7 @@ async def regenerate_summary(
     This avoids a 40-second frontend polling timeout when the request
     would have been silently skipped by the worker anyway.
     """
-    _require_llm_enabled()
+    await _require_llm_enabled(drive)
     _require_file_in_drive(file_id, drive)
 
     # Pre-flight: surface skip reasons as 400 so the frontend can show
@@ -469,7 +466,7 @@ async def batch_summaries(
     skipped) so other drives' file_ids cannot be probed and an attacker
     in one drive cannot incur LLM cost for files in another.
     """
-    _require_llm_enabled()
+    await _require_llm_enabled(drive)
 
     summaries_worker = get_summaries_worker()
 
@@ -603,7 +600,7 @@ async def start_detailed_summary(
     before re-generation — this mirrors the short/long regenerate
     contract (delete + re-enqueue) and avoids accidental overwrite.
     """
-    _require_detailed_enabled()
+    resolved = await _require_detailed_enabled(drive)
     _require_file_in_drive(file_id, drive)
 
     reason = classify_detailed_missing_reason(file_id)
@@ -622,7 +619,7 @@ async def start_detailed_summary(
         )
 
     background_tasks.add_task(
-        generate_detailed_summary, file_id, get_llm_client()
+        generate_detailed_summary, file_id, resolved
     )
     return DetailedSummaryStartResponse(
         status="accepted", message="Detailed summary generation started"
@@ -1057,7 +1054,7 @@ async def regenerate_detailed_summary(
     * 400 propagates the same pre-flight checks as ``start_detailed_summary``
       (unsupported type / insufficient content / missing file).
     """
-    _require_detailed_enabled()
+    resolved = await _require_detailed_enabled(drive)
     _require_file_in_drive(file_id, drive)
 
     force = bool(body.force) if body is not None else False
@@ -1167,7 +1164,7 @@ async def regenerate_detailed_summary(
         DETAILED_STATUS_GENERATING, _set_detailed_status,
     )
     _set_detailed_status(
-        file_id, DETAILED_STATUS_GENERATING, model=settings.llm.model,
+        file_id, DETAILED_STATUS_GENERATING, model=resolved.profile.config.model,
     )
 
     # Promotion to knowledge (Phase 3) records the current note as the
@@ -1178,7 +1175,7 @@ async def regenerate_detailed_summary(
     await _clear_knowledge_active_summary(file_id)
 
     background_tasks.add_task(
-        generate_detailed_summary, file_id, get_llm_client()
+        generate_detailed_summary, file_id, resolved
     )
     return DetailedSummaryStartResponse(
         status="accepted",

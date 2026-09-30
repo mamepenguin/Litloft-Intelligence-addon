@@ -150,6 +150,7 @@ def test_a_mistyped_key_never_reaches_the_log(caplog: pytest.LogCaptureFixture) 
         (lambda s: s["profiles"]["cloud"].update(offhost="no"), "offhost"),
         (lambda s: s["profiles"]["cloud"].update(agentic="yes"), "agentic"),
         (lambda s: s["profiles"]["cloud"].update(modle="x"), "modle"),
+        (lambda s: s["profiles"]["cloud"].update(output_language="en"), "output_language"),
         (lambda s: s["profiles"].update(cloud="not a mapping"), "cloud"),
         (lambda s: s.update(routing=[]), "llm.routing must be a mapping"),
         (lambda s: s.update(routing="x"), "llm.routing must be a mapping"),
@@ -181,7 +182,6 @@ def test_named_but_unset_key_env_gives_no_key() -> None:
         ({"request_timeout_seconds": 60}, "request_timeout_seconds", 60),
         ({"reasoning": "auto"}, "reasoning", "auto"),
         ({"reasoning": "bogus"}, "reasoning", "disabled"),
-        ({"output_language": "en"}, "output_language", "en"),
     ],
 )
 def test_profile_values_go_through_the_llm_config_parser(patch, field, expected) -> None:

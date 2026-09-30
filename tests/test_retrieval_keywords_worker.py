@@ -126,7 +126,7 @@ class TestPostFilter:
 
 
 @pytest.fixture()
-def make_worker():
+def make_worker(use_llm):
     """Factory for a RetrievalKeywordsWorker with a stub LLM client."""
 
     def _make(
@@ -143,7 +143,9 @@ def make_worker():
             client.generate_json = AsyncMock(side_effect=raises("boom"))
         else:
             client.generate_json = AsyncMock(return_value=response)
-        return RetrievalKeywordsWorker(client)
+        use_llm(client, model=model)
+        _make.last_client = client
+        return RetrievalKeywordsWorker()
 
     return _make
 
@@ -224,7 +226,7 @@ class TestProcessFileGates:
         worker = make_worker()
         recorded = _stub_helpers(
             monkeypatch,
-            indexed_file={"file_id": "f1", "filename": "x", "file_type": "video"},
+            indexed_file={"file_id": "f1", "drive": "d", "filename": "x", "file_type": "video"},
             context_type="video",
             context="content",
         )
@@ -232,7 +234,7 @@ class TestProcessFileGates:
 
         await worker._process_file("f1")
 
-        worker._llm_client.generate_json.assert_not_called()
+        make_worker.last_client.generate_json.assert_not_called()
         assert recorded["upsert_calls"] == []
 
     @pytest.mark.asyncio
@@ -241,7 +243,7 @@ class TestProcessFileGates:
         worker = make_worker(enabled=False)
         recorded = _stub_helpers(
             monkeypatch,
-            indexed_file={"file_id": "f1", "filename": "x", "file_type": "video"},
+            indexed_file={"file_id": "f1", "drive": "d", "filename": "x", "file_type": "video"},
             context_type="video",
             context="content",
         )
@@ -249,7 +251,7 @@ class TestProcessFileGates:
 
         await worker._process_file("f1")
 
-        worker._llm_client.generate_json.assert_not_called()
+        make_worker.last_client.generate_json.assert_not_called()
         assert recorded["upsert_calls"] == []
 
     @pytest.mark.asyncio
@@ -258,7 +260,7 @@ class TestProcessFileGates:
         worker = make_worker(response={"keywords": ["a", "b"]})
         recorded = _stub_helpers(
             monkeypatch,
-            indexed_file={"file_id": "f1", "filename": "x", "file_type": "video"},
+            indexed_file={"file_id": "f1", "drive": "d", "filename": "x", "file_type": "video"},
             context_type="video",
             context="content",
             has_existing=True,
@@ -267,7 +269,7 @@ class TestProcessFileGates:
 
         await worker._process_file("f1")
 
-        worker._llm_client.generate_json.assert_not_called()
+        make_worker.last_client.generate_json.assert_not_called()
         assert recorded["upsert_calls"] == []
 
     @pytest.mark.asyncio
@@ -284,7 +286,7 @@ class TestProcessFileGates:
 
         await worker._process_file("missing")
 
-        worker._llm_client.generate_json.assert_not_called()
+        make_worker.last_client.generate_json.assert_not_called()
         assert recorded["upsert_calls"] == []
 
     @pytest.mark.asyncio
@@ -294,7 +296,7 @@ class TestProcessFileGates:
         worker = make_worker(response={"keywords": ["a", "b"]})
         recorded = _stub_helpers(
             monkeypatch,
-            indexed_file={"file_id": "f1", "filename": "x", "file_type": "image"},
+            indexed_file={"file_id": "f1", "drive": "d", "filename": "x", "file_type": "image"},
             context_type="image",
             context="content",
         )
@@ -302,7 +304,7 @@ class TestProcessFileGates:
 
         await worker._process_file("f1")
 
-        worker._llm_client.generate_json.assert_not_called()
+        make_worker.last_client.generate_json.assert_not_called()
         assert recorded["upsert_calls"] == []
 
     @pytest.mark.asyncio
@@ -312,7 +314,7 @@ class TestProcessFileGates:
         worker = make_worker(response={"keywords": ["a", "b"]})
         recorded = _stub_helpers(
             monkeypatch,
-            indexed_file={"file_id": "f1", "filename": "x", "file_type": "video"},
+            indexed_file={"file_id": "f1", "drive": "d", "filename": "x", "file_type": "video"},
             context_type="video",
             context=None,
         )
@@ -320,7 +322,7 @@ class TestProcessFileGates:
 
         await worker._process_file("f1")
 
-        worker._llm_client.generate_json.assert_not_called()
+        make_worker.last_client.generate_json.assert_not_called()
         assert recorded["upsert_calls"] == []
 
 
@@ -333,7 +335,7 @@ class TestProcessFileLLMFailures:
         worker = make_worker(raises=RuntimeError)
         recorded = _stub_helpers(
             monkeypatch,
-            indexed_file={"file_id": "f1", "filename": "x", "file_type": "video"},
+            indexed_file={"file_id": "f1", "drive": "d", "filename": "x", "file_type": "video"},
             context_type="video",
             context="content",
         )
@@ -349,7 +351,7 @@ class TestProcessFileLLMFailures:
         worker = make_worker(response=["a", "b"])
         recorded = _stub_helpers(
             monkeypatch,
-            indexed_file={"file_id": "f1", "filename": "x", "file_type": "video"},
+            indexed_file={"file_id": "f1", "drive": "d", "filename": "x", "file_type": "video"},
             context_type="video",
             context="content",
         )
@@ -365,7 +367,7 @@ class TestProcessFileLLMFailures:
         worker = make_worker(response={"tags": ["a"]})
         recorded = _stub_helpers(
             monkeypatch,
-            indexed_file={"file_id": "f1", "filename": "x", "file_type": "video"},
+            indexed_file={"file_id": "f1", "drive": "d", "filename": "x", "file_type": "video"},
             context_type="video",
             context="content",
         )
@@ -381,7 +383,7 @@ class TestProcessFileLLMFailures:
         worker = make_worker(response={"keywords": []})
         recorded = _stub_helpers(
             monkeypatch,
-            indexed_file={"file_id": "f1", "filename": "x", "file_type": "video"},
+            indexed_file={"file_id": "f1", "drive": "d", "filename": "x", "file_type": "video"},
             context_type="video",
             context="content",
         )
@@ -398,7 +400,7 @@ class TestProcessFileLLMFailures:
         worker = make_worker(response={"keywords": ["common"]})
         recorded = _stub_helpers(
             monkeypatch,
-            indexed_file={"file_id": "f1", "filename": "x", "file_type": "video"},
+            indexed_file={"file_id": "f1", "drive": "d", "filename": "x", "file_type": "video"},
             context_type="video",
             context="content",
         )
@@ -424,6 +426,7 @@ class TestProcessFilePersistence:
             monkeypatch,
             indexed_file={
                 "file_id": "novel-1",
+                "drive": "d",
                 "filename": "letter.md",
                 "file_type": "document",
                 "mime_type": "text/markdown",
@@ -459,6 +462,7 @@ class TestProcessFilePersistence:
             monkeypatch,
             indexed_file={
                 "file_id": "vid-1",
+                "drive": "d",
                 "filename": "x.mp4",
                 "file_type": "video",
                 "mime_type": "video/mp4",
@@ -483,6 +487,7 @@ class TestProcessFilePersistence:
             monkeypatch,
             indexed_file={
                 "file_id": "long-1",
+                "drive": "d",
                 "filename": "x.pdf",
                 "file_type": "document",
             },
@@ -493,7 +498,7 @@ class TestProcessFilePersistence:
 
         await worker._process_file("long-1")
 
-        worker._llm_client.generate_json.assert_called_once()
+        make_worker.last_client.generate_json.assert_called_once()
         assert recorded["upsert_calls"][0]["keywords"] == "a"
 
 

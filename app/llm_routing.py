@@ -8,11 +8,12 @@ read as either answer.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import logging
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -45,7 +46,7 @@ _PROFILE_ONLY_KEYS = ("offhost", "agentic", "api_key_env")
 _CONNECTION_FIELDS = ("provider", "base_url", "api_key", "model", "vision_model")
 _PROFILE_KEYS = (
     frozenset(f.name for f in dataclasses.fields(LLMConfig))
-    - {"api_key", "agentic_models", "agentic_mode", "agentic_min_capability"}
+    - {"api_key", "agentic_models", "agentic_mode", "agentic_min_capability", "output_language"}
 ) | set(_PROFILE_ONLY_KEYS)
 
 
@@ -290,3 +291,21 @@ async def resolve(
     if not client.enabled or (vision and not profile.config.vision_model.strip()):
         return Skip(f"profile {profile.name!r} cannot serve {feature}")
     return Resolved(profile=profile, client=client)
+
+
+DEFER_RETRY_SECONDS = 30.0
+_pending_retries: set[asyncio.Task[Any]] = set()
+
+
+def retry_later(
+    requeue: Callable[[], Awaitable[Any]], delay: float = DEFER_RETRY_SECONDS
+) -> None:
+    """Run ``requeue`` after ``delay`` so a deferred job is asked again."""
+
+    async def _later() -> None:
+        await asyncio.sleep(delay)
+        await requeue()
+
+    task = asyncio.create_task(_later())
+    _pending_retries.add(task)
+    task.add_done_callback(_pending_retries.discard)

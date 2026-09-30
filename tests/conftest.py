@@ -136,3 +136,30 @@ def _clean_vision_capability_cache():
     reset_vision_capability_cache()
     yield
     reset_vision_capability_cache()
+
+
+@pytest.fixture()
+def use_llm(monkeypatch):
+    """Make ``llm_routing.resolve`` hand out ``client`` (or ``result``).
+
+    A client whose ``enabled`` is False resolves to ``Skip``, the same as a
+    disabled profile. Returns the list of ``(drive, feature)`` asked.
+    """
+    from app import llm_routing
+    from tests.llm_helpers import resolved_with
+
+    asked: list[tuple[str, str]] = []
+
+    def _use(client=None, *, model="test-llm", vision_model="", result=None):
+        async def _resolve(drive, feature, *, vision=False):
+            asked.append((drive, feature))
+            if result is not None:
+                return result
+            if client is None or not getattr(client, "enabled", True):
+                return llm_routing.Skip("disabled")
+            return resolved_with(client, model=model, vision_model=vision_model)
+
+        monkeypatch.setattr(llm_routing, "resolve", _resolve)
+        return asked
+
+    return _use

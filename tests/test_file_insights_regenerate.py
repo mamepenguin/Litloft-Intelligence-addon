@@ -23,6 +23,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests.llm_helpers import resolved_with
+
 for _mod in (
     "PIL", "PIL.Image",
     "open_clip",
@@ -48,6 +50,11 @@ from app.database import (  # noqa: E402
 )
 from app.models import IndexedFile  # noqa: E402,F401
 
+
+
+
+async def _llm_gate_passes(drive):
+    return resolved_with(MagicMock())
 
 @pytest.fixture()
 def search_db(tmp_path, monkeypatch):
@@ -134,7 +141,7 @@ async def test_regenerate_then_save_yields_readable_summary(
     )
     assert _get_detailed_summary("abc123") is not None
 
-    monkeypatch.setattr(router_mod, "_require_detailed_enabled", lambda: None)
+    monkeypatch.setattr(router_mod, "_require_detailed_enabled", _llm_gate_passes)
     monkeypatch.setattr(
         router_mod, "_require_file_in_drive", lambda file_id, drive: None
     )
@@ -154,7 +161,6 @@ async def test_regenerate_then_save_yields_readable_summary(
         router_mod, "generate_detailed_summary",
         lambda file_id, client: None,
     )
-    monkeypatch.setattr(router_mod, "get_llm_client", lambda: MagicMock())
 
     from fastapi import BackgroundTasks
     result = await router_mod.regenerate_detailed_summary(
@@ -235,7 +241,7 @@ async def test_regenerate_endpoint_keeps_slot_visible_during_background_window(
         was_truncated=False,
     )
 
-    monkeypatch.setattr(router_mod, "_require_detailed_enabled", lambda: None)
+    monkeypatch.setattr(router_mod, "_require_detailed_enabled", _llm_gate_passes)
     monkeypatch.setattr(
         router_mod, "_require_file_in_drive", lambda file_id, drive: None
     )
@@ -257,7 +263,6 @@ async def test_regenerate_endpoint_keeps_slot_visible_during_background_window(
         router_mod, "generate_detailed_summary",
         lambda file_id, client: scheduled.append(file_id) or None,
     )
-    monkeypatch.setattr(router_mod, "get_llm_client", lambda: MagicMock())
 
     from fastapi import BackgroundTasks
     await router_mod.regenerate_detailed_summary(
@@ -302,7 +307,7 @@ def test_regenerate_supersedes_active_even_without_file_summaries_row(
 
     from app.routers import summaries as router_mod
 
-    monkeypatch.setattr(router_mod, "_require_detailed_enabled", lambda: None)
+    monkeypatch.setattr(router_mod, "_require_detailed_enabled", _llm_gate_passes)
     monkeypatch.setattr(
         router_mod, "_require_file_in_drive", lambda file_id, drive: None
     )
@@ -319,7 +324,6 @@ def test_regenerate_supersedes_active_even_without_file_summaries_row(
         router_mod, "generate_detailed_summary",
         lambda file_id, client: None,
     )
-    monkeypatch.setattr(router_mod, "get_llm_client", lambda: MagicMock())
 
     from fastapi import BackgroundTasks
     import asyncio
@@ -360,7 +364,7 @@ async def test_regenerate_preserves_history_across_multiple_runs(
         DETAILED_STATUS_GENERATING,
     )
 
-    monkeypatch.setattr(router_mod, "_require_detailed_enabled", lambda: None)
+    monkeypatch.setattr(router_mod, "_require_detailed_enabled", _llm_gate_passes)
     monkeypatch.setattr(
         router_mod, "_require_file_in_drive", lambda file_id, drive: None
     )
@@ -377,7 +381,6 @@ async def test_regenerate_preserves_history_across_multiple_runs(
         router_mod, "generate_detailed_summary",
         lambda file_id, client: None,
     )
-    monkeypatch.setattr(router_mod, "get_llm_client", lambda: MagicMock())
 
     # First generation.
     _set_detailed_status("abc123", DETAILED_STATUS_GENERATING, model="m1")

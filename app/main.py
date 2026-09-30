@@ -203,7 +203,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         logger.info("LLM client disabled")
 
-    auto_tags_worker = AutoTagsWorker(llm_client)
+    auto_tags_worker = AutoTagsWorker()
     dependencies._auto_tags_worker = auto_tags_worker
     auto_tags_task: asyncio.Task | None = None
 
@@ -215,8 +215,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             auto_tags_worker.run(), name="auto_tags_worker"
         )
         logger.info(
-            "Auto-tags worker started (mode=%s, llm=%s)",
-            settings.features.auto_tags, llm_client.enabled,
+            "Auto-tags worker started (mode=%s)", settings.features.auto_tags
         )
 
         # on_index: queue already-indexed files that don't have suggested tags yet
@@ -225,10 +224,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             if pending > 0:
                 logger.info("Auto-tags: queued %d previously indexed files", pending)
 
-    chapter_worker = ChapterSuggestionsWorker(llm_client)
+    chapter_worker = ChapterSuggestionsWorker()
     dependencies._chapter_suggestions_worker = chapter_worker
     chapter_task: asyncio.Task | None = None
-    if settings.features.chapter_suggestions != "false" and llm_client.enabled:
+    if settings.features.chapter_suggestions != "false":
         chapter_task = asyncio.create_task(
             chapter_worker.run(), name="chapter_suggestions_worker"
         )
@@ -241,14 +240,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             if pending:
                 logger.info("Chapter suggestions: queued %d files", pending)
 
-    # Initialize summaries worker (shares the same LLM client)
-    summaries_worker = SummariesWorker(llm_client)
+    summaries_worker = SummariesWorker()
     dependencies._summaries_worker = summaries_worker
     summaries_task: asyncio.Task | None = None
 
     summaries_active = settings.features.summaries != "false"
     detailed_on_index = settings.features.detailed_summaries == "on_index"
-    if (summaries_active or detailed_on_index) and llm_client.enabled:
+    if summaries_active or detailed_on_index:
         summaries_task = asyncio.create_task(
             summaries_worker.run(), name="summaries_worker"
         )
@@ -332,17 +330,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     "Video visual index: queued %d previously indexed files", pending
                 )
 
-    # Initialize retrieval_keywords worker (SIRA-style keyword expansion).
-    # Same enable rule as auto_tags / summaries: needs LLM client AND a
-    # non-false feature mode. opt-in by default.
-    retrieval_keywords_worker = RetrievalKeywordsWorker(llm_client)
+    retrieval_keywords_worker = RetrievalKeywordsWorker()
     dependencies._retrieval_keywords_worker = retrieval_keywords_worker
     retrieval_keywords_task: asyncio.Task | None = None
 
-    if (
-        settings.features.retrieval_keywords != "false"
-        and llm_client.enabled
-    ):
+    if settings.features.retrieval_keywords != "false":
         retrieval_keywords_task = asyncio.create_task(
             retrieval_keywords_worker.run(),
             name="retrieval_keywords_worker",

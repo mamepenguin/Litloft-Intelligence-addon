@@ -48,7 +48,7 @@ from app.routers.refine import (  # noqa: E402
 
 
 @pytest.fixture()
-def feature_manual(monkeypatch, make_settings):
+def feature_manual(use_llm, monkeypatch, make_settings):
     """features.transcript_refine = 'manual' + LLM enabled."""
     base = make_settings()
     features = FeaturesConfig(
@@ -73,7 +73,7 @@ def feature_manual(monkeypatch, make_settings):
 
     llm_stub = MagicMock()
     llm_stub.enabled = True
-    monkeypatch.setattr("app.routers.refine.get_llm_client", lambda: llm_stub)
+    use_llm(llm_stub)
 
     # Default: policy allows every drive. Individual tests override to
     # exercise the 403 / 404 paths. Async because the router awaits it.
@@ -107,6 +107,23 @@ class TestRefineFileGating:
         with pytest.raises(HTTPException) as exc:
             await refine_file(file_id="abc", drive="family")
         assert exc.value.status_code in (400, 403)
+
+    @pytest.mark.asyncio
+    async def test_unresolved_llm_rejects_before_starting_a_job(
+        self, feature_manual, monkeypatch, use_llm
+    ):
+        from app.llm_routing import Skip
+
+        start = MagicMock()
+        monkeypatch.setattr("app.routers.refine.start_refine_job", start)
+        asked = use_llm(result=Skip("llm_cloud off"))
+
+        with pytest.raises(HTTPException) as exc:
+            await refine_file(file_id="abc", drive="family")
+
+        assert exc.value.status_code == 400
+        assert asked == [("family", "transcript_refine")]
+        start.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_unknown_file_id_returns_404(

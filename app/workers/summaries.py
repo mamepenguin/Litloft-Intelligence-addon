@@ -24,7 +24,8 @@ from sqlalchemy import text as sql_text
 
 from app.config import settings
 from app.database import get_search_db
-from app.llm import LLMClient
+from app import llm_routing
+from app.llm_routing import Defer, Resolved
 from app.models import IndexedFile, TranscriptChunk, generate_insight_id
 from app.prompt_loader import render
 from app.workers.whisper import LOFT_MIME
@@ -989,7 +990,7 @@ def classify_detailed_missing_reason(file_id: str) -> str:
 
 async def generate_detailed_summary(
     file_id: str,
-    llm_client: LLMClient,
+    resolved: Resolved,
 ) -> None:
     """Generate a detailed Markdown summary for a single file.
 
@@ -1011,14 +1012,6 @@ async def generate_detailed_summary(
     harness only sees a clean return.
     """
     if settings.features.detailed_summaries == "false":
-        return
-
-    if not llm_client.enabled:
-        _set_detailed_status(
-            file_id,
-            DETAILED_STATUS_FAILED,
-            error="LLM provider is disabled",
-        )
         return
 
     indexed_file = _get_indexed_file(file_id)
@@ -1056,14 +1049,15 @@ async def generate_detailed_summary(
         indexed_file, context_type, prepared, was_truncated
     )
 
+    model = resolved.profile.config.model
     _set_detailed_status(
         file_id,
         DETAILED_STATUS_GENERATING,
-        model=settings.llm.model,
+        model=model,
     )
 
     try:
-        raw = await llm_client.generate(
+        raw = await resolved.client.generate(
             system_prompt,
             user_prompt,
             max_tokens_override=_DETAILED_MAX_TOKENS,
@@ -1091,7 +1085,7 @@ async def generate_detailed_summary(
     _save_detailed_summary(
         file_id=file_id,
         detailed_summary=saved_text,
-        model=settings.llm.model,
+        model=model,
         context_chars=len(prepared),
         was_truncated=was_truncated,
     )
@@ -1110,8 +1104,7 @@ async def generate_detailed_summary(
 class SummariesWorker:
     """Async worker that processes summary generation requests via a queue."""
 
-    def __init__(self, llm_client: LLMClient) -> None:
-        self._llm_client = llm_client
+    def __init__(self) -> None:
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._processing: list[str] = []
 
@@ -1250,9 +1243,6 @@ class SummariesWorker:
           automatic detailed generation from this worker; ``"manual"``
           is handled by the router's BackgroundTasks route instead
         """
-        if not self._llm_client.enabled:
-            return
-
         want_short = (
             settings.features.summaries != "false"
             and not _has_summary(file_id)
@@ -1282,10 +1272,16 @@ class SummariesWorker:
             )
             return
 
+        drive = indexed_file["drive"]
         if want_short:
-            await self._generate_short_long(
-                file_id, indexed_file, context_type, raw_context
-            )
+            resolved = await llm_routing.resolve(drive, "summaries")
+            if isinstance(resolved, Defer):
+                llm_routing.retry_later(lambda: self.enqueue(file_id))
+                return
+            if isinstance(resolved, Resolved):
+                await self._generate_short_long(
+                    resolved, file_id, indexed_file, context_type, raw_context
+                )
 
         if want_detailed:
             # Per-drive policy for "detailed_summaries" gates independently
@@ -1293,10 +1289,16 @@ class SummariesWorker:
             # without disabling the short/long path.
             from app.policy_client import is_file_feature_enabled
             if await is_file_feature_enabled(file_id, "detailed_summaries"):
-                await generate_detailed_summary(file_id, self._llm_client)
+                resolved = await llm_routing.resolve(drive, "detailed_summaries")
+                if isinstance(resolved, Defer):
+                    llm_routing.retry_later(lambda: self.enqueue(file_id))
+                    return
+                if isinstance(resolved, Resolved):
+                    await generate_detailed_summary(file_id, resolved)
 
     async def _generate_short_long(
         self,
+        resolved: Resolved,
         file_id: str,
         indexed_file: dict,
         context_type: str,
@@ -1308,7 +1310,7 @@ class SummariesWorker:
             indexed_file, context_type, prepared, was_truncated
         )
 
-        parsed = await self._llm_client.generate_json(
+        parsed = await resolved.client.generate_json(
             _build_system_prompt(), user_prompt
         )
 
@@ -1338,7 +1340,7 @@ class SummariesWorker:
             file_id=file_id,
             short_summary=short_summary,
             long_summary=long_summary,
-            model=settings.llm.model,
+            model=resolved.profile.config.model,
             context_type=context_type,
             context_chars=len(prepared),
             was_truncated=was_truncated,
