@@ -395,8 +395,8 @@
       "resetFailed": "Failed to reset",
       "tristate": {
         "false": "Off",
-        "manual": "Manual only",
-        "on_index": "Auto (on index)"
+        "manual": "Manual",
+        "on_index": "On index"
       },
       "fields": {
         "indexing": {
@@ -443,49 +443,124 @@
           "label": "Visual index",
           "help": "Builds a seekable index of representative video frames with AI-written descriptions. Frame images and nearby transcript text are sent to the configured Vision model. For private libraries, use Off or a local vision model. Requires llm.vision_model to be set."
         }
-      }
+      },
+      "columns": {
+        "feature": "Feature",
+        "mode": "When it runs",
+        "profile": "Profile"
+      },
+      "modeLabel": "When {feature} runs",
+      "profileLabel": "Profile for {feature}",
+      "bool": {
+        "true": "On",
+        "false": "Off"
+      },
+      "profileDefault": "Default ({name})",
+      "profileOffhost": "{name} (off-host)",
+      "destinations": {
+        "sends": "Sends",
+        "falls_back": "Runs on {fallback}",
+        "skips": "Does not run",
+        "unknown": "Unknown"
+      },
+      "destinationsNote": "Features assigned an off-host profile show where each drive's work goes. That is decided by the drive setting \"Allow sending to cloud LLMs\"; drives without it run on the \"Use instead on drives without cloud\" profile.",
+      "savedRestart": "\"When it runs\" changed, so a restart is required after saving.",
+      "savedNow": "Saved. Profile choices are applied now.",
+      "driveSeparator": ", "
     },
     "llm": {
-      "title": "LLM provider",
-      "description": "Configures the language model used for tag candidates, summaries, Ask, and image descriptions. Data being processed is sent to the configured LLM API endpoint. Cloud providers require an API key in the environment. Restart the container for changes to take effect.",
+      "title": "LLM profiles",
+      "introSingle": "The model used for tag candidates, summaries, Ask, and image descriptions. Add a profile to use different models for different tasks.",
+      "introList": "Choose the model each task uses. An \"Off-host\" profile is used only on drives where \"Allow sending to cloud LLMs\" is on.",
+      "connection": "Model connection",
+      "profiles": "Profiles",
+      "addToSplit": "Add a profile to split tasks",
       "save": "Save",
       "saving": "Saving...",
-      "saved": "Saved. Restart required for the change to take effect",
+      "reset": "Revert to YAML settings",
+      "resetting": "Reverting...",
+      "overridesActive": "Settings saved from this screen are in use.",
       "loadFailed": "Failed to load",
-      "saveFailed": "Failed to save",
-      "overridesActive": "Settings on this screen take priority over search-config.yml",
-      "overridesHelp": "To manage settings directly in search-config.yml, reset the settings on this screen",
-      "reset": "Reset screen settings",
-      "resetting": "Resetting...",
-      "resetSuccess": "Reset. Restart required for the change to take effect",
-      "resetFailed": "Failed to reset",
-      "provider": "Provider",
-      "baseUrl": "Base URL",
-      "baseUrlHelp": "ollama: http://host.docker.internal:11434 / openai-compatible: http://host.docker.internal:11434/v1 etc.",
-      "model": "Text model",
-      "modelHelp": "e.g. gemma4:e4b (ollama), gpt-4o-mini, deepseek-chat. Enter a model name available from your provider",
-      "visionModel": "Vision model",
-      "visionModelHelp": "Model used for image description. If empty, vision_describe cannot be used. e.g. llava:13b, gpt-4o-mini",
-      "outputLanguage": "Output language",
-      "providers": {
-        "disabled": "Disabled",
-        "ollama": "Ollama (recommended: local LLM)",
-        "openai_compatible": "OpenAI-compatible API"
+      "saveFailed": "Could not save",
+      "resetFailed": "Could not revert to the YAML settings",
+      "outcome": {
+        "savedNow": "Saved. Applied now.",
+        "savedRestart": "Saved. The output language takes effect after a restart.",
+        "resetNow": "Reverted to the YAML settings. Applied now.",
+        "resetRestart": "Reverted to the YAML settings. The output language takes effect after a restart."
       },
-      "providerHelp": {
-        "disabled": "Disables AI features. Only basic indexing and search remain.",
-        "ollama": "Uses the ollama API on the local host. Reasoning models such as DeepSeek-R1 also run with think:false.",
-        "openai_compatible": "Use OpenAI, DeepSeek, Groq, vLLM, LM Studio, and other OpenAI-compatible providers."
+      "markers": {
+        "now": "Applied on save",
+        "restart": "Restart required"
       },
-      "outputLanguages": {
-        "auto": "Auto",
-        "ja": "Japanese",
-        "en": "English"
+      "routingError": {
+        "title": "The current settings stop every AI feature",
+        "hint": "Save again from this screen, or fix the YAML and restart."
       },
-      "apiKeyPresent": "set",
-      "apiKeyMissing": "missing",
-      "apiKeyHelp": "API keys are configured with the LLM_API_KEY environment variable. They cannot be edited from this screen.",
-      "apiKeyRequired": "The selected provider requires LLM_API_KEY. Add it to .env, run `docker compose up -d`, then save again."
+      "offhostOnly": {
+        "title": "AI features do not run on the drive “{drives}”",
+        "separator": "”, “",
+        "body": "This drive does not allow sending to cloud LLMs, but the only profile is set to \"Send off-host\". If you use Ollama on this machine, turn \"Send off-host\" off. If you use a cloud service, add a local profile and choose it under \"Use instead on drives without cloud\"."
+      },
+      "invalid": {
+        "name": "Profile name “{name}” must start with a lowercase letter or digit and use only lowercase letters, digits, - and _, up to 32 characters.",
+        "duplicate": "Profile name “{name}” is used twice.",
+        "key": "The API key variable of profile {name} must continue LLM_API_KEY_ with uppercase letters, digits and _."
+      },
+      "profile": {
+        "name": "Name",
+        "provider": "Connection",
+        "providers": {
+          "ollama": "Ollama",
+          "openai_compatible": "OpenAI-compatible",
+          "disabled": "Disabled"
+        },
+        "baseUrl": "Base URL",
+        "model": "Model",
+        "visionModel": "Vision model",
+        "visionModelHint": "(leave empty to skip images)",
+        "apiKey": "API key",
+        "envVar": "Environment variable",
+        "keyEnv": "API key environment variable",
+        "keyEnvHelp": "The key itself is not entered here. Add the variable to docker-compose.override.yml and restart the container to load it.",
+        "keyPresent": "Set",
+        "keyMissing": "Not set",
+        "keyMissingOllama": "Not set (not needed for Ollama)",
+        "keyMissingFails": "Not set — tasks using this profile will fail",
+        "offhost": "Send off-host",
+        "offhostHelpList": "On for a cloud service or another machine. An off-host profile is used only on drives that allow cloud sends.",
+        "offhostHelpSingle": "Off for Ollama on this machine. While off, every drive uses this model.",
+        "agentic": "Use for Agentic Ask",
+        "agenticHelp": "Ask that answers by calling tools. Turn on only for models that support tool calls."
+      },
+      "list": {
+        "local": "Local",
+        "offhost": "Off-host",
+        "default": "Default",
+        "editing": "Editing",
+        "editLabel": "Edit",
+        "edit": "Edit profile {name}",
+        "delete": "Delete profile {name}",
+        "add": "Add profile",
+        "vision": "Vision: {model}"
+      },
+      "routing": {
+        "title": "Default routing",
+        "default": "Default profile",
+        "defaultHelp": "Used by features not assigned a profile under Feature toggles.",
+        "fallback": "Use instead on drives without cloud",
+        "fallbackNone": "None (do not run)",
+        "fallbackHelp": "Only local profiles can be chosen."
+      },
+      "outputLanguage": {
+        "title": "Output language",
+        "options": {
+          "auto": "Auto (match the input)",
+          "ja": "日本語",
+          "en": "English"
+        },
+        "pending": "The saved output language takes effect after a restart."
+      }
     },
     "rag": {
       "title": "Ask (question answering) behaviour",
