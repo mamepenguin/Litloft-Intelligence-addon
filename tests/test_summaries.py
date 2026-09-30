@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.llm_helpers import resolved_with
+
 from app.config import FeaturesConfig, LLMConfig, SummariesConfig
 from app.workers.summaries import (
     DETAILED_STATUS_FAILED,
@@ -848,7 +850,7 @@ class TestSummariesWorkerProcessFile:
 
     @pytest.mark.asyncio
     async def test_skips_when_feature_disabled(
-        self, monkeypatch, make_settings, mock_llm_client
+        self, use_llm, monkeypatch, make_settings, mock_llm_client
     ):
         settings = make_settings(features=FeaturesConfig(summaries="false"))
         monkeypatch.setattr("app.config.settings", settings)
@@ -859,7 +861,9 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._save_summary", save_spy
         )
 
-        worker = SummariesWorker(mock_llm_client)
+        use_llm(mock_llm_client)
+
+        worker = SummariesWorker()
         await worker._process_file("abc")
 
         mock_llm_client.generate_json.assert_not_called()
@@ -867,18 +871,35 @@ class TestSummariesWorkerProcessFile:
 
     @pytest.mark.asyncio
     async def test_skips_when_llm_disabled(
-        self, monkeypatch, patched_settings_enabled
+        self, use_llm, monkeypatch, patched_settings_enabled
     ):
         llm = MagicMock()
         llm.enabled = False
         llm.generate_json = AsyncMock()
+        monkeypatch.setattr("app.workers.summaries._has_summary", lambda fid: False)
+        monkeypatch.setattr(
+            "app.workers.summaries._get_indexed_file",
+            lambda fid: {
+                "file_id": fid,
+                "drive": "d",
+                "filename": "talk.mp4",
+                "file_type": "video",
+                "title": "",
+                "description": "",
+            },
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._build_context", lambda f, t: "x" * 500
+        )
 
         save_spy = AsyncMock()
         monkeypatch.setattr(
             "app.workers.summaries._save_summary", save_spy
         )
 
-        worker = SummariesWorker(llm)
+        use_llm(llm)
+
+        worker = SummariesWorker()
         await worker._process_file("abc")
 
         llm.generate_json.assert_not_called()
@@ -886,7 +907,7 @@ class TestSummariesWorkerProcessFile:
 
     @pytest.mark.asyncio
     async def test_skips_when_summary_already_exists(
-        self, monkeypatch, patched_settings_enabled, mock_llm_client
+        self, use_llm, monkeypatch, patched_settings_enabled, mock_llm_client
     ):
         monkeypatch.setattr(
             "app.workers.summaries._has_summary", lambda fid: True
@@ -896,7 +917,9 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._save_summary", save_spy
         )
 
-        worker = SummariesWorker(mock_llm_client)
+        use_llm(mock_llm_client)
+
+        worker = SummariesWorker()
         await worker._process_file("abc")
 
         mock_llm_client.generate_json.assert_not_called()
@@ -904,7 +927,7 @@ class TestSummariesWorkerProcessFile:
 
     @pytest.mark.asyncio
     async def test_skips_when_indexed_file_missing(
-        self, monkeypatch, patched_settings_enabled, mock_llm_client
+        self, use_llm, monkeypatch, patched_settings_enabled, mock_llm_client
     ):
         monkeypatch.setattr(
             "app.workers.summaries._has_summary", lambda fid: False
@@ -917,7 +940,9 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._save_summary", save_spy
         )
 
-        worker = SummariesWorker(mock_llm_client)
+        use_llm(mock_llm_client)
+
+        worker = SummariesWorker()
         await worker._process_file("abc")
 
         mock_llm_client.generate_json.assert_not_called()
@@ -925,7 +950,7 @@ class TestSummariesWorkerProcessFile:
 
     @pytest.mark.asyncio
     async def test_skips_image_file_type(
-        self, monkeypatch, patched_settings_enabled, mock_llm_client
+        self, use_llm, monkeypatch, patched_settings_enabled, mock_llm_client
     ):
         monkeypatch.setattr(
             "app.workers.summaries._has_summary", lambda fid: False
@@ -934,6 +959,7 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "d",
                 "filename": "photo.jpg",
                 "file_type": "image",
                 "title": "",
@@ -945,7 +971,9 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._save_summary", save_spy
         )
 
-        worker = SummariesWorker(mock_llm_client)
+        use_llm(mock_llm_client)
+
+        worker = SummariesWorker()
         await worker._process_file("abc")
 
         mock_llm_client.generate_json.assert_not_called()
@@ -953,7 +981,7 @@ class TestSummariesWorkerProcessFile:
 
     @pytest.mark.asyncio
     async def test_skips_when_context_empty(
-        self, monkeypatch, patched_settings_enabled, mock_llm_client
+        self, use_llm, monkeypatch, patched_settings_enabled, mock_llm_client
     ):
         monkeypatch.setattr(
             "app.workers.summaries._has_summary", lambda fid: False
@@ -962,6 +990,7 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "d",
                 "filename": "video.mp4",
                 "file_type": "video",
                 "title": "",
@@ -976,7 +1005,9 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._save_summary", save_spy
         )
 
-        worker = SummariesWorker(mock_llm_client)
+        use_llm(mock_llm_client)
+
+        worker = SummariesWorker()
         await worker._process_file("abc")
 
         mock_llm_client.generate_json.assert_not_called()
@@ -984,7 +1015,7 @@ class TestSummariesWorkerProcessFile:
 
     @pytest.mark.asyncio
     async def test_skips_when_transcript_below_min_threshold(
-        self, monkeypatch, patched_settings_enabled, mock_llm_client
+        self, use_llm, monkeypatch, patched_settings_enabled, mock_llm_client
     ):
         """A trivial transcript like "you" must not produce a summary.
 
@@ -1000,6 +1031,7 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "d",
                 "filename": "FFXIV - Dawntrail OST Piano Cover.mp4",
                 "file_type": "video",
                 "title": "",
@@ -1015,7 +1047,9 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._save_summary", save_spy
         )
 
-        worker = SummariesWorker(mock_llm_client)
+        use_llm(mock_llm_client)
+
+        worker = SummariesWorker()
         await worker._process_file("abc")
 
         mock_llm_client.generate_json.assert_not_called()
@@ -1023,7 +1057,7 @@ class TestSummariesWorkerProcessFile:
 
     @pytest.mark.asyncio
     async def test_skips_when_document_text_below_min_threshold(
-        self, monkeypatch, patched_settings_enabled, mock_llm_client
+        self, use_llm, monkeypatch, patched_settings_enabled, mock_llm_client
     ):
         """A near-empty document must not produce a summary either."""
         monkeypatch.setattr(
@@ -1033,6 +1067,7 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "d",
                 "filename": "report.pdf",
                 "file_type": "document",
                 "title": "",
@@ -1049,7 +1084,9 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._save_summary", save_spy
         )
 
-        worker = SummariesWorker(mock_llm_client)
+        use_llm(mock_llm_client)
+
+        worker = SummariesWorker()
         await worker._process_file("doc1")
 
         mock_llm_client.generate_json.assert_not_called()
@@ -1057,7 +1094,7 @@ class TestSummariesWorkerProcessFile:
 
     @pytest.mark.asyncio
     async def test_accepts_when_transcript_meets_threshold(
-        self, monkeypatch, make_settings, mock_llm_client
+        self, use_llm, monkeypatch, make_settings, mock_llm_client
     ):
         """A transcript exactly at the threshold should still produce a summary."""
         from app.config import FeaturesConfig, LLMConfig, SummariesConfig
@@ -1077,6 +1114,7 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "d",
                 "filename": "talk.mp4",
                 "file_type": "video",
                 "title": "",
@@ -1098,14 +1136,16 @@ class TestSummariesWorkerProcessFile:
             return_value={"short": "s", "long": "l"}
         )
 
-        worker = SummariesWorker(mock_llm_client)
+        use_llm(mock_llm_client)
+
+        worker = SummariesWorker()
         await worker._process_file("abc")
 
         save_spy.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_saves_valid_summary_for_video(
-        self, monkeypatch, patched_settings_enabled, mock_llm_client
+        self, use_llm, monkeypatch, patched_settings_enabled, mock_llm_client
     ):
         monkeypatch.setattr(
             "app.workers.summaries._has_summary", lambda fid: False
@@ -1114,6 +1154,7 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "d",
                 "filename": "lecture.mp4",
                 "file_type": "video",
                 "title": "",
@@ -1139,7 +1180,9 @@ class TestSummariesWorkerProcessFile:
             }
         )
 
-        worker = SummariesWorker(mock_llm_client)
+        use_llm(mock_llm_client)
+
+        worker = SummariesWorker()
         await worker._process_file("abc")
 
         save_spy.assert_called_once()
@@ -1152,7 +1195,7 @@ class TestSummariesWorkerProcessFile:
 
     @pytest.mark.asyncio
     async def test_saves_valid_summary_for_document(
-        self, monkeypatch, patched_settings_enabled, mock_llm_client
+        self, use_llm, monkeypatch, patched_settings_enabled, mock_llm_client
     ):
         monkeypatch.setattr(
             "app.workers.summaries._has_summary", lambda fid: False
@@ -1161,6 +1204,7 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "d",
                 "filename": "report.pdf",
                 "file_type": "document",
                 "title": "Quarterly Report",
@@ -1183,7 +1227,9 @@ class TestSummariesWorkerProcessFile:
             return_value={"short": "Q4 results", "long": "Details of Q4 revenue."}
         )
 
-        worker = SummariesWorker(mock_llm_client)
+        use_llm(mock_llm_client)
+
+        worker = SummariesWorker()
         await worker._process_file("doc1")
 
         save_spy.assert_called_once()
@@ -1191,7 +1237,7 @@ class TestSummariesWorkerProcessFile:
 
     @pytest.mark.asyncio
     async def test_rejects_non_dict_llm_response(
-        self, monkeypatch, patched_settings_enabled, mock_llm_client
+        self, use_llm, monkeypatch, patched_settings_enabled, mock_llm_client
     ):
         monkeypatch.setattr(
             "app.workers.summaries._has_summary", lambda fid: False
@@ -1200,6 +1246,7 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "d",
                 "filename": "a.mp4",
                 "file_type": "video",
                 "title": "",
@@ -1220,14 +1267,16 @@ class TestSummariesWorkerProcessFile:
             return_value=["not", "a", "dict"]
         )
 
-        worker = SummariesWorker(mock_llm_client)
+        use_llm(mock_llm_client)
+
+        worker = SummariesWorker()
         await worker._process_file("abc")
 
         save_spy.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_rejects_missing_fields(
-        self, monkeypatch, patched_settings_enabled, mock_llm_client
+        self, use_llm, monkeypatch, patched_settings_enabled, mock_llm_client
     ):
         monkeypatch.setattr(
             "app.workers.summaries._has_summary", lambda fid: False
@@ -1236,6 +1285,7 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "d",
                 "filename": "a.mp4",
                 "file_type": "video",
                 "title": "",
@@ -1256,14 +1306,16 @@ class TestSummariesWorkerProcessFile:
             return_value={"short": "only short"}
         )
 
-        worker = SummariesWorker(mock_llm_client)
+        use_llm(mock_llm_client)
+
+        worker = SummariesWorker()
         await worker._process_file("abc")
 
         save_spy.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_rejects_empty_summary_strings(
-        self, monkeypatch, patched_settings_enabled, mock_llm_client
+        self, use_llm, monkeypatch, patched_settings_enabled, mock_llm_client
     ):
         monkeypatch.setattr(
             "app.workers.summaries._has_summary", lambda fid: False
@@ -1272,6 +1324,7 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "d",
                 "filename": "a.mp4",
                 "file_type": "video",
                 "title": "",
@@ -1291,14 +1344,16 @@ class TestSummariesWorkerProcessFile:
             return_value={"short": "  ", "long": "\n\n"}
         )
 
-        worker = SummariesWorker(mock_llm_client)
+        use_llm(mock_llm_client)
+
+        worker = SummariesWorker()
         await worker._process_file("abc")
 
         save_spy.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_truncation_flag_propagated_to_save(
-        self, monkeypatch, make_settings, mock_llm_client
+        self, use_llm, monkeypatch, make_settings, mock_llm_client
     ):
         # Force very small threshold so any non-trivial content truncates.
         settings = make_settings(
@@ -1320,6 +1375,7 @@ class TestSummariesWorkerProcessFile:
             "app.workers.summaries._get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "d",
                 "filename": "long.mp4",
                 "file_type": "video",
                 "title": "",
@@ -1340,7 +1396,9 @@ class TestSummariesWorkerProcessFile:
             return_value={"short": "s", "long": "l"}
         )
 
-        worker = SummariesWorker(mock_llm_client)
+        use_llm(mock_llm_client)
+
+        worker = SummariesWorker()
         await worker._process_file("abc")
 
         save_spy.assert_called_once()
@@ -1364,6 +1422,7 @@ class TestSummariesWorkerOnIndexDetailedChain:
             "app.workers.summaries._get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "d",
                 "filename": "lecture.mp4",
                 "file_type": "video",
                 "mime_type": "video/mp4",
@@ -1393,7 +1452,7 @@ class TestSummariesWorkerOnIndexDetailedChain:
 
     @pytest.mark.asyncio
     async def test_manual_mode_does_not_chain_detailed(
-        self, monkeypatch, make_settings, mock_llm_client
+        self, use_llm, monkeypatch, make_settings, mock_llm_client
     ):
         settings = make_settings(
             features=FeaturesConfig(
@@ -1411,7 +1470,9 @@ class TestSummariesWorkerOnIndexDetailedChain:
         )
         mock_llm_client.generate = AsyncMock(return_value="## 導入\n\n本文…")
 
-        worker = SummariesWorker(mock_llm_client)
+        use_llm(mock_llm_client)
+
+        worker = SummariesWorker()
         await worker._process_file("abc")
 
         # Short summary generation runs (generate_json) but the detailed
@@ -1421,7 +1482,7 @@ class TestSummariesWorkerOnIndexDetailedChain:
 
     @pytest.mark.asyncio
     async def test_on_index_chains_detailed_after_short(
-        self, monkeypatch, make_settings, mock_llm_client
+        self, use_llm, monkeypatch, make_settings, mock_llm_client
     ):
         settings = make_settings(
             features=FeaturesConfig(
@@ -1439,7 +1500,9 @@ class TestSummariesWorkerOnIndexDetailedChain:
         )
         mock_llm_client.generate = AsyncMock(return_value="## 導入\n\n本文…")
 
-        worker = SummariesWorker(mock_llm_client)
+        use_llm(mock_llm_client)
+
+        worker = SummariesWorker()
         await worker._process_file("abc")
 
         mock_llm_client.generate_json.assert_called_once()
@@ -1447,7 +1510,7 @@ class TestSummariesWorkerOnIndexDetailedChain:
 
     @pytest.mark.asyncio
     async def test_on_index_skips_detailed_when_drive_policy_denies(
-        self, monkeypatch, make_settings, mock_llm_client
+        self, use_llm, monkeypatch, make_settings, mock_llm_client
     ):
         settings = make_settings(
             features=FeaturesConfig(
@@ -1472,7 +1535,9 @@ class TestSummariesWorkerOnIndexDetailedChain:
         )
         mock_llm_client.generate = AsyncMock(return_value="## 導入\n\n本文…")
 
-        worker = SummariesWorker(mock_llm_client)
+        use_llm(mock_llm_client)
+
+        worker = SummariesWorker()
         await worker._process_file("abc")
 
         mock_llm_client.generate_json.assert_called_once()
@@ -1480,7 +1545,7 @@ class TestSummariesWorkerOnIndexDetailedChain:
 
     @pytest.mark.asyncio
     async def test_on_index_skips_detailed_when_already_present(
-        self, monkeypatch, make_settings, mock_llm_client
+        self, use_llm, monkeypatch, make_settings, mock_llm_client
     ):
         settings = make_settings(
             features=FeaturesConfig(
@@ -1501,7 +1566,9 @@ class TestSummariesWorkerOnIndexDetailedChain:
         )
         mock_llm_client.generate = AsyncMock(return_value="## 導入\n\n本文…")
 
-        worker = SummariesWorker(mock_llm_client)
+        use_llm(mock_llm_client)
+
+        worker = SummariesWorker()
         await worker._process_file("abc")
 
         mock_llm_client.generate_json.assert_called_once()
@@ -1794,30 +1861,13 @@ class TestGenerateDetailedSummary:
         monkeypatch.setattr("app.config.settings", settings)
         monkeypatch.setattr("app.workers.summaries.settings", settings)
 
-        await generate_detailed_summary("abc", mock_llm_client)
+        await generate_detailed_summary(
+            "abc", resolved_with(mock_llm_client, model="test-model")
+        )
 
         mock_llm_client.generate.assert_not_called()
         mock_detailed_db_helpers.set_status.assert_not_called()
         mock_detailed_db_helpers.save.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_marks_failed_when_llm_disabled(
-        self, patched_detailed_settings_enabled, mock_detailed_db_helpers,
-    ):
-        llm = MagicMock()
-        llm.enabled = False
-        llm.generate = AsyncMock()
-
-        await generate_detailed_summary("abc", llm)
-
-        llm.generate.assert_not_called()
-        mock_detailed_db_helpers.save.assert_not_called()
-        # Status transition: -> failed with a reason.
-        mock_detailed_db_helpers.set_status.assert_called_once()
-        args, kwargs = mock_detailed_db_helpers.set_status.call_args
-        assert args[0] == "abc"
-        assert args[1] == DETAILED_STATUS_FAILED
-        assert kwargs.get("error")
 
     @pytest.mark.asyncio
     async def test_silently_returns_when_file_not_indexed(
@@ -1828,7 +1878,9 @@ class TestGenerateDetailedSummary:
             "app.workers.summaries._get_indexed_file", lambda fid: None
         )
 
-        await generate_detailed_summary("abc", mock_llm_client)
+        await generate_detailed_summary(
+            "abc", resolved_with(mock_llm_client, model="test-model")
+        )
 
         mock_llm_client.generate.assert_not_called()
         # No DB writes — router is expected to have returned 404 already.
@@ -1844,6 +1896,7 @@ class TestGenerateDetailedSummary:
             "app.workers.summaries._get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "d",
                 "filename": "photo.jpg",
                 "file_type": "image",
                 "mime_type": "image/jpeg",
@@ -1852,7 +1905,9 @@ class TestGenerateDetailedSummary:
             },
         )
 
-        await generate_detailed_summary("abc", mock_llm_client)
+        await generate_detailed_summary(
+            "abc", resolved_with(mock_llm_client, model="test-model")
+        )
 
         mock_llm_client.generate.assert_not_called()
         mock_detailed_db_helpers.set_status.assert_called_once()
@@ -1870,6 +1925,7 @@ class TestGenerateDetailedSummary:
             "app.workers.summaries._get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "d",
                 "filename": "video.mp4",
                 "file_type": "video",
                 "mime_type": "video/mp4",
@@ -1881,7 +1937,9 @@ class TestGenerateDetailedSummary:
             "app.workers.summaries._get_full_transcript", lambda fid: ""
         )
 
-        await generate_detailed_summary("abc", mock_llm_client)
+        await generate_detailed_summary(
+            "abc", resolved_with(mock_llm_client, model="test-model")
+        )
 
         mock_llm_client.generate.assert_not_called()
         mock_detailed_db_helpers.set_status.assert_called_once()
@@ -1899,6 +1957,7 @@ class TestGenerateDetailedSummary:
             "app.workers.summaries._get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "d",
                 "filename": "lecture.mp4",
                 "file_type": "video",
                 "mime_type": "video/mp4",
@@ -1912,7 +1971,9 @@ class TestGenerateDetailedSummary:
         )
         mock_llm_client.generate = AsyncMock(return_value="")
 
-        await generate_detailed_summary("abc", mock_llm_client)
+        await generate_detailed_summary(
+            "abc", resolved_with(mock_llm_client, model="test-model")
+        )
 
         # Two set_status calls: generating, then failed.
         assert mock_detailed_db_helpers.set_status.call_count == 2
@@ -1935,6 +1996,7 @@ class TestGenerateDetailedSummary:
             "app.workers.summaries._get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "d",
                 "filename": "lecture.mp4",
                 "file_type": "video",
                 "mime_type": "video/mp4",
@@ -1950,7 +2012,9 @@ class TestGenerateDetailedSummary:
             side_effect=RuntimeError("connection refused")
         )
 
-        await generate_detailed_summary("abc", mock_llm_client)
+        await generate_detailed_summary(
+            "abc", resolved_with(mock_llm_client, model="test-model")
+        )
 
         assert mock_detailed_db_helpers.set_status.call_count == 2
         assert (
@@ -1968,6 +2032,7 @@ class TestGenerateDetailedSummary:
             "app.workers.summaries._get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "d",
                 "filename": "lecture.mp4",
                 "file_type": "video",
                 "mime_type": "video/mp4",
@@ -1984,7 +2049,9 @@ class TestGenerateDetailedSummary:
             return_value="## 導入\n\n本動画は…\n\n"
         )
 
-        await generate_detailed_summary("abc", mock_llm_client)
+        await generate_detailed_summary(
+            "abc", resolved_with(mock_llm_client, model="test-model")
+        )
 
         # generating first, then save (no failed).
         mock_detailed_db_helpers.set_status.assert_called_once()
@@ -2020,6 +2087,7 @@ class TestGenerateDetailedSummary:
             "app.workers.summaries._get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "d",
                 "filename": "lecture.mp4",
                 "file_type": "video",
                 "mime_type": "video/mp4",
@@ -2034,7 +2102,9 @@ class TestGenerateDetailedSummary:
         )
         mock_llm_client.generate = AsyncMock(return_value="## 導入\n\n本動画…")
 
-        await generate_detailed_summary("abc", mock_llm_client)
+        await generate_detailed_summary(
+            "abc", resolved_with(mock_llm_client, model="test-model")
+        )
 
         kwargs = mock_detailed_db_helpers.save.call_args.kwargs
         assert kwargs["was_truncated"] is False
@@ -2065,6 +2135,7 @@ class TestGenerateDetailedSummary:
             "app.workers.summaries._get_indexed_file",
             lambda fid: {
                 "file_id": fid,
+                "drive": "d",
                 "filename": "long.mp4",
                 "file_type": "video",
                 "mime_type": "video/mp4",
@@ -2082,7 +2153,9 @@ class TestGenerateDetailedSummary:
         )
         mock_llm_client.generate = AsyncMock(return_value="ok")
 
-        await generate_detailed_summary("abc", mock_llm_client)
+        await generate_detailed_summary(
+            "abc", resolved_with(mock_llm_client, model="test-model")
+        )
 
         sample_spy.assert_called_once()
         # Positional signature: (text, window_chars, window_count).

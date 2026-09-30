@@ -167,7 +167,7 @@ class GranularSingleWindowLLM:
 
 @pytest.mark.asyncio
 async def test_single_window_editor_receives_all_candidates_without_head_truncation(
-    chapter_db, monkeypatch
+    use_llm, chapter_db, monkeypatch
 ):
     _seed_transcript(chapter_db)
     monkeypatch.setattr(
@@ -187,12 +187,18 @@ async def test_single_window_editor_receives_all_candidates_without_head_truncat
     )
     llm = GranularSingleWindowLLM()
 
-    await ChapterSuggestionsWorker(llm)._process_file(
+    use_llm(llm, model="routed-model")
+
+    await ChapterSuggestionsWorker()._process_file(
         "file00000001", force=True
     )
 
     assert len(llm.calls) == 2
     assert all("max_tokens_override" not in kwargs for _, kwargs in llm.calls)
+    with chapter_db() as session:
+        assert session.execute(text(
+            "SELECT model FROM suggested_chapters WHERE file_id=:fid"
+        ), {"fid": "file00000001"}).scalar_one() == "routed-model"
     with chapter_db() as session:
         saved = json.loads(session.execute(text(
             "SELECT chapters_json FROM suggested_chapters WHERE file_id=:fid"
@@ -229,7 +235,7 @@ class InvalidJsonLLM:
 
 @pytest.mark.asyncio
 async def test_invalid_json_retries_then_emits_failed_event(
-    chapter_db, monkeypatch
+    use_llm, chapter_db, monkeypatch
 ):
     _seed_transcript(chapter_db)
     monkeypatch.setattr(
@@ -254,7 +260,9 @@ async def test_invalid_json_retries_then_emits_failed_event(
     )
     llm = InvalidJsonLLM()
 
-    await ChapterSuggestionsWorker(llm)._process_file(
+    use_llm(llm, model="test-model")
+
+    await ChapterSuggestionsWorker()._process_file(
         "file00000001", force=True
     )
 
@@ -275,7 +283,9 @@ async def test_invalid_json_retries_then_emits_failed_event(
 
 
 @pytest.mark.asyncio
-async def test_long_transcript_covers_every_chunk_and_consolidates_candidates(chapter_db, monkeypatch):
+async def test_long_transcript_covers_every_chunk_and_consolidates_candidates(
+    use_llm, chapter_db, monkeypatch
+):
     _seed_transcript(chapter_db, chunks=8)
     monkeypatch.setattr("app.workers.chapter_suggestions._WINDOW_CHAR_BUDGET", 180)
     monkeypatch.setattr(
@@ -290,7 +300,8 @@ async def test_long_transcript_covers_every_chunk_and_consolidates_candidates(ch
         lambda _drive: _async_true(),
     )
     llm = FakeLLM()
-    worker = ChapterSuggestionsWorker(llm)
+    use_llm(llm, model="test-model")
+    worker = ChapterSuggestionsWorker()
     emitted = []
 
     async def record_event(event, data):
@@ -324,7 +335,7 @@ async def test_long_transcript_covers_every_chunk_and_consolidates_candidates(ch
 
 @pytest.mark.asyncio
 async def test_worker_rechecks_policy_before_sending_transcript(
-    chapter_db, monkeypatch
+    use_llm, chapter_db, monkeypatch
 ):
     _seed_transcript(chapter_db)
     monkeypatch.setattr(
@@ -343,7 +354,8 @@ async def test_worker_rechecks_policy_before_sending_transcript(
         denied,
     )
     llm = FakeLLM()
-    await ChapterSuggestionsWorker(llm)._process_file(
+    use_llm(llm, model="test-model")
+    await ChapterSuggestionsWorker()._process_file(
         "file00000001", force=True
     )
 
@@ -481,7 +493,9 @@ async def _async_none():
 
 
 @pytest.mark.asyncio
-async def test_generate_rejects_missing_transcript(chapter_db, monkeypatch):
+async def test_generate_rejects_missing_transcript(
+    use_llm, chapter_db, monkeypatch
+):
     with chapter_db() as session:
         session.add(IndexedFile(
             file_id="file00000001", drive="Media", filename="silent.mp4",
@@ -496,10 +510,7 @@ async def test_generate_rejects_missing_transcript(chapter_db, monkeypatch):
         "app.policy_client.is_feature_enabled",
         lambda *_args, **_kwargs: _async_true(),
     )
-    monkeypatch.setattr(
-        "app.routers.chapter_suggestions.get_llm_client",
-        lambda: SimpleNamespace(enabled=True),
-    )
+    use_llm(SimpleNamespace(enabled=True))
     from app.routers.chapter_suggestions import generate_chapter_suggestions
     with pytest.raises(Exception) as exc:
         await generate_chapter_suggestions("file00000001", "Media")
@@ -708,7 +719,7 @@ async def test_per_drive_policy_off_is_hidden(chapter_db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_token_budget_failure_names_its_own_reason(
-    chapter_db, monkeypatch
+    use_llm, chapter_db, monkeypatch
 ):
     """A budget spent on reasoning has a different remedy than bad JSON."""
     _seed_transcript(chapter_db)
@@ -734,7 +745,9 @@ async def test_token_budget_failure_names_its_own_reason(
     )
     llm = TokenBudgetLLM()
 
-    await ChapterSuggestionsWorker(llm)._process_file(
+    use_llm(llm, model="test-model")
+
+    await ChapterSuggestionsWorker()._process_file(
         "file00000001", force=True
     )
 
@@ -747,3 +760,44 @@ async def test_token_budget_failure_names_its_own_reason(
             "reason": "model_token_budget",
         },
     )]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["defer", "skip"])
+async def test_unresolved_llm_sends_nothing_and_emits_nothing(
+    use_llm, chapter_db, monkeypatch, kind
+):
+    from app.llm_routing import Defer, Skip
+
+    _seed_transcript(chapter_db)
+    monkeypatch.setattr(
+        "app.workers.chapter_suggestions.settings",
+        SimpleNamespace(
+            features=SimpleNamespace(chapter_suggestions="manual"),
+            llm=SimpleNamespace(output_language="en", model="test-model"),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.workers.chapter_suggestions.is_chapter_suggestions_enabled",
+        lambda _drive: _async_true(),
+    )
+    events = []
+
+    async def record(event, data):
+        events.append(event)
+
+    monkeypatch.setattr(
+        "app.workers.chapter_suggestions.emit_chapter_suggestions_event", record
+    )
+    asked = use_llm(result=Defer("unavailable") if kind == "defer" else Skip("off"))
+
+    worker = ChapterSuggestionsWorker()
+    await worker._process_file("file00000001", force=True)
+
+    assert asked == [("Media", "chapter_suggestions")]
+    assert events == []
+    assert worker.get_status()["waiting"] == 0
+    with chapter_db() as session:
+        assert session.execute(text(
+            "SELECT COUNT(*) FROM suggested_chapters"
+        )).scalar_one() == 0

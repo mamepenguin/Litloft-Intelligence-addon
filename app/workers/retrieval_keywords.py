@@ -48,7 +48,8 @@ from app.database import (
     get_search_db_read,
     upsert_retrieval_keywords,
 )
-from app.llm import LLMClient
+from app import llm_routing
+from app.llm_routing import Resolved
 from app.prompt_loader import render
 from app.rag.keyword_filter import filter_keywords
 from app.rag.rarity_filter import filter_clue_by_rarity
@@ -105,8 +106,7 @@ class RetrievalKeywordsWorker:
     mental model for the on_index post-task family.
     """
 
-    def __init__(self, llm_client: LLMClient) -> None:
-        self._llm_client = llm_client
+    def __init__(self) -> None:
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         # One file id at a time in practice — keeps /status symmetric
         # with the other workers.
@@ -200,9 +200,6 @@ class RetrievalKeywordsWorker:
         if settings.features.retrieval_keywords == "false":
             return
 
-        if not self._llm_client.enabled:
-            return
-
         if _has_retrieval_keywords(file_id):
             return
 
@@ -228,9 +225,14 @@ class RetrievalKeywordsWorker:
         if was_truncated:
             context = context[:_MAX_CONTEXT_CHARS]
 
+        resolved = await llm_routing.resolve(indexed_file["drive"], "retrieval_keywords")
+        if not isinstance(resolved, Resolved):
+            return
+
         t_start = time.perf_counter()
 
         raw_keywords = await self._generate_keywords(
+            resolved,
             indexed_file=indexed_file,
             context_type=context_type,
             context=context,
@@ -250,11 +252,7 @@ class RetrievalKeywordsWorker:
         # of suggested_tags / file_summaries.
         stored_context_type = "transcript" if context_type in ("video", "audio") else "document"
 
-        # ``settings.llm.model`` is the canonical model label across
-        # provider implementations; OllamaLLMClient / OpenAICompatibleLLMClient
-        # do not expose a uniform ``.model`` attribute, so read from
-        # config — matches auto_tags / summaries convention.
-        model_label = settings.llm.model or "unknown"
+        model_label = resolved.profile.config.model or "unknown"
         with get_search_db() as session:
             upsert_retrieval_keywords(
                 session,
@@ -276,6 +274,7 @@ class RetrievalKeywordsWorker:
 
     async def _generate_keywords(
         self,
+        resolved: Resolved,
         *,
         indexed_file: dict,
         context_type: str,
@@ -307,7 +306,7 @@ class RetrievalKeywordsWorker:
         )
 
         try:
-            raw: Any = await self._llm_client.generate_json(
+            raw: Any = await resolved.client.generate_json(
                 system_prompt,
                 user_prompt,
                 max_tokens_override=_MAX_TOKENS,

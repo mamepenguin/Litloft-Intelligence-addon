@@ -14,7 +14,7 @@ Public surface (called by ``app.routers.refine`` and tested directly):
 * ``realign_words_for_chunk(session, file_id, chunk_start, chunk_end,
   refined_text) -> int``
 * ``recompute_chunk_embeddings(chunk_ids)``
-* ``start_refine_job(session, file_id) -> str`` (sync)
+* ``start_refine_job(session, file_id, resolved) -> str`` (sync)
 * ``filter_transcript_file_ids(session, drive, file_ids) -> list[str]``
 * ``is_feature_enabled(drive) -> bool``
 """
@@ -33,6 +33,7 @@ from sqlalchemy import text as sql_text
 
 import app.config as config
 from app.database import get_search_db, get_search_db_read
+from app.llm_routing import Resolved
 from app.models import Embedding, IndexedFile, TranscriptChunk, TranscriptWord
 from app.prompt_loader import render
 from app.workers import aligner
@@ -631,7 +632,7 @@ def get_refine_status() -> dict[str, object]:
 
 
 async def _run_refine_job(
-    file_id: str, job_id: str, chunk_ids_snapshot: list[int]
+    file_id: str, job_id: str, chunk_ids_snapshot: list[int], resolved: Resolved
 ) -> None:
     """Background task body for a single-file refine job."""
     _active_refine_files.add(file_id)
@@ -640,16 +641,7 @@ async def _run_refine_job(
         {"file_id": file_id, "chunk_count": len(chunk_ids_snapshot), "job_id": job_id},
     )
 
-    try:
-        from app.dependencies import get_llm_client
-
-        llm = get_llm_client()
-    except Exception as e:
-        await _emit_ws_event(
-            "intelligence.refine.failed",
-            {"file_id": file_id, "job_id": job_id, "error": str(e)},
-        )
-        return
+    llm = resolved.client
 
     # Snapshot phase: load chunk data into plain objects then release the
     # write lock so the minutes-long LLM round-trips below don't hold it.
@@ -821,7 +813,7 @@ async def _run_refine_job(
         _active_refine_files.discard(file_id)
 
 
-def start_refine_job(session: Any, file_id: str) -> str:
+def start_refine_job(session: Any, file_id: str, resolved: Resolved) -> str:
     """Kick off an async refine job. Returns the generated job_id.
 
     Deliberately synchronous: the body only reads chunk ids and spawns a
@@ -844,7 +836,7 @@ def start_refine_job(session: Any, file_id: str) -> str:
 
     try:
         asyncio.create_task(
-            _run_refine_job(file_id, job_id, chunk_ids),
+            _run_refine_job(file_id, job_id, chunk_ids, resolved),
             name=f"refine_job_{job_id}",
         )
     except RuntimeError:

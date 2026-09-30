@@ -25,7 +25,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.config import settings
 from app.database import get_search_db
-from app.dependencies import get_llm_client
+from app.routers.llm_gate import require_llm
 from app.drive_context import require_drive
 from app.models import IndexedFile, TranscriptChunk
 from app.workers.refine import (
@@ -61,9 +61,6 @@ def _require_feature_on() -> None:
             status_code=400,
             detail="Transcript refine feature is disabled",
         )
-    llm = get_llm_client()
-    if not llm.enabled:
-        raise HTTPException(status_code=400, detail="LLM is not enabled")
 
 
 async def _require_drive_policy(drive: str) -> None:
@@ -109,6 +106,7 @@ async def refine_file(
     """Start a refine job for a single file."""
     _require_feature_on()
     await _require_drive_policy(drive)
+    resolved = await require_llm(drive, "transcript_refine")
 
     with get_search_db() as session:
         indexed = _fetch_indexed_file(session, file_id, drive)
@@ -120,7 +118,7 @@ async def refine_file(
             .filter(TranscriptChunk.file_id == file_id)
             .count()
         )
-        job_id = start_refine_job(session, file_id)
+        job_id = start_refine_job(session, file_id, resolved)
 
     return {"job_id": job_id, "chunk_count": chunk_count}
 
@@ -157,6 +155,7 @@ async def refine_folder(
 
     _require_feature_on()
     await _require_drive_policy(drive)
+    resolved = await require_llm(drive, "transcript_refine")
 
     with get_search_db() as session:
         file_ids = filter_transcript_file_ids(session, drive, raw_ids)
@@ -179,7 +178,7 @@ async def refine_folder(
     async def _enqueue(fid: str) -> None:
         async with sem:
             with get_search_db() as session:
-                start_refine_job(session, fid)
+                start_refine_job(session, fid, resolved)
             queued_ids.append(fid)
 
     if file_ids:
@@ -194,7 +193,6 @@ __all__ = [
     "MAX_FOLDER_FILES",
     "WINDOW_SIZE",
     "filter_transcript_file_ids",
-    "get_llm_client",
     "get_search_db",
     "is_feature_enabled",
     "realign_words_for_chunk",

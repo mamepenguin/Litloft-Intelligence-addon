@@ -231,13 +231,11 @@ def feature_disabled(monkeypatch, make_settings):
 
 
 @pytest.fixture()
-def mock_llm_enabled(monkeypatch):
+def mock_llm_enabled(use_llm):
     """Pretend the LLM client is ready so router gates pass."""
     client = MagicMock()
     client.enabled = True
-    monkeypatch.setattr(
-        "app.routers.summaries.get_llm_client", lambda: client
-    )
+    use_llm(client)
     return client
 
 
@@ -337,13 +335,11 @@ class TestStartDetailedSummary:
 
     @pytest.mark.asyncio
     async def test_400_when_llm_disabled(
-        self, monkeypatch, search_db, feature_enabled,
+        self, use_llm, search_db, feature_enabled,
     ):
         client = MagicMock()
         client.enabled = False
-        monkeypatch.setattr(
-            "app.routers.summaries.get_llm_client", lambda: client
-        )
+        use_llm(client)
 
         with pytest.raises(HTTPException) as exc_info:
             await start_detailed_summary(

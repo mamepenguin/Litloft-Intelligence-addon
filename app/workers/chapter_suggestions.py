@@ -17,7 +17,9 @@ import httpx
 from sqlalchemy import text as sql_text
 
 from app.config import settings
+from app import llm_routing
 from app.llm import FAILURE_TOKEN_BUDGET, LLMClient
+from app.llm_routing import Resolved
 from app.output_language import configured_language_requirement
 from app.prompt_loader import render
 from app.workers.transcription.errors import TransientError
@@ -256,8 +258,7 @@ async def emit_chapter_suggestions_event(event: str, data: dict[str, Any]) -> No
 class ChapterSuggestionsWorker:
     """Serial generation queue for staged chapter candidates."""
 
-    def __init__(self, llm_client: LLMClient) -> None:
-        self._llm_client = llm_client
+    def __init__(self) -> None:
         self._queue: asyncio.Queue[tuple[str, bool]] = asyncio.Queue()
         self._queued: set[str] = set()
         self._processing: list[str] = []
@@ -325,8 +326,6 @@ class ChapterSuggestionsWorker:
     async def _process_file(self, file_id: str, *, force: bool = False) -> None:
         if settings.features.chapter_suggestions == "false":
             return
-        if not self._llm_client.enabled:
-            return
 
         from app.database import get_search_db, get_search_db_read
         from app.models import IndexedFile, TranscriptChunk
@@ -359,6 +358,9 @@ class ChapterSuggestionsWorker:
         # the last safe point before any transcript reaches the LLM.
         if not await is_chapter_suggestions_enabled(drive):
             return
+        resolved = await llm_routing.resolve(drive, "chapter_suggestions")
+        if not isinstance(resolved, Resolved):
+            return
 
         system = _build_system_prompt(settings.llm.output_language)
         candidate_sets: list[list[dict[str, Any]]] = []
@@ -372,7 +374,7 @@ class ChapterSuggestionsWorker:
         try:
             for window_index, window in enumerate(windows):
                 attempt = await _generate_usable_candidates(
-                    self._llm_client,
+                    resolved.client,
                     system,
                     render(
                         "chapter_suggestions/window_user.jinja2",
@@ -414,7 +416,7 @@ class ChapterSuggestionsWorker:
                 for group in groups:
                     flattened = [chapter for item in group for chapter in item]
                     merged = await _generate_usable_candidates(
-                        self._llm_client,
+                        resolved.client,
                         system,
                         render(
                             "chapter_suggestions/consolidate_user.jinja2",
@@ -472,7 +474,7 @@ class ChapterSuggestionsWorker:
             ), {
                 "fid": file_id,
                 "chapters": json.dumps(chapters, ensure_ascii=False),
-                "model": settings.llm.model or "unknown",
+                "model": resolved.profile.config.model or "unknown",
                 "created_at": created_at,
             })
         await emit_chapter_suggestions_event(

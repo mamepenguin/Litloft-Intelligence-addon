@@ -456,7 +456,7 @@ class TestProcessFileBranches:
 
     @pytest.mark.asyncio
     async def test_llm_disabled_uses_local_candidates(
-        self, monkeypatch, make_settings
+        self, monkeypatch, make_settings, use_llm
     ):
         from app.config import FeaturesConfig
         from app.workers import auto_tags as at
@@ -473,7 +473,8 @@ class TestProcessFileBranches:
         candidates = TagCandidates(clip=["料理"], tfidf=["パスタ"])
         self._install_common_stubs(monkeypatch, candidates=candidates, saved=saved)
 
-        worker = at.AutoTagsWorker(llm)
+        use_llm(llm)
+        worker = at.AutoTagsWorker()
         await worker._process_file("file-1")
 
         assert saved["tags"] == ["料理", "パスタ"]
@@ -481,7 +482,7 @@ class TestProcessFileBranches:
 
     @pytest.mark.asyncio
     async def test_llm_enabled_uses_llm_output(
-        self, monkeypatch, make_settings
+        self, monkeypatch, make_settings, use_llm
     ):
         from app.config import FeaturesConfig
         from app.workers import auto_tags as at
@@ -507,7 +508,8 @@ class TestProcessFileBranches:
         candidates = TagCandidates(clip=["料理"], tfidf=["パスタ"])
         self._install_common_stubs(monkeypatch, candidates=candidates, saved=saved)
 
-        worker = at.AutoTagsWorker(llm)
+        use_llm(llm)
+        worker = at.AutoTagsWorker()
         await worker._process_file("file-1")
 
         assert saved["tags"] == ["料理失敗談", "パスタ料理"]
@@ -515,7 +517,7 @@ class TestProcessFileBranches:
 
     @pytest.mark.asyncio
     async def test_llm_non_list_response_falls_back_to_local(
-        self, monkeypatch, make_settings
+        self, monkeypatch, make_settings, use_llm
     ):
         from app.config import FeaturesConfig
         from app.workers import auto_tags as at
@@ -538,7 +540,8 @@ class TestProcessFileBranches:
         candidates = TagCandidates(clip=["料理"], tfidf=["パスタ"])
         self._install_common_stubs(monkeypatch, candidates=candidates, saved=saved)
 
-        worker = at.AutoTagsWorker(llm)
+        use_llm(llm, model="bad-llm")
+        worker = at.AutoTagsWorker()
         await worker._process_file("file-1")
 
         # Fallback uses local candidates but keeps the llm-tagged model label
@@ -547,7 +550,7 @@ class TestProcessFileBranches:
 
     @pytest.mark.asyncio
     async def test_llm_dict_with_tags_key_is_unwrapped(
-        self, monkeypatch, make_settings
+        self, monkeypatch, make_settings, use_llm
     ):
         """When the LLM returns {"tags": [...]} (json_object mode),
         the worker should unwrap the tags list rather than fall back."""
@@ -572,7 +575,8 @@ class TestProcessFileBranches:
         candidates = TagCandidates(clip=["料理"], tfidf=["パスタ"])
         self._install_common_stubs(monkeypatch, candidates=candidates, saved=saved)
 
-        worker = at.AutoTagsWorker(llm)
+        use_llm(llm)
+        worker = at.AutoTagsWorker()
         await worker._process_file("file-1")
 
         assert saved["tags"] == ["料理失敗談", "パスタ料理"]
@@ -580,7 +584,7 @@ class TestProcessFileBranches:
 
     @pytest.mark.asyncio
     async def test_no_candidates_no_save(
-        self, monkeypatch, make_settings
+        self, monkeypatch, make_settings, use_llm
     ):
         from app.config import FeaturesConfig
         from app.workers import auto_tags as at
@@ -600,7 +604,8 @@ class TestProcessFileBranches:
             saved=saved,
         )
 
-        worker = at.AutoTagsWorker(llm)
+        use_llm(llm)
+        worker = at.AutoTagsWorker()
         await worker._process_file("file-1")
 
         # No local candidates → no save attempted
@@ -608,7 +613,7 @@ class TestProcessFileBranches:
 
     @pytest.mark.asyncio
     async def test_feature_disabled_skips(
-        self, monkeypatch, make_settings
+        self, monkeypatch, make_settings, use_llm
     ):
         from app.config import FeaturesConfig
         from app.workers import auto_tags as at
@@ -625,7 +630,8 @@ class TestProcessFileBranches:
         candidates = TagCandidates(clip=["料理"], tfidf=[])
         self._install_common_stubs(monkeypatch, candidates=candidates, saved=saved)
 
-        worker = at.AutoTagsWorker(llm)
+        use_llm(llm)
+        worker = at.AutoTagsWorker()
         await worker._process_file("file-1")
 
         assert saved == {}

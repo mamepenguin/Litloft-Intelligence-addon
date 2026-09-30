@@ -30,7 +30,8 @@ from sqlalchemy import text as sql_text
 
 from app.config import settings
 from app.database import get_litloft_db, get_search_db
-from app.llm import LLMClient
+from app import llm_routing
+from app.llm_routing import Defer, Resolved
 from app.models import Embedding, IndexedFile, TranscriptChunk
 from app.prompt_loader import render
 from app.tfidf import get_tfidf_keywords_for_file
@@ -119,8 +120,7 @@ def _build_system_prompt() -> str:
 class AutoTagsWorker:
     """Async worker that processes auto-tagging requests via a queue."""
 
-    def __init__(self, llm_client: LLMClient) -> None:
-        self._llm_client = llm_client
+    def __init__(self) -> None:
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         # File ids currently being tagged. List preserves order; LLM
         # workers process one file at a time so this stays a list of
@@ -241,13 +241,18 @@ class AutoTagsWorker:
         )
         t_cand = time.perf_counter() - t_cand_start
 
-        # Phase 2: produce the final tag list.
-        llm_enabled = self._llm_client.enabled
+        # Phase 2: produce the final tag list. Without a usable LLM for this
+        # drive the local candidates are the suggestion.
+        resolved = await llm_routing.resolve(indexed_file["drive"], "auto_tags")
+        if isinstance(resolved, Defer):
+            logger.info("Auto-tags: deferred for %s (%s)", file_id, resolved.reason)
+            return
+        llm_enabled = isinstance(resolved, Resolved)
         t_llm = 0.0
-        if llm_enabled:
+        if isinstance(resolved, Resolved):
             t_llm_start = time.perf_counter()
             tags, model_label = await self._tags_via_llm(
-                indexed_file, context_type, existing_tags, candidates
+                resolved, indexed_file, context_type, existing_tags, candidates
             )
             t_llm = time.perf_counter() - t_llm_start
         else:
@@ -286,6 +291,7 @@ class AutoTagsWorker:
 
     async def _tags_via_llm(
         self,
+        resolved: Resolved,
         indexed_file: dict,
         context_type: str,
         existing_tags: list[str],
@@ -302,10 +308,10 @@ class AutoTagsWorker:
         user_prompt = _build_user_prompt(
             indexed_file, context_type, context, existing_tags, candidates
         )
-        raw = await self._llm_client.generate_json(
+        raw = await resolved.client.generate_json(
             _build_system_prompt(), user_prompt
         )
-        model_suffix = settings.llm.model or "llm"
+        model_suffix = resolved.profile.config.model or "llm"
         model_label = f"clip+tfidf+{model_suffix}"
 
         # With json_object mode the provider returns an object, so the

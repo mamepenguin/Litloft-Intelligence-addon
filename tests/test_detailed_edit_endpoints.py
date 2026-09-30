@@ -267,12 +267,10 @@ def stub_side_effects(monkeypatch):
 
 
 @pytest.fixture()
-def mock_llm_enabled(monkeypatch):
+def mock_llm_enabled(monkeypatch, use_llm):
     client = MagicMock()
     client.enabled = True
-    monkeypatch.setattr(
-        "app.routers.summaries.get_llm_client", lambda: client
-    )
+    use_llm(client)
     # Stub the active-summary clear call so the test suite does not
     # fire real HTTP at a non-existent core. Tests that care about
     # the call log re-monkeypatch with a list-capturing stub.

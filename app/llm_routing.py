@@ -45,7 +45,7 @@ _PROFILE_ONLY_KEYS = ("offhost", "agentic", "api_key_env")
 _CONNECTION_FIELDS = ("provider", "base_url", "api_key", "model", "vision_model")
 _PROFILE_KEYS = (
     frozenset(f.name for f in dataclasses.fields(LLMConfig))
-    - {"api_key", "agentic_models", "agentic_mode", "agentic_min_capability"}
+    - {"api_key", "agentic_models", "agentic_mode", "agentic_min_capability", "output_language"}
 ) | set(_PROFILE_ONLY_KEYS)
 
 
@@ -290,3 +290,4 @@ async def resolve(
     if not client.enabled or (vision and not profile.config.vision_model.strip()):
         return Skip(f"profile {profile.name!r} cannot serve {feature}")
     return Resolved(profile=profile, client=client)
+

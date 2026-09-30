@@ -23,6 +23,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests.llm_helpers import resolved_with
+
 for _mod in (
     "PIL", "PIL.Image",
     "open_clip",
@@ -47,6 +49,10 @@ from app.database import (  # noqa: E402
     _create_file_summaries_table,
 )
 from app.models import IndexedFile  # noqa: E402,F401
+
+
+async def _llm_gate_passes(drive):
+    return resolved_with(MagicMock())
 
 
 @pytest.fixture()
@@ -134,7 +140,7 @@ async def test_regenerate_then_save_yields_readable_summary(
     )
     assert _get_detailed_summary("abc123") is not None
 
-    monkeypatch.setattr(router_mod, "_require_detailed_enabled", lambda: None)
+    monkeypatch.setattr(router_mod, "_require_detailed_enabled", _llm_gate_passes)
     monkeypatch.setattr(
         router_mod, "_require_file_in_drive", lambda file_id, drive: None
     )
@@ -154,7 +160,6 @@ async def test_regenerate_then_save_yields_readable_summary(
         router_mod, "generate_detailed_summary",
         lambda file_id, client: None,
     )
-    monkeypatch.setattr(router_mod, "get_llm_client", lambda: MagicMock())
 
     from fastapi import BackgroundTasks
     result = await router_mod.regenerate_detailed_summary(
@@ -235,7 +240,7 @@ async def test_regenerate_endpoint_keeps_slot_visible_during_background_window(
         was_truncated=False,
     )
 
-    monkeypatch.setattr(router_mod, "_require_detailed_enabled", lambda: None)
+    monkeypatch.setattr(router_mod, "_require_detailed_enabled", _llm_gate_passes)
     monkeypatch.setattr(
         router_mod, "_require_file_in_drive", lambda file_id, drive: None
     )
@@ -257,7 +262,6 @@ async def test_regenerate_endpoint_keeps_slot_visible_during_background_window(
         router_mod, "generate_detailed_summary",
         lambda file_id, client: scheduled.append(file_id) or None,
     )
-    monkeypatch.setattr(router_mod, "get_llm_client", lambda: MagicMock())
 
     from fastapi import BackgroundTasks
     await router_mod.regenerate_detailed_summary(
@@ -302,7 +306,7 @@ def test_regenerate_supersedes_active_even_without_file_summaries_row(
 
     from app.routers import summaries as router_mod
 
-    monkeypatch.setattr(router_mod, "_require_detailed_enabled", lambda: None)
+    monkeypatch.setattr(router_mod, "_require_detailed_enabled", _llm_gate_passes)
     monkeypatch.setattr(
         router_mod, "_require_file_in_drive", lambda file_id, drive: None
     )
@@ -319,7 +323,6 @@ def test_regenerate_supersedes_active_even_without_file_summaries_row(
         router_mod, "generate_detailed_summary",
         lambda file_id, client: None,
     )
-    monkeypatch.setattr(router_mod, "get_llm_client", lambda: MagicMock())
 
     from fastapi import BackgroundTasks
     import asyncio
@@ -360,7 +363,7 @@ async def test_regenerate_preserves_history_across_multiple_runs(
         DETAILED_STATUS_GENERATING,
     )
 
-    monkeypatch.setattr(router_mod, "_require_detailed_enabled", lambda: None)
+    monkeypatch.setattr(router_mod, "_require_detailed_enabled", _llm_gate_passes)
     monkeypatch.setattr(
         router_mod, "_require_file_in_drive", lambda file_id, drive: None
     )
@@ -377,7 +380,6 @@ async def test_regenerate_preserves_history_across_multiple_runs(
         router_mod, "generate_detailed_summary",
         lambda file_id, client: None,
     )
-    monkeypatch.setattr(router_mod, "get_llm_client", lambda: MagicMock())
 
     # First generation.
     _set_detailed_status("abc123", DETAILED_STATUS_GENERATING, model="m1")
@@ -414,3 +416,54 @@ async def test_regenerate_preserves_history_across_multiple_runs(
     # Three rows total, only the newest active.
     assert [r[0] for r in rows] == ["body v1", "body v2", "body v3"]
     assert [r[1] for r in rows] == ["superseded", "superseded", "active"]
+
+
+@pytest.mark.asyncio
+async def test_short_summary_is_still_owed_after_a_detailed_marker(
+    search_db, monkeypatch, make_settings
+):
+    """A detailed run can create the row before the short summary exists."""
+    from app.config import FeaturesConfig
+    from app.workers import summaries as sm
+
+    engine, _ = search_db
+    settings = make_settings(features=FeaturesConfig(summaries="on_index"))
+    monkeypatch.setattr(sm, "settings", settings)
+    monkeypatch.setattr(
+        "app.policy_client.is_feature_enabled",
+        lambda *a, **k: _true(),
+    )
+    monkeypatch.setattr(
+        "app.workers.metadata.index_metadata_batch", lambda ids: None
+    )
+    with engine.begin() as conn:
+        conn.execute(text(
+            "UPDATE indexed_files SET metadata_indexed = 1 WHERE file_id = 'abc123'"
+        ))
+
+    sm._set_detailed_status("abc123", sm.DETAILED_STATUS_GENERATING, model="m")
+
+    assert sm._has_summary("abc123") is False
+    worker = sm.SummariesWorker()
+    assert await worker.enqueue_unprocessed() == 1
+
+    await sm._save_summary(
+        file_id="abc123", short_summary="s", long_summary="l", model="routed",
+        context_type="transcript", context_chars=10, was_truncated=True,
+    )
+
+    assert sm._has_summary("abc123") is True
+    with engine.begin() as conn:
+        row = conn.execute(text(
+            "SELECT short_summary, long_summary, model, context_type, "
+            "context_chars, was_truncated, status, detailed_status "
+            "FROM file_summaries WHERE file_id = 'abc123'"
+        )).one()
+    assert tuple(row) == (
+        "s", "l", "routed", "transcript", 10, 1, "generated",
+        sm.DETAILED_STATUS_GENERATING,
+    )
+
+
+async def _true():
+    return True
