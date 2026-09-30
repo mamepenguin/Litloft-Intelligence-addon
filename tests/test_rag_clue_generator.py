@@ -17,6 +17,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.llm_helpers import bind_llm
+
 # Heavy ML deps are stubbed so importing app.rag.clue_generator (which
 # transitively pulls app.search via the keyword filter / DB module)
 # does not need real torch / sentence-transformers / sqlite-vec.
@@ -63,12 +65,9 @@ def _llm_stub(
 class TestGenerateCluesHappyPath:
     @pytest.mark.asyncio
     async def test_returns_clues_list_from_llm(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.clue_generator.get_llm_client",
-            lambda: _llm_stub(
+        bind_llm(monkeypatch, lambda: _llm_stub(
                 response={"clues": ["京都 紅葉", "嵐山", "東福寺"]}
-            ),
-        )
+            ))
 
         result = await generate_clues(
             "京都の紅葉について教えて",
@@ -81,12 +80,9 @@ class TestGenerateCluesHappyPath:
 
     @pytest.mark.asyncio
     async def test_trims_to_clue_count_when_llm_returns_more(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.clue_generator.get_llm_client",
-            lambda: _llm_stub(
+        bind_llm(monkeypatch, lambda: _llm_stub(
                 response={"clues": ["a", "b", "c", "d", "e"]}
-            ),
-        )
+            ))
 
         result = await generate_clues(
             "q",
@@ -99,10 +95,7 @@ class TestGenerateCluesHappyPath:
 
     @pytest.mark.asyncio
     async def test_keeps_fewer_clues_when_llm_returns_fewer(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.clue_generator.get_llm_client",
-            lambda: _llm_stub(response={"clues": ["only_one"]}),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response={"clues": ["only_one"]}))
 
         result = await generate_clues(
             "q",
@@ -116,9 +109,7 @@ class TestGenerateCluesHappyPath:
     @pytest.mark.asyncio
     async def test_passes_summaries_to_prompt(self, monkeypatch):
         client = _llm_stub(response={"clues": ["x"]})
-        monkeypatch.setattr(
-            "app.rag.clue_generator.get_llm_client", lambda: client
-        )
+        bind_llm(monkeypatch, lambda: client)
 
         await generate_clues(
             "京都の紅葉",
@@ -161,9 +152,7 @@ class TestGenerateCluesFallbacks:
     async def test_no_summaries_returns_fallback(self, monkeypatch):
         # No LLM call is needed — short-circuits on empty summaries.
         spy = MagicMock()
-        monkeypatch.setattr(
-            "app.rag.clue_generator.get_llm_client", lambda: spy
-        )
+        bind_llm(monkeypatch, lambda: spy)
 
         result = await generate_clues(
             "q", [], clue_count=3, fallback_keywords="kw"
@@ -174,10 +163,7 @@ class TestGenerateCluesFallbacks:
 
     @pytest.mark.asyncio
     async def test_all_blank_summaries_returns_fallback(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.clue_generator.get_llm_client",
-            lambda: _llm_stub(response={"clues": ["x"]}),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response={"clues": ["x"]}))
 
         result = await generate_clues(
             "q", ["", "   "], clue_count=3, fallback_keywords="kw"
@@ -187,10 +173,7 @@ class TestGenerateCluesFallbacks:
 
     @pytest.mark.asyncio
     async def test_llm_disabled_returns_fallback(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.clue_generator.get_llm_client",
-            lambda: _llm_stub(enabled=False),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(enabled=False))
 
         result = await generate_clues(
             "q", ["s1"], clue_count=3, fallback_keywords="kw"
@@ -203,9 +186,7 @@ class TestGenerateCluesFallbacks:
         def _raise():
             raise RuntimeError("not configured")
 
-        monkeypatch.setattr(
-            "app.rag.clue_generator.get_llm_client", _raise
-        )
+        bind_llm(monkeypatch, _raise)
 
         result = await generate_clues(
             "q", ["s1"], clue_count=3, fallback_keywords="kw"
@@ -215,10 +196,7 @@ class TestGenerateCluesFallbacks:
 
     @pytest.mark.asyncio
     async def test_non_dict_response_returns_fallback(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.clue_generator.get_llm_client",
-            lambda: _llm_stub(response=["a", "b"]),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response=["a", "b"]))
 
         result = await generate_clues(
             "q", ["s1"], clue_count=3, fallback_keywords="kw"
@@ -228,10 +206,7 @@ class TestGenerateCluesFallbacks:
 
     @pytest.mark.asyncio
     async def test_missing_clues_key_returns_fallback(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.clue_generator.get_llm_client",
-            lambda: _llm_stub(response={"keywords": "x"}),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response={"keywords": "x"}))
 
         result = await generate_clues(
             "q", ["s1"], clue_count=3, fallback_keywords="kw"
@@ -241,10 +216,7 @@ class TestGenerateCluesFallbacks:
 
     @pytest.mark.asyncio
     async def test_clues_not_a_list_returns_fallback(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.clue_generator.get_llm_client",
-            lambda: _llm_stub(response={"clues": "single string"}),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response={"clues": "single string"}))
 
         result = await generate_clues(
             "q", ["s1"], clue_count=3, fallback_keywords="kw"
@@ -254,10 +226,7 @@ class TestGenerateCluesFallbacks:
 
     @pytest.mark.asyncio
     async def test_empty_clues_array_returns_fallback(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.clue_generator.get_llm_client",
-            lambda: _llm_stub(response={"clues": []}),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response={"clues": []}))
 
         result = await generate_clues(
             "q", ["s1"], clue_count=3, fallback_keywords="kw"
@@ -274,10 +243,7 @@ class TestGenerateCluesFallbacks:
         monkeypatch.setattr(
             "app.rag.clue_generator.filter_keywords", lambda _s: ""
         )
-        monkeypatch.setattr(
-            "app.rag.clue_generator.get_llm_client",
-            lambda: _llm_stub(response={"clues": ["何", "なぜ"]}),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response={"clues": ["何", "なぜ"]}))
 
         result = await generate_clues(
             "q", ["s1"], clue_count=3, fallback_keywords="kw"
@@ -297,12 +263,9 @@ class TestGenerateCluesFallbacks:
         monkeypatch.setattr(
             "app.rag.clue_generator.filter_keywords", _filter
         )
-        monkeypatch.setattr(
-            "app.rag.clue_generator.get_llm_client",
-            lambda: _llm_stub(
+        bind_llm(monkeypatch, lambda: _llm_stub(
                 response={"clues": ["good_a", "noise here", "good_b"]}
-            ),
-        )
+            ))
 
         result = await generate_clues(
             "q", ["s1"], clue_count=3, fallback_keywords="kw"
@@ -329,12 +292,9 @@ class TestGenerateCluesRarityIntegration:
         monkeypatch.setattr(
             "app.rag.clue_generator.filter_clue_by_rarity", _rarity
         )
-        monkeypatch.setattr(
-            "app.rag.clue_generator.get_llm_client",
-            lambda: _llm_stub(
+        bind_llm(monkeypatch, lambda: _llm_stub(
                 response={"clues": ["domain_a", "common_only", "domain_b"]}
-            ),
-        )
+            ))
 
         result = await generate_clues(
             "q", ["s1"], clue_count=3, fallback_keywords="kw"
@@ -349,10 +309,7 @@ class TestGenerateCluesRarityIntegration:
         monkeypatch.setattr(
             "app.rag.clue_generator.filter_clue_by_rarity", lambda _s: ""
         )
-        monkeypatch.setattr(
-            "app.rag.clue_generator.get_llm_client",
-            lambda: _llm_stub(response={"clues": ["a", "b", "c"]}),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response={"clues": ["a", "b", "c"]}))
 
         result = await generate_clues(
             "q", ["s1"], clue_count=3, fallback_keywords="kw"
@@ -380,10 +337,7 @@ class TestGenerateCluesRarityIntegration:
         monkeypatch.setattr(
             "app.rag.clue_generator.filter_clue_by_rarity", _rarity
         )
-        monkeypatch.setattr(
-            "app.rag.clue_generator.get_llm_client",
-            lambda: _llm_stub(response={"clues": ["one"]}),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response={"clues": ["one"]}))
 
         result = await generate_clues(
             "q", ["s1"], clue_count=3, fallback_keywords="kw"

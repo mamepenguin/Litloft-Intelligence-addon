@@ -28,7 +28,7 @@ import logging
 from sqlalchemy import text as sql_text
 
 from app.database import get_search_db
-from app.dependencies import get_llm_client
+from app import llm_routing
 from app.prompt_loader import render
 from app.rag.keyword_filter import filter_keywords
 from app.rag.rarity_filter import filter_clue_by_rarity
@@ -151,12 +151,8 @@ async def generate_clues(
         # legacy behaviour — preserve it.
         return [fallback_keywords]
 
-    try:
-        llm = get_llm_client()
-    except RuntimeError:
-        return [fallback_keywords]
-
-    if not llm.enabled:
+    llm = llm_routing.bound_client()
+    if llm is None or not llm.enabled:
         return [fallback_keywords]
 
     # Build the candidate-summaries block. Numbering keeps the LLM from

@@ -23,6 +23,8 @@ import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+from tests.llm_helpers import bind_llm
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -67,9 +69,7 @@ def rag_enabled(monkeypatch, make_settings):
 
     llm_stub = MagicMock()
     llm_stub.enabled = True
-    monkeypatch.setattr(
-        "app.routers.rag.get_llm_client", lambda: llm_stub
-    )
+    bind_llm(monkeypatch, lambda: llm_stub)
     return settings
 
 
@@ -88,9 +88,7 @@ def rag_disabled(monkeypatch, make_settings):
 
     llm_stub = MagicMock()
     llm_stub.enabled = True
-    monkeypatch.setattr(
-        "app.routers.rag.get_llm_client", lambda: llm_stub
-    )
+    bind_llm(monkeypatch, lambda: llm_stub)
     return settings
 
 
@@ -105,9 +103,7 @@ def llm_disabled(monkeypatch, make_settings):
 
     llm_stub = MagicMock()
     llm_stub.enabled = False
-    monkeypatch.setattr(
-        "app.routers.rag.get_llm_client", lambda: llm_stub
-    )
+    bind_llm(monkeypatch, lambda: llm_stub)
     return settings
 
 

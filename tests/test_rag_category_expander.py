@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.llm_helpers import bind_llm
+
 # Stub heavy ML deps before importing the module under test.
 for _mod in (
     "PIL",
@@ -52,10 +54,7 @@ def _llm_stub(
 class TestExpandCategoryHappy:
     @pytest.mark.asyncio
     async def test_returns_terms_from_llm(self, monkeypatch):
-        monkeypatch.setattr(
-            category_expander,
-            "get_llm_client",
-            lambda: _llm_stub(
+        bind_llm(monkeypatch, lambda: _llm_stub(
                 response={
                     "terms": [
                         "SF",
@@ -65,8 +64,7 @@ class TestExpandCategoryHappy:
                         "ディストピア",
                     ]
                 }
-            ),
-        )
+            ))
         result = await category_expander.expand_category("SF", max_terms=8)
         # Original is preserved when present in the LLM list, plus
         # the bilingual surface forms.
@@ -77,27 +75,19 @@ class TestExpandCategoryHappy:
 
     @pytest.mark.asyncio
     async def test_caps_at_max_terms(self, monkeypatch):
-        monkeypatch.setattr(
-            category_expander,
-            "get_llm_client",
-            lambda: _llm_stub(
+        bind_llm(monkeypatch, lambda: _llm_stub(
                 response={
                     "terms": ["a", "b", "c", "d", "e", "f", "g"]
                 }
-            ),
-        )
+            ))
         result = await category_expander.expand_category("category", max_terms=3)
         assert len(result) == 3
 
     @pytest.mark.asyncio
     async def test_dedupes_case_insensitive(self, monkeypatch):
-        monkeypatch.setattr(
-            category_expander,
-            "get_llm_client",
-            lambda: _llm_stub(
+        bind_llm(monkeypatch, lambda: _llm_stub(
                 response={"terms": ["SF", "sf", "Sf", "宇宙船"]}
-            ),
-        )
+            ))
         result = await category_expander.expand_category("SF", max_terms=8)
         # First-seen wins; "SF" / "sf" / "Sf" collapse to one entry.
         lower_set = {t.lower() for t in result}
@@ -108,13 +98,9 @@ class TestExpandCategoryHappy:
         # LLM returned only related terms but not the raw query itself.
         # The expander prepends it because per-term retrieval would
         # otherwise lose hits that match the original word verbatim.
-        monkeypatch.setattr(
-            category_expander,
-            "get_llm_client",
-            lambda: _llm_stub(
+        bind_llm(monkeypatch, lambda: _llm_stub(
                 response={"terms": ["science fiction", "宇宙船", "ロボット"]}
-            ),
-        )
+            ))
         result = await category_expander.expand_category("SF", max_terms=8)
         assert result[0] == "SF"
         assert "science fiction" in result
@@ -125,31 +111,19 @@ class TestExpandCategoryFallback:
     async def test_empty_input_returns_empty(self, monkeypatch):
         # Don't even call the LLM for an empty concept — caller skips
         # multi-query entirely.
-        monkeypatch.setattr(
-            category_expander,
-            "get_llm_client",
-            lambda: _llm_stub(side_effect=AssertionError),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(side_effect=AssertionError))
         result = await category_expander.expand_category("   ", max_terms=8)
         assert result == []
 
     @pytest.mark.asyncio
     async def test_max_terms_zero_returns_raw(self, monkeypatch):
-        monkeypatch.setattr(
-            category_expander,
-            "get_llm_client",
-            lambda: _llm_stub(side_effect=AssertionError),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(side_effect=AssertionError))
         result = await category_expander.expand_category("SF", max_terms=0)
         assert result == ["SF"]
 
     @pytest.mark.asyncio
     async def test_llm_disabled_returns_raw(self, monkeypatch):
-        monkeypatch.setattr(
-            category_expander,
-            "get_llm_client",
-            lambda: _llm_stub(enabled=False),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(enabled=False))
         result = await category_expander.expand_category("SF", max_terms=8)
         assert result == ["SF"]
 
@@ -158,27 +132,19 @@ class TestExpandCategoryFallback:
         def _raises():
             raise RuntimeError("not ready")
 
-        monkeypatch.setattr(category_expander, "get_llm_client", _raises)
+        bind_llm(monkeypatch, _raises)
         result = await category_expander.expand_category("SF", max_terms=8)
         assert result == ["SF"]
 
     @pytest.mark.asyncio
     async def test_non_dict_response_returns_raw(self, monkeypatch):
-        monkeypatch.setattr(
-            category_expander,
-            "get_llm_client",
-            lambda: _llm_stub(response=["not", "a", "dict"]),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response=["not", "a", "dict"]))
         result = await category_expander.expand_category("SF", max_terms=8)
         assert result == ["SF"]
 
     @pytest.mark.asyncio
     async def test_missing_terms_key_returns_raw(self, monkeypatch):
-        monkeypatch.setattr(
-            category_expander,
-            "get_llm_client",
-            lambda: _llm_stub(response={"other": "shape"}),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response={"other": "shape"}))
         result = await category_expander.expand_category("SF", max_terms=8)
         assert result == ["SF"]
 
@@ -186,10 +152,6 @@ class TestExpandCategoryFallback:
     async def test_all_terms_filtered_returns_raw(self, monkeypatch):
         # Every term collapses under filter_keywords (e.g. all blanks
         # or all on the noise-words blocklist).
-        monkeypatch.setattr(
-            category_expander,
-            "get_llm_client",
-            lambda: _llm_stub(response={"terms": ["", "  ", None]}),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response={"terms": ["", "  ", None]}))
         result = await category_expander.expand_category("SF", max_terms=8)
         assert result == ["SF"]

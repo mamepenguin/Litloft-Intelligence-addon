@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 
-from app.dependencies import get_llm_client
+from app import llm_routing
 from app.prompt_loader import render
 from app.rag.keyword_filter import filter_keywords
 
@@ -73,12 +73,8 @@ async def expand_category(
     if max_terms < 1:
         return [stripped]
 
-    try:
-        llm = get_llm_client()
-    except RuntimeError:
-        return [stripped]
-
-    if not llm.enabled:
+    llm = llm_routing.bound_client()
+    if llm is None or not llm.enabled:
         return [stripped]
 
     system_prompt = render(

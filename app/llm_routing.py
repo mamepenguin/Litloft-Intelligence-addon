@@ -12,7 +12,9 @@ import dataclasses
 import logging
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -322,3 +324,54 @@ def has_vision_profile(settings: Any | None = None) -> bool:
         p.config.vision_model.strip() and _client_for(active, p).enabled
         for p in active.routing.profiles.values()
     )
+
+
+_bound: ContextVar[Resolved | None] = ContextVar("llm_routing_bound", default=None)
+
+
+@contextmanager
+def bound(resolved: Resolved) -> Iterator[None]:
+    """Hand ``resolved`` to the helpers one Ask calls, for its duration."""
+    token = _bound.set(resolved)
+    try:
+        yield
+    finally:
+        _bound.reset(token)
+
+
+def bound_resolved() -> Resolved | None:
+    return _bound.get()
+
+
+def bound_client() -> LLMClient | OllamaLLMClient | None:
+    resolved = _bound.get()
+    return resolved.client if resolved is not None else None
+
+
+def default_status() -> tuple[LLMProfile | None, bool]:
+    """The profile unassigned features use, and whether its client works."""
+    active = _current()
+    name = active.routing.default
+    profile = active.routing.profiles.get(name) if name is not None else None
+    if profile is None:
+        return None, False
+    return profile, _client_for(active, profile).enabled
+
+
+def resolve_without_ceiling(feature: str, *, vision: bool = False) -> Resolved | Skip:
+    """The profile ``feature`` is routed to, ignoring every drive's ceiling.
+
+    For operator-run tools only (the eval runner); nothing reachable from
+    a route or a worker may call it.
+    """
+    if feature not in LLM_FEATURES:
+        raise ValueError(f"unknown LLM feature {feature!r}")
+    active = _current()
+    name = active.routing.features.get(feature, active.routing.default)
+    if name is None:
+        return Skip(active.routing.error or "no LLM profile configured")
+    profile = active.routing.profiles[name]
+    client = _client_for(active, profile)
+    if not client.enabled or (vision and not profile.config.vision_model.strip()):
+        return Skip(f"profile {profile.name!r} cannot serve {feature}")
+    return Resolved(profile=profile, client=client)

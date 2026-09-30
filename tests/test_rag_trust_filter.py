@@ -178,7 +178,7 @@ async def test_find_keeps_unverified_files_visible(monkeypatch):
 
     from app.rag import service
 
-    source = inspect.getsource(service.find_files)
+    source = inspect.getsource(service._find_files)
     # Both Stage D branches (per-term expansion and the single-query path).
     assert source.count("trust_tier=None") == 2
 

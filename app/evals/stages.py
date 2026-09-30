@@ -30,6 +30,8 @@ from app.rag.query_transform import (
     iter_required_fallback_subsets,
     transform_query_structured,
 )
+from app import llm_routing
+from app.llm_routing import Resolved
 from app.rag.service import answer_question
 from app.search import SearchResult, search
 
@@ -290,6 +292,9 @@ async def run_stage3_once(
     force_legacy_rag: bool = False,
 ) -> Stage3SingleRun:
     start = time.monotonic()
+    routed = llm_routing.resolve_without_ceiling("rag")
+    if not isinstance(routed, Resolved):
+        raise RuntimeError(f"no LLM profile serves rag: {routed.reason}")
     response = await answer_question(
         query=case.query,
         credential=None,
@@ -297,6 +302,7 @@ async def run_stage3_once(
         drive=drive,
         temperature=EVAL_TEMPERATURE,
         force_legacy_rag=force_legacy_rag,
+        resolved=routed,
     )
 
     answer = response.answer or ""

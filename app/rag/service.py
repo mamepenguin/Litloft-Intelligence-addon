@@ -33,7 +33,8 @@ from typing import Any, Literal
 
 from app.config import settings
 from app.credentials import CallerCredential
-from app.dependencies import get_llm_client
+from app import llm_routing
+from app.llm_routing import Resolved
 from app.document_sections import EPUB_MIME, section_title
 from app.rag.agentic import (
     AgenticAnswer,
@@ -981,19 +982,24 @@ def _language_instruction() -> str:
 def _agentic_gate_open(*, force_legacy_rag: bool) -> bool:
     """Single source of truth for "should we activate the agentic loop?".
 
-    The gate fails closed: any unmet precondition (eval bypass flag,
-    agentic_mode=off, model off the allowlist, LLM disabled, client
-    lacks chat_with_tools) returns False and the caller falls through
-    to legacy. Shared between ``answer_question`` and ``stream_answer``
-    so the two surfaces never drift on activation rules.
+    The gate fails closed: any unmet precondition (eval bypass flag, a
+    profile neither marked ``agentic`` nor on the ``agentic_models``
+    allowlist, LLM disabled, client lacks chat_with_tools) returns False
+    and the caller falls through to legacy. Shared between
+    ``answer_question`` and ``stream_answer`` so the two surfaces never
+    drift on activation rules.
     """
-    if force_legacy_rag:
+    resolved = llm_routing.bound_resolved()
+    if force_legacy_rag or resolved is None:
         return False
-    llm_config = settings.llm
-    if not agentic_capability_supported(llm_config.model, llm_config):
+    profile = resolved.profile
+    if not (
+        profile.agentic
+        or agentic_capability_supported(profile.config.model, profile.config)
+    ):
         return False
-    llm_client = get_llm_client()
-    if llm_client is None or not getattr(llm_client, "enabled", False):
+    llm_client = resolved.client
+    if not getattr(llm_client, "enabled", False):
         return False
     # The OpenAI-compatible client owns ``chat_with_tools``; the
     # Ollama-native client does not. Fall back to legacy for the
@@ -1016,8 +1022,9 @@ async def _run_agentic(
     Pulled out of ``_maybe_run_agentic`` so ``stream_answer`` can call
     it without re-doing the config plumbing.
     """
-    llm_config = settings.llm
-    llm_client = get_llm_client()
+    resolved = llm_routing.bound_resolved()
+    llm_config = resolved.profile.config
+    llm_client = resolved.client
     entry = get_agentic_model_entry(llm_config.model, llm_config)
     context_window = entry.context_window if entry is not None else 32768
     budget = compute_token_budget(context_window)
@@ -1069,7 +1076,7 @@ async def _maybe_run_agentic(
     )
 
 
-async def answer_question(
+async def _answer_question(
     query: str,
     credential: CallerCredential | None,
     top_k: int | None = None,
@@ -1248,7 +1255,7 @@ async def answer_question(
     contexts = assemble_contexts(candidates, rag_config, query=query)
 
     # Stage 3: LLM call.
-    llm = get_llm_client()
+    llm = llm_routing.bound_client()
     system_prompt = build_system_prompt(settings.llm.output_language)
     user_prompt = build_user_prompt(query, contexts)
 
@@ -1450,7 +1457,7 @@ async def _stream_agentic(
     )
 
 
-async def stream_answer(
+async def _stream_answer(
     query: str,
     credential: CallerCredential | None,
     top_k: int | None = None,
@@ -1694,7 +1701,7 @@ async def stream_answer(
     contexts = assemble_contexts(candidates, rag_config, query=query)
 
     # Stage 3: stream the LLM answer.
-    llm = get_llm_client()
+    llm = llm_routing.bound_client()
     system_prompt = build_system_prompt(settings.llm.output_language)
     user_prompt = build_user_prompt(query, contexts)
 
@@ -2093,7 +2100,7 @@ def _empty_find_response(
     }
 
 
-async def find_files(
+async def _find_files(
     question: str,
     drive: str,
     viewer_id: str | None = None,
@@ -2284,3 +2291,24 @@ async def find_files(
         "total": len(retrieved),
         "limit": effective_limit,
     }
+
+
+async def answer_question(*args: Any, resolved: Resolved, **kwargs: Any) -> AnswerResponse:
+    """Run :func:`_answer_question` with ``resolved`` as the Ask's LLM."""
+    with llm_routing.bound(resolved):
+        return await _answer_question(*args, **kwargs)
+
+
+async def stream_answer(
+    *args: Any, resolved: Resolved, **kwargs: Any
+) -> AsyncIterator[AnswerEvent]:
+    """Run :func:`_stream_answer` with ``resolved`` as the Ask's LLM."""
+    with llm_routing.bound(resolved):
+        async for event in _stream_answer(*args, **kwargs):
+            yield event
+
+
+async def find_files(*args: Any, resolved: Resolved, **kwargs: Any) -> dict[str, Any]:
+    """Run :func:`_find_files` with ``resolved`` as the Find's LLM."""
+    with llm_routing.bound(resolved):
+        return await _find_files(*args, **kwargs)

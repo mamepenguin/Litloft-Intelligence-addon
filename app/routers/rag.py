@@ -32,7 +32,8 @@ from fastapi.responses import StreamingResponse
 
 from app.config import settings
 from app.credentials import CallerCredential
-from app.dependencies import get_llm_client
+from app.llm_routing import Resolved
+from app.routers.llm_gate import require_llm
 from app.drive_context import require_drive
 from app.rag.service import (
     AnswerEvent,
@@ -96,32 +97,18 @@ _SSE_HEADERS = {
 }
 
 
-def _require_rag_enabled() -> None:
-    """Raise 4xx/5xx if the RAG feature or LLM is not available.
+async def _require_rag_enabled(drive: str) -> Resolved:
+    """Raise 4xx/5xx unless RAG is on and an LLM serves this drive.
 
     * 400 when the feature is explicitly disabled in config.
-    * 400 when the LLM provider is configured as "disabled".
-    * 503 when the dependency container isn't initialized yet
-      (startup race: the router is mounted before the lifespan
-      handler finishes). This is a transient condition, not a
-      permanent misconfiguration, so the distinct status code
-      makes it easier to diagnose in logs vs. an everything-500.
+    * 400 when no LLM profile serves the drive.
+    * 503 when the drive's cloud policy could not be looked up.
     """
     if not settings.features.rag:
         raise HTTPException(
             status_code=400, detail="RAG feature is disabled"
         )
-    try:
-        client = get_llm_client()
-    except RuntimeError:
-        # Startup race: dependency injection not yet populated.
-        raise HTTPException(
-            status_code=503, detail="LLM client not initialized yet"
-        )
-    if not client.enabled:
-        raise HTTPException(
-            status_code=400, detail="LLM is not enabled"
-        )
+    return await require_llm(drive, "rag")
 
 
 def _format_sse_event(event: AnswerEvent) -> str:
@@ -165,6 +152,7 @@ async def _sse_stream(
     drive: str | None,
     viewer_id: str | None,
     semaphore: "asyncio.Semaphore",
+    resolved: Resolved,
 ) -> AsyncIterator[str]:
     """Adapt ``stream_answer`` to the text/event-stream wire format.
 
@@ -188,6 +176,7 @@ async def _sse_stream(
             file_type=file_type,
             drive=drive,
             viewer_id=viewer_id,
+            resolved=resolved,
         ):
             yield _format_sse_event(event)
     except asyncio.CancelledError:
@@ -254,7 +243,7 @@ async def ask_endpoint(
     *replaces* whatever the client sent. ``None`` here means "no
     profile" — the service runs the legacy viewer-agnostic path.
     """
-    _require_rag_enabled()
+    resolved = await _require_rag_enabled(drive)
 
     # Post-strip length check. Pydantic's min_length=1 only rejects the
     # empty string, but a 2-char query gives the LLM nothing to work
@@ -298,6 +287,7 @@ async def ask_endpoint(
             drive=drive,
             viewer_id=viewer_id,
             semaphore=semaphore,
+            resolved=resolved,
         )
         return StreamingResponse(
             generator,
@@ -339,14 +329,14 @@ async def find_endpoint(
     ``X-Lit-Viewer-Id`` header degrades gracefully (Stage B is skipped
     inside the service, no 4xx).
     """
-    _require_rag_enabled()
-
     # Drive non-empty check. ``require_drive`` already raises 400 on a
     # missing header, but tests invoke the handler directly with
     # ``drive=""`` to simulate that path — re-validate so both code
     # paths produce the same status code.
     if not drive:
         raise HTTPException(status_code=400, detail="Drive context required")
+
+    resolved = await _require_rag_enabled(drive)
 
     if len(body.question.strip()) < 3:
         raise HTTPException(status_code=400, detail="Query too short")
@@ -374,6 +364,7 @@ async def find_endpoint(
             credential=credential,
             overrides=body.overrides,
             limit=body.limit,
+            resolved=resolved,
         )
     finally:
         semaphore.release()

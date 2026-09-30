@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.llm_helpers import bind_llm
+
 # Stub out heavy dependencies before importing service + retriever.
 for _mod in (
     "PIL", "PIL.Image",
@@ -33,8 +35,8 @@ from app.rag.retriever import RetrievedFile  # noqa: E402
 from app.rag.service import (  # noqa: E402
     AnswerEvent,
     AnswerResponse,
-    answer_question,
-    stream_answer,
+    _answer_question as answer_question,
+    _stream_answer as stream_answer,
 )
 from app.search import MatchInfo, SegmentGroup  # noqa: E402
 
@@ -142,9 +144,7 @@ class TestAnswerQuestionHappyPath:
                 {"file_id": "f1", "quote": "topic X explanation", "relevance": 0.9}
             ],
         })
-        monkeypatch.setattr(
-            "app.rag.service.get_llm_client", lambda: llm
-        )
+        bind_llm(monkeypatch, lambda: llm)
 
         result = await answer_question(
             query="What topic is covered?",
@@ -185,7 +185,7 @@ class TestAnswerQuestionNoCandidates:
             AsyncMock(return_value=[]),
         )
         llm = _make_llm_mock({"answer": "should not be called", "citations": []})
-        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+        bind_llm(monkeypatch, lambda: llm)
 
         result = await answer_question(
             query="anything",
@@ -223,7 +223,7 @@ class TestAnswerQuestionLLMFailure:
         )
         # LLM returned unparseable output.
         llm = _make_llm_mock(None)
-        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+        bind_llm(monkeypatch, lambda: llm)
 
         result = await answer_question(
             query="q", credential="t"
@@ -251,7 +251,7 @@ class TestAnswerQuestionLLMFailure:
             lambda cands, cfg, **_kw: [_context(c.file_id) for c in cands],
         )
         llm = _make_llm_mock([{"wrong": "shape"}])
-        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+        bind_llm(monkeypatch, lambda: llm)
 
         result = await answer_question(query="q", credential="t")
 
@@ -290,7 +290,7 @@ class TestAnswerQuestionCitationFiltering:
                 {"file_id": "real-2", "quote": "ok2", "relevance": 0.7},
             ],
         })
-        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+        bind_llm(monkeypatch, lambda: llm)
 
         result = await answer_question(query="q", credential="t")
 
@@ -319,7 +319,7 @@ class TestAnswerQuestionCitationFiltering:
                 {"file_id": "fake2", "quote": "y", "relevance": 0.9},
             ],
         })
-        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+        bind_llm(monkeypatch, lambda: llm)
 
         result = await answer_question(query="q", credential="t")
 
@@ -357,10 +357,7 @@ class TestAnswerQuestionTopK:
         monkeypatch.setattr(
             "app.rag.service.retrieve_candidates", retrieve_spy
         )
-        monkeypatch.setattr(
-            "app.rag.service.get_llm_client",
-            lambda: _make_llm_mock({"answer": "x", "citations": []}),
-        )
+        bind_llm(monkeypatch, lambda: _make_llm_mock({"answer": "x", "citations": []}))
 
         await answer_question(query="q", credential=None)
 
@@ -376,10 +373,7 @@ class TestAnswerQuestionTopK:
         monkeypatch.setattr(
             "app.rag.service.retrieve_candidates", retrieve_spy
         )
-        monkeypatch.setattr(
-            "app.rag.service.get_llm_client",
-            lambda: _make_llm_mock({"answer": "x", "citations": []}),
-        )
+        bind_llm(monkeypatch, lambda: _make_llm_mock({"answer": "x", "citations": []}))
 
         await answer_question(query="q", credential=None, top_k=3)
 
@@ -403,10 +397,7 @@ class TestAnswerQuestionTookMs:
             "app.rag.service.retrieve_candidates",
             AsyncMock(return_value=[]),
         )
-        monkeypatch.setattr(
-            "app.rag.service.get_llm_client",
-            lambda: _make_llm_mock({"answer": "x", "citations": []}),
-        )
+        bind_llm(monkeypatch, lambda: _make_llm_mock({"answer": "x", "citations": []}))
 
         result = await answer_question(query="q", credential=None)
 
@@ -426,17 +417,14 @@ class TestAnswerQuestionTookMs:
             "app.rag.service.assemble_contexts",
             lambda cands, cfg, **_kw: [_context(c.file_id) for c in cands],
         )
-        monkeypatch.setattr(
-            "app.rag.service.get_llm_client",
-            lambda: _make_llm_mock(
+        bind_llm(monkeypatch, lambda: _make_llm_mock(
                 {
                     "answer": "Answer",
                     "citations": [
                         {"file_id": "f1", "quote": "q", "relevance": 0.9}
                     ],
                 }
-            ),
-        )
+            ))
 
         result = await answer_question(query="q", credential="t")
 
@@ -460,10 +448,7 @@ class TestAnswerQuestionFilterForwarding:
         monkeypatch.setattr(
             "app.rag.service.retrieve_candidates", retrieve_spy
         )
-        monkeypatch.setattr(
-            "app.rag.service.get_llm_client",
-            lambda: _make_llm_mock({"answer": "x", "citations": []}),
-        )
+        bind_llm(monkeypatch, lambda: _make_llm_mock({"answer": "x", "citations": []}))
 
         await answer_question(
             query="q",
@@ -540,7 +525,7 @@ class TestStreamAnswerHappyPath:
             '"citations": [{"file_id": "f1", "quote": "紅葉", "relevance": 0.9}]}',
         ]
         llm = _make_stream_llm_mock(deltas)
-        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+        bind_llm(monkeypatch, lambda: llm)
 
         events = await _collect(stream_answer(
             query="京都の紅葉について",
@@ -608,7 +593,7 @@ class TestStreamAnswerEmptyRetrieval:
             AsyncMock(return_value=[]),
         )
         llm = _make_stream_llm_mock(["should", "not", "stream"])
-        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+        bind_llm(monkeypatch, lambda: llm)
 
         events = await _collect(stream_answer(query="anything", credential=None))
 
@@ -656,7 +641,7 @@ class TestStreamAnswerHallucinationFilter:
             "]}"
         )
         llm = _make_stream_llm_mock([full_json])
-        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+        bind_llm(monkeypatch, lambda: llm)
 
         events = await _collect(stream_answer(query="q", credential="t"))
 
@@ -707,7 +692,7 @@ class TestStreamAnswerProgressiveCitations:
             "]}",
         ]
         llm = _make_stream_llm_mock(deltas)
-        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+        bind_llm(monkeypatch, lambda: llm)
 
         events = await _collect(stream_answer(query="q", credential="t"))
 
@@ -779,7 +764,7 @@ class TestStreamAnswerProgressiveCitations:
             "]}"
         )
         llm = _make_stream_llm_mock([full_json])
-        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+        bind_llm(monkeypatch, lambda: llm)
 
         events = await _collect(stream_answer(query="q", credential="t"))
 
@@ -828,7 +813,7 @@ class TestStreamAnswerProgressiveCitations:
             "]}"
         )
         llm = _make_stream_llm_mock([full_json])
-        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+        bind_llm(monkeypatch, lambda: llm)
 
         events = await _collect(stream_answer(query="q", credential="t"))
 
@@ -858,7 +843,7 @@ class TestStreamAnswerProgressiveCitations:
             lambda cands, cfg, **_kw: [_context(c.file_id) for c in cands],
         )
         llm = _make_stream_llm_mock(["sorry I cannot answer"])
-        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+        bind_llm(monkeypatch, lambda: llm)
 
         events = await _collect(stream_answer(query="q", credential="t"))
 
@@ -891,7 +876,7 @@ class TestStreamAnswerUnparseableJSON:
             lambda cands, cfg, **_kw: [_context(c.file_id) for c in cands],
         )
         llm = _make_stream_llm_mock(["this is not json at all"])
-        monkeypatch.setattr("app.rag.service.get_llm_client", lambda: llm)
+        bind_llm(monkeypatch, lambda: llm)
 
         events = await _collect(stream_answer(query="q", credential="t"))
 

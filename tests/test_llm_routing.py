@@ -481,3 +481,35 @@ def test_load_settings_legacy_section(
 
     assert (profile.config.provider, profile.offhost) == (provider, offhost)
 
+
+
+@pytest.mark.parametrize(
+    ("section", "expected"),
+    [
+        (_section(), ("local", True)),
+        (_section(default="cloud"), ("cloud", True)),
+    ],
+)
+def test_default_status_reports_the_default_profile(section, expected) -> None:
+    _install(section)
+
+    profile, enabled = llm_routing.default_status()
+
+    assert (profile.name, enabled) == expected
+
+
+def test_default_status_with_invalid_routing_is_disabled() -> None:
+    section = _section()
+    section["routing"]["default"] = "nope"
+    llm_routing.set_routing(build_routing(section, BASE, environ={}))
+
+    assert llm_routing.default_status() == (None, False)
+
+
+def test_resolve_without_ceiling_ignores_the_drive_policy(policy) -> None:
+    _install(_section(features={"rag": "cloud"}))
+
+    result = llm_routing.resolve_without_ceiling("rag")
+
+    assert isinstance(result, Resolved) and result.profile.name == "cloud"
+    assert policy.asked == []

@@ -24,6 +24,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.llm_helpers import bind_llm
+
 for _mod in (
     "PIL", "PIL.Image",
     "open_clip",
@@ -189,10 +191,7 @@ class TestTransformQueryStructuredHappyPath:
             ],
             "semantic": ["動物", "作品"],
         }
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client",
-            lambda: _llm_stub(response=llm_response),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response=llm_response))
 
         result = await transform_query_structured("動物が登場する芥川龍之介の作品")
 
@@ -221,10 +220,7 @@ class TestTransformQueryStructuredHappyPath:
             ],
             "semantic": ["アイス"],
         }
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client",
-            lambda: _llm_stub(response=llm_response),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response=llm_response))
 
         result = await transform_query_structured("ちいかわのアイス")
 
@@ -248,10 +244,7 @@ class TestTransformQueryStructuredHappyPath:
             ],
             "semantic": ["動物"],
         }
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client",
-            lambda: _llm_stub(response=llm_response),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response=llm_response))
 
         result = await transform_query_structured("Pythonで動物")
 
@@ -268,10 +261,7 @@ class TestTransformQueryStructuredHappyPath:
             "required": [],
             "semantic": ["紅葉", "京都"],
         }
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client",
-            lambda: _llm_stub(response=llm_response),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response=llm_response))
 
         result = await transform_query_structured("綺麗な紅葉")
 
@@ -295,10 +285,7 @@ class TestTransformQueryStructuredHappyPath:
             ],
             "semantic": ["紅葉"],
         }
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client",
-            lambda: _llm_stub(response=llm_response),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response=llm_response))
 
         result = await transform_query_structured("東福寺の紅葉について")
 
@@ -311,10 +298,7 @@ class TestTransformQueryStructuredFallbacks:
 
     @pytest.mark.asyncio
     async def test_falls_back_when_llm_disabled(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client",
-            lambda: _llm_stub(enabled=False),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(enabled=False))
 
         result = await transform_query_structured("raw query")
 
@@ -328,9 +312,7 @@ class TestTransformQueryStructuredFallbacks:
         def _raise():
             raise RuntimeError("not initialized")
 
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client", _raise
-        )
+        bind_llm(monkeypatch, _raise)
 
         result = await transform_query_structured("raw query")
 
@@ -339,10 +321,7 @@ class TestTransformQueryStructuredFallbacks:
 
     @pytest.mark.asyncio
     async def test_falls_back_when_llm_returns_none(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client",
-            lambda: _llm_stub(response=None),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response=None))
 
         result = await transform_query_structured("raw query")
 
@@ -357,10 +336,7 @@ class TestTransformQueryStructuredFallbacks:
         # prompt swap this should not happen, but we accept it as a
         # transitional fallback: every LLM-produced word becomes
         # semantic, no required terms.
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client",
-            lambda: _llm_stub(response={"keywords": "東福寺 紅葉"}),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response={"keywords": "東福寺 紅葉"}))
 
         result = await transform_query_structured("東福寺の紅葉")
 
@@ -382,10 +358,7 @@ class TestTransformQueryStructuredFallbacks:
             ],
             "semantic": ["紅葉"],
         }
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client",
-            lambda: _llm_stub(response=llm_response),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response=llm_response))
 
         result = await transform_query_structured("東福寺の紅葉")
 
@@ -401,9 +374,7 @@ class TestTransformQueryStructuredFallbacks:
             spy_called = True
             return _llm_stub(response={})
 
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client", _get_client
-        )
+        bind_llm(monkeypatch, _get_client)
 
         result = await transform_query_structured("   ")
 
@@ -436,10 +407,7 @@ class TestRequiredCanonicalBlocklist:
             ],
             "semantic": ["京都"],
         }
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client",
-            lambda: _llm_stub(response=llm_response),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response=llm_response))
 
         result = await transform_query_structured("東福寺の video")
 
@@ -455,10 +423,7 @@ class TestRequiredCanonicalBlocklist:
             ],
             "semantic": ["料理"],
         }
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client",
-            lambda: _llm_stub(response=llm_response),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response=llm_response))
 
         result = await transform_query_structured("料理の動画")
 

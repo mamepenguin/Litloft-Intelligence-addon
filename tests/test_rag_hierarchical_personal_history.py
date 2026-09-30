@@ -28,6 +28,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.llm_helpers import bind_llm
+
 for _mod in (
     "PIL", "PIL.Image",
     "open_clip",
@@ -55,7 +57,8 @@ from app.rag.coarse_retriever import ShortlistResult  # noqa: E402
 from app.rag.context import ContextSnippet, FileContext  # noqa: E402
 from app.rag.query_decomposer import DecomposedQuery, TimeRange  # noqa: E402
 from app.rag.retriever import RetrievedFile  # noqa: E402
-from app.rag.service import AnswerEvent, stream_answer  # noqa: E402
+from app.rag.service import AnswerEvent  # noqa: E402
+from app.rag.service import _stream_answer as stream_answer  # noqa: E402
 from app.search import MatchInfo, SegmentGroup  # noqa: E402
 
 
@@ -103,6 +106,7 @@ def _make_stream_llm():
         yield '{"answer": "ans", "citations": []}'
 
     client.generate_stream = _stream
+    client.generate_json = AsyncMock(return_value=None)
     return client
 
 
@@ -170,8 +174,7 @@ def common_patches(monkeypatch):
         "app.rag.service.assemble_contexts",
         lambda cands, cfg, **_kw: [_context(c.file_id) for c in cands],
     )
-    monkeypatch.setattr(
-        "app.rag.service.get_llm_client", lambda: _make_stream_llm()
+    bind_llm(monkeypatch, lambda: _make_stream_llm()
     )
     monkeypatch.setattr(
         "app.rag.service._filter_file_ids_via_internal_api",

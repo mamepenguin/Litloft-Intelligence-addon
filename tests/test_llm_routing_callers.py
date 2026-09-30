@@ -365,3 +365,113 @@ async def test_chapter_generate_resolves_before_reading_the_transcript(
     assert exc.value.status_code == 400
     assert asked == [(DRIVE, "chapter_suggestions")]
     touched.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Ask / Find
+# ---------------------------------------------------------------------------
+
+
+def _rag_on(monkeypatch) -> None:
+    from app.routers import rag as rag_router
+
+    monkeypatch.setattr(
+        rag_router, "settings", MagicMock(features=MagicMock(rag=True))
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("result", "status"),
+    [(Defer("unavailable"), 503), (Skip("llm_cloud off"), 400)],
+)
+@pytest.mark.parametrize("route", ["ask", "find"])
+async def test_ask_and_find_refuse_an_unresolved_drive(
+    monkeypatch, use_llm, route, result, status
+) -> None:
+    from app.routers import rag as rag_router
+    from app.schemas import AskRequest, FindRequest
+
+    _rag_on(monkeypatch)
+    asked = use_llm(result=result)
+
+    with pytest.raises(HTTPException) as exc:
+        if route == "ask":
+            await rag_router.ask_endpoint(
+                AskRequest(query="what happened"), None, None, DRIVE, None
+            )
+        else:
+            await rag_router.find_endpoint(
+                FindRequest(question="what happened"), None, None, DRIVE, None
+            )
+
+    assert exc.value.status_code == status
+    assert asked == [(DRIVE, "rag")]
+
+
+@pytest.mark.asyncio
+async def test_find_hands_the_resolved_profile_to_the_service(monkeypatch, use_llm) -> None:
+    from app.routers import rag as rag_router
+    from app.schemas import FindRequest
+
+    _rag_on(monkeypatch)
+    client = MagicMock()
+    use_llm(client)
+    seen: list = []
+
+    async def _find(**kwargs):
+        seen.append(kwargs["resolved"].client)
+        return {}
+
+    monkeypatch.setattr(rag_router, "find_files", _find)
+
+    await rag_router.find_endpoint(
+        FindRequest(question="what happened"), None, None, DRIVE, None
+    )
+
+    assert seen == [client]
+
+
+@pytest.mark.asyncio
+async def test_the_service_binds_its_profile_for_the_helpers_only_while_it_runs(
+    monkeypatch,
+) -> None:
+    from app.rag import service
+
+    client = MagicMock()
+    seen: list = []
+
+    async def _inner(*args, **kwargs):
+        seen.append(llm_routing.bound_client())
+        return "answer"
+
+    monkeypatch.setattr(service, "_answer_question", _inner)
+
+    result = await service.answer_question(
+        "q", None, resolved=resolved_with(client)
+    )
+
+    assert (result, seen, llm_routing.bound_client()) == ("answer", [client], None)
+
+
+@pytest.mark.parametrize(
+    ("agentic", "allowlisted", "expected"),
+    [(True, False, True), (False, True, True), (False, False, False)],
+)
+def test_the_agentic_gate_reads_the_bound_profile(agentic, allowlisted, expected) -> None:
+    from app.config import AgenticModelEntry
+    from app.rag import service
+
+    config = LLMConfig(
+        provider="openai_compatible",
+        base_url="http://llm.test/v1",
+        model="m",
+        agentic_mode="auto",
+        agentic_models=(AgenticModelEntry(name="m"),) if allowlisted else (),
+    )
+    client = MagicMock()
+    client.enabled = True
+    client.chat_with_tools = AsyncMock()
+
+    with llm_routing.bound(resolved_with(client, agentic=agentic, config=config)):
+        assert service._agentic_gate_open(force_legacy_rag=False) is expected
