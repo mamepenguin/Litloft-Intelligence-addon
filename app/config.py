@@ -935,10 +935,6 @@ def load_config_file(path: Path) -> dict[str, Any]:
         return {}
 
 
-class LLMConfigError(ValueError):
-    pass
-
-
 def _same_kind(value: object, default: object) -> bool:
     if isinstance(default, bool):
         return isinstance(value, bool)
@@ -972,9 +968,9 @@ def parse_llm_config(
 ) -> "LLMConfig":
     """Build an ``LLMConfig`` from ``raw`` over ``base`` (field defaults when None).
 
-    Keys that are not ``LLMConfig`` fields, and null values (a YAML key left
-    blank), are treated as absent. A value of the wrong type raises
-    :class:`LLMConfigError`.
+    Keys that are not ``LLMConfig`` fields, null values (a YAML key left
+    blank) and values of the wrong type (YAML reads unquoted ``off`` / ``no``
+    as booleans) are treated as absent.
     """
     start = base if base is not None else LLMConfig()
     defaults = LLMConfig()
@@ -995,7 +991,10 @@ def parse_llm_config(
             )
             value = defaults.reasoning
         elif not _same_kind(value, getattr(defaults, name)):
-            raise LLMConfigError(f"{name} has the wrong type ({type(value).__name__})")
+            logger.warning(
+                "Ignoring llm.%s=%r: expected %s", name, value, type(getattr(defaults, name)).__name__,
+            )
+            continue
         values[name] = value
     return LLMConfig(**values)
 
@@ -1068,11 +1067,7 @@ def load_settings() -> Settings:
         # Env LLM_API_KEY wins over both the yaml field and any GUI
         # override path (secrets do not live in the data volume).
         llm_merged["api_key"] = llm_api_key_env
-    try:
-        llm_config = parse_llm_config(llm_merged)
-    except LLMConfigError as exc:
-        logger.error("Invalid llm section, LLM features disabled: %s", exc)
-        llm_config = LLMConfig(provider="disabled")
+    llm_config = parse_llm_config(llm_merged)
 
     # RAG (only ``personal_history.enabled`` and
     # ``category_expansion.enabled`` are GUI-overridable; everything

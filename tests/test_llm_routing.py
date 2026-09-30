@@ -92,23 +92,30 @@ def test_profile_inherits_tuning_knobs_only() -> None:
     assert cloud.api_key == "k-cloud"
 
 
-@pytest.mark.parametrize(
-    ("field", "expected"),
-    [
-        ("base_url", ""),
-        ("model", ""),
-        ("vision_model", ""),
-        ("api_key", ""),
-    ],
-)
+@pytest.mark.parametrize("written", [None, 123])
+@pytest.mark.parametrize("field", ["base_url", "model", "vision_model"])
 def test_profile_never_inherits_the_top_level_endpoint_or_key(
-    field: str, expected: str
+    field: str, written: object
 ) -> None:
-    section = {"profiles": {"bare": {"provider": "ollama", "offhost": False}}}
+    section = {"profiles": {"bare": {"provider": "ollama", "offhost": False, field: written}}}
 
     routing = build_routing(section, BASE, environ={"LLM_API_KEY": "top-key"})
 
-    assert getattr(routing.profiles["bare"].config, field) == expected
+    config = routing.profiles["bare"].config
+    assert (getattr(config, field), config.api_key) == ("", "")
+
+
+@pytest.mark.parametrize("written", [None, "hot", True])
+def test_profile_knob_left_blank_or_mistyped_inherits_the_top_level_value(
+    written: object,
+) -> None:
+    section = _section()
+    section["profiles"]["cloud"]["temperature"] = written
+
+    routing = build_routing(section, BASE, environ={})
+
+    assert routing.error is None
+    assert routing.profiles["cloud"].config.temperature == 0.7
 
 
 @pytest.mark.parametrize(
@@ -123,9 +130,6 @@ def test_profile_never_inherits_the_top_level_endpoint_or_key(
         (lambda s: s["profiles"]["local"].update(provider="nope"), "provider"),
         (lambda s: s.update(profiles={}), "profiles"),
         (lambda s: s["profiles"]["local"].pop("provider"), "provider"),
-        (lambda s: s["profiles"]["local"].update(model=123), "model"),
-        (lambda s: s["profiles"]["local"].update(temperature="hot"), "temperature"),
-        (lambda s: s["profiles"]["local"].update(max_tokens=True), "max_tokens"),
         (lambda s: s["profiles"]["cloud"].update(offhost="no"), "offhost"),
         (lambda s: s["profiles"]["cloud"].update(agentic="yes"), "agentic"),
         (lambda s: s["profiles"]["cloud"].update(modle="x"), "modle"),
@@ -432,12 +436,14 @@ def test_manifest_declares_the_policy_features() -> None:
     [
         ({"provider": "ollama", "model": "m", "offhost": False}, "ollama", False),
         ({"provider": "ollama", "model": "m"}, "ollama", True),
-        ({"provider": "ollama", "model": 123}, "disabled", True),
+        ({"provider": "ollama", "model": 123}, "ollama", True),
+        ({"provider": "ollama", "model": "m", "agentic_mode": False}, "ollama", True),
+        ({"provider": "ollama", "model": "m", "output_language": False}, "ollama", True),
         ({"provider": "ollama", "model": "m", "api_key": None}, "ollama", True),
         ({"provider": "ollama", "model": "m", "vision_model": None}, "ollama", True),
         ({"provider": "ollama", "model": "m", "reasoning": None}, "ollama", True),
         ({"provider": "ollama", "model": "m", "agentic_models": None}, "ollama", True),
-        ({"provider": "ollama", "model": "m", "agentic_models": "x"}, "ollama", True),
+        ({"provider": "ollama", "model": "m", "agentic_models": 5}, "ollama", True),
     ],
 )
 def test_load_settings_legacy_section(

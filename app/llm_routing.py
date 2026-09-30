@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app import policy_client
-from app.config import LLMConfig, LLMConfigError, parse_llm_config
+from app.config import LLMConfig, parse_llm_config
 from app.llm import LLMClient, OllamaLLMClient, create_llm_client
 from app.llm_overrides import PROVIDER_ENUM
 
@@ -208,10 +208,7 @@ def _build_profile(
     knobs = dataclasses.replace(base, **{f: getattr(LLMConfig(), f) for f in _CONNECTION_FIELDS})
     values = {k: v for k, v in raw.items() if k not in _PROFILE_ONLY_KEYS}
     values["api_key"] = environ.get(api_key_env, "") if api_key_env else ""
-    try:
-        config = parse_llm_config(values, base=knobs)
-    except LLMConfigError as exc:
-        raise _RoutingError(f"llm.profiles.{name}: {exc}") from exc
+    config = parse_llm_config(values, base=knobs)
     return LLMProfile(
         name=name,
         config=config,
