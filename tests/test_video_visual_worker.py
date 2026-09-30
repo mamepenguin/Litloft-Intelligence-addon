@@ -784,8 +784,28 @@ class TestEnqueue:
             s.commit()
 
         worker = VideoVisualWorker()  # configured model is llava:13b
-        result = await worker.enqueue("vid-ok")
+        result = await worker.enqueue("vid-ok", requested_by="on_index")
         assert result["accepted"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_run_the_drive_can_no_longer_serve_fails_without_a_call(
+        self, search_db, feature_manual, policy_allow_all, use_llm, no_emit,
+    ):
+        from app.llm_routing import Skip
+
+        worker = VideoVisualWorker()
+        run_id = (await worker.enqueue("vid-ok", requested_by="manual"))["run_id"]
+        client = MagicMock()
+        client.generate_video_scene_json = AsyncMock()
+        use_llm(result=Skip("llm_cloud off"))
+
+        await worker._process_run(run_id, "vid-ok")
+
+        client.generate_video_scene_json.assert_not_called()
+        _, Session = search_db
+        with Session() as s:
+            run = s.query(VideoVisualRun).filter_by(id=run_id).one()
+            assert (run.status, run.error_class) == ("failed", "PolicyDisabled")
 
     @pytest.mark.asyncio
     async def test_on_index_skips_when_fingerprint_unchanged(

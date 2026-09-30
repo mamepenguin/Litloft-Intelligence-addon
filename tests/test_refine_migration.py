@@ -52,6 +52,9 @@ def search_engine(tmp_path):
             text("ALTER TABLE transcript_chunks ADD COLUMN text_original TEXT")
         )
         conn.execute(
+            text("ALTER TABLE transcript_chunks DROP COLUMN refined_model")
+        )
+        conn.execute(
             text(
                 "INSERT INTO transcript_chunks "
                 "(file_id, chunk_index, text, language, "
