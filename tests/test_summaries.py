@@ -140,7 +140,7 @@ class TestBuildSystemPrompt:
 
         # The JSON shape must appear so the model knows the contract.
         assert '"short"' in result
-        assert '"long"' in result
+        assert '"long": [' in result
 
     def test_prompt_mentions_length_ranges(
         self, monkeypatch, make_settings
@@ -1201,6 +1201,7 @@ class TestSummariesWorkerProcessFile:
             (["a", "b", "c"], "- a\n- b\n- c"),
             ([" a ", "", "  ", "b"], "- a\n- b"),
             (["1", "2", "3", "4", "5", "6", "7"], "- 1\n- 2\n- 3\n- 4\n- 5"),
+            (["", "a", "b", "c", "d", "e"], "- a\n- b\n- c\n- d\n- e"),
             (["a", 3, None, "b"], "- a\n- b"),
             ([" x\n y "], "- x y"),
             ("  a paragraph  ", "a paragraph"),

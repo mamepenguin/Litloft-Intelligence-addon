@@ -18,3 +18,4 @@ search-config.yml
 app/evals_transcription/cases/audio/
 app/evals_transcription/cases/*.yml
 !app/evals_transcription/cases/sample.yml.example
+.coverage
