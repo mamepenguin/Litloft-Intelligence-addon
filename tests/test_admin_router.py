@@ -674,6 +674,9 @@ def test_llm_get_body_can_be_saved_back_unchanged(client, llm_env, monkeypatch) 
     })
 
     assert response.status_code == 200
+    from app import llm_routing
+
+    assert llm_routing.current_routing().error is None
     saved = client.get("/admin/llm").json()["profiles"]
     assert saved["local"]["agentic"] is True
 
@@ -715,11 +718,13 @@ def test_llm_delete_returns_to_the_yaml_immediately(
     from app.llm_overrides import overrides_path
     from app.routers import admin as admin_module
 
-    monkeypatch.setattr(admin_module, "_notify_core_restart_pending", _ok_notify())
+    notify = _ok_notify()
+    monkeypatch.setattr(admin_module, "_notify_core_restart_pending", notify)
     client.put("/admin/llm", json=_ROUTED)
 
     response = client.delete("/admin/llm")
 
+    notify.assert_not_awaited()
     assert response.json()["removed"] is True
     assert not overrides_path(data_dir).is_file()
     assert set(llm_routing.current_routing().profiles) == {"default"}
