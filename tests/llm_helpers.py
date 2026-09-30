@@ -65,7 +65,7 @@ def bind_llm(
             else None
         )
 
-    async def _resolve(drive, feature, *, vision=False):
+    async def _resolve(drive, feature):
         client = _client()
         if client is None or not getattr(client, "enabled", True):
             return llm_routing.Skip("disabled")

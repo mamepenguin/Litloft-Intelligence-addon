@@ -24,6 +24,7 @@ master-viewer judge.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -427,6 +428,9 @@ _LLM_PROVIDERS = ("disabled", "ollama", "openai_compatible")
 _LLM_OUTPUT_LANGUAGES = ("auto", "ja", "en")
 _LLM_MAX_PROFILES = 16
 _LLM_STRING_MAX_LEN = 2048
+_LLM_BODY_MAX_BYTES = 64 * 1024
+# Shown by GET, never stored: a GET body can be sent back unchanged.
+_LLM_VIEW_ONLY_KEYS = frozenset({"api_key_present"})
 
 
 class LLMUpdate(BaseModel):
@@ -448,14 +452,19 @@ def _llm_view() -> dict[str, Any]:
     routing = build_routing(section, base, os.environ)
     legacy = "profiles" not in section
     if legacy:
+        legacy_profile = routing.profiles[LEGACY_PROFILE]
         profiles = {
             LEGACY_PROFILE: {
                 "provider": base.provider,
                 "base_url": base.base_url,
                 "model": base.model,
                 "vision_model": base.vision_model,
-                "offhost": section.get("offhost") is not False,
+                "offhost": legacy_profile.offhost,
+                "agentic": legacy_profile.agentic,
                 "api_key_env": LEGACY_API_KEY_ENV,
+                # The legacy key may also come from YAML, which a saved
+                # profile does not carry over.
+                "api_key_present": bool(base.api_key),
             }
         }
         stored_routing: dict[str, Any] = {"default": LEGACY_PROFILE}
@@ -464,9 +473,9 @@ def _llm_view() -> dict[str, Any]:
         profiles = {k: dict(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
         stored = section.get("routing")
         stored_routing = dict(stored) if isinstance(stored, dict) else {}
-    for profile in profiles.values():
-        env = profile.get("api_key_env")
-        profile["api_key_present"] = bool(isinstance(env, str) and os.getenv(env))
+        for profile in profiles.values():
+            env = profile.get("api_key_env")
+            profile["api_key_present"] = bool(isinstance(env, str) and os.getenv(env))
     return {
         "profiles": profiles,
         "routing": stored_routing,
@@ -509,9 +518,13 @@ async def update_llm_config(payload: LLMUpdate) -> dict[str, Any]:
     from app.llm_routing import build_routing
 
     _validate_llm(payload)
+    profiles = {
+        name: {k: v for k, v in profile.items() if k not in _LLM_VIEW_ONLY_KEYS}
+        for name, profile in payload.profiles.items()
+    }
     _, base = config.load_llm_sources()
     checked = build_routing(
-        {"profiles": payload.profiles, "routing": payload.routing},
+        {"profiles": profiles, "routing": payload.routing},
         base,
         os.environ,
     )
@@ -519,7 +532,7 @@ async def update_llm_config(payload: LLMUpdate) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=checked.error)
 
     path = lo.write_profiles(
-        payload.profiles,
+        profiles,
         payload.routing,
         payload.output_language,
         updated_at=datetime.now(UTC).isoformat(),
@@ -576,22 +589,15 @@ async def get_llm_exposure() -> dict[str, Any]:
             "offhost": bool(profile and profile.offhost),
         }
         if profile is not None and profile.offhost:
-            per_drive: dict[str, str] = {}
             for drive in drives:
                 if drive not in verdicts:
                     verdicts[drive] = await policy_client.lookup_feature(
                         drive, llm_routing.CLOUD_POLICY_FEATURE
                     )
-                verdict = verdicts[drive]
-                if verdict == "allowed":
-                    per_drive[drive] = "sends"
-                elif verdict == "denied":
-                    per_drive[drive] = (
-                        "falls_back" if routing.local_fallback else "skips"
-                    )
-                else:
-                    per_drive[drive] = "unknown"
-            entry["drives"] = per_drive
+            entry["drives"] = {
+                drive: llm_routing.describe_route(feature, verdicts[drive], drive)
+                for drive in drives
+            }
         features[feature] = entry
     return {"features": features, "local_fallback": routing.local_fallback}
 
@@ -608,6 +614,10 @@ def _validate_llm(payload: LLMUpdate) -> None:
                 f"{list(_LLM_OUTPUT_LANGUAGES)}, got "
                 f"{payload.output_language!r}"
             ),
+        )
+    if len(json.dumps(payload.model_dump())) > _LLM_BODY_MAX_BYTES:
+        raise HTTPException(
+            status_code=400, detail=f"llm settings must be <= {_LLM_BODY_MAX_BYTES} bytes"
         )
     if len(payload.profiles) > _LLM_MAX_PROFILES:
         raise HTTPException(

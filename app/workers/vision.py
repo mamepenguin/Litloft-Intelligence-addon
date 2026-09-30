@@ -565,7 +565,7 @@ class VisionDescribeWorker:
             state = _fetch_existing_vision(session, file_id)
             drive = file_row.drive
 
-        resolved = await llm_routing.resolve(drive, "vision_describe", vision=True)
+        resolved = await llm_routing.resolve(drive, "vision_describe")
         if isinstance(resolved, Defer):
             return False, "policy_unavailable"
         if not isinstance(resolved, Resolved):
@@ -736,7 +736,7 @@ class VisionDescribeWorker:
             )
             drive = file_row.drive if file_row is not None else None
         resolved = (
-            await llm_routing.resolve(drive, "vision_describe", vision=True)
+            await llm_routing.resolve(drive, "vision_describe")
             if drive is not None
             else None
         )

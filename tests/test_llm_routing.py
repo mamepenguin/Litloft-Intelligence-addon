@@ -33,7 +33,7 @@ CLOUD = {
     "base_url": "https://api.openai.com/v1",
     "model": "gpt-mini",
     "vision_model": "gpt-mini",
-    "api_key_env": "CLOUD_KEY",
+    "api_key_env": "LLM_API_KEY_CLOUD",
     "offhost": True,
 }
 
@@ -85,7 +85,7 @@ def test_profile_without_offhost_is_treated_as_offhost() -> None:
 
 
 def test_profile_inherits_tuning_knobs_only() -> None:
-    routing = build_routing(_section(), BASE, environ={"CLOUD_KEY": "k-cloud"})
+    routing = build_routing(_section(), BASE, environ={"LLM_API_KEY_CLOUD": "k-cloud"})
 
     cloud = routing.profiles["cloud"].config
     assert cloud.model == "gpt-mini"
@@ -158,6 +158,9 @@ def test_a_mistyped_key_never_reaches_the_log(caplog: pytest.LogCaptureFixture) 
         (lambda s: s["routing"].update(features=[]), "features must be a mapping"),
         (lambda s: s["profiles"]["local"].update(api_key="inline"), "api_key"),
         (lambda s: s["profiles"]["cloud"].update(api_key_env=""), "api_key_env"),
+        (lambda s: s["profiles"]["cloud"].update(api_key_env="CORE_INTERNAL_SECRET"), "api_key_env"),
+        (lambda s: s["profiles"]["cloud"].update(api_key_env="LLM_API_KEYS"), "api_key_env"),
+        (lambda s: s["profiles"]["cloud"].update(api_key_env="llm_api_key_x"), "api_key_env"),
     ],
 )
 def test_invalid_routing_disables_every_profile_and_says_why(mutate, needle) -> None:
@@ -248,29 +251,29 @@ def _restore_routing():
 
 
 def _install(section: dict[str, Any]) -> None:
-    routing = build_routing(section, BASE, environ={"CLOUD_KEY": "k"})
+    routing = build_routing(section, BASE, environ={"LLM_API_KEY_CLOUD": "k"})
     assert routing.error is None
     llm_routing.set_routing(routing)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("assigned", "fallback", "verdict", "vision", "expected"),
+    ("assigned", "fallback", "verdict", "feature", "expected", "described"),
     [
-        ("cloud", "local", "allowed", False, "cloud"),
-        ("cloud", "local", "denied", False, "local"),
-        ("cloud", None, "denied", False, Skip),
-        ("cloud", "local", "unknown", False, Defer),
-        ("cloud", None, "unknown", False, Defer),
-        ("local", "local", None, False, "local"),
-        ("cloud", "local-novision", "denied", True, Skip),
-        ("cloud", "local-novision", "denied", False, "local-novision"),
+        ("cloud", "local", "allowed", "summaries", "cloud", "sends"),
+        ("cloud", "local", "denied", "summaries", "local", "falls_back"),
+        ("cloud", None, "denied", "summaries", Skip, "skips"),
+        ("cloud", "local", "unknown", "summaries", Defer, "unknown"),
+        ("cloud", None, "unknown", "summaries", Defer, "unknown"),
+        ("local", "local", None, "summaries", "local", "sends"),
+        ("cloud", "local-novision", "denied", "vision_describe", Skip, "skips"),
+        ("cloud", "local-novision", "denied", "summaries", "local-novision", "falls_back"),
     ],
 )
 async def test_resolve_never_sends_offhost_without_an_allowed_answer(
-    policy, assigned, fallback, verdict, vision, expected
+    policy, assigned, fallback, verdict, feature, expected, described
 ) -> None:
-    section = _section(features={"summaries": assigned})
+    section = _section(features={feature: assigned})
     section["profiles"]["local-novision"] = {**LOCAL, "vision_model": ""}
     if fallback is None:
         section["routing"].pop("local_fallback")
@@ -280,13 +283,14 @@ async def test_resolve_never_sends_offhost_without_an_allowed_answer(
     if verdict is not None:
         policy.verdicts["d"] = verdict
 
-    result = await llm_routing.resolve("d", "summaries", vision=vision)
+    result = await llm_routing.resolve("d", feature)
 
     if isinstance(expected, str):
         assert isinstance(result, Resolved)
         assert result.profile.name == expected
     else:
         assert type(result) is expected
+    assert llm_routing.describe_route(feature, verdict or "allowed", "d") == described
 
 
 @pytest.mark.asyncio
@@ -555,17 +559,15 @@ def test_a_profile_is_not_agentic_by_the_inherited_allowlist() -> None:
 
 
 @pytest.mark.parametrize(
-    ("patch", "vision"),
-    [({"provider": "disabled"}, False), ({"vision_model": ""}, True)],
+    ("patch", "feature"),
+    [({"provider": "disabled"}, "summaries"), ({"vision_model": ""}, "vision_describe")],
 )
-def test_resolve_without_ceiling_skips_an_unusable_profile(policy, patch, vision) -> None:
-    section = _section(features={"vision_describe": "cloud"})
+def test_resolve_without_ceiling_skips_an_unusable_profile(policy, patch, feature) -> None:
+    section = _section(features={feature: "cloud"})
     section["profiles"]["cloud"].update(patch)
     _install(section)
 
-    assert isinstance(
-        llm_routing.resolve_without_ceiling("vision_describe", vision=vision), Skip
-    )
+    assert isinstance(llm_routing.resolve_without_ceiling(feature), Skip)
 
 
 @pytest.mark.parametrize(

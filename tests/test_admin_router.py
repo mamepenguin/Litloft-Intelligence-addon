@@ -513,7 +513,7 @@ def llm_env(monkeypatch, tmp_path):
 
     monkeypatch.setenv("SEARCH_CONFIG_PATH", str(tmp_path / "missing.yml"))
     monkeypatch.setenv("LLM_API_KEY", "sk-test")
-    monkeypatch.setenv("CLOUD_KEY", "sk-cloud")
+    monkeypatch.setenv("LLM_API_KEY_CLOUD", "sk-cloud")
     llm_routing.set_routing(None)
     yield
     llm_routing.set_routing(None)
@@ -530,7 +530,7 @@ _CLOUD = {
     "base_url": "https://api.example/v1",
     "model": "gpt-mini",
     "offhost": True,
-    "api_key_env": "CLOUD_KEY",
+    "api_key_env": "LLM_API_KEY_CLOUD",
 }
 _ROUTED = {
     "profiles": {"local": _LOCAL, "cloud": _CLOUD},
@@ -586,7 +586,7 @@ def test_llm_put_saves_and_applies_without_a_restart(
     routing = llm_routing.current_routing()
     assert (set(routing.profiles), routing.features) == ({"local", "cloud"}, {"rag": "cloud"})
 
-    monkeypatch.delenv("CLOUD_KEY")
+    monkeypatch.delenv("LLM_API_KEY_CLOUD")
     body = client.get("/admin/llm").json()
     assert body["legacy"] is False
     assert body["profiles"]["cloud"]["api_key_present"] is False
@@ -618,6 +618,11 @@ def test_llm_put_with_a_new_output_language_asks_for_a_restart(
             {"profiles": {f"p{i}": _LOCAL for i in range(17)}, "routing": {"default": "p0"}},
             "16",
         ),
+        (
+            {"profiles": {"local": _LOCAL, "cloud": {**_CLOUD, "api_key_env": "CORE_INTERNAL_SECRET"}}},
+            "api_key_env",
+        ),
+        ({"routing": {**_ROUTED["routing"], "junk": "x" * 70000}}, "bytes"),
     ],
 )
 def test_llm_put_rejects_and_changes_nothing(
@@ -635,6 +640,71 @@ def test_llm_put_rejects_and_changes_nothing(
     assert needle in response.json()["detail"]
     assert not overrides_path(data_dir).is_file()
     assert llm_routing.current_routing() is before
+
+
+def test_llm_get_sees_a_yaml_key_and_the_legacy_agentic_flag(
+    client, llm_env, monkeypatch, tmp_path
+) -> None:
+    import yaml
+
+    config_file = tmp_path / "with-key.yml"
+    config_file.write_text(yaml.safe_dump({"llm": {
+        "provider": "openai_compatible", "base_url": "https://x/v1", "model": "m",
+        "api_key": "yaml-key", "agentic_mode": "auto", "agentic_models": [{"name": "m"}],
+    }}))
+    monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
+    monkeypatch.delenv("LLM_API_KEY")
+
+    profile = client.get("/admin/llm").json()["profiles"]["default"]
+
+    assert (profile["api_key_present"], profile["agentic"]) == (True, True)
+
+
+def test_llm_get_body_can_be_saved_back_unchanged(client, llm_env, monkeypatch) -> None:
+    from app.routers import admin as admin_module
+
+    monkeypatch.setattr(admin_module, "_notify_core_restart_pending", _ok_notify())
+    client.put("/admin/llm", json={**_ROUTED, "profiles": {
+        "local": {**_LOCAL, "agentic": True}, "cloud": _CLOUD,
+    }})
+    body = client.get("/admin/llm").json()
+
+    response = client.put("/admin/llm", json={
+        "profiles": body["profiles"], "routing": body["routing"],
+    })
+
+    assert response.status_code == 200
+    saved = client.get("/admin/llm").json()["profiles"]
+    assert saved["local"]["agentic"] is True
+
+
+def test_llm_restart_is_reported_until_the_language_is_applied(
+    client, llm_env, monkeypatch
+) -> None:
+    from app.routers import admin as admin_module
+
+    import dataclasses
+
+    settings = admin_module.config.settings
+    monkeypatch.setattr(
+        admin_module.config,
+        "settings",
+        dataclasses.replace(
+            settings, llm=dataclasses.replace(settings.llm, output_language="en")
+        ),
+    )
+    notify = _ok_notify()
+    monkeypatch.setattr(admin_module, "_notify_core_restart_pending", notify)
+
+    client.put("/admin/llm", json={**_ROUTED, "output_language": "en"})
+    assert client.get("/admin/llm").json()["output_language_restart_pending"] is False
+    notify.assert_not_awaited()
+
+    response = client.delete("/admin/llm")
+
+    assert response.json()["restart_required"] is True
+    notify.assert_awaited_once()
+    assert client.get("/admin/llm").json()["output_language_restart_pending"] is True
 
 
 def test_llm_delete_returns_to_the_yaml_immediately(
