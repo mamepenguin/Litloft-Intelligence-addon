@@ -430,7 +430,7 @@ _LLM_MAX_PROFILES = 16
 _LLM_STRING_MAX_LEN = 2048
 _LLM_BODY_MAX_BYTES = 64 * 1024
 # Shown by GET, never stored: a GET body can be sent back unchanged.
-_LLM_VIEW_ONLY_KEYS = frozenset({"api_key_present"})
+_LLM_VIEW_ONLY_KEYS = frozenset({"api_key_present", "api_key_source"})
 
 
 class LLMUpdate(BaseModel):

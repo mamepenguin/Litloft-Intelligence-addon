@@ -676,6 +676,21 @@ def test_llm_get_names_where_the_legacy_key_comes_from(
     assert profile["api_key_source"] == source
 
 
+def test_the_legacy_view_saves_back_unchanged(client, llm_env, monkeypatch) -> None:
+    from app import llm_routing
+    from app.routers import admin as admin_module
+
+    monkeypatch.setattr(admin_module, "_notify_core_restart_pending", _ok_notify())
+    body = client.get("/admin/llm").json()
+
+    response = client.put(
+        "/admin/llm", json={"profiles": body["profiles"], "routing": body["routing"]}
+    )
+
+    assert response.status_code == 200
+    assert llm_routing.current_routing().error is None
+
+
 def test_llm_get_body_can_be_saved_back_unchanged(client, llm_env, monkeypatch) -> None:
     from app.routers import admin as admin_module
 
