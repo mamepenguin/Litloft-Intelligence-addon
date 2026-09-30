@@ -851,6 +851,17 @@
         "response_filter": null
       },
       {
+        "path": "/admin/llm/exposure",
+        "methods": [
+          "GET"
+        ],
+        "drive_optional": true,
+        "pre_check": {
+          "type": "admin"
+        },
+        "response_filter": null
+      },
+      {
         "path": "/admin/rag",
         "methods": [
           "GET",

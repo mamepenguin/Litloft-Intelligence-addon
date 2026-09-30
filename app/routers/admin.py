@@ -24,6 +24,7 @@ master-viewer judge.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -425,100 +426,183 @@ def _validate_features(payload: FeaturesUpdate) -> None:
 
 _LLM_PROVIDERS = ("disabled", "ollama", "openai_compatible")
 _LLM_OUTPUT_LANGUAGES = ("auto", "ja", "en")
-_LLM_API_KEY_ENV_VAR = "LLM_API_KEY"
-_LLM_BASE_URL_MAX_LEN = 2048
-_LLM_MODEL_MAX_LEN = 256
+_LLM_MAX_PROFILES = 16
+_LLM_STRING_MAX_LEN = 2048
+_LLM_BODY_MAX_BYTES = 64 * 1024
+# Shown by GET, never stored: a GET body can be sent back unchanged.
+_LLM_VIEW_ONLY_KEYS = frozenset({"api_key_present"})
 
 
 class LLMUpdate(BaseModel):
-    provider: str | None = None
-    base_url: str | None = None
-    model: str | None = None
+    profiles: dict[str, dict[str, Any]]
+    routing: dict[str, Any]
     output_language: str | None = None
-    vision_model: str | None = None
+
+
+def _llm_view() -> dict[str, Any]:
+    from app.llm_overrides import overrides_path
+    from app.llm_routing import (
+        LEGACY_API_KEY_ENV,
+        LEGACY_PROFILE,
+        LLM_FEATURES,
+        build_routing,
+    )
+
+    section, base = config.load_llm_sources()
+    routing = build_routing(section, base, os.environ)
+    legacy = "profiles" not in section
+    if legacy:
+        legacy_profile = routing.profiles[LEGACY_PROFILE]
+        profiles = {
+            LEGACY_PROFILE: {
+                "provider": base.provider,
+                "base_url": base.base_url,
+                "model": base.model,
+                "vision_model": base.vision_model,
+                "offhost": legacy_profile.offhost,
+                "agentic": legacy_profile.agentic,
+                "api_key_env": LEGACY_API_KEY_ENV,
+                # The legacy key may also come from YAML, which a saved
+                # profile does not carry over.
+                "api_key_present": bool(base.api_key),
+            }
+        }
+        stored_routing: dict[str, Any] = {"default": LEGACY_PROFILE}
+    else:
+        raw = section.get("profiles")
+        profiles = {k: dict(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
+        stored = section.get("routing")
+        stored_routing = dict(stored) if isinstance(stored, dict) else {}
+        for profile in profiles.values():
+            env = profile.get("api_key_env")
+            profile["api_key_present"] = bool(isinstance(env, str) and os.getenv(env))
+    return {
+        "profiles": profiles,
+        "routing": stored_routing,
+        "legacy": legacy,
+        "error": routing.error,
+        "output_language": base.output_language,
+        "output_language_restart_pending": (
+            base.output_language != config.settings.llm.output_language
+        ),
+        "features": list(LLM_FEATURES),
+        "available_providers": list(_LLM_PROVIDERS),
+        "available_output_languages": list(_LLM_OUTPUT_LANGUAGES),
+        "overrides_present": overrides_path().is_file(),
+    }
+
+
+def _reload_llm_routing() -> bool:
+    """Apply the on-disk LLM settings now; True when a restart is still owed."""
+    from app import llm_routing
+
+    section, base = config.load_llm_sources()
+    llm_routing.set_routing(llm_routing.build_routing(section, base, os.environ))
+    return base.output_language != config.settings.llm.output_language
 
 
 @router.get("/llm")
 async def get_llm_config() -> dict[str, Any]:
-    """Return the effective LLM config = baseline + on-disk overrides.
-
-    Same idempotency guarantee as ``GET /admin/features`` /
-    ``GET /admin/transcription``: a freshly-saved GUI value is
-    visible before the container restart swaps the cached config.
-    """
-    from app import llm_overrides as lo
-
-    base = config.settings.llm
-    overrides = lo.read_overrides()
-
-    def resolve(field: str) -> Any:
-        if overrides is not None:
-            override_value = getattr(overrides, field)
-            if override_value is not None:
-                return override_value
-        return getattr(base, field)
-
-    return {
-        "provider": resolve("provider"),
-        "base_url": resolve("base_url"),
-        "model": resolve("model"),
-        "output_language": resolve("output_language"),
-        "vision_model": resolve("vision_model"),
-        "available_providers": list(_LLM_PROVIDERS),
-        "available_output_languages": list(_LLM_OUTPUT_LANGUAGES),
-        "api_key_present": bool(os.getenv(_LLM_API_KEY_ENV_VAR, "")),
-        "api_key_env_var": _LLM_API_KEY_ENV_VAR,
-        "overrides_present": overrides is not None,
-    }
+    """The LLM profiles and routing as saved, and whether they are valid."""
+    return _llm_view()
 
 
 @router.put("/llm")
 async def update_llm_config(payload: LLMUpdate) -> dict[str, Any]:
+    """Save profiles and routing and apply them to the next job.
+
+    Only ``output_language`` still needs a restart: workers read it from
+    the settings loaded at start-up.
+    """
     from app import llm_overrides as lo
+    from app.llm_routing import build_routing
 
     _validate_llm(payload)
-    overrides = lo.LLMOverrides(
-        provider=payload.provider,
-        base_url=payload.base_url,
-        model=payload.model,
-        output_language=payload.output_language,
-        vision_model=payload.vision_model,
+    profiles = {
+        name: {k: v for k, v in profile.items() if k not in _LLM_VIEW_ONLY_KEYS}
+        for name, profile in payload.profiles.items()
+    }
+    _, base = config.load_llm_sources()
+    checked = build_routing(
+        {"profiles": profiles, "routing": payload.routing},
+        base,
+        os.environ,
     )
-    path = lo.write_overrides(
-        overrides, updated_at=datetime.now(UTC).isoformat()
+    if checked.error is not None:
+        raise HTTPException(status_code=400, detail=checked.error)
+
+    path = lo.write_profiles(
+        profiles,
+        payload.routing,
+        payload.output_language,
+        updated_at=datetime.now(UTC).isoformat(),
     )
-    logger.info("LLM overrides saved at %s", path)
-    notify_status = await _notify_core_restart_pending()
+    logger.info("LLM profiles saved at %s", path)
+    restart_required = _reload_llm_routing()
+    notify_status = (
+        await _notify_core_restart_pending() if restart_required else "skipped"
+    )
     return {
         "status": "saved",
-        "restart_required": True,
+        "restart_required": restart_required,
         "core_notified": notify_status,
     }
 
 
 @router.delete("/llm")
 async def reset_llm_config() -> dict[str, Any]:
+    """Drop the GUI-saved LLM settings and apply the YAML's now."""
     from app import llm_overrides as lo
 
     removed = lo.delete_overrides()
-    notify_status = await _notify_core_restart_pending()
+    restart_required = _reload_llm_routing()
+    notify_status = (
+        await _notify_core_restart_pending() if restart_required else "skipped"
+    )
     return {
         "status": "reset",
         "removed": removed,
-        "restart_required": removed,
+        "restart_required": restart_required,
         "core_notified": notify_status,
     }
 
 
+@router.get("/llm/exposure")
+async def get_llm_exposure() -> dict[str, Any]:
+    """For each feature on an off-host profile, what each drive does with it.
+
+    ``sends`` (the drive allows ``llm_cloud``), ``falls_back`` (it uses the
+    local fallback), ``skips`` (no fallback) or ``unknown`` (the policy
+    could not be read).
+    """
+    from app import llm_routing, policy_client
+
+    routing = llm_routing.current_routing()
+    drives = sorted(config.settings.drive_mounts)
+    verdicts: dict[str, str] = {}
+    features: dict[str, Any] = {}
+    for feature in llm_routing.LLM_FEATURES:
+        name = routing.features.get(feature, routing.default)
+        profile = routing.profiles.get(name) if name is not None else None
+        entry: dict[str, Any] = {
+            "profile": name if profile is not None else None,
+            "offhost": bool(profile and profile.offhost),
+        }
+        if profile is not None and profile.offhost:
+            for drive in drives:
+                if drive not in verdicts:
+                    verdicts[drive] = await policy_client.lookup_feature(
+                        drive, llm_routing.CLOUD_POLICY_FEATURE
+                    )
+            entry["drives"] = {
+                drive: llm_routing.describe_route(feature, verdicts[drive], drive)
+                for drive in drives
+            }
+        features[feature] = entry
+    return {"features": features, "local_fallback": routing.local_fallback}
+
+
 def _validate_llm(payload: LLMUpdate) -> None:
-    if payload.provider is not None and payload.provider not in _LLM_PROVIDERS:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"llm.provider must be one of {list(_LLM_PROVIDERS)}, "
-                f"got {payload.provider!r}"
-            ),
-        )
     if (
         payload.output_language is not None
         and payload.output_language not in _LLM_OUTPUT_LANGUAGES
@@ -531,34 +615,32 @@ def _validate_llm(payload: LLMUpdate) -> None:
                 f"{payload.output_language!r}"
             ),
         )
-    if payload.base_url is not None and len(payload.base_url) > _LLM_BASE_URL_MAX_LEN:
+    if len(json.dumps(payload.model_dump())) > _LLM_BODY_MAX_BYTES:
+        raise HTTPException(
+            status_code=400, detail=f"llm settings must be <= {_LLM_BODY_MAX_BYTES} bytes"
+        )
+    if len(payload.profiles) > _LLM_MAX_PROFILES:
         raise HTTPException(
             status_code=400,
-            detail=f"llm.base_url must be <= {_LLM_BASE_URL_MAX_LEN} chars",
+            detail=f"at most {_LLM_MAX_PROFILES} LLM profiles",
         )
-    if payload.model is not None and len(payload.model) > _LLM_MODEL_MAX_LEN:
-        raise HTTPException(
-            status_code=400,
-            detail=f"llm.model must be <= {_LLM_MODEL_MAX_LEN} chars",
-        )
-    if (
-        payload.vision_model is not None
-        and len(payload.vision_model) > _LLM_MODEL_MAX_LEN
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=f"llm.vision_model must be <= {_LLM_MODEL_MAX_LEN} chars",
-        )
-    for field, value in (
-        ("base_url", payload.base_url),
-        ("model", payload.model),
-        ("vision_model", payload.vision_model),
-    ):
-        if value is not None and ("\n" in value or "\r" in value or "\x00" in value):
-            raise HTTPException(
-                status_code=400,
-                detail=f"llm.{field} must not contain control characters",
-            )
+    for name, profile in payload.profiles.items():
+        for field, value in profile.items():
+            if not isinstance(value, str):
+                continue
+            if len(value) > _LLM_STRING_MAX_LEN:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"llm.profiles.{name}.{field} is too long",
+                )
+            if "\n" in value or "\r" in value or "\x00" in value:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"llm.profiles.{name}.{field} must not contain "
+                        "control characters"
+                    ),
+                )
 
 
 # ---------------------------------------------------------------------------

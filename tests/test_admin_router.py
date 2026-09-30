@@ -507,122 +507,261 @@ def test_features_delete_removes_overrides(
 # ---------------------------------------------------------------------------
 
 
-def test_llm_get_returns_baseline(client, monkeypatch) -> None:
+@pytest.fixture()
+def llm_env(monkeypatch, tmp_path):
+    from app import llm_routing
+
+    monkeypatch.setenv("SEARCH_CONFIG_PATH", str(tmp_path / "missing.yml"))
     monkeypatch.setenv("LLM_API_KEY", "sk-test")
-    response = client.get("/admin/llm")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["available_providers"] == ["disabled", "ollama", "openai_compatible"]
-    assert body["available_output_languages"] == ["auto", "ja", "en"]
-    assert body["api_key_present"] is True
-    assert body["api_key_env_var"] == "LLM_API_KEY"
+    monkeypatch.setenv("LLM_API_KEY_CLOUD", "sk-cloud")
+    llm_routing.set_routing(None)
+    yield
+    llm_routing.set_routing(None)
+
+
+_LOCAL = {
+    "provider": "ollama",
+    "base_url": "http://ollama:11434",
+    "model": "qwen3:14b",
+    "offhost": False,
+}
+_CLOUD = {
+    "provider": "openai_compatible",
+    "base_url": "https://api.example/v1",
+    "model": "gpt-mini",
+    "offhost": True,
+    "api_key_env": "LLM_API_KEY_CLOUD",
+}
+_ROUTED = {
+    "profiles": {"local": _LOCAL, "cloud": _CLOUD},
+    "routing": {"default": "local", "local_fallback": "local", "features": {"rag": "cloud"}},
+}
+
+
+def test_llm_get_shows_the_legacy_section_as_one_profile(client, llm_env) -> None:
+    body = client.get("/admin/llm").json()
+
+    assert body["legacy"] is True
+    assert body["error"] is None
     assert body["overrides_present"] is False
+    assert body["routing"] == {"default": "default"}
+    assert body["profiles"]["default"]["api_key_env"] == "LLM_API_KEY"
+    assert body["profiles"]["default"]["api_key_present"] is True
+    assert body["profiles"]["default"]["offhost"] is True
+    assert body["available_output_languages"] == ["auto", "ja", "en"]
 
 
-def test_llm_get_reflects_missing_api_key(client, monkeypatch) -> None:
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
-    body = client.get("/admin/llm").json()
-    assert body["api_key_present"] is False
-
-
-def test_llm_get_reflects_saved_overrides_before_restart(
-    client, admin_app
+def test_llm_get_reads_v1_overrides_into_the_legacy_profile(
+    client, admin_app, llm_env
 ) -> None:
     _app, data_dir = admin_app
-    from app.llm_overrides import (
-        LLMOverrides,
-        write_overrides as write_llm,
+    from app.llm_overrides import LLMOverrides, write_overrides
+
+    write_overrides(
+        LLMOverrides(provider="ollama", model="gemma4:e4b"), data_dir=data_dir
     )
-    write_llm(
-        LLMOverrides(
-            provider="ollama",
-            model="gemma4:e4b",
-            base_url="http://host.docker.internal:11434",
-        ),
-        data_dir=data_dir,
-    )
-    body = client.get("/admin/llm").json()
-    assert body["provider"] == "ollama"
-    assert body["model"] == "gemma4:e4b"
-    assert body["base_url"] == "http://host.docker.internal:11434"
-    assert body["overrides_present"] is True
+
+    profile = client.get("/admin/llm").json()["profiles"]["default"]
+
+    assert (profile["provider"], profile["model"]) == ("ollama", "gemma4:e4b")
 
 
-def test_llm_put_persists_payload(client, admin_app, monkeypatch) -> None:
+def test_llm_put_saves_and_applies_without_a_restart(
+    client, admin_app, llm_env, monkeypatch
+) -> None:
     _app, data_dir = admin_app
+    from app import llm_routing
+    from app.llm_overrides import read_profiles
     from app.routers import admin as admin_module
 
-    monkeypatch.setattr(
-        admin_module, "_notify_core_restart_pending", _ok_notify()
-    )
+    notify = _ok_notify()
+    monkeypatch.setattr(admin_module, "_notify_core_restart_pending", notify)
 
-    response = client.put(
-        "/admin/llm",
-        json={
-            "provider": "ollama",
-            "base_url": "http://host.docker.internal:11434",
-            "model": "gemma4:e4b",
-            "output_language": "ja",
-            "vision_model": "llava:13b",
-        },
-    )
+    response = client.put("/admin/llm", json=_ROUTED)
+
     assert response.status_code == 200
-    from app.llm_overrides import read_overrides as read_llm
-    persisted = read_llm(data_dir=data_dir)
-    assert persisted is not None
-    assert persisted.provider == "ollama"
-    assert persisted.model == "gemma4:e4b"
-    assert persisted.vision_model == "llava:13b"
+    assert response.json()["restart_required"] is False
+    notify.assert_not_awaited()
+    assert read_profiles(data_dir=data_dir) == _ROUTED
+    routing = llm_routing.current_routing()
+    assert (set(routing.profiles), routing.features) == ({"local", "cloud"}, {"rag": "cloud"})
+
+    monkeypatch.delenv("LLM_API_KEY_CLOUD")
+    body = client.get("/admin/llm").json()
+    assert body["legacy"] is False
+    assert body["profiles"]["cloud"]["api_key_present"] is False
+    assert body["routing"] == _ROUTED["routing"]
 
 
-def test_llm_put_rejects_unknown_provider(client) -> None:
-    response = client.put(
-        "/admin/llm",
-        json={"provider": "anthropic"},
-    )
-    assert response.status_code == 400
-    assert "provider" in response.json()["detail"]
-
-
-def test_llm_put_rejects_invalid_output_language(client) -> None:
-    response = client.put(
-        "/admin/llm",
-        json={"output_language": "es"},
-    )
-    assert response.status_code == 400
-    assert "output_language" in response.json()["detail"]
-
-
-def test_llm_put_rejects_control_chars_in_url(client) -> None:
-    response = client.put(
-        "/admin/llm",
-        json={"base_url": "http://example.com/\nbad"},
-    )
-    assert response.status_code == 400
-
-
-def test_llm_delete_removes_overrides(
-    client, admin_app, monkeypatch
+def test_llm_put_with_a_new_output_language_asks_for_a_restart(
+    client, llm_env, monkeypatch
 ) -> None:
-    _app, data_dir = admin_app
-    from app.llm_overrides import (
-        LLMOverrides,
-        overrides_path as llm_overrides_path,
-        write_overrides as write_llm,
-    )
-    write_llm(LLMOverrides(provider="ollama"), data_dir=data_dir)
-    assert llm_overrides_path(data_dir).is_file()
-
     from app.routers import admin as admin_module
 
+    notify = _ok_notify()
+    monkeypatch.setattr(admin_module, "_notify_core_restart_pending", notify)
+    language = "en" if admin_module.config.settings.llm.output_language != "en" else "ja"
+
+    response = client.put("/admin/llm", json={**_ROUTED, "output_language": language})
+
+    assert response.json()["restart_required"] is True
+    notify.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("patch", "needle"),
+    [
+        ({"routing": {"default": "nope"}}, "nope"),
+        ({"output_language": "fr"}, "output_language"),
+        ({"profiles": {"local": {**_LOCAL, "base_url": "http://x\ny"}}}, "control"),
+        (
+            {"profiles": {f"p{i}": _LOCAL for i in range(17)}, "routing": {"default": "p0"}},
+            "16",
+        ),
+        (
+            {"profiles": {"local": _LOCAL, "cloud": {**_CLOUD, "api_key_env": "CORE_INTERNAL_SECRET"}}},
+            "api_key_env",
+        ),
+        ({"routing": {**_ROUTED["routing"], "junk": "x" * 70000}}, "bytes"),
+    ],
+)
+def test_llm_put_rejects_and_changes_nothing(
+    client, admin_app, llm_env, patch, needle
+) -> None:
+    _app, data_dir = admin_app
+    from app import llm_routing
+    from app.llm_overrides import overrides_path
+
+    before = llm_routing.current_routing()
+
+    response = client.put("/admin/llm", json={**_ROUTED, **patch})
+
+    assert response.status_code == 400
+    assert needle in response.json()["detail"]
+    assert not overrides_path(data_dir).is_file()
+    assert llm_routing.current_routing() is before
+
+
+def test_llm_get_sees_a_yaml_key_and_the_legacy_agentic_flag(
+    client, llm_env, monkeypatch, tmp_path
+) -> None:
+    import yaml
+
+    config_file = tmp_path / "with-key.yml"
+    config_file.write_text(yaml.safe_dump({"llm": {
+        "provider": "openai_compatible", "base_url": "https://x/v1", "model": "m",
+        "api_key": "yaml-key", "agentic_mode": "auto", "agentic_models": [{"name": "m"}],
+    }}))
+    monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
+    monkeypatch.delenv("LLM_API_KEY")
+
+    profile = client.get("/admin/llm").json()["profiles"]["default"]
+
+    assert (profile["api_key_present"], profile["agentic"]) == (True, True)
+
+
+def test_llm_get_body_can_be_saved_back_unchanged(client, llm_env, monkeypatch) -> None:
+    from app.routers import admin as admin_module
+
+    monkeypatch.setattr(admin_module, "_notify_core_restart_pending", _ok_notify())
+    client.put("/admin/llm", json={**_ROUTED, "profiles": {
+        "local": {**_LOCAL, "agentic": True}, "cloud": _CLOUD,
+    }})
+    body = client.get("/admin/llm").json()
+
+    response = client.put("/admin/llm", json={
+        "profiles": body["profiles"], "routing": body["routing"],
+    })
+
+    assert response.status_code == 200
+    from app import llm_routing
+
+    assert llm_routing.current_routing().error is None
+    saved = client.get("/admin/llm").json()["profiles"]
+    assert saved["local"]["agentic"] is True
+
+
+def test_llm_restart_is_reported_until_the_language_is_applied(
+    client, llm_env, monkeypatch
+) -> None:
+    from app.routers import admin as admin_module
+
+    import dataclasses
+
+    settings = admin_module.config.settings
     monkeypatch.setattr(
-        admin_module, "_notify_core_restart_pending", _ok_notify()
+        admin_module.config,
+        "settings",
+        dataclasses.replace(
+            settings, llm=dataclasses.replace(settings.llm, output_language="en")
+        ),
     )
+    notify = _ok_notify()
+    monkeypatch.setattr(admin_module, "_notify_core_restart_pending", notify)
+
+    client.put("/admin/llm", json={**_ROUTED, "output_language": "en"})
+    assert client.get("/admin/llm").json()["output_language_restart_pending"] is False
+    notify.assert_not_awaited()
 
     response = client.delete("/admin/llm")
-    assert response.status_code == 200
+
+    assert response.json()["restart_required"] is True
+    notify.assert_awaited_once()
+    assert client.get("/admin/llm").json()["output_language_restart_pending"] is True
+
+
+def test_llm_delete_returns_to_the_yaml_immediately(
+    client, admin_app, llm_env, monkeypatch
+) -> None:
+    _app, data_dir = admin_app
+    from app import llm_routing
+    from app.llm_overrides import overrides_path
+    from app.routers import admin as admin_module
+
+    notify = _ok_notify()
+    monkeypatch.setattr(admin_module, "_notify_core_restart_pending", notify)
+    client.put("/admin/llm", json=_ROUTED)
+
+    response = client.delete("/admin/llm")
+
+    notify.assert_not_awaited()
     assert response.json()["removed"] is True
-    assert not llm_overrides_path(data_dir).is_file()
+    assert not overrides_path(data_dir).is_file()
+    assert set(llm_routing.current_routing().profiles) == {"default"}
+
+
+def test_llm_exposure_says_what_each_drive_does(client, llm_env, monkeypatch) -> None:
+    from app import policy_client
+    from app.routers import admin as admin_module
+
+    import dataclasses
+
+    monkeypatch.setattr(
+        admin_module.config,
+        "settings",
+        dataclasses.replace(
+            admin_module.config.settings,
+            drive_mounts={"a": "/d/a", "b": "/d/b", "c": "/d/c"},
+        ),
+    )
+    monkeypatch.setattr(admin_module, "_notify_core_restart_pending", _ok_notify())
+    client.put("/admin/llm", json=_ROUTED)
+    verdicts = {"a": "allowed", "b": "denied", "c": "unknown"}
+
+    async def _lookup(drive, feature):
+        assert feature == "llm_cloud"
+        return verdicts[drive]
+
+    monkeypatch.setattr(policy_client, "lookup_feature", _lookup)
+
+    body = client.get("/admin/llm/exposure").json()
+
+    assert body["features"]["rag"] == {
+        "profile": "cloud",
+        "offhost": True,
+        "drives": {"a": "sends", "b": "falls_back", "c": "unknown"},
+    }
+    assert body["features"]["summaries"] == {"profile": "local", "offhost": False}
 
 
 # ---------------------------------------------------------------------------

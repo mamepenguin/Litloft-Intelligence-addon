@@ -25,6 +25,7 @@ from app.llm_overrides import PROVIDER_ENUM
 
 logger = logging.getLogger(__name__)
 
+VISION_FEATURES = frozenset({"vision_describe", "video_visual_index"})
 LLM_FEATURES = (
     "rag",
     "summaries",
@@ -41,6 +42,9 @@ LEGACY_PROFILE = "default"
 LEGACY_API_KEY_ENV = "LLM_API_KEY"
 
 _PROFILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+# A profile may only read keys the operator named for it: any other variable
+# (e.g. CORE_INTERNAL_SECRET) would be sent as a Bearer token to base_url.
+_API_KEY_ENV_RE = re.compile(r"^LLM_API_KEY(_[A-Z0-9]+)*$")
 _PROFILE_ONLY_KEYS = ("offhost", "agentic", "api_key_env")
 # Never inherited from the top-level ``llm`` section: a profile that omitted
 # its endpoint would otherwise send to, and with the key of, another one.
@@ -206,8 +210,12 @@ def _build_profile(
         if key in raw and not isinstance(raw[key], bool):
             raise _RoutingError(f"llm.profiles.{name}.{key} must be true or false")
     api_key_env = raw.get("api_key_env")
-    if api_key_env is not None and (not isinstance(api_key_env, str) or not api_key_env):
-        raise _RoutingError(f"llm.profiles.{name}.api_key_env must be a string")
+    if api_key_env is not None and (
+        not isinstance(api_key_env, str) or not _API_KEY_ENV_RE.fullmatch(api_key_env)
+    ):
+        raise _RoutingError(
+            f"llm.profiles.{name}.api_key_env must be LLM_API_KEY or LLM_API_KEY_<NAME>"
+        )
 
     knobs = dataclasses.replace(base, **{f: getattr(LLMConfig(), f) for f in _CONNECTION_FIELDS})
     values = {k: v for k, v in raw.items() if k not in _PROFILE_ONLY_KEYS}
@@ -284,32 +292,67 @@ def _client_for(active: _Active, profile: LLMProfile) -> LLMClient | OllamaLLMCl
     return client
 
 
-async def resolve(
-    drive: str, feature: str, *, vision: bool = False
-) -> Resolved | Skip | Defer:
+def _assigned(routing: LLMRouting, feature: str) -> LLMProfile | Skip:
     if feature not in LLM_FEATURES:
         raise ValueError(f"unknown LLM feature {feature!r}")
-    active = _current()
-    routing = active.routing
     name = routing.features.get(feature, routing.default)
     if name is None:
         return Skip(routing.error or "no LLM profile configured")
-    profile = routing.profiles[name]
+    return routing.profiles[name]
 
-    if profile.offhost:
-        verdict = await policy_client.lookup_feature(drive, CLOUD_POLICY_FEATURE)
-        if verdict == "unknown":
-            return Defer(f"{CLOUD_POLICY_FEATURE} policy for {drive!r} unavailable")
-        if verdict == "denied":
-            if routing.local_fallback is None:
-                return Skip(f"{CLOUD_POLICY_FEATURE} is off for {drive!r}")
-            profile = routing.profiles[routing.local_fallback]
 
+def _after_policy(
+    routing: LLMRouting, profile: LLMProfile, verdict: str, drive: str
+) -> LLMProfile | Skip | Defer:
+    """The profile an off-host assignment yields under ``verdict``."""
+    if verdict == "unknown":
+        return Defer(f"{CLOUD_POLICY_FEATURE} policy for {drive!r} unavailable")
+    if verdict == "denied":
+        if routing.local_fallback is None:
+            return Skip(f"{CLOUD_POLICY_FEATURE} is off for {drive!r}")
+        return routing.profiles[routing.local_fallback]
+    return profile
+
+
+def _serve(active: _Active, profile: LLMProfile, feature: str) -> Resolved | Skip:
     client = _client_for(active, profile)
-    if not client.enabled or (vision and not profile.config.vision_model.strip()):
+    needs_vision = feature in VISION_FEATURES
+    if not client.enabled or (needs_vision and not profile.config.vision_model.strip()):
         return Skip(f"profile {profile.name!r} cannot serve {feature}")
     return Resolved(profile=profile, client=client)
 
+
+async def resolve(drive: str, feature: str) -> Resolved | Skip | Defer:
+    active = _current()
+    profile = _assigned(active.routing, feature)
+    if isinstance(profile, Skip):
+        return profile
+    if profile.offhost:
+        verdict = await policy_client.lookup_feature(drive, CLOUD_POLICY_FEATURE)
+        profile = _after_policy(active.routing, profile, verdict, drive)
+        if not isinstance(profile, LLMProfile):
+            return profile
+    return _serve(active, profile, feature)
+
+
+def describe_route(feature: str, verdict: str, drive: str) -> str:
+    """What ``resolve`` would do for ``feature`` on a drive whose policy is
+    ``verdict``: ``sends``, ``falls_back``, ``skips`` or ``unknown``.
+    """
+    active = _current()
+    assigned = _assigned(active.routing, feature)
+    if isinstance(assigned, Skip):
+        return "skips"
+    picked = (
+        _after_policy(active.routing, assigned, verdict, drive)
+        if assigned.offhost
+        else assigned
+    )
+    if isinstance(picked, Defer):
+        return "unknown"
+    if isinstance(picked, Skip) or isinstance(_serve(active, picked, feature), Skip):
+        return "skips"
+    return "sends" if picked is assigned else "falls_back"
 
 
 def has_vision_profile(settings: Any | None = None) -> bool:
@@ -360,20 +403,14 @@ def default_status() -> tuple[LLMProfile | None, bool]:
     return profile, _client_for(active, profile).enabled
 
 
-def resolve_without_ceiling(feature: str, *, vision: bool = False) -> Resolved | Skip:
+def resolve_without_ceiling(feature: str) -> Resolved | Skip:
     """The profile ``feature`` is routed to, ignoring every drive's ceiling.
 
     For operator-run tools only (the eval runner); nothing reachable from
     a route or a worker may call it.
     """
-    if feature not in LLM_FEATURES:
-        raise ValueError(f"unknown LLM feature {feature!r}")
     active = _current()
-    name = active.routing.features.get(feature, active.routing.default)
-    if name is None:
-        return Skip(active.routing.error or "no LLM profile configured")
-    profile = active.routing.profiles[name]
-    client = _client_for(active, profile)
-    if not client.enabled or (vision and not profile.config.vision_model.strip()):
-        return Skip(f"profile {profile.name!r} cannot serve {feature}")
-    return Resolved(profile=profile, client=client)
+    profile = _assigned(active.routing, feature)
+    if isinstance(profile, Skip):
+        return profile
+    return _serve(active, profile, feature)

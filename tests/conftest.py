@@ -155,9 +155,10 @@ def use_llm(monkeypatch):
     asked.vision = []
 
     def _use(client=None, *, model="test-llm", vision_model=None, result=None):
-        async def _resolve(drive, feature, *, vision=False):
+        async def _resolve(drive, feature):
             import app.config as config
 
+            vision = feature in llm_routing.VISION_FEATURES
             asked.append((drive, feature))
             asked.vision.append(vision)
             if result is not None:

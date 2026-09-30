@@ -525,7 +525,7 @@ class VideoVisualWorker:
         if not _clip_candidates_exist(file_id):
             return False, "waiting_clip", None
 
-        resolved = await llm_routing.resolve(drive, "video_visual_index", vision=True)
+        resolved = await llm_routing.resolve(drive, "video_visual_index")
         if isinstance(resolved, Defer):
             return False, "policy_lookup_failed", None
         if not isinstance(resolved, Resolved):
@@ -783,7 +783,7 @@ class VideoVisualWorker:
         if not enabled:
             self._fail_run(run_id, "PolicyDisabled")
             return
-        resolved = await llm_routing.resolve(drive, "video_visual_index", vision=True)
+        resolved = await llm_routing.resolve(drive, "video_visual_index")
         if not isinstance(resolved, Resolved):
             self._release_unserved_run(run_id)
             return

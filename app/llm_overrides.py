@@ -36,6 +36,8 @@ logger = logging.getLogger(__name__)
 
 OVERRIDES_FILENAME = "llm-overrides.json"
 SCHEMA_VERSION = 1
+# Version 2 holds whole ``profiles`` and ``routing`` plus ``output_language``.
+PROFILES_SCHEMA_VERSION = 2
 
 PROVIDER_ENUM = ("disabled", "ollama", "openai_compatible")
 OUTPUT_LANGUAGE_ENUM = ("auto", "ja", "en")
@@ -66,14 +68,51 @@ def overrides_path(data_dir: str | os.PathLike[str] | None = None) -> Path:
 def read_overrides(
     data_dir: str | os.PathLike[str] | None = None,
 ) -> LLMOverrides | None:
-    raw = read_override_payload(
-        OVERRIDES_FILENAME,
-        schema_version=SCHEMA_VERSION,
-        data_dir=data_dir,
-    )
+    raw = _read_raw(data_dir)
     if raw is None:
         return None
     return _from_raw(raw)
+
+
+def read_profiles(
+    data_dir: str | os.PathLike[str] | None = None,
+) -> dict[str, Any] | None:
+    """The GUI-saved ``profiles`` and ``routing``, or None before any save.
+
+    Once saved they replace the YAML's wholesale; nothing is merged.
+    """
+    raw = _read_raw(data_dir)
+    if raw is None or raw.get("schema_version") != PROFILES_SCHEMA_VERSION:
+        return None
+    return {"profiles": raw.get("profiles"), "routing": raw.get("routing")}
+
+
+def write_profiles(
+    profiles: dict[str, Any],
+    routing: dict[str, Any],
+    output_language: str | None,
+    *,
+    data_dir: str | os.PathLike[str] | None = None,
+    updated_at: str | None = None,
+) -> Path:
+    payload: dict[str, Any] = {"profiles": profiles, "routing": routing}
+    if output_language is not None:
+        payload["output_language"] = output_language
+    return write_override_payload(
+        OVERRIDES_FILENAME,
+        payload,
+        schema_version=PROFILES_SCHEMA_VERSION,
+        data_dir=data_dir,
+        updated_at=updated_at,
+    )
+
+
+def _read_raw(data_dir: str | os.PathLike[str] | None) -> dict[str, Any] | None:
+    return read_override_payload(
+        OVERRIDES_FILENAME,
+        schema_version=(SCHEMA_VERSION, PROFILES_SCHEMA_VERSION),
+        data_dir=data_dir,
+    )
 
 
 def write_overrides(

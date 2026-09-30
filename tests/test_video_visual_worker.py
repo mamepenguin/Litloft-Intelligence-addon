@@ -862,7 +862,7 @@ class TestEnqueue:
         from app import llm_routing
         from tests.llm_helpers import resolved_with
 
-        async def _slow(drive, feature, *, vision=False):
+        async def _slow(drive, feature):
             await asyncio.sleep(0.01)
             return resolved_with(MagicMock(), vision_model="llava:13b")
 
