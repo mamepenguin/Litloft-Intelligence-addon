@@ -191,14 +191,14 @@ def _seed_indexed(
     s.close()
 
 
-def _seed_summary(Session, file_id="f1"):
+def _seed_summary(Session, file_id="f1", short="s"):
     s = Session()
     s.execute(text(
         "INSERT INTO file_summaries "
         "(file_id, short_summary, long_summary, model, context_type, "
         " context_chars, created_at) "
-        "VALUES (:fid, 's', 'l', 'm', 'video', 100, '2026-05-03T00:00:00')"
-    ), {"fid": file_id})
+        "VALUES (:fid, :short, 'l', 'm', 'video', 100, '2026-05-03T00:00:00')"
+    ), {"fid": file_id, "short": short})
     s.commit()
     s.close()
 
@@ -242,6 +242,18 @@ class TestRequeueAfterWhisper:
         summaries_worker.enqueue.assert_not_awaited()
         # auto_tags still enqueued because suggested_tags is empty
         auto_tags_worker.enqueue.assert_awaited_once_with("f1")
+
+    @pytest.mark.asyncio
+    async def test_enqueues_summaries_when_only_a_detailed_marker_exists(
+        self, patched, manager, workers
+    ):
+        _seed_indexed(patched)
+        _seed_summary(patched, short="")
+        summaries_worker, _ = workers
+
+        await manager.requeue_after_whisper("f1")
+
+        summaries_worker.enqueue.assert_awaited_once_with("f1")
 
     @pytest.mark.asyncio
     async def test_skips_auto_tags_when_row_exists(
