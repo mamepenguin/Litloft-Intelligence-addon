@@ -1000,6 +1000,38 @@ def parse_llm_config(
     return LLMConfig(**values)
 
 
+def load_llm_sources(
+    config_data: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], "LLMConfig"]:
+    """Read the ``llm`` section as it stands on disk now.
+
+    Returns the ``profiles`` / ``routing`` / ``offhost`` keys and the
+    top-level config they inherit from. GUI-saved profiles and routing
+    replace the YAML's; the other GUI fields merge over it. ``api_key``
+    comes from ``LLM_API_KEY`` only.
+    """
+    import os
+
+    from app import llm_overrides
+
+    if config_data is None:
+        config_data = load_config_file(
+            Path(os.environ.get("SEARCH_CONFIG_PATH", "/app/search-config.yml"))
+        )
+    llm_yaml_raw = config_data.get("llm", {})
+    llm_yaml = llm_yaml_raw if isinstance(llm_yaml_raw, dict) else {}
+    merged = llm_overrides.merge_into_dict(llm_yaml, llm_overrides.read_overrides())
+    saved = llm_overrides.read_profiles()
+    if saved is not None:
+        merged["profiles"] = saved["profiles"]
+        merged["routing"] = saved["routing"]
+    api_key = os.environ.get("LLM_API_KEY", "")
+    if api_key:
+        merged["api_key"] = api_key
+    section = {k: merged[k] for k in ("profiles", "routing", "offhost") if k in merged}
+    return section, parse_llm_config(merged)
+
+
 def load_settings() -> Settings:
     """Load settings from environment variables and config file.
 
@@ -1039,7 +1071,6 @@ def load_settings() -> Settings:
     # using whatever ``search-config.yml`` ships.
     from app import embedding_overrides as _embedding_overrides
     from app import features_overrides as _features_overrides
-    from app import llm_overrides as _llm_overrides
     from app import rag_overrides as _rag_overrides
 
     # Features (8 toggle gates)
@@ -1056,19 +1087,7 @@ def load_settings() -> Settings:
         }
     )
 
-    # LLM (provider / base_url / model / output_language / vision_model
-    # via GUI; api_key still env-only, sub-tuning still file-only)
-    llm_yaml_raw = config_data.get("llm", {})
-    llm_yaml = llm_yaml_raw if isinstance(llm_yaml_raw, dict) else {}
-    llm_merged = _llm_overrides.merge_into_dict(
-        llm_yaml, _llm_overrides.read_overrides()
-    )
-    llm_api_key_env = os.environ.get("LLM_API_KEY", "")
-    if llm_api_key_env:
-        # Env LLM_API_KEY wins over both the yaml field and any GUI
-        # override path (secrets do not live in the data volume).
-        llm_merged["api_key"] = llm_api_key_env
-    llm_config = parse_llm_config(llm_merged)
+    llm_section, llm_config = load_llm_sources(config_data)
 
     # RAG (only ``personal_history.enabled`` and
     # ``category_expansion.enabled`` are GUI-overridable; everything
@@ -1110,11 +1129,7 @@ def load_settings() -> Settings:
         memory=_parse_nested(config_data, "memory", MemoryConfig),
         features=features_config,
         llm=llm_config,
-        llm_section={
-            k: llm_merged[k]
-            for k in ("profiles", "routing", "offhost")
-            if k in llm_merged
-        },
+        llm_section=llm_section,
         summaries=_parse_nested(config_data, "summaries", SummariesConfig),
         rag=rag_config,
         transcription=_parse_transcription(config_data),

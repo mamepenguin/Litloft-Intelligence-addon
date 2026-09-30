@@ -586,3 +586,23 @@ def test_status_reports_the_default_profile(section, expected) -> None:
     status = _llm_status()
 
     assert (status.provider, status.model, status.enabled) == expected
+
+
+def test_saved_profiles_replace_the_yamls_wholesale(monkeypatch, tmp_path) -> None:
+    import yaml
+
+    from app import config
+    from app.llm_overrides import write_profiles
+
+    config_file = tmp_path / "search-config.yml"
+    config_file.write_text(yaml.safe_dump({"llm": _section(features={"rag": "cloud"})}))
+    monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
+    monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path))
+    write_profiles(
+        {"only": dict(LOCAL)}, {"default": "only"}, None, data_dir=tmp_path
+    )
+
+    section, _ = config.load_llm_sources()
+
+    assert section["profiles"] == {"only": LOCAL}
+    assert section["routing"] == {"default": "only"}

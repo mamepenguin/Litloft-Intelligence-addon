@@ -263,17 +263,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     "Summaries: queued %d previously indexed files", pending
                 )
 
-    # Initialize vision_describe worker. Starts only when the feature is
-    # live (mode != false) AND a vision model is configured AND the LLM
-    # client itself is enabled. Any of those missing → worker stays idle
-    # (the routers already 404 in that state, so no requests reach it).
+    # Vision workers start whenever the feature is on: a vision profile can
+    # be added from the GUI without a restart, and each job resolves its own.
     vision_worker = VisionDescribeWorker()
     dependencies._vision_worker = vision_worker
     vision_task: asyncio.Task | None = None
 
-    from app.config import is_vision_describe_available
-
-    if is_vision_describe_available(settings):
+    if settings.features.vision_describe != "false":
         vision_task = asyncio.create_task(
             vision_worker.run(), name="vision_describe_worker"
         )
@@ -300,16 +296,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     "Vision: queued %d previously indexed files", pending
                 )
 
-    # Initialize video-visual-index worker. Shares the same LLM client and
-    # enable rule as vision_describe: needs vision_model configured AND the
-    # LLM client itself enabled.
     video_visual_worker = VideoVisualWorker()
     dependencies._video_visual_worker = video_visual_worker
     video_visual_task: asyncio.Task | None = None
 
-    from app.config import is_video_visual_index_available
-
-    if is_video_visual_index_available(settings):
+    if settings.features.video_visual_index != "false":
         video_visual_task = asyncio.create_task(
             video_visual_worker.run(), name="video_visual_worker"
         )

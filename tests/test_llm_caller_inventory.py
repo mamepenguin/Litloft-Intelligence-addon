@@ -73,7 +73,7 @@ def test_only_output_language_is_read_from_the_llm_settings() -> None:
             ):
                 readers.add(rel)
 
-    assert readers == {"app/llm_routing.py", "app/routers/admin.py"}
+    assert readers == {"app/llm_routing.py"}
 
 
 def test_only_known_modules_import_the_client_types() -> None:

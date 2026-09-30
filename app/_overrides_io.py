@@ -44,7 +44,7 @@ def overrides_path(
 def read_override_payload(
     filename: str,
     *,
-    schema_version: int,
+    schema_version: int | tuple[int, ...],
     data_dir: str | os.PathLike[str] | None = None,
 ) -> dict[str, Any] | None:
     """Load and validate an override file's raw payload.
@@ -73,12 +73,15 @@ def read_override_payload(
             path,
         )
         return None
+    supported = (
+        (schema_version,) if isinstance(schema_version, int) else schema_version
+    )
     schema = raw.get("schema_version")
-    if schema is not None and schema != schema_version:
+    if schema is not None and schema not in supported:
         logger.warning(
             "Ignoring overrides at %s: unknown schema_version %r "
-            "(this build supports %d)",
-            path, schema, schema_version,
+            "(this build supports %s)",
+            path, schema, ", ".join(str(v) for v in supported),
         )
         return None
     return raw
