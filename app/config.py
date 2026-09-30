@@ -1147,33 +1147,31 @@ def is_vision_describe_available(settings_obj: "Settings | None" = None) -> bool
     """Return True iff the vision_describe feature is usable right now.
 
     Two independent gates: ``features.vision_describe`` must be set to a
-    non-``"false"`` mode, AND ``llm.vision_model`` must be a non-empty,
-    non-whitespace string (graceful degradation — an operator who set
-    ``vision_describe: manual`` but forgot ``vision_model`` sees the
-    feature silently disabled instead of producing confusing errors).
+    non-``"false"`` mode, AND some LLM profile must name a vision model
+    (graceful degradation — an operator who set ``vision_describe: manual``
+    but configured no vision model sees the feature silently disabled
+    instead of producing confusing errors). Whether a given drive can use
+    it is decided per job.
     """
+    from app.llm_routing import has_vision_profile
+
     source = settings_obj if settings_obj is not None else settings
-    mode = getattr(source.features, "vision_describe", "false")
-    if mode == "false":
+    if getattr(source.features, "vision_describe", "false") == "false":
         return False
-    model = getattr(source.llm, "vision_model", "") or ""
-    return bool(model.strip())
+    return has_vision_profile(source)
 
 
 def is_video_visual_index_available(settings_obj: "Settings | None" = None) -> bool:
     """Return True iff the video_visual_index feature is usable right now.
 
-    Same two-gate shape as :func:`is_vision_describe_available`: the
-    feature mode must be non-``"false"`` AND ``llm.vision_model`` must be
-    a non-empty, non-whitespace string — the video-visual pipeline reuses
-    the same Vision-capable model as vision_describe.
+    Same two-gate shape as :func:`is_vision_describe_available`.
     """
+    from app.llm_routing import has_vision_profile
+
     source = settings_obj if settings_obj is not None else settings
-    mode = getattr(source.features, "video_visual_index", "false")
-    if mode == "false":
+    if getattr(source.features, "video_visual_index", "false") == "false":
         return False
-    model = getattr(source.llm, "vision_model", "") or ""
-    return bool(model.strip())
+    return has_vision_profile(source)
 
 
 # Module-level singleton, loaded once at import time

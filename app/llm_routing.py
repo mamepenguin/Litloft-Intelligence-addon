@@ -226,21 +226,30 @@ def _build_profile(
 class _Active:
     routing: LLMRouting
     clients: dict[str, LLMClient | OllamaLLMClient]
+    # The settings object the routing belongs to; a different one (a reload,
+    # or a test swapping ``app.config.settings``) means it is stale.
+    settings: object
 
 
 _active: _Active | None = None
 
 
-def _load_from_settings() -> LLMRouting:
-    import app.config as config
-
-    return build_routing(config.settings.llm_section, config.settings.llm, os.environ)
+def _load_from_settings(settings: Any) -> LLMRouting:
+    return build_routing(
+        getattr(settings, "llm_section", None) or {}, settings.llm, os.environ
+    )
 
 
 def _current() -> _Active:
     global _active
-    if _active is None:
-        _active = _Active(routing=_load_from_settings(), clients={})
+    import app.config as config
+
+    if _active is None or _active.settings is not config.settings:
+        _active = _Active(
+            routing=_load_from_settings(config.settings),
+            clients={},
+            settings=config.settings,
+        )
     return _active
 
 
@@ -254,7 +263,13 @@ def set_routing(routing: LLMRouting | None) -> None:
     A job that already resolved keeps the client it was handed.
     """
     global _active
-    _active = None if routing is None else _Active(routing=routing, clients={})
+    import app.config as config
+
+    _active = (
+        None
+        if routing is None
+        else _Active(routing=routing, clients={}, settings=config.settings)
+    )
 
 
 def _client_for(active: _Active, profile: LLMProfile) -> LLMClient | OllamaLLMClient:
@@ -291,3 +306,19 @@ async def resolve(
         return Skip(f"profile {profile.name!r} cannot serve {feature}")
     return Resolved(profile=profile, client=client)
 
+
+
+def has_vision_profile(settings: Any | None = None) -> bool:
+    """True when some profile can describe images under ``settings``."""
+    import app.config as config
+
+    if settings is None or settings is config.settings:
+        active = _current()
+    else:
+        active = _Active(
+            routing=_load_from_settings(settings), clients={}, settings=settings
+        )
+    return any(
+        p.config.vision_model.strip() and _client_for(active, p).enabled
+        for p in active.routing.profiles.values()
+    )

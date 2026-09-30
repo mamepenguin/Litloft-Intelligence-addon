@@ -1015,6 +1015,10 @@ def _migrate_transcript_chunks_if_needed(conn: object) -> None:
                 "ALTER TABLE transcript_chunks ADD COLUMN text_refined_at TIMESTAMP"
             )
         )
+    if "refined_model" not in cols:
+        conn.execute(
+            text("ALTER TABLE transcript_chunks ADD COLUMN refined_model TEXT")
+        )
     if "text_original" in cols:
         conn.execute(
             text("ALTER TABLE transcript_chunks DROP COLUMN text_original")

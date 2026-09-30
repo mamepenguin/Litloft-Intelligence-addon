@@ -52,6 +52,9 @@ def search_engine(tmp_path):
             text("ALTER TABLE transcript_chunks ADD COLUMN text_original TEXT")
         )
         conn.execute(
+            text("ALTER TABLE transcript_chunks DROP COLUMN refined_model")
+        )
+        conn.execute(
             text(
                 "INSERT INTO transcript_chunks "
                 "(file_id, chunk_index, text, language, "
@@ -89,6 +92,10 @@ def _columns(engine):
 
 def test_migration_keeps_refined_at(search_engine):
     assert "text_refined_at" in _columns(search_engine)
+
+
+def test_migration_adds_refined_model(search_engine):
+    assert "refined_model" in _columns(search_engine)
 
 
 def test_migration_drops_text_original(search_engine):

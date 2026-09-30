@@ -40,7 +40,6 @@ from app.database import (
     VISION_DESCRIBE_PRESENT_SQL,
     get_search_db,
 )
-from app.dependencies import get_llm_client
 from app.drive_context import require_drive
 from app.models import Embedding, IndexedFile
 from app.policy_client import is_feature_enabled as _policy_is_feature_enabled
@@ -241,28 +240,11 @@ def filter_image_file_ids(drive: str, file_ids: list[str]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _vision_runtime_ready() -> bool:
-    """True when a request could actually be carried out.
-
-    Configuration alone is not enough: the worker that would do the
-    work only runs while the LLM client is enabled, and a client can be
-    disabled (provider "disabled", no base_url, no text model) with
-    ``llm.vision_model`` still set. Accepting a request in that state
-    queues it for nobody.
-    """
-    if not is_vision_describe_available(settings):
-        return False
-    try:
-        return bool(getattr(get_llm_client(), "enabled", False))
-    except Exception:
-        return False
-
-
 def _require_feature_available() -> None:
     """Shared gate — 404 when the whole feature is unreachable."""
     if settings.features.vision_describe == "false":
         raise HTTPException(status_code=404, detail="Feature disabled")
-    if not _vision_runtime_ready():
+    if not is_vision_describe_available(settings):
         # This collapses "features on but no usable vision LLM" into
         # the same 404 generate routes return. GET has its own override
         # below so users see a useful "unsupported" notice.
@@ -352,7 +334,7 @@ async def get_visual_description(
     if getattr(file_row, "drive", None) != drive:
         raise HTTPException(status_code=404, detail="File not found")
 
-    if not _vision_runtime_ready():
+    if not is_vision_describe_available(settings):
         return {
             "file_id": file_id,
             "visual_description": None,
@@ -477,7 +459,6 @@ __all__ = [
     "filter_image_file_ids",
     "generate_folder_visual_description",
     "generate_visual_description",
-    "get_llm_client",
     "get_search_db",
     "get_visual_description",
     "is_feature_enabled",

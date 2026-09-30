@@ -10,7 +10,7 @@ re-alignment step depends on the whole window being consistent.
 Public surface (called by ``app.routers.refine`` and tested directly):
 
 * ``WINDOW_SIZE``
-* ``refine_chunks(session, llm, chunks) -> RefineResult``
+* ``refine_chunks(session, llm, chunks, *, model) -> RefineResult``
 * ``realign_words_for_chunk(session, file_id, chunk_start, chunk_end,
   refined_text) -> int``
 * ``recompute_chunk_embeddings(chunk_ids)``
@@ -133,7 +133,7 @@ def _parse_llm_response(
 
 
 async def refine_chunks(
-    session: Any, llm: Any, chunks: list[Any]
+    session: Any, llm: Any, chunks: list[Any], *, model: str
 ) -> RefineResult:
     """Refine ``chunks`` in windows of ``WINDOW_SIZE`` via the LLM.
 
@@ -181,6 +181,7 @@ async def refine_chunks(
             new_text = by_id[int(chunk.id)]
             chunk.text = new_text
             chunk.text_refined_at = now
+            chunk.refined_model = model
             refined += 1
 
     return RefineResult(refined_count=refined, skipped_count=skipped)
@@ -296,7 +297,9 @@ def realign_words_for_chunk(
 # --- Re-chunk from word timestamps ------------------------------------------
 
 
-def rechunk_from_words(session: Any, file_id: str) -> list[int]:
+def rechunk_from_words(
+    session: Any, file_id: str, *, refined_model: str
+) -> list[int]:
     """Rebuild ``transcript_chunks`` rows from current ``transcript_words``.
 
     Whisper-small transcribes Japanese with almost no punctuation, so
@@ -388,6 +391,7 @@ def rechunk_from_words(session: Any, file_id: str) -> list[int]:
             timestamp_start=float(chunk["start"]),
             timestamp_end=float(chunk["end"]),
             text_refined_at=now,
+            refined_model=refined_model,
             # Phase 1C: refine intentionally drops chunk-level
             # speaker_id (matches the word-level NULL contract above).
             # ``_build_chunks_from_words`` may have produced a value
@@ -666,6 +670,7 @@ async def _run_refine_job(
                     chunk_index=r.chunk_index,
                     text=r.text,
                     text_refined_at=None,
+                    refined_model=None,
                     timestamp_start=r.timestamp_start,
                     timestamp_end=r.timestamp_end,
                 )
@@ -722,7 +727,9 @@ async def _run_refine_job(
 
                 # LLM call runs WITHOUT the write lock. refine_chunks only
                 # mutates the passed-in objects (no ORM / session access).
-                result = await refine_chunks(None, llm, window)
+                result = await refine_chunks(
+                    None, llm, window, model=resolved.profile.config.model
+                )
                 refined_total += result.refined_count
                 skipped_total += result.skipped_count
 
@@ -748,6 +755,7 @@ async def _run_refine_job(
                                 continue
                             orm.text = snap.text
                             orm.text_refined_at = snap.text_refined_at
+                            orm.refined_model = snap.refined_model
                             aligned = realign_words_for_chunk(
                                 session,
                                 orm.file_id,
@@ -786,7 +794,9 @@ async def _run_refine_job(
             if refined_total > 0:
                 new_ids: list[int] = []
                 with get_search_db() as session:
-                    new_ids = rechunk_from_words(session, file_id) or []
+                    new_ids = rechunk_from_words(
+                        session, file_id, refined_model=resolved.profile.config.model
+                    ) or []
                 if new_ids:
                     await recompute_chunk_embeddings(new_ids)
                     rechunked_count = len(new_ids)

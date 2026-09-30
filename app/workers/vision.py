@@ -45,12 +45,14 @@ from sqlalchemy.exc import OperationalError
 
 import app.config as config
 from app.config import settings
+from app import llm_routing
 from app.database import get_search_db
 from app.llm import (
     FAILURE_REQUEST_FAILED,
     FAILURE_VISION_UNSUPPORTED,
     VisionGeneration,
 )
+from app.llm_routing import Defer, Resolved
 from app.models import Embedding, IndexedFile
 from app.policy_client import is_file_feature_enabled
 
@@ -94,18 +96,6 @@ def _now_iso() -> str:
 def _is_image_mime(mime_type: str | None) -> bool:
     """Accept any ``image/*`` MIME. HEIC is handled via explicit conversion."""
     return bool(mime_type) and mime_type.lower().startswith("image/")
-
-
-def get_llm_client() -> Any:
-    """Thin indirection so worker tests can monkeypatch the LLM.
-
-    Mirrors the pattern used by other workers (via
-    ``app.dependencies.get_llm_client``) but kept local so tests don't
-    need to initialise the full dependency graph.
-    """
-    from app.dependencies import get_llm_client as _get
-
-    return _get()
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +349,22 @@ def _mark_pending(session: Any, file_id: str) -> None:
     )
 
 
+def _clear_pending(session: Any, file_id: str) -> None:
+    """Release a claim without a run: back to what the stored columns say.
+
+    A failed attempt clears the description, so a description still here
+    is the last success.
+    """
+    session.execute(
+        sql_text(
+            "UPDATE file_summaries SET visual_description_status = "
+            "CASE WHEN visual_description IS NOT NULL THEN 'success' END "
+            "WHERE file_id = :fid AND visual_description_status = 'pending'"
+        ),
+        {"fid": file_id},
+    )
+
+
 def _clear_vision_embeddings(session: Any, file_id: str) -> None:
     """Remove prior ``vision_description`` embeddings for this file.
 
@@ -526,24 +532,6 @@ class VisionDescribeWorker:
         if not config.is_vision_describe_available(settings):
             return False, "feature_unavailable"
 
-        # The worker task only runs when the LLM client is enabled
-        # (app/main.py), so accepting work here in that state would
-        # queue it for nobody: the row would be marked pending and stay
-        # that way, and startup recovery lives behind the same gate and
-        # would not free it either. Config can satisfy
-        # is_vision_describe_available while the client is disabled —
-        # provider "disabled", or an empty base_url / text model.
-        try:
-            llm_enabled = bool(getattr(get_llm_client(), "enabled", False))
-        except Exception as e:
-            logger.warning(
-                "vision: LLM client unavailable (%s); refusing to enqueue %s",
-                type(e).__name__, file_id,
-            )
-            return False, "llm_unavailable"
-        if not llm_enabled:
-            return False, "llm_unavailable"
-
         # Fail-closed on policy lookup failure: the file stays in the
         # queue mentally (caller can retry) and we never accidentally
         # run vision on a drive whose operator has opted out. Read paths
@@ -575,6 +563,13 @@ class VisionDescribeWorker:
                 return False, "not_an_image"
 
             state = _fetch_existing_vision(session, file_id)
+            drive = file_row.drive
+
+        resolved = await llm_routing.resolve(drive, "vision_describe", vision=True)
+        if isinstance(resolved, Defer):
+            return False, "policy_unavailable"
+        if not isinstance(resolved, Resolved):
+            return False, "llm_unavailable"
 
         # Already ours to do. Manual does not override this: asking
         # twice for the same work does not make it happen sooner, it
@@ -587,17 +582,16 @@ class VisionDescribeWorker:
 
         if state is not None and not manual:
             status, stored_model = state
-            same_model = (stored_model or "") == (settings.llm.vision_model or "")
-            # "success" is sticky for the SAME vision_model: re-running
-            # would just overwrite an identical description and burn
-            # LLM budget. Swap the model and we retry so the new model
-            # gets a chance.
-            if status == "success" and same_model:
+            # A description counts as done whichever model wrote it; only an
+            # explicit request replaces it, so a routing change never does.
+            if status == "success":
                 return False, "already_described"
-            # "unsupported" is sticky only for the SAME vision_model. If
-            # the operator swapped models we retry — the new model may
-            # handle images even if the old one didn't.
-            if status == "unsupported" and same_model:
+            # "unsupported" is a verdict about one model: the model this
+            # drive would use now gets its own chance.
+            if (
+                status == "unsupported"
+                and (stored_model or "") == resolved.profile.config.vision_model
+            ):
                 return False, "unsupported_sticky"
 
         return True, None
@@ -734,18 +728,26 @@ class VisionDescribeWorker:
         are written at deterministic points so the UI can poll and see
         progress. A best-effort WS emission happens at start / end.
         """
-        vision_model = settings.llm.vision_model or ""
-        llm = None
-        try:
-            llm = get_llm_client()
-        except Exception as e:
-            logger.warning(
-                "vision: LLM client unavailable (%s); aborting %s",
-                type(e).__name__, file_id,
+        with get_search_db() as session:
+            file_row = (
+                session.query(IndexedFile)
+                .filter(IndexedFile.file_id == file_id)
+                .first()
             )
+            drive = file_row.drive if file_row is not None else None
+        resolved = (
+            await llm_routing.resolve(drive, "vision_describe", vision=True)
+            if drive is not None
+            else None
+        )
+        if not isinstance(resolved, Resolved):
+            # Accepted under a routing that no longer serves this drive:
+            # drop the claim so the next sweep sees it as never attempted.
+            with get_search_db() as session:
+                _clear_pending(session, file_id)
             return
-        if not getattr(llm, "enabled", False):
-            return
+        vision_model = resolved.profile.config.vision_model
+        llm = resolved.client
 
         await _emit_ws_event(
             "intelligence.vision_describe.started",
@@ -919,7 +921,6 @@ __all__ = [
     "_mark_pending",
     "_preprocess_image",
     "_write_status",
-    "get_llm_client",
     "is_file_feature_enabled",
     "settings",
 ]

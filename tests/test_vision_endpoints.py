@@ -70,9 +70,6 @@ def feature_manual(monkeypatch, make_settings):
     monkeypatch.setattr("app.config.settings", settings)
     monkeypatch.setattr("app.routers.vision.settings", settings)
 
-    llm_stub = MagicMock()
-    llm_stub.enabled = True
-    monkeypatch.setattr("app.routers.vision.get_llm_client", lambda: llm_stub)
 
     monkeypatch.setattr(
         "app.routers.vision.is_feature_enabled",
@@ -390,7 +387,7 @@ class TestGetVisualDescription:
 
     @pytest.mark.asyncio
     async def test_a_disabled_client_reads_as_not_configured(
-        self, feature_manual, stub_indexed_file, monkeypatch,
+        self, feature_manual, stub_indexed_file, monkeypatch, make_settings,
     ):
         """A vision model set against a disabled client runs nothing.
 
@@ -399,11 +396,12 @@ class TestGetVisualDescription:
         would only queue something nobody would run.
         """
         stub_indexed_file()
-        disabled = MagicMock()
-        disabled.enabled = False
-        monkeypatch.setattr(
-            "app.routers.vision.get_llm_client", lambda: disabled
+        settings = make_settings(
+            features=FeaturesConfig(vision_describe="manual"),  # type: ignore[call-arg]
+            llm=LLMConfig(provider="disabled", vision_model="llava:13b"),
         )
+        monkeypatch.setattr("app.config.settings", settings)
+        monkeypatch.setattr("app.routers.vision.settings", settings)
 
         result = await get_visual_description(
             file_id="img-abc", drive="family"
