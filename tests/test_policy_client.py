@@ -108,3 +108,112 @@ async def test_is_feature_enabled_404_treated_as_disabled(monkeypatch):
 
     monkeypatch.setattr(policy_client.httpx, "AsyncClient", _Client)
     assert await policy_client.is_feature_enabled("ghost", "index") is False
+
+
+def _client_returning(outcome):
+    class _Resp:
+        def __init__(self, status, body):
+            self.status_code = status
+            self._body = body
+
+        def json(self):
+            if isinstance(self._body, Exception):
+                raise self._body
+            return self._body
+
+    class _Client:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return None
+        async def get(self, url, params=None):
+            if isinstance(outcome, Exception):
+                raise outcome
+            return _Resp(*outcome)
+
+    return _Client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        ((200, {"default": True, "features": {}}), "allowed"),
+        ((200, {"default": True, "features": {"llm_cloud": False}}), "denied"),
+        ((200, {"default": False, "features": {}}), "denied"),
+        ((200, {"default": False, "features": {"llm_cloud": True}}), "allowed"),
+        ((404, {}), "denied"),
+        ((500, {}), "unknown"),
+        ((200, {}), "unknown"),
+        ((200, {"features": {}}), "unknown"),
+        ((200, {"default": "yes", "features": {}}), "unknown"),
+        ((200, ["not", "a", "dict"]), "unknown"),
+        ((200, {"default": True, "features": {"llm_cloud": "yes"}}), "denied"),
+        ((200, {"default": True, "features": "x"}), "unknown"),
+        ((200, ValueError("not json")), "unknown"),
+        (__import__("httpx").ConnectError("boom"), "unknown"),
+    ],
+)
+async def test_lookup_feature_separates_denied_from_unknown(
+    monkeypatch, outcome, expected
+):
+    monkeypatch.setattr(policy_client.httpx, "AsyncClient", _client_returning(outcome))
+    assert await policy_client.lookup_feature("d", "llm_cloud") == expected
+
+
+@pytest.mark.asyncio
+async def test_lookup_feature_does_not_cache_unknown(monkeypatch):
+    monkeypatch.setattr(
+        policy_client.httpx, "AsyncClient", _client_returning((500, {}))
+    )
+    assert await policy_client.lookup_feature("d", "llm_cloud") == "unknown"
+    monkeypatch.setattr(
+        policy_client.httpx,
+        "AsyncClient",
+        _client_returning((200, {"default": True, "features": {}})),
+    )
+    assert await policy_client.lookup_feature("d", "llm_cloud") == "allowed"
+
+
+@pytest.mark.asyncio
+async def test_lookup_feature_does_not_cache_a_malformed_body(monkeypatch):
+    monkeypatch.setattr(
+        policy_client.httpx, "AsyncClient", _client_returning((200, {"features": {}}))
+    )
+    assert await policy_client.lookup_feature("d", "llm_cloud") == "unknown"
+    monkeypatch.setattr(
+        policy_client.httpx,
+        "AsyncClient",
+        _client_returning((200, {"default": True, "features": {}})),
+    )
+    assert await policy_client.lookup_feature("d", "llm_cloud") == "allowed"
+
+
+@pytest.mark.asyncio
+async def test_lookup_feature_asks_about_the_given_drive(monkeypatch):
+    asked = []
+
+    class _Client:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return None
+        async def get(self, url, params=None):
+            asked.append((url.rsplit("/", 1)[-1], params))
+            raise __import__("httpx").ConnectError("boom")
+
+    monkeypatch.setattr(policy_client.httpx, "AsyncClient", _Client)
+    await policy_client.lookup_feature("private", "llm_cloud")
+
+    assert asked == [("drive-policy", {"drive": "private", "addon": "intelligence"})]
+
+
+@pytest.mark.asyncio
+async def test_fail_open_reading_never_answers_a_strict_lookup(monkeypatch):
+    monkeypatch.setattr(
+        policy_client.httpx, "AsyncClient", _client_returning((200, {}))
+    )
+    assert await policy_client.is_feature_enabled("d", "llm_cloud") is True
+    monkeypatch.setattr(
+        policy_client.httpx, "AsyncClient", _client_returning((500, {}))
+    )
+
+    assert await policy_client.lookup_feature("d", "llm_cloud") == "unknown"

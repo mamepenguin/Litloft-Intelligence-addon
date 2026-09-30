@@ -4,7 +4,9 @@ Reads settings from environment variables and search-config.yml.
 All config values are immutable after initialization.
 """
 
+import dataclasses
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -723,6 +725,9 @@ class Settings:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     features: FeaturesConfig = field(default_factory=FeaturesConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    # The raw ``profiles`` / ``routing`` / ``offhost`` keys of the ``llm``
+    # section; ``app.llm_routing`` builds profiles from them over ``llm``.
+    llm_section: dict[str, Any] = field(default_factory=dict)
     summaries: SummariesConfig = field(default_factory=SummariesConfig)
     rag: RagConfig = field(default_factory=RagConfig)
     transcription: TranscriptionConfig = field(default_factory=TranscriptionConfig)
@@ -930,6 +935,71 @@ def load_config_file(path: Path) -> dict[str, Any]:
         return {}
 
 
+def _same_kind(value: object, default: object) -> bool:
+    if isinstance(default, bool):
+        return isinstance(value, bool)
+    if isinstance(default, float):
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if isinstance(default, int):
+        return isinstance(value, int) and not isinstance(value, bool)
+    return isinstance(value, type(default))
+
+
+def _coerce_agentic_models(raw: list[Any]) -> tuple[AgenticModelEntry, ...]:
+    coerced: list[AgenticModelEntry] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        try:
+            context_window = int(entry.get("context_window", 32768))
+        except (TypeError, ValueError):
+            context_window = 32768
+        coerced.append(
+            AgenticModelEntry(name=name.strip(), context_window=max(1024, context_window))
+        )
+    return tuple(coerced)
+
+
+def parse_llm_config(
+    raw: Mapping[str, Any], base: "LLMConfig | None" = None
+) -> "LLMConfig":
+    """Build an ``LLMConfig`` from ``raw`` over ``base`` (field defaults when None).
+
+    Keys that are not ``LLMConfig`` fields, null values (a YAML key left
+    blank) and values of the wrong type (YAML reads unquoted ``off`` / ``no``
+    as booleans) are treated as absent.
+    """
+    start = base if base is not None else LLMConfig()
+    defaults = LLMConfig()
+    values = {f.name: getattr(start, f.name) for f in dataclasses.fields(LLMConfig)}
+    for name in values:
+        value = raw.get(name)
+        if value is None:
+            continue
+        if name == "agentic_models":
+            if not isinstance(value, list):
+                continue
+            value = _coerce_agentic_models(value)
+        elif name == "reasoning" and value not in LLM_REASONING_ENUM:
+            # A typo behaves like an absent key rather than like a third mode.
+            logger.warning(
+                "Unknown llm.reasoning value %r; falling back to %r (expected one of %s)",
+                value, defaults.reasoning, ", ".join(LLM_REASONING_ENUM),
+            )
+            value = defaults.reasoning
+        elif not _same_kind(value, getattr(defaults, name)):
+            logger.warning(
+                "Ignoring llm.%s: got %s, expected %s",
+                name, type(value).__name__, type(getattr(defaults, name)).__name__,
+            )
+            continue
+        values[name] = value
+    return LLMConfig(**values)
+
+
 def load_settings() -> Settings:
     """Load settings from environment variables and config file.
 
@@ -998,51 +1068,7 @@ def load_settings() -> Settings:
         # Env LLM_API_KEY wins over both the yaml field and any GUI
         # override path (secrets do not live in the data volume).
         llm_merged["api_key"] = llm_api_key_env
-    # ``agentic_models`` arrives from yaml as a list of dicts; coerce
-    # to a tuple of dataclasses before passing through so consumers
-    # always see a typed sequence regardless of yaml authoring quirks.
-    raw_agentic = llm_merged.get("agentic_models")
-    if isinstance(raw_agentic, list):
-        coerced: list[AgenticModelEntry] = []
-        for entry in raw_agentic:
-            if not isinstance(entry, dict):
-                continue
-            name = entry.get("name")
-            if not isinstance(name, str) or not name.strip():
-                continue
-            context_window = entry.get("context_window", 32768)
-            try:
-                context_window_int = int(context_window)
-            except (TypeError, ValueError):
-                context_window_int = 32768
-            coerced.append(
-                AgenticModelEntry(
-                    name=name.strip(),
-                    context_window=max(1024, context_window_int),
-                )
-            )
-        llm_merged["agentic_models"] = tuple(coerced)
-    # A typo should behave like an absent key rather than like a third
-    # mode, so an unrecognised value takes the same default the field
-    # declares. Providers that refuse the resulting body field are
-    # handled where the request is made, not here.
-    raw_reasoning = llm_merged.get("reasoning")
-    if raw_reasoning is not None and raw_reasoning not in LLM_REASONING_ENUM:
-        default = LLMConfig.reasoning
-        logger.warning(
-            "Unknown llm.reasoning value %r; falling back to %r "
-            "(expected one of %s)",
-            raw_reasoning, default, ", ".join(LLM_REASONING_ENUM),
-        )
-        llm_merged["reasoning"] = default
-
-    llm_config = LLMConfig(
-        **{
-            k: v
-            for k, v in llm_merged.items()
-            if k in LLMConfig.__dataclass_fields__
-        }
-    )
+    llm_config = parse_llm_config(llm_merged)
 
     # RAG (only ``personal_history.enabled`` and
     # ``category_expansion.enabled`` are GUI-overridable; everything
@@ -1084,6 +1110,11 @@ def load_settings() -> Settings:
         memory=_parse_nested(config_data, "memory", MemoryConfig),
         features=features_config,
         llm=llm_config,
+        llm_section={
+            k: llm_merged[k]
+            for k in ("profiles", "routing", "offhost")
+            if k in llm_merged
+        },
         summaries=_parse_nested(config_data, "summaries", SummariesConfig),
         rag=rag_config,
         transcription=_parse_transcription(config_data),

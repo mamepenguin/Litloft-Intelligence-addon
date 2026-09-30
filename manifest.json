@@ -158,6 +158,11 @@
       "name": "chapter_suggestions",
       "default": true,
       "i18n_key": "intelligence.policyFeatures.chapterSuggestions"
+    },
+    {
+      "name": "llm_cloud",
+      "default": true,
+      "i18n_key": "intelligence.policyFeatures.llmCloud"
     }
   ],
   "event_hooks": [
