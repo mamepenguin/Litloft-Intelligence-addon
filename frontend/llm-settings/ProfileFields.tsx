@@ -4,7 +4,15 @@ import { useId } from "react";
 import { Check, X } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { SegmentedControl } from "@/components/SegmentedControl";
-import { KEY_ENV_PREFIX, keyEnvOf, keyPresenceKnown, type ProfileDraft } from "./model";
+import {
+  KEY_ENV_PREFIX,
+  keyChoiceOf,
+  keyEnvFor,
+  keyPresenceKnown,
+  keySuffixOf,
+  type KeyChoice,
+  type ProfileDraft,
+} from "./model";
 
 export const INPUT_CLASS =
   "w-full rounded-2xl border border-warm-silver/40 bg-bg-card px-3.5 py-2.5 text-sm text-text-primary " +
@@ -110,33 +118,59 @@ export function KeyPresence({ profile }: { profile: ProfileDraft }): React.React
   );
 }
 
+const KEY_CHOICES: KeyChoice[] = ["none", "shared", "named"];
+
 function KeyEditor({ profile, onChange }: Pick<Props, "profile" | "onChange">): React.ReactElement {
   const t = useTranslations("settings.llm.profile");
   const id = useId();
+  const choice = keyChoiceOf(profile.keyEnv);
+  const suffix = keySuffixOf(profile.keyEnv);
   return (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className={LABEL_CLASS}>
-        {t("keyEnv")}
+      <label htmlFor={`${id}-choice`} className={LABEL_CLASS}>
+        {t("apiKey")}
       </label>
       <div className="flex flex-wrap items-center gap-3">
-        <div className="flex min-w-0 flex-1 items-center overflow-hidden rounded-2xl border border-warm-silver/40 bg-bg-card focus-within:ring-2 focus-within:ring-focus-ring">
-          <span className="py-2.5 pl-3.5 font-mono text-sm text-text-muted" aria-hidden="true">
-            {`${KEY_ENV_PREFIX}_`}
-          </span>
-          <input
-            id={id}
-            type="text"
-            value={profile.keySuffix}
-            onChange={(e) => onChange({ keySuffix: e.target.value })}
-            aria-describedby={`${id}-help`}
-            className="min-w-0 flex-1 bg-transparent py-2.5 pr-3.5 font-mono text-sm text-text-primary focus:outline-none"
-          />
-        </div>
+        <select
+          id={`${id}-choice`}
+          value={choice}
+          onChange={(e) =>
+            onChange({ keyEnv: keyEnvFor(e.target.value as KeyChoice, suffix) })
+          }
+          className={`${INPUT_CLASS} sm:w-64`}
+        >
+          {KEY_CHOICES.map((value) => (
+            <option key={value} value={value}>
+              {t(`keyChoice.${value}`)}
+            </option>
+          ))}
+        </select>
+        {choice === "named" && (
+          <div className="flex min-w-0 flex-1 items-center overflow-hidden rounded-2xl border border-warm-silver/40 bg-bg-card focus-within:ring-2 focus-within:ring-focus-ring">
+            <span className="py-2.5 pl-3.5 font-mono text-sm text-text-muted" aria-hidden="true">
+              {`${KEY_ENV_PREFIX}_`}
+            </span>
+            <input
+              id={id}
+              type="text"
+              aria-label={t("keyEnv")}
+              value={suffix}
+              onChange={(e) => onChange({ keyEnv: keyEnvFor("named", e.target.value) })}
+              aria-describedby={`${id}-prefix ${id}-help`}
+              className="min-w-0 flex-1 bg-transparent py-2.5 pr-3.5 font-mono text-sm text-text-primary focus:outline-none"
+            />
+            <span id={`${id}-prefix`} className="sr-only">
+              {t("keyEnvPrefix", { env: `${KEY_ENV_PREFIX}_${suffix}` })}
+            </span>
+          </div>
+        )}
         <KeyPresence profile={profile} />
       </div>
-      <span id={`${id}-help`} className="text-xs text-text-muted">
-        {t("keyEnvHelp")}
-      </span>
+      {choice !== "none" && (
+        <span id={`${id}-help`} className="text-xs text-text-muted">
+          {t("keyEnvHelp")}
+        </span>
+      )}
     </div>
   );
 }
@@ -146,13 +180,17 @@ function StaticKey({ profile }: { profile: ProfileDraft }): React.ReactElement {
   return (
     <div className="flex flex-col gap-1.5">
       <span className={LABEL_CLASS}>{t("apiKey")}</span>
-      <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-text-muted">
-        <span>
-          {t("envVar")}{" "}
-          <span className="font-mono text-text-primary">{keyEnvOf(profile.keySuffix)}</span> ·
+      {profile.keyEnv === null ? (
+        <span className="text-sm text-text-muted">{t("keyChoice.none")}</span>
+      ) : (
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-text-muted">
+          <span>
+            {t("envVar")}{" "}
+            <span className="font-mono text-text-primary">{profile.keyEnv}</span> ·
+          </span>
+          <KeyPresence profile={profile} />
         </span>
-        <KeyPresence profile={profile} />
-      </span>
+      )}
     </div>
   );
 }

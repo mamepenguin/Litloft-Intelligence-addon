@@ -10,6 +10,7 @@ export interface ProfileView {
   agentic?: boolean;
   api_key_env?: string;
   api_key_present?: boolean;
+  api_key_source?: "env" | "yaml" | null;
   [key: string]: unknown;
 }
 

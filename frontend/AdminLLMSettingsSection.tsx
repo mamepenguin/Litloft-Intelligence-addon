@@ -1,27 +1,31 @@
 "use client";
 
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/Button";
 import {
   errorDetail,
   fetchExposure,
-  fetchLLM,
-  resetLLM,
-  saveLLM,
   type ExposureView,
   type LLMView,
 } from "./llm-settings/api";
+import {
+  loadLLMView,
+  resetLLMDocument,
+  saveLLMPatch,
+  subscribeLLMSaved,
+} from "./llm-settings/store";
 import { Card, OutputLanguageCard, RoutingCard } from "./llm-settings/Cards";
 import { ErrorBlock, WarningBlock } from "./llm-settings/Notices";
 import ProfileFields from "./llm-settings/ProfileFields";
 import ProfileList from "./llm-settings/ProfileList";
 import {
-  bodyFromDraft,
+  bodyOnto,
   draftFromView,
   drivesLeftWithoutAI,
   invalidOf,
+  isDirty,
   nextProfile,
   removeProfile,
   updateProfile,
@@ -31,6 +35,7 @@ import {
 } from "./llm-settings/model";
 
 type Outcome = { kind: "saved" | "reset"; restart: boolean } | null;
+type ActionError = { title: string; detail: string | null } | null;
 
 function Shell({
   titleId,
@@ -73,12 +78,16 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [seq, setSeq] = useState(0);
   const [busy, setBusy] = useState<"save" | "reset" | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<ActionError>(null);
   const [outcome, setOutcome] = useState<Outcome>(null);
+  const latest = useRef<{ view: LLMView | null; draft: Draft | null }>({ view: null, draft: null });
+  useEffect(() => {
+    latest.current = { view, draft };
+  });
 
   const reload = useCallback(async () => {
     const [next, nextExposure] = await Promise.all([
-      fetchLLM(),
+      loadLLMView(),
       fetchExposure().catch(() => null),
     ]);
     setView(next);
@@ -92,25 +101,39 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
     reload().catch((err: unknown) => {
       if (!cancelled) setLoadError(errorDetail(err, t("loadFailed")));
     });
+    const unsubscribe = subscribeLLMSaved((writer) => {
+      if (writer === "llm") return;
+      const { view: base, draft: current } = latest.current;
+      if (base && current && isDirty(base, current)) return;
+      reload().catch(() => undefined);
+    });
     return () => {
       cancelled = true;
+      unsubscribe();
     };
     // `t` is left out: loading runs once, not whenever the translator is rebuilt.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reload]);
 
   const run = useCallback(
-    async (kind: "save" | "reset", current: Draft | null) => {
+    async (kind: "save" | "reset", base: LLMView, current: Draft) => {
       setActionError(null);
       setOutcome(null);
       setBusy(kind);
       try {
         const result =
-          kind === "save" && current ? await saveLLM(bodyFromDraft(current)) : await resetLLM();
-        await reload();
+          kind === "save"
+            ? await saveLLMPatch("llm", (doc) => bodyOnto(doc, base, current))
+            : await resetLLMDocument("llm");
         setOutcome({ kind: kind === "save" ? "saved" : "reset", restart: result.restart_required });
+        try {
+          await reload();
+        } catch (err: unknown) {
+          setActionError({ title: t("reloadFailed"), detail: errorDetail(err, "") || null });
+        }
       } catch (err: unknown) {
-        setActionError(errorDetail(err, kind === "save" ? t("saveFailed") : t("resetFailed")));
+        const title = kind === "save" ? t("saveFailed") : t("resetFailed");
+        setActionError({ title, detail: errorDetail(err, title) });
       } finally {
         setBusy(null);
       }
@@ -132,6 +155,7 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
   const single = draft.profiles.length === 1;
   const invalid = invalidOf(draft.profiles);
   const skipDrives = drivesLeftWithoutAI(view, exposure);
+  const yamlKey = view.legacy && view.profiles.default?.api_key_source === "yaml";
 
   const change = (id: string, patch: Partial<Omit<ProfileDraft, "id">>) =>
     setDraft((d) => (d ? updateProfile(d, id, patch) : d));
@@ -161,6 +185,12 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
           testId="llm-offhost-only-warning"
         >
           <p className="text-sm text-text-muted">{t("offhostOnly.body")}</p>
+        </WarningBlock>
+      )}
+
+      {yamlKey && (
+        <WarningBlock title={t("yamlKey.title")} testId="llm-yaml-key-warning">
+          <p className="text-sm text-text-muted">{t("yamlKey.body")}</p>
         </WarningBlock>
       )}
 
@@ -195,8 +225,9 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
             profiles={draft.profiles}
             defaultId={draft.routing.defaultId}
             fallbackId={draft.routing.fallbackId}
+            fallbackMissing={draft.routing.fallbackMissing}
             onDefault={(defaultId) => setRouting({ defaultId })}
-            onFallback={(fallbackId) => setRouting({ fallbackId })}
+            onFallback={(fallbackId) => setRouting({ fallbackId, fallbackMissing: null })}
           />
         </>
       )}
@@ -209,15 +240,17 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
       />
 
       {actionError && (
-        <ErrorBlock title={t("saveFailed")} testId="llm-save-error">
-          <p className="text-sm text-text-primary">{actionError}</p>
+        <ErrorBlock title={actionError.title} testId="llm-save-error">
+          {actionError.detail && actionError.detail !== actionError.title && (
+            <p className="text-sm text-text-primary">{actionError.detail}</p>
+          )}
         </ErrorBlock>
       )}
 
       <div className="flex flex-wrap items-center gap-3">
         <Button
           variant="primary"
-          onClick={() => run("save", draft)}
+          onClick={() => run("save", view, draft)}
           disabled={busy !== null || invalid !== null}
           aria-describedby={invalid ? reasonId : undefined}
         >
@@ -225,7 +258,7 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
         </Button>
         {view.overrides_present && (
           <>
-            <Button onClick={() => run("reset", null)} disabled={busy !== null}>
+            <Button onClick={() => run("reset", view, draft)} disabled={busy !== null}>
               {busy === "reset" ? t("resetting") : t("reset")}
             </Button>
             <span className="text-sm text-text-muted">{t("overridesActive")}</span>

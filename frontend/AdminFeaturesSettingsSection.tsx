@@ -1,17 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/Button";
 import { useTranslations } from "next-intl";
 import {
   errorDetail,
   fetchExposure,
-  fetchLLM,
   RequestError,
-  saveLLM,
   type ExposureView,
   type LLMView,
 } from "./llm-settings/api";
+import {
+  loadLLMView,
+  saveLLMPatch,
+  subscribeLLMSaved,
+  withFeatureChoices,
+} from "./llm-settings/store";
 import FeatureProfileCell, { SELECT_CLASS } from "./llm-settings/FeatureProfileCell";
 import { ApplyMarker } from "./llm-settings/Notices";
 
@@ -76,9 +80,19 @@ function modesBody(modes: Modes): Record<string, unknown> {
   return Object.fromEntries(FIELDS.map((f) => [f, isBool(f) ? modes[f] === "true" : modes[f]]));
 }
 
+/** The entries of `next` that differ from `saved`, "" standing for an absent key. */
+function changedEntries(
+  next: Record<string, string>,
+  saved: Record<string, string>,
+): Record<string, string> {
+  const keys = [...new Set([...Object.keys(next), ...Object.keys(saved)])];
+  return Object.fromEntries(
+    keys.filter((k) => (next[k] ?? "") !== (saved[k] ?? "")).map((k) => [k, next[k] ?? ""]),
+  );
+}
+
 function sameRecord(a: Record<string, string>, b: Record<string, string>): boolean {
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-  return [...keys].every((k) => (a[k] ?? "") === (b[k] ?? ""));
+  return Object.keys(changedEntries(a, b)).length === 0;
 }
 
 export default function AdminFeaturesSettingsSection(): React.ReactElement {
@@ -91,61 +105,98 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
   const [assigned, setAssigned] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<"save" | "reset" | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [reloadError, setReloadError] = useState<string | null>(null);
   const [resetError, setResetError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Outcome>(null);
 
-  const reload = useCallback(async () => {
-    const [payload, nextLLM, nextExposure] = await Promise.all([
-      request("GET") as Promise<FeaturesPayload>,
-      fetchLLM().catch(() => null),
-      fetchExposure().catch(() => null),
-    ]);
-    setData(payload);
-    setModes(modesOf(payload));
+  const applyLLM = useCallback((nextLLM: LLMView | null, nextExposure: ExposureView | null) => {
     setLLM(nextLLM);
     setExposure(nextExposure);
     setAssigned({ ...(nextLLM?.routing.features ?? {}) });
   }, []);
+
+  const reloadLLM = useCallback(async () => {
+    const [nextLLM, nextExposure] = await Promise.all([
+      loadLLMView().catch(() => null),
+      fetchExposure().catch(() => null),
+    ]);
+    applyLLM(nextLLM, nextExposure);
+  }, [applyLLM]);
+
+  const reload = useCallback(async () => {
+    const [payload, nextLLM, nextExposure] = await Promise.all([
+      request("GET") as Promise<FeaturesPayload>,
+      loadLLMView().catch(() => null),
+      fetchExposure().catch(() => null),
+    ]);
+    setData(payload);
+    setModes(modesOf(payload));
+    applyLLM(nextLLM, nextExposure);
+  }, [applyLLM]);
+
+  const routingDraft = useRef<{ llm: LLMView | null; assigned: Record<string, string> }>({
+    llm: null,
+    assigned: {},
+  });
+  useEffect(() => {
+    routingDraft.current = { llm, assigned };
+  });
 
   useEffect(() => {
     let cancelled = false;
     reload().catch((err: unknown) => {
       if (!cancelled) setLoadError(errorDetail(err, t("loadFailed")));
     });
+    const unsubscribe = subscribeLLMSaved((writer) => {
+      if (writer === "features") return;
+      const current = routingDraft.current;
+      const saved = current.llm?.routing.features ?? {};
+      if (current.llm && !sameRecord(current.assigned, saved)) return;
+      reloadLLM().catch(() => undefined);
+    });
     return () => {
       cancelled = true;
+      unsubscribe();
     };
     // `t` is left out: loading runs once, not whenever the translator is rebuilt.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reload]);
+  }, [reload, reloadLLM]);
 
   const handleSave = useCallback(async () => {
     if (!data || !modes) return;
     setSaveError(null);
+    setReloadError(null);
     setOutcome(null);
     setBusy("save");
     const modesChanged = !sameRecord(modes, modesOf(data));
-    const routingChanged = llm !== null && !sameRecord(assigned, llm.routing.features ?? {});
+    const choices = llm ? changedEntries(assigned, llm.routing.features ?? {}) : {};
+    const routingChanged = Object.keys(choices).length > 0;
+    let routingSaved = false;
+    let failure: unknown = null;
     try {
-      if (routingChanged && llm) {
-        const features = Object.fromEntries(Object.entries(assigned).filter(([, v]) => v !== ""));
-        const routing = Object.fromEntries(
-          Object.entries(llm.routing).filter(([k]) => k !== "features"),
-        );
-        await saveLLM({
-          profiles: llm.profiles,
-          routing: Object.keys(features).length > 0 ? { ...routing, features } : routing,
-          output_language: llm.output_language,
-        });
+      if (routingChanged) {
+        await saveLLMPatch("features", (latest) => withFeatureChoices(latest, choices));
+        routingSaved = true;
       }
       if (modesChanged || !routingChanged) await request("PUT", modesBody(modes));
-      await reload();
-      setOutcome(modesChanged ? "savedRestart" : routingChanged ? "savedNow" : "saved");
     } catch (err: unknown) {
-      setSaveError(errorDetail(err, t("saveFailed")));
-    } finally {
-      setBusy(null);
+      failure = err;
     }
+    if (failure === null || routingSaved) {
+      try {
+        await reload();
+      } catch {
+        setReloadError(t("reloadFailed"));
+      }
+    }
+    if (failure === null) {
+      setOutcome(modesChanged ? "savedRestart" : routingChanged ? "savedNow" : "saved");
+    } else if (routingSaved) {
+      setSaveError(t("routingSavedModesFailed", { detail: errorDetail(failure, t("saveFailed")) }));
+    } else {
+      setSaveError(errorDetail(failure, t("saveFailed")));
+    }
+    setBusy(null);
   }, [data, modes, llm, assigned, reload, t]);
 
   const handleReset = useCallback(async () => {
@@ -289,6 +340,7 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
           </span>
         )}
         {saveError && <span className="text-xs text-danger">{saveError}</span>}
+        {reloadError && <span className="text-xs text-danger">{reloadError}</span>}
       </div>
     </section>
   );

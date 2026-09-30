@@ -61,21 +61,26 @@ function RoutingSelect({
   );
 }
 
+const MISSING = "__missing__";
+
 export function RoutingCard({
   profiles,
   defaultId,
   fallbackId,
+  fallbackMissing,
   onDefault,
   onFallback,
 }: {
   profiles: ProfileDraft[];
   defaultId: string | null;
   fallbackId: string | null;
+  fallbackMissing: string | null;
   onDefault: (id: string) => void;
   onFallback: (id: string | null) => void;
 }): React.ReactElement {
   const t = useTranslations("settings.llm.routing");
   const local = profiles.filter((p) => !p.offhost);
+  const offhostFallback = profiles.find((p) => p.id === fallbackId && p.offhost);
   return (
     <Card title={t("title")}>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -94,9 +99,19 @@ export function RoutingCard({
         <RoutingSelect
           label={t("fallback")}
           help={t("fallbackHelp")}
-          value={fallbackId ?? ""}
+          value={fallbackMissing !== null ? MISSING : (fallbackId ?? "")}
           onChange={(value) => onFallback(value || null)}
         >
+          {offhostFallback && (
+            <option value={offhostFallback.id} disabled>
+              {t("fallbackOffhost", { name: offhostFallback.name })}
+            </option>
+          )}
+          {fallbackMissing !== null && (
+            <option value={MISSING} disabled>
+              {t("fallbackMissing", { name: fallbackMissing })}
+            </option>
+          )}
           {local.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}

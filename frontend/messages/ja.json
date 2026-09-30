@@ -466,7 +466,10 @@
       "destinationsNote": "外部送信のプロファイルを選んだ機能には、ドライブごとの行き先を表示します。行き先はドライブ設定の「クラウドLLMへの送信を許可」で決まり、許可のないドライブでは「クラウド不可のドライブで代わりに使う」プロファイルで実行します。",
       "savedRestart": "「動かすとき」を変えたので、保存後に再起動が必要です。",
       "savedNow": "保存しました。使うプロファイルはすぐ反映されます。",
-      "driveSeparator": "、"
+      "driveSeparator": "、",
+      "reloadFailed": "再読み込みに失敗したため、表示は保存前のままです。",
+      "routingSavedModesFailed": "プロファイルの割り当ては保存しました。「動かすとき」の保存に失敗しました: {detail}",
+      "profileMissing": "{name}（プロファイルがありません）"
     },
     "llm": {
       "title": "LLM プロファイル",
@@ -531,7 +534,13 @@
         "offhostHelpList": "クラウドや別マシンのサービスならオン。オンのプロファイルは、クラウド送信を許可したドライブでだけ使われます。",
         "offhostHelpSingle": "このマシンの Ollama ならオフ。オフのあいだは、どのドライブでもこのモデルを使います。",
         "agentic": "Agentic Ask に使う",
-        "agenticHelp": "ツールを呼びながら答える Ask。ツール呼び出しに対応したモデルでだけオンにしてください。"
+        "agenticHelp": "ツールを呼びながら答える Ask。ツール呼び出しに対応したモデルでだけオンにしてください。",
+        "keyChoice": {
+          "none": "キーを使わない",
+          "shared": "LLM_API_KEY",
+          "named": "LLM_API_KEY_…（名前を付ける）"
+        },
+        "keyEnvPrefix": "{env} として保存されます。"
       },
       "list": {
         "local": "ローカル",
@@ -550,7 +559,9 @@
         "defaultHelp": "「機能スイッチ」で個別に選んでいない機能が使います。",
         "fallback": "クラウド不可のドライブで代わりに使う",
         "fallbackNone": "使わない（実行しない）",
-        "fallbackHelp": "ローカルのプロファイルだけを選べます。"
+        "fallbackHelp": "ローカルのプロファイルだけを選べます。",
+        "fallbackOffhost": "{name}（外部送信のため使えません）",
+        "fallbackMissing": "{name}（プロファイルがありません）"
       },
       "outputLanguage": {
         "title": "出力の言語",
@@ -560,6 +571,11 @@
           "en": "English"
         },
         "pending": "保存した出力の言語は、再起動するまで反映されません。"
+      },
+      "reloadFailed": "保存しました。再読み込みに失敗したため、表示は保存前のままです。",
+      "yamlKey": {
+        "title": "API キーは search-config.yml から読み込まれています",
+        "body": "いまはこのキーで動いていますが、保存した設定には引き継がれません。保存する前に、キーを環境変数 LLM_API_KEY に移してください。"
       }
     },
     "rag": {

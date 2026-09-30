@@ -466,7 +466,10 @@
       "destinationsNote": "Features assigned an off-host profile show where each drive's work goes. That is decided by the drive setting \"Allow sending to cloud LLMs\"; drives without it run on the \"Use instead on drives without cloud\" profile.",
       "savedRestart": "\"When it runs\" changed, so a restart is required after saving.",
       "savedNow": "Saved. Profile choices are applied now.",
-      "driveSeparator": ", "
+      "driveSeparator": ", ",
+      "reloadFailed": "Reloading failed, so the screen still shows the values from before saving.",
+      "routingSavedModesFailed": "Profile choices were saved. \"When it runs\" could not be saved: {detail}",
+      "profileMissing": "{name} (no such profile)"
     },
     "llm": {
       "title": "LLM profiles",
@@ -531,7 +534,13 @@
         "offhostHelpList": "On for a cloud service or another machine. An off-host profile is used only on drives that allow cloud sends.",
         "offhostHelpSingle": "Off for Ollama on this machine. While off, every drive uses this model.",
         "agentic": "Use for Agentic Ask",
-        "agenticHelp": "Ask that answers by calling tools. Turn on only for models that support tool calls."
+        "agenticHelp": "Ask that answers by calling tools. Turn on only for models that support tool calls.",
+        "keyChoice": {
+          "none": "Do not use a key",
+          "shared": "LLM_API_KEY",
+          "named": "LLM_API_KEY_… (named)"
+        },
+        "keyEnvPrefix": "Saved as {env}."
       },
       "list": {
         "local": "Local",
@@ -550,7 +559,9 @@
         "defaultHelp": "Used by features not assigned a profile under Feature toggles.",
         "fallback": "Use instead on drives without cloud",
         "fallbackNone": "None (do not run)",
-        "fallbackHelp": "Only local profiles can be chosen."
+        "fallbackHelp": "Only local profiles can be chosen.",
+        "fallbackOffhost": "{name} (off-host, cannot be used)",
+        "fallbackMissing": "{name} (no such profile)"
       },
       "outputLanguage": {
         "title": "Output language",
@@ -560,6 +571,11 @@
           "en": "English"
         },
         "pending": "The saved output language takes effect after a restart."
+      },
+      "reloadFailed": "Saved, but reloading failed, so the screen still shows the values from before saving.",
+      "yamlKey": {
+        "title": "The API key is read from search-config.yml",
+        "body": "It is in use now, but saved settings do not carry it over. Move the key to the LLM_API_KEY environment variable before saving."
       }
     },
     "rag": {

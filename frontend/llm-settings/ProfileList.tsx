@@ -4,7 +4,7 @@ import { Cloud, Monitor, Plus, Trash2 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/Button";
 import ProfileFields, { KeyPresence } from "./ProfileFields";
-import { keyEnvOf, keyPresenceKnown, type ProfileDraft } from "./model";
+import { keyPresenceKnown, type ProfileDraft } from "./model";
 
 type Patch = Partial<Omit<ProfileDraft, "id">>;
 
@@ -48,7 +48,7 @@ function Summary({ profile }: { profile: ProfileDraft }): React.ReactElement {
       <span className="truncate text-sm text-text-muted">{parts.join(" · ")}</span>
       {keyMissing && (
         <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="font-mono text-sm text-text-primary">{keyEnvOf(profile.keySuffix)}</span>
+          <span className="font-mono text-sm text-text-primary">{profile.keyEnv}</span>
           <KeyPresence profile={profile} />
         </span>
       )}

@@ -190,7 +190,15 @@ describe("AdminFeaturesSettingsSection", () => {
     expect(await screen.findByText("Saved. Profile choices are applied now.")).toBeInTheDocument();
     expect(callsTo("PUT", ENDPOINT)).toHaveLength(0);
     expect(bodyOf("PUT", LLM)).toEqual({
-      profiles: { local: LOCAL, claude: CLAUDE },
+      profiles: {
+        local: { provider: "ollama", model: "qwen3:14b", offhost: false },
+        claude: {
+          provider: "openai_compatible",
+          model: "claude",
+          offhost: true,
+          api_key_env: "LLM_API_KEY_CLAUDE",
+        },
+      },
       routing: { default: "local", local_fallback: "local", features: { summaries: "claude" } },
       output_language: "ja",
     });
@@ -257,5 +265,107 @@ describe("AdminFeaturesSettingsSection", () => {
     });
     render(<AdminFeaturesSettingsSection />);
     expect(await screen.findByText("boom")).toBeInTheDocument();
+  });
+
+  const SAVED = { body: { status: "saved", restart_required: false } };
+  const RAG = "Profile for AI question answering (Ask)";
+  const SUMMARIES = "Profile for AI summary (short)";
+
+  it("names each option by its saved default and off-host flag", async () => {
+    await renderWith({
+      [`GET ${LLM}`]: {
+        body: llmView(
+          { local: LOCAL, claude: CLAUDE, lan: { provider: "openai_compatible" } },
+          { default: "claude", features: { rag: "ghost" } },
+        ),
+      },
+    });
+    const summaries = screen.getByRole("combobox", { name: SUMMARIES });
+    expect(within(summaries).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Default (claude)",
+      "local",
+      "claude (off-host)",
+      "lan (off-host)",
+    ]);
+    const rag = screen.getByRole("combobox", { name: RAG }) as HTMLSelectElement;
+    expect(rag.selectedOptions[0].textContent).toBe("ghost (no such profile)");
+  });
+
+  it("changing a mode and a profile writes both and says a restart is needed", async () => {
+    await renderWith({
+      [`GET ${LLM}`]: { body: TWO },
+      [`PUT ${LLM}`]: SAVED,
+      [`PUT ${ENDPOINT}`]: { body: { status: "saved", restart_required: true } },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: SUMMARIES }), {
+      target: { value: "claude" },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "When Indexing runs" }), {
+      target: { value: "false" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(
+      await screen.findByText('"When it runs" changed, so a restart is required after saving.'),
+    ).toBeInTheDocument();
+    expect(bodyOf("PUT", LLM).routing.features).toEqual({ rag: "claude", summaries: "claude" });
+    expect(bodyOf("PUT", ENDPOINT).indexing).toBe(false);
+  });
+
+  it("a routing save followed by a failed mode save says what was saved", async () => {
+    await renderWith({
+      [`GET ${LLM}`]: { body: TWO },
+      [`PUT ${LLM}`]: SAVED,
+      [`PUT ${ENDPOINT}`]: { status: 500, body: { detail: "modes boom" } },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: SUMMARIES }), {
+      target: { value: "claude" },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "When Indexing runs" }), {
+      target: { value: "false" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(
+      await screen.findByText(
+        'Profile choices were saved. "When it runs" could not be saved: modes boom',
+      ),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(callsTo("GET", ENDPOINT)).toHaveLength(2));
+  });
+
+  it("a save whose reload fails still reports the save", async () => {
+    await renderWith({
+      [`GET ${ENDPOINT}`]: [
+        { body: defaultPayload() },
+        { status: 500, body: { detail: "reload boom" } },
+      ],
+      [`PUT ${ENDPOINT}`]: { body: { status: "saved", restart_required: true } },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "When Indexing runs" }), {
+      target: { value: "false" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(
+      await screen.findByText('"When it runs" changed, so a restart is required after saving.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Reloading failed, so the screen still shows the values from before saving."),
+    ).toBeInTheDocument();
+  });
+
+  it("destinations disappear once the row's choice differs from the saved routing", async () => {
+    await renderWith({
+      [`GET ${LLM}`]: { body: TWO },
+      [`GET ${EXPOSURE}`]: {
+        body: {
+          features: { rag: { profile: "claude", offhost: true, drives: { media: "sends" } } },
+          local_fallback: "local",
+        },
+      },
+    });
+    expect(screen.getAllByTestId("feature-destinations")).toHaveLength(1);
+    fireEvent.change(screen.getByRole("combobox", { name: RAG }), { target: { value: "local" } });
+    expect(screen.queryByTestId("feature-destinations")).toBeNull();
+    fireEvent.change(screen.getByRole("combobox", { name: RAG }), { target: { value: "claude" } });
+    expect(screen.getAllByTestId("feature-destinations")).toHaveLength(1);
   });
 });

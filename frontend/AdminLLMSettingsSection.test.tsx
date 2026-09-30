@@ -145,7 +145,6 @@ describe("AdminLLMSettingsSection", () => {
   it.each([
     ["WORK", "LLM_API_KEY_WORK"],
     ["A_B2", "LLM_API_KEY_A_B2"],
-    ["", "LLM_API_KEY"],
   ])("key suffix %j is saved as %s", async (suffix, env) => {
     await renderWith({
       [`GET ${ENDPOINT}`]: { body: TWO },
@@ -161,7 +160,35 @@ describe("AdminLLMSettingsSection", () => {
   });
 
   it.each([
+    ["shared", "LLM_API_KEY"],
+    ["none", undefined],
+  ])("key choice %s saves api_key_env %s", async (choice, env) => {
+    await renderWith({
+      [`GET ${ENDPOINT}`]: { body: TWO },
+      [`PUT ${ENDPOINT}`]: { body: { status: "saved", restart_required: false } },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Edit profile claude" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "API key" }), {
+      target: { value: choice },
+    });
+    expect(screen.queryByLabelText("API key environment variable")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(callsTo("PUT")).toHaveLength(1));
+    expect(putBody().profiles.claude.api_key_env).toBe(env);
+  });
+
+  it("the key-name input says what it saves as to assistive tech", async () => {
+    await renderWith({ [`GET ${ENDPOINT}`]: { body: TWO } });
+    fireEvent.click(screen.getByRole("button", { name: "Edit profile claude" }));
+    const input = screen.getByLabelText("API key environment variable");
+    expect(input).toHaveAccessibleDescription(/^Saved as LLM_API_KEY_CLAUDE\. /);
+    fireEvent.change(input, { target: { value: "WORK" } });
+    expect(input).toHaveAccessibleDescription(/^Saved as LLM_API_KEY_WORK\. /);
+  });
+
+  it.each([
     ["key suffix", "API key environment variable", "work", /API key variable of profile claude/],
+    ["empty key suffix", "API key environment variable", "", /API key variable of profile claude/],
     ["name", "Name", "Claude", /Profile name “Claude”/],
     ["duplicate name", "Name", "local", /Profile name “local” is used twice/],
   ])("an invalid %s disables save and says why", async (_what, field, value, reason) => {
@@ -332,5 +359,270 @@ describe("AdminLLMSettingsSection", () => {
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: "Revert to YAML settings" })).toBeNull(),
     );
+  });
+
+  const SAVED = { body: { status: "saved", restart_required: false } };
+
+  const LAN = {
+    provider: "openai_compatible",
+    base_url: "http://lan:8000/v1",
+    model: "lan-model",
+    temperature: 0.2,
+    api_key_present: false,
+  };
+  const SHARED = {
+    provider: "openai_compatible",
+    base_url: "https://api.example.com/v1",
+    model: "shared-model",
+    vision_model: "",
+    offhost: true,
+    agentic: false,
+    api_key_env: "LLM_API_KEY",
+    api_key_present: true,
+  };
+  const ROUND_TRIP = view({
+    legacy: false,
+    profiles: { lan: LAN, claude: CLAUDE, shared: SHARED },
+    routing: { default: "claude", features: { rag: "lan" }, later_key: 1 },
+    output_language: "ja",
+  });
+
+  it("an untouched save sends back what GET returned", async () => {
+    await renderWith({ [`GET ${ENDPOINT}`]: { body: ROUND_TRIP }, [`PUT ${ENDPOINT}`]: SAVED });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(callsTo("PUT")).toHaveLength(1));
+    expect(putBody()).toEqual({
+      profiles: {
+        lan: {
+          provider: "openai_compatible",
+          base_url: "http://lan:8000/v1",
+          model: "lan-model",
+          temperature: 0.2,
+        },
+        claude: {
+          provider: "openai_compatible",
+          base_url: "https://openrouter.ai/api/v1",
+          model: "anthropic/claude-sonnet-5",
+          vision_model: "",
+          offhost: true,
+          agentic: true,
+          api_key_env: "LLM_API_KEY_CLAUDE",
+        },
+        shared: {
+          provider: "openai_compatible",
+          base_url: "https://api.example.com/v1",
+          model: "shared-model",
+          vision_model: "",
+          offhost: true,
+          agentic: false,
+          api_key_env: "LLM_API_KEY",
+        },
+      },
+      routing: { default: "claude", features: { rag: "lan" }, later_key: 1 },
+      output_language: "ja",
+    });
+  });
+
+  it("an edited profile keeps its key, knobs, off-host default and agentic flag", async () => {
+    await renderWith({ [`GET ${ENDPOINT}`]: { body: ROUND_TRIP }, [`PUT ${ENDPOINT}`]: SAVED });
+    for (const [name, model] of [
+      ["lan", "lan-2"],
+      ["claude", "claude-2"],
+      ["shared", "shared-2"],
+    ]) {
+      fireEvent.click(screen.getByRole("button", { name: `Edit profile ${name}` }));
+      fireEvent.change(screen.getByLabelText("Model"), { target: { value: model } });
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(callsTo("PUT")).toHaveLength(1));
+    expect(putBody().profiles).toEqual({
+      lan: {
+        temperature: 0.2,
+        provider: "openai_compatible",
+        base_url: "http://lan:8000/v1",
+        model: "lan-2",
+        vision_model: "",
+        offhost: true,
+        agentic: false,
+      },
+      claude: {
+        provider: "openai_compatible",
+        base_url: "https://openrouter.ai/api/v1",
+        model: "claude-2",
+        vision_model: "",
+        offhost: true,
+        agentic: true,
+        api_key_env: "LLM_API_KEY_CLAUDE",
+      },
+      shared: {
+        provider: "openai_compatible",
+        base_url: "https://api.example.com/v1",
+        model: "shared-2",
+        vision_model: "",
+        offhost: true,
+        agentic: false,
+        api_key_env: "LLM_API_KEY",
+      },
+    });
+  });
+
+  it.each([
+    ["lan", "Do not use a key", true, false],
+    ["claude", "LLM_API_KEY_… (named)", true, true],
+    ["shared", "LLM_API_KEY", true, false],
+  ])("profile %s loads with key choice %s, off-host=%s, agentic=%s", async (name, choice, offhost, agentic) => {
+    await renderWith({ [`GET ${ENDPOINT}`]: { body: ROUND_TRIP } });
+    fireEvent.click(screen.getByRole("button", { name: `Edit profile ${name}` }));
+    const select = screen.getByRole("combobox", { name: "API key" }) as HTMLSelectElement;
+    expect(select.selectedOptions[0].textContent).toBe(choice);
+    expect(screen.getByRole("checkbox", { name: "Send off-host" })).toHaveProperty("checked", offhost);
+    const agenticBox = screen.getByRole("checkbox", { name: "Use for Agentic Ask" });
+    expect(agenticBox).toHaveProperty("checked", agentic);
+    fireEvent.click(agenticBox);
+    expect(agenticBox).toHaveProperty("checked", !agentic);
+  });
+
+  it("a new profile starts off-host and reads no key", async () => {
+    await renderWith({ [`GET ${ENDPOINT}`]: { body: TWO }, [`PUT ${ENDPOINT}`]: SAVED });
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    const select = screen.getByRole("combobox", { name: "API key" }) as HTMLSelectElement;
+    expect(select.selectedOptions[0].textContent).toBe("Do not use a key");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(callsTo("PUT")).toHaveLength(1));
+    expect(putBody().profiles["profile-3"]).toEqual({
+      provider: "openai_compatible",
+      base_url: "",
+      model: "",
+      vision_model: "",
+      offhost: true,
+      agentic: false,
+    });
+  });
+
+  it.each([
+    ["legacy key from YAML", true, "yaml", true],
+    ["legacy key from the environment", true, "env", false],
+    ["saved profiles", false, "yaml", false],
+  ])("the YAML key notice: %s", async (_case, legacy, source, shown) => {
+    await renderWith({
+      [`GET ${ENDPOINT}`]: {
+        body: view({
+          legacy,
+          profiles: { default: { ...LOCAL, api_key_present: true, api_key_source: source } },
+        }),
+      },
+    });
+    if (shown) {
+      expect(screen.getByTestId("llm-yaml-key-warning")).toHaveTextContent(
+        "The API key is read from search-config.yml",
+      );
+    } else {
+      expect(screen.queryByTestId("llm-yaml-key-warning")).toBeNull();
+    }
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
+  it("a save whose reload fails says it was saved", async () => {
+    await renderWith({
+      [`GET ${ENDPOINT}`]: [
+        { body: view() },
+        { body: view() },
+        { status: 500, body: { detail: "reload boom" } },
+      ],
+      [`PUT ${ENDPOINT}`]: SAVED,
+    });
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "gemma4:e4b" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved. Applied now.")).toBeInTheDocument();
+    const alert = screen.getByTestId("llm-save-error");
+    expect(alert).toHaveTextContent("Saved, but reloading failed");
+    expect(alert).not.toHaveTextContent("Could not save");
+  });
+
+  it.each([
+    ["an off-host profile", "claude", "claude (off-host, cannot be used)"],
+    ["a missing profile", "ghost", "ghost (no such profile)"],
+  ])("a saved fallback naming %s is shown as it is", async (_case, fallback, label) => {
+    await renderWith({
+      [`GET ${ENDPOINT}`]: {
+        body: { ...TWO, routing: { default: "local", local_fallback: fallback } },
+      },
+      [`PUT ${ENDPOINT}`]: SAVED,
+    });
+    const select = screen.getByRole("combobox", {
+      name: "Use instead on drives without cloud",
+    }) as HTMLSelectElement;
+    expect(select.selectedOptions[0].textContent).toBe(label);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(callsTo("PUT")).toHaveLength(1));
+    expect(putBody().routing).toEqual({ default: "local", local_fallback: fallback });
+    fireEvent.change(select, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(callsTo("PUT")).toHaveLength(2));
+    expect(putBody().routing).toEqual({ default: "local" });
+  });
+
+  const KEY_TEXTS = [
+    "Set",
+    "Not set",
+    "Not set (not needed for Ollama)",
+    "Not set — tasks using this profile will fail",
+  ];
+
+  it.each([
+    ["openai_compatible", true, null, "Set"],
+    ["openai_compatible", false, null, "Not set — tasks using this profile will fail"],
+    ["ollama", false, null, "Not set (not needed for Ollama)"],
+    ["disabled", false, null, "Not set"],
+    ["openai_compatible", true, "OTHER", null],
+    ["openai_compatible", false, "OTHER", null],
+  ])("key presence: %s, present=%s, suffix changed to %s -> %s", async (provider, present, suffix, text) => {
+    await renderWith({
+      [`GET ${ENDPOINT}`]: {
+        body: {
+          ...TWO,
+          profiles: {
+            local: LOCAL,
+            x: { ...CLAUDE, provider, api_key_env: "LLM_API_KEY_X", api_key_present: present },
+          },
+        },
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Edit profile x" }));
+    const editor = screen.getByTestId("llm-profile-editor-p1");
+    if (suffix !== null) {
+      fireEvent.change(within(editor).getByLabelText("API key environment variable"), {
+        target: { value: suffix },
+      });
+    }
+    const shown = KEY_TEXTS.filter((k) => within(editor).queryByText(k) !== null);
+    expect(shown).toEqual(text === null ? [] : [text]);
+  });
+
+  it.each([
+    ["openai_compatible", "LLM_API_KEY_X", false, true],
+    ["openai_compatible", "LLM_API_KEY_X", true, false],
+    ["ollama", "LLM_API_KEY_X", false, false],
+    ["openai_compatible", undefined, false, false],
+  ])("the collapsed row warns of a missing key: %s %s present=%s -> %s", async (provider, env, present, warns) => {
+    await renderWith({
+      [`GET ${ENDPOINT}`]: {
+        body: {
+          ...TWO,
+          profiles: {
+            local: LOCAL,
+            x: { ...CLAUDE, provider, api_key_env: env, api_key_present: present },
+          },
+        },
+      },
+    });
+    const row = screen.getByTestId("llm-profile-row-p1");
+    if (warns) {
+      expect(row).toHaveTextContent("LLM_API_KEY_X");
+      expect(row).toHaveTextContent("Not set — tasks using this profile will fail");
+    } else {
+      expect(row).not.toHaveTextContent("LLM_API_KEY");
+      expect(row).not.toHaveTextContent("Not set");
+    }
   });
 });

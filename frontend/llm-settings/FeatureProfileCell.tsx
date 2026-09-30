@@ -69,6 +69,11 @@ export default function FeatureProfileCell({
         className={SELECT_CLASS}
       >
         <option value="">{t("profileDefault", { name: defaultName })}</option>
+        {value !== "" && !names.includes(value) && (
+          <option value={value} disabled>
+            {t("profileMissing", { name: value })}
+          </option>
+        )}
         {names.map((name) => (
           <option key={name} value={name}>
             {llm.profiles[name].offhost === false ? name : t("profileOffhost", { name })}
