@@ -183,6 +183,7 @@ class TranscriptChunk(Base):
     text_refined_at: Mapped[datetime | None] = mapped_column(
         DateTime, nullable=True
     )
+    refined_model: Mapped[str | None] = mapped_column(String, nullable=True)
 
     # Diarization speaker label, populated by providers that return
     # diarized output (Deepgram / ElevenLabs Scribe). NULL for

@@ -296,7 +296,9 @@ def realign_words_for_chunk(
 # --- Re-chunk from word timestamps ------------------------------------------
 
 
-def rechunk_from_words(session: Any, file_id: str) -> list[int]:
+def rechunk_from_words(
+    session: Any, file_id: str, *, refined_model: str
+) -> list[int]:
     """Rebuild ``transcript_chunks`` rows from current ``transcript_words``.
 
     Whisper-small transcribes Japanese with almost no punctuation, so
@@ -388,6 +390,7 @@ def rechunk_from_words(session: Any, file_id: str) -> list[int]:
             timestamp_start=float(chunk["start"]),
             timestamp_end=float(chunk["end"]),
             text_refined_at=now,
+            refined_model=refined_model,
             # Phase 1C: refine intentionally drops chunk-level
             # speaker_id (matches the word-level NULL contract above).
             # ``_build_chunks_from_words`` may have produced a value
@@ -642,6 +645,7 @@ async def _run_refine_job(
     )
 
     llm = resolved.client
+    refined_model = resolved.profile.config.model
 
     # Snapshot phase: load chunk data into plain objects then release the
     # write lock so the minutes-long LLM round-trips below don't hold it.
@@ -748,6 +752,7 @@ async def _run_refine_job(
                                 continue
                             orm.text = snap.text
                             orm.text_refined_at = snap.text_refined_at
+                            orm.refined_model = refined_model
                             aligned = realign_words_for_chunk(
                                 session,
                                 orm.file_id,
@@ -786,7 +791,7 @@ async def _run_refine_job(
             if refined_total > 0:
                 new_ids: list[int] = []
                 with get_search_db() as session:
-                    new_ids = rechunk_from_words(session, file_id) or []
+                    new_ids = rechunk_from_words(session, file_id, refined_model=refined_model) or []
                 if new_ids:
                     await recompute_chunk_embeddings(new_ids)
                     rechunked_count = len(new_ids)

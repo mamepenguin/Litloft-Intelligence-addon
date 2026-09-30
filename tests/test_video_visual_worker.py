@@ -16,6 +16,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.llm_helpers import resolved_with
+
 for _mod in (
     "PIL", "PIL.Image",
     "open_clip",
@@ -155,7 +157,7 @@ def search_db(monkeypatch, tmp_path):
 
 
 @pytest.fixture()
-def feature_manual(monkeypatch, make_settings):
+def feature_manual(monkeypatch, make_settings, use_llm):
     settings = make_settings(
         features=FeaturesConfig(video_visual_index="manual"),  # type: ignore[call-arg]
         llm=LLMConfig(
@@ -167,6 +169,7 @@ def feature_manual(monkeypatch, make_settings):
     )
     monkeypatch.setattr("app.config.settings", settings)
     monkeypatch.setattr("app.workers.video_visual.settings", settings)
+    use_llm(MagicMock())
     return settings
 
 
@@ -298,8 +301,8 @@ class TestProcessSceneLabel:
             None,
         ))
 
-        outcome = await VideoVisualWorker(llm)._process_scene(
-            scene_id, "vvr_label", "vid-ok", "/drives/family/clip.mp4", "clip.mp4"
+        outcome = await VideoVisualWorker()._process_scene(
+            resolved_with(llm), scene_id, "vvr_label", "vid-ok", "/drives/family/clip.mp4", "clip.mp4"
         )
 
         assert outcome == "succeeded"
@@ -363,8 +366,8 @@ class TestProcessSceneLabel:
             )
         )
 
-        outcome = await VideoVisualWorker(llm)._process_scene(
-            scene_id, "vvr_trunc", "vid-ok", "/drives/family/clip.mp4", "clip.mp4"
+        outcome = await VideoVisualWorker()._process_scene(
+            resolved_with(llm), scene_id, "vvr_trunc", "vid-ok", "/drives/family/clip.mp4", "clip.mp4"
         )
 
         assert outcome != "succeeded"
@@ -419,8 +422,8 @@ class TestProcessSceneLabel:
             return_value=JsonGeneration(None, FAILURE_MODEL_MISSING)
         )
 
-        outcome = await VideoVisualWorker(llm)._process_scene(
-            scene_id, "vvr_gone", "vid-ok", "/drives/family/clip.mp4", "clip.mp4"
+        outcome = await VideoVisualWorker()._process_scene(
+            resolved_with(llm), scene_id, "vvr_gone", "vid-ok", "/drives/family/clip.mp4", "clip.mp4"
         )
         assert outcome == "model_missing"
         # One call, not a repair attempt as well: the answer will not
@@ -475,8 +478,8 @@ class TestProcessSceneLabel:
             return_value=JsonGeneration(None, FAILURE_IMAGE_REJECTED)
         )
 
-        outcome = await VideoVisualWorker(llm)._process_scene(
-            scene_id, "vvr_rej", "vid-ok", "/drives/family/clip.mp4", "clip.mp4"
+        outcome = await VideoVisualWorker()._process_scene(
+            resolved_with(llm), scene_id, "vvr_rej", "vid-ok", "/drives/family/clip.mp4", "clip.mp4"
         )
 
         assert outcome != "unsupported"
@@ -496,7 +499,7 @@ class TestEnqueue:
     async def test_eligible_video_with_clip_is_accepted(
         self, search_db, feature_manual, policy_allow_all,
     ):
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         result = await worker.enqueue("vid-ok", requested_by="manual")
         assert result["accepted"] is True
         assert result["reason"] == "queued"
@@ -515,10 +518,43 @@ class TestEnqueue:
         )
 
     @pytest.mark.asyncio
+    async def test_the_run_records_the_routed_vision_model(
+        self, search_db, feature_manual, policy_allow_all, use_llm,
+    ):
+        use_llm(MagicMock(), vision_model="routed-vision")
+
+        result = await VideoVisualWorker().enqueue("vid-ok", requested_by="manual")
+
+        _, Session = search_db
+        with Session() as s:
+            run = s.query(VideoVisualRun).filter_by(id=result["run_id"]).one()
+            assert run.vision_model == "routed-vision"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("kind", "reason"),
+        [("defer", "policy_lookup_failed"), ("skip", "disabled")],
+    )
+    async def test_an_unresolved_drive_stages_no_run(
+        self, search_db, feature_manual, policy_allow_all, use_llm, kind, reason,
+    ):
+        from app.llm_routing import Defer, Skip
+
+        asked = use_llm(result=Defer("x") if kind == "defer" else Skip("x"))
+
+        result = await VideoVisualWorker().enqueue("vid-ok", requested_by="manual")
+
+        assert result == {"accepted": False, "reason": reason}
+        assert [feature for _, feature in asked] == ["video_visual_index"]
+        _, Session = search_db
+        with Session() as s:
+            assert s.query(VideoVisualRun).count() == 0
+
+    @pytest.mark.asyncio
     async def test_on_index_uses_priority_zero(
         self, search_db, feature_manual, policy_allow_all,
     ):
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         result = await worker.enqueue("vid-ok", requested_by="on_index")
         assert result["accepted"] is True
         _, Session = search_db
@@ -530,7 +566,7 @@ class TestEnqueue:
     async def test_non_video_mime_is_rejected(
         self, search_db, feature_manual, policy_allow_all,
     ):
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         result = await worker.enqueue("img-not-video")
         assert result["accepted"] is False
         assert result["reason"] == "not_eligible"
@@ -539,7 +575,7 @@ class TestEnqueue:
     async def test_missing_file_is_rejected(
         self, search_db, feature_manual, policy_allow_all,
     ):
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         result = await worker.enqueue("ghost")
         assert result["accepted"] is False
         assert result["reason"] == "not_found"
@@ -555,7 +591,7 @@ class TestEnqueue:
         monkeypatch.setattr("app.config.settings", settings)
         monkeypatch.setattr("app.workers.video_visual.settings", settings)
 
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         result = await worker.enqueue("vid-ok")
         assert result["accepted"] is False
         assert result["reason"] == "disabled"
@@ -571,7 +607,7 @@ class TestEnqueue:
         monkeypatch.setattr("app.config.settings", settings)
         monkeypatch.setattr("app.workers.video_visual.settings", settings)
 
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         result = await worker.enqueue("vid-ok")
         assert result["accepted"] is False
         assert result["reason"] == "disabled"
@@ -585,7 +621,7 @@ class TestEnqueue:
             AsyncMock(return_value=False),
             raising=False,
         )
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         result = await worker.enqueue("vid-ok")
         assert result["accepted"] is False
         assert result["reason"] == "disabled"
@@ -599,7 +635,7 @@ class TestEnqueue:
         monkeypatch.setattr(
             "app.dependencies.get_index_manager", lambda: index_manager,
         )
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         result = await worker.enqueue("vid-no-clip", requested_by="manual")
         assert result["accepted"] is False
         assert result["reason"] == "waiting_clip"
@@ -613,7 +649,7 @@ class TestEnqueue:
         monkeypatch.setattr(
             "app.dependencies.get_index_manager", lambda: index_manager,
         )
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         result = await worker.enqueue("vid-no-clip", requested_by="on_index")
         assert result["accepted"] is False
         assert result["reason"] == "waiting_clip"
@@ -623,7 +659,7 @@ class TestEnqueue:
     async def test_already_in_flight_is_rejected(
         self, search_db, feature_manual, policy_allow_all,
     ):
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         first = await worker.enqueue("vid-ok")
         assert first["accepted"] is True
         second = await worker.enqueue("vid-ok")
@@ -652,7 +688,7 @@ class TestEnqueue:
             )
             s.commit()
 
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         # The automatic path: a settled verdict is not re-spent on.
         result = await worker.enqueue("vid-ok", requested_by="on_index")
         assert result["accepted"] is False
@@ -686,7 +722,7 @@ class TestEnqueue:
             )
             s.commit()
 
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         assert (await worker.enqueue("vid-ok", requested_by="on_index"))[
             "reason"
         ] == "unsupported_sticky"
@@ -721,7 +757,7 @@ class TestEnqueue:
             )
             s.commit()
 
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         result = await worker.enqueue("vid-ok", requested_by="manual")
         assert result == {"accepted": False, "reason": "already_queued"}
 
@@ -747,7 +783,7 @@ class TestEnqueue:
             )
             s.commit()
 
-        worker = VideoVisualWorker(MagicMock())  # configured model is llava:13b
+        worker = VideoVisualWorker()  # configured model is llava:13b
         result = await worker.enqueue("vid-ok")
         assert result["accepted"] is True
 
@@ -783,7 +819,7 @@ class TestEnqueue:
             lambda candidates: "same-fp",
         )
 
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         result = await worker.enqueue("vid-ok", requested_by="on_index")
         assert result["accepted"] is False
         assert result["reason"] == "up_to_date"
@@ -813,7 +849,7 @@ class TestEnqueue:
             lambda candidates: "same-fp",
         )
 
-        result = await VideoVisualWorker(MagicMock()).enqueue(
+        result = await VideoVisualWorker().enqueue(
             "vid-ok", requested_by="on_index"
         )
 
@@ -845,7 +881,7 @@ class TestEnqueue:
             lambda candidates: "same-fp",
         )
 
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         result = await worker.enqueue("vid-ok", requested_by="manual")
         assert result["accepted"] is True
 
@@ -858,7 +894,7 @@ class TestEnqueue:
 class TestRetry:
     @pytest.mark.asyncio
     async def test_no_run_rejected(self, search_db, feature_manual, policy_allow_all):
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         result = await worker.retry("vid-ok")
         assert result["accepted"] is False
         assert result["reason"] == "no_run"
@@ -878,7 +914,7 @@ class TestRetry:
                 )
             )
             s.commit()
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         result = await worker.retry("vid-ok")
         assert result["accepted"] is False
         assert result["reason"] == "no_failed_scenes"
@@ -912,7 +948,7 @@ class TestRetry:
             )
             s.commit()
 
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         result = await worker.retry("vid-ok")
         assert result["accepted"] is True
         assert result["reset_count"] == 1
@@ -968,7 +1004,7 @@ class TestRetry:
             )
             s.commit()
 
-        result = await VideoVisualWorker(MagicMock()).retry("vid-ok")
+        result = await VideoVisualWorker().retry("vid-ok")
 
         assert result == {"accepted": False, "reason": "no_run"}
         with Session() as s:
@@ -998,7 +1034,7 @@ class TestFinalizeRunSucceededActivation:
             )
             s.commit()
 
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         await worker._finalize_run("vvr_new", "vid-ok", "family")
 
         with Session() as s:
@@ -1067,7 +1103,7 @@ class TestFinalizeRunSucceededActivation:
             )
             s.commit()
 
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         await worker._finalize_run("vvr_new", "vid-ok", "family")
 
         with Session() as s:
@@ -1106,7 +1142,7 @@ class TestFinalizeRunPartialAndFailedActivation:
             )
             s.commit()
 
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         await worker._finalize_run("vvr_1", "vid-ok", "family")
 
         with Session() as s:
@@ -1138,7 +1174,7 @@ class TestFinalizeRunPartialAndFailedActivation:
             )
             s.commit()
 
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         await worker._finalize_run("vvr_staged", "vid-ok", "family")
 
         with Session() as s:
@@ -1173,7 +1209,7 @@ class TestFinalizeRunPartialAndFailedActivation:
             )
             s.commit()
 
-        worker = VideoVisualWorker(MagicMock())
+        worker = VideoVisualWorker()
         await worker._finalize_run("vvr_staged", "vid-ok", "family")
 
         with Session() as s:
@@ -1208,7 +1244,7 @@ class TestInterruptedRunRecovery:
             ])
             s.commit()
 
-        VideoVisualWorker(MagicMock())._requeue_interrupted_run("vvr_interrupted")
+        VideoVisualWorker()._requeue_interrupted_run("vvr_interrupted")
 
         with Session() as s:
             run = s.query(VideoVisualRun).filter_by(id="vvr_interrupted").one()

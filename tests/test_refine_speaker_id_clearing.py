@@ -182,7 +182,9 @@ def test_rechunk_drops_speaker_id_on_new_chunks(session) -> None:
     # chunk under the default min/max settings.
     _seed_speaker_words(session)
 
-    new_ids = refine.rechunk_from_words(session, file_id="f00000000001")
+    new_ids = refine.rechunk_from_words(
+        session, file_id="f00000000001", refined_model="routed-model"
+    )
     assert new_ids, "rechunk must produce at least one new chunk"
 
     chunks = (
@@ -191,6 +193,7 @@ def test_rechunk_drops_speaker_id_on_new_chunks(session) -> None:
         .all()
     )
     assert chunks, "rechunk must persist new TranscriptChunk rows"
+    assert {c.refined_model for c in chunks} == {"routed-model"}
     for c in chunks:
         assert c.speaker_id is None, (
             f"rechunk produced TranscriptChunk(speaker_id={c.speaker_id!r}); "

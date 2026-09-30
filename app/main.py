@@ -276,7 +276,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     from app.config import is_vision_describe_available
 
-    if is_vision_describe_available(settings) and llm_client.enabled:
+    if is_vision_describe_available(settings):
         vision_task = asyncio.create_task(
             vision_worker.run(), name="vision_describe_worker"
         )
@@ -307,13 +307,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize video-visual-index worker. Shares the same LLM client and
     # enable rule as vision_describe: needs vision_model configured AND the
     # LLM client itself enabled.
-    video_visual_worker = VideoVisualWorker(llm_client)
+    video_visual_worker = VideoVisualWorker()
     dependencies._video_visual_worker = video_visual_worker
     video_visual_task: asyncio.Task | None = None
 
     from app.config import is_video_visual_index_available
 
-    if is_video_visual_index_available(settings) and llm_client.enabled:
+    if is_video_visual_index_available(settings):
         video_visual_task = asyncio.create_task(
             video_visual_worker.run(), name="video_visual_worker"
         )

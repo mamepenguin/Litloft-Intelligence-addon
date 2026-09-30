@@ -91,6 +91,10 @@ def test_migration_keeps_refined_at(search_engine):
     assert "text_refined_at" in _columns(search_engine)
 
 
+def test_migration_adds_refined_model(search_engine):
+    assert "refined_model" in _columns(search_engine)
+
+
 def test_migration_drops_text_original(search_engine):
     assert "text_original" not in _columns(search_engine)
 

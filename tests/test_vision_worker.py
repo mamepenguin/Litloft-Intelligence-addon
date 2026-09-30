@@ -146,7 +146,7 @@ def search_db(tmp_path, monkeypatch):
 
 
 @pytest.fixture()
-def feature_manual(monkeypatch, make_settings):
+def feature_manual(use_llm, monkeypatch, make_settings):
     settings = make_settings(
         features=FeaturesConfig(vision_describe="manual"),  # type: ignore[call-arg]
         llm=LLMConfig(
@@ -165,9 +165,7 @@ def feature_manual(monkeypatch, make_settings):
     # gone override this.
     enabled_llm = MagicMock()
     enabled_llm.enabled = True
-    monkeypatch.setattr(
-        "app.workers.vision.get_llm_client", lambda: enabled_llm
-    )
+    use_llm(enabled_llm)
     return settings
 
 
@@ -205,6 +203,63 @@ class TestEnqueue:
         worker = VisionDescribeWorker()
         accepted = (await worker.enqueue("img-ok"))["accepted"]
         assert accepted is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("kind", "reason"),
+        [("defer", "policy_unavailable"), ("skip", "llm_unavailable")],
+    )
+    async def test_unresolved_drive_is_refused_without_a_pending_mark(
+        self, use_llm, search_db, feature_manual, policy_allow_family, kind, reason,
+    ):
+        from app.llm_routing import Defer, Skip
+
+        engine, _ = search_db
+        asked = use_llm(result=Defer("x") if kind == "defer" else Skip("x"))
+
+        result = await VisionDescribeWorker().enqueue("img-ok")
+
+        assert result == {"accepted": False, "reason": reason}
+        assert asked == [("family", "vision_describe")]
+        assert _get_summary_row(engine, "img-ok") is None
+
+    @pytest.mark.asyncio
+    async def test_a_claim_the_drive_can_no_longer_serve_is_dropped(
+        self, use_llm, search_db, feature_manual, policy_allow_family,
+    ):
+        from app.llm_routing import Skip
+
+        engine, _ = search_db
+        worker = VisionDescribeWorker()
+        assert (await worker.enqueue("img-ok"))["accepted"] is True
+        client = MagicMock()
+        client.generate_vision = AsyncMock()
+        use_llm(result=Skip("llm_cloud off"))
+
+        await worker._process_file("img-ok")
+
+        client.generate_vision.assert_not_called()
+        assert _get_summary_row(engine, "img-ok")[1] is None
+
+    @pytest.mark.asyncio
+    async def test_the_description_records_the_routed_vision_model(
+        self, use_llm, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        engine, _ = search_db
+        monkeypatch.setattr(
+            "app.workers.vision._load_image_bytes",
+            lambda file_id: (b"\xff\xd8\xff\xe0fake", "image/jpeg"),
+        )
+        monkeypatch.setattr("app.workers.vision._embed_and_store", lambda f, t: None)
+        client = MagicMock()
+        client.generate_vision = AsyncMock(
+            return_value=VisionGeneration("A cat.", None)
+        )
+        use_llm(client, vision_model="routed-vision")
+
+        await VisionDescribeWorker()._process_file("img-ok")
+
+        assert _get_summary_row(engine, "img-ok")[2] == "routed-vision"
 
     @pytest.mark.asyncio
     async def test_non_image_mime_is_rejected(
@@ -287,7 +342,7 @@ def _get_summary_row(engine, file_id: str):
 class TestProcessFileStatusTransitions:
     @pytest.mark.asyncio
     async def test_success_writes_description_and_status(
-        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+        self, use_llm, search_db, feature_manual, policy_allow_family, monkeypatch,
     ):
         engine, _ = search_db
 
@@ -304,9 +359,7 @@ class TestProcessFileStatusTransitions:
         llm_stub.generate_vision = AsyncMock(
             return_value=VisionGeneration("A red apple on a wooden table.", None)
         )
-        monkeypatch.setattr(
-            "app.workers.vision.get_llm_client", lambda: llm_stub
-        )
+        use_llm(llm_stub)
         # Stub embedding generation so we don't need a real model.
         monkeypatch.setattr(
             "app.workers.vision._embed_and_store",
@@ -326,7 +379,7 @@ class TestProcessFileStatusTransitions:
 
     @pytest.mark.asyncio
     async def test_failed_llm_sets_failed_status(
-        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+        self, use_llm, search_db, feature_manual, policy_allow_family, monkeypatch,
     ):
         engine, _ = search_db
 
@@ -341,9 +394,7 @@ class TestProcessFileStatusTransitions:
         llm_stub.generate_vision = AsyncMock(
             return_value=VisionGeneration(None, FAILURE_EMPTY)
         )
-        monkeypatch.setattr(
-            "app.workers.vision.get_llm_client", lambda: llm_stub
-        )
+        use_llm(llm_stub)
 
         worker = VisionDescribeWorker()
         await worker._process_file("img-ok")
@@ -355,7 +406,7 @@ class TestProcessFileStatusTransitions:
 
     @pytest.mark.asyncio
     async def test_the_failure_reason_is_persisted(
-        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+        self, use_llm, search_db, feature_manual, policy_allow_family, monkeypatch,
     ):
         """The UI cannot offer the right remedy for a reason it never sees."""
         engine, _ = search_db
@@ -371,9 +422,7 @@ class TestProcessFileStatusTransitions:
         llm_stub.generate_vision = AsyncMock(
             return_value=VisionGeneration(None, FAILURE_MODEL_MISSING)
         )
-        monkeypatch.setattr(
-            "app.workers.vision.get_llm_client", lambda: llm_stub
-        )
+        use_llm(llm_stub)
 
         worker = VisionDescribeWorker()
         await worker._process_file("img-ok")
@@ -384,7 +433,7 @@ class TestProcessFileStatusTransitions:
 
     @pytest.mark.asyncio
     async def test_a_reason_does_not_outlive_its_attempt(
-        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+        self, use_llm, search_db, feature_manual, policy_allow_family, monkeypatch,
     ):
         """A stale reason read against a later attempt misleads.
 
@@ -406,9 +455,7 @@ class TestProcessFileStatusTransitions:
 
         llm_stub = MagicMock()
         llm_stub.enabled = True
-        monkeypatch.setattr(
-            "app.workers.vision.get_llm_client", lambda: llm_stub
-        )
+        use_llm(llm_stub)
 
         worker = VisionDescribeWorker()
         llm_stub.generate_vision = AsyncMock(
@@ -427,7 +474,7 @@ class TestProcessFileStatusTransitions:
 
     @pytest.mark.asyncio
     async def test_truncated_description_is_not_stored_as_success(
-        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+        self, use_llm, search_db, feature_manual, policy_allow_family, monkeypatch,
     ):
         """A description cut off by the token ceiling is not a description.
 
@@ -451,9 +498,7 @@ class TestProcessFileStatusTransitions:
                 "A red apple on a wooden tab", FAILURE_TOKEN_BUDGET
             )
         )
-        monkeypatch.setattr(
-            "app.workers.vision.get_llm_client", lambda: llm_stub
-        )
+        use_llm(llm_stub)
         embed_mock = MagicMock()
         monkeypatch.setattr(
             "app.workers.vision._embed_and_store", embed_mock, raising=False,
@@ -470,7 +515,7 @@ class TestProcessFileStatusTransitions:
 
     @pytest.mark.asyncio
     async def test_unsupported_response_sets_unsupported_status(
-        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+        self, use_llm, search_db, feature_manual, policy_allow_family, monkeypatch,
     ):
         engine, _ = search_db
 
@@ -486,9 +531,7 @@ class TestProcessFileStatusTransitions:
         llm_stub.generate_vision = AsyncMock(
             return_value=VisionGeneration(None, FAILURE_VISION_UNSUPPORTED)
         )
-        monkeypatch.setattr(
-            "app.workers.vision.get_llm_client", lambda: llm_stub
-        )
+        use_llm(llm_stub)
 
         worker = VisionDescribeWorker()
         await worker._process_file("img-ok")
@@ -502,7 +545,7 @@ class TestProcessFileStatusTransitions:
 
     @pytest.mark.asyncio
     async def test_unsupported_same_model_does_not_retry(
-        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+        self, use_llm, search_db, feature_manual, policy_allow_family, monkeypatch,
     ):
         """A subsequent enqueue for an unsupported file must skip LLM call."""
         engine, _ = search_db
@@ -526,9 +569,7 @@ class TestProcessFileStatusTransitions:
         llm_stub.generate_vision = AsyncMock(
             return_value=VisionGeneration("should not be called", None)
         )
-        monkeypatch.setattr(
-            "app.workers.vision.get_llm_client", lambda: llm_stub
-        )
+        use_llm(llm_stub)
 
         worker = VisionDescribeWorker()
         accepted = (await worker.enqueue("img-ok"))["accepted"]
@@ -715,7 +756,7 @@ class TestProcessFileStatusTransitions:
 
     @pytest.mark.asyncio
     async def test_no_client_means_no_acceptance(
-        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+        self, use_llm, search_db, feature_manual, policy_allow_family, monkeypatch,
     ):
         """Configured is not the same as runnable.
 
@@ -728,9 +769,7 @@ class TestProcessFileStatusTransitions:
         engine, _ = search_db
         disabled = MagicMock()
         disabled.enabled = False
-        monkeypatch.setattr(
-            "app.workers.vision.get_llm_client", lambda: disabled
-        )
+        use_llm(disabled)
 
         worker = VisionDescribeWorker()
         result = await worker.enqueue("img-ok", manual=True)
@@ -817,7 +856,7 @@ class TestProcessFileStatusTransitions:
 
     @pytest.mark.asyncio
     async def test_success_same_model_does_not_retry(
-        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+        self, use_llm, search_db, feature_manual, policy_allow_family, monkeypatch,
     ):
         """An already-described file with the SAME model must skip LLM call.
 
@@ -846,9 +885,7 @@ class TestProcessFileStatusTransitions:
         llm_stub.generate_vision = AsyncMock(
             return_value=VisionGeneration("should not be called", None)
         )
-        monkeypatch.setattr(
-            "app.workers.vision.get_llm_client", lambda: llm_stub
-        )
+        use_llm(llm_stub)
 
         worker = VisionDescribeWorker()
         accepted = (await worker.enqueue("img-ok"))["accepted"]
@@ -856,10 +893,10 @@ class TestProcessFileStatusTransitions:
         llm_stub.generate_vision.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_success_different_model_retries(
-        self, search_db, monkeypatch, make_settings, policy_allow_family,
+    async def test_success_stays_done_under_a_different_model(
+        self, use_llm, search_db, monkeypatch, make_settings, policy_allow_family,
     ):
-        """Changing vision_model lets a previously successful file rerun."""
+        """A routing change must not regenerate an existing description."""
         settings = make_settings(
             features=FeaturesConfig(vision_describe="manual"),  # type: ignore[call-arg]
             llm=LLMConfig(
@@ -873,9 +910,7 @@ class TestProcessFileStatusTransitions:
         monkeypatch.setattr("app.workers.vision.settings", settings)
         enabled_llm = MagicMock()
         enabled_llm.enabled = True
-        monkeypatch.setattr(
-            "app.workers.vision.get_llm_client", lambda: enabled_llm
-        )
+        use_llm(enabled_llm)
 
         engine, _ = search_db
         now = datetime.now(UTC).isoformat()
@@ -894,12 +929,12 @@ class TestProcessFileStatusTransitions:
             )
 
         worker = VisionDescribeWorker()
-        accepted = (await worker.enqueue("img-ok"))["accepted"]
-        assert accepted is True
+        result = await worker.enqueue("img-ok")
+        assert result == {"accepted": False, "reason": "already_described"}
 
     @pytest.mark.asyncio
     async def test_unsupported_different_model_retries(
-        self, search_db, monkeypatch, make_settings, policy_allow_family,
+        self, use_llm, search_db, monkeypatch, make_settings, policy_allow_family,
     ):
         """Changing vision_model must reset stickiness and allow retry."""
         settings = make_settings(
@@ -915,9 +950,7 @@ class TestProcessFileStatusTransitions:
         monkeypatch.setattr("app.workers.vision.settings", settings)
         enabled_llm = MagicMock()
         enabled_llm.enabled = True
-        monkeypatch.setattr(
-            "app.workers.vision.get_llm_client", lambda: enabled_llm
-        )
+        use_llm(enabled_llm)
 
         engine, _ = search_db
         now = datetime.now(UTC).isoformat()
@@ -1063,7 +1096,7 @@ class TestEnqueueUnprocessed:
 class TestEmbeddingRegistration:
     @pytest.mark.asyncio
     async def test_success_inserts_vision_description_embedding(
-        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+        self, use_llm, search_db, feature_manual, policy_allow_family, monkeypatch,
     ):
         """A success path must register an embeddings row of type
         ``vision_description`` so hybrid retrieval can pick it up."""
@@ -1082,9 +1115,7 @@ class TestEmbeddingRegistration:
                 "A yellow duckling swimming in a pond.", None
             )
         )
-        monkeypatch.setattr(
-            "app.workers.vision.get_llm_client", lambda: llm_stub
-        )
+        use_llm(llm_stub)
 
         # Capture embed-and-store invocations (we don't want to run the
         # real embedder, which pulls in heavy ML deps).
@@ -1135,7 +1166,7 @@ class TestEmbeddingRegistration:
 
     @pytest.mark.asyncio
     async def test_failure_does_not_write_embedding(
-        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+        self, use_llm, search_db, feature_manual, policy_allow_family, monkeypatch,
     ):
         engine, Session = search_db
 
@@ -1150,9 +1181,7 @@ class TestEmbeddingRegistration:
         llm_stub.generate_vision = AsyncMock(
             return_value=VisionGeneration(None, FAILURE_EMPTY)
         )
-        monkeypatch.setattr(
-            "app.workers.vision.get_llm_client", lambda: llm_stub
-        )
+        use_llm(llm_stub)
 
         embed_mock = MagicMock()
         monkeypatch.setattr(

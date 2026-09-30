@@ -144,7 +144,12 @@ class TestVisionFeatureAvailability:
         # predicate cares about.
         class _Fake:
             features = FeaturesConfig(vision_describe=features_mode)
-            llm = LLMConfig(vision_model=vision_model)
+            llm = LLMConfig(
+                provider="openai_compatible",
+                base_url="http://llm.test/v1",
+                model="text",
+                vision_model=vision_model,
+            )
 
         return is_vision_describe_available(_Fake())
 

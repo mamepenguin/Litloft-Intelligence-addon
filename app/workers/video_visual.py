@@ -33,6 +33,7 @@ from sqlalchemy import or_, text as sql_text
 from sqlalchemy.exc import OperationalError
 
 import app.config as config
+from app import llm_routing
 from app.config import is_video_visual_index_available, settings
 from app.database import get_search_db, get_search_db_read, get_search_engine
 from app.frame_cache import ensure_frame_cached
@@ -44,6 +45,7 @@ from app.llm import (
     FAILURE_VISION_UNSUPPORTED,
     JsonGeneration,
 )
+from app.llm_routing import Defer, Resolved
 from app.models import Embedding, IndexedFile, TranscriptChunk, VideoVisualRun, VideoVisualScene
 from app.output_language import configured_language_requirement
 from app.policy_client import is_file_feature_enabled
@@ -429,8 +431,7 @@ class VideoVisualWorker:
     busy loop while idle.
     """
 
-    def __init__(self, llm_client) -> None:
-        self._llm_client = llm_client
+    def __init__(self) -> None:
         self._wake = asyncio.Event()
         self._pause_event = asyncio.Event()
         self._pause_event.set()  # start unpaused
@@ -462,7 +463,7 @@ class VideoVisualWorker:
 
     async def _should_accept(
         self, file_id: str, *, manual: bool = False
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool, str, Resolved | None]:
         """Shared gate: feature flag + vision_model + drive policy + mime + CLIP + stickiness.
 
         ``manual`` skips the stickiness check and nothing else, matching
@@ -474,7 +475,7 @@ class VideoVisualWorker:
         already in flight — applies to everyone.
         """
         if not is_video_visual_index_available(settings):
-            return False, "disabled"
+            return False, "disabled", None
 
         try:
             enabled = await is_file_feature_enabled(
@@ -487,9 +488,9 @@ class VideoVisualWorker:
                 "video_visual: policy lookup failed for %s (%s); refusing (fail-closed)",
                 file_id, type(e).__name__,
             )
-            return False, "policy_lookup_failed"
+            return False, "policy_lookup_failed", None
         if not enabled:
-            return False, "disabled"
+            return False, "disabled", None
 
         with get_search_db_read() as session:
             file_row = (
@@ -498,9 +499,9 @@ class VideoVisualWorker:
                 .first()
             )
             if file_row is None:
-                return False, "not_found"
+                return False, "not_found", None
             if file_row.mime_type not in VIDEO_TYPES:
-                return False, "not_eligible"
+                return False, "not_eligible", None
 
             last_run = (
                 session.query(VideoVisualRun)
@@ -509,16 +510,16 @@ class VideoVisualWorker:
                 .first()
             )
             # Sticky "provider/model can't do this" — same shape as
-            # VisionDescribeWorker._should_accept. A model swap clears
-            # it, and so does an explicit request.
-            if (
-                not manual
-                and last_run is not None
+            # VisionDescribeWorker._should_accept. A different model for
+            # this drive clears it, and so does an explicit request.
+            unsupported_model = (
+                (last_run.vision_model or "")
+                if last_run is not None
                 and last_run.status == "failed"
                 and last_run.error_class == "Unsupported"
-                and (last_run.vision_model or "") == (settings.llm.vision_model or "")
-            ):
-                return False, "unsupported_sticky"
+                else None
+            )
+            drive = file_row.drive
 
             in_flight = (
                 session.query(VideoVisualRun.id)
@@ -529,12 +530,23 @@ class VideoVisualWorker:
                 .first()
             )
             if in_flight is not None:
-                return False, "already_queued"
+                return False, "already_queued", None
 
         if not _clip_candidates_exist(file_id):
-            return False, "waiting_clip"
+            return False, "waiting_clip", None
 
-        return True, "ok"
+        resolved = await llm_routing.resolve(drive, "video_visual_index", vision=True)
+        if isinstance(resolved, Defer):
+            return False, "policy_lookup_failed", None
+        if not isinstance(resolved, Resolved):
+            return False, "disabled", None
+        if (
+            not manual
+            and unsupported_model is not None
+            and unsupported_model == resolved.profile.config.vision_model
+        ):
+            return False, "unsupported_sticky", None
+        return True, "ok", resolved
 
     async def enqueue(self, file_id: str, *, requested_by: str = "manual") -> dict:
         """Stage a new run for ``file_id``.
@@ -545,7 +557,7 @@ class VideoVisualWorker:
         file's CLIP task (§6.1); an automatic request is simply skipped
         (the periodic on_index sweep / CLIP-completion hook retries it).
         """
-        accepted, reason = await self._should_accept(
+        accepted, reason, resolved = await self._should_accept(
             file_id, manual=(requested_by == "manual")
         )
         if not accepted:
@@ -585,7 +597,7 @@ class VideoVisualWorker:
                 status="queued",
                 requested_by=requested_by,
                 priority=priority,
-                vision_model=settings.llm.vision_model or "",
+                vision_model=resolved.profile.config.vision_model,
                 pipeline_version=PIPELINE_VERSION,
                 candidate_fingerprint="",
                 created_at=datetime.now(UTC),
@@ -765,7 +777,12 @@ class VideoVisualWorker:
             )
         except Exception:
             enabled = False
-        if not enabled:
+        resolved = (
+            await llm_routing.resolve(drive, "video_visual_index", vision=True)
+            if enabled
+            else None
+        )
+        if not isinstance(resolved, Resolved):
             self._fail_run(run_id, "PolicyDisabled")
             return
 
@@ -801,7 +818,9 @@ class VideoVisualWorker:
 
         for scene_id in pending_ids:
             await self._pause_event.wait()  # checked between scenes only
-            outcome = await self._process_scene(scene_id, run_id, file_id, file_path, filename)
+            outcome = await self._process_scene(
+                resolved, scene_id, run_id, file_id, file_path, filename
+            )
             # Both of these are facts about the model, so every
             # remaining scene would meet them too. Only the first is
             # sticky: a model that cannot see stays that way until it
@@ -868,7 +887,13 @@ class VideoVisualWorker:
         return "failed"
 
     async def _process_scene(
-        self, scene_id: int, run_id: str, file_id: str, file_path: str, filename: str
+        self,
+        resolved: Resolved,
+        scene_id: int,
+        run_id: str,
+        file_id: str,
+        file_path: str,
+        filename: str,
     ) -> str:
         with get_search_db() as session:
             scene = session.query(VideoVisualScene).filter_by(id=scene_id).first()
@@ -908,7 +933,7 @@ class VideoVisualWorker:
         )
 
         try:
-            result = await self._llm_client.generate_video_scene_json(
+            result = await resolved.client.generate_video_scene_json(
                 image_bytes, image_mime, system_prompt, user_prompt
             )
         except Exception as e:
@@ -930,7 +955,7 @@ class VideoVisualWorker:
                 "video_visual_scene/retry_user.jinja2", original_prompt=user_prompt
             )
             try:
-                result2 = await self._llm_client.generate_video_scene_json(
+                result2 = await resolved.client.generate_video_scene_json(
                     image_bytes, image_mime, system_prompt, retry_prompt
                 )
             except Exception as e:
