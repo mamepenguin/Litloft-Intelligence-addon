@@ -262,6 +262,81 @@ class TestEnqueue:
         assert _get_summary_row(engine, "img-ok")[2] == "routed-vision"
 
     @pytest.mark.asyncio
+    async def test_both_resolves_use_the_files_drive_and_ask_for_vision(
+        self, use_llm, search_db, feature_manual, policy_allow_family,
+    ):
+        from app.llm_routing import Skip
+
+        engine, _ = search_db
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE indexed_files SET drive = 'second' WHERE file_id = 'img-ok'"))
+        asked = use_llm(MagicMock())
+        worker = VisionDescribeWorker()
+        assert (await worker.enqueue("img-ok"))["accepted"] is True
+        later = use_llm(result=Skip("off"))
+
+        await worker._process_file("img-ok")
+
+        assert later is asked
+        assert (list(asked), asked.vision) == (
+            [("second", "vision_describe")] * 2, [True, True]
+        )
+
+    @pytest.mark.asyncio
+    async def test_releasing_a_re_request_keeps_the_description_visible(
+        self, use_llm, search_db, feature_manual, policy_allow_family,
+    ):
+        from app.llm_routing import Skip
+
+        engine, _ = search_db
+        now = datetime.now(UTC).isoformat()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO file_summaries "
+                    "(file_id, short_summary, long_summary, model, context_type, "
+                    "context_chars, was_truncated, status, created_at, "
+                    "visual_description, visual_description_status, "
+                    "visual_description_model) "
+                    "VALUES ('img-ok', '', '', '', 'image', 0, 0, 'hidden', :now, "
+                    "'A cat.', 'success', 'llava:13b')"
+                ),
+                {"now": now},
+            )
+        worker = VisionDescribeWorker()
+        assert (await worker.enqueue("img-ok", manual=True))["accepted"] is True
+        use_llm(result=Skip("off"))
+
+        await worker._process_file("img-ok")
+
+        row = _get_summary_row(engine, "img-ok")
+        assert (row[0], row[1]) == ("A cat.", "success")
+
+    @pytest.mark.asyncio
+    async def test_unsupported_is_judged_against_the_routed_model(
+        self, use_llm, search_db, feature_manual, policy_allow_family,
+    ):
+        engine, _ = search_db
+        now = datetime.now(UTC).isoformat()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO file_summaries "
+                    "(file_id, short_summary, long_summary, model, context_type, "
+                    "context_chars, was_truncated, status, created_at, "
+                    "visual_description_status, visual_description_model) "
+                    "VALUES ('img-ok', '', '', '', 'image', 0, 0, 'hidden', :now, "
+                    "'unsupported', 'llava:13b')"
+                ),
+                {"now": now},
+            )
+        use_llm(MagicMock(), vision_model="other-vision")
+
+        result = await VisionDescribeWorker().enqueue("img-ok")
+
+        assert result["accepted"] is True
+
+    @pytest.mark.asyncio
     async def test_non_image_mime_is_rejected(
         self, search_db, feature_manual, policy_allow_family,
     ):

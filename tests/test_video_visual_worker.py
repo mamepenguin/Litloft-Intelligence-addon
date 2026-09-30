@@ -32,7 +32,7 @@ for _mod in (
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
 
-from sqlalchemy import create_engine  # noqa: E402
+from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.config import FeaturesConfig, LLMConfig  # noqa: E402
@@ -306,6 +306,7 @@ class TestProcessSceneLabel:
         )
 
         assert outcome == "succeeded"
+        assert llm.generate_video_scene_json.await_count == 1
         with Session() as s:
             stored = s.query(VideoVisualScene).filter_by(id=scene_id).one()
             assert stored.scene_label == "Chicken marinade added"
@@ -788,7 +789,7 @@ class TestEnqueue:
         assert result["accepted"] is True
 
     @pytest.mark.asyncio
-    async def test_a_run_the_drive_can_no_longer_serve_fails_without_a_call(
+    async def test_a_fresh_run_the_drive_can_no_longer_serve_is_removed(
         self, search_db, feature_manual, policy_allow_all, use_llm, no_emit,
     ):
         from app.llm_routing import Skip
@@ -797,15 +798,92 @@ class TestEnqueue:
         run_id = (await worker.enqueue("vid-ok", requested_by="manual"))["run_id"]
         client = MagicMock()
         client.generate_video_scene_json = AsyncMock()
-        use_llm(result=Skip("llm_cloud off"))
+        asked = use_llm(result=Skip("llm_cloud off"))
 
         await worker._process_run(run_id, "vid-ok")
 
         client.generate_video_scene_json.assert_not_called()
+        assert asked.vision == [True, True]
         _, Session = search_db
+        with Session() as s:
+            assert s.query(VideoVisualRun).filter_by(id=run_id).count() == 0
+
+    @pytest.mark.asyncio
+    async def test_a_retried_run_the_drive_can_no_longer_serve_keeps_its_scenes(
+        self, search_db, feature_manual, policy_allow_all, use_llm, no_emit,
+    ):
+        from app.llm_routing import Skip
+
+        worker = VideoVisualWorker()
+        run_id = (await worker.enqueue("vid-ok", requested_by="manual"))["run_id"]
+        _, Session = search_db
+        with Session() as s:
+            s.add(VideoVisualScene(
+                run_id=run_id, ordering=0, clip_embedding_id="clip-0",
+                start_time=0.0, status="succeeded",
+            ))
+            s.commit()
+        use_llm(result=Skip("llm_cloud off"))
+
+        await worker._process_run(run_id, "vid-ok")
+
         with Session() as s:
             run = s.query(VideoVisualRun).filter_by(id=run_id).one()
             assert (run.status, run.error_class) == ("failed", "PolicyDisabled")
+            assert s.query(VideoVisualScene).filter_by(run_id=run_id).count() == 1
+
+    @pytest.mark.asyncio
+    async def test_the_run_records_the_model_it_was_processed_with(
+        self, search_db, feature_manual, policy_allow_all, use_llm, no_emit, monkeypatch,
+    ):
+        worker = VideoVisualWorker()
+        use_llm(MagicMock(), vision_model="first-vision")
+        run_id = (await worker.enqueue("vid-ok", requested_by="manual"))["run_id"]
+        use_llm(MagicMock(), vision_model="second-vision")
+        monkeypatch.setattr(worker, "_build_scenes", lambda *a: False)
+
+        await worker._process_run(run_id, "vid-ok")
+
+        _, Session = search_db
+        with Session() as s:
+            assert s.query(VideoVisualRun).filter_by(id=run_id).one().vision_model == (
+                "second-vision"
+            )
+
+    @pytest.mark.asyncio
+    async def test_both_resolves_use_the_files_drive(
+        self, search_db, feature_manual, policy_allow_all, use_llm, no_emit, monkeypatch,
+    ):
+        engine, _ = search_db
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE indexed_files SET drive = 'second' WHERE file_id = 'vid-ok'"))
+        worker = VideoVisualWorker()
+        asked = use_llm(MagicMock())
+        run_id = (await worker.enqueue("vid-ok", requested_by="manual"))["run_id"]
+        monkeypatch.setattr(worker, "_build_scenes", lambda *a: False)
+
+        await worker._process_run(run_id, "vid-ok")
+
+        assert list(asked) == [("second", "video_visual_index")] * 2
+        assert asked.vision == [True, True]
+
+    @pytest.mark.asyncio
+    async def test_unsupported_is_judged_against_the_routed_model(
+        self, search_db, feature_manual, policy_allow_all, use_llm,
+    ):
+        _, Session = search_db
+        with Session() as s:
+            s.add(VideoVisualRun(
+                id="vvr_unsup", file_id="vid-ok", status="failed", is_active=False,
+                requested_by="on_index", priority=0, vision_model="llava:13b",
+                pipeline_version=1, candidate_fingerprint="fp", error_class="Unsupported",
+            ))
+            s.commit()
+        use_llm(MagicMock(), vision_model="other-vision")
+
+        result = await VideoVisualWorker().enqueue("vid-ok", requested_by="on_index")
+
+        assert result["accepted"] is True
 
     @pytest.mark.asyncio
     async def test_on_index_skips_when_fingerprint_unchanged(

@@ -11,7 +11,7 @@ chunks in other windows.
 Target module: ``app.workers.refine`` with:
 
 * ``WINDOW_SIZE`` (int, default 10)
-* ``async refine_chunks(session, llm, chunks)`` -> ``RefineResult``
+* ``async refine_chunks(session, llm, chunks, *, model)`` -> ``RefineResult``
   where ``RefineResult.refined_count`` and ``.skipped_count`` are ints.
 
 This module does not exist yet — tests import-guard accordingly.
@@ -37,6 +37,7 @@ def _chunk(cid: int, text: str, start: float, end: float) -> SimpleNamespace:
         chunk_index=cid - 1,
         text=text,
         text_refined_at=None,
+        refined_model=None,
         timestamp_start=start,
         timestamp_end=end,
         language="ja",
@@ -70,7 +71,7 @@ class TestRefineChunksHappyPath:
             {"id": 2, "text_refined": "refined two"},
         ]
 
-        result = await refine_chunks(session, llm_stub, chunks)
+        result = await refine_chunks(session, llm_stub, chunks, model="routed-model")
 
         assert result.refined_count == 2
         assert result.skipped_count == 0
@@ -79,6 +80,7 @@ class TestRefineChunksHappyPath:
         # would invalidate per-chunk originals anyway.
         assert chunks[0].text == "refined one"
         assert chunks[0].text_refined_at is not None
+        assert [c.refined_model for c in chunks] == ["routed-model", "routed-model"]
         assert chunks[1].text == "refined two"
         assert chunks[1].text_refined_at is not None
 
@@ -90,18 +92,19 @@ class TestRefineChunksMalformedResponse:
         chunks = [_chunk(1, "origin", 0.0, 5.0)]
         llm_stub.generate_json.return_value = None
 
-        result = await refine_chunks(session, llm_stub, chunks)
+        result = await refine_chunks(session, llm_stub, chunks, model="routed-model")
 
         assert result.refined_count == 0
         assert result.skipped_count == 1
         assert chunks[0].text == "origin"
         assert chunks[0].text_refined_at is None
+        assert chunks[0].refined_model is None
 
     async def test_non_list_response_preserves_original(self, session, llm_stub):
         chunks = [_chunk(1, "origin", 0.0, 5.0)]
         llm_stub.generate_json.return_value = {"unexpected": "dict"}
 
-        result = await refine_chunks(session, llm_stub, chunks)
+        result = await refine_chunks(session, llm_stub, chunks, model="routed-model")
         assert result.refined_count == 0
         assert result.skipped_count == 1
         assert chunks[0].text == "origin"
@@ -124,7 +127,7 @@ class TestRefineChunksIdMismatch:
             {"id": 1, "text_refined": "A"},
         ]
 
-        result = await refine_chunks(session, llm_stub, chunks)
+        result = await refine_chunks(session, llm_stub, chunks, model="routed-model")
         assert result.refined_count == 0
         assert result.skipped_count == 2
         assert chunks[0].text == "a"
@@ -137,7 +140,7 @@ class TestRefineChunksIdMismatch:
             {"id": 999, "text_refined": "hallucinated"},
         ]
 
-        result = await refine_chunks(session, llm_stub, chunks)
+        result = await refine_chunks(session, llm_stub, chunks, model="routed-model")
         assert result.refined_count == 0
         assert result.skipped_count == 1
         assert chunks[0].text == "a"
@@ -165,7 +168,7 @@ class TestRefineChunksExceptionHandling:
             second_payload,
         ]
 
-        result = await refine_chunks(session, llm_stub, chunks)
+        result = await refine_chunks(session, llm_stub, chunks, model="routed-model")
 
         # Window 1 (WINDOW_SIZE chunks) skipped, window 2 refined.
         assert result.refined_count == WINDOW_SIZE
@@ -200,7 +203,7 @@ class TestRefineChunksBatching:
 
         llm_stub.generate_json.side_effect = _respond
 
-        result = await refine_chunks(session, llm_stub, chunks)
+        result = await refine_chunks(session, llm_stub, chunks, model="routed-model")
 
         assert llm_stub.generate_json.call_count == 3
         assert result.refined_count == total

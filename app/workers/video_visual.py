@@ -521,16 +521,6 @@ class VideoVisualWorker:
             )
             drive = file_row.drive
 
-            in_flight = (
-                session.query(VideoVisualRun.id)
-                .filter(
-                    VideoVisualRun.file_id == file_id,
-                    VideoVisualRun.status.in_(("queued", "running")),
-                )
-                .first()
-            )
-            if in_flight is not None:
-                return False, "already_queued", None
 
         if not _clip_candidates_exist(file_id):
             return False, "waiting_clip", None
@@ -546,6 +536,19 @@ class VideoVisualWorker:
             and unsupported_model == resolved.profile.config.vision_model
         ):
             return False, "unsupported_sticky", None
+
+        # After the last await, so two concurrent requests cannot both pass.
+        with get_search_db_read() as session:
+            in_flight = (
+                session.query(VideoVisualRun.id)
+                .filter(
+                    VideoVisualRun.file_id == file_id,
+                    VideoVisualRun.status.in_(("queued", "running")),
+                )
+                .first()
+            )
+        if in_flight is not None:
+            return False, "already_queued", None
         return True, "ok", resolved
 
     async def enqueue(self, file_id: str, *, requested_by: str = "manual") -> dict:
@@ -777,14 +780,14 @@ class VideoVisualWorker:
             )
         except Exception:
             enabled = False
-        resolved = (
-            await llm_routing.resolve(drive, "video_visual_index", vision=True)
-            if enabled
-            else None
-        )
-        if not isinstance(resolved, Resolved):
+        if not enabled:
             self._fail_run(run_id, "PolicyDisabled")
             return
+        resolved = await llm_routing.resolve(drive, "video_visual_index", vision=True)
+        if not isinstance(resolved, Resolved):
+            self._release_unserved_run(run_id)
+            return
+        self._stamp_run_model(run_id, resolved.profile.config.vision_model)
 
         await emit_video_visual_event(
             "intelligence.video_visual.started",
@@ -837,6 +840,31 @@ class VideoVisualWorker:
             await self._emit_progress(run_id, file_id, drive)
 
         await self._finalize_run(run_id, file_id, drive)
+
+    def _release_unserved_run(self, run_id: str) -> None:
+        """Undo a claim the drive's routing can no longer serve.
+
+        A fresh run is removed, so the file reads as never attempted and
+        the next sweep picks it up. A retried run keeps the scenes it
+        already has and fails as the policy path does.
+        """
+        with get_search_db() as session:
+            has_scenes = (
+                session.query(VideoVisualScene.id)
+                .filter(VideoVisualScene.run_id == run_id)
+                .first()
+                is not None
+            )
+            if not has_scenes:
+                session.query(VideoVisualRun).filter_by(id=run_id).delete()
+                return
+        self._fail_run(run_id, "PolicyDisabled")
+
+    def _stamp_run_model(self, run_id: str, vision_model: str) -> None:
+        with get_search_db() as session:
+            session.query(VideoVisualRun).filter_by(id=run_id).update(
+                {"vision_model": vision_model}, synchronize_session=False
+            )
 
     def _build_scenes(self, run_id: str, file_id: str) -> bool:
         candidates, duration = _load_candidates(file_id)

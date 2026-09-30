@@ -148,13 +148,18 @@ def use_llm(monkeypatch):
     from app import llm_routing
     from tests.llm_helpers import resolved_with
 
-    asked: list[tuple[str, str]] = []
+    class _Asked(list):
+        vision: list[bool]
+
+    asked = _Asked()
+    asked.vision = []
 
     def _use(client=None, *, model="test-llm", vision_model=None, result=None):
         async def _resolve(drive, feature, *, vision=False):
             import app.config as config
 
             asked.append((drive, feature))
+            asked.vision.append(vision)
             if result is not None:
                 return result
             if client is None or not getattr(client, "enabled", True):

@@ -350,9 +350,15 @@ def _mark_pending(session: Any, file_id: str) -> None:
 
 
 def _clear_pending(session: Any, file_id: str) -> None:
+    """Release a claim without a run: back to what the stored columns say.
+
+    A failed attempt clears the description, so a description still here
+    is the last success.
+    """
     session.execute(
         sql_text(
-            "UPDATE file_summaries SET visual_description_status = NULL "
+            "UPDATE file_summaries SET visual_description_status = "
+            "CASE WHEN visual_description IS NOT NULL THEN 'success' END "
             "WHERE file_id = :fid AND visual_description_status = 'pending'"
         ),
         {"fid": file_id},
@@ -559,6 +565,12 @@ class VisionDescribeWorker:
             state = _fetch_existing_vision(session, file_id)
             drive = file_row.drive
 
+        resolved = await llm_routing.resolve(drive, "vision_describe", vision=True)
+        if isinstance(resolved, Defer):
+            return False, "policy_unavailable"
+        if not isinstance(resolved, Resolved):
+            return False, "llm_unavailable"
+
         # Already ours to do. Manual does not override this: asking
         # twice for the same work does not make it happen sooner, it
         # just buys a second LLM call whose result overwrites the
@@ -567,12 +579,6 @@ class VisionDescribeWorker:
         # stays retryable.
         if file_id in self._queued or file_id in self._processing:
             return False, "already_queued"
-
-        resolved = await llm_routing.resolve(drive, "vision_describe", vision=True)
-        if isinstance(resolved, Defer):
-            return False, "policy_unavailable"
-        if not isinstance(resolved, Resolved):
-            return False, "llm_unavailable"
 
         if state is not None and not manual:
             status, stored_model = state
