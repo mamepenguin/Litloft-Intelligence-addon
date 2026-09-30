@@ -586,9 +586,10 @@ def test_llm_put_saves_and_applies_without_a_restart(
     routing = llm_routing.current_routing()
     assert (set(routing.profiles), routing.features) == ({"local", "cloud"}, {"rag": "cloud"})
 
+    monkeypatch.delenv("CLOUD_KEY")
     body = client.get("/admin/llm").json()
     assert body["legacy"] is False
-    assert body["profiles"]["cloud"]["api_key_present"] is True
+    assert body["profiles"]["cloud"]["api_key_present"] is False
     assert body["routing"] == _ROUTED["routing"]
 
 
