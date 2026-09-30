@@ -530,11 +530,19 @@ def _build_user_prompt(
     )
 
 
+# A detailed summary's workflow marker creates a row with an empty short
+# summary, so "has a short summary" is read from the text, not the row.
+_HAS_SHORT_SUMMARY = "COALESCE(short_summary, '') != ''"
+
+
 def _has_summary(file_id: str) -> bool:
-    """True if a summary (in any status) already exists for this file."""
+    """True if a short/long summary (in any status) exists for this file."""
     with get_search_db() as session:
         row = session.execute(
-            sql_text("SELECT 1 FROM file_summaries WHERE file_id = :fid"),
+            sql_text(
+                "SELECT 1 FROM file_summaries WHERE file_id = :fid "
+                f"AND {_HAS_SHORT_SUMMARY}"
+            ),
             {"fid": file_id},
         ).fetchone()
         return row is not None
@@ -566,12 +574,21 @@ async def _save_summary(
     with get_search_db() as session:
         session.execute(
             sql_text(
-                "INSERT OR REPLACE INTO file_summaries "
+                "INSERT INTO file_summaries "
                 "(file_id, short_summary, long_summary, model, context_type, "
                 "context_chars, was_truncated, status, created_at) "
                 "VALUES (:file_id, :short_summary, :long_summary, :model, "
                 ":context_type, :context_chars, :was_truncated, 'generated', "
-                ":created_at)"
+                ":created_at) "
+                "ON CONFLICT(file_id) DO UPDATE SET "
+                "short_summary = excluded.short_summary, "
+                "long_summary = excluded.long_summary, "
+                "model = excluded.model, "
+                "context_type = excluded.context_type, "
+                "context_chars = excluded.context_chars, "
+                "was_truncated = excluded.was_truncated, "
+                "status = excluded.status, "
+                "created_at = excluded.created_at"
             ),
             {
                 "file_id": file_id,
@@ -1168,7 +1185,8 @@ class SummariesWorker:
                         "SELECT f.file_id, f.drive FROM indexed_files f "
                         "WHERE f.active = 1 AND f.metadata_indexed = 1 "
                         "AND f.file_type IN ('video', 'audio', 'document', 'text') "
-                        "AND f.file_id NOT IN (SELECT file_id FROM file_summaries)"
+                        "AND f.file_id NOT IN (SELECT file_id FROM file_summaries "
+                        f"WHERE {_HAS_SHORT_SUMMARY})"
                     )
                 ).fetchall()
                 pending.extend(

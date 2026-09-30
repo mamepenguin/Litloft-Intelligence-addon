@@ -62,10 +62,12 @@ async def test_auto_tags_defer_writes_nothing(
     saved = _auto_tags(monkeypatch, make_settings)
     asked = use_llm(result=Defer("policy unavailable"))
 
-    await AutoTagsWorker()._process_file("f1")
+    worker = AutoTagsWorker()
+    await worker._process_file("f1")
 
     assert asked == [(DRIVE, "auto_tags")]
     assert saved == {}
+    assert worker.get_status()["waiting"] == 0
 
 
 @pytest.mark.asyncio
@@ -130,10 +132,12 @@ async def test_summaries_defer_writes_nothing(
     save = _summaries(monkeypatch, make_settings, summaries="manual")
     asked = use_llm(result=Defer("policy unavailable"))
 
-    await SummariesWorker()._process_file("f1")
+    worker = SummariesWorker()
+    await worker._process_file("f1")
 
     assert asked == [(DRIVE, "summaries")]
     save.assert_not_called()
+    assert worker.get_status()["waiting"] == 0
 
 
 @pytest.mark.asyncio

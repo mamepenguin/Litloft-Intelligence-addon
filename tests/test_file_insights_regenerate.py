@@ -51,10 +51,9 @@ from app.database import (  # noqa: E402
 from app.models import IndexedFile  # noqa: E402,F401
 
 
-
-
 async def _llm_gate_passes(drive):
     return resolved_with(MagicMock())
+
 
 @pytest.fixture()
 def search_db(tmp_path, monkeypatch):
@@ -417,3 +416,48 @@ async def test_regenerate_preserves_history_across_multiple_runs(
     # Three rows total, only the newest active.
     assert [r[0] for r in rows] == ["body v1", "body v2", "body v3"]
     assert [r[1] for r in rows] == ["superseded", "superseded", "active"]
+
+
+@pytest.mark.asyncio
+async def test_short_summary_is_still_owed_after_a_detailed_marker(
+    search_db, monkeypatch, make_settings
+):
+    """A detailed run can create the row before the short summary exists."""
+    from app.config import FeaturesConfig
+    from app.workers import summaries as sm
+
+    engine, _ = search_db
+    settings = make_settings(features=FeaturesConfig(summaries="on_index"))
+    monkeypatch.setattr(sm, "settings", settings)
+    monkeypatch.setattr(
+        "app.policy_client.is_feature_enabled",
+        lambda *a, **k: _true(),
+    )
+    monkeypatch.setattr(
+        "app.workers.metadata.index_metadata_batch", lambda ids: None
+    )
+    with engine.begin() as conn:
+        conn.execute(text(
+            "UPDATE indexed_files SET metadata_indexed = 1 WHERE file_id = 'abc123'"
+        ))
+
+    sm._set_detailed_status("abc123", sm.DETAILED_STATUS_GENERATING, model="m")
+
+    assert sm._has_summary("abc123") is False
+    worker = sm.SummariesWorker()
+    assert await worker.enqueue_unprocessed() == 1
+
+    await sm._save_summary(
+        file_id="abc123", short_summary="s", long_summary="l", model="m",
+        context_type="transcript", context_chars=10, was_truncated=False,
+    )
+
+    assert sm._has_summary("abc123") is True
+    with engine.begin() as conn:
+        assert conn.execute(text(
+            "SELECT detailed_status FROM file_summaries WHERE file_id = 'abc123'"
+        )).scalar_one() == sm.DETAILED_STATUS_GENERATING
+
+
+async def _true():
+    return True

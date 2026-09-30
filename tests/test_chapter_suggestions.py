@@ -791,10 +791,12 @@ async def test_unresolved_llm_sends_nothing_and_emits_nothing(
     )
     asked = use_llm(result=Defer("unavailable") if kind == "defer" else Skip("off"))
 
-    await ChapterSuggestionsWorker()._process_file("file00000001", force=True)
+    worker = ChapterSuggestionsWorker()
+    await worker._process_file("file00000001", force=True)
 
     assert asked == [("Media", "chapter_suggestions")]
     assert events == []
+    assert worker.get_status()["waiting"] == 0
     with chapter_db() as session:
         assert session.execute(text(
             "SELECT COUNT(*) FROM suggested_chapters"

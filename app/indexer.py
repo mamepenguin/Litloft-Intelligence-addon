@@ -987,7 +987,8 @@ class IndexManager:
                 no_summary = session.execute(
                     sql_text(
                         "SELECT 1 FROM file_summaries "
-                        "WHERE file_id = :fid LIMIT 1"
+                        "WHERE file_id = :fid "
+                        "AND COALESCE(short_summary, '') != '' LIMIT 1"
                     ),
                     {"fid": file_id},
                 ).fetchone() is None
