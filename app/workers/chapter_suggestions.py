@@ -19,7 +19,7 @@ from sqlalchemy import text as sql_text
 from app.config import settings
 from app import llm_routing
 from app.llm import FAILURE_TOKEN_BUDGET, LLMClient
-from app.llm_routing import Defer, Resolved
+from app.llm_routing import Resolved
 from app.output_language import configured_language_requirement
 from app.prompt_loader import render
 from app.workers.transcription.errors import TransientError
@@ -359,9 +359,6 @@ class ChapterSuggestionsWorker:
         if not await is_chapter_suggestions_enabled(drive):
             return
         resolved = await llm_routing.resolve(drive, "chapter_suggestions")
-        if isinstance(resolved, Defer):
-            llm_routing.retry_later(lambda: self.enqueue(file_id, force=force))
-            return
         if not isinstance(resolved, Resolved):
             return
 

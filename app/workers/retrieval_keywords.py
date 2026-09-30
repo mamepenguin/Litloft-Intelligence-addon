@@ -49,7 +49,7 @@ from app.database import (
     upsert_retrieval_keywords,
 )
 from app import llm_routing
-from app.llm_routing import Defer, Resolved
+from app.llm_routing import Resolved
 from app.prompt_loader import render
 from app.rag.keyword_filter import filter_keywords
 from app.rag.rarity_filter import filter_clue_by_rarity
@@ -226,9 +226,6 @@ class RetrievalKeywordsWorker:
             context = context[:_MAX_CONTEXT_CHARS]
 
         resolved = await llm_routing.resolve(indexed_file["drive"], "retrieval_keywords")
-        if isinstance(resolved, Defer):
-            llm_routing.retry_later(lambda: self.enqueue(file_id))
-            return
         if not isinstance(resolved, Resolved):
             return
 

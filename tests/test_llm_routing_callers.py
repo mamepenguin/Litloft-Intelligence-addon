@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -11,15 +11,9 @@ from fastapi import HTTPException
 from app import llm_routing
 from app.config import FeaturesConfig, LLMConfig
 from app.llm_routing import Defer, Skip
+from tests.llm_helpers import resolved_with
 
 DRIVE = "private"
-
-
-@pytest.fixture
-def retries(monkeypatch: pytest.MonkeyPatch) -> list:
-    scheduled: list = []
-    monkeypatch.setattr(llm_routing, "retry_later", scheduled.append)
-    return scheduled
 
 
 def _indexed(fid: str, file_type: str = "video") -> dict:
@@ -60,8 +54,8 @@ def _auto_tags(monkeypatch, make_settings) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_auto_tags_defer_writes_nothing_and_retries(
-    monkeypatch, make_settings, use_llm, retries
+async def test_auto_tags_defer_writes_nothing(
+    monkeypatch, make_settings, use_llm
 ) -> None:
     from app.workers.auto_tags import AutoTagsWorker
 
@@ -72,12 +66,11 @@ async def test_auto_tags_defer_writes_nothing_and_retries(
 
     assert asked == [(DRIVE, "auto_tags")]
     assert saved == {}
-    assert len(retries) == 1
 
 
 @pytest.mark.asyncio
 async def test_auto_tags_skip_keeps_local_candidates_without_an_llm(
-    monkeypatch, make_settings, use_llm, retries
+    monkeypatch, make_settings, use_llm
 ) -> None:
     from app.workers.auto_tags import AutoTagsWorker
 
@@ -87,7 +80,6 @@ async def test_auto_tags_skip_keeps_local_candidates_without_an_llm(
     await AutoTagsWorker()._process_file("f1")
 
     assert saved["model"] == "clip+tfidf"
-    assert retries == []
 
 
 @pytest.mark.asyncio
@@ -130,8 +122,8 @@ def _summaries(monkeypatch, make_settings, **features) -> AsyncMock:
 
 
 @pytest.mark.asyncio
-async def test_summaries_defer_writes_nothing_and_retries(
-    monkeypatch, make_settings, use_llm, retries
+async def test_summaries_defer_writes_nothing(
+    monkeypatch, make_settings, use_llm
 ) -> None:
     from app.workers.summaries import SummariesWorker
 
@@ -142,12 +134,11 @@ async def test_summaries_defer_writes_nothing_and_retries(
 
     assert asked == [(DRIVE, "summaries")]
     save.assert_not_called()
-    assert len(retries) == 1
 
 
 @pytest.mark.asyncio
 async def test_summaries_skip_writes_nothing(
-    monkeypatch, make_settings, use_llm, retries
+    monkeypatch, make_settings, use_llm
 ) -> None:
     from app.workers.summaries import SummariesWorker
 
@@ -157,7 +148,6 @@ async def test_summaries_skip_writes_nothing(
     await SummariesWorker()._process_file("f1")
 
     save.assert_not_called()
-    assert retries == []
 
 
 @pytest.mark.asyncio
@@ -178,7 +168,7 @@ async def test_summaries_record_the_resolved_model(
 
 @pytest.mark.asyncio
 async def test_detailed_on_index_resolves_its_own_feature(
-    monkeypatch, make_settings, use_llm, retries
+    monkeypatch, make_settings, use_llm
 ) -> None:
     from app.workers import summaries as sm
 
@@ -206,7 +196,7 @@ async def test_detailed_on_index_resolves_its_own_feature(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("result", [Defer("unavailable"), Skip("off")])
 async def test_retrieval_keywords_unresolved_writes_nothing(
-    monkeypatch, use_llm, retries, result
+    monkeypatch, use_llm, result
 ) -> None:
     from app.workers import retrieval_keywords as rk
 
@@ -224,24 +214,11 @@ async def test_retrieval_keywords_unresolved_writes_nothing(
 
     assert asked == [(DRIVE, "retrieval_keywords")]
     upsert.assert_not_called()
-    assert len(retries) == (1 if isinstance(result, Defer) else 0)
 
 
 # ---------------------------------------------------------------------------
-# retry_later and the router gate
+# the router gate
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_retry_later_requeues_after_the_delay() -> None:
-    requeued = asyncio.Event()
-
-    async def _requeue() -> None:
-        requeued.set()
-
-    llm_routing.retry_later(_requeue, delay=0)
-
-    await asyncio.wait_for(requeued.wait(), timeout=1)
 
 
 @pytest.mark.asyncio
@@ -274,23 +251,113 @@ async def test_require_llm_returns_the_resolved_profile(use_llm) -> None:
 
 
 @pytest.mark.asyncio
-async def test_regenerate_detailed_rejects_before_touching_the_stored_summary(
-    monkeypatch, use_llm
+async def test_detailed_summary_records_the_resolved_model(
+    monkeypatch, make_settings
 ) -> None:
+    from app.workers import summaries as sm
+
+    _summaries(monkeypatch, make_settings, detailed_summaries="manual")
+    statuses: list = []
+    monkeypatch.setattr(sm, "_set_detailed_status", lambda *a, **k: statuses.append(k))
+    saved: dict = {}
+    monkeypatch.setattr(sm, "_save_detailed_summary", lambda **k: saved.update(k))
+    monkeypatch.setattr(sm, "_recalculate_citations", AsyncMock())
+    client = MagicMock()
+    client.generate = AsyncMock(return_value="# Body")
+
+    await sm.generate_detailed_summary("f1", resolved_with(client, model="routed-model"))
+
+    assert statuses[0]["model"] == "routed-model"
+    assert saved["model"] == "routed-model"
+
+
+@pytest.mark.asyncio
+async def test_retrieval_keywords_record_the_resolved_model(monkeypatch, use_llm) -> None:
+    from app.workers import retrieval_keywords as rk
+
+    settings = MagicMock()
+    settings.features.retrieval_keywords = "on_index"
+    settings.llm.model = "global-model"
+    monkeypatch.setattr(rk, "settings", settings)
+    monkeypatch.setattr(rk, "_has_retrieval_keywords", lambda fid: False)
+    monkeypatch.setattr(rk, "_get_indexed_file", _indexed)
+    monkeypatch.setattr(rk, "_build_context", lambda f, t: "word " * 50)
+    monkeypatch.setattr(rk, "_post_filter", lambda raw: "alpha beta")
+    upsert = MagicMock()
+    monkeypatch.setattr(rk, "upsert_retrieval_keywords", upsert)
+    monkeypatch.setattr(rk, "get_search_db", contextmanager(lambda: iter([MagicMock()])))
+    client = MagicMock()
+    client.generate_json = AsyncMock(return_value={"keywords": ["alpha"]})
+    use_llm(client, model="routed-model")
+
+    await rk.RetrievalKeywordsWorker()._process_file("f1")
+
+    assert upsert.call_args.kwargs["model"] == "routed-model"
+
+
+def _summary_router(monkeypatch) -> MagicMock:
     from app.routers import summaries as router_mod
 
     monkeypatch.setattr(
-        router_mod, "settings", MagicMock(features=MagicMock(detailed_summaries="manual"))
+        router_mod,
+        "settings",
+        MagicMock(features=MagicMock(summaries="manual", detailed_summaries="manual")),
     )
     touched = MagicMock()
-    monkeypatch.setattr(router_mod, "_require_file_in_drive", touched)
-    monkeypatch.setattr(router_mod, "get_search_db", touched)
-    use_llm(result=Skip("llm_cloud off"))
+    for name in ("_require_file_in_drive", "get_search_db", "get_summaries_worker"):
+        monkeypatch.setattr(router_mod, name, touched)
+    return touched
 
-    with pytest.raises(HTTPException):
-        await router_mod.regenerate_detailed_summary(
-            "f1", MagicMock(), None, DRIVE
-        )
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "feature"),
+    [
+        ("regenerate_summary", "summaries"),
+        ("batch_summaries", "summaries"),
+        ("start_detailed_summary", "detailed_summaries"),
+        ("regenerate_detailed_summary", "detailed_summaries"),
+    ],
+)
+async def test_summary_routes_resolve_their_feature_before_any_change(
+    monkeypatch, use_llm, route, feature
+) -> None:
+    from app.routers import summaries as router_mod
+
+    touched = _summary_router(monkeypatch)
+    asked = use_llm(result=Skip("llm_cloud off"))
+    args = {
+        "regenerate_summary": ("f1", DRIVE),
+        "batch_summaries": (MagicMock(file_ids=["f1"]), DRIVE),
+        "start_detailed_summary": ("f1", MagicMock(), DRIVE),
+        "regenerate_detailed_summary": ("f1", MagicMock(), None, DRIVE),
+    }[route]
+
+    with pytest.raises(HTTPException) as exc:
+        await getattr(router_mod, route)(*args)
+
+    assert exc.value.status_code == 400
+    assert asked == [(DRIVE, feature)]
     touched.assert_not_called()
 
+
+@pytest.mark.asyncio
+async def test_chapter_generate_resolves_before_reading_the_transcript(
+    monkeypatch, use_llm
+) -> None:
+    from app.routers import chapter_suggestions as router_mod
+
+    monkeypatch.setattr(
+        router_mod, "settings", MagicMock(features=MagicMock(chapter_suggestions="manual"))
+    )
+    monkeypatch.setattr(router_mod, "_require_allowed", AsyncMock())
+    touched = MagicMock()
+    monkeypatch.setattr(router_mod, "get_search_db", touched)
+    asked = use_llm(result=Skip("llm_cloud off"))
+
+    with pytest.raises(HTTPException) as exc:
+        await router_mod.generate_chapter_suggestions("f1", DRIVE)
+
+    assert exc.value.status_code == 400
+    assert asked == [(DRIVE, "chapter_suggestions")]
+    touched.assert_not_called()

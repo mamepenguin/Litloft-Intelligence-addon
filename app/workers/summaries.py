@@ -25,7 +25,7 @@ from sqlalchemy import text as sql_text
 from app.config import settings
 from app.database import get_search_db
 from app import llm_routing
-from app.llm_routing import Defer, Resolved
+from app.llm_routing import Resolved
 from app.models import IndexedFile, TranscriptChunk, generate_insight_id
 from app.prompt_loader import render
 from app.workers.whisper import LOFT_MIME
@@ -1275,9 +1275,6 @@ class SummariesWorker:
         drive = indexed_file["drive"]
         if want_short:
             resolved = await llm_routing.resolve(drive, "summaries")
-            if isinstance(resolved, Defer):
-                llm_routing.retry_later(lambda: self.enqueue(file_id))
-                return
             if isinstance(resolved, Resolved):
                 await self._generate_short_long(
                     resolved, file_id, indexed_file, context_type, raw_context
@@ -1290,9 +1287,6 @@ class SummariesWorker:
             from app.policy_client import is_file_feature_enabled
             if await is_file_feature_enabled(file_id, "detailed_summaries"):
                 resolved = await llm_routing.resolve(drive, "detailed_summaries")
-                if isinstance(resolved, Defer):
-                    llm_routing.retry_later(lambda: self.enqueue(file_id))
-                    return
                 if isinstance(resolved, Resolved):
                     await generate_detailed_summary(file_id, resolved)
 

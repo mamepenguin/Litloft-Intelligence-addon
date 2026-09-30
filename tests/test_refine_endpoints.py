@@ -230,6 +230,26 @@ class TestRefineFolder:
         assert queued == 2 or queued == ["f1", "f2"]
 
 
+    @pytest.mark.asyncio
+    async def test_folder_resolves_the_request_drive_before_starting(
+        self, feature_manual, monkeypatch, use_llm
+    ):
+        from app.llm_routing import Skip
+
+        start_mock = MagicMock()
+        monkeypatch.setattr("app.routers.refine.start_refine_job", start_mock)
+        asked = use_llm(result=Skip("llm_cloud off"))
+
+        with pytest.raises(HTTPException) as exc:
+            await refine_folder(
+                body={"drive": "family", "file_ids": ["f1"]}, drive="family"
+            )
+
+        assert exc.value.status_code == 400
+        assert asked == [("family", "transcript_refine")]
+        start_mock.assert_not_called()
+
+
 class TestPerDrivePolicy:
     @pytest.mark.asyncio
     async def test_policy_off_for_drive_returns_403(

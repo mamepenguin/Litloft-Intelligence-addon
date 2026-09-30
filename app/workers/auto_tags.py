@@ -245,7 +245,7 @@ class AutoTagsWorker:
         # drive the local candidates are the suggestion.
         resolved = await llm_routing.resolve(indexed_file["drive"], "auto_tags")
         if isinstance(resolved, Defer):
-            llm_routing.retry_later(lambda: self.enqueue(file_id))
+            logger.info("Auto-tags: deferred for %s (%s)", file_id, resolved.reason)
             return
         llm_enabled = isinstance(resolved, Resolved)
         t_llm = 0.0

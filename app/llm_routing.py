@@ -8,12 +8,11 @@ read as either answer.
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 import logging
 import os
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -292,20 +291,3 @@ async def resolve(
         return Skip(f"profile {profile.name!r} cannot serve {feature}")
     return Resolved(profile=profile, client=client)
 
-
-DEFER_RETRY_SECONDS = 30.0
-_pending_retries: set[asyncio.Task[Any]] = set()
-
-
-def retry_later(
-    requeue: Callable[[], Awaitable[Any]], delay: float = DEFER_RETRY_SECONDS
-) -> None:
-    """Run ``requeue`` after ``delay`` so a deferred job is asked again."""
-
-    async def _later() -> None:
-        await asyncio.sleep(delay)
-        await requeue()
-
-    task = asyncio.create_task(_later())
-    _pending_retries.add(task)
-    task.add_done_callback(_pending_retries.discard)

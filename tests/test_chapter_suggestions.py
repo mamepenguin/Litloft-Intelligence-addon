@@ -187,7 +187,7 @@ async def test_single_window_editor_receives_all_candidates_without_head_truncat
     )
     llm = GranularSingleWindowLLM()
 
-    use_llm(llm, model="test-model")
+    use_llm(llm, model="routed-model")
 
     await ChapterSuggestionsWorker()._process_file(
         "file00000001", force=True
@@ -195,6 +195,10 @@ async def test_single_window_editor_receives_all_candidates_without_head_truncat
 
     assert len(llm.calls) == 2
     assert all("max_tokens_override" not in kwargs for _, kwargs in llm.calls)
+    with chapter_db() as session:
+        assert session.execute(text(
+            "SELECT model FROM suggested_chapters WHERE file_id=:fid"
+        ), {"fid": "file00000001"}).scalar_one() == "routed-model"
     with chapter_db() as session:
         saved = json.loads(session.execute(text(
             "SELECT chapters_json FROM suggested_chapters WHERE file_id=:fid"
@@ -759,11 +763,11 @@ async def test_token_budget_failure_names_its_own_reason(
 
 
 @pytest.mark.asyncio
-async def test_deferred_policy_sends_nothing_and_retries(
-    use_llm, chapter_db, monkeypatch
+@pytest.mark.parametrize("kind", ["defer", "skip"])
+async def test_unresolved_llm_sends_nothing_and_emits_nothing(
+    use_llm, chapter_db, monkeypatch, kind
 ):
-    from app import llm_routing
-    from app.llm_routing import Defer
+    from app.llm_routing import Defer, Skip
 
     _seed_transcript(chapter_db)
     monkeypatch.setattr(
@@ -777,14 +781,20 @@ async def test_deferred_policy_sends_nothing_and_retries(
         "app.workers.chapter_suggestions.is_chapter_suggestions_enabled",
         lambda _drive: _async_true(),
     )
-    retries = []
-    monkeypatch.setattr(llm_routing, "retry_later", retries.append)
-    asked = use_llm(result=Defer("policy unavailable"))
+    events = []
+
+    async def record(event, data):
+        events.append(event)
+
+    monkeypatch.setattr(
+        "app.workers.chapter_suggestions.emit_chapter_suggestions_event", record
+    )
+    asked = use_llm(result=Defer("unavailable") if kind == "defer" else Skip("off"))
 
     await ChapterSuggestionsWorker()._process_file("file00000001", force=True)
 
-    assert [feature for _, feature in asked] == ["chapter_suggestions"]
-    assert len(retries) == 1
+    assert asked == [("Media", "chapter_suggestions")]
+    assert events == []
     with chapter_db() as session:
         assert session.execute(text(
             "SELECT COUNT(*) FROM suggested_chapters"
