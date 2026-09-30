@@ -462,9 +462,14 @@ def _llm_view() -> dict[str, Any]:
                 "offhost": legacy_profile.offhost,
                 "agentic": legacy_profile.agentic,
                 "api_key_env": LEGACY_API_KEY_ENV,
-                # The legacy key may also come from YAML, which a saved
-                # profile does not carry over.
                 "api_key_present": bool(base.api_key),
+                # A YAML key is not carried into saved profiles, which read
+                # keys from the environment only.
+                "api_key_source": (
+                    "env" if os.getenv(LEGACY_API_KEY_ENV)
+                    else "yaml" if base.api_key
+                    else None
+                ),
             }
         }
         stored_routing: dict[str, Any] = {"default": LEGACY_PROFILE}
