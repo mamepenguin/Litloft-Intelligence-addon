@@ -488,6 +488,10 @@ def test_load_settings_legacy_section(
     [
         (_section(), ("local", True)),
         (_section(default="cloud"), ("cloud", True)),
+        (
+            {"profiles": {"off": {**LOCAL, "provider": "disabled"}}},
+            ("off", False),
+        ),
     ],
 )
 def test_default_status_reports_the_default_profile(section, expected) -> None:
