@@ -448,15 +448,21 @@ async def test_short_summary_is_still_owed_after_a_detailed_marker(
     assert await worker.enqueue_unprocessed() == 1
 
     await sm._save_summary(
-        file_id="abc123", short_summary="s", long_summary="l", model="m",
-        context_type="transcript", context_chars=10, was_truncated=False,
+        file_id="abc123", short_summary="s", long_summary="l", model="routed",
+        context_type="transcript", context_chars=10, was_truncated=True,
     )
 
     assert sm._has_summary("abc123") is True
     with engine.begin() as conn:
-        assert conn.execute(text(
-            "SELECT detailed_status FROM file_summaries WHERE file_id = 'abc123'"
-        )).scalar_one() == sm.DETAILED_STATUS_GENERATING
+        row = conn.execute(text(
+            "SELECT short_summary, long_summary, model, context_type, "
+            "context_chars, was_truncated, status, detailed_status "
+            "FROM file_summaries WHERE file_id = 'abc123'"
+        )).one()
+    assert tuple(row) == (
+        "s", "l", "routed", "transcript", 10, 1, "generated",
+        sm.DETAILED_STATUS_GENERATING,
+    )
 
 
 async def _true():
