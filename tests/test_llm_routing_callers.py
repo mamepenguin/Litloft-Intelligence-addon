@@ -572,3 +572,56 @@ async def test_the_eval_runner_runs_every_stage_with_the_rag_profile_bound(
 
     assert await runner._run_routed(MagicMock()) == 0
     assert seen == [client]
+
+
+@pytest.mark.asyncio
+async def test_ask_hands_the_resolved_profile_to_the_stream(monkeypatch, use_llm) -> None:
+    from app.routers import rag as rag_router
+    from app.schemas import AskRequest
+
+    _rag_on(monkeypatch)
+    client = MagicMock()
+    use_llm(client)
+    seen: list = []
+
+    async def _stream(**kwargs):
+        seen.append(kwargs["resolved"].client)
+        return
+        yield
+
+    monkeypatch.setattr(rag_router, "stream_answer", _stream)
+
+    response = await rag_router.ask_endpoint(
+        AskRequest(query="what happened"), None, None, DRIVE, None
+    )
+    [chunk async for chunk in response.body_iterator]
+
+    assert seen == [client]
+
+
+def test_the_eval_entry_point_runs_bound_and_refuses_an_unrouted_rag(monkeypatch) -> None:
+    from app.evals import __main__ as runner
+
+    client = MagicMock()
+    seen: list = []
+
+    async def _run(args):
+        seen.append(llm_routing.bound_client())
+        return 0
+
+    monkeypatch.setattr(runner, "_run", _run)
+    monkeypatch.setattr(
+        llm_routing, "resolve_without_ceiling", lambda feature: resolved_with(client)
+    )
+    monkeypatch.setattr(
+        runner, "build_parser", lambda: MagicMock(parse_args=lambda argv: MagicMock())
+    )
+
+    assert runner.main([]) == 0
+    assert seen == [client]
+
+    monkeypatch.setattr(
+        llm_routing, "resolve_without_ceiling", lambda feature: Skip("no profile")
+    )
+    assert runner.main([]) == 2
+    assert seen == [client]
