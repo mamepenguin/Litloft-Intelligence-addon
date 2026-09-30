@@ -105,17 +105,34 @@ def test_profile_never_inherits_the_top_level_endpoint_or_key(
     assert (getattr(config, field), config.api_key) == ("", "")
 
 
-@pytest.mark.parametrize("written", [None, "hot", True])
+@pytest.mark.parametrize(
+    ("field", "written"),
+    [
+        ("temperature", None),
+        ("temperature", "hot"),
+        ("temperature", True),
+        ("max_tokens", True),
+    ],
+)
 def test_profile_knob_left_blank_or_mistyped_inherits_the_top_level_value(
-    written: object,
+    field: str, written: object
 ) -> None:
     section = _section()
-    section["profiles"]["cloud"]["temperature"] = written
+    section["profiles"]["cloud"][field] = written
 
     routing = build_routing(section, BASE, environ={})
 
     assert routing.error is None
-    assert routing.profiles["cloud"].config.temperature == 0.7
+    assert getattr(routing.profiles["cloud"].config, field) == getattr(BASE, field)
+
+
+def test_a_mistyped_key_never_reaches_the_log(caplog: pytest.LogCaptureFixture) -> None:
+    from app.config import parse_llm_config
+
+    with caplog.at_level("WARNING"):
+        parse_llm_config({"api_key": 98765432101234})
+
+    assert "98765432101234" not in caplog.text
 
 
 @pytest.mark.parametrize(

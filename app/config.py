@@ -992,7 +992,8 @@ def parse_llm_config(
             value = defaults.reasoning
         elif not _same_kind(value, getattr(defaults, name)):
             logger.warning(
-                "Ignoring llm.%s=%r: expected %s", name, value, type(getattr(defaults, name)).__name__,
+                "Ignoring llm.%s: got %s, expected %s",
+                name, type(value).__name__, type(getattr(defaults, name)).__name__,
             )
             continue
         values[name] = value
