@@ -289,6 +289,9 @@ class TestProcessSceneLabel:
             lambda *args: "nearby transcript",
         )
         embed_scene = MagicMock()
+        monkeypatch.setattr(
+            "app.workers.video_visual.render", lambda name, **kwargs: name
+        )
         monkeypatch.setattr("app.workers.video_visual._embed_scene", embed_scene)
 
         llm = MagicMock()
@@ -307,6 +310,9 @@ class TestProcessSceneLabel:
 
         assert outcome == "succeeded"
         assert llm.generate_video_scene_json.await_count == 1
+        assert llm.generate_video_scene_json.await_args.args[3] == (
+            "video_visual_scene/user.jinja2"
+        )
         with Session() as s:
             stored = s.query(VideoVisualScene).filter_by(id=scene_id).one()
             assert stored.scene_label == "Chicken marinade added"
@@ -831,6 +837,44 @@ class TestEnqueue:
             run = s.query(VideoVisualRun).filter_by(id=run_id).one()
             assert (run.status, run.error_class) == ("failed", "PolicyDisabled")
             assert s.query(VideoVisualScene).filter_by(run_id=run_id).count() == 1
+
+    @pytest.mark.asyncio
+    async def test_a_policy_off_drive_still_fails_a_fresh_run(
+        self, search_db, feature_manual, policy_allow_all, use_llm, no_emit,
+    ):
+        worker = VideoVisualWorker()
+        run_id = (await worker.enqueue("vid-ok", requested_by="manual"))["run_id"]
+        policy_allow_all.return_value = False
+
+        await worker._process_run(run_id, "vid-ok")
+
+        _, Session = search_db
+        with Session() as s:
+            run = s.query(VideoVisualRun).filter_by(id=run_id).one()
+            assert (run.status, run.error_class) == ("failed", "PolicyDisabled")
+
+    @pytest.mark.asyncio
+    async def test_two_concurrent_requests_stage_one_run(
+        self, search_db, feature_manual, policy_allow_all, monkeypatch,
+    ):
+        import asyncio
+
+        from app import llm_routing
+        from tests.llm_helpers import resolved_with
+
+        async def _slow(drive, feature, *, vision=False):
+            await asyncio.sleep(0.01)
+            return resolved_with(MagicMock(), vision_model="llava:13b")
+
+        monkeypatch.setattr(llm_routing, "resolve", _slow)
+        worker = VideoVisualWorker()
+
+        results = await asyncio.gather(
+            worker.enqueue("vid-ok", requested_by="manual"),
+            worker.enqueue("vid-ok", requested_by="manual"),
+        )
+
+        assert sorted(r["reason"] for r in results) == ["already_queued", "queued"]
 
     @pytest.mark.asyncio
     async def test_the_run_records_the_model_it_was_processed_with(

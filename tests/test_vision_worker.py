@@ -313,6 +313,54 @@ class TestEnqueue:
         assert (row[0], row[1]) == ("A cat.", "success")
 
     @pytest.mark.asyncio
+    async def test_releasing_a_claim_with_no_description_leaves_it_unattempted(
+        self, use_llm, search_db, feature_manual, policy_allow_family,
+    ):
+        from app.llm_routing import Skip
+
+        engine, _ = search_db
+        now = datetime.now(UTC).isoformat()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO file_summaries "
+                    "(file_id, short_summary, long_summary, model, context_type, "
+                    "context_chars, was_truncated, status, created_at, "
+                    "visual_description_status, visual_description_model) "
+                    "VALUES ('img-ok', '', '', '', 'image', 0, 0, 'hidden', :now, "
+                    "'failed', 'llava:13b')"
+                ),
+                {"now": now},
+            )
+        worker = VisionDescribeWorker()
+        assert (await worker.enqueue("img-ok", manual=True))["accepted"] is True
+        use_llm(result=Skip("off"))
+
+        await worker._process_file("img-ok")
+
+        assert _get_summary_row(engine, "img-ok")[1] is None
+
+    @pytest.mark.asyncio
+    async def test_two_concurrent_requests_are_accepted_once(
+        self, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        import asyncio
+
+        from app import llm_routing
+        from tests.llm_helpers import resolved_with
+
+        async def _slow(drive, feature, *, vision=False):
+            await asyncio.sleep(0.01)
+            return resolved_with(MagicMock(), vision_model="llava:13b")
+
+        monkeypatch.setattr(llm_routing, "resolve", _slow)
+        worker = VisionDescribeWorker()
+
+        results = await asyncio.gather(worker.enqueue("img-ok"), worker.enqueue("img-ok"))
+
+        assert sorted(str(r["reason"]) for r in results) == ["None", "already_queued"]
+
+    @pytest.mark.asyncio
     async def test_unsupported_is_judged_against_the_routed_model(
         self, use_llm, search_db, feature_manual, policy_allow_family,
     ):
