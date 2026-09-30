@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.llm_helpers import bind_llm
+
 for _mod in (
     "PIL", "PIL.Image",
     "open_clip",
@@ -33,7 +35,7 @@ from app.rag.retriever import RetrievedFile  # noqa: E402
 from app.rag.service import (  # noqa: E402
     AnswerEvent,
     _rrf_merge_candidates,
-    stream_answer,
+    _stream_answer as stream_answer,
 )
 from app.search import MatchInfo, SegmentGroup  # noqa: E402
 
@@ -107,8 +109,7 @@ def common_patches(monkeypatch):
         "app.rag.service.assemble_contexts",
         lambda cands, cfg, **_kw: [_context(c.file_id) for c in cands],
     )
-    monkeypatch.setattr(
-        "app.rag.service.get_llm_client", lambda: _make_stream_llm()
+    bind_llm(monkeypatch, lambda: _make_stream_llm()
     )
     # Default: access filter is a no-op pass-through. Tests that need
     # to exercise the gate override this with their own AsyncMock.

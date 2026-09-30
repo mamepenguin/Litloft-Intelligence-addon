@@ -30,6 +30,7 @@ from app.rag.query_transform import (
     iter_required_fallback_subsets,
     transform_query_structured,
 )
+from app import llm_routing
 from app.rag.service import answer_question
 from app.search import SearchResult, search
 
@@ -297,6 +298,7 @@ async def run_stage3_once(
         drive=drive,
         temperature=EVAL_TEMPERATURE,
         force_legacy_rag=force_legacy_rag,
+        resolved=llm_routing.bound_resolved(),
     )
 
     answer = response.answer or ""

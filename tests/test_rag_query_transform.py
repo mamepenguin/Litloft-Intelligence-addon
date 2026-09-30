@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.llm_helpers import bind_llm
+
 for _mod in (
     "PIL", "PIL.Image",
     "open_clip",
@@ -55,10 +57,7 @@ def _llm_stub(
 class TestTransformQueryHappyPath:
     @pytest.mark.asyncio
     async def test_returns_keywords_field_from_llm(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client",
-            lambda: _llm_stub(response={"keywords": "おでかけ子ザメ"}),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response={"keywords": "おでかけ子ザメ"}))
 
         result = await transform_query("おでかけ子ザメの共通点は？")
 
@@ -66,10 +65,7 @@ class TestTransformQueryHappyPath:
 
     @pytest.mark.asyncio
     async def test_strips_whitespace(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client",
-            lambda: _llm_stub(response={"keywords": "  京都 紅葉  "}),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response={"keywords": "  京都 紅葉  "}))
 
         result = await transform_query("京都の紅葉について教えて")
 
@@ -81,10 +77,7 @@ class TestTransformQueryFallbacks:
 
     @pytest.mark.asyncio
     async def test_falls_back_when_llm_disabled(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client",
-            lambda: _llm_stub(enabled=False),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(enabled=False))
 
         result = await transform_query("raw query")
 
@@ -95,9 +88,7 @@ class TestTransformQueryFallbacks:
         def _raise():
             raise RuntimeError("not initialized")
 
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client", _raise
-        )
+        bind_llm(monkeypatch, _raise)
 
         result = await transform_query("raw query")
 
@@ -105,10 +96,7 @@ class TestTransformQueryFallbacks:
 
     @pytest.mark.asyncio
     async def test_falls_back_when_llm_returns_none(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client",
-            lambda: _llm_stub(response=None),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response=None))
 
         result = await transform_query("raw query")
 
@@ -118,10 +106,7 @@ class TestTransformQueryFallbacks:
     async def test_falls_back_when_llm_returns_list(self, monkeypatch):
         # The prompt instructs the LLM to return an object; a list is
         # a shape mismatch that should be treated as failure.
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client",
-            lambda: _llm_stub(response=["kw1", "kw2"]),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response=["kw1", "kw2"]))
 
         result = await transform_query("raw query")
 
@@ -129,10 +114,7 @@ class TestTransformQueryFallbacks:
 
     @pytest.mark.asyncio
     async def test_falls_back_when_keywords_missing(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client",
-            lambda: _llm_stub(response={"other_field": "value"}),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response={"other_field": "value"}))
 
         result = await transform_query("raw query")
 
@@ -140,10 +122,7 @@ class TestTransformQueryFallbacks:
 
     @pytest.mark.asyncio
     async def test_falls_back_when_keywords_empty(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client",
-            lambda: _llm_stub(response={"keywords": "   "}),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response={"keywords": "   "}))
 
         result = await transform_query("raw query")
 
@@ -151,10 +130,7 @@ class TestTransformQueryFallbacks:
 
     @pytest.mark.asyncio
     async def test_falls_back_when_keywords_wrong_type(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client",
-            lambda: _llm_stub(response={"keywords": 123}),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response={"keywords": 123}))
 
         result = await transform_query("raw query")
 
@@ -170,9 +146,7 @@ class TestTransformQueryFallbacks:
             spy_called = True
             return _llm_stub(response={"keywords": "whatever"})
 
-        monkeypatch.setattr(
-            "app.rag.query_transform.get_llm_client", _get_client
-        )
+        bind_llm(monkeypatch, _get_client)
 
         result = await transform_query("   ")
 

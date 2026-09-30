@@ -85,19 +85,6 @@ def _init_dbs() -> None:
     init_search_db()
 
 
-def _init_llm() -> None:
-    """Bring up the dependency container so RAG calls find the LLM client."""
-    from app.config import settings
-    from app import dependencies
-    from app.llm import create_llm_client
-
-    # No public setter exists in the production code path (clients are
-    # bound during the FastAPI lifespan). Mutating the module attribute
-    # is the established pattern in this codebase for dev-time tooling
-    # — the eval runner is the only non-router caller of get_llm_client.
-    dependencies._llm_client = create_llm_client(settings.llm)
-
-
 async def _run(args: argparse.Namespace) -> int:
     from app.config import settings
     from app.evals.compare import compare_sidecars, render_comparison_md
@@ -122,7 +109,6 @@ async def _run(args: argparse.Namespace) -> int:
 
     _setup_snapshot(snapshot_path)
     _init_dbs()
-    _init_llm()
 
     cases = load_cases(cases_path, filter_substr=args.filter)
     logger.info("Loaded %d cases from %s", len(cases), cases_path)
@@ -208,13 +194,25 @@ async def _run(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_routed(args: argparse.Namespace) -> int:
+    """Run every stage with the rag profile bound, as an Ask would be."""
+    from app import llm_routing
+
+    routed = llm_routing.resolve_without_ceiling("rag")
+    if not isinstance(routed, llm_routing.Resolved):
+        print(f"No LLM profile serves rag: {routed.reason}", file=sys.stderr)
+        return 2
+    with llm_routing.bound(routed):
+        return await _run(args)
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     args = build_parser().parse_args(argv)
-    return asyncio.run(_run(args))
+    return asyncio.run(_run_routed(args))
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ import logging
 import unicodedata
 from dataclasses import dataclass
 
-from app.dependencies import get_llm_client
+from app import llm_routing
 from app.prompt_loader import render
 from app.rag.keyword_filter import filter_keywords, is_blocked
 
@@ -382,12 +382,8 @@ async def transform_query_structured(
     if not stripped:
         return StructuredQuery.passthrough(natural_query)
 
-    try:
-        llm = get_llm_client()
-    except RuntimeError:
-        return StructuredQuery.passthrough(natural_query)
-
-    if not llm.enabled:
+    llm = llm_routing.bound_client()
+    if llm is None or not llm.enabled:
         return StructuredQuery.passthrough(natural_query)
 
     user_prompt = f"<user_question>\n{stripped}\n</user_question>"

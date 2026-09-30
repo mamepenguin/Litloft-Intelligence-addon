@@ -15,6 +15,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.llm_helpers import bind_llm
+
 
 # Heavy ML deps are stubbed so importing app.rag.query_decomposer (which
 # transitively pulls app.dependencies → app.llm) does not need real
@@ -195,17 +197,14 @@ class TestResolveTimeRange:
 class TestDecomposeQueryHappyPath:
     @pytest.mark.asyncio
     async def test_full_decomposition(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.query_decomposer.get_llm_client",
-            lambda: _llm_stub(
+        bind_llm(monkeypatch, lambda: _llm_stub(
                 response={
                     "time_range": "last_week",
                     "personal_scope": "viewed",
                     "file_type_hint": "video",
                     "semantic_query": "SF",
                 }
-            ),
-        )
+            ))
 
         result = await decompose_query(
             "先週観た映画の中で SF っぽいのどれ？",
@@ -227,17 +226,14 @@ class TestDecomposeQueryHappyPath:
 
     @pytest.mark.asyncio
     async def test_not_viewed_scope(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.query_decomposer.get_llm_client",
-            lambda: _llm_stub(
+        bind_llm(monkeypatch, lambda: _llm_stub(
                 response={
                     "time_range": "this_month",
                     "personal_scope": "not_viewed",
                     "file_type_hint": "video",
                     "semantic_query": "",
                 }
-            ),
-        )
+            ))
 
         result = await decompose_query("今月観てない動画でおすすめ", now=NOW)
         assert result.personal_scope == "not_viewed"
@@ -246,17 +242,14 @@ class TestDecomposeQueryHappyPath:
 
     @pytest.mark.asyncio
     async def test_no_personal_signal(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.query_decomposer.get_llm_client",
-            lambda: _llm_stub(
+        bind_llm(monkeypatch, lambda: _llm_stub(
                 response={
                     "time_range": "none",
                     "personal_scope": "none",
                     "file_type_hint": "none",
                     "semantic_query": "ベイズ統計",
                 }
-            ),
-        )
+            ))
 
         result = await decompose_query("ベイズ統計について", now=NOW)
         assert result.has_personal_signal is False
@@ -281,9 +274,7 @@ class TestDecomposeQueryFallback:
             called = True
             return _llm_stub()
 
-        monkeypatch.setattr(
-            "app.rag.query_decomposer.get_llm_client", _fake_get_llm_client
-        )
+        bind_llm(monkeypatch, _fake_get_llm_client)
 
         result = await decompose_query("   ", now=NOW)
         assert result == DecomposedQuery.passthrough("   ")
@@ -291,10 +282,7 @@ class TestDecomposeQueryFallback:
 
     @pytest.mark.asyncio
     async def test_llm_disabled_returns_passthrough(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.query_decomposer.get_llm_client",
-            lambda: _llm_stub(enabled=False),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(enabled=False))
         result = await decompose_query("先週観た映画", now=NOW)
         assert result == DecomposedQuery.passthrough("先週観た映画")
 
@@ -304,27 +292,19 @@ class TestDecomposeQueryFallback:
         def _raises():
             raise RuntimeError("not ready")
 
-        monkeypatch.setattr(
-            "app.rag.query_decomposer.get_llm_client", _raises
-        )
+        bind_llm(monkeypatch, _raises)
         result = await decompose_query("先週観た映画", now=NOW)
         assert result == DecomposedQuery.passthrough("先週観た映画")
 
     @pytest.mark.asyncio
     async def test_non_dict_response_returns_passthrough(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.query_decomposer.get_llm_client",
-            lambda: _llm_stub(response=["not", "a", "dict"]),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response=["not", "a", "dict"]))
         result = await decompose_query("先週観た映画", now=NOW)
         assert result == DecomposedQuery.passthrough("先週観た映画")
 
     @pytest.mark.asyncio
     async def test_none_response_returns_passthrough(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.query_decomposer.get_llm_client",
-            lambda: _llm_stub(response=None),
-        )
+        bind_llm(monkeypatch, lambda: _llm_stub(response=None))
         result = await decompose_query("先週観た映画", now=NOW)
         assert result == DecomposedQuery.passthrough("先週観た映画")
 
@@ -333,17 +313,14 @@ class TestDecomposeQueryFallback:
         # The LLM hallucinated ``last_quarter`` / ``maybe_viewed`` etc.
         # Each unknown label collapses to ``"none"`` so downstream stages
         # do not attempt to act on garbage.
-        monkeypatch.setattr(
-            "app.rag.query_decomposer.get_llm_client",
-            lambda: _llm_stub(
+        bind_llm(monkeypatch, lambda: _llm_stub(
                 response={
                     "time_range": "last_quarter",
                     "personal_scope": "maybe_viewed",
                     "file_type_hint": "spreadsheet",
                     "semantic_query": "ベイズ統計",
                 }
-            ),
-        )
+            ))
         result = await decompose_query("ベイズ統計", now=NOW)
         assert result.time_range.label == "none"
         assert result.personal_scope == "none"
@@ -356,33 +333,27 @@ class TestDecomposeQueryFallback:
         # All structured fields ``"none"`` *and* semantic_query empty —
         # the LLM did not actually understand the query. We restore
         # the raw text so retrieval still has something to embed.
-        monkeypatch.setattr(
-            "app.rag.query_decomposer.get_llm_client",
-            lambda: _llm_stub(
+        bind_llm(monkeypatch, lambda: _llm_stub(
                 response={
                     "time_range": "none",
                     "personal_scope": "none",
                     "file_type_hint": "none",
                     "semantic_query": "",
                 }
-            ),
-        )
+            ))
         result = await decompose_query("曖昧な質問", now=NOW)
         assert result.semantic_query == "曖昧な質問"
 
     @pytest.mark.asyncio
     async def test_max_lookback_clips_resolution(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.rag.query_decomposer.get_llm_client",
-            lambda: _llm_stub(
+        bind_llm(monkeypatch, lambda: _llm_stub(
                 response={
                     "time_range": "this_month",
                     "personal_scope": "viewed",
                     "file_type_hint": "none",
                     "semantic_query": "アニメ",
                 }
-            ),
-        )
+            ))
 
         result = await decompose_query(
             "今月観たアニメ",
@@ -402,17 +373,14 @@ class TestDecomposeQueryFallback:
         # When ``now`` is omitted, the resolver must still return a
         # populated TimeRange for non-``none`` labels — proving the
         # default datetime.now() path works without an explicit override.
-        monkeypatch.setattr(
-            "app.rag.query_decomposer.get_llm_client",
-            lambda: _llm_stub(
+        bind_llm(monkeypatch, lambda: _llm_stub(
                 response={
                     "time_range": "today",
                     "personal_scope": "viewed",
                     "file_type_hint": "none",
                     "semantic_query": "メモ",
                 }
-            ),
-        )
+            ))
         result = await decompose_query("今日観たメモ")
         assert result.time_range.label == "today"
         assert result.time_range.after is not None

@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from app.dependencies import get_llm_client
+from app import llm_routing
 from app.prompt_loader import render
 
 logger = logging.getLogger(__name__)
@@ -298,14 +298,8 @@ async def decompose_query(
     if not stripped:
         return DecomposedQuery.passthrough(natural_query)
 
-    try:
-        llm = get_llm_client()
-    except RuntimeError:
-        # Dependency container not initialised — fall through to legacy
-        # Ask behaviour rather than 500-ing on a startup race.
-        return DecomposedQuery.passthrough(natural_query)
-
-    if not llm.enabled:
+    llm = llm_routing.bound_client()
+    if llm is None or not llm.enabled:
         return DecomposedQuery.passthrough(natural_query)
 
     user_prompt = f"<user_question>\n{stripped}\n</user_question>"

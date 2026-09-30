@@ -16,7 +16,7 @@ from app import dependencies
 from app.config import settings
 from app.database import init_litloft_db, init_search_db
 from app.indexer import IndexManager
-from app.llm import create_llm_client
+from app import llm_routing
 from app.loop_watchdog import LoopWatchdog
 from app.routers import (
     admin,
@@ -191,17 +191,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:
         logger.exception("video_visual_index purge failed; continuing startup")
 
-    # Initialize LLM client and auto-tags worker
-    llm_client = create_llm_client(settings.llm)
-    dependencies._llm_client = llm_client
-
-    if llm_client.enabled:
-        logger.info(
-            "LLM client enabled: provider=%s, model=%s",
-            settings.llm.provider, settings.llm.model,
-        )
+    routing = llm_routing.current_routing()
+    if routing.error is not None:
+        logger.error("LLM routing disabled: %s", routing.error)
     else:
-        logger.info("LLM client disabled")
+        logger.info(
+            "LLM profiles: %s (default=%s)",
+            ", ".join(sorted(routing.profiles)), routing.default,
+        )
 
     auto_tags_worker = AutoTagsWorker()
     dependencies._auto_tags_worker = auto_tags_worker
@@ -281,9 +278,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             vision_worker.run(), name="vision_describe_worker"
         )
         logger.info(
-            "Vision describe worker started (mode=%s, model=%s)",
+            "Vision describe worker started (mode=%s)",
             settings.features.vision_describe,
-            settings.llm.vision_model,
         )
 
         # on_index: queue already-indexed images that don't have a
@@ -318,9 +314,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             video_visual_worker.run(), name="video_visual_worker"
         )
         logger.info(
-            "Video visual index worker started (mode=%s, model=%s)",
+            "Video visual index worker started (mode=%s)",
             settings.features.video_visual_index,
-            settings.llm.vision_model,
         )
 
         if settings.features.video_visual_index == "on_index":
@@ -447,6 +442,17 @@ app.include_router(video_visual.router)
 app.include_router(admin.router)
 
 
+def _llm_status() -> LLMStatus:
+    """The default profile: the one every unassigned feature uses."""
+    profile, enabled = llm_routing.default_status()
+    return LLMStatus(
+        provider=profile.config.provider if profile else "disabled",
+        model=profile.config.model if profile else "",
+        enabled=enabled,
+        output_language=settings.llm.output_language,
+    )
+
+
 @app.get("/status", response_model=StatusResponse, tags=["status"])
 def status_endpoint() -> StatusResponse:
     """Get current service and indexing status.
@@ -462,8 +468,6 @@ def status_endpoint() -> StatusResponse:
     manager = dependencies.get_index_manager()
     index_status = manager.get_index_status()
     queue_status = manager.get_queue_status()
-
-    llm_client = dependencies._llm_client
 
     # Per-task breakdown for the dashboard. Index manager owns the four
     # core indexing types (metadata / clip / whisper / text_content).
@@ -566,12 +570,7 @@ def status_endpoint() -> StatusResponse:
             chapter_suggestions=settings.features.chapter_suggestions,
             video_visual_index=settings.features.video_visual_index,
         ),
-        llm=LLMStatus(
-            provider=settings.llm.provider,
-            model=settings.llm.model,
-            enabled=llm_client.enabled if llm_client else False,
-            output_language=settings.llm.output_language,
-        ),
+        llm=_llm_status(),
     )
 
 

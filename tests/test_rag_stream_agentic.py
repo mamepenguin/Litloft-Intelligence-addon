@@ -31,7 +31,9 @@ import pytest  # noqa: E402
 from app.config import AgenticModelEntry, LLMConfig, Settings  # noqa: E402
 from app.rag.agentic import AgenticAnswer  # noqa: E402
 from app.rag.agentic_types import AgenticTelemetry  # noqa: E402
-from app.rag.service import AnswerEvent, stream_answer  # noqa: E402
+from app.rag.service import AnswerEvent  # noqa: E402
+from tests.llm_helpers import bind_llm  # noqa: E402
+from app.rag.service import _stream_answer as stream_answer  # noqa: E402
 
 
 @pytest.fixture
@@ -59,10 +61,9 @@ def _agentic_settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
     # A bare MagicMock with the duck-typed attributes the gate checks.
     llm_client = MagicMock()
     llm_client.enabled = True
+    llm_client.generate_json = AsyncMock(return_value=None)
     llm_client.chat_with_tools = AsyncMock()  # presence only
-    monkeypatch.setattr(
-        "app.rag.service.get_llm_client", lambda: llm_client
-    )
+    bind_llm(monkeypatch, lambda: llm_client, config=settings.llm)
     return settings
 
 
@@ -150,10 +151,9 @@ async def test_stream_answer_skips_agentic_when_model_not_allowlisted(
     monkeypatch.setattr("app.rag.service.settings", settings)
     llm_client = MagicMock()
     llm_client.enabled = True
+    llm_client.generate_json = AsyncMock(return_value=None)
     llm_client.chat_with_tools = AsyncMock()
-    monkeypatch.setattr(
-        "app.rag.service.get_llm_client", lambda: llm_client
-    )
+    bind_llm(monkeypatch, lambda: llm_client, config=settings.llm)
 
     loop_spy = AsyncMock()
     monkeypatch.setattr("app.rag.service.run_agentic_loop", loop_spy)
@@ -199,10 +199,9 @@ async def test_stream_answer_skips_agentic_when_mode_off(
     monkeypatch.setattr("app.rag.service.settings", settings)
     llm_client = MagicMock()
     llm_client.enabled = True
+    llm_client.generate_json = AsyncMock(return_value=None)
     llm_client.chat_with_tools = AsyncMock()
-    monkeypatch.setattr(
-        "app.rag.service.get_llm_client", lambda: llm_client
-    )
+    bind_llm(monkeypatch, lambda: llm_client, config=settings.llm)
     loop_spy = AsyncMock()
     monkeypatch.setattr("app.rag.service.run_agentic_loop", loop_spy)
     monkeypatch.setattr(
@@ -247,9 +246,7 @@ async def test_stream_answer_skips_agentic_without_chat_with_tools(
         enabled = True
         # No chat_with_tools attribute.
 
-    monkeypatch.setattr(
-        "app.rag.service.get_llm_client", lambda: _NoToolsLLM()
-    )
+    bind_llm(monkeypatch, lambda: _NoToolsLLM(), config=settings.llm)
     loop_spy = AsyncMock()
     monkeypatch.setattr("app.rag.service.run_agentic_loop", loop_spy)
     monkeypatch.setattr(

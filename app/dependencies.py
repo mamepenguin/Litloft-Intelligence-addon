@@ -5,7 +5,6 @@ import os
 from fastapi import Header, HTTPException
 
 from app.indexer import IndexManager
-from app.llm import LLMClient
 from app.workers.auto_tags import AutoTagsWorker
 from app.workers.chapter_suggestions import ChapterSuggestionsWorker
 from app.workers.pickup import PickupWorker
@@ -23,7 +22,6 @@ _vision_worker: VisionDescribeWorker | None = None
 _video_visual_worker: VideoVisualWorker | None = None
 _retrieval_keywords_worker: RetrievalKeywordsWorker | None = None
 _pickup_worker: PickupWorker | None = None
-_llm_client: LLMClient | None = None
 
 _WEBHOOK_SECRET = os.environ.get("SEARCH_WEBHOOK_SECRET", "")
 
@@ -98,17 +96,6 @@ def get_retrieval_keywords_worker() -> RetrievalKeywordsWorker:
     if _retrieval_keywords_worker is None:
         raise RuntimeError("Retrieval-keywords worker not initialized")
     return _retrieval_keywords_worker
-
-
-def get_llm_client() -> LLMClient:
-    """Get the LLM client instance.
-
-    Raises:
-        RuntimeError: If the client is not initialized.
-    """
-    if _llm_client is None:
-        raise RuntimeError("LLM client not initialized")
-    return _llm_client
 
 
 async def verify_webhook_secret(
