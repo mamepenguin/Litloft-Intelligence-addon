@@ -1410,7 +1410,7 @@ def _create_file_summaries_table(conn: object) -> None:
 
     Stores a single summary per file with two layers:
     - short_summary: ~1 sentence (30-80 chars)
-    - long_summary: 3-5 sentences (200-400 chars)
+    - long_summary: 3-5 "- " lines, or one paragraph in older rows
 
     Unlike suggested_tags, summaries have no approve/dismiss workflow —
     the intelligence DB stays self-contained and the host DB is never touched.

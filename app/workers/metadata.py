@@ -81,7 +81,7 @@ def _build_metadata_text(
 
     Args:
         file: The indexed file record.
-        long_summary: Optional 3-5 sentence AI summary text for
+        long_summary: Optional AI summary text for
             transcribable / textual files. Pass ``None`` when no
             summary exists OR the row has ``status='hidden'`` — both
             must omit the summary so the user's opt-out is respected.

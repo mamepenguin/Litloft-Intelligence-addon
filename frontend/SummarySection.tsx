@@ -36,6 +36,18 @@ const POLL_INTERVAL_MS = 2000;
 const SHORT_MAX = 200;
 const LONG_MAX = 4000;
 
+const BULLET_PREFIX = "- ";
+
+// Summaries written before the key-point format are one paragraph, so a
+// list is drawn only when every line is a bullet.
+function bulletItems(long: string): string[] | null {
+  const lines = long.split("\n").filter((line) => line.trim() !== "");
+  if (lines.length === 0 || !lines.every((l) => l.startsWith(BULLET_PREFIX))) {
+    return null;
+  }
+  return lines.map((line) => line.slice(BULLET_PREFIX.length).trim());
+}
+
 export default function SummarySection({ fileId, drive }: SummarySectionProps) {
   const t = useTranslations("file");
   const [data, setData] = useState<SummaryResponse | null>(null);
@@ -198,6 +210,7 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
     draftShort.trim().length === 0 || draftShort.length > SHORT_MAX;
   const longInvalid =
     draftLong.trim().length === 0 || draftLong.length > LONG_MAX;
+  const longItems = bulletItems(data.long_summary ?? "");
 
   return (
     <div>
@@ -295,11 +308,18 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
             </p>
           )}
 
-          {data.long_summary && (
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-text-muted">
-              {data.long_summary}
-            </p>
-          )}
+          {data.long_summary &&
+            (longItems ? (
+              <ul className="list-disc space-y-1 pl-5 text-sm leading-relaxed text-text-muted">
+                {longItems.map((item, i) => (
+                  <li key={i}>{item}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-text-muted">
+                {data.long_summary}
+              </p>
+            ))}
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button

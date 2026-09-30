@@ -1,6 +1,6 @@
 """AI summaries worker using LLM.
 
-Generates two-layer summaries (1-sentence short + paragraph long) for
+Generates two-layer summaries (1-sentence short + key-point list long) for
 videos, audio files, and documents. Runs as a dedicated async queue
 processing one file at a time.
 
@@ -137,6 +137,24 @@ _SUPPORTED_CONTEXT_TYPES: frozenset[str] = frozenset({"video", "audio", "documen
 
 # Separator inserted between sampled windows in truncated contexts.
 _WINDOW_SEPARATOR = "\n\n[... excerpt ...]\n\n"
+
+_LONG_MAX_ITEMS = 5
+
+
+def _normalise_long(raw: str | list[object]) -> str:
+    """Return ``long_summary`` text: a list becomes ``- item`` lines.
+
+    Each item is collapsed onto one line because the frontend renders the
+    value as a list only when every line starts with ``- ``.
+    """
+    if isinstance(raw, str):
+        return raw.strip()
+    items = [
+        " ".join(item.split())
+        for item in raw
+        if isinstance(item, str) and item.strip()
+    ]
+    return "\n".join(f"- {item}" for item in items[:_LONG_MAX_ITEMS])
 
 # Proper-noun / topic-boundary / numeric handling rules now live in
 # prompts/summaries/_common_rules.jinja2 (included by both system templates).
@@ -1334,14 +1352,16 @@ class SummariesWorker:
 
         short_raw = parsed.get("short")
         long_raw = parsed.get("long")
-        if not isinstance(short_raw, str) or not isinstance(long_raw, str):
+        if not isinstance(short_raw, str) or not isinstance(
+            long_raw, (str, list)
+        ):
             logger.warning(
                 "Summaries LLM response missing short/long fields for %s", file_id
             )
             return
 
         short_summary = short_raw.strip()
-        long_summary = long_raw.strip()
+        long_summary = _normalise_long(long_raw)
         if not short_summary or not long_summary:
             logger.warning(
                 "Summaries LLM produced empty short/long for %s", file_id

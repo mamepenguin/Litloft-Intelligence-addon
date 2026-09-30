@@ -153,7 +153,8 @@ class TestBuildSystemPrompt:
 
         # Guide the model on how long each field should be.
         assert "30-80" in result
-        assert "200-400" in result
+        assert "3-5 items" in result
+        assert "40-80" in result
 
     def test_proper_noun_rules_anchor_to_trusted_sources(
         self, monkeypatch, make_settings
@@ -1192,6 +1193,68 @@ class TestSummariesWorkerProcessFile:
         assert "perceptrons" in kwargs["long_summary"]
         assert kwargs["context_type"] == "video"
         assert kwargs["was_truncated"] is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("long_raw", "expected"),
+        [
+            (["a", "b", "c"], "- a\n- b\n- c"),
+            ([" a ", "", "  ", "b"], "- a\n- b"),
+            (["1", "2", "3", "4", "5", "6", "7"], "- 1\n- 2\n- 3\n- 4\n- 5"),
+            (["a", 3, None, "b"], "- a\n- b"),
+            ([" x\n y "], "- x y"),
+            ("  a paragraph  ", "a paragraph"),
+            ([], None),
+            (["", "  "], None),
+            ([1, 2], None),
+            (42, None),
+            ({"a": "b"}, None),
+        ],
+    )
+    async def test_long_shape_is_normalised_before_save(
+        self,
+        use_llm,
+        monkeypatch,
+        patched_settings_enabled,
+        mock_llm_client,
+        long_raw,
+        expected,
+    ):
+        monkeypatch.setattr(
+            "app.workers.summaries._has_summary", lambda fid: False
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._get_indexed_file",
+            lambda fid: {
+                "file_id": fid,
+                "drive": "d",
+                "filename": "lecture.mp4",
+                "file_type": "video",
+                "title": "",
+                "description": "",
+            },
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_transcript",
+            lambda fid: "a transcript long enough to pass the minimum threshold",
+        )
+        save_spy = AsyncMock()
+        monkeypatch.setattr(
+            "app.workers.summaries._save_summary", save_spy
+        )
+        mock_llm_client.generate_json = AsyncMock(
+            return_value={"short": "s", "long": long_raw}
+        )
+        use_llm(mock_llm_client)
+
+        await SummariesWorker()._process_file("abc")
+
+        if expected is None:
+            save_spy.assert_not_called()
+        else:
+            save_spy.assert_called_once()
+            assert save_spy.call_args.kwargs["long_summary"] == expected
+            assert save_spy.call_args.kwargs["short_summary"] == "s"
 
     @pytest.mark.asyncio
     async def test_saves_valid_summary_for_document(

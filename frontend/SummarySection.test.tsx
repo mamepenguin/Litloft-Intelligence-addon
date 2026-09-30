@@ -311,3 +311,46 @@ describe("SummarySection — edit flow", () => {
     expect(save.disabled).toBe(true);
   });
 });
+
+describe("SummarySection — long summary shape", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetFileAiActions();
+  });
+
+  it.each([
+    ["- one\n- two\n- three", ["one", "two", "three"]],
+    ["- one\n\n- two\n", ["one", "two"]],
+  ])("renders %j as a list without markers", async (long, items) => {
+    vi.mocked(getSummary).mockResolvedValue({
+      ...aiResponse,
+      long_summary: long,
+    } as never);
+    renderSection();
+
+    const list = await screen.findByRole("list");
+    expect(
+      Array.from(list.querySelectorAll("li")).map((li) => li.textContent),
+    ).toEqual(items);
+  });
+
+  it.each([
+    "A plain paragraph.",
+    "- one\nnot a bullet",
+    "intro\n- one\n- two",
+  ])("renders %j as the paragraph it was", async (long) => {
+    vi.mocked(getSummary).mockResolvedValue({
+      ...aiResponse,
+      long_summary: long,
+    } as never);
+    renderSection();
+
+    await waitFor(() =>
+      expect(screen.getByText("AI short")).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("list")).not.toBeInTheDocument();
+    expect(
+      screen.getByText((_, el) => el?.tagName === "P" && el.textContent === long),
+    ).toBeInTheDocument();
+  });
+});
