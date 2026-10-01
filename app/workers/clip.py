@@ -443,6 +443,8 @@ def _extract_scene_frames(
             ],
             capture_output=True,
             text=True,
+            # stderr echoes container metadata, which is not always UTF-8.
+            errors="replace",
             timeout=300,
         )
 
