@@ -111,9 +111,9 @@ export function KeyPresence({ profile }: { profile: ProfileDraft }): React.React
     return <span className="text-sm text-text-muted">{t("keyMissing")}</span>;
   }
   return (
-    <span className="flex items-center gap-1.5 text-sm text-danger">
-      <X size={14} aria-hidden="true" />
-      {t("keyMissingFails")}
+    <span className="flex items-start gap-1.5 text-sm text-danger">
+      <X size={14} aria-hidden="true" className="mt-[3px] shrink-0" />
+      <span>{t("keyMissingFails")}</span>
     </span>
   );
 }
@@ -186,7 +186,7 @@ function StaticKey({ profile }: { profile: ProfileDraft }): React.ReactElement {
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-text-muted">
           <span>
             {t("envVar")}{" "}
-            <span className="font-mono text-text-primary">{profile.keyEnv}</span> ·
+            <span className="whitespace-nowrap font-mono text-text-primary">{profile.keyEnv}</span> ·
           </span>
           <KeyPresence profile={profile} />
         </span>

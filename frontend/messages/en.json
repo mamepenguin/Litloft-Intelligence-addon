@@ -19,7 +19,7 @@
       },
       "llmCloud": {
         "label": "Allow cloud LLMs",
-        "help": "Sends this drive's file content, transcripts and images to LLM profiles marked as off-host. When OFF, only local profiles are used, and features without a local profile do not run.",
+        "help": "Sends this drive's file content, transcripts and images to LLM profiles marked as external server. When OFF, only local profiles are used, and features without a local profile do not run.",
         "warning": "Jobs already in progress will finish after you turn this OFF."
       }
     },
@@ -459,7 +459,7 @@
     "llm": {
       "title": "LLM profiles",
       "introSingle": "The model used for tag candidates, summaries, Ask, and image descriptions. Add a profile to use different models for different tasks.",
-      "introList": "Choose the model each task uses. An \"Off-host\" profile is used only on drives where \"Allow sending to cloud LLMs\" is on.",
+      "introList": "Choose the model each task uses. An \"External server\" profile is used only on drives where \"Allow sending to cloud LLMs\" is on.",
       "connection": "Model connection",
       "profiles": "Profiles",
       "addToSplit": "Add a profile to split tasks",
@@ -488,7 +488,7 @@
       "offhostOnly": {
         "title": "AI features do not run on the drive “{drives}”",
         "separator": "”, “",
-        "body": "This drive does not allow sending to cloud LLMs, but the only profile is set to \"Send off-host\". If you use Ollama on this machine, turn \"Send off-host\" off. If you use a cloud service, add a local profile and choose it under \"Use instead on drives without cloud\"."
+        "body": "This drive does not allow sending to cloud LLMs, but the only profile is set to \"External server\". If you use Ollama on this machine, turn \"External server\" off. If you use a cloud service, add a local profile and choose it under \"Use instead on drives without cloud\"."
       },
       "invalid": {
         "name": "Profile name “{name}” must start with a lowercase letter or digit and use only lowercase letters, digits, - and _, up to 32 characters.",
@@ -515,8 +515,8 @@
         "keyMissing": "Not set",
         "keyMissingOllama": "Not set (not needed for Ollama)",
         "keyMissingFails": "Not set — tasks using this profile will fail",
-        "offhost": "Send off-host",
-        "offhostHelpList": "On for a cloud service or another machine. An off-host profile is used only on drives that allow cloud sends.",
+        "offhost": "External server",
+        "offhostHelpList": "On for an LLM that runs on a server other than this machine (a cloud service, another PC, and so on). A profile with this on is used only on drives where the drive setting \"Allow sending to cloud LLMs\" is on.",
         "offhostHelpSingle": "Off for Ollama on this machine. While off, every drive uses this model.",
         "agentic": "Use for Agentic Ask",
         "agenticHelp": "Ask that answers by calling tools. Turn on only for models that support tool calls.",
@@ -529,7 +529,7 @@
       },
       "list": {
         "local": "Local",
-        "offhost": "Off-host",
+        "offhost": "External server",
         "default": "Default",
         "editing": "Editing",
         "editLabel": "Edit",
@@ -545,7 +545,7 @@
         "fallback": "Use instead on drives without cloud",
         "fallbackNone": "None (do not run)",
         "fallbackHelp": "Only local profiles can be chosen.",
-        "fallbackOffhost": "{name} (off-host, cannot be used)",
+        "fallbackOffhost": "{name} (external server, cannot be used)",
         "fallbackMissing": "{name} (no such profile)",
         "columns": {
           "feature": "Feature",
@@ -553,7 +553,7 @@
         },
         "profileLabel": "Profile for {feature}",
         "profileDefault": "Default ({name})",
-        "profileOffhost": "{name} (off-host)",
+        "profileOffhost": "{name} (external server)",
         "profileMissing": "{name} (no such profile)",
         "destinations": {
           "sends": "Sends",
@@ -562,7 +562,7 @@
           "unknown": "Unknown"
         },
         "driveSeparator": ", ",
-        "destinationsNote": "Features assigned an off-host profile show where each drive's work goes. That is decided by the drive setting \"Allow sending to cloud LLMs\". Whether a feature runs at all is set under Feature toggles.",
+        "destinationsNote": "Features assigned an external-server profile show where each drive's work goes. That is decided by the drive setting \"Allow sending to cloud LLMs\". Whether a feature runs at all is set under Feature toggles.",
         "featureOff": "Off (Feature toggles)"
       },
       "outputLanguage": {

@@ -48,7 +48,7 @@ function Summary({ profile }: { profile: ProfileDraft }): React.ReactElement {
       <span className="truncate text-sm text-text-muted">{parts.join(" · ")}</span>
       {keyMissing && (
         <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="font-mono text-sm text-text-primary">{profile.keyEnv}</span>
+          <span className="whitespace-nowrap font-mono text-sm text-text-primary">{profile.keyEnv}</span>
           <KeyPresence profile={profile} />
         </span>
       )}
@@ -113,16 +113,19 @@ export default function ProfileList({
           <div
             key={profile.id}
             data-testid={`llm-profile-row-${profile.id}`}
-            className="flex items-center gap-4 rounded-xl border border-bg-border p-4"
+            className="flex flex-col gap-3 rounded-xl border border-bg-border p-4 sm:flex-row sm:items-center sm:gap-4"
           >
-            <ProfileIcon offhost={profile.offhost} />
-            <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badges profile={profile} isDefault={profile.id === defaultId} />
+            <div className="flex min-w-0 flex-1 items-center gap-4">
+              <ProfileIcon offhost={profile.offhost} />
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badges profile={profile} isDefault={profile.id === defaultId} />
+                </div>
+                <Summary profile={profile} />
               </div>
-              <Summary profile={profile} />
             </div>
             <Button
+              className="self-end sm:self-auto"
               variant="ghost"
               aria-label={t("edit", { name: profile.name })}
               onClick={() => onExpand(profile.id)}

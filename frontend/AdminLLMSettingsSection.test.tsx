@@ -278,7 +278,7 @@ describe("AdminLLMSettingsSection", () => {
       [`PUT ${ENDPOINT}`]: { body: { status: "saved", restart_required: false } },
     });
     fireEvent.click(screen.getByRole("button", { name: "Edit profile local" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Send off-host" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "External server" }));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(callsTo("PUT")).toHaveLength(1));
     expect(putBody().routing).toEqual({ default: "local" });
@@ -481,7 +481,7 @@ describe("AdminLLMSettingsSection", () => {
     fireEvent.click(screen.getByRole("button", { name: `Edit profile ${name}` }));
     const select = screen.getByRole("combobox", { name: "API key" }) as HTMLSelectElement;
     expect(select.selectedOptions[0].textContent).toBe(choice);
-    expect(screen.getByRole("checkbox", { name: "Send off-host" })).toHaveProperty("checked", offhost);
+    expect(screen.getByRole("checkbox", { name: "External server" })).toHaveProperty("checked", offhost);
     const agenticBox = screen.getByRole("checkbox", { name: "Use for Agentic Ask" });
     expect(agenticBox).toHaveProperty("checked", agentic);
     fireEvent.click(agenticBox);
@@ -542,7 +542,7 @@ describe("AdminLLMSettingsSection", () => {
   });
 
   it.each([
-    ["an off-host profile", "claude", "claude (off-host, cannot be used)"],
+    ["an off-host profile", "claude", "claude (external server, cannot be used)"],
     ["a missing profile", "ghost", "ghost (no such profile)"],
   ])("a saved fallback naming %s is shown as it is", async (_case, fallback, label) => {
     await renderWith({
@@ -678,11 +678,11 @@ describe("AdminLLMSettingsSection", () => {
   it("each feature option names the default and the off-host profiles", async () => {
     await renderWith({ [`GET ${ENDPOINT}`]: { body: ROUTED } });
     const rag = screen.getByRole("combobox", { name: RAG }) as HTMLSelectElement;
-    expect(rag.selectedOptions[0].textContent).toBe("claude (off-host)");
+    expect(rag.selectedOptions[0].textContent).toBe("claude (external server)");
     expect(within(rag).getAllByRole("option").map((o) => o.textContent)).toEqual([
       "Default (local)",
       "local",
-      "claude (off-host)",
+      "claude (external server)",
     ]);
   });
 

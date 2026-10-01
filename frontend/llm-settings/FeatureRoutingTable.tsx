@@ -95,14 +95,14 @@ export default function FeatureRoutingTable({
   const headClass = "border-b border-bg-border px-4 py-3 text-left align-top font-semibold";
   return (
     <div className="flex flex-col gap-4">
-      <table className="w-full border-separate border-spacing-0 text-sm text-text-primary">
-          <thead>
+      <table className="block w-full sm:table border-separate border-spacing-0 text-sm text-text-primary">
+          <thead className="hidden sm:table-header-group">
             <tr>
               <th className={`${headClass} pl-0`}>{t("columns.feature")}</th>
               <th className={`${headClass} pr-0`}>{t("columns.profile")}</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="block sm:table-row-group">
             {features.map((feature) => {
               const label = tf(`${feature}.label`);
               const off = offFeatures?.has(feature) === true;
@@ -113,14 +113,14 @@ export default function FeatureRoutingTable({
                   ? seen.drives
                   : undefined;
               return (
-                <tr key={feature} data-testid={`feature-route-${feature}`}>
-                  <td className="border-b border-bg-border py-3 pr-4 align-top">
+                <tr key={feature} data-testid={`feature-route-${feature}`} className="block sm:table-row">
+                  <td className="block pt-3 pb-1.5 align-top sm:table-cell sm:border-b sm:border-bg-border sm:py-3 sm:pr-4">
                     <span className={off ? "text-text-muted" : undefined}>{label}</span>
                     {off && (
                       <span className="ml-2 text-xs text-text-muted">{t("featureOff")}</span>
                     )}
                   </td>
-                  <td className="w-1/2 border-b border-bg-border py-3 pl-4 align-top">
+                  <td className="block border-b border-bg-border pb-3 align-top sm:table-cell sm:w-1/2 sm:pt-3 sm:pl-4">
                     <div className="flex flex-col gap-2">
                       <ProfileSelect
                         feature={feature}
