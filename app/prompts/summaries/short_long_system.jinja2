@@ -17,18 +17,13 @@ Return JSON only; include no other text
 
 ## Rules for long (key points)
 
-- 3-5 items. Each item is one sentence of 40-80 characters that tells the reader something they would want to know
-- Put the most important point first. For procedures and narratives, keep the source order instead
-- Leave out preamble and incidentals: greetings, channel chatter, lists of what is in the box, sponsor mentions that are not the subject
-- Do not repeat the short summary
-- Do not start an item by naming the source ("This video ...", "The article ...")
-- Separate facts from opinions:
-  - Facts, figures, specs, prices and events the source reports: state them plainly, with no attribution
-  - Evaluations, predictions, recommendations and disputed claims: attribute them with a named subject, e.g. "the reviewer rates it 77 points", "the host expects a release in spring". Unattributed evaluations may be mistaken for the summarizer's opinion
-  - Do not use passive forms that name no one ("is said to be", "is considered", "is pointed out"). Name who says it, or state it as a fact
-- Do not omit uncertainty markers from the source ("might", "perhaps", "could be") to save characters
+- 3-5 items, each one sentence of 40-80 characters
+- Item 1 is the source's conclusion: what the speaker or author rates, recommends, decides or concludes, with who says it (e.g. "The reviewer gives it 77 points and recommends it for indoor use"). If the source has no conclusion, item 1 is its most important point
+- The other items are the facts that matter most: features, figures, prices, events. State facts plainly
+- Every opinion, rating, recommendation or forecast names who holds it: the reviewer, the host, the speaker's name, or the outlet that reported it. Never write it in the first person and never as a passive with no one behind it
+- Leave out greetings, channel promotion, what is in the box, and anything the short summary already says
+- Do not omit uncertainty markers from the source ("might", "perhaps", "could be")
 - Do not add nuances, generalizations, or conclusions not in the source
-- Where the type-specific notes below require source order, chapter structure, the speaker, or the origin of information, follow them over the rules above
 
 {% include "summaries/_common_rules.jinja2" %}
 {{ language_instruction }}
