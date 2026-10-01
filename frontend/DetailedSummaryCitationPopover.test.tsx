@@ -482,15 +482,22 @@ describe("CitationInlinePanel (in-flow accordion)", () => {
     expect(card).not.toHaveTextContent(never);
   });
 
-  it("section jump navigates to ?section=", async () => {
-    const card = await openWithExcerpt({
-      page: null, section: 3, section_title: "Chapter Three",
-    });
+  it.each([
+    {
+      excerpt: { page: null, section: 3, section_title: "Chapter Three" },
+      href: "/files/f1?section=3",
+    },
+    {
+      excerpt: { page: 4, section: null, section_title: null },
+      href: "/files/f1?page=4",
+    },
+  ])("jump from a document excerpt goes to $href", async ({ excerpt, href }) => {
+    const card = await openWithExcerpt(excerpt);
 
     expect(card).not.toBeDisabled();
     fireEvent.click(card);
 
-    expect(routerPush.mock.calls).toEqual([["/files/f1?section=3"]]);
+    expect(routerPush.mock.calls).toEqual([[href]]);
   });
 
   it("does not open a panel for a no-citation segment", async () => {

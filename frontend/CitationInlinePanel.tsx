@@ -263,6 +263,7 @@ function InlineExcerptBody({
     if (excerpt.start_time != null && videoRef?.current) return false;
     if (onJump && excerpt) return false;
     if (excerpt.section != null) return false;
+    if (excerpt.page != null) return false;
     return true;
   })();
 
@@ -273,6 +274,10 @@ function InlineExcerptBody({
     }
     if (excerpt.section != null) {
       router.push(`/files/${excerpt.file_id}?section=${excerpt.section}`);
+      return;
+    }
+    if (excerpt.page != null) {
+      router.push(`/files/${excerpt.file_id}?page=${excerpt.page}`);
       return;
     }
     if (excerpt.start_time != null) {
