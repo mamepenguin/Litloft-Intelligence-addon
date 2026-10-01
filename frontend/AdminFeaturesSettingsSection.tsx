@@ -1,25 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/Button";
 import { useTranslations } from "next-intl";
-import {
-  errorDetail,
-  fetchExposure,
-  RequestError,
-  type ExposureView,
-  type LLMView,
-} from "./llm-settings/api";
-import {
-  loadLLMView,
-  saveLLMPatch,
-  subscribeLLMSaved,
-  withFeatureChoices,
-} from "./llm-settings/store";
-import FeatureProfileCell, { SELECT_CLASS } from "./llm-settings/FeatureProfileCell";
+import { errorDetail, FEATURES_ENDPOINT, RequestError } from "./llm-settings/api";
 import { ApplyMarker } from "./llm-settings/Notices";
 
-const ENDPOINT = "/api/addons/intelligence/admin/features";
+const ENDPOINT = FEATURES_ENDPOINT;
 
 const TRISTATE_FIELDS = [
   "auto_tags",
@@ -44,7 +31,11 @@ interface FeaturesPayload extends Record<BoolField, boolean>, Record<TristateFie
   overrides_present: boolean;
 }
 
-type Outcome = "saved" | "savedRestart" | "savedNow" | "resetSuccess" | null;
+type Outcome = "saved" | "resetSuccess" | null;
+
+const SELECT_CLASS =
+  "w-full rounded-2xl border border-warm-silver/40 bg-bg-card px-3 py-2 text-sm text-text-primary " +
+  "focus:outline-none focus:ring-2 focus:ring-focus-ring";
 
 async function request(method: "GET" | "PUT" | "DELETE", body?: unknown): Promise<unknown> {
   const resp = await fetch(ENDPOINT, {
@@ -80,124 +71,55 @@ function modesBody(modes: Modes): Record<string, unknown> {
   return Object.fromEntries(FIELDS.map((f) => [f, isBool(f) ? modes[f] === "true" : modes[f]]));
 }
 
-/** The entries of `next` that differ from `saved`, "" standing for an absent key. */
-function changedEntries(
-  next: Record<string, string>,
-  saved: Record<string, string>,
-): Record<string, string> {
-  const keys = [...new Set([...Object.keys(next), ...Object.keys(saved)])];
-  return Object.fromEntries(
-    keys.filter((k) => (next[k] ?? "") !== (saved[k] ?? "")).map((k) => [k, next[k] ?? ""]),
-  );
-}
-
-function sameRecord(a: Record<string, string>, b: Record<string, string>): boolean {
-  return Object.keys(changedEntries(a, b)).length === 0;
-}
-
 export default function AdminFeaturesSettingsSection(): React.ReactElement {
   const t = useTranslations("settings.features");
   const [data, setData] = useState<FeaturesPayload | null>(null);
-  const [llm, setLLM] = useState<LLMView | null>(null);
-  const [exposure, setExposure] = useState<ExposureView | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [modes, setModes] = useState<Modes | null>(null);
-  const [assigned, setAssigned] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<"save" | "reset" | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [reloadError, setReloadError] = useState<string | null>(null);
   const [resetError, setResetError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Outcome>(null);
 
-  const applyLLM = useCallback((nextLLM: LLMView | null, nextExposure: ExposureView | null) => {
-    setLLM(nextLLM);
-    setExposure(nextExposure);
-    setAssigned({ ...(nextLLM?.routing.features ?? {}) });
-  }, []);
-
-  const reloadLLM = useCallback(async () => {
-    const [nextLLM, nextExposure] = await Promise.all([
-      loadLLMView().catch(() => null),
-      fetchExposure().catch(() => null),
-    ]);
-    applyLLM(nextLLM, nextExposure);
-  }, [applyLLM]);
-
   const reload = useCallback(async () => {
-    const [payload, nextLLM, nextExposure] = await Promise.all([
-      request("GET") as Promise<FeaturesPayload>,
-      loadLLMView().catch(() => null),
-      fetchExposure().catch(() => null),
-    ]);
+    const payload = (await request("GET")) as FeaturesPayload;
     setData(payload);
     setModes(modesOf(payload));
-    applyLLM(nextLLM, nextExposure);
-  }, [applyLLM]);
-
-  const routingDraft = useRef<{ llm: LLMView | null; assigned: Record<string, string> }>({
-    llm: null,
-    assigned: {},
-  });
-  useEffect(() => {
-    routingDraft.current = { llm, assigned };
-  });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     reload().catch((err: unknown) => {
       if (!cancelled) setLoadError(errorDetail(err, t("loadFailed")));
     });
-    const unsubscribe = subscribeLLMSaved((writer) => {
-      if (writer === "features") return;
-      const current = routingDraft.current;
-      const saved = current.llm?.routing.features ?? {};
-      if (current.llm && !sameRecord(current.assigned, saved)) return;
-      reloadLLM().catch(() => undefined);
-    });
     return () => {
       cancelled = true;
-      unsubscribe();
     };
     // `t` is left out: loading runs once, not whenever the translator is rebuilt.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reload, reloadLLM]);
+  }, [reload]);
 
   const handleSave = useCallback(async () => {
-    if (!data || !modes) return;
+    if (!modes) return;
     setSaveError(null);
     setReloadError(null);
     setOutcome(null);
     setBusy("save");
-    const modesChanged = !sameRecord(modes, modesOf(data));
-    const choices = llm ? changedEntries(assigned, llm.routing.features ?? {}) : {};
-    const routingChanged = Object.keys(choices).length > 0;
-    let routingSaved = false;
-    let failure: unknown = null;
     try {
-      if (routingChanged) {
-        await saveLLMPatch("features", (latest) => withFeatureChoices(latest, choices));
-        routingSaved = true;
-      }
-      if (modesChanged || !routingChanged) await request("PUT", modesBody(modes));
-    } catch (err: unknown) {
-      failure = err;
-    }
-    if (failure === null || routingSaved) {
+      await request("PUT", modesBody(modes));
+      setOutcome("saved");
       try {
         await reload();
       } catch {
         setReloadError(t("reloadFailed"));
       }
+    } catch (err: unknown) {
+      setSaveError(errorDetail(err, t("saveFailed")));
+    } finally {
+      setBusy(null);
     }
-    if (failure === null) {
-      setOutcome(modesChanged ? "savedRestart" : routingChanged ? "savedNow" : "saved");
-    } else if (routingSaved) {
-      setSaveError(t("routingSavedModesFailed", { detail: errorDetail(failure, t("saveFailed")) }));
-    } else {
-      setSaveError(errorDetail(failure, t("saveFailed")));
-    }
-    setBusy(null);
-  }, [data, modes, llm, assigned, reload, t]);
+  }, [modes, reload, t]);
 
   const handleReset = useCallback(async () => {
     setResetError(null);
@@ -231,8 +153,6 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
     );
   }
 
-  const profileColumn = llm !== null && Object.keys(llm.profiles).length >= 2;
-  const savedFeatures = llm?.routing.features ?? {};
   const headClass =
     "sticky top-0 z-10 border-b border-bg-border bg-bg-card px-4 py-3 text-left align-top font-semibold";
 
@@ -269,14 +189,6 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
                   <ApplyMarker when="restart" />
                 </span>
               </th>
-              {profileColumn && (
-                <th className={headClass}>
-                  <span className="flex flex-col gap-0.5">
-                    {t("columns.profile")}
-                    <ApplyMarker when="now" />
-                  </span>
-                </th>
-              )}
             </tr>
           </thead>
           <tbody>
@@ -305,30 +217,13 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
                       ))}
                     </select>
                   </td>
-                  {profileColumn && llm && (
-                    <td className="min-w-48 border-b border-bg-border px-4 py-3 align-top">
-                      {llm.features.includes(field) && (
-                        <FeatureProfileCell
-                          featureLabel={label}
-                          llm={llm}
-                          value={assigned[field] ?? ""}
-                          savedValue={savedFeatures[field] ?? ""}
-                          exposure={exposure?.features[field]}
-                          fallback={exposure?.local_fallback ?? null}
-                          onChange={(value) => setAssigned({ ...assigned, [field]: value })}
-                        />
-                      )}
-                    </td>
-                  )}
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
-      {profileColumn && (
-        <p className="mt-4 text-xs text-text-muted">{t("destinationsNote")}</p>
-      )}
+      <p className="mt-4 text-xs text-text-muted">{t("profilesNote")}</p>
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <Button variant="primary" onClick={handleSave} disabled={busy !== null}>

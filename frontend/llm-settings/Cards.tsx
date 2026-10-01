@@ -70,6 +70,7 @@ export function RoutingCard({
   fallbackMissing,
   onDefault,
   onFallback,
+  children,
 }: {
   profiles: ProfileDraft[];
   defaultId: string | null;
@@ -77,12 +78,13 @@ export function RoutingCard({
   fallbackMissing: string | null;
   onDefault: (id: string) => void;
   onFallback: (id: string | null) => void;
+  children: ReactNode;
 }): React.ReactElement {
   const t = useTranslations("settings.llm.routing");
   const local = profiles.filter((p) => !p.offhost);
   const offhostFallback = profiles.find((p) => p.id === fallbackId && p.offhost);
   return (
-    <Card title={t("title")}>
+    <Card title={t("title")} marker="now">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <RoutingSelect
           label={t("default")}
@@ -120,6 +122,7 @@ export function RoutingCard({
           <option value="">{t("fallbackNone")}</option>
         </RoutingSelect>
       </div>
+      {children}
     </Card>
   );
 }

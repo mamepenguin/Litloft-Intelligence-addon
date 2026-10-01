@@ -1,33 +1,32 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { Plus } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/Button";
 import {
   errorDetail,
   fetchExposure,
+  fetchLLM,
+  fetchOffFeatures,
+  resetLLM,
+  saveLLM,
   type ExposureView,
   type LLMView,
 } from "./llm-settings/api";
-import {
-  loadLLMView,
-  resetLLMDocument,
-  saveLLMPatch,
-  subscribeLLMSaved,
-} from "./llm-settings/store";
 import { Card, OutputLanguageCard, RoutingCard } from "./llm-settings/Cards";
+import FeatureRoutingTable from "./llm-settings/FeatureRoutingTable";
 import { ErrorBlock, WarningBlock } from "./llm-settings/Notices";
 import ProfileFields from "./llm-settings/ProfileFields";
 import ProfileList from "./llm-settings/ProfileList";
 import {
-  bodyOnto,
+  bodyOf,
   draftFromView,
   drivesLeftWithoutAI,
   invalidOf,
-  isDirty,
   nextProfile,
   removeProfile,
+  setFeatureRoute,
   updateProfile,
   type Draft,
   type Invalid,
@@ -73,6 +72,7 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
 
   const [view, setView] = useState<LLMView | null>(null);
   const [exposure, setExposure] = useState<ExposureView | null>(null);
+  const [offFeatures, setOffFeatures] = useState<Set<string> | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -80,18 +80,15 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
   const [busy, setBusy] = useState<"save" | "reset" | null>(null);
   const [actionError, setActionError] = useState<ActionError>(null);
   const [outcome, setOutcome] = useState<Outcome>(null);
-  const latest = useRef<{ view: LLMView | null; draft: Draft | null }>({ view: null, draft: null });
-  useEffect(() => {
-    latest.current = { view, draft };
-  });
-
   const reload = useCallback(async () => {
-    const [next, nextExposure] = await Promise.all([
-      loadLLMView(),
+    const [next, nextExposure, nextOff] = await Promise.all([
+      fetchLLM(),
       fetchExposure().catch(() => null),
+      fetchOffFeatures().catch(() => null),
     ]);
     setView(next);
     setExposure(nextExposure);
+    setOffFeatures(nextOff);
     setDraft(draftFromView(next));
     setExpandedId(null);
   }, []);
@@ -101,15 +98,8 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
     reload().catch((err: unknown) => {
       if (!cancelled) setLoadError(errorDetail(err, t("loadFailed")));
     });
-    const unsubscribe = subscribeLLMSaved((writer) => {
-      if (writer === "llm") return;
-      const { view: base, draft: current } = latest.current;
-      if (base && current && isDirty(base, current)) return;
-      reload().catch(() => undefined);
-    });
     return () => {
       cancelled = true;
-      unsubscribe();
     };
     // `t` is left out: loading runs once, not whenever the translator is rebuilt.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -121,15 +111,13 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
       setOutcome(null);
       setBusy(kind);
       try {
-        const result =
-          kind === "save"
-            ? await saveLLMPatch("llm", (doc) => bodyOnto(doc, base, current))
-            : await resetLLMDocument("llm");
+        const result = kind === "save" ? await saveLLM(bodyOf(base, current)) : await resetLLM();
         setOutcome({ kind: kind === "save" ? "saved" : "reset", restart: result.restart_required });
         try {
           await reload();
         } catch (err: unknown) {
-          setActionError({ title: t("reloadFailed"), detail: errorDetail(err, "") || null });
+          const title = kind === "save" ? t("reloadFailed") : t("resetReloadFailed");
+          setActionError({ title, detail: errorDetail(err, "") || null });
         }
       } catch (err: unknown) {
         const title = kind === "save" ? t("saveFailed") : t("resetFailed");
@@ -228,7 +216,17 @@ export default function AdminLLMSettingsSection(): React.ReactElement {
             fallbackMissing={draft.routing.fallbackMissing}
             onDefault={(defaultId) => setRouting({ defaultId })}
             onFallback={(fallbackId) => setRouting({ fallbackId, fallbackMissing: null })}
-          />
+          >
+            <FeatureRoutingTable
+              features={view.features}
+              draft={draft}
+              offFeatures={offFeatures}
+              exposure={exposure}
+              onChange={(feature, profileId) =>
+                setDraft((d) => (d ? setFeatureRoute(d, feature, profileId) : d))
+              }
+            />
+          </RoutingCard>
         </>
       )}
 

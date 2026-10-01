@@ -5,6 +5,7 @@ import AdminLLMSettingsSection from "./AdminLLMSettingsSection";
 
 const ENDPOINT = "/api/addons/intelligence/admin/llm";
 const EXPOSURE = "/api/addons/intelligence/admin/llm/exposure";
+const FEATURES = "/api/addons/intelligence/admin/features";
 
 type Reply = { status?: number; body: unknown };
 type Routes = Record<string, Reply | Reply[]>;
@@ -95,9 +96,10 @@ const TWO = view({
 });
 
 const NO_EXPOSURE = { body: { features: {}, local_fallback: null } };
+const MODES = { body: { indexing: true, search: true, rag: true, summaries: "manual" } };
 
 async function renderWith(routes: Routes) {
-  serve({ [`GET ${EXPOSURE}`]: NO_EXPOSURE, ...routes });
+  serve({ [`GET ${EXPOSURE}`]: NO_EXPOSURE, [`GET ${FEATURES}`]: MODES, ...routes });
   render(<AdminLLMSettingsSection />);
   await screen.findByRole("button", { name: "Save" });
 }
@@ -106,7 +108,7 @@ describe("AdminLLMSettingsSection", () => {
   it("one profile renders the single layout: no list, no routing", async () => {
     await renderWith({ [`GET ${ENDPOINT}`]: { body: view() } });
     expect(screen.getByRole("heading", { name: "Model connection" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Default routing" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Routing" })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Delete profile/ })).toBeNull();
     expect(screen.getByRole("group", { name: "Connection" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Ollama" })).toHaveAttribute("aria-pressed", "true");
@@ -117,7 +119,7 @@ describe("AdminLLMSettingsSection", () => {
     expect(screen.getByRole("heading", { name: "Profiles" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Edit profile local" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Edit profile claude" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Default routing" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Routing" })).toBeInTheDocument();
   });
 
   it("the fallback select offers only local profiles and none", async () => {
@@ -231,7 +233,11 @@ describe("AdminLLMSettingsSection", () => {
       [`GET ${ENDPOINT}`]: {
         body: {
           ...TWO,
-          routing: { default: "local", local_fallback: "local", features: { rag: "claude" } },
+          routing: {
+            default: "local",
+            local_fallback: "local",
+            features: { rag: "claude", summaries: "local" },
+          },
         },
       },
       [`PUT ${ENDPOINT}`]: { body: { status: "saved", restart_required: false } },
@@ -245,7 +251,7 @@ describe("AdminLLMSettingsSection", () => {
     expect(body.routing).toEqual({
       default: "home",
       local_fallback: "home",
-      features: { rag: "claude" },
+      features: { rag: "claude", summaries: "home" },
     });
   });
 
@@ -524,11 +530,7 @@ describe("AdminLLMSettingsSection", () => {
 
   it("a save whose reload fails says it was saved", async () => {
     await renderWith({
-      [`GET ${ENDPOINT}`]: [
-        { body: view() },
-        { body: view() },
-        { status: 500, body: { detail: "reload boom" } },
-      ],
+      [`GET ${ENDPOINT}`]: [{ body: view() }, { status: 500, body: { detail: "reload boom" } }],
       [`PUT ${ENDPOINT}`]: SAVED,
     });
     fireEvent.change(screen.getByLabelText("Model"), { target: { value: "gemma4:e4b" } });
@@ -624,5 +626,181 @@ describe("AdminLLMSettingsSection", () => {
       expect(row).not.toHaveTextContent("LLM_API_KEY");
       expect(row).not.toHaveTextContent("Not set");
     }
+  });
+
+  it("reverting whose reload fails says it was reverted, not saved", async () => {
+    await renderWith({
+      [`GET ${ENDPOINT}`]: [
+        { body: view({ overrides_present: true }) },
+        { status: 500, body: { detail: "reload boom" } },
+      ],
+      [`DELETE ${ENDPOINT}`]: { body: { status: "reset", removed: true, restart_required: false } },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Revert to YAML settings" }));
+    const alert = await screen.findByTestId("llm-save-error");
+    expect(alert).toHaveTextContent("Reverted to the YAML settings, but reloading failed");
+    expect(alert).not.toHaveTextContent("Saved");
+  });
+
+  it("a second click while a save is in flight sends nothing", async () => {
+    await renderWith({ [`GET ${ENDPOINT}`]: { body: TWO } });
+    const served = mockFetch.getMockImplementation()!;
+    let finish: (r: Response) => void = () => undefined;
+    mockFetch.mockImplementation((url: string, init?: RequestInit) =>
+      init?.method === "PUT" ? new Promise<Response>((r) => (finish = r)) : served(url, init),
+    );
+    const save = screen.getByRole("button", { name: "Save" });
+    fireEvent.click(save);
+    fireEvent.click(save);
+    fireEvent.click(screen.getByRole("button", { name: "Saving..." }));
+    expect(callsTo("PUT")).toHaveLength(1);
+    finish(new Response(JSON.stringify({ status: "saved", restart_required: false })));
+    expect(await screen.findByText("Saved. Applied now.")).toBeInTheDocument();
+    expect(callsTo("PUT")).toHaveLength(1);
+  });
+
+  const ROUTED = view({
+    legacy: false,
+    profiles: { local: LOCAL, claude: CLAUDE },
+    routing: { default: "local", local_fallback: "local", features: { rag: "claude" } },
+  });
+  const RAG = "Profile for AI question answering (Ask)";
+  const SUMMARIES = "Profile for AI summary (short)";
+
+  it.each([
+    ["one profile", view(), 0],
+    ["two profiles", ROUTED, 2],
+  ])("the feature table with %s has %i profile selects", async (_case, body, count) => {
+    await renderWith({ [`GET ${ENDPOINT}`]: { body } });
+    expect(screen.queryAllByRole("combobox", { name: /^Profile for/ })).toHaveLength(count);
+  });
+
+  it("each feature option names the default and the off-host profiles", async () => {
+    await renderWith({ [`GET ${ENDPOINT}`]: { body: ROUTED } });
+    const rag = screen.getByRole("combobox", { name: RAG }) as HTMLSelectElement;
+    expect(rag.selectedOptions[0].textContent).toBe("claude (off-host)");
+    expect(within(rag).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Default (local)",
+      "local",
+      "claude (off-host)",
+    ]);
+  });
+
+  it("a saved feature naming no profile is shown as it is and saved back", async () => {
+    await renderWith({
+      [`GET ${ENDPOINT}`]: {
+        body: { ...ROUTED, routing: { default: "local", features: { rag: "ghost" } } },
+      },
+      [`PUT ${ENDPOINT}`]: SAVED,
+    });
+    const rag = screen.getByRole("combobox", { name: RAG }) as HTMLSelectElement;
+    expect(rag.selectedOptions[0].textContent).toBe("ghost (no such profile)");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(callsTo("PUT")).toHaveLength(1));
+    expect(putBody().routing).toEqual({ default: "local", features: { rag: "ghost" } });
+  });
+
+  it("a feature whose mode is off is dimmed and labelled, and still selectable", async () => {
+    await renderWith({
+      [`GET ${ENDPOINT}`]: { body: ROUTED },
+      [`GET ${FEATURES}`]: { body: { rag: false, summaries: "manual" } },
+    });
+    expect(screen.getByTestId("feature-route-rag")).toHaveTextContent("Off (Feature toggles)");
+    expect(screen.getByTestId("feature-route-summaries")).not.toHaveTextContent("Off");
+    const rag = screen.getByRole("combobox", { name: RAG }) as HTMLSelectElement;
+    expect(rag).toBeEnabled();
+    fireEvent.change(rag, { target: { value: "p0" } });
+    expect(rag.selectedOptions[0].textContent).toBe("local");
+  });
+
+  it("a feature reads as off for a tristate \"false\" too", async () => {
+    await renderWith({
+      [`GET ${ENDPOINT}`]: { body: ROUTED },
+      [`GET ${FEATURES}`]: { body: { rag: true, summaries: "false" } },
+    });
+    expect(screen.getByTestId("feature-route-summaries")).toHaveTextContent("Off (Feature toggles)");
+    expect(screen.getByTestId("feature-route-rag")).not.toHaveTextContent("Off");
+  });
+
+  it("feature choices save in the LLM body with the rest of the section", async () => {
+    await renderWith({ [`GET ${ENDPOINT}`]: { body: ROUTED }, [`PUT ${ENDPOINT}`]: SAVED });
+    fireEvent.change(screen.getByRole("combobox", { name: SUMMARIES }), {
+      target: { value: "p1" },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: RAG }), { target: { value: "" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Output language" }), {
+      target: { value: "en" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(callsTo("PUT")).toHaveLength(1));
+    expect(putBody()).toEqual({
+      profiles: {
+        local: {
+          provider: "ollama",
+          base_url: "http://host.docker.internal:11434",
+          model: "qwen3:14b",
+          vision_model: "gemma3:12b",
+          offhost: false,
+          agentic: false,
+          api_key_env: "LLM_API_KEY",
+        },
+        claude: {
+          provider: "openai_compatible",
+          base_url: "https://openrouter.ai/api/v1",
+          model: "anthropic/claude-sonnet-5",
+          vision_model: "",
+          offhost: true,
+          agentic: true,
+          api_key_env: "LLM_API_KEY_CLAUDE",
+        },
+      },
+      routing: { default: "local", local_fallback: "local", features: { summaries: "claude" } },
+      output_language: "en",
+    });
+    expect(callsTo("PUT", FEATURES)).toHaveLength(0);
+  });
+
+  it("deleting a profile drops the feature choices that named it", async () => {
+    await renderWith({ [`GET ${ENDPOINT}`]: { body: ROUTED }, [`PUT ${ENDPOINT}`]: SAVED });
+    fireEvent.click(screen.getByRole("button", { name: "Edit profile claude" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete profile claude" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(callsTo("PUT")).toHaveLength(1));
+    expect(putBody().routing).toEqual({ default: "local", local_fallback: "local" });
+  });
+
+  const RAG_EXPOSURE = {
+    body: {
+      features: {
+        rag: {
+          profile: "claude",
+          offhost: true,
+          drives: { media: "sends", misc: "sends", private: "falls_back", old: "skips", nas: "unknown" },
+        },
+        summaries: { profile: "local", offhost: false },
+      },
+      local_fallback: "local",
+    },
+  };
+
+  it("lists each drive's destination under an off-host row", async () => {
+    await renderWith({ [`GET ${ENDPOINT}`]: { body: ROUTED }, [`GET ${EXPOSURE}`]: RAG_EXPOSURE });
+    const destinations = screen.getAllByTestId("feature-destinations");
+    expect(destinations).toHaveLength(1);
+    expect([...destinations[0].children].map((s) => s.textContent)).toEqual([
+      "Sends media, misc",
+      "Runs on local private",
+      "Does not run old",
+      "Unknown nas",
+    ]);
+  });
+
+  it("destinations disappear once the row's choice differs from the saved routing", async () => {
+    await renderWith({ [`GET ${ENDPOINT}`]: { body: ROUTED }, [`GET ${EXPOSURE}`]: RAG_EXPOSURE });
+    expect(screen.getAllByTestId("feature-destinations")).toHaveLength(1);
+    fireEvent.change(screen.getByRole("combobox", { name: RAG }), { target: { value: "p0" } });
+    expect(screen.queryByTestId("feature-destinations")).toBeNull();
+    fireEvent.change(screen.getByRole("combobox", { name: RAG }), { target: { value: "p1" } });
+    expect(screen.getAllByTestId("feature-destinations")).toHaveLength(1);
   });
 });

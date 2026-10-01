@@ -1,5 +1,4 @@
 import type { LLMUpdateBody, LLMView, ProfileView, RoutingView } from "./api";
-import { documentOf, storedProfile } from "./store";
 
 export const KEY_ENV_PREFIX = "LLM_API_KEY";
 const NAMED_KEY_PREFIX = `${KEY_ENV_PREFIX}_`;
@@ -20,6 +19,7 @@ const PROFILE_FIELDS = new Set([
   "api_key",
 ]);
 const ROUTING_FIELDS = new Set(["default", "local_fallback", "features"]);
+const VIEW_ONLY_KEYS = new Set(["api_key_present", "api_key_source"]);
 
 export interface ProfileDraft {
   id: string;
@@ -38,11 +38,16 @@ export interface ProfileDraft {
   extra: Record<string, unknown>;
 }
 
+/** A saved feature choice: a profile, or a name that matches none (kept until changed). */
+export type FeatureRoute = { id: string } | { missing: string };
+
 export interface RoutingDraft {
   defaultId: string | null;
   fallbackId: string | null;
   /** A saved fallback that names no profile, kept until the user picks another. */
   fallbackMissing: string | null;
+  /** A feature absent here uses the default profile. */
+  features: Record<string, FeatureRoute>;
 }
 
 export interface Draft {
@@ -111,12 +116,19 @@ export function draftFromView(view: LLMView): Draft {
     profiles.find((p) => p.name === name)?.id ?? null;
   const fallback = view.routing.local_fallback;
   const fallbackId = idOf(fallback);
+  const features = Object.fromEntries(
+    Object.entries(view.routing.features ?? {}).map(([feature, name]): [string, FeatureRoute] => {
+      const id = idOf(name);
+      return [feature, id === null ? { missing: name } : { id }];
+    }),
+  );
   return {
     profiles,
     routing: {
       defaultId: idOf(view.routing.default) ?? profiles[0]?.id ?? null,
       fallbackId,
       fallbackMissing: fallbackId === null && typeof fallback === "string" ? fallback : null,
+      features,
     },
     outputLanguage: view.output_language,
   };
@@ -200,82 +212,66 @@ function profileBody(p: ProfileDraft): ProfileView {
   };
 }
 
+/** `profileId`: a profile's id, or "" for the default profile. */
+export function setFeatureRoute(draft: Draft, feature: string, profileId: string): Draft {
+  const rest = Object.fromEntries(
+    Object.entries(draft.routing.features).filter(([f]) => f !== feature),
+  );
+  const features = profileId === "" ? rest : { ...rest, [feature]: { id: profileId } };
+  return { ...draft, routing: { ...draft.routing, features } };
+}
+
+function nameOfId(draft: Draft, id: string | null): string | undefined {
+  return draft.profiles.find((p) => p.id === id)?.name;
+}
+
+/** The profile name a feature runs on in `draft`, or undefined when unresolved. */
+export function effectiveProfileName(draft: Draft, feature: string): string | undefined {
+  const route = draft.routing.features[feature];
+  if (route === undefined) return nameOfId(draft, draft.routing.defaultId);
+  return "id" in route ? nameOfId(draft, route.id) : route.missing;
+}
+
+export function storedProfile(view: ProfileView): ProfileView {
+  return Object.fromEntries(Object.entries(view).filter(([k]) => !VIEW_ONLY_KEYS.has(k)));
+}
+
 function sameJSON(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-/** Whether `draft` differs from what `base` loads as. */
-export function isDirty(base: LLMView, draft: Draft): boolean {
-  return !sameJSON(draft, draftFromView(base));
-}
-
 /**
- * The body that writes this section's edits onto `latest`: its profiles
- * (renamed and deleted by id), the default, the fallback and the output
- * language. `routing.features` is taken from `latest`, following the renames
- * and deletions; other profiles and routing keys in `latest` are kept.
+ * The PUT body for `draft`, loaded from `base`. A profile the user did not
+ * touch is written as `base` stored it; routing keys this screen does not edit
+ * are kept.
  */
-export function bodyOnto(latest: LLMView, base: LLMView, draft: Draft): LLMUpdateBody {
-  const doc = documentOf(latest);
-  const baseDraft = draftFromView(base);
-  const baseNameOf = new Map(baseDraft.profiles.map((p) => [p.id, p.name]));
-  const idOfBaseName = new Map(baseDraft.profiles.map((p) => [p.name, p.id]));
-  const draftById = new Map(draft.profiles.map((p) => [p.id, p]));
-  const draftNames = new Set(draft.profiles.map((p) => p.name));
-
-  const entryOf = (p: ProfileDraft): ProfileView => {
-    const before = baseDraft.profiles.find((b) => b.id === p.id);
-    const baseName = baseNameOf.get(p.id);
-    if (before && baseName !== undefined && sameJSON(before, p)) {
-      return doc.profiles[baseName] ?? storedProfile(base.profiles[baseName]);
-    }
-    return profileBody(p);
-  };
-
-  const placed = new Set<string>();
-  const profiles: [string, ProfileView][] = [];
-  for (const [name, stored] of Object.entries(doc.profiles)) {
-    const id = idOfBaseName.get(name);
-    if (id === undefined) {
-      if (!draftNames.has(name)) profiles.push([name, stored]);
-      continue;
-    }
-    const p = draftById.get(id);
-    if (!p) continue;
-    profiles.push([p.name, entryOf(p)]);
-    placed.add(id);
-  }
-  for (const p of draft.profiles) {
-    if (!placed.has(p.id)) profiles.push([p.name, entryOf(p)]);
-  }
-
-  const nameOf = (id: string | null): string | undefined =>
-    draft.profiles.find((p) => p.id === id)?.name;
-  const renamed = (name: string): string | null => {
-    const id = idOfBaseName.get(name);
-    if (id === undefined) return name;
-    return draftById.get(id)?.name ?? null;
-  };
+export function bodyOf(base: LLMView, draft: Draft): LLMUpdateBody {
+  const baseProfiles = new Map(draftFromView(base).profiles.map((p) => [p.id, p]));
+  const profiles = Object.fromEntries(
+    draft.profiles.map((p) => {
+      const before = baseProfiles.get(p.id);
+      const untouched = before !== undefined && sameJSON(before, p);
+      return [p.name, untouched ? storedProfile(base.profiles[before.name]) : profileBody(p)];
+    }),
+  );
   const features = Object.fromEntries(
-    Object.entries(latest.routing.features ?? {}).flatMap(([feature, name]) => {
-      const next = renamed(name);
-      return next === null ? [] : [[feature, next]];
+    Object.entries(draft.routing.features).flatMap(([feature, route]) => {
+      const name = "id" in route ? nameOfId(draft, route.id) : route.missing;
+      return name === undefined ? [] : [[feature, name]];
     }),
   );
   const rest = Object.fromEntries(
-    Object.entries(doc.routing).filter(([k]) => !ROUTING_FIELDS.has(k)),
+    Object.entries(base.routing).filter(([k]) => !ROUTING_FIELDS.has(k)),
   );
-  const defaultName = nameOf(draft.routing.defaultId);
-  const fallbackName = nameOf(draft.routing.fallbackId) ?? draft.routing.fallbackMissing;
+  const defaultName = nameOfId(draft, draft.routing.defaultId);
+  const fallbackName = nameOfId(draft, draft.routing.fallbackId) ?? draft.routing.fallbackMissing;
   const routing: RoutingView = {
     ...rest,
     ...(defaultName === undefined ? {} : { default: defaultName }),
     ...(fallbackName == null ? {} : { local_fallback: fallbackName }),
     ...(Object.keys(features).length > 0 ? { features } : {}),
   };
-  const outputLanguage =
-    draft.outputLanguage !== base.output_language ? draft.outputLanguage : latest.output_language;
-  return { profiles: Object.fromEntries(profiles), routing, output_language: outputLanguage };
+  return { profiles, routing, output_language: draft.outputLanguage };
 }
 
 /** Drives where some feature does not run because the only profile is off-host. */

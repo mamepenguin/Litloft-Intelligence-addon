@@ -446,30 +446,15 @@
       },
       "columns": {
         "feature": "Feature",
-        "mode": "When it runs",
-        "profile": "Profile"
+        "mode": "When it runs"
       },
       "modeLabel": "When {feature} runs",
-      "profileLabel": "Profile for {feature}",
       "bool": {
         "true": "On",
         "false": "Off"
       },
-      "profileDefault": "Default ({name})",
-      "profileOffhost": "{name} (off-host)",
-      "destinations": {
-        "sends": "Sends",
-        "falls_back": "Runs on {fallback}",
-        "skips": "Does not run",
-        "unknown": "Unknown"
-      },
-      "destinationsNote": "Features assigned an off-host profile show where each drive's work goes. That is decided by the drive setting \"Allow sending to cloud LLMs\"; drives without it run on the \"Use instead on drives without cloud\" profile.",
-      "savedRestart": "\"When it runs\" changed, so a restart is required after saving.",
-      "savedNow": "Saved. Profile choices are applied now.",
-      "driveSeparator": ", ",
       "reloadFailed": "Reloading failed, so the screen still shows the values from before saving.",
-      "routingSavedModesFailed": "Profile choices were saved. \"When it runs\" could not be saved: {detail}",
-      "profileMissing": "{name} (no such profile)"
+      "profilesNote": "Which model a feature runs on is chosen under LLM profiles › Routing."
     },
     "llm": {
       "title": "LLM profiles",
@@ -554,14 +539,31 @@
         "vision": "Vision: {model}"
       },
       "routing": {
-        "title": "Default routing",
+        "title": "Routing",
         "default": "Default profile",
-        "defaultHelp": "Used by features not assigned a profile under Feature toggles.",
+        "defaultHelp": "Used by features left at Default in the table below.",
         "fallback": "Use instead on drives without cloud",
         "fallbackNone": "None (do not run)",
         "fallbackHelp": "Only local profiles can be chosen.",
         "fallbackOffhost": "{name} (off-host, cannot be used)",
-        "fallbackMissing": "{name} (no such profile)"
+        "fallbackMissing": "{name} (no such profile)",
+        "columns": {
+          "feature": "Feature",
+          "profile": "Profile"
+        },
+        "profileLabel": "Profile for {feature}",
+        "profileDefault": "Default ({name})",
+        "profileOffhost": "{name} (off-host)",
+        "profileMissing": "{name} (no such profile)",
+        "destinations": {
+          "sends": "Sends",
+          "falls_back": "Runs on {fallback}",
+          "skips": "Does not run",
+          "unknown": "Unknown"
+        },
+        "driveSeparator": ", ",
+        "destinationsNote": "Features assigned an off-host profile show where each drive's work goes. That is decided by the drive setting \"Allow sending to cloud LLMs\". Whether a feature runs at all is set under Feature toggles.",
+        "featureOff": "Off (Feature toggles)"
       },
       "outputLanguage": {
         "title": "Output language",
@@ -576,7 +578,8 @@
       "yamlKey": {
         "title": "The API key is read from search-config.yml",
         "body": "It is in use now, but saved settings do not carry it over. Move the key to the LLM_API_KEY environment variable before saving."
-      }
+      },
+      "resetReloadFailed": "Reverted to the YAML settings, but reloading failed, so the screen still shows the values from before reverting."
     },
     "rag": {
       "title": "Ask (question answering) behaviour",

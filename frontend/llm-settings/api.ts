@@ -1,5 +1,6 @@
 export const LLM_ENDPOINT = "/api/addons/intelligence/admin/llm";
 export const EXPOSURE_ENDPOINT = "/api/addons/intelligence/admin/llm/exposure";
+export const FEATURES_ENDPOINT = "/api/addons/intelligence/admin/features";
 
 export interface ProfileView {
   provider?: string;
@@ -90,6 +91,16 @@ export function fetchLLM(): Promise<LLMView> {
 
 export function fetchExposure(): Promise<ExposureView> {
   return request<ExposureView>(EXPOSURE_ENDPOINT, { method: "GET" });
+}
+
+/** Features whose mode is off in `GET /admin/features` (`false` or `"false"`). */
+export async function fetchOffFeatures(): Promise<Set<string>> {
+  const modes = await request<Record<string, unknown>>(FEATURES_ENDPOINT, { method: "GET" });
+  return new Set(
+    Object.entries(modes)
+      .filter(([, mode]) => mode === false || mode === "false")
+      .map(([feature]) => feature),
+  );
 }
 
 export function saveLLM(body: LLMUpdateBody): Promise<SaveResult> {

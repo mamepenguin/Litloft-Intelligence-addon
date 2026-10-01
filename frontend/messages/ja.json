@@ -446,30 +446,15 @@
       },
       "columns": {
         "feature": "機能",
-        "mode": "動かすとき",
-        "profile": "使うプロファイル"
+        "mode": "動かすとき"
       },
       "modeLabel": "{feature}を動かすとき",
-      "profileLabel": "{feature}で使うプロファイル",
       "bool": {
         "true": "オン",
         "false": "オフ"
       },
-      "profileDefault": "既定（{name}）",
-      "profileOffhost": "{name}（外部送信）",
-      "destinations": {
-        "sends": "送信する",
-        "falls_back": "{fallback} で実行",
-        "skips": "実行しない",
-        "unknown": "確認できません"
-      },
-      "destinationsNote": "外部送信のプロファイルを選んだ機能には、ドライブごとの行き先を表示します。行き先はドライブ設定の「クラウドLLMへの送信を許可」で決まり、許可のないドライブでは「クラウド不可のドライブで代わりに使う」プロファイルで実行します。",
-      "savedRestart": "「動かすとき」を変えたので、保存後に再起動が必要です。",
-      "savedNow": "保存しました。使うプロファイルはすぐ反映されます。",
-      "driveSeparator": "、",
       "reloadFailed": "再読み込みに失敗したため、表示は保存前のままです。",
-      "routingSavedModesFailed": "プロファイルの割り当ては保存しました。「動かすとき」の保存に失敗しました: {detail}",
-      "profileMissing": "{name}（プロファイルがありません）"
+      "profilesNote": "どのモデルで動かすかは「LLM プロファイル」の「使い分け」で選びます。"
     },
     "llm": {
       "title": "LLM プロファイル",
@@ -554,14 +539,31 @@
         "vision": "Vision: {model}"
       },
       "routing": {
-        "title": "既定の使い分け",
+        "title": "使い分け",
         "default": "既定のプロファイル",
-        "defaultHelp": "「機能スイッチ」で個別に選んでいない機能が使います。",
+        "defaultHelp": "下の表で「既定」のままの機能が使います。",
         "fallback": "クラウド不可のドライブで代わりに使う",
         "fallbackNone": "使わない（実行しない）",
         "fallbackHelp": "ローカルのプロファイルだけを選べます。",
         "fallbackOffhost": "{name}（外部送信のため使えません）",
-        "fallbackMissing": "{name}（プロファイルがありません）"
+        "fallbackMissing": "{name}（プロファイルがありません）",
+        "columns": {
+          "feature": "機能",
+          "profile": "使うプロファイル"
+        },
+        "profileLabel": "{feature}で使うプロファイル",
+        "profileDefault": "既定（{name}）",
+        "profileOffhost": "{name}（外部送信）",
+        "profileMissing": "{name}（プロファイルがありません）",
+        "destinations": {
+          "sends": "送信する",
+          "falls_back": "{fallback} で実行",
+          "skips": "実行しない",
+          "unknown": "確認できません"
+        },
+        "driveSeparator": "、",
+        "destinationsNote": "外部送信のプロファイルを選んだ機能には、ドライブごとの行き先を表示します。行き先はドライブ設定の「クラウドLLMへの送信を許可」で決まります。機能を動かすかどうかは「機能スイッチ」で設定します。",
+        "featureOff": "オフ（機能スイッチ）"
       },
       "outputLanguage": {
         "title": "出力の言語",
@@ -576,7 +578,8 @@
       "yamlKey": {
         "title": "API キーは search-config.yml から読み込まれています",
         "body": "いまはこのキーで動いていますが、保存した設定には引き継がれません。保存する前に、キーを環境変数 LLM_API_KEY に移してください。"
-      }
+      },
+      "resetReloadFailed": "YAML の設定に戻しました。再読み込みに失敗したため、表示は戻す前のままです。"
     },
     "rag": {
       "title": "Ask（質問応答）の挙動",
