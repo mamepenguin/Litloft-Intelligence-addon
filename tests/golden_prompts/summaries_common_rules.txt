@@ -25,6 +25,7 @@ This content originates from a transcript (speech recognition or text extraction
 Numeric information in the source (quantities, times, temperatures, storage periods, prices, distances, years, etc.) must be preserved as written in the source.
 
 - Do not change, correct, or round numbers
+- Model names, generations and version numbers are numbers too: keep them as written, even where you expect a different one (if the source says "M6", do not write "M5")
 - Do not convert units or standardize notation (if the source says "2/3 tsp", keep "2/3 tsp")
 - However, adding an uncertainty note without changing the number itself is permitted
   - When the content is from a transcript and a number appears likely to be a speech recognition error (e.g. a storage period of "45 days" for leafy vegetables, which greatly exceeds common knowledge), you may add a note in this form:
