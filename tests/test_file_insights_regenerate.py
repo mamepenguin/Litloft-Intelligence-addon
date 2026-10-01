@@ -467,3 +467,31 @@ async def test_short_summary_is_still_owed_after_a_detailed_marker(
 
 async def _true():
     return True
+
+
+@pytest.mark.asyncio
+async def test_the_workers_resolve_with_the_drive_of_the_indexed_row(
+    search_db, monkeypatch, make_settings, use_llm
+):
+    """The workers read the drive from the real indexed-file lookup."""
+    from unittest.mock import AsyncMock
+
+    from app.config import FeaturesConfig
+    from app.workers import retrieval_keywords as rk
+    from app.workers import summaries as sm
+
+    settings = make_settings(
+        features=FeaturesConfig(summaries="manual", retrieval_keywords="manual")
+    )
+    monkeypatch.setattr(sm, "settings", settings)
+    monkeypatch.setattr(rk, "settings", settings)
+    monkeypatch.setattr(sm, "_build_context", lambda f, t: "word " * 400)
+    monkeypatch.setattr(rk, "_build_context", lambda f, t: "word " * 400)
+    monkeypatch.setattr(rk, "_has_retrieval_keywords", lambda fid: False)
+    monkeypatch.setattr(sm, "_save_summary", AsyncMock())
+    asked = use_llm(MagicMock(enabled=False))
+
+    await sm.SummariesWorker()._process_file("abc123")
+    await rk.RetrievalKeywordsWorker()._process_file("abc123")
+
+    assert list(asked) == [("drive1", "summaries"), ("drive1", "retrieval_keywords")]

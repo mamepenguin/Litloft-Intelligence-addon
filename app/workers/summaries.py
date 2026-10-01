@@ -415,6 +415,7 @@ def _get_indexed_file(file_id: str) -> dict | None:
             return None
         return {
             "file_id": f.file_id,
+            "drive": f.drive,
             "filename": f.filename,
             "file_type": f.file_type,
             "mime_type": f.mime_type,
