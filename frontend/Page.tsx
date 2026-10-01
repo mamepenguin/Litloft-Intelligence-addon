@@ -52,6 +52,7 @@ import { addSourceCapture } from "@/lib/sourceCapture";
 import {
   askQuestionStream,
   getIntelligenceStatus,
+  isProfileUnavailable,
   type AskStreamEvent,
   type Citation,
   type DecomposedQueryPayload,
@@ -64,6 +65,7 @@ import {
   parseSegmentLocation,
   queryToFilename,
 } from "./askNoteFormat";
+import { choiceOffered, useLLMChoices } from "./llmChoice";
 
 // Minimum allowed query length after trimming. Matches the backend
 // gate so we never send a request the server will reject.
@@ -374,6 +376,7 @@ function SourceCard({ source }: { source: Source }) {
 
 function IntelligenceAskPageInner() {
   const t = useTranslations("askSearch");
+  const tc = useTranslations("llmChoice");
   const searchParams = useSearchParams();
   const seedQuery = searchParams?.get("q") ?? "";
   // The page lives at /drive/{drive}/addons/intelligence so this is
@@ -392,6 +395,29 @@ function IntelligenceAskPageInner() {
   // status check re-renders the component. Without this an upstream
   // router update could accidentally re-trigger the request.
   const autoFiredRef = useRef(false);
+
+  // `null` is Auto. Component state only: a costly model kept across
+  // visits would stay selected without anyone noticing.
+  const [chosenProfile, setChosenProfile] = useState<string | null>(null);
+  useEffect(() => {
+    setChosenProfile(null);
+  }, [drive]);
+  const { choices, refetch: refetchChoices } = useLLMChoices(
+    "rag",
+    drive ?? "",
+    ragAvailable === true,
+  );
+  const profileOffered = choiceOffered(choices);
+  const askProfile: string | undefined = useMemo(() => {
+    if (!choices || !profileOffered) return undefined;
+    if (
+      chosenProfile !== null
+      && choices.choices.some((c) => c.name === chosenProfile)
+    ) {
+      return chosenProfile;
+    }
+    return choices.auto === null ? choices.choices[0]?.name : undefined;
+  }, [choices, profileOffered, chosenProfile]);
 
   // --- Status probe: gate the Ask UI when RAG is off or the LLM is
   //     not configured. ``getIntelligenceStatus`` returns ``null`` when
@@ -497,6 +523,7 @@ function IntelligenceAskPageInner() {
       try {
         const stream = askQuestionStream(trimmed, drive, {
           signal: controller.signal,
+          profile: askProfile,
         });
 
         // Running state accumulators. We keep them in locals so
@@ -766,6 +793,15 @@ function IntelligenceAskPageInner() {
       } catch (err) {
         if (controller.signal.aborted) return;
         if (err instanceof DOMException && err.name === "AbortError") return;
+        if (isProfileUnavailable(err)) {
+          refetchChoices();
+          setState({
+            kind: "error",
+            message: tc("profileUnavailable"),
+            retryable: true,
+          });
+          return;
+        }
         const message =
           err instanceof Error && err.message
             ? err.message
@@ -781,7 +817,7 @@ function IntelligenceAskPageInner() {
         }
       }
     },
-    [t, drive],
+    [t, tc, drive, askProfile, refetchChoices],
   );
 
   // --- Auto-fire on mount when the URL carries a seed query.
@@ -904,30 +940,53 @@ function IntelligenceAskPageInner() {
             aria-label="Question input"
           />
           <div className="flex items-center justify-between gap-2">
-            <p className="text-xs text-text-muted">
+            <p className="min-w-0 text-xs text-text-muted">
               {state.kind === "streaming"
                 ? t("loading")
                 : t("privacyHint")}
             </p>
-            {state.kind === "streaming" ? (
-              <button
-                type="button"
-                onClick={handleAbort}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-bg-border bg-bg-card px-3 py-1.5 text-xs font-medium text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
-              >
-                <Square size={12} /> {t("close")}
-              </button>
-            ) : (
-              <Button
-                type="submit"
-                variant="primary"
-                size="sm"
-                data-testid="ask-submit"
-                disabled={!canSubmit}
-              >
-                <Send size={12} /> {t("submit")}
-              </Button>
-            )}
+            <div className="flex flex-shrink-0 items-center gap-2">
+              {profileOffered && choices && (
+                <select
+                  value={askProfile ?? ""}
+                  onChange={(e) => setChosenProfile(e.target.value || null)}
+                  disabled={state.kind === "streaming"}
+                  aria-label={tc("model")}
+                  data-testid="ask-profile"
+                  className="max-w-36 truncate rounded-lg border border-bg-border bg-bg-card px-2 py-1.5 text-xs text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring disabled:opacity-50"
+                >
+                  {choices.auto !== null && (
+                    <option value="">{tc("auto")}</option>
+                  )}
+                  {choices.choices.map((c) => (
+                    <option key={c.name} value={c.name}>
+                      {c.offhost
+                        ? `${c.name} — ${c.model} (${tc("offhost")})`
+                        : `${c.name} — ${c.model}`}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {state.kind === "streaming" ? (
+                <button
+                  type="button"
+                  onClick={handleAbort}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-bg-border bg-bg-card px-3 py-1.5 text-xs font-medium text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary"
+                >
+                  <Square size={12} /> {t("close")}
+                </button>
+              ) : (
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  data-testid="ask-submit"
+                  disabled={!canSubmit}
+                >
+                  <Send size={12} /> {t("submit")}
+                </Button>
+              )}
+            </div>
           </div>
         </form>
 

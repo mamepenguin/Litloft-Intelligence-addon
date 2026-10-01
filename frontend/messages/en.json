@@ -669,5 +669,12 @@
       "providerFailed": "Transcription failed: {error}",
       "openaiFileTooLarge": "OpenAI Whisper API cannot process files over 25MB. For long audio, use Deepgram / ElevenLabs Scribe / Groq / self-hosted Whisper."
     }
+  },
+  "llmChoice": {
+    "regenerateWith": "Regenerate with…",
+    "offhost": "External server",
+    "profileUnavailable": "This model can't be used right now. The choices have been updated.",
+    "model": "Model",
+    "auto": "Auto"
   }
 }
