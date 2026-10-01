@@ -939,8 +939,8 @@ function IntelligenceAskPageInner() {
             className="w-full resize-y rounded-lg border border-bg-border bg-bg-card p-3 text-sm text-text-primary placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
             aria-label="Question input"
           />
-          <div className="flex items-center justify-between gap-2">
-            <p className="min-w-0 text-xs text-text-muted">
+          <div className="flex flex-wrap items-center justify-end gap-2 sm:flex-nowrap sm:justify-between">
+            <p className="min-w-0 basis-full text-xs text-text-muted sm:basis-auto">
               {state.kind === "streaming"
                 ? t("loading")
                 : t("privacyHint")}
