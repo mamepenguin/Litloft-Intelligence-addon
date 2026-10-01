@@ -795,6 +795,18 @@ describe("AdminLLMSettingsSection", () => {
     ]);
   });
 
+  it("lists destinations for an off-host feature that runs on the default profile", async () => {
+    await renderWith({
+      [`GET ${ENDPOINT}`]: {
+        body: { ...ROUTED, routing: { default: "claude", local_fallback: "local", features: {} } },
+      },
+      [`GET ${EXPOSURE}`]: RAG_EXPOSURE,
+    });
+    const destinations = screen.getAllByTestId("feature-destinations");
+    expect(destinations).toHaveLength(1);
+    expect(destinations[0].children[0].textContent).toBe("Sends media, misc");
+  });
+
   it("destinations disappear once the row's choice differs from the saved routing", async () => {
     await renderWith({ [`GET ${ENDPOINT}`]: { body: ROUTED }, [`GET ${EXPOSURE}`]: RAG_EXPOSURE });
     expect(screen.getAllByTestId("feature-destinations")).toHaveLength(1);
