@@ -37,11 +37,14 @@ LLM_FEATURES = (
     "vision_describe",
     "video_visual_index",
 )
+# Features a viewer may run on a profile of their choice instead of routing's.
+REQUESTABLE_FEATURES = frozenset({"summaries", "detailed_summaries", "rag"})
 CLOUD_POLICY_FEATURE = "llm_cloud"
 LEGACY_PROFILE = "default"
 LEGACY_API_KEY_ENV = "LLM_API_KEY"
 
-_PROFILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+PROFILE_NAME_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,31}$"
+_PROFILE_NAME_RE = re.compile(PROFILE_NAME_PATTERN)
 # A profile may only read keys the operator named for it: any other variable
 # (e.g. CORE_INTERNAL_SECRET) would be sent as a Bearer token to base_url.
 _API_KEY_ENV_RE = re.compile(r"^LLM_API_KEY(_[A-Z0-9]+)*$")
@@ -322,17 +325,96 @@ def _serve(active: _Active, profile: LLMProfile, feature: str) -> Resolved | Ski
     return Resolved(profile=profile, client=client)
 
 
-async def resolve(drive: str, feature: str) -> Resolved | Skip | Defer:
-    active = _current()
+class _Verdict:
+    """The drive's ``llm_cloud`` answer, asked at most once."""
+
+    def __init__(self, drive: str) -> None:
+        self._drive = drive
+        self._value: str | None = None
+
+    async def get(self) -> str:
+        if self._value is None:
+            self._value = await policy_client.lookup_feature(
+                self._drive, CLOUD_POLICY_FEATURE
+            )
+        return self._value
+
+
+async def _resolve(
+    active: _Active,
+    drive: str,
+    feature: str,
+    requested: str | None,
+    verdict: _Verdict,
+) -> Resolved | Skip | Defer:
+    if requested is not None:
+        return await _resolve_requested(active, drive, feature, requested, verdict)
     profile = _assigned(active.routing, feature)
     if isinstance(profile, Skip):
         return profile
     if profile.offhost:
-        verdict = await policy_client.lookup_feature(drive, CLOUD_POLICY_FEATURE)
-        profile = _after_policy(active.routing, profile, verdict, drive)
-        if not isinstance(profile, LLMProfile):
-            return profile
+        picked = _after_policy(active.routing, profile, await verdict.get(), drive)
+        if not isinstance(picked, LLMProfile):
+            return picked
+        profile = picked
     return _serve(active, profile, feature)
+
+
+async def _resolve_requested(
+    active: _Active,
+    drive: str,
+    feature: str,
+    requested: str,
+    verdict: _Verdict,
+) -> Resolved | Skip | Defer:
+    """A chosen profile is served as it is or not at all: never ``local_fallback``."""
+    if feature not in REQUESTABLE_FEATURES:
+        raise ValueError(f"{feature!r} does not take a requested profile")
+    profile = active.routing.profiles.get(requested)
+    if profile is None:
+        return Skip(f"no profile named {requested!r}")
+    if profile.offhost:
+        answer = await verdict.get()
+        if answer == "unknown":
+            return Defer(f"{CLOUD_POLICY_FEATURE} policy for {drive!r} unavailable")
+        if answer != "allowed":
+            return Skip(f"{CLOUD_POLICY_FEATURE} is off for {drive!r}")
+    return _serve(active, profile, feature)
+
+
+async def resolve(
+    drive: str, feature: str, requested: str | None = None
+) -> Resolved | Skip | Defer:
+    return await _resolve(_current(), drive, feature, requested, _Verdict(drive))
+
+
+@dataclass(frozen=True)
+class Choices:
+    auto: LLMProfile | None
+    profiles: tuple[LLMProfile, ...]
+
+
+async def choices(drive: str, feature: str) -> Choices | Defer:
+    """What routing picks for ``feature`` on ``drive``, and every profile a
+    request naming it would be served by, in configured order.
+    """
+    if feature not in REQUESTABLE_FEATURES:
+        raise ValueError(f"{feature!r} does not take a requested profile")
+    active = _current()
+    verdict = _Verdict(drive)
+    # An off-host ``auto`` that defers is itself listed below and defers there.
+    auto = await _resolve(active, drive, feature, None, verdict)
+    served: list[LLMProfile] = []
+    for name in active.routing.profiles:
+        result = await _resolve(active, drive, feature, name, verdict)
+        if isinstance(result, Defer):
+            return result
+        if isinstance(result, Resolved):
+            served.append(result.profile)
+    return Choices(
+        auto=auto.profile if isinstance(auto, Resolved) else None,
+        profiles=tuple(served),
+    )
 
 
 def describe_route(feature: str, verdict: str, drive: str) -> str:

@@ -22,6 +22,7 @@ from app.routers import (
     admin,
     chapter_suggestions,
     files,
+    llm_choices,
     pickup,
     queue,
     rag,
@@ -427,6 +428,7 @@ app.include_router(pickup.router)
 app.include_router(summaries.router)
 app.include_router(chapter_suggestions.router)
 app.include_router(rag.router)
+app.include_router(llm_choices.router)
 app.include_router(refine.router)
 app.include_router(vision.router)
 app.include_router(video_visual.router)

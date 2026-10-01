@@ -293,6 +293,106 @@ async def test_resolve_never_sends_offhost_without_an_allowed_answer(
     assert llm_routing.describe_route(feature, verdict or "allowed", "d") == described
 
 
+def _requestable_section() -> dict[str, Any]:
+    section = _section(features={"summaries": "local", "detailed_summaries": "local", "rag": "local"})
+    section["profiles"]["off"] = {**LOCAL, "provider": "disabled"}
+    section["profiles"]["cloud-novision"] = {**CLOUD, "vision_model": ""}
+    return section
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("feature", ["summaries", "detailed_summaries", "rag"])
+@pytest.mark.parametrize(
+    ("requested", "verdict", "expected", "asks_policy"),
+    [
+        ("local", "denied", "local", False),
+        ("cloud", "allowed", "cloud", True),
+        ("cloud-novision", "allowed", "cloud-novision", True),
+        ("cloud", "denied", Skip, True),
+        ("cloud", "unknown", Defer, True),
+        ("off", "allowed", Skip, False),
+        ("nope", "allowed", Skip, False),
+    ],
+)
+async def test_a_requested_profile_is_served_as_is_or_not_at_all(
+    policy, feature, requested, verdict, expected, asks_policy
+) -> None:
+    _install(_requestable_section())
+    policy.verdicts["d"] = verdict
+
+    result = await llm_routing.resolve("d", feature, requested)
+
+    if isinstance(expected, str):
+        assert isinstance(result, Resolved)
+        assert result.profile.name == expected
+    else:
+        assert type(result) is expected
+    assert policy.asked == ([("d", "llm_cloud")] if asks_policy else [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "feature", sorted(set(llm_routing.LLM_FEATURES) - {"summaries", "detailed_summaries", "rag"})
+)
+async def test_only_the_three_choosable_features_take_a_requested_profile(
+    policy, feature
+) -> None:
+    _install(_requestable_section())
+
+    with pytest.raises(ValueError):
+        await llm_routing.resolve("d", feature, "local")
+
+
+# ``routing`` assigns every choosable feature to ``auto``; the drive answers ``verdict``.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("feature", ["summaries", "detailed_summaries", "rag"])
+@pytest.mark.parametrize(
+    ("auto", "fallback", "verdict", "expected_auto", "expected_names"),
+    [
+        ("local", "local", "allowed", "local", ["local", "cloud", "cloud-novision"]),
+        ("cloud", "local", "allowed", "cloud", ["local", "cloud", "cloud-novision"]),
+        ("cloud", "local", "denied", "local", ["local"]),
+        ("cloud", None, "denied", None, ["local"]),
+        ("off", None, "denied", None, ["local"]),
+    ],
+)
+async def test_choices_are_the_profiles_a_request_would_be_served_by(
+    policy, feature, auto, fallback, verdict, expected_auto, expected_names
+) -> None:
+    section = _requestable_section()
+    section["routing"]["features"] = {feature: auto}
+    if fallback is None:
+        section["routing"].pop("local_fallback")
+    _install(section)
+    policy.verdicts["d"] = verdict
+
+    result = await llm_routing.choices("d", feature)
+
+    assert not isinstance(result, Defer)
+    assert (result.auto.name if result.auto else None) == expected_auto
+    assert [p.name for p in result.profiles] == expected_names
+    assert len(policy.asked) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auto", ["local", "cloud"])
+async def test_choices_defer_when_the_policy_cannot_be_read(policy, auto) -> None:
+    section = _requestable_section()
+    section["routing"]["features"] = {"rag": auto}
+    _install(section)
+    policy.verdicts["d"] = "unknown"
+
+    assert isinstance(await llm_routing.choices("d", "rag"), Defer)
+
+
+@pytest.mark.asyncio
+async def test_choices_refuse_a_feature_that_takes_no_choice(policy) -> None:
+    _install(_requestable_section())
+
+    with pytest.raises(ValueError):
+        await llm_routing.choices("d", "auto_tags")
+
+
 @pytest.mark.asyncio
 async def test_resolve_does_not_ask_the_policy_for_an_onhost_profile(policy) -> None:
     _install(_section(features={"auto_tags": "local"}))
@@ -608,3 +708,118 @@ def test_saved_profiles_replace_the_yamls_wholesale(monkeypatch, tmp_path) -> No
 
     assert section["profiles"] == {"only": LOCAL}
     assert section["routing"] == {"default": "only"}
+
+
+# ---------------------------------------------------------------------------
+# GET /llm/choices/*
+# ---------------------------------------------------------------------------
+
+
+def _choices_client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.routers import llm_choices
+
+    app = FastAPI()
+    app.include_router(llm_choices.router)
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("feature", ["summaries", "detailed_summaries", "rag"])
+@pytest.mark.parametrize(
+    ("verdict", "expected"),
+    [
+        (
+            "allowed",
+            {
+                "auto": "cloud",
+                "choices": [
+                    {"name": "local", "model": "qwen3:14b", "offhost": False},
+                    {"name": "cloud", "model": "gpt-mini", "offhost": True},
+                ],
+            },
+        ),
+        (
+            "denied",
+            {
+                "auto": None,
+                "choices": [{"name": "local", "model": "qwen3:14b", "offhost": False}],
+            },
+        ),
+    ],
+)
+def test_choices_endpoint_lists_names_and_models_only(
+    policy, feature, verdict, expected
+) -> None:
+    section = _section(features={feature: "cloud"})
+    section["routing"].pop("local_fallback")
+    section["profiles"]["off"] = {**LOCAL, "provider": "disabled"}
+    _install(section)
+    policy.verdicts["d"] = verdict
+
+    response = _choices_client().get(
+        f"/llm/choices/{feature}", headers={"X-Lit-Drive": "d"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == expected
+
+
+@pytest.mark.parametrize("feature", ["summaries", "detailed_summaries", "rag"])
+def test_choices_endpoint_is_unavailable_while_the_policy_is_unknown(
+    policy, feature
+) -> None:
+    _install(_section(features={feature: "local"}))
+    policy.verdicts["d"] = "unknown"
+
+    response = _choices_client().get(
+        f"/llm/choices/{feature}", headers={"X-Lit-Drive": "d"}
+    )
+
+    assert response.status_code == 503
+
+
+@pytest.mark.parametrize("feature", ["summaries", "detailed_summaries", "rag"])
+def test_choices_endpoint_needs_a_drive(policy, feature) -> None:
+    _install(_section())
+
+    response = _choices_client().get(f"/llm/choices/{feature}")
+
+    assert response.status_code == 400
+    assert policy.asked == []
+
+
+def test_choices_routes_are_drive_scoped_and_gated_by_their_feature() -> None:
+    import json
+    from pathlib import Path
+
+    manifest = json.loads((Path(__file__).parent.parent / "manifest.json").read_text())
+    routes = {
+        r["path"]: r for r in manifest["proxy"]["routes"] if r["path"].startswith("/llm/")
+    }
+
+    assert routes == {
+        f"/llm/choices/{feature}": {
+            "path": f"/llm/choices/{feature}",
+            "methods": ["GET"],
+            "pre_check": {"type": "addon_feature", "feature": feature},
+            "response_filter": None,
+        }
+        for feature in ("summaries", "detailed_summaries", "rag")
+    }
+
+
+@pytest.mark.parametrize("feature", ["summaries", "detailed_summaries", "rag"])
+def test_the_app_serves_the_choices_routes(policy, feature) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    _install(_section(features={feature: "local"}))
+    policy.verdicts["d"] = "allowed"
+
+    response = TestClient(app).get(f"/llm/choices/{feature}", headers={"X-Lit-Drive": "d"})
+
+    assert response.status_code == 200
+    assert response.json()["auto"] == "local"

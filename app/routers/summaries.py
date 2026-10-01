@@ -3,7 +3,8 @@
 Provides CRUD-like endpoints for LLM-generated file summaries:
 
 - GET /files/{file_id}/summary             — fetch current summary
-- POST /files/{file_id}/summary/regenerate — delete + re-enqueue
+- POST /files/{file_id}/summary/regenerate — delete + re-enqueue (or, with a
+  chosen ``profile``, generate in BackgroundTasks)
 - POST /files/{file_id}/summary/edit       — user overwrite (keeps AI snapshot)
 - POST /files/{file_id}/summary/revert     — restore AI snapshot
 - POST /batch/summaries                    — queue a batch of files
@@ -51,6 +52,7 @@ from app.schemas import (
     DetailedSummaryStartResponse,
     MessageResponse,
     SummaryEditRequest,
+    SummaryProfileRequest,
     SummaryResponse,
 )
 from app.workers.summaries import (
@@ -64,6 +66,7 @@ from app.workers.summaries import (
     classify_detailed_missing_reason,
     classify_missing_reason,
     generate_detailed_summary,
+    generate_summary,
 )
 
 
@@ -149,7 +152,9 @@ async def _reembed_metadata_after_summary_change(file_id: str) -> None:
 router = APIRouter(tags=["summaries"])
 
 
-async def _require_llm_enabled(drive: str) -> Resolved:
+async def _require_llm_enabled(
+    drive: str, requested: str | None = None
+) -> Resolved:
     """Raise 400 unless summaries are on and an LLM serves this drive.
 
     The worker resolves again per job; this rejects a request that could
@@ -159,7 +164,7 @@ async def _require_llm_enabled(drive: str) -> Resolved:
         raise HTTPException(
             status_code=400, detail="Summaries feature is disabled"
         )
-    return await require_llm(drive, "summaries")
+    return await require_llm(drive, "summaries", requested)
 
 
 def _require_detailed_feature_enabled() -> None:
@@ -176,14 +181,16 @@ def _require_detailed_feature_enabled() -> None:
         )
 
 
-async def _require_detailed_enabled(drive: str) -> Resolved:
+async def _require_detailed_enabled(
+    drive: str, requested: str | None = None
+) -> Resolved:
     """Raise 400 unless detailed summaries are on and an LLM serves this drive.
 
     Independent of ``features.summaries`` so operators can enable the
     long-form variant without the short/long pair (or vice versa).
     """
     _require_detailed_feature_enabled()
-    return await require_llm(drive, "detailed_summaries")
+    return await require_llm(drive, "detailed_summaries", requested)
 
 
 @router.get("/files/{file_id}/summary", response_model=SummaryResponse)
@@ -250,6 +257,8 @@ async def get_summary(
 async def regenerate_summary(
     file_id: str,
     drive: str = Depends(require_drive),
+    body: SummaryProfileRequest | None = None,
+    background_tasks: BackgroundTasks = None,
 ) -> MessageResponse:
     """Delete the existing summary and re-queue generation.
 
@@ -258,7 +267,8 @@ async def regenerate_summary(
     This avoids a 40-second frontend polling timeout when the request
     would have been silently skipped by the worker anyway.
     """
-    await _require_llm_enabled(drive)
+    requested = body.profile if body is not None else None
+    resolved = await _require_llm_enabled(drive, requested)
     _require_file_in_drive(file_id, drive)
 
     # Pre-flight: surface skip reasons as 400 so the frontend can show
@@ -281,9 +291,16 @@ async def regenerate_summary(
     # stale text.
     await _reembed_metadata_after_summary_change(file_id)
 
-    await summaries_worker.enqueue(file_id)
+    if requested is None:
+        await summaries_worker.enqueue(file_id)
+        return MessageResponse(
+            status="accepted", message="Regeneration queued"
+        )
+    # A queue item for the same file ahead of this one would fill the
+    # summary through routing and make the chosen one skip.
+    background_tasks.add_task(generate_summary, file_id, resolved)
     return MessageResponse(
-        status="accepted", message="Regeneration queued"
+        status="accepted", message="Regeneration started"
     )
 
 
@@ -587,6 +604,7 @@ async def start_detailed_summary(
     file_id: str,
     background_tasks: BackgroundTasks,
     drive: str = Depends(require_drive),
+    body: SummaryProfileRequest | None = None,
 ) -> DetailedSummaryStartResponse:
     """Kick off detailed-summary generation in the background.
 
@@ -600,7 +618,9 @@ async def start_detailed_summary(
     before re-generation — this mirrors the short/long regenerate
     contract (delete + re-enqueue) and avoids accidental overwrite.
     """
-    resolved = await _require_detailed_enabled(drive)
+    resolved = await _require_detailed_enabled(
+        drive, body.profile if body is not None else None
+    )
     _require_file_in_drive(file_id, drive)
 
     reason = classify_detailed_missing_reason(file_id)
@@ -1054,7 +1074,9 @@ async def regenerate_detailed_summary(
     * 400 propagates the same pre-flight checks as ``start_detailed_summary``
       (unsupported type / insufficient content / missing file).
     """
-    resolved = await _require_detailed_enabled(drive)
+    resolved = await _require_detailed_enabled(
+        drive, body.profile if body is not None else None
+    )
     _require_file_in_drive(file_id, drive)
 
     force = bool(body.force) if body is not None else False
