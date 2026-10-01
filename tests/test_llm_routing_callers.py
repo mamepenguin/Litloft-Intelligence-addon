@@ -492,6 +492,7 @@ async def test_summary_regenerate_with_a_choice_runs_it_beside_the_queue(
 
     assert asked.requested == ["big"]
     assert [sql for sql, _ in executed] == ["DELETE FROM file_summaries WHERE file_id = :fid"]
+    router_mod._reembed_metadata_after_summary_change.assert_awaited_once_with("f1")
     worker.enqueue.assert_not_called()
     [task] = bg.tasks
     assert task.func is generate_summary
