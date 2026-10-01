@@ -742,6 +742,9 @@ function DetailedSummaryBody({
 
     const handler = (e: KeyboardEvent) => {
       if (isTextInput(e.target)) return;
+      // An open menu owns its keys; this listener is on `window`, which the
+      // shortcut stack cannot shadow.
+      if (e.target instanceof Element && e.target.closest('[role="menu"]')) return;
       if (!host.contains(document.activeElement) && !host.contains(e.target as Node)) {
         // Allow global shortcuts when the body itself has focus too.
         if (e.key !== "v") return;

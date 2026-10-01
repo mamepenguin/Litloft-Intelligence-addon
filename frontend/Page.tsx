@@ -65,7 +65,7 @@ import {
   parseSegmentLocation,
   queryToFilename,
 } from "./askNoteFormat";
-import { choiceOffered, useLLMChoices } from "./llmChoice";
+import { choiceLabel, choiceOffered, useLLMChoices } from "./llmChoice";
 
 // Minimum allowed query length after trimming. Matches the backend
 // gate so we never send a request the server will reject.
@@ -960,9 +960,7 @@ function IntelligenceAskPageInner() {
                   )}
                   {choices.choices.map((c) => (
                     <option key={c.name} value={c.name}>
-                      {c.offhost
-                        ? `${c.name} — ${c.model} (${tc("offhost")})`
-                        : `${c.name} — ${c.model}`}
+                      {choiceLabel(c, tc("offhost"))}
                     </option>
                   ))}
                 </select>

@@ -1,19 +1,16 @@
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChevronDown } from "lucide-react";
 
 import { DismissScrim } from "@/components/DismissScrim";
 import { useMenuSurface } from "@/components/ToolbarMenu";
+import { useShortcuts } from "@/hooks/useShortcuts";
+import { OVERLAY_PRIORITY } from "@/lib/shortcuts";
 
 import type { LLMChoice } from "./api";
+import { choiceLabel } from "./llmChoice";
 
 interface RegenerateWithMenuProps {
   choices: LLMChoice[];
@@ -58,32 +55,59 @@ export function RegenerateWithMenu({
     if (open) items()[0]?.focus();
   }, [open, items]);
 
-  const handleKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (!open) return;
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      close();
-      return;
-    }
+  const moveTo = (pick: (at: number, count: number) => number) => {
     const list = items();
     if (list.length === 0) return;
     const at = list.indexOf(document.activeElement as HTMLButtonElement);
-    let next: number | null = null;
-    if (e.key === "ArrowDown") next = at < 0 ? 0 : (at + 1) % list.length;
-    else if (e.key === "ArrowUp")
-      next = at < 0 ? list.length - 1 : (at - 1 + list.length) % list.length;
-    else if (e.key === "Home") next = 0;
-    else if (e.key === "End") next = list.length - 1;
-    if (next === null) return;
-    e.preventDefault();
-    list[next].focus();
+    list[pick(at, list.length)].focus();
   };
+
+  // On the shortcut stack rather than in `onKeyDown`: React and
+  // `ShortcutsProvider` both listen on `document`, so `stopPropagation`
+  // cannot keep these keys from the page's own bindings (video seek on the
+  // arrows, collapsing citations on Escape). The open menu answers first.
+  useShortcuts(
+    "intelligence-regenerate-with",
+    "Menu",
+    [
+      { key: "escape", label: "Close", editingOnly: false, hidden: true, handler: close },
+      {
+        key: "arrowdown",
+        label: "Next",
+        editingOnly: false,
+        hidden: true,
+        handler: () => moveTo((at, n) => (at < 0 ? 0 : (at + 1) % n)),
+      },
+      {
+        key: "arrowup",
+        label: "Previous",
+        editingOnly: false,
+        hidden: true,
+        handler: () => moveTo((at, n) => (at < 0 ? n - 1 : (at - 1 + n) % n)),
+      },
+      {
+        key: "home",
+        label: "First",
+        editingOnly: false,
+        hidden: true,
+        handler: () => moveTo(() => 0),
+      },
+      {
+        key: "end",
+        label: "Last",
+        editingOnly: false,
+        hidden: true,
+        handler: () => moveTo((_, n) => n - 1),
+      },
+    ],
+    open,
+    OVERLAY_PRIORITY,
+  );
 
   return (
     <div
       ref={surface.wrapperRef}
       className="relative flex items-center"
-      onKeyDown={handleKeyDown}
     >
       <button
         ref={triggerRef}
@@ -113,6 +137,7 @@ export function RegenerateWithMenu({
                   type="button"
                   role="menuitem"
                   disabled={disabled}
+                  aria-label={choiceLabel(choice, t("offhost"))}
                   onClick={() => {
                     close();
                     onChoose(choice.name);

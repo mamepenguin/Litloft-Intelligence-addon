@@ -21,6 +21,14 @@ export function choiceOffered(choices: LLMChoicesResponse | null): boolean {
   );
 }
 
+export function choiceLabel(
+  choice: { name: string; model: string; offhost: boolean },
+  offhostText: string,
+): string {
+  const base = `${choice.name} — ${choice.model}`;
+  return choice.offhost ? `${base} (${offhostText})` : base;
+}
+
 /**
  * The profiles this drive may use for `feature`, fetched while `enabled`.
  * `null` until loaded, after a failed request, and while disabled.
