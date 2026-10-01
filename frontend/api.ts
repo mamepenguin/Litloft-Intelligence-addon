@@ -15,6 +15,80 @@ function driveHeaders(drive: string): HeadersInit {
   return { "X-Lit-Drive": encodeURIComponent(drive) };
 }
 
+/**
+ * A non-2xx response whose `detail` the caller needs, which core's
+ * `fetchJSON` discards. `message` keeps `fetchJSON`'s wording so callers
+ * that only log it read the same.
+ */
+export class LLMRequestError extends Error {
+  readonly status: number;
+  readonly detail: unknown;
+
+  constructor(message: string, status: number, detail: unknown) {
+    super(message);
+    this.name = "LLMRequestError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+/** The 400 a request naming a profile gets when that profile cannot serve this drive. */
+export function isProfileUnavailable(err: unknown): boolean {
+  return (
+    err instanceof LLMRequestError
+    && err.status === 400
+    && err.detail === "profile_unavailable"
+  );
+}
+
+async function readDetail(res: Response): Promise<unknown> {
+  try {
+    const body = (await res.json()) as { detail?: unknown };
+    return body?.detail;
+  } catch {
+    return undefined;
+  }
+}
+
+async function fetchJSONWithDetail<T>(
+  url: string,
+  options: RequestInit,
+): Promise<T> {
+  const res = await fetch(url, { credentials: "include", ...options });
+  if (!res.ok) {
+    throw new LLMRequestError(
+      `API error: ${res.status} ${res.statusText}`,
+      res.status,
+      await readDetail(res),
+    );
+  }
+  return res.json();
+}
+
+export type LLMChoiceFeature = "summaries" | "detailed_summaries" | "rag";
+
+export interface LLMChoice {
+  name: string;
+  model: string;
+  offhost: boolean;
+}
+
+export interface LLMChoicesResponse {
+  /** The profile routing would use; `null` when routing serves nothing here. */
+  auto: string | null;
+  choices: LLMChoice[];
+}
+
+export async function fetchLLMChoices(
+  feature: LLMChoiceFeature,
+  drive: string,
+): Promise<LLMChoicesResponse> {
+  return fetchJSON<LLMChoicesResponse>(
+    `${API_BASE}/addons/intelligence/llm/choices/${feature}`,
+    { headers: driveHeaders(drive) },
+  );
+}
+
 // Semantic search types
 export interface SemanticSearchMatch {
   type: "transcript" | "clip" | "metadata" | "content";
@@ -557,13 +631,22 @@ export async function getSummary(
   }
 }
 
+/** `profile` omitted generates with the profile routing assigns. */
 export async function regenerateSummary(
   fileId: string,
   drive: string,
+  profile?: string,
 ): Promise<void> {
-  await fetchJSON(
-    `${API_BASE}/addons/intelligence/files/${fileId}/summary/regenerate`,
-    { method: "POST", headers: driveHeaders(drive) },
+  const url = `${API_BASE}/addons/intelligence/files/${fileId}/summary/regenerate`;
+  await fetchJSONWithDetail(
+    url,
+    profile === undefined
+      ? { method: "POST", headers: driveHeaders(drive) }
+      : {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...driveHeaders(drive) },
+          body: JSON.stringify({ profile }),
+        },
   );
 }
 
@@ -791,14 +874,18 @@ export async function revertDetailedSummary(
 export async function regenerateDetailedSummary(
   fileId: string,
   drive: string,
-  options?: { force?: boolean },
+  options?: { force?: boolean; profile?: string },
 ): Promise<{ status: string; message: string }> {
-  return fetchJSON<{ status: string; message: string }>(
+  const body: { force: boolean; profile?: string } = {
+    force: options?.force ?? false,
+  };
+  if (options?.profile !== undefined) body.profile = options.profile;
+  return fetchJSONWithDetail<{ status: string; message: string }>(
     `${API_BASE}/addons/intelligence/files/${fileId}/summary/detailed/regenerate`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json", ...driveHeaders(drive) },
-      body: JSON.stringify({ force: options?.force ?? false }),
+      body: JSON.stringify(body),
     },
   );
 }
@@ -1127,6 +1214,8 @@ export interface AskOptions {
   topK?: number;
   fileType?: FileType;
   signal?: AbortSignal;
+  /** Omitted answers with the profile routing assigns. */
+  profile?: string;
 }
 
 // Intelligence /status shape extended with feature flags + llm enablement.
@@ -1553,6 +1642,7 @@ export async function* askQuestionStream(
   const body: Record<string, unknown> = { query };
   if (options?.topK != null) body.top_k = options.topK;
   if (options?.fileType) body.file_type = options.fileType;
+  if (options?.profile !== undefined) body.profile = options.profile;
 
   const res = await fetch(`${API_BASE}/addons/intelligence/ask`, {
     method: "POST",
@@ -1567,16 +1657,14 @@ export async function* askQuestionStream(
   });
 
   if (!res.ok) {
-    let detail = `${res.status} ${res.statusText}`;
-    try {
-      const errBody = (await res.json()) as { detail?: string };
-      if (errBody?.detail) detail = errBody.detail;
-    } catch {
-      // ignore — fall back to status text
-    }
-    const err = new Error(detail) as Error & { status?: number };
-    err.status = res.status;
-    throw err;
+    const detail = await readDetail(res);
+    throw new LLMRequestError(
+      typeof detail === "string" && detail
+        ? detail
+        : `${res.status} ${res.statusText}`,
+      res.status,
+      detail,
+    );
   }
 
   const reader = res.body?.getReader();

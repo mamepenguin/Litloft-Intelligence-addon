@@ -17,19 +17,33 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { NextIntlClientProvider } from "next-intl";
 
-vi.mock("@/addons/intelligence/api", () => ({
-  getSummary: vi.fn(),
-  editSummary: vi.fn(),
-  revertSummary: vi.fn(),
-  regenerateSummary: vi.fn(),
-}));
+vi.mock("@/addons/intelligence/api", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/addons/intelligence/api")
+  >("@/addons/intelligence/api");
+  return {
+    getSummary: vi.fn(),
+    editSummary: vi.fn(),
+    revertSummary: vi.fn(),
+    regenerateSummary: vi.fn(),
+    fetchLLMChoices: vi.fn(async () => {
+      throw new Error("not stubbed");
+    }),
+    isProfileUnavailable: actual.isProfileUnavailable,
+    LLMRequestError: actual.LLMRequestError,
+  };
+});
 
+import { ShortcutsProvider } from "@/components/ShortcutsProvider";
+import { useShortcuts } from "@/hooks/useShortcuts";
 import SummarySection from "@/addons/intelligence/SummarySection";
 import FileAIActionsButton from "@/addons/intelligence/FileAIActionsButton";
 import { resetFileAiActions } from "@/lib/fileAiActions";
 import {
   editSummary,
+  fetchLLMChoices,
   getSummary,
+  LLMRequestError,
   regenerateSummary,
   revertSummary,
 } from "@/addons/intelligence/api";
@@ -92,7 +106,7 @@ describe("SummarySection — the offer moves to the AI menu", () => {
     fireEvent.click(trigger);
     fireEvent.click(screen.getByRole("menuitem", { name: /Create AI summary/ }));
     await waitFor(() =>
-      expect(regenerateSummary).toHaveBeenCalledWith("f1", "drive1"),
+      expect(regenerateSummary).toHaveBeenCalledWith("f1", "drive1", undefined),
     );
   });
 
@@ -352,5 +366,248 @@ describe("SummarySection — long summary shape", () => {
     expect(
       screen.getByText((_, el) => el?.tagName === "P" && el.textContent === long),
     ).toBeInTheDocument();
+  });
+});
+
+describe("SummarySection — regenerate with another model", () => {
+  const UNAVAILABLE =
+    "This model can't be used right now. The choices have been updated.";
+  const local = { name: "local", model: "gemma3", offhost: false };
+  const cloud = { name: "cloud", model: "gpt-x", offhost: true };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetFileAiActions();
+    vi.mocked(getSummary).mockResolvedValue(aiResponse as never);
+  });
+
+  const trigger = () =>
+    screen.queryByRole("button", { name: "Regenerate with…" });
+
+  it.each([
+    { label: "0 choices, auto set", value: { auto: "local", choices: [] }, shown: false },
+    { label: "1 choice, auto set", value: { auto: "local", choices: [local] }, shown: false },
+    { label: "1 choice, auto null", value: { auto: null, choices: [local] }, shown: true },
+    { label: "2 choices, auto set", value: { auto: "local", choices: [local, cloud] }, shown: true },
+    { label: "0 choices, auto null", value: { auto: null, choices: [] }, shown: false },
+  ])("$label → offered: $shown", async ({ value, shown }) => {
+    vi.mocked(fetchLLMChoices).mockResolvedValue(value as never);
+    renderSection();
+    await screen.findByText("AI short");
+    await waitFor(() =>
+      expect(fetchLLMChoices).toHaveBeenCalledWith("summaries", "drive1"),
+    );
+    if (shown) {
+      expect(await screen.findByRole("button", { name: "Regenerate with…" })).toBeInTheDocument();
+    } else {
+      await act(async () => {});
+      expect(trigger()).toBeNull();
+    }
+  });
+
+  it("offers nothing when the choices request fails", async () => {
+    vi.mocked(fetchLLMChoices).mockRejectedValue(new Error("404"));
+    renderSection();
+    await screen.findByText("AI short");
+    await waitFor(() => expect(fetchLLMChoices).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+    expect(trigger()).toBeNull();
+  });
+
+  it("does not ask for choices while the feature is off", async () => {
+    vi.mocked(getSummary).mockResolvedValue({ available: false } as never);
+    vi.mocked(fetchLLMChoices).mockResolvedValue({
+      auto: "local",
+      choices: [local, cloud],
+    } as never);
+    renderSection();
+    await act(async () => {});
+    expect(fetchLLMChoices).not.toHaveBeenCalled();
+    expect(trigger()).toBeNull();
+  });
+
+  it("lists each choice as name — model and marks the external one", async () => {
+    vi.mocked(fetchLLMChoices).mockResolvedValue({
+      auto: "local",
+      choices: [local, cloud],
+    } as never);
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Regenerate with…" }));
+    expect(screen.getAllByRole("menuitem")).toEqual([
+      screen.getByRole("menuitem", { name: "local — gemma3" }),
+      screen.getByRole("menuitem", { name: "cloud — gpt-x (External server)" }),
+    ]);
+  });
+
+  it("keeps the menu's keys from the page's shortcuts", async () => {
+    vi.mocked(fetchLLMChoices).mockResolvedValue({
+      auto: "local",
+      choices: [local, cloud, { name: "third", model: "m3", offhost: false }],
+    } as never);
+    const pageKeys = vi.fn();
+    function PageShortcuts() {
+      useShortcuts(
+        "page",
+        "Page",
+        ["arrowdown", "arrowup", "home", "end", "escape"].map((key) => ({
+          key,
+          label: key,
+          handler: () => pageKeys(key),
+        })),
+      );
+      return null;
+    }
+    render(
+      <NextIntlClientProvider locale="en" messages={{}}>
+        <ShortcutsProvider>
+          <PageShortcuts />
+          <SummarySection fileId="f1" drive="drive1" />
+        </ShortcutsProvider>
+      </NextIntlClientProvider>,
+    );
+    const button = await screen.findByRole("button", { name: "Regenerate with…" });
+    fireEvent.click(button);
+    const [first, second, third] = screen.getAllByRole("menuitem");
+    await waitFor(() => expect(first).toHaveFocus());
+
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(second).toHaveFocus();
+    fireEvent.keyDown(second, { key: "End" });
+    expect(third).toHaveFocus();
+    fireEvent.keyDown(third, { key: "ArrowDown" });
+    expect(first).toHaveFocus();
+    fireEvent.keyDown(first, { key: "ArrowUp" });
+    expect(third).toHaveFocus();
+    fireEvent.keyDown(third, { key: "Home" });
+    expect(first).toHaveFocus();
+    fireEvent.keyDown(first, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(button).toHaveFocus();
+    expect(pageKeys).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(button, { key: "ArrowDown" });
+    expect(pageKeys).toHaveBeenCalledWith("arrowdown");
+  });
+
+  it("sends the chosen profile, and none from the plain button", async () => {
+    vi.mocked(regenerateSummary).mockReturnValue(new Promise(() => {}) as never);
+    vi.mocked(fetchLLMChoices).mockResolvedValue({
+      auto: "local",
+      choices: [local, cloud],
+    } as never);
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Regenerate with…" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /cloud — gpt-x/ }));
+    expect(regenerateSummary).toHaveBeenCalledTimes(1);
+    expect(regenerateSummary).toHaveBeenCalledWith("f1", "drive1", "cloud");
+  });
+
+  it("disables the plain button and every choice while a run is in flight", async () => {
+    vi.mocked(regenerateSummary).mockReturnValue(new Promise(() => {}) as never);
+    vi.mocked(fetchLLMChoices).mockResolvedValue({
+      auto: "local",
+      choices: [local, cloud],
+    } as never);
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Regenerate with…" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Create again$/ }));
+
+    expect(regenerateSummary).toHaveBeenCalledWith("f1", "drive1", undefined);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Creating summary/ })).toBeDisabled(),
+    );
+    for (const item of screen.getAllByRole("menuitem")) {
+      expect(item).toBeDisabled();
+    }
+    expect(screen.getByRole("button", { name: "Regenerate with…" })).toBeDisabled();
+  });
+
+  it("says the model is unavailable and asks for the choices again", async () => {
+    vi.mocked(regenerateSummary).mockRejectedValue(
+      new LLMRequestError("API error: 400", 400, "profile_unavailable"),
+    );
+    vi.mocked(fetchLLMChoices).mockResolvedValue({
+      auto: "local",
+      choices: [local, cloud],
+    } as never);
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Regenerate with…" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: /cloud — gpt-x/ }));
+    });
+
+    expect(
+      await screen.findByText(
+        "This model can't be used right now. The choices have been updated.",
+      ),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(fetchLLMChoices).toHaveBeenCalledTimes(2));
+  });
+
+  async function rejectChoice() {
+    fireEvent.click(await screen.findByRole("button", { name: "Regenerate with…" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: /cloud — gpt-x/ }));
+    });
+    await screen.findByText(UNAVAILABLE);
+  }
+
+  it("drops the unavailable-model note when the next run starts", async () => {
+    vi.mocked(regenerateSummary)
+      .mockRejectedValueOnce(
+        new LLMRequestError("API error: 400", 400, "profile_unavailable"),
+      )
+      .mockReturnValue(new Promise(() => {}) as never);
+    vi.mocked(fetchLLMChoices).mockResolvedValue({
+      auto: "local",
+      choices: [local, cloud],
+    } as never);
+    renderSection();
+    await rejectChoice();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Create again$/ }));
+    });
+    expect(regenerateSummary).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(UNAVAILABLE)).toBeNull();
+  });
+
+  it("drops the unavailable-model note on the next file", async () => {
+    vi.mocked(regenerateSummary).mockRejectedValueOnce(
+      new LLMRequestError("API error: 400", 400, "profile_unavailable"),
+    );
+    vi.mocked(fetchLLMChoices).mockResolvedValue({
+      auto: "local",
+      choices: [local, cloud],
+    } as never);
+    const ui = (fileId: string) => (
+      <NextIntlClientProvider locale="en" messages={{}}>
+        <SummarySection fileId={fileId} drive="drive1" />
+      </NextIntlClientProvider>
+    );
+    const { rerender } = render(ui("f1"));
+    await rejectChoice();
+
+    rerender(ui("f2"));
+    await waitFor(() => expect(getSummary).toHaveBeenCalledWith("f2", "drive1"));
+    expect(screen.queryByText(UNAVAILABLE)).toBeNull();
+  });
+
+  it("says nothing about the model for another 400", async () => {
+    vi.mocked(regenerateSummary).mockRejectedValue(
+      new LLMRequestError("API error: 400", 400, "insufficient_content"),
+    );
+    vi.mocked(fetchLLMChoices).mockResolvedValue({
+      auto: "local",
+      choices: [local, cloud],
+    } as never);
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Regenerate with…" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: /cloud — gpt-x/ }));
+    });
+    await act(async () => {});
+    expect(screen.queryByText(/This model can't be used/)).toBeNull();
+    expect(fetchLLMChoices).toHaveBeenCalledTimes(1);
   });
 });

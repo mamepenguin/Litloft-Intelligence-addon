@@ -669,5 +669,12 @@
       "providerFailed": "文字起こしに失敗しました: {error}",
       "openaiFileTooLarge": "OpenAI Whisper APIでは25MBを超えるファイルを処理できません。長時間の音声にはDeepgram / ElevenLabs Scribe / Groq / セルフホスト版Whisperなどを使ってください"
     }
+  },
+  "llmChoice": {
+    "regenerateWith": "別のモデルで再生成",
+    "offhost": "外部サーバー",
+    "profileUnavailable": "このモデルは今使えません。選択肢を更新しました。",
+    "model": "モデル",
+    "auto": "自動"
   }
 }

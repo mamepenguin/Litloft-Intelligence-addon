@@ -59,6 +59,7 @@ import {
   editDetailedSummarySection,
   getDetailedSummary,
   getDetailedSummaryCitations,
+  isProfileUnavailable,
   regenerateDetailedSummary,
   revertDetailedSummary,
 } from "./api";
@@ -67,7 +68,10 @@ import type {
   CitationChunkExcerpt,
   DetailedSummaryCitation,
   DetailedSummaryResponse,
+  LLMChoice,
 } from "./api";
+import { choiceOffered, useLLMChoices } from "./llmChoice";
+import { RegenerateWithMenu } from "./RegenerateWithMenu";
 import { DetailedSummaryCitationPopover } from "./DetailedSummaryCitationPopover";
 import { CitationInlinePanel } from "./CitationInlinePanel";
 import { InlineMarkdown } from "./InlineMarkdown";
@@ -133,6 +137,12 @@ export default function DetailedSummarySection({
   const [reverting, setReverting] = useState(false);
   const [confirmRevertOpen, setConfirmRevertOpen] = useState(false);
   const [confirmRegenerateOpen, setConfirmRegenerateOpen] = useState(false);
+  // The profile chosen from "Regenerate with…" while the confirm dialog
+  // is open, so confirming sends the same choice.
+  const [pendingProfile, setPendingProfile] = useState<string | undefined>(
+    undefined,
+  );
+  const [profileRejected, setProfileRejected] = useState(false);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [sourceFilename, setSourceFilename] = useState<string>("");
 
@@ -176,6 +186,8 @@ export default function DetailedSummarySection({
     setReverting(false);
     setConfirmRevertOpen(false);
     setConfirmRegenerateOpen(false);
+    setPendingProfile(undefined);
+    setProfileRejected(false);
     pollTokenRef.current += 1;
     void fetchData().then((result) => {
       if (result.status === "generating") {
@@ -227,24 +239,41 @@ export default function DetailedSummarySection({
     }
   }, [fileId, drive, fetchCitations]);
 
-  const doRegenerate = useCallback(async (force: boolean) => {
+  const canGenerate =
+    loaded && (data?.available === true || data?.status === "failed");
+  const { choices, refetch: refetchChoices } = useLLMChoices(
+    "detailed_summaries",
+    drive,
+    canGenerate,
+  );
+
+  const doRegenerate = useCallback(async (force: boolean, profile?: string) => {
     setWorking(true);
     setCollapsed(false);
+    setProfileRejected(false);
     try {
       // Single endpoint for every regenerate case (edited / un-edited /
       // first-time generation). The backend superseded-not-deleted
       // history changes mean the prior DELETE+POST fallback would
       // have dropped the history we now want to keep.
-      await regenerateDetailedSummary(fileId, drive, { force });
+      await regenerateDetailedSummary(
+        fileId,
+        drive,
+        profile === undefined ? { force } : { force, profile },
+      );
       await pollUntilDone();
-    } catch {
+    } catch (err) {
+      if (isProfileUnavailable(err)) {
+        setProfileRejected(true);
+        refetchChoices();
+      }
       await fetchData();
     } finally {
       setWorking(false);
     }
-  }, [fileId, drive, pollUntilDone, fetchData]);
+  }, [fileId, drive, pollUntilDone, fetchData, refetchChoices]);
 
-  const handleGenerate = useCallback(() => {
+  const startGenerate = useCallback((profile: string | undefined) => {
     // Entering regenerate from the edited state surfaces a confirm
     // dialog first; once accepted the confirm handler calls
     // doRegenerate(true). Also confirm when a knowledge note is
@@ -253,16 +282,22 @@ export default function DetailedSummarySection({
     // opt into. Untouched summaries with no active note skip the
     // dialog.
     if (data?.edited_at || hasActiveSummary) {
+      setPendingProfile(profile);
       setConfirmRegenerateOpen(true);
       return;
     }
-    void doRegenerate(false);
+    void doRegenerate(false, profile);
   }, [data?.edited_at, hasActiveSummary, doRegenerate]);
+
+  const handleGenerate = useCallback(() => startGenerate(undefined), [startGenerate]);
 
   const handleConfirmRegenerate = useCallback(() => {
     setConfirmRegenerateOpen(false);
-    void doRegenerate(true);
-  }, [doRegenerate]);
+    void doRegenerate(true, pendingProfile);
+  }, [doRegenerate, pendingProfile]);
+
+  const offeredChoices: LLMChoice[] | null =
+    choices && choiceOffered(choices) ? choices.choices : null;
 
   const handleDownload = useCallback(async () => {
     setDownloading(true);
@@ -454,14 +489,24 @@ export default function DetailedSummarySection({
             {data.error}
           </p>
         )}
-        <button
-          onClick={handleGenerate}
-          disabled={working}
-          className="mt-2 flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
-        >
-          <RefreshCw size={11} className={working ? "animate-spin" : ""} />
-          {t("detailedSummaryRetry", { defaultMessage: "Retry" })}
-        </button>
+        <div className="mt-2 flex items-center">
+          <button
+            onClick={handleGenerate}
+            disabled={working}
+            className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+          >
+            <RefreshCw size={11} className={working ? "animate-spin" : ""} />
+            {t("detailedSummaryRetry", { defaultMessage: "Retry" })}
+          </button>
+          {offeredChoices && (
+            <RegenerateWithMenu
+              choices={offeredChoices}
+              disabled={working}
+              onChoose={startGenerate}
+            />
+          )}
+        </div>
+        {profileRejected && <ProfileRejectedNote />}
       </div>
     );
   }
@@ -508,6 +553,9 @@ export default function DetailedSummarySection({
         onCloseRevert={() => setConfirmRevertOpen(false)}
         onConfirmRevert={handleRevert}
         onGenerate={handleGenerate}
+        offeredChoices={offeredChoices}
+        onGenerateWith={startGenerate}
+        profileRejected={profileRejected}
         onCloseRegenerate={() => setConfirmRegenerateOpen(false)}
         onConfirmRegenerate={handleConfirmRegenerate}
         onOpenSave={handleOpenSaveDialog}
@@ -560,6 +608,9 @@ interface DetailedSummaryBodyProps {
   onCloseRevert: () => void;
   onConfirmRevert: () => void;
   onGenerate: () => void;
+  offeredChoices: LLMChoice[] | null;
+  onGenerateWith: (profile: string) => void;
+  profileRejected: boolean;
   onCloseRegenerate: () => void;
   onConfirmRegenerate: () => void;
   onOpenSave: () => void;
@@ -597,6 +648,9 @@ function DetailedSummaryBody({
   onCloseRevert,
   onConfirmRevert,
   onGenerate,
+  offeredChoices,
+  onGenerateWith,
+  profileRejected,
   onCloseRegenerate,
   onConfirmRegenerate,
   onOpenSave,
@@ -688,6 +742,9 @@ function DetailedSummaryBody({
 
     const handler = (e: KeyboardEvent) => {
       if (isTextInput(e.target)) return;
+      // An open menu owns its keys; this listener is on `window`, which the
+      // shortcut stack cannot shadow.
+      if (e.target instanceof Element && e.target.closest('[role="menu"]')) return;
       if (!host.contains(document.activeElement) && !host.contains(e.target as Node)) {
         // Allow global shortcuts when the body itself has focus too.
         if (e.key !== "v") return;
@@ -766,18 +823,32 @@ function DetailedSummaryBody({
         >
           {td("dormant.badge", { defaultMessage: "Dormant" })}
         </span>
-        <button
-          onClick={onGenerate}
-          disabled={working}
-          className="ml-auto flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
-        >
-          <RefreshCw size={11} className={working ? "animate-spin" : ""} />
-          {working
-            ? t("detailedSummaryGenerating", {
-                defaultMessage: "Generating detailed summary…",
-              })
-            : t("detailedSummaryRegenerate", { defaultMessage: "Regenerate" })}
-        </button>
+        <div className="ml-auto flex items-center">
+          <button
+            onClick={onGenerate}
+            disabled={working}
+            className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+          >
+            <RefreshCw size={11} className={working ? "animate-spin" : ""} />
+            {working
+              ? t("detailedSummaryGenerating", {
+                  defaultMessage: "Generating detailed summary…",
+                })
+              : t("detailedSummaryRegenerate", { defaultMessage: "Regenerate" })}
+          </button>
+          {offeredChoices && (
+            <RegenerateWithMenu
+              choices={offeredChoices}
+              disabled={working}
+              onChoose={onGenerateWith}
+            />
+          )}
+        </div>
+        {profileRejected && (
+          <div className="basis-full">
+            <ProfileRejectedNote />
+          </div>
+        )}
         <ConfirmDialog
           open={confirmRegenerateOpen}
           title={t("detailedSummaryRegenerate", { defaultMessage: "Regenerate" })}
@@ -985,21 +1056,31 @@ function DetailedSummaryBody({
                 })}
               </button>
             )}
-            <button
-              onClick={onGenerate}
-              disabled={working}
-              className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
-            >
-              <RefreshCw size={11} className={working ? "animate-spin" : ""} />
-              {working
-                ? t("detailedSummaryGenerating", {
-                    defaultMessage: "Generating detailed summary…",
-                  })
-                : t("detailedSummaryRegenerate", {
-                    defaultMessage: "Regenerate",
-                  })}
-            </button>
+            <div className="flex items-center">
+              <button
+                onClick={onGenerate}
+                disabled={working}
+                className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+              >
+                <RefreshCw size={11} className={working ? "animate-spin" : ""} />
+                {working
+                  ? t("detailedSummaryGenerating", {
+                      defaultMessage: "Generating detailed summary…",
+                    })
+                  : t("detailedSummaryRegenerate", {
+                      defaultMessage: "Regenerate",
+                    })}
+              </button>
+              {offeredChoices && (
+                <RegenerateWithMenu
+                  choices={offeredChoices}
+                  disabled={working}
+                  onChoose={onGenerateWith}
+                />
+              )}
+            </div>
           </div>
+          {profileRejected && <ProfileRejectedNote />}
           {verify && (
             <KeyboardHintFooter
               text={td("verify.keyboardHints", {
@@ -1040,6 +1121,15 @@ function DetailedSummaryBody({
         onCancel={onCloseRegenerate}
       />
     </div>
+  );
+}
+
+function ProfileRejectedNote() {
+  const tc = useTranslations("llmChoice");
+  return (
+    <p role="status" className="mt-2 text-[11px] text-text-muted">
+      {tc("profileUnavailable")}
+    </p>
   );
 }
 

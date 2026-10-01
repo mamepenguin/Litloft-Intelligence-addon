@@ -41,8 +41,9 @@ vi.mock("@/lib/api", () => ({
   ]),
 }));
 
+const currentDrive = { current: "family" };
 vi.mock("@/components/CurrentDriveProvider", () => ({
-  useCurrentDrive: () => "family",
+  useCurrentDrive: () => currentDrive.current,
 }));
 
 // --- Shared stream controller the mocked `askQuestionStream` binds to.
@@ -98,6 +99,9 @@ vi.mock("@/addons/intelligence/api", async () => {
   return {
     ...actual,
     askQuestionStream: vi.fn(() => streamState.current.generator()),
+    fetchLLMChoices: vi.fn(async () => {
+      throw new Error("not stubbed");
+    }),
     getIntelligenceStatus: vi.fn().mockResolvedValue({
       status: "ok",
       features: {
@@ -122,7 +126,10 @@ import IntelligenceAskPage from "@/addons/intelligence/Page";
 import { accentFills } from "@/__tests__/helpers/accentFills";
 import { COMPOSITION_GRACE_MS } from "@/lib/ime";
 import {
+  askQuestionStream,
+  fetchLLMChoices,
   getIntelligenceStatus,
+  LLMRequestError,
   parseSseFrame,
   type AskStreamEvent,
   type Citation,
@@ -1100,5 +1107,299 @@ describe("IntelligenceAskPage — IME composition", () => {
     fireEvent.keyDown(textarea, { key: "Enter", keyCode: 13, shiftKey: true });
 
     expect(ask).not.toHaveBeenCalled();
+  });
+});
+
+describe("IntelligenceAskPage — choosing the model", () => {
+  const local = { name: "local", model: "gemma3", offhost: false };
+  const cloud = { name: "cloud", model: "gpt-x", offhost: true };
+
+  beforeEach(() => {
+    streamState.current = makeController();
+    currentDrive.current = "family";
+    vi.mocked(askQuestionStream).mockClear();
+    vi.mocked(fetchLLMChoices).mockReset();
+  });
+
+  afterEach(() => {
+    streamState.current.end();
+    currentDrive.current = "family";
+  });
+
+  async function ask(question: string) {
+    const textarea = (await screen.findByRole("textbox", {
+      name: /question input/i,
+    })) as HTMLTextAreaElement;
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!;
+    await act(async () => {
+      setter.call(textarea, question);
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      textarea
+        .closest("form")!
+        .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+  }
+
+  async function finishAnswer() {
+    await act(async () => {
+      streamState.current.push({ kind: "answer_chunk", delta: "Answer." });
+      streamState.current.push({ kind: "done" });
+      streamState.current.end();
+    });
+    streamState.current = makeController();
+  }
+
+  const sentProfiles = () =>
+    vi.mocked(askQuestionStream).mock.calls.map((c) => c[2]?.profile);
+
+  const optionTexts = (select: HTMLSelectElement) =>
+    Array.from(select.options).map((o) => o.textContent);
+
+  it.each([
+    { label: "1 choice, auto set", value: { auto: "local", choices: [local] }, shown: false },
+    { label: "0 choices, auto null", value: { auto: null, choices: [] }, shown: false },
+    { label: "1 choice, auto null", value: { auto: null, choices: [local] }, shown: true },
+    { label: "2 choices, auto set", value: { auto: "local", choices: [local, cloud] }, shown: true },
+  ])("$label → offered: $shown", async ({ value, shown }) => {
+    vi.mocked(fetchLLMChoices).mockResolvedValue(value as never);
+    render(<IntelligenceAskPage />);
+    await waitFor(() => expect(fetchLLMChoices).toHaveBeenCalledWith("rag", "family"));
+    if (shown) {
+      expect(await screen.findByTestId("ask-profile")).toBeInTheDocument();
+    } else {
+      await act(async () => {});
+      expect(screen.queryByTestId("ask-profile")).toBeNull();
+    }
+  });
+
+  it("offers Auto first, then each choice, marking the external one", async () => {
+    vi.mocked(fetchLLMChoices).mockResolvedValue({
+      auto: "local",
+      choices: [local, cloud],
+    } as never);
+    render(<IntelligenceAskPage />);
+    const select = (await screen.findByTestId("ask-profile")) as HTMLSelectElement;
+    expect(optionTexts(select)).toEqual([
+      "Auto",
+      "local — gemma3",
+      "cloud — gpt-x (External server)",
+    ]);
+    expect(select.value).toBe("");
+  });
+
+  it("leaves Auto out and preselects the first choice when routing serves nothing", async () => {
+    vi.mocked(fetchLLMChoices).mockResolvedValue({
+      auto: null,
+      choices: [local, cloud],
+    } as never);
+    render(<IntelligenceAskPage />);
+    const select = (await screen.findByTestId("ask-profile")) as HTMLSelectElement;
+    expect(optionTexts(select)).toEqual([
+      "local — gemma3",
+      "cloud — gpt-x (External server)",
+    ]);
+    expect(select.value).toBe("local");
+    await ask("what is the plot?");
+    expect(sentProfiles()).toEqual(["local"]);
+  });
+
+  it("sends the choice with every question while the page stays open", async () => {
+    vi.mocked(fetchLLMChoices).mockResolvedValue({
+      auto: "local",
+      choices: [local, cloud],
+    } as never);
+    render(<IntelligenceAskPage />);
+    const select = (await screen.findByTestId("ask-profile")) as HTMLSelectElement;
+
+    await ask("first question");
+    await finishAnswer();
+    fireEvent.change(select, { target: { value: "cloud" } });
+    await ask("second question");
+    await finishAnswer();
+    await ask("third question");
+
+    expect(sentProfiles()).toEqual([undefined, "cloud", "cloud"]);
+  });
+
+  it("does not ask for choices while Ask is off", async () => {
+    vi.mocked(getIntelligenceStatus).mockResolvedValueOnce({
+      status: "ok",
+      features: {
+        indexing: true,
+        search: true,
+        auto_tags: "false",
+        summaries: "false",
+        rag: false,
+      },
+      llm: { provider: "ollama", model: "qwen", enabled: true, output_language: "auto" },
+    });
+    vi.mocked(fetchLLMChoices).mockResolvedValue({
+      auto: "local",
+      choices: [local, cloud],
+    } as never);
+    render(<IntelligenceAskPage />);
+    await screen.findByText("LLM is not configured");
+    expect(fetchLLMChoices).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("ask-profile")).toBeNull();
+  });
+
+  it("offers nothing when the choices request fails", async () => {
+    vi.mocked(fetchLLMChoices).mockRejectedValue(new Error("404"));
+    render(<IntelligenceAskPage />);
+    await waitFor(() => expect(fetchLLMChoices).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+    expect(screen.queryByTestId("ask-profile")).toBeNull();
+  });
+
+  it("goes back to Auto when the drive changes", async () => {
+    vi.mocked(fetchLLMChoices).mockResolvedValue({
+      auto: "local",
+      choices: [local, cloud],
+    } as never);
+    const { rerender } = render(<IntelligenceAskPage />);
+    const select = (await screen.findByTestId("ask-profile")) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "cloud" } });
+    expect(select.value).toBe("cloud");
+
+    currentDrive.current = "work";
+    rerender(<IntelligenceAskPage />);
+    await waitFor(() => expect(fetchLLMChoices).toHaveBeenCalledWith("rag", "work"));
+    const after = (await screen.findByTestId("ask-profile")) as HTMLSelectElement;
+    expect(after.value).toBe("");
+    await ask("a question about work");
+    expect(sentProfiles()).toEqual([undefined]);
+  });
+
+  it("falls back to Auto when the refetched choices no longer list the chosen one", async () => {
+    vi.mocked(fetchLLMChoices)
+      .mockResolvedValueOnce({ auto: "local", choices: [local, cloud] } as never)
+      .mockResolvedValue({ auto: "local", choices: [local, { ...cloud, name: "cloud2" }] } as never);
+    vi.mocked(askQuestionStream).mockImplementationOnce(() => {
+      throw new LLMRequestError("profile_unavailable", 400, "profile_unavailable");
+    });
+    render(<IntelligenceAskPage />);
+    fireEvent.change(await screen.findByTestId("ask-profile"), {
+      target: { value: "cloud" },
+    });
+    await ask("what is the plot?");
+    await waitFor(() => expect(fetchLLMChoices).toHaveBeenCalledTimes(2));
+    await screen.findByText("cloud2 — gpt-x (External server)");
+
+    expect((screen.getByTestId("ask-profile") as HTMLSelectElement).value).toBe("");
+    await ask("what is the plot?");
+    expect(sentProfiles()).toEqual(["cloud", undefined]);
+  });
+
+  it("says the model is unavailable and asks for the choices again", async () => {
+    vi.mocked(fetchLLMChoices).mockResolvedValue({
+      auto: "local",
+      choices: [local, cloud],
+    } as never);
+    vi.mocked(askQuestionStream).mockImplementationOnce(() => {
+      throw new LLMRequestError("profile_unavailable", 400, "profile_unavailable");
+    });
+    render(<IntelligenceAskPage />);
+    const select = (await screen.findByTestId("ask-profile")) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "cloud" } });
+    await ask("what is the plot?");
+
+    expect(
+      await screen.findByText(
+        "This model can't be used right now. The choices have been updated.",
+      ),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(fetchLLMChoices).toHaveBeenCalledTimes(2));
+  });
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  it("ignores a late answer for the drive it left", async () => {
+    const family = deferred<unknown>();
+    const work = deferred<unknown>();
+    vi.mocked(fetchLLMChoices).mockImplementation(((_: string, drive: string) =>
+      drive === "family" ? family.promise : work.promise) as never);
+    const { rerender } = render(<IntelligenceAskPage />);
+    await waitFor(() => expect(fetchLLMChoices).toHaveBeenCalledWith("rag", "family"));
+
+    currentDrive.current = "work";
+    rerender(<IntelligenceAskPage />);
+    await waitFor(() => expect(fetchLLMChoices).toHaveBeenCalledWith("rag", "work"));
+    await act(async () => {
+      work.resolve({ auto: "local", choices: [local, cloud] });
+    });
+    await act(async () => {
+      family.resolve({ auto: null, choices: [cloud] });
+    });
+
+    const select = screen.getByTestId("ask-profile") as HTMLSelectElement;
+    expect(optionTexts(select)).toEqual([
+      "Auto",
+      "local — gemma3",
+      "cloud — gpt-x (External server)",
+    ]);
+    expect(select.value).toBe("");
+    await ask("a question about work");
+    expect(sentProfiles()).toEqual([undefined]);
+  });
+
+  it("drops the last drive's choices while the next drive's are loading", async () => {
+    const work = deferred<unknown>();
+    vi.mocked(fetchLLMChoices).mockImplementation(((_: string, drive: string) =>
+      drive === "family"
+        ? Promise.resolve({ auto: null, choices: [local, cloud] })
+        : work.promise) as never);
+    const { rerender } = render(<IntelligenceAskPage />);
+    expect(
+      ((await screen.findByTestId("ask-profile")) as HTMLSelectElement).value,
+    ).toBe("local");
+
+    currentDrive.current = "work";
+    rerender(<IntelligenceAskPage />);
+    await waitFor(() => expect(fetchLLMChoices).toHaveBeenCalledWith("rag", "work"));
+    expect(screen.queryByTestId("ask-profile")).toBeNull();
+    await ask("a question about work");
+    expect(sentProfiles()).toEqual([undefined]);
+  });
+
+  it("stops sending a kept choice once the select is no longer offered", async () => {
+    vi.mocked(fetchLLMChoices)
+      .mockResolvedValueOnce({ auto: "local", choices: [local, cloud] } as never)
+      .mockResolvedValue({ auto: "local", choices: [cloud] } as never);
+    vi.mocked(askQuestionStream).mockImplementationOnce(() => {
+      throw new LLMRequestError("profile_unavailable", 400, "profile_unavailable");
+    });
+    render(<IntelligenceAskPage />);
+    fireEvent.change(await screen.findByTestId("ask-profile"), {
+      target: { value: "cloud" },
+    });
+    await ask("what is the plot?");
+    await waitFor(() => expect(fetchLLMChoices).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByTestId("ask-profile")).toBeNull());
+
+    await ask("what is the plot?");
+    expect(sentProfiles()).toEqual(["cloud", undefined]);
+  });
+
+  it("locks the select while an answer is streaming", async () => {
+    vi.mocked(fetchLLMChoices).mockResolvedValue({
+      auto: "local",
+      choices: [local, cloud],
+    } as never);
+    render(<IntelligenceAskPage />);
+    const select = (await screen.findByTestId("ask-profile")) as HTMLSelectElement;
+    expect(select).not.toBeDisabled();
+    await ask("what is the plot?");
+    expect(select).toBeDisabled();
+    await finishAnswer();
+    expect(select).not.toBeDisabled();
   });
 });

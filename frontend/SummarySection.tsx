@@ -15,12 +15,15 @@ import {
 import {
   editSummary,
   getSummary,
+  isProfileUnavailable,
   regenerateSummary,
   revertSummary,
 } from "./api";
 import type { SummaryResponse } from "./api";
 import { useOfferIntelligenceAction } from "./offerIntelligenceAction";
 import { GeneratingRow } from "./GeneratingRow";
+import { choiceOffered, useLLMChoices } from "./llmChoice";
+import { RegenerateWithMenu } from "./RegenerateWithMenu";
 
 interface SummarySectionProps {
   fileId: string;
@@ -50,6 +53,7 @@ function bulletItems(long: string): string[] | null {
 
 export default function SummarySection({ fileId, drive }: SummarySectionProps) {
   const t = useTranslations("file");
+  const tc = useTranslations("llmChoice");
   const [data, setData] = useState<SummaryResponse | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
@@ -64,6 +68,12 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
   const [reverting, setReverting] = useState(false);
   const [draftShort, setDraftShort] = useState("");
   const [draftLong, setDraftLong] = useState("");
+  const [profileRejected, setProfileRejected] = useState(false);
+  const { choices, refetch: refetchChoices } = useLLMChoices(
+    "summaries",
+    drive,
+    loaded && data?.available === true,
+  );
 
   const fetchData = useCallback(async () => {
     const result = await getSummary(fileId, drive);
@@ -79,14 +89,16 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
     setEditing(false);
     setSaving(false);
     setReverting(false);
+    setProfileRejected(false);
     fetchData();
   }, [fileId, fetchData]);
 
-  const handleRegenerate = useCallback(async () => {
+  const handleRegenerate = useCallback(async (profile?: string) => {
     setRegenerating(true);
     setCollapsed(false);
+    setProfileRejected(false);
     try {
-      await regenerateSummary(fileId, drive);
+      await regenerateSummary(fileId, drive, profile);
       // Poll for results — LLM processing takes a few seconds.
       for (let i = 0; i < POLL_MAX_ATTEMPTS; i++) {
         await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
@@ -96,12 +108,15 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
           break;
         }
       }
-    } catch {
-      // silently fail — user can retry
+    } catch (err) {
+      if (isProfileUnavailable(err)) {
+        setProfileRejected(true);
+        refetchChoices();
+      }
     } finally {
       setRegenerating(false);
     }
-  }, [fileId, drive]);
+  }, [fileId, drive, refetchChoices]);
 
   const handleToggleCollapsed = useCallback(() => {
     setCollapsed((prev) => !prev);
@@ -168,7 +183,7 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
       && data?.reason !== "unsupported_type"
       && data?.reason !== "insufficient_content",
     busy: regenerating,
-    run: handleRegenerate,
+    run: () => void handleRegenerate(),
   });
 
   if (!loaded) return null;
@@ -345,17 +360,31 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
                 })}
               </button>
             )}
-            <button
-              onClick={handleRegenerate}
-              disabled={regenerating}
-              className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
-            >
-              <RefreshCw size={11} className={regenerating ? "animate-spin" : ""} />
-              {regenerating
-                ? t("summaryGenerating", { defaultMessage: "Generating summary..." })
-                : t("summaryRegenerate", { defaultMessage: "Regenerate" })}
-            </button>
+            <div className="flex items-center">
+              <button
+                onClick={() => void handleRegenerate()}
+                disabled={regenerating}
+                className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+              >
+                <RefreshCw size={11} className={regenerating ? "animate-spin" : ""} />
+                {regenerating
+                  ? t("summaryGenerating", { defaultMessage: "Generating summary..." })
+                  : t("summaryRegenerate", { defaultMessage: "Regenerate" })}
+              </button>
+              {choices && choiceOffered(choices) && (
+                <RegenerateWithMenu
+                  choices={choices.choices}
+                  disabled={regenerating}
+                  onChoose={(profile) => void handleRegenerate(profile)}
+                />
+              )}
+            </div>
           </div>
+          {profileRejected && (
+            <p role="status" className="mt-2 text-[11px] text-text-muted">
+              {tc("profileUnavailable")}
+            </p>
+          )}
         </>
       )}
     </div>
