@@ -430,7 +430,7 @@ _LLM_MAX_PROFILES = 16
 _LLM_STRING_MAX_LEN = 2048
 _LLM_BODY_MAX_BYTES = 64 * 1024
 # Shown by GET, never stored: a GET body can be sent back unchanged.
-_LLM_VIEW_ONLY_KEYS = frozenset({"api_key_present"})
+_LLM_VIEW_ONLY_KEYS = frozenset({"api_key_present", "api_key_source"})
 
 
 class LLMUpdate(BaseModel):
@@ -462,9 +462,14 @@ def _llm_view() -> dict[str, Any]:
                 "offhost": legacy_profile.offhost,
                 "agentic": legacy_profile.agentic,
                 "api_key_env": LEGACY_API_KEY_ENV,
-                # The legacy key may also come from YAML, which a saved
-                # profile does not carry over.
                 "api_key_present": bool(base.api_key),
+                # A YAML key is not carried into saved profiles, which read
+                # keys from the environment only.
+                "api_key_source": (
+                    "env" if os.getenv(LEGACY_API_KEY_ENV)
+                    else "yaml" if base.api_key
+                    else None
+                ),
             }
         }
         stored_routing: dict[str, Any] = {"default": LEGACY_PROFILE}

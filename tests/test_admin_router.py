@@ -657,7 +657,38 @@ def test_llm_get_sees_a_yaml_key_and_the_legacy_agentic_flag(
 
     profile = client.get("/admin/llm").json()["profiles"]["default"]
 
-    assert (profile["api_key_present"], profile["agentic"]) == (True, True)
+    assert (profile["api_key_present"], profile["agentic"], profile["api_key_source"]) == (
+        True, True, "yaml"
+    )
+
+
+@pytest.mark.parametrize(("env_key", "source"), [("sk-env", "env"), (None, None)])
+def test_llm_get_names_where_the_legacy_key_comes_from(
+    client, llm_env, monkeypatch, env_key, source
+) -> None:
+    if env_key is None:
+        monkeypatch.delenv("LLM_API_KEY")
+    else:
+        monkeypatch.setenv("LLM_API_KEY", env_key)
+
+    profile = client.get("/admin/llm").json()["profiles"]["default"]
+
+    assert profile["api_key_source"] == source
+
+
+def test_the_legacy_view_saves_back_unchanged(client, llm_env, monkeypatch) -> None:
+    from app import llm_routing
+    from app.routers import admin as admin_module
+
+    monkeypatch.setattr(admin_module, "_notify_core_restart_pending", _ok_notify())
+    body = client.get("/admin/llm").json()
+
+    response = client.put(
+        "/admin/llm", json={"profiles": body["profiles"], "routing": body["routing"]}
+    )
+
+    assert response.status_code == 200
+    assert llm_routing.current_routing().error is None
 
 
 def test_llm_get_body_can_be_saved_back_unchanged(client, llm_env, monkeypatch) -> None:

@@ -19,7 +19,7 @@
       },
       "llmCloud": {
         "label": "クラウドLLMへの送信を許可",
-        "help": "外部送信のLLMプロファイルに、このドライブのファイル内容・文字起こし・画像を送信します。OFFにすると、ローカルのプロファイルだけを使い、ローカルのプロファイルが無い機能は実行しません。",
+        "help": "外部サーバーのLLMプロファイルに、このドライブのファイル内容・文字起こし・画像を送信します。OFFにすると、ローカルのプロファイルだけを使い、ローカルのプロファイルが無い機能は実行しません。",
         "warning": "OFFに切り替えた後も、進行中の処理は最後まで続きます。"
       }
     },
@@ -394,9 +394,9 @@
       "resetSuccess": "リセットしました。反映には再起動が必要です",
       "resetFailed": "リセットに失敗しました",
       "tristate": {
-        "false": "無効",
-        "manual": "手動のみ",
-        "on_index": "自動（インデックス時）"
+        "false": "オフ",
+        "manual": "手動",
+        "on_index": "インデックス時"
       },
       "fields": {
         "indexing": {
@@ -443,49 +443,143 @@
           "label": "ビジュアルインデックス",
           "help": "代表的な動画フレームをAIが説明文付きでシーク可能にインデックス化します。フレーム画像と付近の文字起こしが設定されたVisionモデルに送信されます。プライベートなライブラリでは「無効」かローカルのvisionモデルをおすすめします。利用するにはllm.vision_modelの設定が必要です。"
         }
-      }
+      },
+      "columns": {
+        "feature": "機能",
+        "mode": "動かすとき"
+      },
+      "modeLabel": "{feature}を動かすとき",
+      "bool": {
+        "true": "オン",
+        "false": "オフ"
+      },
+      "reloadFailed": "再読み込みに失敗したため、表示は保存前のままです。",
+      "profilesNote": "どのモデルで動かすかは「LLM プロファイル」の「使い分け」で選びます。"
     },
     "llm": {
-      "title": "LLMプロバイダー",
-      "description": "タグ候補、要約、Ask、画像説明で使う言語モデルを設定します。処理対象のデータは、設定されたLLM APIエンドポイントへ送信されます。クラウドを使う場合は、APIキーを環境変数に設定してください。変更の反映にはコンテナの再起動が必要です。",
+      "title": "LLM プロファイル",
+      "introSingle": "タグ候補、要約、Ask、画像説明で使うモデルです。プロファイルを追加すると、処理ごとにモデルを使い分けられます。",
+      "introList": "処理ごとに使うモデルを選べます。「外部サーバー」のプロファイルは、ドライブごとの「クラウドLLMへの送信を許可」がオンのドライブでだけ使われます。",
+      "connection": "モデルの接続先",
+      "profiles": "プロファイル",
+      "addToSplit": "プロファイルを追加して使い分ける",
       "save": "保存",
       "saving": "保存中...",
-      "saved": "保存しました。反映には再起動が必要です",
+      "reset": "YAML の設定に戻す",
+      "resetting": "戻しています...",
+      "overridesActive": "GUI で保存した設定があります。",
       "loadFailed": "読み込みに失敗しました",
-      "saveFailed": "保存に失敗しました",
-      "overridesActive": "この画面の設定がsearch-config.ymlより優先されています",
-      "overridesHelp": "search-config.ymlで直接管理したい場合は、この画面の設定をリセットしてください",
-      "reset": "画面設定をリセット",
-      "resetting": "リセット中...",
-      "resetSuccess": "リセットしました。反映には再起動が必要です",
-      "resetFailed": "リセットに失敗しました",
-      "provider": "プロバイダー",
-      "baseUrl": "ベースURL",
-      "baseUrlHelp": "ollama: http://host.docker.internal:11434 / OpenAI互換: http://host.docker.internal:11434/v1など",
-      "model": "テキストモデル",
-      "modelHelp": "例: gemma4:e4b（ollama）、gpt-4o-mini、deepseek-chat。プロバイダーで利用できるモデル名を入力してください",
-      "visionModel": "画像モデル",
-      "visionModelHelp": "画像説明で使うモデルです。空欄の場合、vision_describeは使えません。例: llava:13b、gpt-4o-mini",
-      "outputLanguage": "出力言語",
-      "providers": {
-        "disabled": "無効",
-        "ollama": "Ollama（推奨：ローカルLLM）",
-        "openai_compatible": "OpenAI互換API"
+      "saveFailed": "保存できませんでした",
+      "resetFailed": "YAML の設定に戻せませんでした",
+      "outcome": {
+        "savedNow": "保存しました。すぐ反映されます。",
+        "savedRestart": "保存しました。出力の言語は再起動後に反映されます。",
+        "resetNow": "YAML の設定に戻しました。すぐ反映されます。",
+        "resetRestart": "YAML の設定に戻しました。出力の言語は再起動後に反映されます。"
       },
-      "providerHelp": {
-        "disabled": "AI機能を無効にします。インデックスと検索の基本機能だけが動作します。",
-        "ollama": "ローカルホスト上のollama APIを使う設定です。reasoningモデル（DeepSeek-R1など）もthink:falseで動作します。",
-        "openai_compatible": "OpenAI公式、DeepSeek、Groq、vLLM、LM Studioなどを利用できます。"
+      "markers": {
+        "now": "保存するとすぐ反映",
+        "restart": "変更には再起動が必要"
       },
-      "outputLanguages": {
-        "auto": "自動",
-        "ja": "日本語",
-        "en": "英語"
+      "routingError": {
+        "title": "いまの設定では AI 機能がすべて止まっています",
+        "hint": "GUI から保存し直すか、YAML を直して再起動してください。"
       },
-      "apiKeyPresent": "設定済",
-      "apiKeyMissing": "未設定",
-      "apiKeyHelp": "APIキーは環境変数（LLM_API_KEY）で設定します。この画面からは編集できません",
-      "apiKeyRequired": "選択中のプロバイダーを使うにはLLM_API_KEYが必要です。.envに追加し、`docker compose up -d`のあとで再度保存してください"
+      "offhostOnly": {
+        "title": "「{drives}」ドライブでは AI 機能が動きません",
+        "separator": "」「",
+        "body": "このドライブはクラウド LLM への送信を許可していませんが、プロファイルが 1 つしかなく、それが「外部サーバー」になっています。このマシンの Ollama などを使っているなら「外部サーバー」をオフにしてください。クラウドを使っているなら、ローカルのプロファイルを追加して「クラウド不可のドライブで代わりに使う」に選んでください。"
+      },
+      "invalid": {
+        "name": "プロファイル名「{name}」は、英小文字か数字で始め、英小文字・数字・-・_ の 32 文字以内にしてください。",
+        "duplicate": "プロファイル名「{name}」が重複しています。",
+        "key": "プロファイル {name} の API キーの環境変数は、LLM_API_KEY_ のあとを英大文字・数字・_ にしてください。"
+      },
+      "profile": {
+        "name": "名前",
+        "provider": "接続方式",
+        "providers": {
+          "ollama": "Ollama",
+          "openai_compatible": "OpenAI 互換",
+          "disabled": "無効"
+        },
+        "baseUrl": "ベース URL",
+        "model": "モデル",
+        "visionModel": "Vision モデル",
+        "visionModelHint": "（空欄で画像を扱わない）",
+        "apiKey": "API キー",
+        "envVar": "環境変数",
+        "keyEnv": "API キーの環境変数",
+        "keyEnvHelp": "キーそのものはここに書きません。docker-compose.override.yml に環境変数を追加し、コンテナを再起動すると読み込まれます。",
+        "keyPresent": "設定済み",
+        "keyMissing": "未設定",
+        "keyMissingOllama": "未設定（Ollama では不要）",
+        "keyMissingFails": "未設定 — このプロファイルを使う処理は失敗します",
+        "offhost": "外部サーバー",
+        "offhostHelpList": "このマシン以外のサーバー（クラウドや別の PC など）で動く LLM ならオン。オンのプロファイルは、ドライブ設定で「クラウドLLMへの送信を許可」したドライブでだけ使われます。",
+        "offhostHelpSingle": "このマシンの Ollama ならオフ。オフのあいだは、どのドライブでもこのモデルを使います。",
+        "agentic": "Agentic Ask に使う",
+        "agenticHelp": "ツールを呼びながら答える Ask。ツール呼び出しに対応したモデルでだけオンにしてください。",
+        "keyChoice": {
+          "none": "キーを使わない",
+          "shared": "LLM_API_KEY",
+          "named": "LLM_API_KEY_…（名前を付ける）"
+        },
+        "keyEnvPrefix": "{env} として保存されます。"
+      },
+      "list": {
+        "local": "ローカル",
+        "offhost": "外部サーバー",
+        "default": "既定",
+        "editing": "編集中",
+        "editLabel": "編集",
+        "edit": "プロファイル {name} を編集",
+        "delete": "プロファイル {name} を削除",
+        "add": "プロファイルを追加",
+        "vision": "Vision: {model}"
+      },
+      "routing": {
+        "title": "使い分け",
+        "default": "既定のプロファイル",
+        "defaultHelp": "下の表で「既定」のままの機能が使います。",
+        "fallback": "クラウド不可のドライブで代わりに使う",
+        "fallbackNone": "使わない（実行しない）",
+        "fallbackHelp": "ローカルのプロファイルだけを選べます。",
+        "fallbackOffhost": "{name}（外部サーバーのため使えません）",
+        "fallbackMissing": "{name}（プロファイルがありません）",
+        "columns": {
+          "feature": "機能",
+          "profile": "使うプロファイル"
+        },
+        "profileLabel": "{feature}で使うプロファイル",
+        "profileDefault": "既定（{name}）",
+        "profileOffhost": "{name}（外部サーバー）",
+        "profileMissing": "{name}（プロファイルがありません）",
+        "destinations": {
+          "sends": "送信する",
+          "falls_back": "{fallback} で実行",
+          "skips": "実行しない",
+          "unknown": "確認できません"
+        },
+        "driveSeparator": "、",
+        "destinationsNote": "外部サーバーのプロファイルを選んだ機能には、ドライブごとの行き先を表示します。行き先はドライブ設定の「クラウドLLMへの送信を許可」で決まります。機能を動かすかどうかは「機能スイッチ」で設定します。",
+        "featureOff": "オフ（機能スイッチ）"
+      },
+      "outputLanguage": {
+        "title": "出力の言語",
+        "options": {
+          "auto": "自動（入力に合わせる）",
+          "ja": "日本語",
+          "en": "English"
+        },
+        "pending": "保存した出力の言語は、再起動するまで反映されません。"
+      },
+      "reloadFailed": "保存しました。再読み込みに失敗したため、表示は保存前のままです。",
+      "yamlKey": {
+        "title": "API キーは search-config.yml から読み込まれています",
+        "body": "いまはこのキーで動いていますが、保存した設定には引き継がれません。保存する前に、キーを環境変数 LLM_API_KEY に移してください。"
+      },
+      "resetReloadFailed": "YAML の設定に戻しました。再読み込みに失敗したため、表示は戻す前のままです。"
     },
     "rag": {
       "title": "Ask（質問応答）の挙動",
