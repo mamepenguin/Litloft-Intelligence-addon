@@ -51,7 +51,7 @@ from app.database import (  # noqa: E402
 from app.models import IndexedFile  # noqa: E402,F401
 
 
-async def _llm_gate_passes(drive):
+async def _llm_gate_passes(drive, requested=None):
     return resolved_with(MagicMock())
 
 

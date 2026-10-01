@@ -97,7 +97,7 @@ _SSE_HEADERS = {
 }
 
 
-async def _require_rag_enabled(drive: str) -> Resolved:
+async def _require_rag_enabled(drive: str, requested: str | None = None) -> Resolved:
     """Raise 4xx/5xx unless RAG is on and an LLM serves this drive.
 
     * 400 when the feature is explicitly disabled in config.
@@ -108,7 +108,7 @@ async def _require_rag_enabled(drive: str) -> Resolved:
         raise HTTPException(
             status_code=400, detail="RAG feature is disabled"
         )
-    return await require_llm(drive, "rag")
+    return await require_llm(drive, "rag", requested)
 
 
 def _format_sse_event(event: AnswerEvent) -> str:
@@ -243,7 +243,7 @@ async def ask_endpoint(
     *replaces* whatever the client sent. ``None`` here means "no
     profile" — the service runs the legacy viewer-agnostic path.
     """
-    resolved = await _require_rag_enabled(drive)
+    resolved = await _require_rag_enabled(drive, body.profile)
 
     # Post-strip length check. Pydantic's min_length=1 only rejects the
     # empty string, but a 2-char query gives the LLM nothing to work

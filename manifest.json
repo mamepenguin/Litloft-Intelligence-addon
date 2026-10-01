@@ -703,6 +703,39 @@
         "response_filter": null
       },
       {
+        "path": "/llm/choices/summaries",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "summaries"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/llm/choices/detailed_summaries",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "detailed_summaries"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/llm/choices/rag",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "rag"
+        },
+        "response_filter": null
+      },
+      {
         "path": "/files/{file_id}/visual_description",
         "methods": [
           "GET"

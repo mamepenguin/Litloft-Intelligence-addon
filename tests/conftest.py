@@ -150,17 +150,20 @@ def use_llm(monkeypatch):
 
     class _Asked(list):
         vision: list[bool]
+        requested: list[str | None]
 
     asked = _Asked()
     asked.vision = []
+    asked.requested = []
 
     def _use(client=None, *, model="test-llm", vision_model=None, result=None):
-        async def _resolve(drive, feature):
+        async def _resolve(drive, feature, requested=None):
             import app.config as config
 
             vision = feature in llm_routing.VISION_FEATURES
             asked.append((drive, feature))
             asked.vision.append(vision)
+            asked.requested.append(requested)
             if result is not None:
                 return result
             if client is None or not getattr(client, "enabled", True):

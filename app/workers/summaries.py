@@ -1137,6 +1137,87 @@ async def generate_detailed_summary(
     await _recalculate_citations(file_id, saved_text)
 
 
+async def _generate_short_long(
+    resolved: Resolved,
+    file_id: str,
+    indexed_file: dict,
+    context_type: str,
+    raw_context: str,
+) -> None:
+    """Run the short/long generation path and persist the result."""
+    prepared, was_truncated = _prepare_context(raw_context)
+    user_prompt = _build_user_prompt(
+        indexed_file, context_type, prepared, was_truncated
+    )
+
+    parsed = await resolved.client.generate_json(
+        _build_system_prompt(), user_prompt
+    )
+
+    if not isinstance(parsed, dict):
+        logger.warning(
+            "Summaries LLM returned non-dict for %s, skipping", file_id
+        )
+        return
+
+    short_raw = parsed.get("short")
+    long_raw = parsed.get("long")
+    if not isinstance(short_raw, str) or not isinstance(
+        long_raw, (str, list)
+    ):
+        logger.warning(
+            "Summaries LLM response missing short/long fields for %s", file_id
+        )
+        return
+
+    short_summary = short_raw.strip()
+    long_summary = _normalise_long(long_raw)
+    if not short_summary or not long_summary:
+        logger.warning(
+            "Summaries LLM produced empty short/long for %s", file_id
+        )
+        return
+
+    await _save_summary(
+        file_id=file_id,
+        short_summary=short_summary,
+        long_summary=long_summary,
+        model=resolved.profile.config.model,
+        context_type=context_type,
+        context_chars=len(prepared),
+        was_truncated=was_truncated,
+    )
+    logger.info(
+        "Summaries: saved summary for %s (%s, %d chars, truncated=%s)",
+        file_id, context_type, len(prepared), was_truncated,
+    )
+
+
+async def generate_summary(file_id: str, resolved: Resolved) -> None:
+    """Generate the short/long summary of ``file_id`` with ``resolved``.
+
+    For a request that already resolved its profile; it never resolves
+    again and never goes through the queue.
+    """
+    try:
+        indexed_file = _get_indexed_file(file_id)
+        if indexed_file is None:
+            return
+        context_type = _classify_file_type(
+            indexed_file["file_type"], indexed_file.get("mime_type")
+        )
+        if context_type not in _SUPPORTED_CONTEXT_TYPES:
+            return
+        raw_context = _build_context(indexed_file, context_type)
+        if not raw_context:
+            return
+        await _generate_short_long(
+            resolved, file_id, indexed_file, context_type, raw_context
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error("Summaries: generation failed for %s: %s", file_id, e)
+
+
 class SummariesWorker:
     """Async worker that processes summary generation requests via a queue."""
 
@@ -1313,7 +1394,7 @@ class SummariesWorker:
         if want_short:
             resolved = await llm_routing.resolve(drive, "summaries")
             if isinstance(resolved, Resolved):
-                await self._generate_short_long(
+                await _generate_short_long(
                     resolved, file_id, indexed_file, context_type, raw_context
                 )
 
@@ -1326,59 +1407,3 @@ class SummariesWorker:
                 resolved = await llm_routing.resolve(drive, "detailed_summaries")
                 if isinstance(resolved, Resolved):
                     await generate_detailed_summary(file_id, resolved)
-
-    async def _generate_short_long(
-        self,
-        resolved: Resolved,
-        file_id: str,
-        indexed_file: dict,
-        context_type: str,
-        raw_context: str,
-    ) -> None:
-        """Run the short/long generation path and persist the result."""
-        prepared, was_truncated = _prepare_context(raw_context)
-        user_prompt = _build_user_prompt(
-            indexed_file, context_type, prepared, was_truncated
-        )
-
-        parsed = await resolved.client.generate_json(
-            _build_system_prompt(), user_prompt
-        )
-
-        if not isinstance(parsed, dict):
-            logger.warning(
-                "Summaries LLM returned non-dict for %s, skipping", file_id
-            )
-            return
-
-        short_raw = parsed.get("short")
-        long_raw = parsed.get("long")
-        if not isinstance(short_raw, str) or not isinstance(
-            long_raw, (str, list)
-        ):
-            logger.warning(
-                "Summaries LLM response missing short/long fields for %s", file_id
-            )
-            return
-
-        short_summary = short_raw.strip()
-        long_summary = _normalise_long(long_raw)
-        if not short_summary or not long_summary:
-            logger.warning(
-                "Summaries LLM produced empty short/long for %s", file_id
-            )
-            return
-
-        await _save_summary(
-            file_id=file_id,
-            short_summary=short_summary,
-            long_summary=long_summary,
-            model=resolved.profile.config.model,
-            context_type=context_type,
-            context_chars=len(prepared),
-            was_truncated=was_truncated,
-        )
-        logger.info(
-            "Summaries: saved summary for %s (%s, %d chars, truncated=%s)",
-            file_id, context_type, len(prepared), was_truncated,
-        )

@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.llm_routing import PROFILE_NAME_PATTERN
+
 
 # --- Search ---
 
@@ -497,7 +499,13 @@ class DetailedSummaryEditRequest(BaseModel):
     new_content: str = Field(..., min_length=1, max_length=20000)
 
 
-class DetailedSummaryRegenerateRequest(BaseModel):
+class SummaryProfileRequest(BaseModel):
+    """Optional body naming the LLM profile to generate with; absent means routing."""
+
+    profile: str | None = Field(default=None, pattern=PROFILE_NAME_PATTERN)
+
+
+class DetailedSummaryRegenerateRequest(SummaryProfileRequest):
     """Optional request body for POST /files/{id}/summary/detailed/regenerate.
 
     ``force=True`` suppresses the 409-Conflict when the current
@@ -506,6 +514,17 @@ class DetailedSummaryRegenerateRequest(BaseModel):
     """
 
     force: bool = False
+
+
+class LLMChoice(BaseModel):
+    name: str
+    model: str
+    offhost: bool
+
+
+class LLMChoicesResponse(BaseModel):
+    auto: str | None
+    choices: list[LLMChoice]
 
 
 # --- RAG (question answering) ---
@@ -523,6 +542,7 @@ class AskRequest(BaseModel):
     top_k: int | None = Field(default=None, ge=1, le=20)
     file_type: str | None = None
     drive: str | None = None
+    profile: str | None = Field(default=None, pattern=PROFILE_NAME_PATTERN)
 
 
 class CitationModel(BaseModel):

@@ -722,6 +722,64 @@ class TestRegenerateConflict:
         assert cleared == ["abc123"]
 
     @pytest.mark.asyncio
+    async def test_a_rejected_choice_keeps_the_edited_summary(
+        self, monkeypatch, search_db, feature_enabled, use_llm,
+    ):
+        from app.llm_routing import Skip
+
+        engine, _ = search_db
+        _insert_detailed_row(
+            engine,
+            "abc123",
+            detailed_summary="USER EDITED",
+            detailed_original=_SAMPLE_SUMMARY,
+            detailed_edited_at=datetime.now(UTC).isoformat(),
+        )
+        monkeypatch.setattr(
+            "app.workers.summaries._get_full_transcript",
+            lambda fid: "a" * 500,
+        )
+        cleared: list[str] = []
+
+        async def fake_clear(file_id: str) -> None:
+            cleared.append(file_id)
+
+        monkeypatch.setattr(
+            "app.routers.summaries._clear_knowledge_active_summary", fake_clear
+        )
+        use_llm(result=Skip("llm_cloud off"))
+
+        def _snapshot():
+            with engine.connect() as conn:
+                return (
+                    conn.execute(text(
+                        "SELECT * FROM file_summaries WHERE file_id = 'abc123'"
+                    )).fetchall(),
+                    conn.execute(text(
+                        "SELECT id, status, content FROM file_insights "
+                        "WHERE file_id = 'abc123' ORDER BY id"
+                    )).fetchall(),
+                )
+
+        before = _snapshot()
+        bg = BackgroundTasks()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await regenerate_detailed_summary(
+                "abc123",
+                bg,
+                DetailedSummaryRegenerateRequest(force=True, profile="big"),
+                "drive1",
+            )
+
+        assert (exc_info.value.status_code, exc_info.value.detail) == (
+            400, "profile_unavailable",
+        )
+        assert _snapshot() == before
+        assert before[1] != []
+        assert (bg.tasks, cleared) == ([], [])
+
+    @pytest.mark.asyncio
     async def test_400_when_content_insufficient(
         self, monkeypatch, search_db, feature_enabled, mock_llm_enabled,
     ):
