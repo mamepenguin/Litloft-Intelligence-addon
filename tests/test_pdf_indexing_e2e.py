@@ -525,6 +525,46 @@ def test_reindex_empty_extraction_clears_stale_pdf_markdown_row(
     assert _pdf_markdown_row(search_db, "pdf-empty") is None
 
 
+def _text_indexed(engine, file_id: str) -> int:
+    with engine.connect() as conn:
+        return conn.execute(
+            text("SELECT text_indexed FROM indexed_files WHERE file_id = :f"),
+            {"f": file_id},
+        ).scalar()
+
+
+def test_empty_extraction_marks_the_file_text_indexed(
+    search_db, fake_pdf, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_pymupdf4llm(monkeypatch, [])
+    _seed_indexed_pdf(search_db, file_id="pdf-none", file_path=fake_pdf)
+
+    assert metadata_worker.index_text_content("pdf-none") is True
+
+    assert _text_indexed(search_db, "pdf-none") == 1
+
+
+def test_empty_extraction_of_a_file_deactivated_meanwhile_writes_nothing(
+    search_db, fake_pdf, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _deactivate_then_return_nothing(*_a, **_kw):
+        with search_db.begin() as conn:
+            conn.execute(text(
+                "UPDATE indexed_files SET active = 0 WHERE file_id = 'pdf-gone'"
+            ))
+        return []
+
+    fake = MagicMock()
+    fake.to_markdown = _deactivate_then_return_nothing
+    monkeypatch.setitem(sys.modules, "pymupdf4llm", fake)
+    _seed_indexed_pdf(search_db, file_id="pdf-gone", file_path=fake_pdf)
+
+    assert metadata_worker.index_text_content("pdf-gone") is False
+
+    assert _text_indexed(search_db, "pdf-gone") == 0
+    assert _pdf_markdown_row(search_db, "pdf-gone") is None
+
+
 # ---------------------------------------------------------------------------
 # Every text embedding must be joinable to the full chunk text it was
 # built from — the display string and the matched string are one string.
