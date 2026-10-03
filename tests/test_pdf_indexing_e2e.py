@@ -580,8 +580,20 @@ def test_extraction_of_a_file_deactivated_meanwhile_writes_no_embeddings(
     monkeypatch.setitem(sys.modules, "pymupdf4llm", fake)
     _stub_embed_passages(monkeypatch)
     _seed_indexed_pdf(search_db, file_id="pdf-gone2", file_path=fake_pdf)
+    with search_db.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO embeddings (id, file_id, embedding_type, vector_table, "
+            "content_preview, created_at) VALUES "
+            "('txt_old', 'pdf-gone2', 'text_content', 'vec_text', 'old', "
+            "CURRENT_TIMESTAMP)"
+        ))
 
     assert metadata_worker.index_text_content("pdf-gone2") is False
+
+    with search_db.connect() as conn:
+        assert conn.execute(text(
+            "SELECT COUNT(*) FROM embeddings WHERE id = 'txt_old'"
+        )).scalar() == 1
 
     assert _text_indexed(search_db, "pdf-gone2") == 0
     assert _pdf_markdown_row(search_db, "pdf-gone2") is None
