@@ -21,12 +21,12 @@ hang trades one outage for another. Recovery stays a human decision,
 informed by the stack dump.
 """
 
-import faulthandler
-import io
 import logging
 import os
+import sys
 import threading
 import time
+import traceback
 from asyncio import AbstractEventLoop
 
 logger = logging.getLogger(__name__)
@@ -102,12 +102,12 @@ class LoopWatchdog:
 
     @staticmethod
     def _thread_dump() -> str:
-        buf = io.StringIO()
-        try:
-            faulthandler.dump_traceback(file=buf, all_threads=True)
-        except Exception as e:  # pragma: no cover - diagnostics must not raise
-            return f"<stack dump unavailable: {e}>"
-        return buf.getvalue()
+        names = {t.ident: t.name for t in threading.enumerate()}
+        return "\n".join(
+            f"Thread {names.get(ident, '?')} (ident {ident}):\n"
+            + "".join(traceback.format_stack(frame))
+            for ident, frame in sys._current_frames().items()
+        )
 
     # -- lifecycle ------------------------------------------------------
 

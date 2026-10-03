@@ -92,7 +92,13 @@ def _create_aux_tables(conn: object) -> None:
 
 
 @pytest.fixture()
-def search_db(tmp_path, monkeypatch):
+def open_write_sessions() -> dict[str, int]:
+    """Number of ``get_search_db`` blocks currently open (the write lock)."""
+    return {"n": 0}
+
+
+@pytest.fixture()
+def search_db(tmp_path, monkeypatch, open_write_sessions):
     """Real SQLite wired into ``app.workers.metadata.get_search_db``."""
     db_path = tmp_path / "search.db"
     engine = create_engine(
@@ -111,6 +117,7 @@ def search_db(tmp_path, monkeypatch):
     @contextmanager
     def _get_search_db():
         session = Session()
+        open_write_sessions["n"] += 1
         try:
             yield session
             session.commit()
@@ -118,10 +125,23 @@ def search_db(tmp_path, monkeypatch):
             session.rollback()
             raise
         finally:
+            open_write_sessions["n"] -= 1
+            session.close()
+
+    @contextmanager
+    def _get_search_db_read():
+        session = Session()
+        try:
+            yield session
+        finally:
             session.close()
 
     monkeypatch.setattr(
         "app.workers.metadata.get_search_db", _get_search_db
+    )
+    monkeypatch.setattr(
+        "app.workers.metadata.get_search_db_read", _get_search_db_read,
+        raising=False,
     )
     monkeypatch.setattr(config, "validate_file_path", lambda _path: True)
     return engine
@@ -278,6 +298,33 @@ def test_index_pdf_persists_markdown_row(
         )).scalar()
     assert ti == 1
     assert len(embed_calls) == 1 and embed_calls[0]
+
+
+def test_extraction_and_embedding_run_without_the_write_lock(
+    search_db, fake_pdf, open_write_sessions, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every other writer, and the event loop, queue behind that lock."""
+    import numpy as np
+
+    held_during: dict[str, int] = {}
+
+    def _to_markdown(*_a, **_kw):
+        held_during["extract"] = open_write_sessions["n"]
+        return [{"text": "Body on page one."}]
+
+    def _embed(passages: list[str]):
+        held_during["embed"] = open_write_sessions["n"]
+        return [np.zeros(4, dtype=np.float32) for _ in passages]
+
+    fake = MagicMock()
+    fake.to_markdown = _to_markdown
+    monkeypatch.setitem(sys.modules, "pymupdf4llm", fake)
+    monkeypatch.setattr(metadata_worker, "embed_passages", _embed)
+    _seed_indexed_pdf(search_db, file_id="pdf-lock", file_path=fake_pdf)
+
+    assert metadata_worker.index_text_content("pdf-lock") is True
+
+    assert held_during == {"extract": 0, "embed": 0}
 
 
 def test_index_pdf_chunks_land_in_vec_text_and_fts(

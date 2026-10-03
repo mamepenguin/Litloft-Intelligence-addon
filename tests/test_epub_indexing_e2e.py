@@ -61,6 +61,7 @@ def search_db(tmp_path, monkeypatch):
             session.close()
 
     monkeypatch.setattr("app.workers.metadata.get_search_db", _get_search_db)
+    monkeypatch.setattr("app.workers.metadata.get_search_db_read", _get_search_db)
     monkeypatch.setattr(config, "validate_file_path", lambda _path: True)
     return engine
 
