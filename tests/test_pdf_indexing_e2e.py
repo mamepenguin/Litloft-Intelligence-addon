@@ -565,6 +565,33 @@ def test_empty_extraction_of_a_file_deactivated_meanwhile_writes_nothing(
     assert _pdf_markdown_row(search_db, "pdf-gone") is None
 
 
+def test_extraction_of_a_file_deactivated_meanwhile_writes_no_embeddings(
+    search_db, fake_pdf, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _deactivate_then_return_a_page(*_a, **_kw):
+        with search_db.begin() as conn:
+            conn.execute(text(
+                "UPDATE indexed_files SET active = 0 WHERE file_id = 'pdf-gone2'"
+            ))
+        return [{"text": "Body on page one."}]
+
+    fake = MagicMock()
+    fake.to_markdown = _deactivate_then_return_a_page
+    monkeypatch.setitem(sys.modules, "pymupdf4llm", fake)
+    _stub_embed_passages(monkeypatch)
+    _seed_indexed_pdf(search_db, file_id="pdf-gone2", file_path=fake_pdf)
+
+    assert metadata_worker.index_text_content("pdf-gone2") is False
+
+    assert _text_indexed(search_db, "pdf-gone2") == 0
+    assert _pdf_markdown_row(search_db, "pdf-gone2") is None
+    with search_db.connect() as conn:
+        assert conn.execute(text("SELECT COUNT(*) FROM vec_text")).scalar() == 0
+        assert conn.execute(text(
+            "SELECT COUNT(*) FROM fts_text_content WHERE file_id = 'pdf-gone2'"
+        )).scalar() == 0
+
+
 # ---------------------------------------------------------------------------
 # Every text embedding must be joinable to the full chunk text it was
 # built from — the display string and the matched string are one string.

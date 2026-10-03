@@ -369,6 +369,12 @@ def index_text_content(file_id: str) -> bool:
 
     # --- Phase 3: Write results to DB (short transaction) ---
     with get_search_db() as session:
+        file_record = session.query(IndexedFile).filter_by(
+            file_id=file_id, active=True
+        ).first()
+        if file_record is None:
+            return False
+
         # Remove old text content embeddings
         _remove_embeddings(session, file_id, "text_content")
 
@@ -406,11 +412,7 @@ def index_text_content(file_id: str) -> bool:
 
         _upsert_pdf_markdown(session, file_id, result)
 
-        file_record = session.query(IndexedFile).filter_by(
-            file_id=file_id
-        ).first()
-        if file_record is not None:
-            file_record.text_indexed = True
+        file_record.text_indexed = True
         return True
 
 
