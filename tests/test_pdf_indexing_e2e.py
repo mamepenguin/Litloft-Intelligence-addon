@@ -92,7 +92,13 @@ def _create_aux_tables(conn: object) -> None:
 
 
 @pytest.fixture()
-def search_db(tmp_path, monkeypatch):
+def open_write_sessions() -> dict[str, int]:
+    """Number of ``get_search_db`` blocks currently open (the write lock)."""
+    return {"n": 0}
+
+
+@pytest.fixture()
+def search_db(tmp_path, monkeypatch, open_write_sessions):
     """Real SQLite wired into ``app.workers.metadata.get_search_db``."""
     db_path = tmp_path / "search.db"
     engine = create_engine(
@@ -111,6 +117,7 @@ def search_db(tmp_path, monkeypatch):
     @contextmanager
     def _get_search_db():
         session = Session()
+        open_write_sessions["n"] += 1
         try:
             yield session
             session.commit()
@@ -118,10 +125,23 @@ def search_db(tmp_path, monkeypatch):
             session.rollback()
             raise
         finally:
+            open_write_sessions["n"] -= 1
+            session.close()
+
+    @contextmanager
+    def _get_search_db_read():
+        session = Session()
+        try:
+            yield session
+        finally:
             session.close()
 
     monkeypatch.setattr(
         "app.workers.metadata.get_search_db", _get_search_db
+    )
+    monkeypatch.setattr(
+        "app.workers.metadata.get_search_db_read", _get_search_db_read,
+        raising=False,
     )
     monkeypatch.setattr(config, "validate_file_path", lambda _path: True)
     return engine
@@ -278,6 +298,33 @@ def test_index_pdf_persists_markdown_row(
         )).scalar()
     assert ti == 1
     assert len(embed_calls) == 1 and embed_calls[0]
+
+
+def test_extraction_and_embedding_run_without_the_write_lock(
+    search_db, fake_pdf, open_write_sessions, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every other writer, and the event loop, queue behind that lock."""
+    import numpy as np
+
+    held_during: dict[str, int] = {}
+
+    def _to_markdown(*_a, **_kw):
+        held_during["extract"] = open_write_sessions["n"]
+        return [{"text": "Body on page one."}]
+
+    def _embed(passages: list[str]):
+        held_during["embed"] = open_write_sessions["n"]
+        return [np.zeros(4, dtype=np.float32) for _ in passages]
+
+    fake = MagicMock()
+    fake.to_markdown = _to_markdown
+    monkeypatch.setitem(sys.modules, "pymupdf4llm", fake)
+    monkeypatch.setattr(metadata_worker, "embed_passages", _embed)
+    _seed_indexed_pdf(search_db, file_id="pdf-lock", file_path=fake_pdf)
+
+    assert metadata_worker.index_text_content("pdf-lock") is True
+
+    assert held_during == {"extract": 0, "embed": 0}
 
 
 def test_index_pdf_chunks_land_in_vec_text_and_fts(
@@ -476,6 +523,85 @@ def test_reindex_empty_extraction_clears_stale_pdf_markdown_row(
 
     # Stale row is gone; DB reflects current FS-derived state.
     assert _pdf_markdown_row(search_db, "pdf-empty") is None
+
+
+def _text_indexed(engine, file_id: str) -> int:
+    with engine.connect() as conn:
+        return conn.execute(
+            text("SELECT text_indexed FROM indexed_files WHERE file_id = :f"),
+            {"f": file_id},
+        ).scalar()
+
+
+def test_empty_extraction_marks_the_file_text_indexed(
+    search_db, fake_pdf, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_pymupdf4llm(monkeypatch, [])
+    _seed_indexed_pdf(search_db, file_id="pdf-none", file_path=fake_pdf)
+
+    assert metadata_worker.index_text_content("pdf-none") is True
+
+    assert _text_indexed(search_db, "pdf-none") == 1
+
+
+def test_empty_extraction_of_a_file_deactivated_meanwhile_writes_nothing(
+    search_db, fake_pdf, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _deactivate_then_return_nothing(*_a, **_kw):
+        with search_db.begin() as conn:
+            conn.execute(text(
+                "UPDATE indexed_files SET active = 0 WHERE file_id = 'pdf-gone'"
+            ))
+        return []
+
+    fake = MagicMock()
+    fake.to_markdown = _deactivate_then_return_nothing
+    monkeypatch.setitem(sys.modules, "pymupdf4llm", fake)
+    _seed_indexed_pdf(search_db, file_id="pdf-gone", file_path=fake_pdf)
+
+    assert metadata_worker.index_text_content("pdf-gone") is False
+
+    assert _text_indexed(search_db, "pdf-gone") == 0
+    assert _pdf_markdown_row(search_db, "pdf-gone") is None
+
+
+def test_extraction_of_a_file_deactivated_meanwhile_writes_no_embeddings(
+    search_db, fake_pdf, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _deactivate_then_return_a_page(*_a, **_kw):
+        with search_db.begin() as conn:
+            conn.execute(text(
+                "UPDATE indexed_files SET active = 0 WHERE file_id = 'pdf-gone2'"
+            ))
+        return [{"text": "Body on page one."}]
+
+    fake = MagicMock()
+    fake.to_markdown = _deactivate_then_return_a_page
+    monkeypatch.setitem(sys.modules, "pymupdf4llm", fake)
+    _stub_embed_passages(monkeypatch)
+    _seed_indexed_pdf(search_db, file_id="pdf-gone2", file_path=fake_pdf)
+    with search_db.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO embeddings (id, file_id, embedding_type, vector_table, "
+            "content_preview, created_at) VALUES "
+            "('txt_old', 'pdf-gone2', 'text_content', 'vec_text', 'old', "
+            "CURRENT_TIMESTAMP)"
+        ))
+
+    assert metadata_worker.index_text_content("pdf-gone2") is False
+
+    with search_db.connect() as conn:
+        assert conn.execute(text(
+            "SELECT COUNT(*) FROM embeddings WHERE id = 'txt_old'"
+        )).scalar() == 1
+
+    assert _text_indexed(search_db, "pdf-gone2") == 0
+    assert _pdf_markdown_row(search_db, "pdf-gone2") is None
+    with search_db.connect() as conn:
+        assert conn.execute(text("SELECT COUNT(*) FROM vec_text")).scalar() == 0
+        assert conn.execute(text(
+            "SELECT COUNT(*) FROM fts_text_content WHERE file_id = 'pdf-gone2'"
+        )).scalar() == 0
 
 
 # ---------------------------------------------------------------------------

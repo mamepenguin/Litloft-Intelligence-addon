@@ -60,8 +60,9 @@ def test_blocked_loop_is_reported_with_a_stack_dump(loop, caplog):
     assert found, "watchdog did not report a blocked loop"
     message = caplog.records[0].getMessage()
     assert "not run a callback" in message
-    # The dump is the point: it must name threads, not just complain.
-    assert "Thread" in message
+    assert "unavailable" not in message
+    # The dump must show where the loop thread is stuck, not just complain.
+    assert "test_loop_watchdog.py" in message
 
 
 def test_report_is_emitted_once_per_stall(loop, caplog):

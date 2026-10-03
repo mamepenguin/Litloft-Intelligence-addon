@@ -16,7 +16,12 @@ from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.database import get_search_db, upsert_fts_text_content, validate_vector_table
+from app.database import (
+    get_search_db,
+    get_search_db_read,
+    upsert_fts_text_content,
+    validate_vector_table,
+)
 from app.document_sections import replace_document_sections
 from app.extractors.base import ExtractionResult
 from app.extractors.epub import EpubExtractor
@@ -323,26 +328,35 @@ def index_text_content(file_id: str) -> bool:
     Returns:
         True if indexing succeeded.
     """
-    # --- Phase 1: Read file info (short DB access) ---
-    with get_search_db() as session:
+    # --- Phase 1: Read file info, then extract with no lock held ---
+    # Extracting a scanned PDF takes tens of seconds; every other writer,
+    # and any coroutine that touches the DB, queues behind the write lock
+    # for that long.
+    with get_search_db_read() as session:
         file = session.query(IndexedFile).filter_by(
             file_id=file_id, active=True
         ).first()
 
-        if file is None:
-            return False
+    if file is None:
+        return False
 
-        result = _extract_file_content(file)
-        chunks = list(result.chunks)
-        if not chunks:
-            # No chunks: still call _upsert_pdf_markdown so an empty
-            # PyMuPDF4LLM extraction (markdown="") clears any stale
-            # row from a prior re-index. markdown=None (fitz fallback /
-            # non-PDF) is a no-op inside the helper.
+    result = _extract_file_content(file)
+    chunks = list(result.chunks)
+    if not chunks:
+        # No chunks: still call _upsert_pdf_markdown so an empty
+        # PyMuPDF4LLM extraction (markdown="") clears any stale
+        # row from a prior re-index. markdown=None (fitz fallback /
+        # non-PDF) is a no-op inside the helper.
+        with get_search_db() as session:
+            record = session.query(IndexedFile).filter_by(
+                file_id=file_id, active=True
+            ).first()
+            if record is None:
+                return False
             _upsert_pdf_markdown(session, file_id, result)
             replace_document_sections(session, file_id, result.section_titles)
-            file.text_indexed = True
-            return True
+            record.text_indexed = True
+        return True
 
     # --- Phase 2: Compute embeddings (no DB lock, may be slow) ---
     chunk_texts = [c.text for c in chunks]
@@ -355,6 +369,12 @@ def index_text_content(file_id: str) -> bool:
 
     # --- Phase 3: Write results to DB (short transaction) ---
     with get_search_db() as session:
+        file_record = session.query(IndexedFile).filter_by(
+            file_id=file_id, active=True
+        ).first()
+        if file_record is None:
+            return False
+
         # Remove old text content embeddings
         _remove_embeddings(session, file_id, "text_content")
 
@@ -392,11 +412,7 @@ def index_text_content(file_id: str) -> bool:
 
         _upsert_pdf_markdown(session, file_id, result)
 
-        file_record = session.query(IndexedFile).filter_by(
-            file_id=file_id
-        ).first()
-        if file_record is not None:
-            file_record.text_indexed = True
+        file_record.text_indexed = True
         return True
 
 
