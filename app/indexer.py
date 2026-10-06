@@ -27,6 +27,7 @@ from app.database import (
     validate_vector_table,
 )
 from app.models import Embedding, IndexedFile, TranscriptChunk, TranscriptWord
+from app.sidecar_match import match_siblings
 from app.workers.blip import check_idle_unload as check_blip_idle_unload
 from app.workers.clip_concepts import check_idle_unload as check_clip_concepts_idle_unload
 from app.workers.clip import (
@@ -607,6 +608,7 @@ class IndexManager:
             )
 
             reset_count = 0
+            unlistable_count = 0
             for f in loft_refs:
                 # Temp STT audio is an explicit request from Media Import
                 # and must re-run even when the loft already has VTT chunks.
@@ -629,10 +631,20 @@ class IndexManager:
                 if has_chunks:
                     continue
 
-                # Check if VTT file now exists on disk
-                if any(parent.glob(f"{stem}*.vtt")):
+                try:
+                    has_vtt = bool(match_siblings(parent, stem, "*.vtt"))
+                except OSError:
+                    unlistable_count += 1
+                    continue
+                if has_vtt:
                     f.whisper_indexed = False
                     reset_count += 1
+
+            if unlistable_count:
+                logger.warning(
+                    "Skipped %d loft ref(s) whose folder could not be listed",
+                    unlistable_count,
+                )
 
             if reset_count:
                 logger.info(
