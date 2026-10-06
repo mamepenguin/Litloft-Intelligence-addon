@@ -119,9 +119,11 @@ def _loft_stt_temp_path(file_path: str) -> str | None:
 
     loft_path = Path(file_path)
     candidate = loft_path.parent / f"{loft_path.stem}{LOFT_STT_TEMP_SUFFIX}"
-    if candidate.is_file():
-        return str(candidate)
-    return None
+    try:
+        found = candidate.is_file()
+    except OSError:
+        return None
+    return str(candidate) if found else None
 
 
 def _cleanup_loft_stt_temp(file_path: str | None) -> None:

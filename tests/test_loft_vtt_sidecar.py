@@ -80,28 +80,39 @@ def Session(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def unlistable(monkeypatch):
-    """Make the given directories fail to list, as a permission error would."""
-    blocked: set[str] = set()
-    real_scandir, real_listdir = os.scandir, os.listdir
+    """Make the given directories fail to list or search, as a permission error would.
 
-    def _check(path):
-        if path is not None and not isinstance(path, int):
-            if os.path.realpath(os.fsdecode(path)) in blocked:
-                raise PermissionError(13, "Permission denied", os.fsdecode(path))
+    Listing the directory and stat-ing anything inside it both raise, so a
+    check that stats a path in the folder before listing it is caught too.
+    """
+    blocked: set[str] = set()
+    real_scandir, real_listdir, real_stat = os.scandir, os.listdir, os.stat
+
+    def _deny(path):
+        raise PermissionError(13, "Permission denied", os.fsdecode(path))
 
     def _scandir(path="."):
-        _check(path)
+        if os.path.abspath(os.fsdecode(path)) in blocked:
+            _deny(path)
         return real_scandir(path)
 
     def _listdir(path="."):
-        _check(path)
+        if os.path.abspath(os.fsdecode(path)) in blocked:
+            _deny(path)
         return real_listdir(path)
+
+    def _stat(path, *args, **kwargs):
+        if not isinstance(path, int):
+            if os.path.dirname(os.path.abspath(os.fsdecode(path))) in blocked:
+                _deny(path)
+        return real_stat(path, *args, **kwargs)
 
     monkeypatch.setattr(os, "scandir", _scandir)
     monkeypatch.setattr(os, "listdir", _listdir)
+    monkeypatch.setattr(os, "stat", _stat)
 
     def _block(directory: Path) -> None:
-        blocked.add(os.path.realpath(directory))
+        blocked.add(os.path.abspath(directory))
 
     return _block
 
@@ -271,6 +282,39 @@ class TestReconcile:
         _reconcile_vtt()
 
         assert _whisper_indexed(Session, "f1") is True
+
+    def test_spec_addon_001_loft_with_chunks_is_not_requeued(self, Session, tmp_path):
+        loft = _make_loft(tmp_path / "dir", nfc(CAFE))
+        _vtt(tmp_path / "dir" / (nfd(CAFE) + ".vtt"), "already indexed")
+        _seed_loft(Session, "f1", loft, whisper_indexed=True)
+        s = Session()
+        s.add(TranscriptChunk(
+            file_id="f1", chunk_index=0, text="already indexed",
+            timestamp_start=0.0, timestamp_end=2.0,
+        ))
+        s.commit()
+        s.close()
+
+        _reconcile_vtt()
+
+        assert _whisper_indexed(Session, "f1") is True
+
+    @pytest.mark.parametrize("locked_count", [0, 1])
+    def test_spec_addon_001_reconcile_warns_only_when_a_folder_was_skipped(
+        self, Session, tmp_path, unlistable, caplog, locked_count
+    ):
+        for i in range(locked_count):
+            locked = _make_loft(tmp_path / f"locked{i}", "Clip")
+            _seed_loft(Session, f"locked{i}", locked, whisper_indexed=True)
+            unlistable(tmp_path / f"locked{i}")
+        ok = _make_loft(tmp_path / "open", "Clip")
+        _seed_loft(Session, "open", ok, whisper_indexed=True)
+
+        with caplog.at_level(logging.WARNING):
+            _reconcile_vtt()
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == locked_count
 
     def test_spec_addon_001_unlistable_directories_are_skipped_and_counted_once(
         self, Session, tmp_path, unlistable, caplog

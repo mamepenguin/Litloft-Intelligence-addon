@@ -617,7 +617,12 @@ class IndexManager:
                 stem = loft_path.stem
                 parent = loft_path.parent
                 temp_audio = parent / f"{stem}.stt_temp.m4a"
-                if temp_audio.is_file():
+                try:
+                    has_temp_audio = temp_audio.is_file()
+                except OSError:
+                    unlistable_count += 1
+                    continue
+                if has_temp_audio:
                     f.whisper_indexed = False
                     reset_count += 1
                     continue
