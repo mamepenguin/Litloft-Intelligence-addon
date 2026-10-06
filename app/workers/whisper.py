@@ -19,6 +19,7 @@ import os
 import re
 import threading
 import time
+import unicodedata
 import uuid
 from datetime import UTC, datetime
 
@@ -31,6 +32,7 @@ from app.models import (
     TranscriptChunk,
     TranscriptWord,
 )
+from app.sidecar_match import match_siblings
 from app.workers.embedder import embed_passages
 from app.workers.transcription import get_provider
 from app.workers.transcription.errors import (
@@ -117,9 +119,11 @@ def _loft_stt_temp_path(file_path: str) -> str | None:
 
     loft_path = Path(file_path)
     candidate = loft_path.parent / f"{loft_path.stem}{LOFT_STT_TEMP_SUFFIX}"
-    if candidate.is_file():
-        return str(candidate)
-    return None
+    try:
+        found = candidate.is_file()
+    except OSError:
+        return None
+    return str(candidate) if found else None
 
 
 def _cleanup_loft_stt_temp(file_path: str | None) -> None:
@@ -1675,7 +1679,11 @@ def _index_loft_vtt(file_id: str, file_path: str) -> bool:
     stem = loft_path.stem
     parent = loft_path.parent
 
-    vtt_candidates = sorted(parent.glob(f"{stem}*.vtt"))
+    try:
+        vtt_candidates = match_siblings(parent, stem, "*.vtt")
+    except OSError as exc:
+        logger.warning("Cannot list the folder of loft ref %s: %s", file_id, exc)
+        vtt_candidates = []
     if not vtt_candidates:
         logger.info("No adjacent VTT for loft ref %s, marking as indexed", file_id)
         with get_search_db() as session:
@@ -1684,11 +1692,11 @@ def _index_loft_vtt(file_id: str, file_path: str) -> bool:
                 file.whisper_indexed = True
         return True
 
-    best_vtt = vtt_candidates[0]
-    for c in vtt_candidates:
-        if c.name == f"{stem}.vtt":
-            best_vtt = c
-            break
+    exact_name = unicodedata.normalize("NFC", f"{stem}.vtt")
+    best_vtt = next(
+        (c for c in vtt_candidates if unicodedata.normalize("NFC", c.name) == exact_name),
+        vtt_candidates[0],
+    )
 
     raw_segments = _dedup_rolling_cues(_parse_vtt_cues(str(best_vtt)))
     if not raw_segments:
