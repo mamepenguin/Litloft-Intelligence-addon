@@ -84,8 +84,11 @@ def unlistable(monkeypatch):
 
     Listing the directory and stat-ing anything inside it both raise, so a
     check that stats a path in the folder before listing it is caught too.
+    With ``searchable=True`` only the listing raises, as for a folder whose
+    execute bit is set but whose read bit is not.
     """
     blocked: set[str] = set()
+    unsearchable: set[str] = set()
     real_scandir, real_listdir, real_stat = os.scandir, os.listdir, os.stat
 
     def _deny(path):
@@ -103,7 +106,7 @@ def unlistable(monkeypatch):
 
     def _stat(path, *args, **kwargs):
         if not isinstance(path, int):
-            if os.path.dirname(os.path.abspath(os.fsdecode(path))) in blocked:
+            if os.path.dirname(os.path.abspath(os.fsdecode(path))) in unsearchable:
                 _deny(path)
         return real_stat(path, *args, **kwargs)
 
@@ -111,8 +114,10 @@ def unlistable(monkeypatch):
     monkeypatch.setattr(os, "listdir", _listdir)
     monkeypatch.setattr(os, "stat", _stat)
 
-    def _block(directory: Path) -> None:
+    def _block(directory: Path, *, searchable: bool = False) -> None:
         blocked.add(os.path.abspath(directory))
+        if not searchable:
+            unsearchable.add(os.path.abspath(directory))
 
     return _block
 
@@ -316,14 +321,15 @@ class TestReconcile:
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(warnings) == locked_count
 
+    @pytest.mark.parametrize("searchable", [False, True], ids=["unsearchable", "searchable"])
     def test_spec_addon_001_unlistable_directories_are_skipped_and_counted_once(
-        self, Session, tmp_path, unlistable, caplog
+        self, Session, tmp_path, unlistable, caplog, searchable
     ):
         for i in (1, 2):
             locked = _make_loft(tmp_path / f"locked{i}", "Clip")
             _vtt(tmp_path / f"locked{i}" / "Clip.vtt", "unreachable")
             _seed_loft(Session, f"locked{i}", locked, whisper_indexed=True)
-            unlistable(tmp_path / f"locked{i}")
+            unlistable(tmp_path / f"locked{i}", searchable=searchable)
         ok = _make_loft(tmp_path / "open", nfc(CAFE))
         _vtt(tmp_path / "open" / (nfd(CAFE) + ".vtt"), "late transcript")
         _seed_loft(Session, "open", ok, whisper_indexed=True)
