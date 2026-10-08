@@ -353,6 +353,8 @@ def reset_vision_capability_cache() -> None:
 # mode must still get its retry when the probe happens to time out. A
 # 404 is excluded: an absent model does not become present by dropping a
 # body field.
+_JSON_OBJECT_FORMAT = {"type": "json_object"}
+
 _RESPONSE_FORMAT_SUSPECT_FAILURES = frozenset(
     {
         FAILURE_VISION_UNSUPPORTED,
@@ -461,6 +463,9 @@ class LLMClient:
         self._last_request_time: float | None = None
         # Latched once a provider answers 400 to our opt-in body fields.
         self._extras_rejected = False
+        # Latched once a request rejected with JSON mode is answered
+        # without it.
+        self._json_mode_rejected = False
 
     def _provider_extras(self) -> dict:
         """Provider-specific body fields for this request.
@@ -569,8 +574,12 @@ class LLMClient:
         # providers that 400 on unknown keys are not broken for non-JSON
         # callers like RAG streaming.
         extra_kwargs: dict = self._provider_extras()
-        if response_format is not None:
+        json_mode = response_format == _JSON_OBJECT_FORMAT
+        if response_format is not None and not (
+            json_mode and self._json_mode_rejected
+        ):
             extra_kwargs["response_format"] = response_format
+        resent_without_json_mode = False
 
         # OpenAI's gpt-5 / o-series families reject ``max_tokens`` and
         # require ``max_completion_tokens``. Every other OpenAI-compatible
@@ -596,6 +605,13 @@ class LLMClient:
                     temperature=effective_temperature,
                     **extra_kwargs,
                 )
+                if resent_without_json_mode and not self._json_mode_rejected:
+                    self._json_mode_rejected = True
+                    logger.info(
+                        "Provider answered without response_format; continuing "
+                        "without it (model=%s)",
+                        self._config.model,
+                    )
                 choice = response.choices[0]
                 content = choice.message.content
                 finish_reason = getattr(choice, "finish_reason", None)
@@ -630,6 +646,25 @@ class LLMClient:
                     # without the opt-in, and do not spend a retry on
                     # our own doing.
                     extra_kwargs = reduced
+                    continue
+                if (
+                    e.status_code == 400
+                    and json_mode
+                    and "response_format" in extra_kwargs
+                ):
+                    # Whether the field caused the 400 is decided by the
+                    # answer to the request without it, not by the
+                    # provider's error text.
+                    logger.info(
+                        "Request rejected with response_format (400); "
+                        "retrying without it (model=%s)",
+                        self._config.model,
+                    )
+                    extra_kwargs = {
+                        k: v for k, v in extra_kwargs.items()
+                        if k != "response_format"
+                    }
+                    resent_without_json_mode = True
                     continue
                 if e.status_code in _PERMANENT_STATUS_CODES:
                     logger.warning(
@@ -1204,7 +1239,7 @@ class LLMClient:
         # that happens, retry once without response_format so the model
         # can obey the prompt-level JSON instruction. Compliant providers
         # never hit this path, so latency is only paid by broken ones.
-        if not raw.strip():
+        if not raw.strip() and not self._json_mode_rejected:
             logger.info(
                 "LLM returned empty body with json_object mode; "
                 "retrying without response_format"
