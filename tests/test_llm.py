@@ -5,6 +5,8 @@ text generation with mocked AsyncOpenAI, JSON parsing with
 regex fallback, retry with exponential backoff, and rate limiting.
 """
 
+import copy
+import json
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1486,3 +1488,519 @@ class TestOllamaJsonFailureClassification:
 
         assert result.value == {"ok": True}
         assert result.failure is None
+
+
+# ---------------------------------------------------------------------------
+# A provider that rejects JSON object mode (SPEC-ADDON-008)
+# ---------------------------------------------------------------------------
+
+
+_JSON_MODE = {"type": "json_object"}
+_SCHEMA_MODE = {
+    "type": "json_schema",
+    "json_schema": {"name": "x", "schema": {"type": "object"}},
+}
+_FALLBACK_MODEL = "claude-test-model"
+
+
+class _Provider:
+    """Answers chat completions the way an OpenAI-compatible server would.
+
+    A request carrying ``response_format`` is answered 400 while
+    ``rejects_json_mode`` is set. Requests without it take their outcome
+    from ``without_json_mode`` in order, then get ``respond()``.
+    """
+
+    def __init__(
+        self,
+        *,
+        rejects_json_mode: bool = True,
+        content: str | None = '{"ok": true}',
+        without_json_mode: list | None = None,
+    ) -> None:
+        self.rejects_json_mode = rejects_json_mode
+        self.content = content
+        self.without_json_mode = list(without_json_mode or [])
+        self.respond = lambda: _make_classified_response(self.content)
+        self.sent: list[dict] = []
+
+    async def create(self, **kwargs):
+        self.sent.append(copy.deepcopy(kwargs))
+        if "response_format" in kwargs:
+            if self.rejects_json_mode:
+                raise _make_status_error(400)
+            return self.respond()
+        if self.without_json_mode:
+            outcome = self.without_json_mode.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+        return self.respond()
+
+
+def _fallback_client(
+    provider: _Provider,
+    *,
+    reasoning: str = "auto",
+    retry_attempts: int = 0,
+) -> LLMClient:
+    client = LLMClient(
+        LLMConfig(
+            provider="openai_compatible",
+            base_url="https://api.example.test/v1",
+            model=_FALLBACK_MODEL,
+            vision_model="vision-test-model",
+            retry_attempts=retry_attempts,
+            retry_base_delay=0.001,
+            retry_max_delay=0.002,
+            reasoning=reasoning,
+        )
+    )
+    client._client = MagicMock()
+    client._client.chat.completions.create = AsyncMock(
+        side_effect=provider.create
+    )
+    return client
+
+
+def _make_503() -> InternalServerError:
+    request = httpx.Request("POST", "http://test/chat/completions")
+    response = httpx.Response(
+        status_code=503,
+        request=request,
+        content=b'{"error": {"message": "overloaded"}}',
+    )
+    return InternalServerError(
+        message="Service unavailable", response=response, body=None
+    )
+
+
+def _without(request: dict, *keys: str) -> dict:
+    return {k: v for k, v in request.items() if k not in keys}
+
+
+async def _latch(client: LLMClient) -> None:
+    """Drive the client through one rejected-then-answered JSON call."""
+    result = await client.generate_json_result("system", "user")
+    assert result.value == {"ok": True}
+    assert result.failure is None
+
+
+async def _via_generate_json_result(client: LLMClient):
+    return (await client.generate_json_result("system", "user")).value
+
+
+async def _via_generate_json(client: LLMClient):
+    return await client.generate_json("system", "user")
+
+
+async def _via_generate_with_json_mode(client: LLMClient):
+    text = await client.generate(
+        "system", "user", response_format=_JSON_MODE
+    )
+    return None if text is None else json.loads(text)
+
+
+_JSON_ENTRY_POINTS = pytest.mark.parametrize(
+    "call",
+    [
+        _via_generate_json_result,
+        _via_generate_json,
+        _via_generate_with_json_mode,
+    ],
+    ids=["generate_json_result", "generate_json", "generate"],
+)
+
+
+class TestJsonModeFallback:
+    """SPEC-ADDON-008: JSON requests survive a provider that rejects JSON mode."""
+
+    # SPEC-ADDON-008 (I1, scope): every public path that sends json_object.
+    @_JSON_ENTRY_POINTS
+    @pytest.mark.asyncio
+    async def test_a_rejected_json_request_is_answered_without_json_mode(
+        self, call
+    ):
+        provider = _Provider()
+        client = _fallback_client(provider)
+
+        value = await call(client)
+
+        assert value == {"ok": True}
+        assert len(provider.sent) == 2
+        assert provider.sent[0]["response_format"] == _JSON_MODE
+        assert "response_format" not in provider.sent[1]
+
+    # SPEC-ADDON-008 (I2, step 6): later calls on the latched client.
+    @_JSON_ENTRY_POINTS
+    @pytest.mark.asyncio
+    async def test_after_the_latch_one_request_without_json_mode(self, call):
+        provider = _Provider()
+        client = _fallback_client(provider)
+        await _latch(client)
+        before = len(provider.sent)
+
+        value = await call(client)
+
+        assert value == {"ok": True}
+        later = provider.sent[before:]
+        assert len(later) == 1
+        assert "response_format" not in later[0]
+
+    # SPEC-ADDON-008 (I2): the latch holds for every later call, not one.
+    @pytest.mark.asyncio
+    async def test_the_latch_holds_across_many_calls(self):
+        provider = _Provider()
+        client = _fallback_client(provider)
+        await _latch(client)
+        before = len(provider.sent)
+
+        for _ in range(3):
+            assert await client.generate_json("system", "user") == {"ok": True}
+
+        later = provider.sent[before:]
+        assert len(later) == 3
+        assert all("response_format" not in r for r in later)
+
+    # SPEC-ADDON-008 (I6): default reasoning config, Anthropic-like provider.
+    @pytest.mark.asyncio
+    async def test_default_reasoning_first_call_sends_three_requests(self):
+        provider = _Provider()
+        client = _fallback_client(provider, reasoning="disabled")
+
+        first = await client.generate_json_result("system", "user")
+        second = await client.generate_json_result("system", "user")
+
+        assert first.value == {"ok": True}
+        assert first.failure is None
+        assert len(provider.sent) == 4
+        assert "extra_body" in provider.sent[0]
+        assert provider.sent[0]["response_format"] == _JSON_MODE
+        assert "extra_body" not in provider.sent[1]
+        assert provider.sent[1]["response_format"] == _JSON_MODE
+        assert "extra_body" not in provider.sent[2]
+        assert "response_format" not in provider.sent[2]
+        assert second.value == {"ok": True}
+        assert "extra_body" not in provider.sent[3]
+        assert "response_format" not in provider.sent[3]
+
+    # SPEC-ADDON-008 (I7): the resend changes nothing but the dropped fields.
+    @pytest.mark.asyncio
+    async def test_the_resend_differs_only_by_response_format(self):
+        provider = _Provider()
+        client = _fallback_client(provider)
+
+        await client.generate_json_result(
+            "system", "user", max_tokens_override=777, temperature=0.42
+        )
+
+        assert len(provider.sent) == 2
+        assert provider.sent[1] == _without(provider.sent[0], "response_format")
+
+    # SPEC-ADDON-008 (I7): with the reasoning field already dropped.
+    @pytest.mark.asyncio
+    async def test_the_resend_keeps_the_reasoning_field_dropped(self):
+        provider = _Provider()
+        client = _fallback_client(provider, reasoning="disabled")
+
+        await client.generate_json_result(
+            "system", "user", max_tokens_override=777, temperature=0.42
+        )
+
+        assert len(provider.sent) == 3
+        assert provider.sent[2] == _without(provider.sent[1], "response_format")
+        assert provider.sent[2] == _without(
+            provider.sent[0], "response_format", "extra_body"
+        )
+
+    # SPEC-ADDON-008 (I10, step 4): the 400 is not charged to retry_attempts.
+    @pytest.mark.asyncio
+    async def test_the_resend_happens_with_zero_retry_attempts(self):
+        provider = _Provider()
+        client = _fallback_client(provider, retry_attempts=0)
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value == {"ok": True}
+        assert len(provider.sent) == 2
+        assert "response_format" not in provider.sent[1]
+
+    # SPEC-ADDON-008 (I10, failure cases): a retry within budget still latches.
+    @pytest.mark.asyncio
+    async def test_a_503_then_200_on_the_resend_latches(self):
+        provider = _Provider(without_json_mode=[_make_503()])
+        client = _fallback_client(provider, retry_attempts=1)
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value == {"ok": True}
+        assert len(provider.sent) == 3
+        assert provider.sent[0]["response_format"] == _JSON_MODE
+        assert "response_format" not in provider.sent[1]
+        assert "response_format" not in provider.sent[2]
+        before = len(provider.sent)
+        assert await client.generate_json("system", "user") == {"ok": True}
+        assert len(provider.sent) == before + 1
+        assert "response_format" not in provider.sent[-1]
+
+    # SPEC-ADDON-008 (I3, failure case 1): a 400 that is not about the field.
+    @pytest.mark.parametrize("reasoning", ["auto", "disabled"])
+    @pytest.mark.asyncio
+    async def test_a_400_with_and_without_json_mode_fails_and_does_not_latch(
+        self, reasoning
+    ):
+        provider = _Provider(without_json_mode=[_make_status_error(400)])
+        client = _fallback_client(
+            provider, reasoning=reasoning, retry_attempts=3
+        )
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value is None
+        assert result.failure == "request_failed"
+        resends = [r for r in provider.sent if "response_format" not in r]
+        assert len(resends) == 1
+        assert len(provider.sent) == (2 if reasoning == "auto" else 3)
+
+        provider.rejects_json_mode = False
+        before = len(provider.sent)
+        assert await client.generate_json("system", "user") == {"ok": True}
+        assert provider.sent[before]["response_format"] == _JSON_MODE
+
+    # SPEC-ADDON-008 (I3, failure case 2): any other error on the resend.
+    @pytest.mark.parametrize(
+        ("retry_attempts", "outcomes", "expected_requests"),
+        [
+            (3, [_make_status_error(401)], 2),
+            (3, [_make_status_error(402)], 2),
+            (3, [_make_status_error(403)], 2),
+            (3, [_make_status_error(404)], 2),
+            (0, [_make_rate_limit_error()], 2),
+            (1, [_make_503(), _make_503()], 3),
+            (3, [ValueError("unexpected")], 2),
+        ],
+        ids=["401", "402", "403", "404", "429-exhausted", "503-exhausted",
+             "unexpected-exception"],
+    )
+    @pytest.mark.asyncio
+    async def test_another_error_on_the_resend_fails_and_does_not_latch(
+        self, retry_attempts, outcomes, expected_requests
+    ):
+        provider = _Provider(without_json_mode=list(outcomes))
+        client = _fallback_client(provider, retry_attempts=retry_attempts)
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value is None
+        assert result.failure == "request_failed"
+        assert len(provider.sent) == expected_requests
+        assert provider.sent[0]["response_format"] == _JSON_MODE
+        assert all("response_format" not in r for r in provider.sent[1:])
+
+        provider.rejects_json_mode = False
+        before = len(provider.sent)
+        assert await client.generate_json("system", "user") == {"ok": True}
+        assert provider.sent[before]["response_format"] == _JSON_MODE
+
+    # SPEC-ADDON-008 (failure case 3): plain text without JSON still latches.
+    @pytest.mark.asyncio
+    async def test_a_non_json_resend_is_malformed_and_latches(self):
+        provider = _Provider(content="Sure, here is no JSON at all.")
+        client = _fallback_client(provider)
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value is None
+        assert result.failure == "malformed"
+        assert len(provider.sent) == 2
+        provider.content = '{"ok": true}'
+        before = len(provider.sent)
+        assert await client.generate_json("system", "user") == {"ok": True}
+        assert len(provider.sent) == before + 1
+        assert "response_format" not in provider.sent[-1]
+
+    # SPEC-ADDON-008 (failure case 4): an empty resend body, no empty-body retry.
+    @pytest.mark.parametrize("empty", [None, ""], ids=["none", "empty-string"])
+    @pytest.mark.asyncio
+    async def test_an_empty_resend_is_empty_and_latches(self, empty):
+        provider = _Provider(content=empty)
+        client = _fallback_client(provider)
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value is None
+        assert result.failure == "empty"
+        assert len(provider.sent) == 2
+        provider.content = '{"ok": true}'
+        before = len(provider.sent)
+        assert await client.generate_json("system", "user") == {"ok": True}
+        assert len(provider.sent) == before + 1
+        assert "response_format" not in provider.sent[-1]
+
+    # SPEC-ADDON-008 (I9, failure case 5): an empty answer after the latch.
+    @pytest.mark.asyncio
+    async def test_an_empty_answer_after_the_latch_sends_nothing_more(self):
+        provider = _Provider()
+        client = _fallback_client(provider)
+        await _latch(client)
+        provider.content = None
+        before = len(provider.sent)
+
+        result = await client.generate_json_result("system", "user")
+
+        assert result.value is None
+        assert result.failure == "empty"
+        assert len(provider.sent) == before + 1
+
+    # SPEC-ADDON-008 (scope, I5): another response_format type is never stripped.
+    @pytest.mark.asyncio
+    async def test_the_latch_leaves_another_response_format_type_alone(self):
+        provider = _Provider()
+        client = _fallback_client(provider)
+        await _latch(client)
+        provider.rejects_json_mode = False
+        before = len(provider.sent)
+
+        await client.generate("system", "user", response_format=_SCHEMA_MODE)
+
+        assert len(provider.sent) == before + 1
+        assert provider.sent[-1]["response_format"] == _SCHEMA_MODE
+
+    # SPEC-ADDON-008 (I5): after the latch, a 400 to another type is not resent.
+    @pytest.mark.asyncio
+    async def test_a_rejected_schema_request_is_not_resent(self):
+        provider = _Provider()
+        client = _fallback_client(provider, retry_attempts=3)
+        await _latch(client)
+        before = len(provider.sent)
+
+        text = await client.generate(
+            "system", "user", response_format=_SCHEMA_MODE
+        )
+
+        assert text is None
+        assert len(provider.sent) == before + 1
+        assert provider.sent[-1]["response_format"] == _SCHEMA_MODE
+
+    # SPEC-ADDON-008 (I5): a 400 to a plain request on a latched client.
+    @pytest.mark.asyncio
+    async def test_a_rejected_plain_request_is_not_resent(self):
+        provider = _Provider()
+        client = _fallback_client(provider, retry_attempts=3)
+        await _latch(client)
+        provider.without_json_mode = [_make_status_error(400)]
+        before = len(provider.sent)
+
+        text = await client.generate("system", "user")
+
+        assert text is None
+        assert len(provider.sent) == before + 1
+        assert "response_format" not in provider.sent[-1]
+
+    # SPEC-ADDON-008 (I8): vision JSON does not read the latch.
+    @pytest.mark.asyncio
+    async def test_vision_json_still_sends_json_mode_after_the_latch(self):
+        provider = _Provider()
+        client = _fallback_client(provider)
+        await _latch(client)
+        provider.rejects_json_mode = False
+        provider.content = (
+            '{"scene_label": "s", "visible_text": "", "scene_type": "slide"}'
+        )
+        before = len(provider.sent)
+
+        await client.generate_video_scene_json(
+            b"\xff\xd8\xff\xd9", "image/jpeg", "system", "user"
+        )
+
+        assert provider.sent[before]["response_format"] == _JSON_MODE
+
+    # SPEC-ADDON-008 (I8): chat_with_tools does not read the latch.
+    @pytest.mark.asyncio
+    async def test_chat_with_tools_still_sends_json_mode_after_the_latch(self):
+        provider = _Provider()
+        client = _fallback_client(provider)
+        await _latch(client)
+        provider.rejects_json_mode = False
+        provider.respond = _make_tool_response_obj
+        before = len(provider.sent)
+
+        await client.chat_with_tools(
+            [{"role": "user", "content": "hi"}], response_format=_JSON_MODE
+        )
+
+        assert provider.sent[before]["response_format"] == _JSON_MODE
+
+    # SPEC-ADDON-008 (states): the latch is per client; a new one starts fresh.
+    @pytest.mark.asyncio
+    async def test_a_new_client_starts_sending_json_mode(self):
+        provider = _Provider()
+        latched = _fallback_client(provider)
+        await _latch(latched)
+        fresh = _fallback_client(provider)
+        before = len(provider.sent)
+
+        result = await fresh.generate_json_result("system", "user")
+
+        assert result.value == {"ok": True}
+        assert provider.sent[before]["response_format"] == _JSON_MODE
+        assert len(provider.sent) == before + 2
+
+    # SPEC-ADDON-008 (I4, item 7): a provider that accepts JSON mode is unchanged.
+    @_JSON_ENTRY_POINTS
+    @pytest.mark.asyncio
+    async def test_an_accepting_provider_gets_json_mode_once_per_call(
+        self, call
+    ):
+        provider = _Provider(rejects_json_mode=False)
+        client = _fallback_client(provider)
+
+        for _ in range(3):
+            assert await call(client) == {"ok": True}
+
+        assert len(provider.sent) == 3
+        assert all(r["response_format"] == _JSON_MODE for r in provider.sent)
+
+    # SPEC-ADDON-008 (item 8): the triggering 400 and the latch log at INFO.
+    @pytest.mark.asyncio
+    async def test_the_fallback_logs_two_info_lines_and_no_warning(
+        self, caplog
+    ):
+        provider = _Provider()
+        client = _fallback_client(provider)
+
+        with caplog.at_level(logging.INFO):
+            await client.generate_json_result("system", "user")
+
+        about_field = [
+            r for r in caplog.records
+            if "response_format" in r.getMessage()
+        ]
+        assert len(about_field) == 2
+        assert all(r.levelno == logging.INFO for r in about_field)
+        assert all(_FALLBACK_MODEL in r.getMessage() for r in about_field)
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    # SPEC-ADDON-008 (item 8): an unrelated 400 logs one INFO, then the WARNING.
+    @pytest.mark.asyncio
+    async def test_an_unrelated_400_logs_one_info_then_the_warning(
+        self, caplog
+    ):
+        provider = _Provider(without_json_mode=[_make_status_error(400)])
+        client = _fallback_client(provider)
+
+        with caplog.at_level(logging.INFO):
+            await client.generate_json_result("system", "user")
+
+        about_field = [
+            r for r in caplog.records
+            if "response_format" in r.getMessage()
+            and r.levelno == logging.INFO
+        ]
+        assert len(about_field) == 1
+        assert _FALLBACK_MODEL in about_field[0].getMessage()
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert warnings
+        assert caplog.records.index(about_field[0]) < caplog.records.index(
+            warnings[0]
+        )
