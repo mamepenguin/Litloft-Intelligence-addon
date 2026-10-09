@@ -16,7 +16,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
-from app.digit_separator import is_digit_separator
+from app.digit_separator import is_digit_separator, splits_number
 
 logger = logging.getLogger(__name__)
 
@@ -475,7 +475,12 @@ def _balance_two_lines(cue: dict, soft_width: int) -> dict:
         return cue
 
     if " " in text:
-        words = text.split(" ")
+        words: list[str] = []
+        for w in text.split(" "):
+            if words and is_digit_separator(None, words[-1], w):
+                words[-1] = f"{words[-1]} {w}"
+            else:
+                words.append(w)
         midpoint_width = _display_width(text) // 2
         first: list[str] = []
         running = 0
@@ -491,14 +496,43 @@ def _balance_two_lines(cue: dict, soft_width: int) -> dict:
         return cue
 
     for i, ch in enumerate(text):
-        if ch in _PUNCT_SOFT and _display_width(text[: i + 1]) >= soft_width // 2:
+        if (
+            ch in _PUNCT_SOFT
+            and _display_width(text[: i + 1]) >= soft_width // 2
+            and not splits_number(text, i + 1)
+        ):
             return {**cue, "text": text[: i + 1] + "\n" + text[i + 1 :].lstrip()}
 
     target = len(text) // 2
     mid = _janome_break_position(text, target)
     if mid is None or not (0 < mid < len(text)):
         mid = _adjust_cjk_break(text, target)
+    if splits_number(text, mid):
+        mid = _number_edge(text, mid)
+        if mid is None:
+            return cue
     return {**cue, "text": text[:mid] + "\n" + text[mid:]}
+
+
+def _number_edge(text: str, pos: int) -> int | None:
+    """Where to break instead of ``pos``, which falls inside a number.
+
+    The start of the number, keeping it with the counter or noun after
+    it; its end when the number opens the text. ``None`` when neither
+    leaves text on both lines or the end would start a line with a
+    character that must not.
+    """
+    start = pos
+    while splits_number(text, start):
+        start -= 1
+    if start > 0:
+        return start
+    end = pos
+    while splits_number(text, end):
+        end += 1
+    if end >= len(text) or text[end] in _NO_BREAK_BEFORE:
+        return None
+    return end
 
 
 def _sanitise_cue_text(text: str) -> str:

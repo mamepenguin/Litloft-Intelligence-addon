@@ -159,12 +159,16 @@ def align_segment(
     segments = result.get("segments") if isinstance(result, dict) else None
     if not segments:
         return None
-    seg = segments[0] if isinstance(segments[0], dict) else None
-    if seg is None:
-        return None
 
+    # WhisperX splits the text into sentences (NLTK Punkt) and returns one
+    # segment per sentence.
     key = "chars" if want_chars else "words"
-    items = seg.get(key) or []
+    items = [
+        item
+        for seg in segments
+        if isinstance(seg, dict)
+        for item in (seg.get(key) or [])
+    ]
 
     # First pass: collect tokens with raw timestamps. Punctuation and
     # other chars outside wav2vec2's phoneme vocabulary come through

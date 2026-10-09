@@ -281,10 +281,14 @@ def check_idle_unload() -> None:
 _LANG_DETECT_MIN_PROB = 0.5
 
 
-# faster-whisper's detector reads only the first 30 s, and decoding the
+# Long enough to reach speech after a music or silent opening; decoding the
 # whole file would cost about 1 GB for an unsplit file several hours long.
-_LANG_DETECT_SECONDS = 30
+_LANG_DETECT_SECONDS = 120
 _LANG_DETECT_DECODE_TIMEOUT_S = 60
+# faster-whisper 1.1.0 answers en ~0.61 (above _LANG_DETECT_MIN_PROB) when
+# VAD leaves nothing, and a VAD false positive leaves almost nothing; 1 s of
+# real speech was enough on every clip measured.
+_LANG_DETECT_MIN_SPEECH_S = 1.0
 
 
 def _decode_detection_sample(file_path: str, sampling_rate: int) -> np.ndarray:
@@ -303,12 +307,20 @@ def _decode_detection_sample(file_path: str, sampling_rate: int) -> np.ndarray:
     return np.frombuffer(result.stdout, dtype=np.float32)
 
 
+def _speech_seconds(audio: np.ndarray, sampling_rate: int) -> float:
+    """Total length of the speech Silero VAD finds in ``audio``."""
+    from faster_whisper.vad import get_speech_timestamps
+
+    chunks = get_speech_timestamps(audio, sampling_rate=sampling_rate)
+    return sum(c["end"] - c["start"] for c in chunks) / sampling_rate
+
+
 def _detect_language(model: object, file_path: str) -> str | None:
     """Run Whisper's lightweight language detector on a media file.
 
-    Returns ``None`` on low confidence, on a file with no audio in its
-    first 30 s, or on any failure — callers must tolerate an absent
-    language.
+    Returns ``None`` on low confidence, when the first
+    ``_LANG_DETECT_SECONDS`` hold too little speech, or on any failure —
+    callers must tolerate an absent language.
     """
     try:
         sampling_rate = model.feature_extractor.sampling_rate
@@ -319,7 +331,16 @@ def _detect_language(model: object, file_path: str) -> str | None:
                 file_path, _LANG_DETECT_SECONDS,
             )
             return None
-        language, probability, _ = model.detect_language(audio=audio)
+        speech = _speech_seconds(audio, sampling_rate)
+        if speech < _LANG_DETECT_MIN_SPEECH_S:
+            logger.info(
+                "Language detection skipped for %s: %.1fs of speech in the first %ds",
+                file_path, speech, _LANG_DETECT_SECONDS,
+            )
+            return None
+        language, probability, _ = model.detect_language(
+            audio=audio, vad_filter=True
+        )
     except Exception as e:
         logger.warning(
             "Language detection failed for %s: %s", file_path, e
