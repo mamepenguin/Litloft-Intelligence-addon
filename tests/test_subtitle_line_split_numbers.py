@@ -7,6 +7,7 @@ import re
 import pytest
 
 from app import subtitle_builder
+from app.digit_separator import splits_number
 from app.subtitle_builder import _balance_two_lines
 
 DIGITS = "0123456789"
@@ -165,3 +166,26 @@ def test_spec_addon_014_space_inside_a_number_is_not_a_split(text, soft_width, e
 )
 def test_spec_addon_014_split_outside_a_number_is_unchanged(janome, text, soft_width, expected):
     assert _balance(text, soft_width) == expected
+
+
+@pytest.mark.parametrize(
+    "text, pos, inside",
+    [
+        ("3.3", 1, True),
+        ("3.3", 2, True),
+        ("2025", 2, True),
+        ("1,500", 1, True),
+        ("3. 3km", 3, True),
+        ("a3.3", 1, False),
+        ("3.3", 0, False),
+        ("3.3", 3, False),
+        ("3.a", 1, False),
+        ("a.3", 2, False),
+        ("Yes, 3", 5, False),
+        ("2020 50", 5, False),
+        ("3.  3", 4, False),
+        ("3.3キロ", 3, False),
+    ],
+)
+def test_spec_addon_014_splits_number(text, pos, inside):
+    assert splits_number(text, pos) is inside
