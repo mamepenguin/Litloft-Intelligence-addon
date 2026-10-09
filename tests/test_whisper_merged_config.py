@@ -173,6 +173,9 @@ async def test_spec_addon_011_loft_caption_chunks_use_documented_segment_duratio
         "embed_passages",
         lambda texts, *a, **k: np.zeros((len(texts), 8), dtype=np.float32),
     )
+    # The Session fixture does not reach the TF-IDF corpus; whether this step
+    # touches the DB depends on which janome stub an earlier test installed.
+    monkeypatch.setattr("app.tfidf.extract_top_keywords", lambda *a, **k: [])
     seen = {}
     for i, run in enumerate(THREE_RUNS):
         use_settings(monkeypatch, load_settings_from(tmp_path, monkeypatch, _tree(run, values)))
