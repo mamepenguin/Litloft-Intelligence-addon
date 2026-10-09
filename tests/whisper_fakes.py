@@ -104,6 +104,7 @@ class FakeWhisperModel:
         self.detect_raises = detect_raises
         self.segments = tuple(segments)
         self.detect_calls: list[object] = []
+        self.detect_kwargs: list[dict] = []
         self.transcribe_calls: list[dict] = []
 
     def detect_language(
@@ -116,6 +117,13 @@ class FakeWhisperModel:
         language_detection_threshold=0.5,
     ):
         self.detect_calls.append(audio)
+        self.detect_kwargs.append(
+            {
+                "features": features,
+                "vad_filter": vad_filter,
+                "vad_parameters": vad_parameters,
+            }
+        )
         if not isinstance(audio, np.ndarray):
             raise TypeError(f"audio must be a numpy.ndarray, got {type(audio).__name__}")
         if self.detect_raises is not None:
