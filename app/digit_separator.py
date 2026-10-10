@@ -1,13 +1,13 @@
-"""Tell a decimal point or digit-group comma from sentence punctuation."""
+"""Tell a separator inside a number (3.3, 1,500, 12:30) from sentence punctuation."""
 
 from __future__ import annotations
 
-_SEPARATORS = frozenset(".,")
+_SEPARATORS = frozenset(".,:：")
 _DIGITS = frozenset("0123456789")
 
 
 def is_digit_separator(prev_text: str | None, text: str, next_text: str | None) -> bool:
-    """True when ``text`` ends in ``.``/``,`` sitting between two digits.
+    """True when ``text`` ends in a separator sitting between two digits.
 
     The separator is the last character of ``text``; the digit before it
     is in ``text`` itself, or the last character of ``prev_text`` when
@@ -27,7 +27,7 @@ def is_digit_separator(prev_text: str | None, text: str, next_text: str | None) 
 def splits_number(text: str, pos: int) -> bool:
     """True when a line break before ``text[pos]`` would cut a number in two.
 
-    A number is a run of digits with single ``.``/``,`` between digits; a
+    A number is a run of digits with single separators between digits; a
     space after such a separator (``3. 3km``, rows joined by a space) stays
     inside it, as ``is_digit_separator`` treats those rows.
     """
