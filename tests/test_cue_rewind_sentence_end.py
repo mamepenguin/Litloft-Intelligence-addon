@@ -163,7 +163,7 @@ class TestDurationFlush:
     ):
         last = {"en": "today", "ja": "正午に"}[language]
         rows, expected = _scenario(
-            language, last, 3.1, 4.1, "duration", following=SHORT_FOLLOWING
+            language, last, 3.1, 4.2, "duration", following=SHORT_FOLLOWING
         )
 
         assert _cues(rows, language, DURATION_3, janome, monkeypatch) == expected

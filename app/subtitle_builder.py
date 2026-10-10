@@ -369,19 +369,25 @@ def build_cues(
             ):
                 safe_breaks.append(len(current))
 
-        hard_boundary = (
-            duration >= cfg.min_duration
-            and (ends_hard or gap >= cfg.silence_gap)
-        )
-        soft_boundary = (
-            duration >= cfg.min_duration
-            and ends_soft
-            and current_width >= cfg.max_width * 0.75
-        )
+        def at_boundary(duration: float, width: int) -> bool:
+            hard = duration >= cfg.min_duration and (ends_hard or gap >= cfg.silence_gap)
+            soft = (
+                duration >= cfg.min_duration
+                and ends_soft
+                and width >= cfg.max_width * 0.75
+            )
+            return hard or soft
 
         if duration >= cfg.max_duration or current_width >= cfg.max_width:
             flush_with_rewind(word_end)
-        elif hard_boundary or soft_boundary:
+            # The rewind carries a tail ending with this word; it ends here
+            # when this word ends a cue, as on the path without a flush.
+            if current:
+                tail_tokens = [w["text"].strip() for w in current if w["text"].strip()]
+                tail_width = _display_width(_join_for_language(tail_tokens, language))
+                if at_boundary(word_end - cue_start, tail_width):
+                    emit(len(current), word_end)
+        elif at_boundary(duration, current_width):
             emit(len(current), word_end)
 
     if current:
