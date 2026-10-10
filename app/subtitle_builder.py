@@ -16,6 +16,8 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
+from app.digit_separator import is_digit_separator, splits_number
+
 logger = logging.getLogger(__name__)
 
 # Module-level janome tokenizer. Lazily constructed on first JA cue build,
@@ -228,7 +230,7 @@ def _can_break_before(word: dict) -> bool:
     return bool(ch) and ch not in _NO_BREAK_BEFORE
 
 
-def _safe_break_between(prev: dict, nxt: dict) -> bool:
+def _safe_break_between(prev: dict, nxt: dict, before: dict | None = None) -> bool:
     """Check a cue boundary between two adjacent word tokens.
 
     Rejects leading-prolongation / small-kana cases and also refuses to
@@ -241,6 +243,8 @@ def _safe_break_between(prev: dict, nxt: dict) -> bool:
     prev_text = (prev.get("text") or "").strip()
     nxt_text = (nxt.get("text") or "").strip()
     if prev_text and nxt_text and _is_katakana(prev_text[-1]) and _is_katakana(nxt_text[0]):
+        return False
+    if is_digit_separator(before.get("text") if before else None, prev_text, nxt_text):
         return False
     return True
 
@@ -313,14 +317,18 @@ def build_cues(
             head_text = _join_for_language(head_tokens, language)
             if _display_width(head_text) < half_width:
                 continue
-            if not _safe_break_between(current[cand - 1], current[cand]):
+            if not _safe_break_between(
+                current[cand - 1], current[cand], current[cand - 2] if cand > 1 else None
+            ):
                 continue
             emit(cand, float(current[cand - 1]["timestamp_end"]))
             return
         # No recorded candidate worked — scan backwards for any position
         # whose successor is breakable, then fall back to hard flush.
         for cand in range(len(current) - 1, 0, -1):
-            if _safe_break_between(current[cand - 1], current[cand]):
+            if _safe_break_between(
+                current[cand - 1], current[cand], current[cand - 2] if cand > 1 else None
+            ):
                 emit(cand, float(current[cand - 1]["timestamp_end"]))
                 return
         emit(len(current), fallback_end)
@@ -344,14 +352,21 @@ def build_cues(
         )
         gap = max(0.0, next_start - word_end)
         word_text = word["text"].strip()
-        ends_hard = bool(word_text) and word_text[-1] in _PUNCT_BREAK
-        ends_soft = bool(word_text) and word_text[-1] in _PUNCT_SOFT
+        punctuation = bool(word_text) and not is_digit_separator(
+            words[i - 1]["text"] if i > 0 else None,
+            word_text,
+            words[i + 1]["text"] if i + 1 < len(words) else None,
+        )
+        ends_hard = punctuation and word_text[-1] in _PUNCT_BREAK
+        ends_soft = punctuation and word_text[-1] in _PUNCT_SOFT
         has_space = " " in word_text  # ASCII/EN segmentation hint
 
         # Record a safe-break candidate AFTER this word whenever the
         # boundary is linguistically clean.
         if ends_hard or ends_soft or gap >= cfg.silence_gap or has_space:
-            if i + 1 < len(words) and _safe_break_between(word, words[i + 1]):
+            if i + 1 < len(words) and _safe_break_between(
+                word, words[i + 1], words[i - 1] if i > 0 else None
+            ):
                 safe_breaks.append(len(current))
 
         hard_boundary = (
@@ -460,7 +475,12 @@ def _balance_two_lines(cue: dict, soft_width: int) -> dict:
         return cue
 
     if " " in text:
-        words = text.split(" ")
+        words: list[str] = []
+        for w in text.split(" "):
+            if words and is_digit_separator(None, words[-1], w):
+                words[-1] = f"{words[-1]} {w}"
+            else:
+                words.append(w)
         midpoint_width = _display_width(text) // 2
         first: list[str] = []
         running = 0
@@ -476,14 +496,43 @@ def _balance_two_lines(cue: dict, soft_width: int) -> dict:
         return cue
 
     for i, ch in enumerate(text):
-        if ch in _PUNCT_SOFT and _display_width(text[: i + 1]) >= soft_width // 2:
+        if (
+            ch in _PUNCT_SOFT
+            and _display_width(text[: i + 1]) >= soft_width // 2
+            and not splits_number(text, i + 1)
+        ):
             return {**cue, "text": text[: i + 1] + "\n" + text[i + 1 :].lstrip()}
 
     target = len(text) // 2
     mid = _janome_break_position(text, target)
     if mid is None or not (0 < mid < len(text)):
         mid = _adjust_cjk_break(text, target)
+    if splits_number(text, mid):
+        mid = _number_edge(text, mid)
+        if mid is None:
+            return cue
     return {**cue, "text": text[:mid] + "\n" + text[mid:]}
+
+
+def _number_edge(text: str, pos: int) -> int | None:
+    """Where to break instead of ``pos``, which falls inside a number.
+
+    The start of the number, keeping it with the counter or noun after
+    it; its end when the number opens the text. ``None`` when neither
+    leaves text on both lines or the end would start a line with a
+    character that must not.
+    """
+    start = pos
+    while splits_number(text, start):
+        start -= 1
+    if start > 0:
+        return start
+    end = pos
+    while splits_number(text, end):
+        end += 1
+    if end >= len(text) or text[end] in _NO_BREAK_BEFORE:
+        return None
+    return end
 
 
 def _sanitise_cue_text(text: str) -> str:

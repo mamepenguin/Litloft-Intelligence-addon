@@ -463,7 +463,6 @@ transcription:
   # Local faster-whisper settings. Migrated from indexing.whisper.* — see
   # the deprecation notice on `indexing.whisper` below.
   whisper_local:
-    model: openai/whisper-large-v3-turbo
     initial_prompt: ""
     beam_size: 1
     batch_size: 0
