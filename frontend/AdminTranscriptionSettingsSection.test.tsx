@@ -59,7 +59,7 @@ function defaultPayload(overrides: Record<string, unknown> = {}) {
     },
     overrides_present: false,
     search_config_summary: {
-      whisper_local: { model: "openai/whisper-large-v3-turbo" },
+      whisper_local: { "models.whisper": "openai/whisper-large-v3-turbo" },
       openai_compatible: { model: "whisper-1", base_url: "https://api.openai.com/v1" },
       deepgram: { model: "nova-3" },
       elevenlabs_scribe: { model_id: "scribe_v1" },
@@ -211,6 +211,21 @@ describe("AdminTranscriptionSettingsSection", () => {
     await waitFor(() =>
       expect(screen.queryByTestId("overrides-banner")).toBeNull(),
     );
+  });
+
+  it("SPEC-ADDON-016 I6: shows models.whisper=<value> under whisper_local, with no model= text", async () => {
+    const summary = {
+      ...defaultPayload().search_config_summary,
+      whisper_local: { "models.whisper": "openai/whisper-small" },
+    };
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse(defaultPayload({ search_config_summary: summary })),
+    );
+    render(<AdminTranscriptionSettingsSection />);
+
+    const line = await screen.findByText(/models\.whisper=openai\/whisper-small/);
+    expect(line.textContent).not.toMatch(/(^|[^.\w])model=/);
+    expect(screen.queryByText(/(^|[^.\w])model=openai\/whisper/)).toBeNull();
   });
 
   it("surfaces the server detail when reset fails", async () => {

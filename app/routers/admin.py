@@ -264,8 +264,9 @@ def _frozen_subconfig_summary() -> dict[str, Any]:
     """
     base = config.settings.transcription
     return {
+        # The worker loads models.whisper; whisper_local.model is parsed but unused.
         "whisper_local": {
-            "model": base.whisper_local.model,
+            "models.whisper": config.settings.models.whisper,
         },
         "openai_compatible": {
             "model": base.openai_compatible.model,

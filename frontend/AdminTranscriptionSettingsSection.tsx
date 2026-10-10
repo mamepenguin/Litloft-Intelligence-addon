@@ -32,7 +32,7 @@ const PROVIDER_KEY_ENV: Record<string, string | null> = {
 };
 
 interface SearchConfigSummary {
-  whisper_local?: { model?: string };
+  whisper_local?: { "models.whisper"?: string };
   openai_compatible?: { model?: string; base_url?: string };
   deepgram?: { model?: string };
   elevenlabs_scribe?: { model_id?: string };
