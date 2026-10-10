@@ -393,7 +393,22 @@ def build_cues(
     if current:
         emit(len(current), float(current[-1]["timestamp_end"]))
 
-    return [_balance_two_lines(c, cfg.max_width // 2) for c in cues]
+    return [_balance_two_lines(c, cfg.max_width // 2) for c in _clamp_to_next_start(cues)]
+
+
+def _clamp_to_next_start(cues: list[dict]) -> list[dict]:
+    """End each cue no later than the next cue starts.
+
+    A next cue starting at or before this one's start is left alone: clamping
+    would leave the cue no time on screen.
+    """
+    clamped = []
+    for cue, nxt in zip(cues, cues[1:] + [None]):
+        if nxt is not None and cue["start"] < nxt["start"] < cue["end"]:
+            clamped.append({**cue, "end": nxt["start"]})
+        else:
+            clamped.append(cue)
+    return clamped
 
 
 def _is_katakana(ch: str) -> bool:
