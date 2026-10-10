@@ -59,7 +59,7 @@ function defaultPayload(overrides: Record<string, unknown> = {}) {
     },
     overrides_present: false,
     search_config_summary: {
-      whisper_local: { model: "openai/whisper-large-v3-turbo" },
+      whisper_local: { "models.whisper": "openai/whisper-large-v3-turbo" },
       openai_compatible: { model: "whisper-1", base_url: "https://api.openai.com/v1" },
       deepgram: { model: "nova-3" },
       elevenlabs_scribe: { model_id: "scribe_v1" },

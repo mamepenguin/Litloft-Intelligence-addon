@@ -383,7 +383,6 @@ rag:
 
 models:
   # Whisper model for audio transcription (multilingual)
-  # Default: openai/whisper-small (244M, ~500MB int8 RAM)
   # Alternatives (multilingual, CT2 int8):
   #   openai/whisper-large-v3-turbo  (809M, ~1.0-1.2GB RAM; best accuracy/speed balance)
   #   openai/whisper-large-v3        (1550M, ~2-3GB RAM; highest accuracy)
