@@ -1,9 +1,11 @@
-"""SPEC-ADDON-010: a `.` or `,` between two digits is not punctuation for chunks or cues."""
+"""SPEC-ADDON-010, SPEC-ADDON-015: a `.`, `,`, `:` or `：` between two digits is not
+punctuation for chunks or cues."""
 
 from __future__ import annotations
 
 import pytest
 
+from app.digit_separator import is_digit_separator
 from app.subtitle_builder import CueConfig, build_cues
 from app.workers.whisper import _build_chunks_from_words
 
@@ -51,7 +53,7 @@ def _is_digit_separator_boundary(left: str, right: str) -> bool:
     left, right = left.strip(), right.strip()
     return (
         len(left) >= 2
-        and left[-1] in ".,"
+        and left[-1] in ".,:："
         and left[-2].isdigit()
         and right[:1].isdigit()
     )
@@ -165,5 +167,127 @@ class TestCues:
 
         assert len(cues) >= 2
         texts = [_flat(c["text"], language) for c in cues]
+        for left, right in zip(texts, texts[1:]):
+            assert not _is_digit_separator_boundary(left, right), (left, right)
+
+
+def _timed(tokens, step=1.0):
+    return [(t, i * step, i * step + step) for i, t in enumerate(tokens)]
+
+
+class TestColonSeparator:
+    """SPEC-ADDON-015: `:` and `：` between two digits join the number like `.` and `,`."""
+
+    def test_spec_addon_015_is_digit_separator_accepts_colons_between_digits_only(self):
+        cases = {
+            (None, "12:", "30"): True,
+            (None, "12：", "30"): True,
+            ("12", ":", "30"): True,
+            ("12", "：", "30"): True,
+            (None, " 12: ", " 30"): True,
+            (None, "1：", "0"): True,
+            (None, "Note:", "3"): False,
+            (None, "時刻：", "12"): False,
+            (None, "12:", "a"): False,
+            (None, "12：", "時"): False,
+            ("a", ":", "3"): False,
+            ("刻", "：", "12"): False,
+            (None, ":", "3"): False,
+            ("12", ":", None): False,
+            (None, "１２：", "30"): False,
+        }
+
+        assert {k: is_digit_separator(*k) for k in cases} == cases
+
+    def test_spec_addon_015_colon_token_row_does_not_end_a_chunk(self):
+        rows = _timed(
+            ["we", "meet", "at", "12:", "30", "today.",
+             "it", "says", "Note:",
+             "3", "items", "left", "there."]
+        )
+        rows += [("from", 13.0, 14.0), ("1:", 14.0, 15.0), ("15", 17.0, 18.0), ("on.", 18.0, 19.0)]
+
+        chunks = _build_chunks_from_words(_chunk_words(rows, "en"), min_duration=2, max_duration=30)
+
+        assert [(c["text"], c["start"], c["end"]) for c in chunks] == [
+            ("we meet at 12: 30 today.", 0.0, 6.0),
+            ("it says Note:", 6.0, 9.0),
+            ("3 items left there.", 9.0, 13.0),
+            ("from 1:", 13.0, 15.0),
+            ("15 on.", 17.0, 19.0),
+        ]
+
+    def test_spec_addon_015_fullwidth_colon_token_row_does_not_end_a_chunk(self):
+        rows = _timed(["今日は", "朝", "12：", "30", "から", "時刻：", "今", "です。"])
+
+        chunks = _build_chunks_from_words(_chunk_words(rows, "ja"), min_duration=2, max_duration=30)
+
+        assert [c["text"] for c in chunks] == ["今日は朝12：30から時刻：", "今です。"]
+
+    @pytest.mark.parametrize("colon", [":", "："], ids=["ascii", "fullwidth"])
+    def test_spec_addon_015_colon_character_row_does_not_end_a_chunk(self, colon):
+        text = f"朝は12{colon}30から時刻{colon}今です。"
+        rows = _timed(list(text), step=0.5)
+
+        chunks = _build_chunks_from_words(_chunk_words(rows, "ja"), min_duration=1, max_duration=30)
+
+        assert [c["text"] for c in chunks] == [f"朝は12{colon}30から時刻{colon}", "今です。"]
+
+    @pytest.mark.parametrize("colon", [":", "："], ids=["ascii", "fullwidth"])
+    def test_spec_addon_015_max_duration_still_bounds_a_run_of_times(self, colon):
+        rows = []
+        t = 0.0
+        for _ in range(40):
+            for ch in ("1", colon, "5"):
+                rows.append((ch, t, t + 0.2))
+                t += 0.2
+
+        chunks = _build_chunks_from_words(_chunk_words(rows, "ja"), min_duration=2, max_duration=6)
+
+        assert "".join(c["text"] for c in chunks) == f"1{colon}5" * 40
+        assert all(c["end"] - c["start"] <= 6.5 for c in chunks)
+        assert len(chunks) <= 5
+
+    @pytest.mark.parametrize("time_word", ["12:", "12："], ids=["ascii", "fullwidth"])
+    def test_spec_addon_015_colon_is_not_a_safe_cue_break_for_duration(self, time_word):
+        def cue_texts(word):
+            rows = _timed(["we", "meet", "at", word, "30", "in", "the", "big", "hall", "now"])
+            cues = build_cues(
+                _cue_words(rows), language="en", config=CueConfig(max_duration=5, max_width=200)
+            )
+            return [_flat(c["text"], "en") for c in cues]
+
+        texts = cue_texts(time_word)
+        for left, right in zip(texts, texts[1:]):
+            assert not _is_digit_separator_boundary(left, right), (left, right)
+        assert cue_texts("Note:")[0] == "we meet at Note:"
+
+    @pytest.mark.parametrize("colon", [":", "："], ids=["ascii", "fullwidth"])
+    def test_spec_addon_015_colon_is_not_a_safe_japanese_cue_break_for_duration(self, colon):
+        def cue_texts(middle):
+            rows = _timed(list(f"あいうえ{middle}かきくけこ"), step=0.5)
+            cues = build_cues(
+                _cue_words(rows), language="ja", config=CueConfig(max_duration=4, max_width=200)
+            )
+            return [_flat(c["text"], "ja") for c in cues]
+
+        texts = cue_texts(f"12{colon}30")
+        for left, right in zip(texts, texts[1:]):
+            assert not _is_digit_separator_boundary(left, right), (left, right)
+        assert cue_texts(f"時刻{colon}今日")[0] == f"あいうえ時刻{colon}"
+
+    @pytest.mark.parametrize("colon", [":", "："], ids=["ascii", "fullwidth"])
+    def test_spec_addon_015_colon_is_not_a_safe_japanese_cue_break_for_width(self, colon):
+        rows = _timed(
+            list("あいうえ") + ["1", "2", colon, "3", "0"] + list("かきくけこさしすせそたちつてと"),
+            step=0.2,
+        )
+
+        cues = build_cues(
+            _cue_words(rows), language="ja", config=CueConfig(max_duration=100, max_width=14)
+        )
+
+        assert len(cues) >= 2
+        texts = [_flat(c["text"], "ja") for c in cues]
         for left, right in zip(texts, texts[1:]):
             assert not _is_digit_separator_boundary(left, right), (left, right)
