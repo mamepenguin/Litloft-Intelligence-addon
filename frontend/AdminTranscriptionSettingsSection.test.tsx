@@ -213,6 +213,21 @@ describe("AdminTranscriptionSettingsSection", () => {
     );
   });
 
+  it("SPEC-ADDON-016 I6: shows models.whisper=<value> under whisper_local, with no model= text", async () => {
+    const summary = {
+      ...defaultPayload().search_config_summary,
+      whisper_local: { "models.whisper": "openai/whisper-small" },
+    };
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse(defaultPayload({ search_config_summary: summary })),
+    );
+    render(<AdminTranscriptionSettingsSection />);
+
+    const line = await screen.findByText(/models\.whisper=openai\/whisper-small/);
+    expect(line.textContent).not.toMatch(/(^|[^.\w])model=/);
+    expect(screen.queryByText(/(^|[^.\w])model=openai\/whisper/)).toBeNull();
+  });
+
   it("surfaces the server detail when reset fails", async () => {
     mockFetch.mockResolvedValueOnce(
       jsonResponse(defaultPayload({ overrides_present: true })),
