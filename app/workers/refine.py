@@ -112,13 +112,16 @@ def _parse_llm_response(
     for entry in items:
         if not isinstance(entry, dict):
             return None
-        if "id" not in entry or "text_refined" not in entry:
+        # Local models answer under the input's key ``text`` instead of
+        # the requested ``text_refined``.
+        key = "text_refined" if "text_refined" in entry else "text"
+        if "id" not in entry or key not in entry:
             return None
         try:
             cid = int(entry["id"])
         except (TypeError, ValueError):
             return None
-        refined = entry.get("text_refined")
+        refined = entry.get(key)
         if not isinstance(refined, str):
             return None
         by_id[cid] = refined
