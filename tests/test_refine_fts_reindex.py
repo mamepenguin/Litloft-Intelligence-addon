@@ -334,8 +334,8 @@ async def test_spec_addon_019_without_rechunk_keyword_rows_hold_refined_text_min
     _patch_job(monkeypatch, Session, realign=lambda *a, **k: 0)
 
     await refine._run_refine_job(
-        FILE, "job1", [1, 3],
-        _llm([(1, "We deployed it on Kubernetes."), (3, "And it worked fine.")]),
+        FILE, "job1", [1, 2, 3],
+        _llm([(1, "We deployed it on Kubernetes."), (2, "   "), (3, "And it worked fine.")]),
     )
 
     expected = [
