@@ -13,7 +13,7 @@ for _mod in ("torch", "sentence_transformers", "faster_whisper", "sqlite_vec"):
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
 
-from sqlalchemy import create_engine  # noqa: E402
+from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.database import Base  # noqa: E402
@@ -26,6 +26,11 @@ from tests.llm_helpers import resolved_with  # noqa: E402
 async def test_refine_job_stamps_the_text_model_on_every_write(tmp_path, monkeypatch):
     engine = create_engine(f"sqlite:///{tmp_path / 'search.db'}")
     Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        for table in ("fts_transcripts", "fts_transcripts_word"):
+            conn.execute(text(
+                f"CREATE VIRTUAL TABLE {table} USING fts5(file_id, chunk_index, text)"
+            ))
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     with Session() as s:
         s.add(IndexedFile(

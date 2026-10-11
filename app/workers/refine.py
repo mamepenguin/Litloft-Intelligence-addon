@@ -32,7 +32,7 @@ from typing import Any
 from sqlalchemy import text as sql_text
 
 import app.config as config
-from app.database import get_search_db, get_search_db_read
+from app.database import get_search_db, get_search_db_read, upsert_fts_transcripts
 from app.llm_routing import Resolved
 from app.models import Embedding, IndexedFile, TranscriptChunk, TranscriptWord
 from app.prompt_loader import render
@@ -407,6 +407,26 @@ def rechunk_from_words(
     return new_ids
 
 
+def _reindex_keywords(session: Any, file_id: str) -> None:
+    """Replace the file's keyword index rows with its current chunk rows."""
+    session.flush()
+    chunks = (
+        session.query(TranscriptChunk.chunk_index, TranscriptChunk.text)
+        .filter(TranscriptChunk.file_id == file_id)
+        .order_by(TranscriptChunk.chunk_index)
+        .all()
+    )
+    upsert_fts_transcripts(
+        session,
+        file_id,
+        [
+            {"chunk_index": idx, "text": text}
+            for idx, text in chunks
+            if (text or "").strip()
+        ],
+    )
+
+
 # --- Embedding re-compute ---------------------------------------------------
 
 
@@ -769,6 +789,7 @@ async def _run_refine_job(
                             else:
                                 aligner_skipped_total += 1
                             applied_ids.append(int(orm.id))
+                        _reindex_keywords(session, file_id)
 
                     # Outside the write block: recompute_chunk_embeddings()
                     # embeds off-thread and takes the lock itself.
@@ -797,6 +818,8 @@ async def _run_refine_job(
                     new_ids = rechunk_from_words(
                         session, file_id, refined_model=resolved.profile.config.model
                     ) or []
+                    if new_ids:
+                        _reindex_keywords(session, file_id)
                 if new_ids:
                     await recompute_chunk_embeddings(new_ids)
                     rechunked_count = len(new_ids)
