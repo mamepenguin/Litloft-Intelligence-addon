@@ -2422,3 +2422,50 @@ describe("TranscriptSection — a response that arrives too late", () => {
   });
 });
 
+
+// SPEC-ADDON-018 I8
+describe("TranscriptSection — word cues that end where the next begins", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("moves the highlight to the next row when playback reaches its start (SPEC-ADDON-018 I8)", async () => {
+    const getFileTranscript = await transcriptApiMock();
+    getFileTranscript.mockResolvedValue({ available: false });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        "WEBVTT\n\n00:00:12.000 --> 00:00:13.695\nfirst row\n\n00:00:13.695 --> 00:00:14.500\nsecond row\n",
+      json: async () => null,
+    } as Response);
+    const state = { currentTime: 13.694 };
+    const mc = {
+      seek: vi.fn(),
+      play: vi.fn(),
+      pause: vi.fn(),
+      togglePlay: vi.fn(),
+      toggleMute: vi.fn(),
+      toggleFullscreen: vi.fn(),
+      getCurrentTime: () => state.currentTime,
+      getDuration: () => 20,
+      isPaused: () => false,
+      isMuted: () => false,
+      getVolume: () => 1,
+      setVolume: vi.fn(),
+      getPlaybackRate: () => 1,
+      setPlaybackRate: vi.fn(),
+      getBufferedFraction: () => 0,
+    };
+    render(<TranscriptSection fileId="abc" drive="family" mediaController={mc} />);
+
+    expect(await screen.findByRole("button", { current: true })).toHaveTextContent("first row");
+
+    state.currentTime = 13.695;
+    await waitFor(() => {
+      const active = screen.getAllByRole("button", { current: true });
+      expect(active).toHaveLength(1);
+      expect(active[0]).toHaveTextContent("second row");
+    });
+  });
+});
