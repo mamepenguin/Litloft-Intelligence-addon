@@ -153,16 +153,19 @@ class RetrievalKeywordsWorker:
         """
         from app.policy_client import is_feature_enabled
 
-        with get_search_db_read() as session:
-            rows = session.execute(
-                sql_text(
-                    "SELECT f.file_id, f.drive FROM indexed_files f "
-                    "WHERE f.active = 1 AND f.metadata_indexed = 1 "
-                    "AND f.file_type IN ('video', 'audio', 'document', 'text') "
-                    "AND f.file_id NOT IN "
-                    "  (SELECT file_id FROM retrieval_keywords)"
-                )
-            ).fetchall()
+        def _unprocessed() -> list:
+            with get_search_db_read() as session:
+                return session.execute(
+                    sql_text(
+                        "SELECT f.file_id, f.drive FROM indexed_files f "
+                        "WHERE f.active = 1 AND f.metadata_indexed = 1 "
+                        "AND f.file_type IN ('video', 'audio', 'document', 'text') "
+                        "AND f.file_id NOT IN "
+                        "  (SELECT file_id FROM retrieval_keywords)"
+                    )
+                ).fetchall()
+
+        rows = await asyncio.to_thread(_unprocessed)
 
         drive_allowed: dict[str, bool] = {}
         count = 0
@@ -200,10 +203,10 @@ class RetrievalKeywordsWorker:
         if settings.features.retrieval_keywords == "false":
             return
 
-        if _has_retrieval_keywords(file_id):
+        if await asyncio.to_thread(_has_retrieval_keywords, file_id):
             return
 
-        indexed_file = _get_indexed_file(file_id)
+        indexed_file = await asyncio.to_thread(_get_indexed_file, file_id)
         if indexed_file is None:
             return
 
@@ -214,7 +217,7 @@ class RetrievalKeywordsWorker:
         if context_type not in _HANDLED_CONTEXT_TYPES:
             return
 
-        context = _build_context(indexed_file, context_type)
+        context = await asyncio.to_thread(_build_context, indexed_file, context_type)
         if not context:
             # Either no content (silent transcript / empty extractor)
             # or below summaries.min_context_chars — keyword expansion
@@ -239,7 +242,7 @@ class RetrievalKeywordsWorker:
             was_truncated=was_truncated,
         )
 
-        cleaned = _post_filter(raw_keywords)
+        cleaned = await asyncio.to_thread(_post_filter, raw_keywords)
         if not cleaned:
             logger.debug(
                 "retrieval_keywords: no keywords survived filtering for %s",
@@ -253,14 +256,18 @@ class RetrievalKeywordsWorker:
         stored_context_type = "transcript" if context_type in ("video", "audio") else "document"
 
         model_label = resolved.profile.config.model or "unknown"
-        with get_search_db() as session:
-            upsert_retrieval_keywords(
-                session,
-                file_id=file_id,
-                keywords=cleaned,
-                model=model_label,
-                context_type=stored_context_type,
-            )
+
+        def _save() -> None:
+            with get_search_db() as session:
+                upsert_retrieval_keywords(
+                    session,
+                    file_id=file_id,
+                    keywords=cleaned,
+                    model=model_label,
+                    context_type=stored_context_type,
+                )
+
+        await asyncio.to_thread(_save)
 
         logger.info(
             "retrieval_keywords: generated for %s (%d chars context, "

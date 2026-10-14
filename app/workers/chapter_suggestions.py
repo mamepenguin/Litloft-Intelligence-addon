@@ -273,11 +273,14 @@ class ChapterSuggestionsWorker:
         from app.database import get_search_db_read
         from app.models import IndexedFile
 
-        with get_search_db_read() as session:
-            row = session.query(IndexedFile.drive).filter(
-                IndexedFile.file_id == file_id,
-                IndexedFile.active.is_(True),
-            ).first()
+        def _active_row():
+            with get_search_db_read() as session:
+                return session.query(IndexedFile.drive).filter(
+                    IndexedFile.file_id == file_id,
+                    IndexedFile.active.is_(True),
+                ).first()
+
+        row = await asyncio.to_thread(_active_row)
         if row is None or not await is_chapter_suggestions_enabled(row.drive):
             return False
         if file_id in self._queued or file_id in self._processing:
@@ -289,15 +292,18 @@ class ChapterSuggestionsWorker:
     async def enqueue_unprocessed(self) -> int:
         from app.database import get_search_db_read
 
-        with get_search_db_read() as session:
-            rows = session.execute(sql_text(
-                "SELECT f.file_id, f.drive FROM indexed_files f "
-                "WHERE f.active = 1 AND f.file_type IN ('video', 'audio') "
-                "AND EXISTS (SELECT 1 FROM transcript_chunks t "
-                "            WHERE t.file_id = f.file_id) "
-                "AND NOT EXISTS (SELECT 1 FROM suggested_chapters s "
-                "                WHERE s.file_id = f.file_id)"
-            )).fetchall()
+        def _unprocessed() -> list:
+            with get_search_db_read() as session:
+                return session.execute(sql_text(
+                    "SELECT f.file_id, f.drive FROM indexed_files f "
+                    "WHERE f.active = 1 AND f.file_type IN ('video', 'audio') "
+                    "AND EXISTS (SELECT 1 FROM transcript_chunks t "
+                    "            WHERE t.file_id = f.file_id) "
+                    "AND NOT EXISTS (SELECT 1 FROM suggested_chapters s "
+                    "                WHERE s.file_id = f.file_id)"
+                )).fetchall()
+
+        rows = await asyncio.to_thread(_unprocessed)
         allowed_by_drive: dict[str, bool] = {}
         count = 0
         for file_id, drive in rows:
@@ -330,28 +336,33 @@ class ChapterSuggestionsWorker:
         from app.database import get_search_db, get_search_db_read
         from app.models import IndexedFile, TranscriptChunk
 
-        with get_search_db_read() as session:
-            indexed = session.query(IndexedFile).filter(
-                IndexedFile.file_id == file_id,
-                IndexedFile.active.is_(True),
-                IndexedFile.file_type.in_(("video", "audio")),
-            ).first()
-            if indexed is None:
-                return
-            if not force:
-                exists = session.execute(sql_text(
-                    "SELECT 1 FROM suggested_chapters WHERE file_id=:fid"
-                ), {"fid": file_id}).first()
-                if exists is not None:
-                    return
-            chunks = session.query(TranscriptChunk).filter(
-                TranscriptChunk.file_id == file_id
-            ).order_by(
-                TranscriptChunk.timestamp_start,
-                TranscriptChunk.chunk_index,
-            ).all()
-            filename = indexed.filename
-            drive = indexed.drive
+        def _load() -> tuple[list, str, str] | None:
+            with get_search_db_read() as session:
+                indexed = session.query(IndexedFile).filter(
+                    IndexedFile.file_id == file_id,
+                    IndexedFile.active.is_(True),
+                    IndexedFile.file_type.in_(("video", "audio")),
+                ).first()
+                if indexed is None:
+                    return None
+                if not force:
+                    exists = session.execute(sql_text(
+                        "SELECT 1 FROM suggested_chapters WHERE file_id=:fid"
+                    ), {"fid": file_id}).first()
+                    if exists is not None:
+                        return None
+                chunks = session.query(TranscriptChunk).filter(
+                    TranscriptChunk.file_id == file_id
+                ).order_by(
+                    TranscriptChunk.timestamp_start,
+                    TranscriptChunk.chunk_index,
+                ).all()
+                return chunks, indexed.filename, indexed.drive
+
+        loaded = await asyncio.to_thread(_load)
+        if loaded is None:
+            return
+        chunks, filename, drive = loaded
         if not chunks:
             return
         # Policy may change while a job waits in the serial queue. Re-check at
@@ -463,20 +474,24 @@ class ChapterSuggestionsWorker:
             return
 
         created_at = datetime.now(UTC).isoformat()
-        with get_search_db() as session:
-            session.execute(sql_text(
-                "INSERT INTO suggested_chapters "
-                "(file_id, chapters_json, model, created_at, status) "
-                "VALUES (:fid, :chapters, :model, :created_at, 'pending') "
-                "ON CONFLICT(file_id) DO UPDATE SET "
-                "chapters_json=excluded.chapters_json, model=excluded.model, "
-                "created_at=excluded.created_at, status='pending'"
-            ), {
-                "fid": file_id,
-                "chapters": json.dumps(chapters, ensure_ascii=False),
-                "model": resolved.profile.config.model or "unknown",
-                "created_at": created_at,
-            })
+
+        def _save() -> None:
+            with get_search_db() as session:
+                session.execute(sql_text(
+                    "INSERT INTO suggested_chapters "
+                    "(file_id, chapters_json, model, created_at, status) "
+                    "VALUES (:fid, :chapters, :model, :created_at, 'pending') "
+                    "ON CONFLICT(file_id) DO UPDATE SET "
+                    "chapters_json=excluded.chapters_json, model=excluded.model, "
+                    "created_at=excluded.created_at, status='pending'"
+                ), {
+                    "fid": file_id,
+                    "chapters": json.dumps(chapters, ensure_ascii=False),
+                    "model": resolved.profile.config.model or "unknown",
+                    "created_at": created_at,
+                })
+
+        await asyncio.to_thread(_save)
         await emit_chapter_suggestions_event(
             _READY_EVENT,
             {

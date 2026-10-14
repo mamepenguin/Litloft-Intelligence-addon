@@ -22,6 +22,7 @@ in practice (a few thousand files per disabled drive at most) and a
 batch SQL would need to duplicate the vector-table cleanup logic.
 """
 
+import asyncio
 import logging
 
 from sqlalchemy.exc import OperationalError
@@ -167,6 +168,18 @@ def purge_vision_for_drive(drive: str) -> int:
     return touched
 
 
+def _indexed_drives() -> list[str]:
+    from app.database import get_search_db
+
+    with get_search_db() as session:
+        return [
+            row.drive
+            for row in session.query(IndexedFile.drive)
+            .distinct()
+            .all()
+        ]
+
+
 async def purge_disabled_vision_drives() -> dict[str, int]:
     """Scan indexed drives and wipe vision artefacts on policy-off drives.
 
@@ -177,16 +190,9 @@ async def purge_disabled_vision_drives() -> dict[str, int]:
     workflow. Policy lookup errors cause the drive to be skipped (not
     purged) to avoid accidental data loss.
     """
-    from app.database import get_search_db
     from app.policy_client import is_feature_enabled
 
-    with get_search_db() as session:
-        drives = [
-            row.drive
-            for row in session.query(IndexedFile.drive)
-            .distinct()
-            .all()
-        ]
+    drives = await asyncio.to_thread(_indexed_drives)
 
     results: dict[str, int] = {}
     for drive in drives:
@@ -203,7 +209,7 @@ async def purge_disabled_vision_drives() -> dict[str, int]:
             continue
         if allowed:
             continue
-        purged = purge_vision_for_drive(drive)
+        purged = await asyncio.to_thread(purge_vision_for_drive, drive)
         if purged:
             results[drive] = purged
     return results
@@ -296,16 +302,9 @@ async def purge_disabled_video_visual_drives() -> dict[str, int]:
     ``video_visual_index`` feature. Policy lookup errors cause the drive
     to be skipped (not purged) to avoid accidental data loss.
     """
-    from app.database import get_search_db
     from app.policy_client import is_feature_enabled
 
-    with get_search_db() as session:
-        drives = [
-            row.drive
-            for row in session.query(IndexedFile.drive)
-            .distinct()
-            .all()
-        ]
+    drives = await asyncio.to_thread(_indexed_drives)
 
     results: dict[str, int] = {}
     for drive in drives:
@@ -322,7 +321,7 @@ async def purge_disabled_video_visual_drives() -> dict[str, int]:
             continue
         if allowed:
             continue
-        purged = purge_video_visual_for_drive(drive)
+        purged = await asyncio.to_thread(purge_video_visual_for_drive, drive)
         if purged:
             results[drive] = purged
     return results
@@ -340,16 +339,9 @@ async def purge_disabled_drives() -> dict[str, int]:
     Returns ``{drive_name: purged_count}`` for every drive that was
     actually purged (entries with 0 purged are omitted).
     """
-    from app.database import get_search_db
     from app.policy_client import is_feature_enabled
 
-    with get_search_db() as session:
-        drives = [
-            row.drive
-            for row in session.query(IndexedFile.drive)
-            .distinct()
-            .all()
-        ]
+    drives = await asyncio.to_thread(_indexed_drives)
 
     results: dict[str, int] = {}
     for drive in drives:
@@ -366,7 +358,7 @@ async def purge_disabled_drives() -> dict[str, int]:
             continue
         if allowed:
             continue
-        purged = purge_drive(drive)
+        purged = await asyncio.to_thread(purge_drive, drive)
         if purged:
             results[drive] = purged
 

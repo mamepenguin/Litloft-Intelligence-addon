@@ -101,18 +101,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         reset_falsely_completed_clip,
         reset_falsely_completed_clip_thumbnail,
     )
-    cleaned = cleanup_orphaned_embeddings()
+    cleaned = await asyncio.to_thread(cleanup_orphaned_embeddings)
     if cleaned > 0:
         logger.info("Cleaned up %d orphaned embeddings from previous run", cleaned)
 
     # Reset files marked as clip_indexed but missing actual vectors
-    reset = reset_falsely_completed_clip()
+    reset = await asyncio.to_thread(reset_falsely_completed_clip)
     if reset > 0:
         logger.info("Reset %d falsely completed CLIP files for re-indexing", reset)
 
     # The thumbnail leg is tracked separately and a video's scene rows
     # hide its absence from the check above.
-    reset_thumb = reset_falsely_completed_clip_thumbnail()
+    reset_thumb = await asyncio.to_thread(reset_falsely_completed_clip_thumbnail)
     if reset_thumb:
         logger.info(
             "Reopened %d thumbnail CLIP legs for re-indexing",
@@ -126,7 +126,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # restart return to a resumable state (design doc §9).
     try:
         from app.workers.video_visual import recover_on_startup as recover_video_visual
-        recover_video_visual()
+        await asyncio.to_thread(recover_video_visual)
     except Exception:
         logger.exception("video_visual startup recovery failed; continuing startup")
 
@@ -138,7 +138,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # words the dead worker wrote.
     try:
         from app.workers.whisper import fail_orphaned_running_jobs
-        fail_orphaned_running_jobs()
+        await asyncio.to_thread(fail_orphaned_running_jobs)
     except Exception:
         logger.exception(
             "Failed to fail orphaned running JobRecords; continuing startup"
