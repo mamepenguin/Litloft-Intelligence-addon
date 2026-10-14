@@ -314,9 +314,16 @@ def _app_offenders() -> list[tuple[str, str, str, int]]:
     ]
 
 
+def _unlisted(offenders, pending) -> list[tuple[str, str, str, int]]:
+    return [o for o in offenders if (o[0], o[1]) not in pending]
+
+
+def _stale(offenders, pending) -> set[tuple[str, str]]:
+    return set(pending) - {(where, fn) for where, fn, _, _ in offenders}
+
+
 def test_no_sync_db_call_runs_on_the_event_loop():
-    offenders = _app_offenders()
-    new = [o for o in offenders if (o[0], o[1]) not in _PENDING]
+    new = _unlisted(_app_offenders(), _PENDING)
     assert not new, "\n".join(
         f"  async {fn}() calls {called}() directly at {where}:{line} — "
         "wrap it in asyncio.to_thread"
@@ -325,10 +332,17 @@ def test_no_sync_db_call_runs_on_the_event_loop():
 
 
 def test_pending_list_only_names_live_offenders():
-    live = {(where, fn) for where, fn, _, _ in _app_offenders()}
-    assert not (_PENDING - live), (
-        f"no longer offending, remove from _PENDING: {sorted(_PENDING - live)}"
-    )
+    stale = _stale(_app_offenders(), _PENDING)
+    assert not stale, f"no longer offending, remove from _PENDING: {sorted(stale)}"
+
+
+def test_pending_exempts_a_function_not_its_whole_file():
+    offenders = [("routers/x.py", "listed", "get_search_db", 1),
+                 ("routers/x.py", "added_later", "get_search_db", 9)]
+    pending = {("routers/x.py", "listed")}
+
+    assert _unlisted(offenders, pending) == [offenders[1]]
+    assert _stale(offenders[1:], pending) == {("routers/x.py", "listed")}
 
 
 def test_guard_covers_the_service_tree():
@@ -492,6 +506,34 @@ def test_detector_follows_imports(sources):
 )
 def test_detector_allows_non_blocking_shapes(source):
     assert not _detect(source), "detector flagged a safe shape"
+
+
+@pytest.mark.parametrize(
+    "source, flagged",
+    [
+        # The sync definition can block, so a call by that name can too.
+        ("class A:\n"
+         "    def load(self):\n"
+         "        with get_search_db() as s:\n"
+         "            return s\n"
+         "class B:\n"
+         "    async def load(self):\n"
+         "        return 1\n"
+         "    async def f(self):\n"
+         "        return self.load()\n", True),
+        ("class A:\n"
+         "    async def load(self):\n"
+         "        return 1\n"
+         "class B:\n"
+         "    async def load(self):\n"
+         "        return 1\n"
+         "    async def f(self):\n"
+         "        return await self.load()\n", False),
+    ],
+    ids=["sync-and-async-share-a-name", "all-async"],
+)
+def test_a_name_counts_as_async_only_if_every_definition_is(source, flagged):
+    assert bool(_detect(source)) is flagged
 
 
 def test_detector_keeps_same_named_functions_in_other_modules_apart():

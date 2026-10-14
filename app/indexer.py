@@ -118,6 +118,28 @@ class IndexStatus:
     pending_tfidf_keywords: int = 0
 
 
+def _loft_needs_reset(file_path: str, chunked: bool) -> bool | None:
+    """Whether an indexed loft must be transcribed again; None if unlistable.
+
+    Temp STT audio is an explicit request from Media Import and must re-run
+    even when the loft already has VTT chunks.
+    """
+    loft_path = Path(file_path)
+    stem = loft_path.stem
+    parent = loft_path.parent
+    try:
+        if (parent / f"{stem}.stt_temp.m4a").is_file():
+            return True
+    except OSError:
+        return None
+    if chunked:
+        return False
+    try:
+        return bool(match_siblings(parent, stem, "*.vtt"))
+    except OSError:
+        return None
+
+
 class IndexManager:
     """Manages the indexing pipeline and task queue.
 
@@ -597,46 +619,37 @@ class IndexManager:
         indexed; that temp audio intentionally wins even if VTT chunks
         already exist (manual/always STT).
         """
-        with get_search_db_read() as session:
+        def _loft_refs(session, file_ids: list[str] | None = None) -> list:
             has_chunks = (
                 session.query(TranscriptChunk.file_id)
                 .filter(TranscriptChunk.file_id == IndexedFile.file_id)
                 .exists()
             )
-            loft_refs = (
-                session.query(IndexedFile.file_id, IndexedFile.file_path, has_chunks)
-                .filter(
-                    IndexedFile.active.is_(True),
-                    IndexedFile.mime_type == LOFT_MIME,
-                    IndexedFile.whisper_indexed.is_(True),
-                )
-                .all()
+            query = session.query(
+                IndexedFile.file_id, IndexedFile.file_path, has_chunks
+            ).filter(
+                IndexedFile.active.is_(True),
+                IndexedFile.mime_type == LOFT_MIME,
+                IndexedFile.whisper_indexed.is_(True),
             )
+            if file_ids is not None:
+                query = query.filter(IndexedFile.file_id.in_(file_ids))
+            return query.all()
+
+        with get_search_db_read() as session:
+            loft_refs = _loft_refs(session)
 
         # Listing every loft folder takes minutes on a large library behind
-        # a slow bind mount, so the write lock is taken only for the update.
-        to_reset: list[str] = []
+        # a slow bind mount, so it runs without the write lock and only
+        # narrows the candidates.
+        candidates: list[str] = []
         unlistable_count = 0
         for file_id, file_path, chunked in loft_refs:
-            # Temp STT audio is an explicit request from Media Import
-            # and must re-run even when the loft already has VTT chunks.
-            loft_path = Path(file_path)
-            stem = loft_path.stem
-            parent = loft_path.parent
-            try:
-                if (parent / f"{stem}.stt_temp.m4a").is_file():
-                    to_reset.append(file_id)
-                    continue
-            except OSError:
+            needs_reset = _loft_needs_reset(file_path, chunked)
+            if needs_reset is None:
                 unlistable_count += 1
-                continue
-            if chunked:
-                continue
-            try:
-                if match_siblings(parent, stem, "*.vtt"):
-                    to_reset.append(file_id)
-            except OSError:
-                unlistable_count += 1
+            elif needs_reset:
+                candidates.append(file_id)
 
         if unlistable_count:
             logger.warning(
@@ -644,24 +657,26 @@ class IndexManager:
                 unlistable_count,
             )
 
-        if not to_reset:
-            return
-
+        # A whisper job can finish between the scan and the write, so each
+        # candidate is decided again under the lock the job writes with.
         reset_count = 0
-        for i in range(0, len(to_reset), _RESET_BATCH_SIZE):
-            batch = to_reset[i:i + _RESET_BATCH_SIZE]
+        for i in range(0, len(candidates), _RESET_BATCH_SIZE):
+            batch = candidates[i:i + _RESET_BATCH_SIZE]
             with get_search_db() as session:
-                reset_count += (
-                    session.query(IndexedFile)
-                    .filter(
-                        IndexedFile.file_id.in_(batch),
-                        IndexedFile.whisper_indexed.is_(True),
+                confirmed = [
+                    file_id
+                    for file_id, file_path, chunked in _loft_refs(session, batch)
+                    if _loft_needs_reset(file_path, chunked)
+                ]
+                if confirmed:
+                    reset_count += (
+                        session.query(IndexedFile)
+                        .filter(IndexedFile.file_id.in_(confirmed))
+                        .update(
+                            {IndexedFile.whisper_indexed: False},
+                            synchronize_session=False,
+                        )
                     )
-                    .update(
-                        {IndexedFile.whisper_indexed: False},
-                        synchronize_session=False,
-                    )
-                )
 
         if reset_count:
             logger.info(

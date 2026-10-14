@@ -361,6 +361,32 @@ class TestEnqueue:
         assert sorted(str(r["reason"]) for r in results) == ["None", "already_queued"]
 
     @pytest.mark.asyncio
+    async def test_a_failed_pending_write_does_not_leave_the_file_queued(
+        self, use_llm, search_db, feature_manual, policy_allow_family, monkeypatch,
+    ):
+        from app.workers import vision as vision_module
+
+        use_llm(MagicMock(), vision_model="llava:13b")
+        real_mark_pending = vision_module._mark_pending
+        calls = 0
+
+        def _flaky(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("database is locked")
+            return real_mark_pending(*args, **kwargs)
+
+        monkeypatch.setattr(vision_module, "_mark_pending", _flaky)
+        worker = VisionDescribeWorker()
+
+        with pytest.raises(RuntimeError):
+            await worker.enqueue("img-ok")
+        result = await worker.enqueue("img-ok")
+
+        assert result["accepted"] is True
+
+    @pytest.mark.asyncio
     async def test_unsupported_is_judged_against_the_routed_model(
         self, use_llm, search_db, feature_manual, policy_allow_family,
     ):

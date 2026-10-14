@@ -277,7 +277,7 @@ class TestReconcile:
 
         assert _whisper_indexed(Session, "f1") is False
 
-    def test_reconcile_touches_no_file_while_holding_a_write_session(
+    def test_reconcile_lists_only_candidate_folders_while_holding_a_write_session(
         self, Session, tmp_path, monkeypatch
     ):
         import app.indexer as indexer
@@ -288,6 +288,9 @@ class TestReconcile:
         audio_loft = _make_loft(tmp_path / "b", "WithAudio")
         (tmp_path / "b" / "WithAudio.stt_temp.m4a").write_bytes(b"")
         _seed_loft(Session, "audio", audio_loft, whisper_indexed=True)
+        for i in range(3):
+            plain = _make_loft(tmp_path / f"plain{i}", "Plain")
+            _seed_loft(Session, f"plain{i}", plain, whisper_indexed=True)
 
         writing = False
         touched_while_writing: list[str] = []
@@ -321,9 +324,63 @@ class TestReconcile:
 
         _reconcile_vtt()
 
-        assert touched_while_writing == []
+        assert not [p for p in touched_while_writing if "plain" in p]
         assert _whisper_indexed(Session, "vtt") is False
         assert _whisper_indexed(Session, "audio") is False
+        for i in range(3):
+            assert _whisper_indexed(Session, f"plain{i}") is True
+
+    def test_stt_finishing_during_the_scan_is_not_reset(
+        self, Session, tmp_path, monkeypatch
+    ):
+        loft = _make_loft(tmp_path / "dir", "Clip")
+        temp_audio = tmp_path / "dir" / "Clip.stt_temp.m4a"
+        temp_audio.write_bytes(b"")
+        _vtt(tmp_path / "dir" / "Clip.vtt", "caption text")
+        _seed_loft(Session, "f1", loft, whisper_indexed=True)
+
+        real_stat = os.stat
+        finished = False
+
+        def _stat(path, *args, **kwargs):
+            # The scan sees the temp audio; the STT job then completes:
+            # chunks written, flag already true, temp audio consumed.
+            nonlocal finished
+            result = real_stat(path, *args, **kwargs)
+            if not finished and not isinstance(path, int) and os.fsdecode(path) == str(temp_audio):
+                finished = True
+                s = Session()
+                s.add(TranscriptChunk(
+                    file_id="f1", chunk_index=0, text="stt text",
+                    timestamp_start=0.0, timestamp_end=2.0,
+                ))
+                s.commit()
+                s.close()
+                temp_audio.unlink()
+            return result
+
+        monkeypatch.setattr(os, "stat", _stat)
+
+        _reconcile_vtt()
+
+        assert finished
+        assert _whisper_indexed(Session, "f1") is True
+        assert _chunks(Session, "f1") == ["stt text"]
+
+    def test_every_candidate_is_reset_across_write_batches(
+        self, Session, tmp_path, monkeypatch
+    ):
+        import app.indexer as indexer
+
+        monkeypatch.setattr(indexer, "_RESET_BATCH_SIZE", 2)
+        for i in range(5):
+            loft = _make_loft(tmp_path / f"d{i}", "Clip")
+            _vtt(tmp_path / f"d{i}" / "Clip.vtt", "late transcript")
+            _seed_loft(Session, f"f{i}", loft, whisper_indexed=True)
+
+        _reconcile_vtt()
+
+        assert [_whisper_indexed(Session, f"f{i}") for i in range(5)] == [False] * 5
 
     def test_spec_addon_001_metacharacters_never_widen_the_requeue(
         self, Session, tmp_path
