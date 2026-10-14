@@ -161,14 +161,17 @@ class AutoTagsWorker:
         """
         from app.policy_client import is_feature_enabled
 
-        with get_search_db() as session:
-            rows = session.execute(
-                sql_text(
-                    "SELECT f.file_id, f.drive FROM indexed_files f "
-                    "WHERE f.active = 1 AND f.metadata_indexed = 1 "
-                    "AND f.file_id NOT IN (SELECT file_id FROM suggested_tags)"
-                )
-            ).fetchall()
+        def _unprocessed() -> list:
+            with get_search_db() as session:
+                return session.execute(
+                    sql_text(
+                        "SELECT f.file_id, f.drive FROM indexed_files f "
+                        "WHERE f.active = 1 AND f.metadata_indexed = 1 "
+                        "AND f.file_id NOT IN (SELECT file_id FROM suggested_tags)"
+                    )
+                ).fetchall()
+
+        rows = await asyncio.to_thread(_unprocessed)
 
         # Cache per-drive decisions so we don't pay one HTTP round-trip
         # per file when many files share a drive.
@@ -214,14 +217,14 @@ class AutoTagsWorker:
         if settings.features.auto_tags == "false":
             return
 
-        if _has_suggested_tags(file_id):
+        if await asyncio.to_thread(_has_suggested_tags, file_id):
             return
 
-        indexed_file = _get_indexed_file(file_id)
+        indexed_file = await asyncio.to_thread(_get_indexed_file, file_id)
         if indexed_file is None:
             return
 
-        existing_tags = _get_existing_tags(file_id)
+        existing_tags = await asyncio.to_thread(_get_existing_tags, file_id)
         context_type = _classify_file_type(indexed_file["file_type"])
 
         t_start = time.perf_counter()
@@ -278,7 +281,8 @@ class AutoTagsWorker:
             logger.info("Auto-tags: all tags filtered out for %s", file_id)
             return
 
-        _save_suggested_tags(
+        await asyncio.to_thread(
+            _save_suggested_tags,
             file_id=file_id,
             tags=filtered,
             model=model_label,
@@ -304,7 +308,7 @@ class AutoTagsWorker:
         pipeline and the LLM so we can later tell which pipeline
         produced a given suggestion.
         """
-        context = _build_context(indexed_file, context_type)
+        context = await asyncio.to_thread(_build_context, indexed_file, context_type)
         user_prompt = _build_user_prompt(
             indexed_file, context_type, context, existing_tags, candidates
         )

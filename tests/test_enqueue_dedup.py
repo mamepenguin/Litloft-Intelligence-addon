@@ -173,6 +173,46 @@ async def test_after_collect_reenqueue_allowed(manager):
 
 
 @pytest.mark.asyncio
+async def test_start_returns_without_waiting_for_the_first_reconcile(monkeypatch):
+    settings_ns = SimpleNamespace(
+        workers=SimpleNamespace(
+            whisper_parallel=1, clip_parallel=1, metadata_batch_size=10
+        ),
+        indexing=SimpleNamespace(reconciliation_interval=3600),
+    )
+    monkeypatch.setattr("app.indexer.settings", settings_ns)
+
+    from app.indexer import IndexManager
+
+    manager = IndexManager()
+    stop_event = asyncio.Event()
+    reconcile_started = asyncio.Event()
+
+    async def idle_worker() -> None:
+        await stop_event.wait()
+
+    async def slow_reconcile() -> dict:
+        reconcile_started.set()
+        await stop_event.wait()
+        return {}
+
+    manager._metadata_worker = idle_worker
+    manager._text_content_worker = idle_worker
+    manager._clip_worker = idle_worker
+    manager._whisper_worker = idle_worker
+    manager._tfidf_keywords_worker = idle_worker
+    manager._idle_unload_worker = idle_worker
+    manager.reconcile = slow_reconcile
+
+    try:
+        await asyncio.wait_for(manager.start(), timeout=2)
+        await asyncio.wait_for(reconcile_started.wait(), timeout=2)
+    finally:
+        stop_event.set()
+        await manager.stop()
+
+
+@pytest.mark.asyncio
 async def test_start_honors_whisper_parallel(monkeypatch):
     """``workers.whisper_parallel`` starts that many transcription workers."""
     workers_ns = SimpleNamespace(

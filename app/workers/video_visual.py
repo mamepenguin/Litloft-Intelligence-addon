@@ -435,6 +435,7 @@ class VideoVisualWorker:
         self._wake = asyncio.Event()
         self._pause_event = asyncio.Event()
         self._pause_event.set()  # start unpaused
+        self._stage_lock = asyncio.Lock()
         self._current_file_id: str | None = None
         self._current_run_id: str | None = None
 
@@ -492,37 +493,41 @@ class VideoVisualWorker:
         if not enabled:
             return False, "disabled", None
 
-        with get_search_db_read() as session:
-            file_row = (
-                session.query(IndexedFile)
-                .filter(IndexedFile.file_id == file_id, IndexedFile.active.is_(True))
-                .first()
-            )
-            if file_row is None:
-                return False, "not_found", None
-            if file_row.mime_type not in VIDEO_TYPES:
-                return False, "not_eligible", None
+        def _load_file_state() -> tuple[str | None, str | None, str | None]:
+            with get_search_db_read() as session:
+                file_row = (
+                    session.query(IndexedFile)
+                    .filter(IndexedFile.file_id == file_id, IndexedFile.active.is_(True))
+                    .first()
+                )
+                if file_row is None:
+                    return "not_found", None, None
+                if file_row.mime_type not in VIDEO_TYPES:
+                    return "not_eligible", None, None
 
-            last_run = (
-                session.query(VideoVisualRun)
-                .filter(VideoVisualRun.file_id == file_id)
-                .order_by(VideoVisualRun.created_at.desc())
-                .first()
-            )
-            # Sticky "provider/model can't do this" — same shape as
-            # VisionDescribeWorker._should_accept. A different model for
-            # this drive clears it, and so does an explicit request.
-            unsupported_model = (
-                (last_run.vision_model or "")
-                if last_run is not None
-                and last_run.status == "failed"
-                and last_run.error_class == "Unsupported"
-                else None
-            )
-            drive = file_row.drive
+                last_run = (
+                    session.query(VideoVisualRun)
+                    .filter(VideoVisualRun.file_id == file_id)
+                    .order_by(VideoVisualRun.created_at.desc())
+                    .first()
+                )
+                # Sticky "provider/model can't do this" — same shape as
+                # VisionDescribeWorker._should_accept. A different model for
+                # this drive clears it, and so does an explicit request.
+                unsupported_model = (
+                    (last_run.vision_model or "")
+                    if last_run is not None
+                    and last_run.status == "failed"
+                    and last_run.error_class == "Unsupported"
+                    else None
+                )
+                return None, unsupported_model, file_row.drive
 
+        rejection, unsupported_model, drive = await asyncio.to_thread(_load_file_state)
+        if rejection is not None:
+            return False, rejection, None
 
-        if not _clip_candidates_exist(file_id):
+        if not await asyncio.to_thread(_clip_candidates_exist, file_id):
             return False, "waiting_clip", None
 
         resolved = await llm_routing.resolve(drive, "video_visual_index")
@@ -537,16 +542,18 @@ class VideoVisualWorker:
         ):
             return False, "unsupported_sticky", None
 
-        # After the last await, so two concurrent requests cannot both pass.
-        with get_search_db_read() as session:
-            in_flight = (
-                session.query(VideoVisualRun.id)
-                .filter(
-                    VideoVisualRun.file_id == file_id,
-                    VideoVisualRun.status.in_(("queued", "running")),
+        def _find_in_flight() -> object | None:
+            with get_search_db_read() as session:
+                return (
+                    session.query(VideoVisualRun.id)
+                    .filter(
+                        VideoVisualRun.file_id == file_id,
+                        VideoVisualRun.status.in_(("queued", "running")),
+                    )
+                    .first()
                 )
-                .first()
-            )
+
+        in_flight = await asyncio.to_thread(_find_in_flight)
         if in_flight is not None:
             return False, "already_queued", None
         return True, "ok", resolved
@@ -578,36 +585,60 @@ class VideoVisualWorker:
             # candidate set hasn't actually changed (§12 "Source CLIP
             # fingerprint changes"). Manual "Generate again" always
             # creates a new run regardless (§3.4).
-            with get_search_db_read() as session:
-                active = (
-                    session.query(VideoVisualRun)
-                    .filter(VideoVisualRun.file_id == file_id, VideoVisualRun.is_active.is_(True))
-                    .first()
-                )
-            if active is not None:
+            def _is_up_to_date() -> bool:
+                with get_search_db_read() as session:
+                    active = (
+                        session.query(VideoVisualRun)
+                        .filter(VideoVisualRun.file_id == file_id, VideoVisualRun.is_active.is_(True))
+                        .first()
+                    )
+                if active is None:
+                    return False
                 candidates, _ = _load_candidates(file_id)
-                if (
+                return (
                     active.pipeline_version == PIPELINE_VERSION
                     and compute_candidate_fingerprint(candidates)
                     == active.candidate_fingerprint
-                ):
-                    return {"accepted": False, "reason": "up_to_date"}
+                )
+
+            if await asyncio.to_thread(_is_up_to_date):
+                return {"accepted": False, "reason": "up_to_date"}
 
         priority = 100 if requested_by == "manual" else 0
-        with get_search_db() as session:
-            run = VideoVisualRun(
-                file_id=file_id,
-                status="queued",
-                requested_by=requested_by,
-                priority=priority,
-                vision_model=resolved.profile.config.vision_model,
-                pipeline_version=PIPELINE_VERSION,
-                candidate_fingerprint="",
-                created_at=datetime.now(UTC),
-            )
-            session.add(run)
-            session.flush()
-            run_id = run.id
+
+        def _insert_run() -> str | None:
+            with get_search_db() as session:
+                # Re-checked here: the in-flight check in _should_accept is
+                # separated from this insert by awaits, so two concurrent
+                # requests could both have passed it.
+                in_flight = (
+                    session.query(VideoVisualRun.id)
+                    .filter(
+                        VideoVisualRun.file_id == file_id,
+                        VideoVisualRun.status.in_(("queued", "running")),
+                    )
+                    .first()
+                )
+                if in_flight is not None:
+                    return None
+                run = VideoVisualRun(
+                    file_id=file_id,
+                    status="queued",
+                    requested_by=requested_by,
+                    priority=priority,
+                    vision_model=resolved.profile.config.vision_model,
+                    pipeline_version=PIPELINE_VERSION,
+                    candidate_fingerprint="",
+                    created_at=datetime.now(UTC),
+                )
+                session.add(run)
+                session.flush()
+                return run.id
+
+        async with self._stage_lock:
+            run_id = await asyncio.to_thread(_insert_run)
+        if run_id is None:
+            return {"accepted": False, "reason": "already_queued"}
 
         self._wake.set()
         return {"accepted": True, "reason": "queued", "run_id": run_id}
@@ -616,71 +647,79 @@ class VideoVisualWorker:
         """Re-queue only the failed scenes of the file's most recent
         retryable run (§3.4, §9 "Retry operates on the same staged run
         and failed scene rows")."""
-        with get_search_db() as session:
-            active = (
-                session.query(VideoVisualRun)
-                .filter(
-                    VideoVisualRun.file_id == file_id,
-                    VideoVisualRun.is_active.is_(True),
-                )
-                .first()
-            )
-            retryable = session.query(VideoVisualRun).filter(
-                VideoVisualRun.file_id == file_id,
-                VideoVisualRun.status.in_(("partial", "failed")),
-            )
-            if active is not None:
-                retryable = retryable.filter(
-                    or_(
-                        VideoVisualRun.id == active.id,
-                        VideoVisualRun.created_at > active.created_at,
+
+        def _requeue_failed_scenes() -> dict:
+            with get_search_db() as session:
+                active = (
+                    session.query(VideoVisualRun)
+                    .filter(
+                        VideoVisualRun.file_id == file_id,
+                        VideoVisualRun.is_active.is_(True),
                     )
+                    .first()
                 )
-            run = (
-                retryable
-                .order_by(VideoVisualRun.created_at.desc())
-                .first()
-            )
-            if run is None:
-                return {"accepted": False, "reason": "no_run"}
+                retryable = session.query(VideoVisualRun).filter(
+                    VideoVisualRun.file_id == file_id,
+                    VideoVisualRun.status.in_(("partial", "failed")),
+                )
+                if active is not None:
+                    retryable = retryable.filter(
+                        or_(
+                            VideoVisualRun.id == active.id,
+                            VideoVisualRun.created_at > active.created_at,
+                        )
+                    )
+                run = (
+                    retryable
+                    .order_by(VideoVisualRun.created_at.desc())
+                    .first()
+                )
+                if run is None:
+                    return {"accepted": False, "reason": "no_run"}
 
-            failed_scenes = (
-                session.query(VideoVisualScene)
-                .filter(VideoVisualScene.run_id == run.id, VideoVisualScene.status == "failed")
-                .all()
-            )
-            if not failed_scenes:
-                return {"accepted": False, "reason": "no_failed_scenes"}
+                failed_scenes = (
+                    session.query(VideoVisualScene)
+                    .filter(VideoVisualScene.run_id == run.id, VideoVisualScene.status == "failed")
+                    .all()
+                )
+                if not failed_scenes:
+                    return {"accepted": False, "reason": "no_failed_scenes"}
 
-            reset_count = 0
-            for scene in failed_scenes:
-                scene.status = "pending"
-                scene.error_class = None
-                scene.error_message = None
-                reset_count += 1
+                reset_count = 0
+                for scene in failed_scenes:
+                    scene.status = "pending"
+                    scene.error_class = None
+                    scene.error_message = None
+                    reset_count += 1
 
-            run.failed_count = max(0, run.failed_count - reset_count)
-            run.completed_count = max(0, run.completed_count - reset_count)
-            run.status = "queued"
-            run.priority = 100
-            run.completed_at = None
-            run_id = run.id
+                run.failed_count = max(0, run.failed_count - reset_count)
+                run.completed_count = max(0, run.completed_count - reset_count)
+                run.status = "queued"
+                run.priority = 100
+                run.completed_at = None
+                return {"accepted": True, "run_id": run.id, "reset_count": reset_count}
 
-        self._wake.set()
-        return {"accepted": True, "run_id": run_id, "reset_count": reset_count}
+        result = await asyncio.to_thread(_requeue_failed_scenes)
+        if result["accepted"]:
+            self._wake.set()
+        return result
 
     async def enqueue_unprocessed(self) -> int:
         """on_index coverage sweep: queue native videos with no run yet."""
-        with get_search_db_read() as session:
-            existing_ids = {r[0] for r in session.query(VideoVisualRun.file_id).distinct().all()}
-            rows = (
-                session.query(IndexedFile.file_id)
-                .filter(
-                    IndexedFile.active.is_(True),
-                    IndexedFile.mime_type.in_(list(VIDEO_TYPES)),
+        def _load_sweep_rows() -> tuple[set[str], list]:
+            with get_search_db_read() as session:
+                existing_ids = {r[0] for r in session.query(VideoVisualRun.file_id).distinct().all()}
+                rows = (
+                    session.query(IndexedFile.file_id)
+                    .filter(
+                        IndexedFile.active.is_(True),
+                        IndexedFile.mime_type.in_(list(VIDEO_TYPES)),
+                    )
+                    .all()
                 )
-                .all()
-            )
+            return existing_ids, rows
+
+        existing_ids, rows = await asyncio.to_thread(_load_sweep_rows)
         queued = 0
         for (file_id,) in rows:
             if file_id in existing_ids:
@@ -761,14 +800,17 @@ class VideoVisualWorker:
             ).update({"status": "queued"}, synchronize_session=False)
 
     async def _process_run(self, run_id: str, file_id: str) -> None:
-        with get_search_db_read() as session:
-            file_row = (
-                session.query(IndexedFile)
-                .filter(IndexedFile.file_id == file_id, IndexedFile.active.is_(True))
-                .first()
-            )
+        def _load_file_row() -> IndexedFile | None:
+            with get_search_db_read() as session:
+                return (
+                    session.query(IndexedFile)
+                    .filter(IndexedFile.file_id == file_id, IndexedFile.active.is_(True))
+                    .first()
+                )
+
+        file_row = await asyncio.to_thread(_load_file_row)
         if file_row is None:
-            self._fail_run(run_id, "FileUnavailable")
+            await asyncio.to_thread(self._fail_run, run_id, "FileUnavailable")
             return
         drive, file_path, filename = file_row.drive, file_row.file_path, file_row.filename
 
@@ -781,43 +823,49 @@ class VideoVisualWorker:
         except Exception:
             enabled = False
         if not enabled:
-            self._fail_run(run_id, "PolicyDisabled")
+            await asyncio.to_thread(self._fail_run, run_id, "PolicyDisabled")
             return
         resolved = await llm_routing.resolve(drive, "video_visual_index")
         if not isinstance(resolved, Resolved):
-            self._release_unserved_run(run_id)
+            await asyncio.to_thread(self._release_unserved_run, run_id)
             return
-        self._stamp_run_model(run_id, resolved.profile.config.vision_model)
+        await asyncio.to_thread(
+            self._stamp_run_model, run_id, resolved.profile.config.vision_model
+        )
 
         await emit_video_visual_event(
             "intelligence.video_visual.started",
             {"file_id": file_id, "run_id": run_id, "drive": drive},
         )
 
-        with get_search_db_read() as session:
-            has_scenes = (
-                session.query(VideoVisualScene.id).filter(VideoVisualScene.run_id == run_id).first()
-                is not None
-            )
+        def _has_scenes() -> bool:
+            with get_search_db_read() as session:
+                return (
+                    session.query(VideoVisualScene.id).filter(VideoVisualScene.run_id == run_id).first()
+                    is not None
+                )
 
-        if not has_scenes:
-            built = self._build_scenes(run_id, file_id)
+        if not await asyncio.to_thread(_has_scenes):
+            built = await asyncio.to_thread(self._build_scenes, run_id, file_id)
             if not built:
-                self._fail_run(run_id, "NoCandidates")
+                await asyncio.to_thread(self._fail_run, run_id, "NoCandidates")
                 await emit_video_visual_event(
                     _READY_EVENTS["failed"],
                     {"file_id": file_id, "run_id": run_id, "drive": drive, "reason": "no_candidates"},
                 )
                 return
 
-        with get_search_db_read() as session:
-            pending_ids = [
-                r[0]
-                for r in session.query(VideoVisualScene.id)
-                .filter(VideoVisualScene.run_id == run_id, VideoVisualScene.status == "pending")
-                .order_by(VideoVisualScene.ordering)
-                .all()
-            ]
+        def _load_pending_ids() -> list[int]:
+            with get_search_db_read() as session:
+                return [
+                    r[0]
+                    for r in session.query(VideoVisualScene.id)
+                    .filter(VideoVisualScene.run_id == run_id, VideoVisualScene.status == "pending")
+                    .order_by(VideoVisualScene.ordering)
+                    .all()
+                ]
+
+        pending_ids = await asyncio.to_thread(_load_pending_ids)
 
         for scene_id in pending_ids:
             await self._pause_event.wait()  # checked between scenes only
@@ -831,7 +879,7 @@ class VideoVisualWorker:
             # so its error_class deliberately is not the one
             # ``_should_accept`` latches on.
             if outcome in _RUN_ENDING_OUTCOMES:
-                self._fail_run(run_id, _RUN_ENDING_OUTCOMES[outcome])
+                await asyncio.to_thread(self._fail_run, run_id, _RUN_ENDING_OUTCOMES[outcome])
                 await emit_video_visual_event(
                     _READY_EVENTS["failed"],
                     {"file_id": file_id, "run_id": run_id, "drive": drive, "reason": outcome},
@@ -923,22 +971,31 @@ class VideoVisualWorker:
         file_path: str,
         filename: str,
     ) -> str:
-        with get_search_db() as session:
-            scene = session.query(VideoVisualScene).filter_by(id=scene_id).first()
-            if scene is None:
-                return "failed"
-            scene.status = "running"
-            scene.attempt_count += 1
-            start_time = scene.start_time
-            end_time = scene.end_time
+        def _start_scene() -> tuple[float, float | None] | None:
+            with get_search_db() as session:
+                scene = session.query(VideoVisualScene).filter_by(id=scene_id).first()
+                if scene is None:
+                    return None
+                scene.status = "running"
+                scene.attempt_count += 1
+                return scene.start_time, scene.end_time
+
+        times = await asyncio.to_thread(_start_scene)
+        if times is None:
+            return "failed"
+        start_time, end_time = times
 
         if not config.validate_file_path(file_path):
-            return self._fail_scene(scene_id, run_id, "InvalidPath", "file path failed validation")
+            return await asyncio.to_thread(
+                self._fail_scene, scene_id, run_id, "InvalidPath", "file path failed validation"
+            )
 
         try:
             raw_bytes = await _load_frame_bytes(file_id, start_time, file_path)
         except Exception as e:
-            return self._fail_scene(scene_id, run_id, "FrameExtraction", str(e)[:200])
+            return await asyncio.to_thread(
+                self._fail_scene, scene_id, run_id, "FrameExtraction", str(e)[:200]
+            )
 
         # Reuse the existing image preprocessing path (bound dimensions/
         # bytes, strip metadata) even though ffmpeg frames normally carry
@@ -947,10 +1004,14 @@ class VideoVisualWorker:
 
         preprocessed = _preprocess_image(raw_bytes, "image/webp")
         if preprocessed is None:
-            return self._fail_scene(scene_id, run_id, "Decode", "frame preprocessing failed")
+            return await asyncio.to_thread(
+                self._fail_scene, scene_id, run_id, "Decode", "frame preprocessing failed"
+            )
         image_bytes, image_mime = preprocessed
 
-        transcript_excerpt = _select_transcript_excerpt(file_id, start_time, end_time)
+        transcript_excerpt = await asyncio.to_thread(
+            _select_transcript_excerpt, file_id, start_time, end_time
+        )
 
         system_prompt = _build_scene_system_prompt(settings.llm.output_language)
         user_prompt = render(
@@ -998,7 +1059,8 @@ class VideoVisualWorker:
                 return "model_missing"
             parsed = _validate_scene_output(result2.value)
             if parsed is None:
-                return self._fail_scene(
+                return await asyncio.to_thread(
+                    self._fail_scene,
                     scene_id, run_id,
                     _SCENE_ERROR_CLASSES.get(result2.failure, "MalformedOutput"),
                     "structured output invalid after repair attempt"
@@ -1006,22 +1068,26 @@ class VideoVisualWorker:
                     else f"vision call failed: {result2.failure}",
                 )
 
-        with get_search_db() as session:
-            scene = session.query(VideoVisualScene).filter_by(id=scene_id).first()
-            if scene is not None:
-                scene.status = "succeeded"
-                scene.scene_label = parsed["scene_label"]
-                scene.visible_text = parsed["visible_text"] or None
-                scene.scene_type = parsed["scene_type"]
-                scene.transcript_excerpt = transcript_excerpt or None
-                scene.completed_at = datetime.now(UTC)
-            run = session.query(VideoVisualRun).filter_by(id=run_id).first()
-            if run is not None:
-                run.completed_count += 1
-                run.succeeded_count += 1
+        def _record_success() -> None:
+            with get_search_db() as session:
+                scene = session.query(VideoVisualScene).filter_by(id=scene_id).first()
+                if scene is not None:
+                    scene.status = "succeeded"
+                    scene.scene_label = parsed["scene_label"]
+                    scene.visible_text = parsed["visible_text"] or None
+                    scene.scene_type = parsed["scene_type"]
+                    scene.transcript_excerpt = transcript_excerpt or None
+                    scene.completed_at = datetime.now(UTC)
+                run = session.query(VideoVisualRun).filter_by(id=run_id).first()
+                if run is not None:
+                    run.completed_count += 1
+                    run.succeeded_count += 1
+
+        await asyncio.to_thread(_record_success)
 
         try:
-            _embed_scene(
+            await asyncio.to_thread(
+                _embed_scene,
                 file_id, scene_id,
                 parsed["scene_label"], parsed["visible_text"],
                 start_time, end_time,
@@ -1032,84 +1098,96 @@ class VideoVisualWorker:
         return "succeeded"
 
     async def _emit_progress(self, run_id: str, file_id: str, drive: str) -> None:
-        with get_search_db_read() as session:
-            run = session.query(VideoVisualRun).filter_by(id=run_id).first()
-            if run is None:
-                return
-            counts = {
-                "selected_count": run.selected_count,
-                "completed_count": run.completed_count,
-                "succeeded_count": run.succeeded_count,
-                "failed_count": run.failed_count,
-            }
+        def _load_counts() -> dict | None:
+            with get_search_db_read() as session:
+                run = session.query(VideoVisualRun).filter_by(id=run_id).first()
+                if run is None:
+                    return None
+                return {
+                    "selected_count": run.selected_count,
+                    "completed_count": run.completed_count,
+                    "succeeded_count": run.succeeded_count,
+                    "failed_count": run.failed_count,
+                }
+
+        counts = await asyncio.to_thread(_load_counts)
+        if counts is None:
+            return
         await emit_video_visual_event(
             "intelligence.video_visual.progress",
             {"file_id": file_id, "run_id": run_id, "drive": drive, **counts},
         )
 
     async def _finalize_run(self, run_id: str, file_id: str, drive: str) -> None:
-        with get_search_db() as session:
-            run = session.query(VideoVisualRun).filter_by(id=run_id).first()
-            if run is None:
-                return
+        def _settle_run() -> tuple[str, dict] | None:
+            with get_search_db() as session:
+                run = session.query(VideoVisualRun).filter_by(id=run_id).first()
+                if run is None:
+                    return None
 
-            if run.succeeded_count > 0 and run.failed_count == 0:
-                final_status = "succeeded"
-            elif run.succeeded_count > 0:
-                final_status = "partial"
-            else:
-                final_status = "failed"
+                if run.succeeded_count > 0 and run.failed_count == 0:
+                    final_status = "succeeded"
+                elif run.succeeded_count > 0:
+                    final_status = "partial"
+                else:
+                    final_status = "failed"
 
-            run.status = final_status
-            run.completed_at = datetime.now(UTC)
+                run.status = final_status
+                run.completed_at = datetime.now(UTC)
 
-            if final_status == "succeeded":
-                old_runs = (
-                    session.query(VideoVisualRun)
-                    .filter(
-                        VideoVisualRun.file_id == file_id,
-                        VideoVisualRun.id != run_id,
-                        VideoVisualRun.status.in_(("succeeded", "partial", "failed")),
-                    )
-                    .all()
-                )
-                old_run_ids = [r.id for r in old_runs]
-                if old_run_ids:
-                    old_scene_ids = [
-                        s[0]
-                        for s in session.query(VideoVisualScene.id)
-                        .filter(VideoVisualScene.run_id.in_(old_run_ids))
+                if final_status == "succeeded":
+                    old_runs = (
+                        session.query(VideoVisualRun)
+                        .filter(
+                            VideoVisualRun.file_id == file_id,
+                            VideoVisualRun.id != run_id,
+                            VideoVisualRun.status.in_(("succeeded", "partial", "failed")),
+                        )
                         .all()
-                    ]
-                    _purge_scene_embeddings(session, old_scene_ids)
-                    session.query(VideoVisualRun).filter(
-                        VideoVisualRun.id.in_(old_run_ids)
-                    ).update(
-                        {"is_active": False, "status": "superseded"},
-                        synchronize_session=False,
                     )
-                    session.flush()
-                run.is_active = True
-            elif final_status == "partial":
-                has_other_active = (
-                    session.query(VideoVisualRun.id)
-                    .filter(
-                        VideoVisualRun.file_id == file_id,
-                        VideoVisualRun.is_active.is_(True),
-                        VideoVisualRun.id != run_id,
-                    )
-                    .first()
-                    is not None
-                )
-                if not has_other_active:
+                    old_run_ids = [r.id for r in old_runs]
+                    if old_run_ids:
+                        old_scene_ids = [
+                            s[0]
+                            for s in session.query(VideoVisualScene.id)
+                            .filter(VideoVisualScene.run_id.in_(old_run_ids))
+                            .all()
+                        ]
+                        _purge_scene_embeddings(session, old_scene_ids)
+                        session.query(VideoVisualRun).filter(
+                            VideoVisualRun.id.in_(old_run_ids)
+                        ).update(
+                            {"is_active": False, "status": "superseded"},
+                            synchronize_session=False,
+                        )
+                        session.flush()
                     run.is_active = True
-            # failed: is_active stays False, active run (if any) untouched.
+                elif final_status == "partial":
+                    has_other_active = (
+                        session.query(VideoVisualRun.id)
+                        .filter(
+                            VideoVisualRun.file_id == file_id,
+                            VideoVisualRun.is_active.is_(True),
+                            VideoVisualRun.id != run_id,
+                        )
+                        .first()
+                        is not None
+                    )
+                    if not has_other_active:
+                        run.is_active = True
+                # failed: is_active stays False, active run (if any) untouched.
 
-            counts = {
-                "selected_count": run.selected_count,
-                "succeeded_count": run.succeeded_count,
-                "failed_count": run.failed_count,
-            }
+                counts = {
+                    "selected_count": run.selected_count,
+                    "succeeded_count": run.succeeded_count,
+                    "failed_count": run.failed_count,
+                }
+                return final_status, counts
+
+        settled = await asyncio.to_thread(_settle_run)
+        if settled is None:
+            return
+        final_status, counts = settled
 
         await emit_video_visual_event(
             _READY_EVENTS[final_status],

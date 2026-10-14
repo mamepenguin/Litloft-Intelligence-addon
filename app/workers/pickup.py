@@ -110,13 +110,16 @@ class PickupWorker:
                 logger.info("Pickup: recomputing drive=%s for a missed trigger", drive)
 
     async def _sweep_all_drives(self) -> None:
-        with get_search_db() as session:
-            rows = (
-                session.query(IndexedFile.drive)
-                .filter(IndexedFile.active.is_(True))
-                .distinct()
-                .all()
-            )
+        def _active_drives() -> list:
+            with get_search_db() as session:
+                return (
+                    session.query(IndexedFile.drive)
+                    .filter(IndexedFile.active.is_(True))
+                    .distinct()
+                    .all()
+                )
+
+        rows = await asyncio.to_thread(_active_drives)
         for (drive,) in rows:
             await self._guarded_compute(drive)
 

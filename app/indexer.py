@@ -11,6 +11,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text as sql_text
@@ -48,6 +49,9 @@ from app.workers.whisper import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Under SQLite's bound-parameter limit, so an IN list never overflows it.
+_RESET_BATCH_SIZE = 500
 
 # MIME types for text content extraction (shared across all indexing logic)
 TEXT_MIMES = frozenset({
@@ -203,9 +207,6 @@ class IndexManager:
                 self._idle_unload_worker(), name="idle_unload_worker"
             ),
         ]
-
-        # Initial reconciliation
-        await self.reconcile()
 
     async def stop(self) -> None:
         """Stop all background workers gracefully."""
@@ -596,9 +597,14 @@ class IndexManager:
         indexed; that temp audio intentionally wins even if VTT chunks
         already exist (manual/always STT).
         """
-        with get_search_db() as session:
+        with get_search_db_read() as session:
+            has_chunks = (
+                session.query(TranscriptChunk.file_id)
+                .filter(TranscriptChunk.file_id == IndexedFile.file_id)
+                .exists()
+            )
             loft_refs = (
-                session.query(IndexedFile)
+                session.query(IndexedFile.file_id, IndexedFile.file_path, has_chunks)
                 .filter(
                     IndexedFile.active.is_(True),
                     IndexedFile.mime_type == LOFT_MIME,
@@ -607,55 +613,61 @@ class IndexManager:
                 .all()
             )
 
-            reset_count = 0
-            unlistable_count = 0
-            for f in loft_refs:
-                # Temp STT audio is an explicit request from Media Import
-                # and must re-run even when the loft already has VTT chunks.
-                from pathlib import Path
-                loft_path = Path(f.file_path)
-                stem = loft_path.stem
-                parent = loft_path.parent
-                temp_audio = parent / f"{stem}.stt_temp.m4a"
-                try:
-                    has_temp_audio = temp_audio.is_file()
-                except OSError:
-                    unlistable_count += 1
+        # Listing every loft folder takes minutes on a large library behind
+        # a slow bind mount, so the write lock is taken only for the update.
+        to_reset: list[str] = []
+        unlistable_count = 0
+        for file_id, file_path, chunked in loft_refs:
+            # Temp STT audio is an explicit request from Media Import
+            # and must re-run even when the loft already has VTT chunks.
+            loft_path = Path(file_path)
+            stem = loft_path.stem
+            parent = loft_path.parent
+            try:
+                if (parent / f"{stem}.stt_temp.m4a").is_file():
+                    to_reset.append(file_id)
                     continue
-                if has_temp_audio:
-                    f.whisper_indexed = False
-                    reset_count += 1
-                    continue
+            except OSError:
+                unlistable_count += 1
+                continue
+            if chunked:
+                continue
+            try:
+                if match_siblings(parent, stem, "*.vtt"):
+                    to_reset.append(file_id)
+            except OSError:
+                unlistable_count += 1
 
-                has_chunks = (
-                    session.query(TranscriptChunk)
-                    .filter_by(file_id=f.file_id)
-                    .first()
-                    is not None
+        if unlistable_count:
+            logger.warning(
+                "Skipped %d loft ref(s) whose folder could not be listed",
+                unlistable_count,
+            )
+
+        if not to_reset:
+            return
+
+        reset_count = 0
+        for i in range(0, len(to_reset), _RESET_BATCH_SIZE):
+            batch = to_reset[i:i + _RESET_BATCH_SIZE]
+            with get_search_db() as session:
+                reset_count += (
+                    session.query(IndexedFile)
+                    .filter(
+                        IndexedFile.file_id.in_(batch),
+                        IndexedFile.whisper_indexed.is_(True),
+                    )
+                    .update(
+                        {IndexedFile.whisper_indexed: False},
+                        synchronize_session=False,
+                    )
                 )
-                if has_chunks:
-                    continue
 
-                try:
-                    has_vtt = bool(match_siblings(parent, stem, "*.vtt"))
-                except OSError:
-                    unlistable_count += 1
-                    continue
-                if has_vtt:
-                    f.whisper_indexed = False
-                    reset_count += 1
-
-            if unlistable_count:
-                logger.warning(
-                    "Skipped %d loft ref(s) whose folder could not be listed",
-                    unlistable_count,
-                )
-
-            if reset_count:
-                logger.info(
-                    "Reset %d loft ref(s) with new VTT/STT temp for re-indexing",
-                    reset_count,
-                )
+        if reset_count:
+            logger.info(
+                "Reset %d loft ref(s) with new VTT/STT temp for re-indexing",
+                reset_count,
+            )
 
     async def _resume_incomplete(self) -> int:
         """Re-queue active files that have incomplete indexing.
@@ -1575,13 +1587,13 @@ class IndexManager:
                 await asyncio.sleep(5)
 
     async def _reconciliation_worker(self) -> None:
-        """Periodically reconcile index with Litloft DB."""
+        """Reconcile index with Litloft DB now, then periodically."""
         interval = settings.indexing.reconciliation_interval
 
         while True:
             try:
-                await asyncio.sleep(interval)
                 await self.reconcile()
+                await asyncio.sleep(interval)
             except asyncio.CancelledError:
                 return
             except Exception as e:

@@ -349,6 +349,12 @@ def _mark_pending(session: Any, file_id: str) -> None:
     )
 
 
+def _in_search_txn(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """Run ``fn(session, *args, **kwargs)`` in its own search-DB transaction."""
+    with get_search_db() as session:
+        return fn(session, *args, **kwargs)
+
+
 def _clear_pending(session: Any, file_id: str) -> None:
     """Release a claim without a run: back to what the stored columns say.
 
@@ -548,22 +554,25 @@ class VisionDescribeWorker:
         if not enabled:
             return False, "policy_off"
 
-        with get_search_db() as session:
-            file_row = (
-                session.query(IndexedFile)
-                .filter(
-                    IndexedFile.file_id == file_id,
-                    IndexedFile.active.is_(True),
+        def _read_file_state() -> tuple[str | None, Any, str | None]:
+            with get_search_db() as session:
+                file_row = (
+                    session.query(IndexedFile)
+                    .filter(
+                        IndexedFile.file_id == file_id,
+                        IndexedFile.active.is_(True),
+                    )
+                    .first()
                 )
-                .first()
-            )
-            if file_row is None:
-                return False, "file_not_found"
-            if not _is_image_mime(file_row.mime_type):
-                return False, "not_an_image"
+                if file_row is None:
+                    return "file_not_found", None, None
+                if not _is_image_mime(file_row.mime_type):
+                    return "not_an_image", None, None
+                return None, _fetch_existing_vision(session, file_id), file_row.drive
 
-            state = _fetch_existing_vision(session, file_id)
-            drive = file_row.drive
+        rejected, state, drive = await asyncio.to_thread(_read_file_state)
+        if rejected is not None:
+            return False, rejected
 
         resolved = await llm_routing.resolve(drive, "vision_describe")
         if isinstance(resolved, Defer):
@@ -615,9 +624,14 @@ class VisionDescribeWorker:
         # reporting its previous outcome, and a caller polling for the
         # change it just asked for would read the old answer and
         # conclude nothing happened.
-        with get_search_db() as session:
-            _mark_pending(session, file_id)
+        # Claimed before the write's await, so a concurrent request for the
+        # same file sees ``already_queued`` instead of passing the gate too.
         self._queued.add(file_id)
+        try:
+            await asyncio.to_thread(_in_search_txn, _mark_pending, file_id)
+        except BaseException:
+            self._queued.discard(file_id)
+            raise
         await self._queue.put(file_id)
         return {"accepted": True, "reason": None}
 
@@ -641,16 +655,19 @@ class VisionDescribeWorker:
         on_index one. It is still subject to the feature being live —
         both this call site and ``_should_accept`` require that.
         """
-        with get_search_db() as session:
-            rows = session.execute(
-                sql_text(
-                    "SELECT f.file_id FROM indexed_files f "
-                    "JOIN file_summaries s ON s.file_id = f.file_id "
-                    "WHERE f.active = 1 "
-                    "AND f.mime_type LIKE 'image/%' "
-                    "AND s.visual_description_status = 'pending'"
-                )
-            ).fetchall()
+        def _select_rows() -> list[Any]:
+            with get_search_db() as session:
+                return session.execute(
+                    sql_text(
+                        "SELECT f.file_id FROM indexed_files f "
+                        "JOIN file_summaries s ON s.file_id = f.file_id "
+                        "WHERE f.active = 1 "
+                        "AND f.mime_type LIKE 'image/%' "
+                        "AND s.visual_description_status = 'pending'"
+                    )
+                ).fetchall()
+
+        rows = await asyncio.to_thread(_select_rows)
 
         queued = 0
         for (file_id,) in rows:
@@ -683,16 +700,19 @@ class VisionDescribeWorker:
 
         Returns the number of files actually accepted onto the queue.
         """
-        with get_search_db() as session:
-            rows = session.execute(
-                sql_text(
-                    "SELECT f.file_id FROM indexed_files f "
-                    "LEFT JOIN file_summaries s ON s.file_id = f.file_id "
-                    "WHERE f.active = 1 "
-                    "AND f.mime_type LIKE 'image/%' "
-                    "AND s.visual_description_status IS NULL"
-                )
-            ).fetchall()
+        def _select_rows() -> list[Any]:
+            with get_search_db() as session:
+                return session.execute(
+                    sql_text(
+                        "SELECT f.file_id FROM indexed_files f "
+                        "LEFT JOIN file_summaries s ON s.file_id = f.file_id "
+                        "WHERE f.active = 1 "
+                        "AND f.mime_type LIKE 'image/%' "
+                        "AND s.visual_description_status IS NULL"
+                    )
+                ).fetchall()
+
+        rows = await asyncio.to_thread(_select_rows)
 
         queued = 0
         for (file_id,) in rows:
@@ -728,13 +748,16 @@ class VisionDescribeWorker:
         are written at deterministic points so the UI can poll and see
         progress. A best-effort WS emission happens at start / end.
         """
-        with get_search_db() as session:
-            file_row = (
-                session.query(IndexedFile)
-                .filter(IndexedFile.file_id == file_id)
-                .first()
-            )
-            drive = file_row.drive if file_row is not None else None
+        def _read_drive() -> str | None:
+            with get_search_db() as session:
+                file_row = (
+                    session.query(IndexedFile)
+                    .filter(IndexedFile.file_id == file_id)
+                    .first()
+                )
+                return file_row.drive if file_row is not None else None
+
+        drive = await asyncio.to_thread(_read_drive)
         resolved = (
             await llm_routing.resolve(drive, "vision_describe")
             if drive is not None
@@ -743,8 +766,7 @@ class VisionDescribeWorker:
         if not isinstance(resolved, Resolved):
             # Accepted under a routing that no longer serves this drive:
             # drop the claim so the next sweep sees it as never attempted.
-            with get_search_db() as session:
-                _clear_pending(session, file_id)
+            await asyncio.to_thread(_in_search_txn, _clear_pending, file_id)
             return
         vision_model = resolved.profile.config.vision_model
         llm = resolved.client
@@ -758,21 +780,20 @@ class VisionDescribeWorker:
         # the previous state. Redundant when the file arrived through
         # ``enqueue``, which already did it, but ``_process_file`` is
         # also driven directly and must not depend on that.
-        with get_search_db() as session:
-            _mark_pending(session, file_id)
+        await asyncio.to_thread(_in_search_txn, _mark_pending, file_id)
 
-        loaded = _load_image_bytes(file_id)
+        loaded = await asyncio.to_thread(_load_image_bytes, file_id)
         if loaded is None:
-            with get_search_db() as session:
-                _write_status(
-                    session,
-                    file_id,
-                    description=None,
-                    status="failed",
-                    model=vision_model,
-                    generated_at=None,
-                    error="load",
-                )
+            await asyncio.to_thread(
+                _in_search_txn,
+                _write_status,
+                file_id,
+                description=None,
+                status="failed",
+                model=vision_model,
+                generated_at=None,
+                error="load",
+            )
             await _emit_ws_event(
                 "intelligence.vision_describe.failed",
                 {"file_id": file_id, "reason": "load"},
@@ -782,16 +803,16 @@ class VisionDescribeWorker:
         raw_bytes, mime_type = loaded
         preprocessed = _preprocess_image(raw_bytes, mime_type)
         if preprocessed is None:
-            with get_search_db() as session:
-                _write_status(
-                    session,
-                    file_id,
-                    description=None,
-                    status="failed",
-                    model=vision_model,
-                    generated_at=None,
-                    error="decode",
-                )
+            await asyncio.to_thread(
+                _in_search_txn,
+                _write_status,
+                file_id,
+                description=None,
+                status="failed",
+                model=vision_model,
+                generated_at=None,
+                error="decode",
+            )
             await _emit_ws_event(
                 "intelligence.vision_describe.failed",
                 {"file_id": file_id, "reason": "decode"},
@@ -819,16 +840,16 @@ class VisionDescribeWorker:
         # or the next file is one the provider can read — so it stays a
         # retryable failure.
         if result.failure == FAILURE_VISION_UNSUPPORTED:
-            with get_search_db() as session:
-                _write_status(
-                    session,
-                    file_id,
-                    description=None,
-                    status="unsupported",
-                    model=vision_model,
-                    generated_at=None,
-                    error=FAILURE_VISION_UNSUPPORTED,
-                )
+            await asyncio.to_thread(
+                _in_search_txn,
+                _write_status,
+                file_id,
+                description=None,
+                status="unsupported",
+                model=vision_model,
+                generated_at=None,
+                error=FAILURE_VISION_UNSUPPORTED,
+            )
             await _emit_ws_event(
                 "intelligence.vision_describe.unsupported",
                 {"file_id": file_id, "model": vision_model},
@@ -843,16 +864,16 @@ class VisionDescribeWorker:
         # sentence would sit in retrieval as though it were the whole
         # description.
         if result.failure is not None or not description:
-            with get_search_db() as session:
-                _write_status(
-                    session,
-                    file_id,
-                    description=None,
-                    status="failed",
-                    model=vision_model,
-                    generated_at=None,
-                    error=result.failure or FAILURE_REQUEST_FAILED,
-                )
+            await asyncio.to_thread(
+                _in_search_txn,
+                _write_status,
+                file_id,
+                description=None,
+                status="failed",
+                model=vision_model,
+                generated_at=None,
+                error=result.failure or FAILURE_REQUEST_FAILED,
+            )
             await _emit_ws_event(
                 "intelligence.vision_describe.failed",
                 {
@@ -863,21 +884,21 @@ class VisionDescribeWorker:
             return
 
         generated_at = _now_iso()
-        with get_search_db() as session:
-            _write_status(
-                session,
-                file_id,
-                description=description,
-                status="success",
-                model=vision_model,
-                generated_at=generated_at,
-            )
+        await asyncio.to_thread(
+            _in_search_txn,
+            _write_status,
+            file_id,
+            description=description,
+            status="success",
+            model=vision_model,
+            generated_at=generated_at,
+        )
 
         # Embedding registration is best-effort — a failure here leaves
         # the description queryable via keyword search (fts) but not
         # dense retrieval; we still consider the overall outcome success.
         try:
-            _embed_and_store(file_id, description)
+            await asyncio.to_thread(_embed_and_store, file_id, description)
         except Exception as e:
             logger.warning(
                 "vision: embed_and_store failed for %s (%s)",

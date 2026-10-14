@@ -277,6 +277,54 @@ class TestReconcile:
 
         assert _whisper_indexed(Session, "f1") is False
 
+    def test_reconcile_touches_no_file_while_holding_a_write_session(
+        self, Session, tmp_path, monkeypatch
+    ):
+        import app.indexer as indexer
+
+        vtt_loft = _make_loft(tmp_path / "a", "WithVtt")
+        _vtt(tmp_path / "a" / "WithVtt.vtt", "late transcript")
+        _seed_loft(Session, "vtt", vtt_loft, whisper_indexed=True)
+        audio_loft = _make_loft(tmp_path / "b", "WithAudio")
+        (tmp_path / "b" / "WithAudio.stt_temp.m4a").write_bytes(b"")
+        _seed_loft(Session, "audio", audio_loft, whisper_indexed=True)
+
+        writing = False
+        touched_while_writing: list[str] = []
+        real_write = indexer.get_search_db
+
+        @contextmanager
+        def _tracked_write():
+            nonlocal writing
+            with real_write() as session:
+                writing = True
+                try:
+                    yield session
+                finally:
+                    writing = False
+
+        real_scandir, real_stat = os.scandir, os.stat
+
+        def _scandir(path="."):
+            if writing:
+                touched_while_writing.append(os.fsdecode(path))
+            return real_scandir(path)
+
+        def _stat(path, *args, **kwargs):
+            if writing and not isinstance(path, int):
+                touched_while_writing.append(os.fsdecode(path))
+            return real_stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(indexer, "get_search_db", _tracked_write)
+        monkeypatch.setattr(os, "scandir", _scandir)
+        monkeypatch.setattr(os, "stat", _stat)
+
+        _reconcile_vtt()
+
+        assert touched_while_writing == []
+        assert _whisper_indexed(Session, "vtt") is False
+        assert _whisper_indexed(Session, "audio") is False
+
     def test_spec_addon_001_metacharacters_never_widen_the_requeue(
         self, Session, tmp_path
     ):
