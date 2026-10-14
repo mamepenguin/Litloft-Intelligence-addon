@@ -405,8 +405,8 @@ async def retrieve_with_keywords(
     if not allowed_results:
         return []
 
-    meta_by_id = _get_indexed_files_meta(
-        [r.file_id for r in allowed_results]
+    meta_by_id = await asyncio.to_thread(
+        _get_indexed_files_meta, [r.file_id for r in allowed_results]
     )
 
     return [

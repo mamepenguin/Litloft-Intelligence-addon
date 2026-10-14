@@ -1,5 +1,6 @@
 """File inspection and suggested tags endpoints."""
 
+import asyncio
 import logging
 from typing import Annotated, Any
 from urllib.parse import unquote
@@ -73,7 +74,7 @@ def _get_indexed_file_or_404(file_id: str, drive: str) -> dict[str, Any]:
 
 
 @router.get("/files/{file_id}/transcript", response_model=TranscriptResponse)
-async def get_transcript(
+def get_transcript(
     file_id: str,
     drive: str = Depends(require_drive),
 ) -> TranscriptResponse:
@@ -135,49 +136,52 @@ async def get_subtitles_vtt(
     from app.models import IndexedFile, TranscriptWord
     from app.subtitle_builder import build_vtt
 
-    drive = unquote(x_hv_drive) if x_hv_drive else None
-    if drive is None:
-        with get_search_db() as db:
-            row = (
-                db.query(IndexedFile)
-                .filter(
-                    IndexedFile.file_id == file_id,
-                    IndexedFile.active.is_(True),
+    def _build_vtt() -> Response:
+        drive = unquote(x_hv_drive) if x_hv_drive else None
+        if drive is None:
+            with get_search_db() as db:
+                row = (
+                    db.query(IndexedFile)
+                    .filter(
+                        IndexedFile.file_id == file_id,
+                        IndexedFile.active.is_(True),
+                    )
+                    .first()
                 )
-                .first()
-            )
-        if not row:
-            raise HTTPException(status_code=404, detail="File not indexed")
-    else:
-        _get_indexed_file_or_404(file_id, drive)
+            if not row:
+                raise HTTPException(status_code=404, detail="File not indexed")
+        else:
+            _get_indexed_file_or_404(file_id, drive)
 
-    with get_search_db() as db:
-        rows = (
-            db.query(TranscriptWord)
-            .filter(TranscriptWord.file_id == file_id)
-            .order_by(TranscriptWord.timestamp_start, TranscriptWord.id)
-            .all()
+        with get_search_db() as db:
+            rows = (
+                db.query(TranscriptWord)
+                .filter(TranscriptWord.file_id == file_id)
+                .order_by(TranscriptWord.timestamp_start, TranscriptWord.id)
+                .all()
+            )
+
+        if not rows:
+            raise HTTPException(status_code=404, detail="No word-level transcript available")
+
+        language = rows[0].language or ""
+        words = [
+            {
+                "text": r.text,
+                "timestamp_start": r.timestamp_start,
+                "timestamp_end": r.timestamp_end,
+            }
+            for r in rows
+        ]
+
+        vtt = build_vtt(words, language=language)
+        return Response(
+            content=vtt,
+            media_type="text/vtt; charset=utf-8",
+            headers={"Cache-Control": "private, max-age=300"},
         )
 
-    if not rows:
-        raise HTTPException(status_code=404, detail="No word-level transcript available")
-
-    language = rows[0].language or ""
-    words = [
-        {
-            "text": r.text,
-            "timestamp_start": r.timestamp_start,
-            "timestamp_end": r.timestamp_end,
-        }
-        for r in rows
-    ]
-
-    vtt = build_vtt(words, language=language)
-    return Response(
-        content=vtt,
-        media_type="text/vtt; charset=utf-8",
-        headers={"Cache-Control": "private, max-age=300"},
-    )
+    return await asyncio.to_thread(_build_vtt)
 
 
 # --- Per-file × per-task reindex (spec 2026-05-24-intelligence-reindex-controls) ---
@@ -197,6 +201,10 @@ _REINDEX_FLAG_COLUMN: dict[str, str] = {
     "whisper": "whisper_indexed",
     "text": "text_indexed",
 }
+
+# (file_id, task) pairs a reindex request has passed the ``is_queued``
+# gate for but not yet enqueued. Touched only on the event loop.
+_reindex_in_flight: set[tuple[str, str]] = set()
 
 
 @router.post("/files/{file_id}/reindex")
@@ -265,14 +273,14 @@ async def reindex_file(
     # ---- Layer 2: drive boundary + soft-delete check ----
     # 404 (not 403) on cross-drive / soft-deleted / unknown — keeps the
     # drive boundary opaque to the caller.
-    _get_indexed_file_or_404(file_id, drive)
+    await asyncio.to_thread(_get_indexed_file_or_404, file_id, drive)
 
     # ---- Layer 3: split tasks into already-queued vs fresh ----
     manager = get_index_manager()
     fresh: list[str] = []
     already_queued: list[str] = []
     for t in tasks:
-        if manager.is_queued(file_id, t):
+        if manager.is_queued(file_id, t) or (file_id, t) in _reindex_in_flight:
             already_queued.append(t)
         else:
             fresh.append(t)
@@ -292,24 +300,34 @@ async def reindex_file(
     from app.database import get_search_db
     from app.models import IndexedFile
 
-    with get_search_db() as session:
-        row = (
-            session.query(IndexedFile)
-            .filter(
-                IndexedFile.file_id == file_id,
-                IndexedFile.active.is_(True),
+    def _reset_flags() -> None:
+        with get_search_db() as session:
+            row = (
+                session.query(IndexedFile)
+                .filter(
+                    IndexedFile.file_id == file_id,
+                    IndexedFile.active.is_(True),
+                )
+                .first()
             )
-            .first()
-        )
-        # Re-fetch under the write session — between the lookup above
-        # and now the row could have been soft-deleted; surface as 404.
-        if row is None:
-            raise HTTPException(status_code=404, detail="File not indexed")
-        for t in fresh:
-            setattr(row, _REINDEX_FLAG_COLUMN[t], False)
+            # Re-fetch under the write session — between the lookup above
+            # and now the row could have been soft-deleted; surface as 404.
+            if row is None:
+                raise HTTPException(status_code=404, detail="File not indexed")
+            for t in fresh:
+                setattr(row, _REINDEX_FLAG_COLUMN[t], False)
 
-    for t in fresh:
-        await manager.enqueue_task_for_file(file_id, t)
+    # ``is_queued`` lives on the loop and cannot join the flag flip's
+    # transaction, so the claim keeps a concurrent request that checks
+    # during the offloaded write from passing the gate too.
+    claimed = [(file_id, t) for t in fresh]
+    _reindex_in_flight.update(claimed)
+    try:
+        await asyncio.to_thread(_reset_flags)
+        for t in fresh:
+            await manager.enqueue_task_for_file(file_id, t)
+    finally:
+        _reindex_in_flight.difference_update(claimed)
 
     return ReindexResponse(
         status="accepted",
@@ -328,45 +346,48 @@ async def get_index_details(
     from app.database import get_search_db
     from app.models import Embedding
 
-    indexed = _get_indexed_file_or_404(file_id, drive)
+    indexed = await asyncio.to_thread(_get_indexed_file_or_404, file_id, drive)
 
-    embeddings_by_type: dict[str, IndexDetailType] = {}
+    def _read_details() -> tuple[dict[str, IndexDetailType], dict[str, ProviderStats]]:
+        embeddings_by_type: dict[str, IndexDetailType] = {}
 
-    with get_search_db() as db:
-        for etype in _EMBEDDING_TYPES:
-            count = (
-                db.query(func.count(Embedding.id))
-                .filter(
-                    Embedding.file_id == file_id,
-                    Embedding.embedding_type == etype,
-                )
-                .scalar()
-            ) or 0
-
-            items_query = (
-                db.query(Embedding)
-                .filter(
-                    Embedding.file_id == file_id,
-                    Embedding.embedding_type == etype,
-                )
-                .order_by(Embedding.timestamp_start.asc().nullsfirst())
-                .limit(_ITEMS_PER_TYPE)
-                .all()
-            )
-
-            embeddings_by_type[etype] = IndexDetailType(
-                count=count,
-                items=[
-                    IndexDetailEmbeddingItem(
-                        content_preview=e.content_preview,
-                        start=e.timestamp_start,
-                        end=e.timestamp_end,
+        with get_search_db() as db:
+            for etype in _EMBEDDING_TYPES:
+                count = (
+                    db.query(func.count(Embedding.id))
+                    .filter(
+                        Embedding.file_id == file_id,
+                        Embedding.embedding_type == etype,
                     )
-                    for e in items_query
-                ],
-            )
+                    .scalar()
+                ) or 0
 
-        provider_stats = _compute_provider_stats(db, file_id)
+                items_query = (
+                    db.query(Embedding)
+                    .filter(
+                        Embedding.file_id == file_id,
+                        Embedding.embedding_type == etype,
+                    )
+                    .order_by(Embedding.timestamp_start.asc().nullsfirst())
+                    .limit(_ITEMS_PER_TYPE)
+                    .all()
+                )
+
+                embeddings_by_type[etype] = IndexDetailType(
+                    count=count,
+                    items=[
+                        IndexDetailEmbeddingItem(
+                            content_preview=e.content_preview,
+                            start=e.timestamp_start,
+                            end=e.timestamp_end,
+                        )
+                        for e in items_query
+                    ],
+                )
+
+            return embeddings_by_type, _compute_provider_stats(db, file_id)
+
+    embeddings_by_type, provider_stats = await asyncio.to_thread(_read_details)
 
     return IndexDetailsResponse(
         file_id=file_id,
@@ -455,7 +476,7 @@ def _compute_provider_stats(db, file_id: str) -> dict[str, ProviderStats]:
 
 
 @router.get("/files/{file_id}/clip-timestamps", response_model=ClipTimestampsResponse)
-async def get_clip_timestamps(
+def get_clip_timestamps(
     file_id: str,
     drive: str = Depends(require_drive),
 ) -> ClipTimestampsResponse:
@@ -595,129 +616,132 @@ async def get_chunk_excerpt(
 
     source, chunk_index = _parse_chunk_id(chunk_id)
 
-    # Confirms file exists and belongs to the caller's drive. Raises
-    # 404 otherwise — never leaks the existence of files in other
-    # drives.
-    indexed = _get_indexed_file_or_404(file_id, drive)
-    is_book = indexed["mime_type"] == EPUB_MIME
+    def _build_excerpt() -> ChunkExcerptResponse:
+        # Confirms file exists and belongs to the caller's drive. Raises
+        # 404 otherwise — never leaks the existence of files in other
+        # drives.
+        indexed = _get_indexed_file_or_404(file_id, drive)
+        is_book = indexed["mime_type"] == EPUB_MIME
 
-    from app.database import get_search_db
-    from app.models import TranscriptChunk
+        from app.database import get_search_db
+        from app.models import TranscriptChunk
 
-    if source == "transcript":
-        with get_search_db() as db:
-            target_row = (
-                db.query(TranscriptChunk)
-                .filter(
-                    TranscriptChunk.file_id == file_id,
-                    TranscriptChunk.chunk_index == chunk_index,
+        if source == "transcript":
+            with get_search_db() as db:
+                target_row = (
+                    db.query(TranscriptChunk)
+                    .filter(
+                        TranscriptChunk.file_id == file_id,
+                        TranscriptChunk.chunk_index == chunk_index,
+                    )
+                    .first()
                 )
-                .first()
+                if target_row is None:
+                    raise HTTPException(status_code=404, detail="Chunk not found")
+
+                prev_row = (
+                    db.query(TranscriptChunk)
+                    .filter(
+                        TranscriptChunk.file_id == file_id,
+                        TranscriptChunk.chunk_index == chunk_index - 1,
+                    )
+                    .first()
+                )
+                next_row = (
+                    db.query(TranscriptChunk)
+                    .filter(
+                        TranscriptChunk.file_id == file_id,
+                        TranscriptChunk.chunk_index == chunk_index + 1,
+                    )
+                    .first()
+                )
+
+                prefix, target_text, suffix = _compose_excerpt(
+                    target_row.text,
+                    prev_row.text if prev_row else None,
+                    next_row.text if next_row else None,
+                )
+                start = target_row.timestamp_start
+                end = target_row.timestamp_end
+
+            return ChunkExcerptResponse(
+                chunk_id=chunk_id,
+                file_id=file_id,
+                prefix=prefix,
+                target=target_text,
+                suffix=suffix,
+                start_time=start,
+                end_time=end,
+                page=None,
             )
-            if target_row is None:
+
+        # source == "document": fts_text_content is an FTS5 virtual table
+        # whose ``chunk_index`` and ``page`` columns are stored as TEXT, so
+        # numeric comparisons must CAST to INTEGER (see hako memo
+        # EAiVExR4vGgOym5aAv_Up).
+        with get_search_db() as db:
+            target = db.execute(
+                sql_text(
+                    "SELECT text, page FROM fts_text_content "
+                    "WHERE file_id = :fid "
+                    "AND CAST(chunk_index AS INTEGER) = :idx"
+                ),
+                {"fid": file_id, "idx": chunk_index},
+            ).fetchone()
+            if target is None:
                 raise HTTPException(status_code=404, detail="Chunk not found")
 
-            prev_row = (
-                db.query(TranscriptChunk)
-                .filter(
-                    TranscriptChunk.file_id == file_id,
-                    TranscriptChunk.chunk_index == chunk_index - 1,
-                )
-                .first()
-            )
-            next_row = (
-                db.query(TranscriptChunk)
-                .filter(
-                    TranscriptChunk.file_id == file_id,
-                    TranscriptChunk.chunk_index == chunk_index + 1,
-                )
-                .first()
+            prev_row = db.execute(
+                sql_text(
+                    "SELECT text FROM fts_text_content "
+                    "WHERE file_id = :fid "
+                    "AND CAST(chunk_index AS INTEGER) = :idx"
+                ),
+                {"fid": file_id, "idx": chunk_index - 1},
+            ).fetchone()
+            next_row = db.execute(
+                sql_text(
+                    "SELECT text FROM fts_text_content "
+                    "WHERE file_id = :fid "
+                    "AND CAST(chunk_index AS INTEGER) = :idx"
+                ),
+                {"fid": file_id, "idx": chunk_index + 1},
+            ).fetchone()
+
+            target_text = target[0] or ""
+            page_raw = target[1]
+            page: int | None
+            try:
+                page = int(page_raw) if page_raw not in (None, "") else None
+            except (TypeError, ValueError):
+                page = None
+
+            title = (
+                load_section_titles(db, [(file_id, page)]).get((file_id, page))
+                if is_book and page is not None
+                else None
             )
 
-            prefix, target_text, suffix = _compose_excerpt(
-                target_row.text,
-                prev_row.text if prev_row else None,
-                next_row.text if next_row else None,
-            )
-            start = target_row.timestamp_start
-            end = target_row.timestamp_end
+        prefix, target_out, suffix = _compose_excerpt(
+            target_text,
+            prev_row[0] if prev_row else None,
+            next_row[0] if next_row else None,
+        )
 
         return ChunkExcerptResponse(
             chunk_id=chunk_id,
             file_id=file_id,
             prefix=prefix,
-            target=target_text,
+            target=target_out,
             suffix=suffix,
-            start_time=start,
-            end_time=end,
-            page=None,
+            start_time=None,
+            end_time=None,
+            page=None if is_book else page,
+            section=page if is_book else None,
+            section_title=title,
         )
 
-    # source == "document": fts_text_content is an FTS5 virtual table
-    # whose ``chunk_index`` and ``page`` columns are stored as TEXT, so
-    # numeric comparisons must CAST to INTEGER (see hako memo
-    # EAiVExR4vGgOym5aAv_Up).
-    with get_search_db() as db:
-        target = db.execute(
-            sql_text(
-                "SELECT text, page FROM fts_text_content "
-                "WHERE file_id = :fid "
-                "AND CAST(chunk_index AS INTEGER) = :idx"
-            ),
-            {"fid": file_id, "idx": chunk_index},
-        ).fetchone()
-        if target is None:
-            raise HTTPException(status_code=404, detail="Chunk not found")
-
-        prev_row = db.execute(
-            sql_text(
-                "SELECT text FROM fts_text_content "
-                "WHERE file_id = :fid "
-                "AND CAST(chunk_index AS INTEGER) = :idx"
-            ),
-            {"fid": file_id, "idx": chunk_index - 1},
-        ).fetchone()
-        next_row = db.execute(
-            sql_text(
-                "SELECT text FROM fts_text_content "
-                "WHERE file_id = :fid "
-                "AND CAST(chunk_index AS INTEGER) = :idx"
-            ),
-            {"fid": file_id, "idx": chunk_index + 1},
-        ).fetchone()
-
-        target_text = target[0] or ""
-        page_raw = target[1]
-        page: int | None
-        try:
-            page = int(page_raw) if page_raw not in (None, "") else None
-        except (TypeError, ValueError):
-            page = None
-
-        title = (
-            load_section_titles(db, [(file_id, page)]).get((file_id, page))
-            if is_book and page is not None
-            else None
-        )
-
-    prefix, target_out, suffix = _compose_excerpt(
-        target_text,
-        prev_row[0] if prev_row else None,
-        next_row[0] if next_row else None,
-    )
-
-    return ChunkExcerptResponse(
-        chunk_id=chunk_id,
-        file_id=file_id,
-        prefix=prefix,
-        target=target_out,
-        suffix=suffix,
-        start_time=None,
-        end_time=None,
-        page=None if is_book else page,
-        section=page if is_book else None,
-        section_title=title,
-    )
+    return await asyncio.to_thread(_build_excerpt)
 
 
 @router.get(
@@ -751,23 +775,26 @@ async def get_pdf_markdown(
     from app.database import get_search_db
     from app.models import PdfMarkdown
 
-    _get_indexed_file_or_404(file_id, drive)
+    def _read_markdown() -> PdfMarkdownResponse:
+        _get_indexed_file_or_404(file_id, drive)
 
-    with get_search_db() as db:
-        row = (
-            db.query(PdfMarkdown)
-            .filter(PdfMarkdown.file_id == file_id)
-            .first()
-        )
-        if row is None:
-            raise HTTPException(status_code=404, detail="PDF Markdown not available")
-        return PdfMarkdownResponse(
-            file_id=row.file_id,
-            markdown=row.markdown,
-            page_count=row.page_count,
-            extractor=row.extractor,
-            generated_at=row.generated_at,
-        )
+        with get_search_db() as db:
+            row = (
+                db.query(PdfMarkdown)
+                .filter(PdfMarkdown.file_id == file_id)
+                .first()
+            )
+            if row is None:
+                raise HTTPException(status_code=404, detail="PDF Markdown not available")
+            return PdfMarkdownResponse(
+                file_id=row.file_id,
+                markdown=row.markdown,
+                page_count=row.page_count,
+                extractor=row.extractor,
+                generated_at=row.generated_at,
+            )
+
+    return await asyncio.to_thread(_read_markdown)
 
 
 # --- CLIP frame extraction with persistent disk cache ---
@@ -784,7 +811,7 @@ from app.frame_cache import (  # noqa: E402
 
 
 @router.get("/files/{file_id}/frame")
-async def get_frame(
+def get_frame(
     file_id: str,
     t: float = Query(..., ge=0, description="Timestamp in seconds"),
     x_hv_drive: Annotated[str | None, Header(alias="X-Lit-Drive")] = None,
@@ -861,7 +888,7 @@ async def get_frame(
 
 
 @router.get("/files/{file_id}/suggested-tags", response_model=SuggestedTagsResponse)
-async def get_suggested_tags(
+def get_suggested_tags(
     file_id: str,
     drive: str = Depends(require_drive),
 ) -> SuggestedTagsResponse:
@@ -905,7 +932,7 @@ async def get_suggested_tags(
 
 
 @router.post("/files/{file_id}/suggested-tags/dismiss", response_model=MessageResponse)
-async def dismiss_suggested_tags(
+def dismiss_suggested_tags(
     file_id: str,
     drive: str = Depends(require_drive),
 ) -> MessageResponse:
@@ -940,15 +967,17 @@ async def regenerate_suggested_tags(
     if settings.features.auto_tags == "false":
         raise HTTPException(status_code=400, detail="Auto-tags feature is disabled")
 
-    _get_indexed_file_or_404(file_id, drive)
+    await asyncio.to_thread(_get_indexed_file_or_404, file_id, drive)
     auto_tags_worker = get_auto_tags_worker()
 
-    # Delete existing entry
-    with get_search_db() as session:
-        session.execute(
-            sql_text("DELETE FROM suggested_tags WHERE file_id = :fid"),
-            {"fid": file_id},
-        )
+    def _delete_existing() -> None:
+        with get_search_db() as session:
+            session.execute(
+                sql_text("DELETE FROM suggested_tags WHERE file_id = :fid"),
+                {"fid": file_id},
+            )
+
+    await asyncio.to_thread(_delete_existing)
 
     # Re-queue
     await auto_tags_worker.enqueue(file_id)
@@ -977,9 +1006,8 @@ async def batch_suggested_tags(
 
     auto_tags_worker = get_auto_tags_worker()
 
-    in_drive: set[str] = set()
-    existing: set[str] = set()
-    if body.file_ids:
+    def _read_eligibility() -> tuple[set[str], set[str]]:
+        existing: set[str] = set()
         with get_search_db() as session:
             in_drive = {
                 row.file_id
@@ -998,6 +1026,12 @@ async def batch_suggested_tags(
                 params,
             ).fetchall():
                 existing.add(row[0])
+        return in_drive, existing
+
+    in_drive: set[str] = set()
+    existing: set[str] = set()
+    if body.file_ids:
+        in_drive, existing = await asyncio.to_thread(_read_eligibility)
 
     queued = 0
     skipped = 0

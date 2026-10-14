@@ -27,6 +27,7 @@ acceptance for work that was dropped.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -277,7 +278,7 @@ async def generate_visual_description(
     _require_feature_available()
     await _require_drive_policy(drive)
 
-    file_row = _fetch_indexed_file(file_id)
+    file_row = await asyncio.to_thread(_fetch_indexed_file, file_id)
     if file_row is None:
         raise HTTPException(status_code=404, detail="File not found")
     if getattr(file_row, "drive", None) != drive:
@@ -328,7 +329,7 @@ async def get_visual_description(
         raise HTTPException(status_code=404, detail="Feature disabled")
     await _require_drive_policy(drive)
 
-    file_row = _fetch_indexed_file(file_id)
+    file_row = await asyncio.to_thread(_fetch_indexed_file, file_id)
     if file_row is None:
         raise HTTPException(status_code=404, detail="File not found")
     if getattr(file_row, "drive", None) != drive:
@@ -344,7 +345,7 @@ async def get_visual_description(
             "generated_at": None,
         }
 
-    data = _fetch_visual_description(file_id)
+    data = await asyncio.to_thread(_fetch_visual_description, file_id)
     if data is None:
         return {
             "file_id": file_id,
@@ -374,13 +375,13 @@ async def delete_visual_description(
     _require_feature_available()
     await _require_drive_policy(drive)
 
-    file_row = _fetch_indexed_file(file_id)
+    file_row = await asyncio.to_thread(_fetch_indexed_file, file_id)
     if file_row is None:
         raise HTTPException(status_code=404, detail="File not found")
     if getattr(file_row, "drive", None) != drive:
         raise HTTPException(status_code=404, detail="File not found")
 
-    cleared = _clear_visual_description(file_id)
+    cleared = await asyncio.to_thread(_clear_visual_description, file_id)
     if not cleared:
         raise HTTPException(status_code=404, detail="No description to clear")
     return {"status": "ok", "file_id": file_id}
@@ -425,7 +426,7 @@ async def generate_folder_visual_description(
     _require_feature_available()
     await _require_drive_policy(drive)
 
-    file_ids = filter_image_file_ids(drive, raw_ids)
+    file_ids = await asyncio.to_thread(filter_image_file_ids, drive, raw_ids)
 
     # Cap counts files that pass every acceptance gate (policy, mime,
     # stickiness) — not the raw input list. A request listing 10 000

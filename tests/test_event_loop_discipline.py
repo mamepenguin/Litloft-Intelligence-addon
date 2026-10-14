@@ -29,67 +29,6 @@ _SESSION_FACTORIES = {
     "get_litloft_db",
 }
 
-# Known offenders waiting for their own fix. An entry is (path relative to
-# app/, async function). The list may only shrink: a new offender fails,
-# and so does an entry that no longer offends.
-_PENDING: set[tuple[str, str]] = {
-    ("rag/clue_generator.py", "generate_clues"),
-    ("rag/coarse_retriever.py", "coarse_retrieve"),
-    ("rag/retriever.py", "retrieve_with_keywords"),
-    ("rag/service.py", "_answer_question"),
-    ("rag/service.py", "_run_hierarchical_retrieval"),
-    ("rag/service.py", "_stream_answer"),
-    ("routers/admin.py", "get_embedding_config"),
-    ("routers/admin.py", "get_failed_jobs"),
-    ("routers/admin.py", "reset_embedding_config"),
-    ("routers/admin.py", "resolve_failed_job"),
-    ("routers/admin.py", "update_embedding_config"),
-    ("routers/chapter_suggestions.py", "_require_allowed"),
-    ("routers/chapter_suggestions.py", "approve_chapter_suggestions"),
-    ("routers/chapter_suggestions.py", "dismiss_chapter_suggestions"),
-    ("routers/chapter_suggestions.py", "generate_chapter_suggestions"),
-    ("routers/chapter_suggestions.py", "get_chapter_suggestions"),
-    ("routers/files.py", "batch_suggested_tags"),
-    ("routers/files.py", "dismiss_suggested_tags"),
-    ("routers/files.py", "get_chunk_excerpt"),
-    ("routers/files.py", "get_clip_timestamps"),
-    ("routers/files.py", "get_frame"),
-    ("routers/files.py", "get_index_details"),
-    ("routers/files.py", "get_pdf_markdown"),
-    ("routers/files.py", "get_subtitles_vtt"),
-    ("routers/files.py", "get_suggested_tags"),
-    ("routers/files.py", "get_transcript"),
-    ("routers/files.py", "regenerate_suggested_tags"),
-    ("routers/files.py", "reindex_file"),
-    ("routers/pickup.py", "pickup_endpoint"),
-    ("routers/refine.py", "_enqueue"),
-    ("routers/refine.py", "refine_file"),
-    ("routers/refine.py", "refine_folder"),
-    ("routers/search.py", "search_compare_endpoint"),
-    ("routers/similar.py", "debug_similar_endpoint"),
-    ("routers/similar.py", "similar_files_endpoint"),
-    ("routers/summaries.py", "batch_summaries"),
-    ("routers/summaries.py", "delete_detailed_summary_route"),
-    ("routers/summaries.py", "download_detailed_summary"),
-    ("routers/summaries.py", "edit_detailed_summary_section"),
-    ("routers/summaries.py", "edit_summary"),
-    ("routers/summaries.py", "get_detailed_summary_citations"),
-    ("routers/summaries.py", "get_detailed_summary_route"),
-    ("routers/summaries.py", "get_summary"),
-    ("routers/summaries.py", "regenerate_detailed_summary"),
-    ("routers/summaries.py", "regenerate_summary"),
-    ("routers/summaries.py", "revert_detailed_summary"),
-    ("routers/summaries.py", "revert_summary"),
-    ("routers/summaries.py", "start_detailed_summary"),
-    ("routers/video_visual.py", "generate_visual_index"),
-    ("routers/video_visual.py", "get_visual_index"),
-    ("routers/video_visual.py", "retry_visual_index"),
-    ("routers/vision.py", "delete_visual_description"),
-    ("routers/vision.py", "generate_folder_visual_description"),
-    ("routers/vision.py", "generate_visual_description"),
-    ("routers/vision.py", "get_visual_description"),
-}
-
 Key = tuple[str, str]
 
 
@@ -314,35 +253,13 @@ def _app_offenders() -> list[tuple[str, str, str, int]]:
     ]
 
 
-def _unlisted(offenders, pending) -> list[tuple[str, str, str, int]]:
-    return [o for o in offenders if (o[0], o[1]) not in pending]
-
-
-def _stale(offenders, pending) -> set[tuple[str, str]]:
-    return set(pending) - {(where, fn) for where, fn, _, _ in offenders}
-
-
 def test_no_sync_db_call_runs_on_the_event_loop():
-    new = _unlisted(_app_offenders(), _PENDING)
-    assert not new, "\n".join(
+    offenders = _app_offenders()
+    assert not offenders, "\n".join(
         f"  async {fn}() calls {called}() directly at {where}:{line} — "
         "wrap it in asyncio.to_thread"
-        for where, fn, called, line in new
+        for where, fn, called, line in offenders
     )
-
-
-def test_pending_list_only_names_live_offenders():
-    stale = _stale(_app_offenders(), _PENDING)
-    assert not stale, f"no longer offending, remove from _PENDING: {sorted(stale)}"
-
-
-def test_pending_exempts_a_function_not_its_whole_file():
-    offenders = [("routers/x.py", "listed", "get_search_db", 1),
-                 ("routers/x.py", "added_later", "get_search_db", 9)]
-    pending = {("routers/x.py", "listed")}
-
-    assert _unlisted(offenders, pending) == [offenders[1]]
-    assert _stale(offenders[1:], pending) == {("routers/x.py", "listed")}
 
 
 def test_guard_covers_the_service_tree():

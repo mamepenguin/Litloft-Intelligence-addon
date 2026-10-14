@@ -23,6 +23,7 @@ broken clue generator never *worsens* recall — it only loses the
 multi-query expansion benefit.
 """
 
+import asyncio
 import logging
 
 from sqlalchemy import text as sql_text
@@ -205,7 +206,7 @@ async def generate_clues(
         # If either stage empties this clue we drop it — but only
         # this clue, not the whole result.
         candidate = filter_keywords(entry.strip())
-        candidate = filter_clue_by_rarity(candidate)
+        candidate = await asyncio.to_thread(filter_clue_by_rarity, candidate)
         if candidate:
             cleaned = [*cleaned, candidate]
         if len(cleaned) >= clue_count:

@@ -428,6 +428,52 @@ class TestReindexAlreadyQueued:
         assert ("active_one", "whisper") not in fake_index_manager.enqueued
 
     @pytest.mark.asyncio
+    async def test_two_concurrent_requests_enqueue_once(
+        self, search_db, fake_index_manager, monkeypatch,
+    ):
+        import asyncio
+
+        from app.routers.files import reindex_file
+
+        async def _enqueue(file_id: str, task: str) -> None:
+            fake_index_manager.enqueued.append((file_id, task))
+            fake_index_manager.queued_pairs.add((file_id, task))
+
+        monkeypatch.setattr(fake_index_manager, "enqueue_task_for_file", _enqueue)
+
+        await asyncio.gather(
+            reindex_file("active_one", body={"tasks": ["whisper"]}, drive="drive1"),
+            reindex_file("active_one", body={"tasks": ["whisper"]}, drive="drive1"),
+        )
+
+        assert fake_index_manager.enqueued == [("active_one", "whisper")]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_request_releases_its_claim(
+        self, search_db, fake_index_manager, monkeypatch,
+    ):
+        from app.routers.files import reindex_file
+
+        calls = 0
+
+        async def _enqueue(file_id: str, task: str) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("queue unavailable")
+            fake_index_manager.enqueued.append((file_id, task))
+
+        monkeypatch.setattr(fake_index_manager, "enqueue_task_for_file", _enqueue)
+
+        with pytest.raises(RuntimeError):
+            await reindex_file(
+                "active_one", body={"tasks": ["whisper"]}, drive="drive1",
+            )
+        await reindex_file("active_one", body={"tasks": ["whisper"]}, drive="drive1")
+
+        assert fake_index_manager.enqueued == [("active_one", "whisper")]
+
+    @pytest.mark.asyncio
     async def test_mixed_queued_and_fresh_only_resets_fresh(
         self, search_db, fake_index_manager,
     ):

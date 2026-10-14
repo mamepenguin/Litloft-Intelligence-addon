@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -29,7 +31,7 @@ router = APIRouter(tags=["chapter-suggestions"])
 async def _require_allowed(file_id: str, drive: str) -> dict:
     if settings.features.chapter_suggestions == "false":
         raise HTTPException(status_code=404, detail="Feature not available")
-    indexed = _get_indexed_file_or_404(file_id, drive)
+    indexed = await asyncio.to_thread(_get_indexed_file_or_404, file_id, drive)
     if indexed["file_type"] not in ("video", "audio"):
         raise HTTPException(status_code=404, detail="File not eligible")
     if not await is_chapter_suggestions_enabled(drive):
@@ -48,11 +50,15 @@ async def get_chapter_suggestions(
     if settings.features.chapter_suggestions == "false":
         return ChapterSuggestionsResponse(enabled=False, available=False)
     await _require_allowed(file_id, drive)
-    with get_search_db() as session:
-        row = session.execute(sql_text(
-            "SELECT file_id, chapters_json, model, status, created_at "
-            "FROM suggested_chapters WHERE file_id=:fid"
-        ), {"fid": file_id}).fetchone()
+
+    def _read() -> Any:
+        with get_search_db() as session:
+            return session.execute(sql_text(
+                "SELECT file_id, chapters_json, model, status, created_at "
+                "FROM suggested_chapters WHERE file_id=:fid"
+            ), {"fid": file_id}).fetchone()
+
+    row = await asyncio.to_thread(_read)
     if row is None:
         return ChapterSuggestionsResponse(available=False)
     try:
@@ -81,10 +87,14 @@ async def generate_chapter_suggestions(
         raise HTTPException(status_code=400, detail="Chapter suggestions disabled")
     await _require_allowed(file_id, drive)
     await require_llm(drive, "chapter_suggestions")
-    with get_search_db() as session:
-        has_transcript = session.execute(sql_text(
-            "SELECT 1 FROM transcript_chunks WHERE file_id=:fid LIMIT 1"
-        ), {"fid": file_id}).first()
+
+    def _has_transcript() -> Any:
+        with get_search_db() as session:
+            return session.execute(sql_text(
+                "SELECT 1 FROM transcript_chunks WHERE file_id=:fid LIMIT 1"
+            ), {"fid": file_id}).first()
+
+    has_transcript = await asyncio.to_thread(_has_transcript)
     if has_transcript is None:
         raise HTTPException(status_code=409, detail="Transcript is not available")
     queued = await get_chapter_suggestions_worker().enqueue(file_id, force=True)
@@ -103,24 +113,28 @@ async def dismiss_chapter_suggestions(
     drive: str = Depends(require_drive),
 ) -> MessageResponse:
     await _require_allowed(file_id, drive)
-    with get_search_db() as session:
-        row = session.execute(sql_text(
-            "SELECT status FROM suggested_chapters WHERE file_id=:fid"
-        ), {"fid": file_id}).fetchone()
-        if row is None:
-            raise HTTPException(
-                status_code=404,
-                detail="No chapter suggestions found",
-            )
-        if row[0] != "pending":
-            raise HTTPException(
-                status_code=409,
-                detail="Only pending chapter suggestions can be dismissed",
-            )
-        session.execute(sql_text(
-            "UPDATE suggested_chapters SET status='dismissed' "
-            "WHERE file_id=:fid AND status='pending'"
-        ), {"fid": file_id})
+
+    def _dismiss() -> None:
+        with get_search_db() as session:
+            row = session.execute(sql_text(
+                "SELECT status FROM suggested_chapters WHERE file_id=:fid"
+            ), {"fid": file_id}).fetchone()
+            if row is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No chapter suggestions found",
+                )
+            if row[0] != "pending":
+                raise HTTPException(
+                    status_code=409,
+                    detail="Only pending chapter suggestions can be dismissed",
+                )
+            session.execute(sql_text(
+                "UPDATE suggested_chapters SET status='dismissed' "
+                "WHERE file_id=:fid AND status='pending'"
+            ), {"fid": file_id})
+
+    await asyncio.to_thread(_dismiss)
     return MessageResponse(status="ok", message="Chapter suggestions dismissed")
 
 
@@ -133,11 +147,15 @@ async def approve_chapter_suggestions(
     drive: str = Depends(require_drive),
 ) -> MessageResponse:
     await _require_allowed(file_id, drive)
-    with get_search_db() as session:
-        row = session.execute(sql_text(
-            "SELECT chapters_json, created_at, status FROM suggested_chapters "
-            "WHERE file_id=:fid"
-        ), {"fid": file_id}).fetchone()
+
+    def _read() -> Any:
+        with get_search_db() as session:
+            return session.execute(sql_text(
+                "SELECT chapters_json, created_at, status FROM suggested_chapters "
+                "WHERE file_id=:fid"
+            ), {"fid": file_id}).fetchone()
+
+    row = await asyncio.to_thread(_read)
     if row is None:
         raise HTTPException(status_code=404, detail="No chapter suggestions found")
     if row[2] != "pending":
@@ -165,13 +183,15 @@ async def approve_chapter_suggestions(
         raise HTTPException(status_code=502, detail="Core unavailable") from exc
 
     # Approval state changes only after core confirms its durable write.
-    with get_search_db() as session:
-        result = session.execute(sql_text(
-            "UPDATE suggested_chapters SET status='accepted' "
-            "WHERE file_id=:fid AND created_at=:created_at "
-            "AND status='pending'"
-        ), {"fid": file_id, "created_at": row[1]})
-    if result.rowcount != 1:
+    def _accept() -> int:
+        with get_search_db() as session:
+            return session.execute(sql_text(
+                "UPDATE suggested_chapters SET status='accepted' "
+                "WHERE file_id=:fid AND created_at=:created_at "
+                "AND status='pending'"
+            ), {"fid": file_id, "created_at": row[1]}).rowcount
+
+    if await asyncio.to_thread(_accept) != 1:
         raise HTTPException(
             status_code=409,
             detail="Chapter suggestions changed during approval",

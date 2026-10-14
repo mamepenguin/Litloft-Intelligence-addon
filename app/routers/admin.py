@@ -24,6 +24,7 @@ master-viewer judge.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -852,7 +853,7 @@ async def get_embedding_config() -> dict[str, Any]:
     Spec §3.4. Reads the on-disk override authoritatively so a
     freshly-saved value is reflected before the next restart.
     """
-    return _embedding_status_payload()
+    return await asyncio.to_thread(_embedding_status_payload)
 
 
 @router.put("/embedding")
@@ -874,7 +875,7 @@ async def update_embedding_config(payload: EmbeddingUpdate) -> dict[str, Any]:
         payload.text_embedding, path,
     )
     notify_status = await _notify_core_restart_pending()
-    body = _embedding_status_payload()
+    body = await asyncio.to_thread(_embedding_status_payload)
     body.update({
         "status": "saved",
         "restart_required": True,
@@ -900,7 +901,7 @@ async def reset_embedding_config() -> dict[str, Any]:
             "Embedding overrides reset requested but no file present"
         )
     notify_status = await _notify_core_restart_pending()
-    body = _embedding_status_payload()
+    body = await asyncio.to_thread(_embedding_status_payload)
     body.update({
         "status": "reset",
         "removed": removed,
@@ -1055,7 +1056,10 @@ async def get_failed_jobs(
     # so the handler stays callable from tests that bypass the proxy.
     limit = max(1, min(limit, _FAILED_JOBS_MAX_LIMIT))
     offset = max(0, offset)
+    return await asyncio.to_thread(_failed_jobs_page, limit, offset)
 
+
+def _failed_jobs_page(limit: int, offset: int) -> FailedJobsResponse:
     import app.database as database_mod
     from sqlalchemy import and_, func, or_
 
@@ -1248,34 +1252,37 @@ async def resolve_failed_job(
 
     now = datetime.now(UTC)
 
-    with database_mod.get_search_db() as session:
-        row = (
-            session.query(IndexedFile)
-            .filter(
-                IndexedFile.file_id == file_id,
-                IndexedFile.active.is_(True),
+    def _mark_resolved() -> None:
+        with database_mod.get_search_db() as session:
+            row = (
+                session.query(IndexedFile)
+                .filter(
+                    IndexedFile.file_id == file_id,
+                    IndexedFile.active.is_(True),
+                )
+                .first()
             )
-            .first()
-        )
-        if row is None:
-            raise HTTPException(status_code=404, detail="File not indexed")
+            if row is None:
+                raise HTTPException(status_code=404, detail="File not indexed")
 
-        setattr(row, flag_column, True)
-        if task == "clip":
-            row.clip_thumbnail_indexed = True
-        elif task == "whisper":
-            row.tfidf_keywords_indexed = True
+            setattr(row, flag_column, True)
+            if task == "clip":
+                row.clip_thumbnail_indexed = True
+            elif task == "whisper":
+                row.tfidf_keywords_indexed = True
 
-        session.add(JobRecord(
-            file_id=file_id,
-            job_kind=job_kind,
-            provider=provider,
-            status="skipped",
-            error_class="ManuallyResolved",
-            error_message="Marked resolved from the admin failed jobs modal",
-            attempted_at=now,
-            completed_at=now,
-        ))
+            session.add(JobRecord(
+                file_id=file_id,
+                job_kind=job_kind,
+                provider=provider,
+                status="skipped",
+                error_class="ManuallyResolved",
+                error_message="Marked resolved from the admin failed jobs modal",
+                attempted_at=now,
+                completed_at=now,
+            ))
+
+    await asyncio.to_thread(_mark_resolved)
 
     return ResolveFailedJobResponse(
         status="resolved",
