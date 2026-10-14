@@ -52,6 +52,7 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.database import Base  # noqa: E402
 from app.models import IndexedFile  # noqa: E402
+from tests.search_db_doubles import read_session_from  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -135,9 +136,11 @@ def search_db(tmp_path, monkeypatch):
             session.close()
 
     monkeypatch.setattr("app.database.get_search_db", _get_search_db)
+    monkeypatch.setattr('app.database.get_search_db_read', read_session_from(_get_search_db), raising=False)
     monkeypatch.setattr(
         "app.routers.files.get_search_db", _get_search_db, raising=False,
     )
+    monkeypatch.setattr('app.routers.files.get_search_db_read', read_session_from(_get_search_db), raising=False)
     return engine, Session
 
 
@@ -382,6 +385,12 @@ class TestReindexNotFound:
                 "other_drv", body={"tasks": ["whisper"]}, drive="drive1",
             )
         assert exc.value.status_code == 404
+
+        _, Session = search_db
+        with Session() as s:
+            row = s.query(IndexedFile).filter_by(file_id="other_drv").one()
+            assert row.whisper_indexed is True
+        assert fake_index_manager.enqueued == []
 
 
 # ---------------------------------------------------------------------------

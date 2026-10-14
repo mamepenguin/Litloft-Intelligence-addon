@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import text as sql_text
 
-from app.database import get_search_db, get_search_engine
+from app.database import get_search_db_read, get_search_engine
 from app.search import _l2_to_cosine_similarity
 from app.workers.embedder import embed_query
 
@@ -111,7 +111,7 @@ async def coarse_retrieve(
                 {"vec": vec_bytes, "drive": drive, "over_fetch": over_fetch},
             ).fetchall()
 
-        with get_search_db() as session:
+        with get_search_db_read() as session:
             count_row = session.execute(
                 sql_text(
                     "SELECT COUNT(*) FROM indexed_files "

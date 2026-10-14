@@ -41,7 +41,7 @@ import numpy as np
 from sqlalchemy import text as sql_text
 
 from app.config import settings
-from app.database import get_search_db
+from app.database import get_search_db, get_search_db_read
 from app.summary_parser import Segment, parse_segments
 
 logger = logging.getLogger(__name__)
@@ -1634,7 +1634,7 @@ def get_citations(file_id: str) -> list[dict]:
     coerced to native Python bools). Returns an empty list when no
     citations have been computed yet.
     """
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         rows = session.execute(
             sql_text(
                 "SELECT section_path, segment_type, segment_text, "

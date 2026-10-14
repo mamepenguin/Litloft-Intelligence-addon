@@ -28,6 +28,7 @@ import logging
 import os
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -70,13 +71,13 @@ def extract_frame_to_cache(
 ) -> None:
     """Run ffmpeg to extract one frame and atomically write it to ``cache_path``.
 
-    Writes to a sibling ``.tmp`` file first then ``os.replace`` so a
+    Writes to a sibling ``.tmp`` file of its own first then ``os.replace`` so a
     concurrent reader never sees a half-written WebP. Raises
     ``HTTPException`` on timeout / non-zero ffmpeg exit so the caller
     can surface a sensible status code.
     """
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+    tmp_path = cache_path.with_name(f"{cache_path.name}.{uuid.uuid4().hex}.tmp")
     try:
         result = subprocess.run(
             [

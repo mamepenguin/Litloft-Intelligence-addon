@@ -189,6 +189,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 from app.models import TranscriptChunk, TranscriptWord
+from tests.search_db_doubles import read_session_from  # noqa: E402
 
 
 @pytest.fixture()
@@ -530,6 +531,7 @@ class TestVttEndpointOrderingInvariant:
             yield real_session
 
         monkeypatch.setattr(database, "get_search_db", _search_db)
+        monkeypatch.setattr(database, "get_search_db_read", read_session_from(_search_db), raising=False)
 
         response = asyncio.run(get_subtitles_vtt(fid))
         vtt = response.body.decode("utf-8")

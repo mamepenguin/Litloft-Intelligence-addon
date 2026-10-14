@@ -36,7 +36,7 @@ from fastapi.responses import Response
 from sqlalchemy import text as sql_text
 
 from app.config import settings
-from app.database import get_search_db
+from app.database import get_search_db, get_search_db_read
 from app.dependencies import get_summaries_worker
 from app.llm_routing import Resolved
 from app.routers.llm_gate import require_llm
@@ -109,7 +109,7 @@ async def _clear_knowledge_active_summary(file_id: str) -> None:
 
 def _require_file_in_drive(file_id: str, drive: str) -> None:
     """Raise 404 unless ``file_id`` belongs to ``drive``."""
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         row = (
             session.query(IndexedFile.drive)
             .filter(
@@ -214,7 +214,7 @@ async def get_summary(
 
     def _load() -> object | None:
         _require_file_in_drive(file_id, drive)
-        with get_search_db() as session:
+        with get_search_db_read() as session:
             return session.execute(
                 sql_text(
                     "SELECT s.file_id, s.short_summary, s.long_summary, s.model, "
@@ -549,7 +549,7 @@ async def batch_summaries(
 
 def _get_indexed_file_basics(file_id: str) -> tuple[str, str] | None:
     """Return ``(drive, filename)`` for an active file, or None if absent."""
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         row = (
             session.query(IndexedFile.drive, IndexedFile.filename)
             .filter(

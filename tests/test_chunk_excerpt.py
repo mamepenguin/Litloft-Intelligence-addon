@@ -49,6 +49,7 @@ from app.routers.files import (  # noqa: E402
     _parse_chunk_id,
     get_chunk_excerpt,
 )
+from tests.search_db_doubles import read_session_from  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +138,7 @@ def search_db(tmp_path, monkeypatch):
     # routes), so patching app.database is sufficient — there is no
     # module-level binding in app.routers.files to override.
     monkeypatch.setattr("app.database.get_search_db", _get_search_db)
+    monkeypatch.setattr('app.database.get_search_db_read', read_session_from(_get_search_db), raising=False)
     return engine, Session
 
 

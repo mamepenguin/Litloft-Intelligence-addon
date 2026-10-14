@@ -36,6 +36,7 @@ from app.workers.summaries import (
     classify_missing_reason,
     generate_detailed_summary,
 )
+from tests.search_db_doubles import read_session_from  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -492,6 +493,7 @@ class TestGetFullDocumentText:
     def test_concatenates_chunks_in_index_order(self, monkeypatch, mock_search_db):
         get_db, session = mock_search_db
         monkeypatch.setattr("app.workers.summaries.get_search_db", get_db)
+        monkeypatch.setattr('app.workers.summaries.get_search_db_read', read_session_from(get_db), raising=False)
 
         # Return rows in wrong order to verify ORDER BY CAST works.
         session.execute.return_value.fetchall.return_value = [
@@ -514,6 +516,7 @@ class TestGetFullDocumentText:
     def test_empty_when_no_rows(self, monkeypatch, mock_search_db):
         get_db, session = mock_search_db
         monkeypatch.setattr("app.workers.summaries.get_search_db", get_db)
+        monkeypatch.setattr('app.workers.summaries.get_search_db_read', read_session_from(get_db), raising=False)
 
         session.execute.return_value.fetchall.return_value = []
 
@@ -522,6 +525,7 @@ class TestGetFullDocumentText:
     def test_skips_empty_chunks(self, monkeypatch, mock_search_db):
         get_db, session = mock_search_db
         monkeypatch.setattr("app.workers.summaries.get_search_db", get_db)
+        monkeypatch.setattr('app.workers.summaries.get_search_db_read', read_session_from(get_db), raising=False)
 
         session.execute.return_value.fetchall.return_value = [
             ("real content",),
@@ -551,6 +555,7 @@ class TestGetPdfMarkdown:
     def test_returns_markdown_when_row_exists(self, monkeypatch, mock_search_db):
         get_db, session = mock_search_db
         monkeypatch.setattr("app.workers.summaries.get_search_db", get_db)
+        monkeypatch.setattr('app.workers.summaries.get_search_db_read', read_session_from(get_db), raising=False)
 
         session.execute.return_value.fetchone.return_value = ("# Heading\n\nBody",)
 
@@ -560,6 +565,7 @@ class TestGetPdfMarkdown:
     def test_returns_none_when_row_missing(self, monkeypatch, mock_search_db):
         get_db, session = mock_search_db
         monkeypatch.setattr("app.workers.summaries.get_search_db", get_db)
+        monkeypatch.setattr('app.workers.summaries.get_search_db_read', read_session_from(get_db), raising=False)
 
         session.execute.return_value.fetchone.return_value = None
 
@@ -568,6 +574,7 @@ class TestGetPdfMarkdown:
     def test_returns_none_when_markdown_empty(self, monkeypatch, mock_search_db):
         get_db, session = mock_search_db
         monkeypatch.setattr("app.workers.summaries.get_search_db", get_db)
+        monkeypatch.setattr('app.workers.summaries.get_search_db_read', read_session_from(get_db), raising=False)
 
         session.execute.return_value.fetchone.return_value = ("",)
 

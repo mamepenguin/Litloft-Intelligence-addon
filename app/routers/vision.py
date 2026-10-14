@@ -40,6 +40,7 @@ from app.database import (
     VISION_DESCRIBE_CLEAR_SQL,
     VISION_DESCRIBE_PRESENT_SQL,
     get_search_db,
+    get_search_db_read,
 )
 from app.drive_context import require_drive
 from app.models import Embedding, IndexedFile
@@ -83,7 +84,7 @@ def _fetch_indexed_file(file_id: str) -> Any | None:
     skip them uniformly — matches the host convention that
     ``active=False`` rows are invisible to feature endpoints.
     """
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         return (
             session.query(IndexedFile)
             .filter(
@@ -101,7 +102,7 @@ def _fetch_visual_description(file_id: str) -> dict | None:
     when the row doesn't exist. Tests override this to return canned
     shapes without hitting SQLite.
     """
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         row = session.execute(
             sql_text(
                 "SELECT visual_description, visual_description_status, "

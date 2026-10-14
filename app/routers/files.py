@@ -46,10 +46,10 @@ def _get_indexed_file_or_404(file_id: str, drive: str) -> dict[str, Any]:
     drive other than the request's. Treating both as 404 keeps the API
     from leaking which file_ids exist outside the current drive.
     """
-    from app.database import get_search_db
+    from app.database import get_search_db_read
     from app.models import IndexedFile
 
-    with get_search_db() as db:
+    with get_search_db_read() as db:
         indexed = db.query(IndexedFile).filter(
             IndexedFile.file_id == file_id,
             IndexedFile.active.is_(True),
@@ -79,12 +79,12 @@ def get_transcript(
     drive: str = Depends(require_drive),
 ) -> TranscriptResponse:
     """Get Whisper transcript chunks for a file."""
-    from app.database import get_search_db
+    from app.database import get_search_db_read
     from app.models import TranscriptChunk
 
     indexed = _get_indexed_file_or_404(file_id, drive)
 
-    with get_search_db() as db:
+    with get_search_db_read() as db:
         chunks = (
             db.query(TranscriptChunk)
             .filter(TranscriptChunk.file_id == file_id)
@@ -132,14 +132,14 @@ async def get_subtitles_vtt(
     have been indexed after the word-level rollout; older files lack
     words and yield 404 until they are re-indexed.
     """
-    from app.database import get_search_db
+    from app.database import get_search_db_read
     from app.models import IndexedFile, TranscriptWord
     from app.subtitle_builder import build_vtt
 
     def _build_vtt() -> Response:
         drive = unquote(x_hv_drive) if x_hv_drive else None
         if drive is None:
-            with get_search_db() as db:
+            with get_search_db_read() as db:
                 row = (
                     db.query(IndexedFile)
                     .filter(
@@ -153,7 +153,7 @@ async def get_subtitles_vtt(
         else:
             _get_indexed_file_or_404(file_id, drive)
 
-        with get_search_db() as db:
+        with get_search_db_read() as db:
             rows = (
                 db.query(TranscriptWord)
                 .filter(TranscriptWord.file_id == file_id)
@@ -343,7 +343,7 @@ async def get_index_details(
 ) -> IndexDetailsResponse:
     """Get detailed indexing status and embedding info for a file."""
     from sqlalchemy import func
-    from app.database import get_search_db
+    from app.database import get_search_db_read
     from app.models import Embedding
 
     indexed = await asyncio.to_thread(_get_indexed_file_or_404, file_id, drive)
@@ -351,7 +351,7 @@ async def get_index_details(
     def _read_details() -> tuple[dict[str, IndexDetailType], dict[str, ProviderStats]]:
         embeddings_by_type: dict[str, IndexDetailType] = {}
 
-        with get_search_db() as db:
+        with get_search_db_read() as db:
             for etype in _EMBEDDING_TYPES:
                 count = (
                     db.query(func.count(Embedding.id))
@@ -481,12 +481,12 @@ def get_clip_timestamps(
     drive: str = Depends(require_drive),
 ) -> ClipTimestampsResponse:
     """Get CLIP frame extraction timestamps for a file."""
-    from app.database import get_search_db
+    from app.database import get_search_db_read
     from app.models import Embedding
 
     indexed = _get_indexed_file_or_404(file_id, drive)
 
-    with get_search_db() as db:
+    with get_search_db_read() as db:
         clips = (
             db.query(Embedding)
             .filter(
@@ -623,11 +623,11 @@ async def get_chunk_excerpt(
         indexed = _get_indexed_file_or_404(file_id, drive)
         is_book = indexed["mime_type"] == EPUB_MIME
 
-        from app.database import get_search_db
+        from app.database import get_search_db_read
         from app.models import TranscriptChunk
 
         if source == "transcript":
-            with get_search_db() as db:
+            with get_search_db_read() as db:
                 target_row = (
                     db.query(TranscriptChunk)
                     .filter(
@@ -679,7 +679,7 @@ async def get_chunk_excerpt(
         # whose ``chunk_index`` and ``page`` columns are stored as TEXT, so
         # numeric comparisons must CAST to INTEGER (see hako memo
         # EAiVExR4vGgOym5aAv_Up).
-        with get_search_db() as db:
+        with get_search_db_read() as db:
             target = db.execute(
                 sql_text(
                     "SELECT text, page FROM fts_text_content "
@@ -772,13 +772,13 @@ async def get_pdf_markdown(
     drive enforcement; the handler-side ``_get_indexed_file_or_404``
     is the second layer of defence in depth.
     """
-    from app.database import get_search_db
+    from app.database import get_search_db_read
     from app.models import PdfMarkdown
 
     def _read_markdown() -> PdfMarkdownResponse:
         _get_indexed_file_or_404(file_id, drive)
 
-        with get_search_db() as db:
+        with get_search_db_read() as db:
             row = (
                 db.query(PdfMarkdown)
                 .filter(PdfMarkdown.file_id == file_id)
@@ -835,9 +835,9 @@ def get_frame(
     if drive is None:
         # Look up the indexed file without the drive assertion. The
         # host already authorised the caller for this specific file.
-        from app.database import get_search_db
+        from app.database import get_search_db_read
         from app.models import IndexedFile
-        with get_search_db() as db:
+        with get_search_db_read() as db:
             row = (
                 db.query(IndexedFile)
                 .filter(
@@ -894,7 +894,7 @@ def get_suggested_tags(
 ) -> SuggestedTagsResponse:
     """Get suggested tags for a file."""
     import json as json_mod
-    from app.database import get_search_db
+    from app.database import get_search_db_read
 
     if settings.features.auto_tags == "false":
         return SuggestedTagsResponse(available=False)
@@ -904,7 +904,7 @@ def get_suggested_tags(
     # drives' file_ids.
     _get_indexed_file_or_404(file_id, drive)
 
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         row = session.execute(
             sql_text(
                 "SELECT file_id, tags, model, status, created_at "

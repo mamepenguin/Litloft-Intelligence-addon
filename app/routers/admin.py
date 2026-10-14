@@ -1065,7 +1065,7 @@ def _failed_jobs_page(limit: int, offset: int) -> FailedJobsResponse:
 
     from app.models import IndexedFile, JobRecord
 
-    with database_mod.get_search_db() as session:
+    with database_mod.get_search_db_read() as session:
         # Step 1: distinct groups (file_id, job_kind, provider) ordered
         # by their latest attempted_at. The aggregate considers every
         # status, then the outer query keeps only groups whose latest

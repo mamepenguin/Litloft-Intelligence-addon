@@ -881,12 +881,8 @@ def refine_chunk_ids(session: Any, file_id: str) -> list[int]:
 def start_refine_job(file_id: str, chunk_ids: list[int], resolved: Resolved) -> str:
     """Kick off an async refine job on the running loop. Returns the job_id."""
     job_id = uuid.uuid4().hex
-    try:
-        asyncio.create_task(
-            _run_refine_job(file_id, job_id, chunk_ids, resolved),
-            name=f"refine_job_{job_id}",
-        )
-    except RuntimeError:
-        # No running loop (e.g. unit-test context without asyncio).
-        pass
+    asyncio.create_task(
+        _run_refine_job(file_id, job_id, chunk_ids, resolved),
+        name=f"refine_job_{job_id}",
+    )
     return job_id

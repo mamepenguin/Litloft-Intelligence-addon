@@ -51,6 +51,7 @@ from app.routers.summaries import (  # noqa: E402
     revert_summary,
 )
 from app.schemas import SummaryEditRequest  # noqa: E402
+from tests.search_db_doubles import read_session_from  # noqa: E402
 
 
 @pytest.fixture()
@@ -132,7 +133,9 @@ def search_db(tmp_path, monkeypatch):
     # The router reads get_search_db from the module-level import, so we
     # patch both the database module's binding and the router's alias.
     monkeypatch.setattr("app.database.get_search_db", _get_search_db)
+    monkeypatch.setattr('app.database.get_search_db_read', read_session_from(_get_search_db), raising=False)
     monkeypatch.setattr("app.routers.summaries.get_search_db", _get_search_db)
+    monkeypatch.setattr('app.routers.summaries.get_search_db_read', read_session_from(_get_search_db), raising=False)
     return engine, Session
 
 
@@ -227,6 +230,21 @@ class TestEditSummary:
         assert row["short_original"] == "AI short"
         assert row["long_original"] == "AI long content"
         assert row["edited_at"] is not None
+
+    @pytest.mark.asyncio
+    async def test_edit_from_another_drive_is_404_and_writes_nothing(
+        self, search_db,
+    ):
+        engine, _ = search_db
+        body = SummaryEditRequest(short_summary="x", long_summary="y")
+
+        with pytest.raises(HTTPException) as exc:
+            await edit_summary("abc123", body, "drive2")
+
+        assert exc.value.status_code == 404
+        row = _row(engine, "abc123")
+        assert row["short_summary"] == "AI short"
+        assert row["edited_at"] is None
 
     @pytest.mark.asyncio
     async def test_second_edit_preserves_ai_snapshot(self, search_db):

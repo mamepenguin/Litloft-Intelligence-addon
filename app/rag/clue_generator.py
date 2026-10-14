@@ -28,7 +28,7 @@ import logging
 
 from sqlalchemy import text as sql_text
 
-from app.database import get_search_db
+from app.database import get_search_db_read
 from app import llm_routing
 from app.prompt_loader import render
 from app.rag.keyword_filter import filter_keywords
@@ -79,7 +79,7 @@ def fetch_long_summaries(file_ids: list[str]) -> dict[str, str]:
     placeholders = ",".join(f":id{i}" for i in range(len(file_ids)))
     params: dict[str, str] = {f"id{i}": fid for i, fid in enumerate(file_ids)}
 
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         rows = session.execute(
             sql_text(
                 "SELECT file_id, "

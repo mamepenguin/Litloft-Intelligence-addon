@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text as sql_text
 
 from app.config import settings
-from app.database import get_search_db
+from app.database import get_search_db, get_search_db_read
 from app.dependencies import get_chapter_suggestions_worker
 from app.routers.llm_gate import require_llm
 from app.drive_context import require_drive
@@ -52,7 +52,7 @@ async def get_chapter_suggestions(
     await _require_allowed(file_id, drive)
 
     def _read() -> Any:
-        with get_search_db() as session:
+        with get_search_db_read() as session:
             return session.execute(sql_text(
                 "SELECT file_id, chapters_json, model, status, created_at "
                 "FROM suggested_chapters WHERE file_id=:fid"
@@ -149,7 +149,7 @@ async def approve_chapter_suggestions(
     await _require_allowed(file_id, drive)
 
     def _read() -> Any:
-        with get_search_db() as session:
+        with get_search_db_read() as session:
             return session.execute(sql_text(
                 "SELECT chapters_json, created_at, status FROM suggested_chapters "
                 "WHERE file_id=:fid"
