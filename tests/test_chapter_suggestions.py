@@ -58,8 +58,7 @@ def chapter_db(tmp_path, monkeypatch):
             session.close()
 
     monkeypatch.setattr("app.database.get_search_db", db)
-    monkeypatch.setattr('app.database.get_search_db_read', read_session_from(db), raising=False)
-    monkeypatch.setattr("app.database.get_search_db_read", db)
+    monkeypatch.setattr("app.database.get_search_db_read", read_session_from(db))
     # indexer imports the helpers by value; in a full-suite run it may have
     # been imported before this fixture, so patch that reference as well.
     monkeypatch.setattr("app.indexer.get_search_db", db)
