@@ -197,6 +197,20 @@ def _set_child(child: tfidf.TokenizerChild | None) -> None:
         _current_child = child
 
 
+def _register_child(child: tfidf.TokenizerChild, stop: threading.Event) -> bool:
+    """Make ``child`` the one the cancel path terminates, unless ``stop`` is set.
+
+    The cancel path sets ``stop`` before it takes the lock to read the
+    child, so either it sees this child or this check sees ``stop``.
+    """
+    global _current_child
+    with _state_lock:
+        if stop.is_set():
+            return False
+        _current_child = child
+        return True
+
+
 def _terminate_current_child() -> None:
     with _state_lock:
         child = _current_child
@@ -207,13 +221,17 @@ def _terminate_current_child() -> None:
 class _Tokenizer:
     """The pass's child: started on first use, replaced after a failure."""
 
-    def __init__(self) -> None:
+    def __init__(self, stop: threading.Event) -> None:
         self._child: tfidf.TokenizerChild | None = None
+        self._stop = stop
 
     def term_sets(self, docs: list[_Doc]) -> list[list[str]]:
         if self._child is None:
-            self._child = tfidf.TokenizerChild()
-            _set_child(self._child)
+            child = tfidf.TokenizerChild()
+            if not _register_child(child, self._stop):
+                child.terminate()
+                raise tfidf.TokenizerChildFailed("stopped before the child started")
+            self._child = child
         try:
             return self._child.term_sets(
                 [(d.filename, d.transcript) for d in docs],
@@ -334,7 +352,7 @@ def run_idf_backfill_pass(stop: threading.Event | None = None) -> PassResult:
         logger.debug("IDF term backfill: nothing to write")
         return result
 
-    tokenizer = _Tokenizer()
+    tokenizer = _Tokenizer(stop)
     try:
         batch_size = tfidf._CORPUS_BATCH_FILES
         for start in range(0, len(todo), batch_size):

@@ -342,3 +342,35 @@ async def test_spec_addon_021_startup_checks_the_rules_first_and_shutdown_ends_t
     assert no_children(timeout=5)
     assert idx.state("k1") == (False, 0)
     assert idx.terms("k1") == set()
+
+
+@pytest.mark.asyncio
+async def test_spec_addon_021_cancelling_the_loop_before_its_child_starts_leaves_no_child(
+    idx, fast, monkeypatch,
+):
+    import threading
+
+    monkeypatch.setattr(tfidf, "_TOKENIZER_FACTORY", MarkerTokenizer)
+    reading = threading.Event()
+    release = threading.Event()
+    read = tfidf._get_transcript_text
+
+    def held_read(session, file_id):
+        reading.set()
+        release.wait(timeout=30)
+        return read(session, file_id)
+
+    monkeypatch.setattr(tfidf, "_get_transcript_text", held_read)
+    idx.add_file("k1", transcript="GATEWORD " + WORDS)
+
+    task = asyncio.create_task(api.run_loop())
+    assert await _until(reading.is_set)
+    task.cancel()
+    with contextlib.suppress(BaseException):
+        await asyncio.wait_for(task, timeout=10)
+    assert task.done()
+    release.set()
+    await asyncio.sleep(2.0)
+
+    assert no_children(timeout=5)
+    assert idx.state("k1") == (False, 0)
