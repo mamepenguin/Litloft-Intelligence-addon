@@ -232,6 +232,7 @@ def init_search_db() -> None:
 
     with _search_engine.begin() as conn:
         _migrate_tfidf_keywords_indexed(conn)
+        _migrate_idf_terms_columns(conn)
         _migrate_pickup_to_rows(conn)
 
 
@@ -988,6 +989,62 @@ def _migrate_tfidf_keywords_indexed(conn: object) -> None:
                 "ON indexed_files(tfidf_keywords_indexed)"
             )
         )
+
+
+def _migrate_idf_terms_columns(conn: object) -> None:
+    """Add the per-file IDF term-set state to ``indexed_files``.
+
+    Idempotent. The ``idf_doc_terms`` table itself comes from
+    ``create_all``.
+    """
+    cols = {
+        row[1]
+        for row in conn.execute(
+            text("PRAGMA table_info(indexed_files)")
+        ).fetchall()
+    }
+    if "idf_terms_indexed" not in cols:
+        conn.execute(text(
+            "ALTER TABLE indexed_files ADD COLUMN "
+            "idf_terms_indexed BOOLEAN NOT NULL DEFAULT 0"
+        ))
+    if "idf_terms_gen" not in cols:
+        conn.execute(text(
+            "ALTER TABLE indexed_files ADD COLUMN "
+            "idf_terms_gen INTEGER NOT NULL DEFAULT 0"
+        ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_indexed_files_idf_terms_indexed "
+        "ON indexed_files(idf_terms_indexed)"
+    ))
+
+
+_IDF_TERM_RULES_KEY = "idf_term_rules"
+
+
+def check_idf_term_rules() -> None:
+    """Flag every file's term set stale when the tokenizer rules changed.
+
+    Run by the lifespan only, before the IDF backfill starts. The flag
+    reset and the recorded version commit together, so a failure leaves
+    both as they were and the next start checks again.
+    """
+    from app.tfidf import IDF_TERM_RULES_VERSION
+
+    logger = logging.getLogger(__name__)
+    try:
+        with get_search_db() as session:
+            conn = session.connection()
+            if _read_index_meta(conn, _IDF_TERM_RULES_KEY) == IDF_TERM_RULES_VERSION:
+                return
+            conn.execute(text("UPDATE indexed_files SET idf_terms_indexed = 0"))
+            _upsert_index_meta(conn, _IDF_TERM_RULES_KEY, IDF_TERM_RULES_VERSION)
+        logger.info(
+            "IDF term rules are now %s; every file's term set will be rebuilt",
+            IDF_TERM_RULES_VERSION,
+        )
+    except Exception:
+        logger.exception("IDF term rule check failed; continuing startup")
 
 
 def _migrate_transcript_chunks_if_needed(conn: object) -> None:

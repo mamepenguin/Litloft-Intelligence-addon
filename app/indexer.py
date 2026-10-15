@@ -27,6 +27,7 @@ from app.database import (
     upsert_fts_file,
     validate_vector_table,
 )
+from app.idf_backfill import mark_idf_terms_stale, request_idf_backfill
 from app.models import Embedding, IndexedFile, TranscriptChunk, TranscriptWord
 from app.sidecar_match import match_siblings
 from app.workers.blip import check_idle_unload as check_blip_idle_unload
@@ -243,6 +244,10 @@ class IndexManager:
         self._state = QueueState.PAUSED
         self._pause_event.clear()
         logger.info("Queue paused")
+
+    def is_paused(self) -> bool:
+        """Whether the queue is paused. Safe to read from any thread."""
+        return not self._pause_event.is_set()
 
     def resume(self) -> None:
         """Resume queue processing."""
@@ -503,6 +508,8 @@ class IndexManager:
 
         except Exception as e:
             logger.error("Reconciliation failed: %s", e)
+        finally:
+            request_idf_backfill()
 
         return {
             "added": added,
@@ -1241,6 +1248,8 @@ class IndexManager:
                         continue
 
                     title = meta.get("title") or ""
+                    if indexed.filename != meta["filename"]:
+                        mark_idf_terms_stale(session, file_id)
                     indexed.drive = meta["drive"]
                     indexed.file_path = abs_path
                     indexed.filename = meta["filename"]

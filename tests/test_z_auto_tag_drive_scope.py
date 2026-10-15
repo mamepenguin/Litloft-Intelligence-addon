@@ -35,6 +35,7 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 from app import tfidf as tfidf_mod  # noqa: E402
 from app.models import Base, Embedding, IndexedFile, TranscriptChunk  # noqa: E402
 from app.workers import clip_concepts, tag_knn  # noqa: E402
+from tests import idf_backfill_api as backfill  # noqa: E402
 from tests.idf_doubles import PidTokenizer, WordTokenizer  # noqa: E402
 
 DIM = 4
@@ -143,6 +144,11 @@ def index(monkeypatch, tmp_path):
     monkeypatch.setattr(tag_knn, "get_litloft_db", idx.litloft_db)
     monkeypatch.setattr(clip_concepts, "get_litloft_db", idx.litloft_db)
     monkeypatch.setattr(tfidf_mod, "get_search_db_read", idx.search_db)
+    monkeypatch.setattr("app.database._search_engine", idx.engine)
+    monkeypatch.setattr("app.database._SearchSession", idx._maker)
+    from app.indexer import IndexManager
+
+    monkeypatch.setattr("app.dependencies._index_manager", IndexManager())
     # sqlite-vec's MATCH is not available here; order by the stored
     # distance column instead, which is what MATCH would have produced.
     monkeypatch.setattr(
@@ -292,6 +298,7 @@ def _say(index, file_id: str, words: str) -> None:
         session.close()
 
 
+# SPEC-ADDON-021
 def test_document_frequency_counts_only_the_drives_own_files(index, monkeypatch):
     """``min_doc_freq`` must not be satisfied by files in another drive."""
     index.add_file("a1", "a", distance=None)
@@ -305,6 +312,7 @@ def test_document_frequency_counts_only_the_drives_own_files(index, monkeypatch)
         _say(index, fid, "別の話題 " * 10)
     monkeypatch.setattr(tfidf_mod, "_TOKENIZER_FACTORY", WordTokenizer)
     tfidf_mod.reset_corpus_idf_cache()
+    backfill.run_pass()
 
     idf_a, n_docs_a = tfidf_mod._build_corpus_idf("a")
     idf_b, n_docs_b = tfidf_mod._build_corpus_idf("b")
@@ -331,6 +339,7 @@ def _put_file(index, file_id: str, filename: str, *, active: bool = True) -> Non
         session.close()
 
 
+# SPEC-ADDON-021
 def test_the_idf_counts_every_batch_and_only_active_files_with_words(
     index, monkeypatch,
 ):
@@ -348,6 +357,7 @@ def test_the_idf_counts_every_batch_and_only_active_files_with_words(
             _say(index, fid, words)
     _put_file(index, "k6", "6.mp4", active=False)
     _say(index, "k6", "共通語 " * 10)
+    backfill.run_pass()
 
     idf, n_docs = tfidf_mod._build_corpus_idf("a")
 
@@ -359,6 +369,7 @@ def test_the_idf_counts_every_batch_and_only_active_files_with_words(
     })
 
 
+# SPEC-ADDON-021
 def test_the_corpus_is_tokenized_in_a_spawned_process(index, monkeypatch):
     """Tokenizing a drive takes minutes of pure-Python CPU; inside this
     process it would hold the GIL against every thread that reads rows.
@@ -375,6 +386,7 @@ def test_the_corpus_is_tokenized_in_a_spawned_process(index, monkeypatch):
 
     monkeypatch.setattr(tfidf_mod.multiprocessing, "get_context", recording_get_context)
 
+    backfill.run_pass()
     idf, _ = tfidf_mod._build_corpus_idf("a")
 
     pid_tokens = {t for t in idf if t.startswith("pid")}

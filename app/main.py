@@ -370,10 +370,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as e:
         logger.error("Failed to start index manager: %s", e)
 
+    from app.database import check_idf_term_rules
+    from app.idf_backfill import idf_backfill_loop
+
+    await asyncio.to_thread(check_idf_term_rules)
+    idf_backfill_task = asyncio.create_task(
+        idf_backfill_loop(), name="idf_backfill"
+    )
+
     logger.info("Semantic search service ready on port %d", settings.port)
     yield
 
     # Shutdown
+    idf_backfill_task.cancel()
+    try:
+        await idf_backfill_task
+    except asyncio.CancelledError:
+        pass
     pickup_task.cancel()
     try:
         await pickup_task

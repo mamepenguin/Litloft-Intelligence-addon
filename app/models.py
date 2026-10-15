@@ -88,6 +88,15 @@ class IndexedFile(Base):
     tfidf_keywords_indexed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )
+    # True when ``idf_doc_terms`` holds the term set of the file's current
+    # transcript and filename. ``idf_terms_gen`` is bumped by every write
+    # that changes either, so the backfill can tell that its read is stale.
+    idf_terms_indexed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    idf_terms_gen: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
 
     # Metadata snapshot (for keyword matching)
     title: Mapped[str] = mapped_column(String, nullable=False, default="")
@@ -116,7 +125,23 @@ class IndexedFile(Base):
         Index("idx_indexed_files_whisper_indexed", "whisper_indexed"),
         Index("idx_indexed_files_text_indexed", "text_indexed"),
         Index("idx_indexed_files_tfidf_keywords_indexed", "tfidf_keywords_indexed"),
+        Index("idx_indexed_files_idf_terms_indexed", "idf_terms_indexed"),
     )
+
+
+class IdfDocTerm(Base):
+    """One distinct term of a file's TF-IDF document, for the corpus IDF."""
+
+    __tablename__ = "idf_doc_terms"
+
+    file_id: Mapped[str] = mapped_column(
+        String(12),
+        ForeignKey("indexed_files.file_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    term: Mapped[str] = mapped_column(String, primary_key=True)
+
+    __table_args__ = {"sqlite_with_rowid": False}
 
 
 class Embedding(Base):

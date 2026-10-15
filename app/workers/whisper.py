@@ -29,6 +29,7 @@ import numpy as np
 from app.config import settings, validate_file_path
 from app.digit_separator import is_digit_separator
 from app.database import delete_fts_transcripts, get_search_db, get_search_db_read, upsert_fts_transcripts
+from app.idf_backfill import mark_idf_terms_stale
 from app.models import (
     Embedding,
     IndexedFile,
@@ -1560,6 +1561,10 @@ def _remove_whisper_data(session: object, file_id: str) -> None:
         session: Database session.
         file_id: The file ID.
     """
+    # First, so a caller that commits after a later statement raises
+    # still records that the transcript changed.
+    mark_idf_terms_stale(session, file_id)
+
     # Remove transcript chunks, word-level rows, and FTS5 mirror
     session.query(TranscriptChunk).filter_by(file_id=file_id).delete()
     session.query(TranscriptWord).filter_by(file_id=file_id).delete()
