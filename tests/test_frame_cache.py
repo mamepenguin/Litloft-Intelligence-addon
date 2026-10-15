@@ -112,7 +112,7 @@ class TestExtractFrameToCache:
         assert cache_path.exists()
         assert cache_path.read_bytes() == b"FAKE_WEBP"
         # tmp sibling must have been moved away
-        assert not cache_path.with_suffix(cache_path.suffix + ".tmp").exists()
+        assert not list(cache_path.parent.glob("*.tmp"))
 
     def test_creates_parent_dirs(self, tmp_path):
         cache_path = tmp_path / "deeply" / "nested" / "f" / "1.webp"
@@ -141,7 +141,7 @@ class TestExtractFrameToCache:
         assert excinfo.value.status_code == 500
         assert not cache_path.exists()
         # Temp file must be cleaned up so retries don't see stale bytes.
-        assert not cache_path.with_suffix(cache_path.suffix + ".tmp").exists()
+        assert not list(cache_path.parent.glob("*.tmp"))
 
     def test_ffmpeg_empty_output_raises_500(self, tmp_path):
         cache_path = tmp_path / "f" / "1000.webp"
@@ -159,12 +159,10 @@ class TestExtractFrameToCache:
 
     def test_timeout_raises_504_and_cleans_tmp(self, tmp_path):
         cache_path = tmp_path / "f" / "1000.webp"
-        tmp_sibling = cache_path.with_suffix(cache_path.suffix + ".tmp")
 
         def fake_run(cmd, capture_output, timeout):
             # Simulate ffmpeg starting a write before being killed.
-            tmp_sibling.parent.mkdir(parents=True, exist_ok=True)
-            tmp_sibling.write_bytes(b"WIP")
+            Path(cmd[-1]).write_bytes(b"WIP")
             raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
 
         with patch("app.frame_cache.subprocess.run", side_effect=fake_run):
@@ -172,7 +170,36 @@ class TestExtractFrameToCache:
                 extract_frame_to_cache("/tmp/video.mp4", cache_path, 1.0)
 
         assert excinfo.value.status_code == 504
-        assert not tmp_sibling.exists()
+        assert not list(cache_path.parent.glob("*.tmp"))
+
+    def test_concurrent_extractions_of_one_frame_both_succeed(self, tmp_path):
+        import threading
+
+        cache_path = tmp_path / "f" / "1000.webp"
+        both_writing = threading.Barrier(2)
+
+        def fake_run(cmd, capture_output, timeout):
+            Path(cmd[-1]).write_bytes(b"FAKE_WEBP")
+            both_writing.wait(timeout=5)
+            return MagicMock(returncode=0)
+
+        errors: list[BaseException] = []
+
+        def _extract():
+            try:
+                extract_frame_to_cache("/tmp/video.mp4", cache_path, 1.0)
+            except BaseException as e:  # noqa: BLE001
+                errors.append(e)
+
+        with patch("app.frame_cache.subprocess.run", side_effect=fake_run):
+            threads = [threading.Thread(target=_extract) for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
+
+        assert errors == []
+        assert cache_path.read_bytes() == b"FAKE_WEBP"
 
 
 # ---------------------------------------------------------------------------

@@ -54,6 +54,7 @@ from app.routers.vision import (  # noqa: E402
     generate_visual_description,
     get_visual_description,
 )
+from tests.search_db_doubles import read_session_from  # noqa: E402
 
 
 @pytest.fixture()
@@ -123,6 +124,7 @@ def stub_indexed_file(monkeypatch):
     monkeypatch.setattr(
         "app.routers.vision.get_search_db", lambda: _Ctx()
     )
+    monkeypatch.setattr('app.routers.vision.get_search_db_read', read_session_from(lambda: _Ctx()), raising=False)
     return _seed
 
 
@@ -187,6 +189,7 @@ class TestGenerateVisualDescription:
         monkeypatch.setattr(
             "app.routers.vision.get_search_db", lambda: _Ctx()
         )
+        monkeypatch.setattr('app.routers.vision.get_search_db_read', read_session_from(lambda: _Ctx()), raising=False)
 
         with pytest.raises(HTTPException) as exc:
             await generate_visual_description(

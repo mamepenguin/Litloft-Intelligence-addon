@@ -58,6 +58,7 @@ from app.schemas import (  # noqa: E402
     DetailedSummaryEditRequest,
     DetailedSummaryRegenerateRequest,
 )
+from tests.search_db_doubles import read_session_from  # noqa: E402
 
 
 _SAMPLE_SUMMARY = (
@@ -119,8 +120,11 @@ def search_db(tmp_path, monkeypatch):
             session.close()
 
     monkeypatch.setattr("app.database.get_search_db", _get_search_db)
+    monkeypatch.setattr('app.database.get_search_db_read', read_session_from(_get_search_db), raising=False)
     monkeypatch.setattr("app.routers.summaries.get_search_db", _get_search_db)
+    monkeypatch.setattr('app.routers.summaries.get_search_db_read', read_session_from(_get_search_db), raising=False)
     monkeypatch.setattr("app.workers.summaries.get_search_db", _get_search_db)
+    monkeypatch.setattr('app.workers.summaries.get_search_db_read', read_session_from(_get_search_db), raising=False)
     return engine, Session
 
 

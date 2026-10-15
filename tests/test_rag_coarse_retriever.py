@@ -74,7 +74,7 @@ def _patch_db(monkeypatch, *, vec_rows, drive_count):
     def _get_search_db():
         yield session
 
-    monkeypatch.setattr(cr_mod, "get_search_db", _get_search_db)
+    monkeypatch.setattr(cr_mod, "get_search_db_read", _get_search_db)
     return engine_conn, session
 
 

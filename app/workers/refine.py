@@ -14,7 +14,8 @@ Public surface (called by ``app.routers.refine`` and tested directly):
 * ``realign_words_for_chunk(session, file_id, chunk_start, chunk_end,
   refined_text) -> int``
 * ``recompute_chunk_embeddings(chunk_ids)``
-* ``start_refine_job(session, file_id, resolved) -> str`` (sync)
+* ``refine_chunk_ids(session, file_id) -> list[int]``
+* ``start_refine_job(file_id, chunk_ids, resolved) -> str`` (sync, needs a running loop)
 * ``filter_transcript_file_ids(session, drive, file_ids) -> list[str]``
 * ``is_feature_enabled(drive) -> bool``
 """
@@ -864,34 +865,24 @@ async def _run_refine_job(
         _active_refine_files.discard(file_id)
 
 
-def start_refine_job(session: Any, file_id: str, resolved: Resolved) -> str:
-    """Kick off an async refine job. Returns the generated job_id.
-
-    Deliberately synchronous: the body only reads chunk ids and spawns a
-    task, and callers hold the search-DB write lock while calling it.
-    Awaiting under that lock would risk wedging the event loop (see the
-    INVARIANT note on ``app.database._write_lock``).
-    """
-    job_id = uuid.uuid4().hex
-
-    chunk_ids: list[int] = []
+def refine_chunk_ids(session: Any, file_id: str) -> list[int]:
+    """Chunk ids a refine job for ``file_id`` will snapshot."""
     try:
         rows = (
             session.query(TranscriptChunk.id)
             .filter(TranscriptChunk.file_id == file_id)
             .all()
         )
-        chunk_ids = [int(r[0]) for r in rows] if rows else []
+        return [int(r[0]) for r in rows] if rows else []
     except Exception:
-        chunk_ids = []
+        return []
 
-    try:
-        asyncio.create_task(
-            _run_refine_job(file_id, job_id, chunk_ids, resolved),
-            name=f"refine_job_{job_id}",
-        )
-    except RuntimeError:
-        # No running loop (e.g. unit-test context without asyncio).
-        pass
 
+def start_refine_job(file_id: str, chunk_ids: list[int], resolved: Resolved) -> str:
+    """Kick off an async refine job on the running loop. Returns the job_id."""
+    job_id = uuid.uuid4().hex
+    asyncio.create_task(
+        _run_refine_job(file_id, job_id, chunk_ids, resolved),
+        name=f"refine_job_{job_id}",
+    )
     return job_id

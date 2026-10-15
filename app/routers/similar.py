@@ -1,5 +1,6 @@
 """Similar files endpoints."""
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -24,11 +25,9 @@ async def similar_files_endpoint(
     from app.models import IndexedFile
 
     # The read session, not ``get_search_db``: the write session takes a
-    # blocking ``threading.Lock``, this handler is ``async def`` and so runs on
-    # the single event-loop thread, and refine holds that lock across a whole
-    # WhisperX alignment. Waiting on it here stops every other request in the
-    # addon, not just this one. ``find_similar`` runs the same query two lines
-    # below through the same read session.
+    # blocking ``threading.Lock`` that refine holds across a whole WhisperX
+    # alignment. ``find_similar`` runs the same query two lines below through
+    # the same read session.
     #
     # ``find_similar`` restricts the *results* to ``drive`` but looks the
     # source row up without one, so a caller holding two drives could rank
@@ -41,20 +40,25 @@ async def similar_files_endpoint(
     # which answers with an empty result. Raising here instead would turn
     # "indexing has not reached this file yet" into an error the caller
     # retries and then reports as unavailable.
-    with get_search_db_read() as session:
-        source = (
-            session.query(IndexedFile)
-            .filter(
-                IndexedFile.file_id == file_id,
-                IndexedFile.active.is_(True),
+    def _check_source() -> None:
+        with get_search_db_read() as session:
+            source = (
+                session.query(IndexedFile)
+                .filter(
+                    IndexedFile.file_id == file_id,
+                    IndexedFile.active.is_(True),
+                )
+                .first()
             )
-            .first()
-        )
-        if source is not None:
-            assert_file_in_drive(source.drive, drive)
+            if source is not None:
+                assert_file_in_drive(source.drive, drive)
+
+    await asyncio.to_thread(_check_source)
 
     try:
-        search_result = find_similar(file_id=file_id, limit=limit, drive=drive)
+        search_result = await asyncio.to_thread(
+            find_similar, file_id=file_id, limit=limit, drive=drive,
+        )
     except Exception as e:
         logger.error("Similar files search failed: %s", e)
         raise HTTPException(status_code=500, detail="Similar search failed") from e
@@ -97,33 +101,43 @@ async def debug_similar_endpoint(
     from app.database import get_search_db_read
     from app.models import IndexedFile
 
-    with get_search_db_read() as session:
-        source = (
-            session.query(IndexedFile)
-            .filter(
-                IndexedFile.file_id == file_id,
-                IndexedFile.active.is_(True),
+    def _read_source() -> dict:
+        with get_search_db_read() as session:
+            source = (
+                session.query(IndexedFile)
+                .filter(
+                    IndexedFile.file_id == file_id,
+                    IndexedFile.active.is_(True),
+                )
+                .first()
             )
-            .first()
-        )
-        if not source:
-            raise HTTPException(status_code=404, detail="File not indexed")
-        assert_file_in_drive(source.drive, drive)
+            if not source:
+                raise HTTPException(status_code=404, detail="File not indexed")
+            assert_file_in_drive(source.drive, drive)
 
-        source_info = {
-            "file_id": source.file_id,
-            "filename": source.filename,
-            "file_type": source.file_type,
-            "drive": source.drive,
-        }
+            return {
+                "file_id": source.file_id,
+                "filename": source.filename,
+                "file_type": source.file_type,
+                "drive": source.drive,
+            }
+
+    source_info = await asyncio.to_thread(_read_source)
 
     primary_type, fallback_type = _select_embedding_types(source_info["file_type"])
 
     all_types = ["clip", "metadata", "whisper", "text_content"]
     results_by_type: dict[str, list[dict]] = {}
 
+    def _scores() -> dict[str, list[dict]]:
+        return {
+            etype: _find_similar_by_embedding(file_id, etype, limit, drive)
+            for etype in all_types
+        }
+
+    raw_by_type = await asyncio.to_thread(_scores)
     for etype in all_types:
-        raw = _find_similar_by_embedding(file_id, etype, limit, drive)
+        raw = raw_by_type[etype]
         results_by_type[etype] = [
             {
                 "file_id": r["file_id"],

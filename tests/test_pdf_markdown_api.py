@@ -51,6 +51,7 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 from app.database import Base  # noqa: E402
 from app.models import IndexedFile, PdfMarkdown  # noqa: E402
 from app.routers.files import get_pdf_markdown  # noqa: E402
+from tests.search_db_doubles import read_session_from  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +149,7 @@ def search_db(tmp_path, monkeypatch):
             session.close()
 
     monkeypatch.setattr("app.database.get_search_db", _get_search_db)
+    monkeypatch.setattr('app.database.get_search_db_read', read_session_from(_get_search_db), raising=False)
     return engine, Session
 
 

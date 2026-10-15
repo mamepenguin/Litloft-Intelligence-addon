@@ -3,6 +3,7 @@
 Reads precomputed rows. No scoring happens in the request path.
 """
 
+import asyncio
 import hashlib
 import logging
 import random
@@ -72,29 +73,35 @@ async def pickup_endpoint(
 
     # A read must not take the process-wide write lock: it is held
     # across long jobs (refine keeps it for a whole forced
-    # alignment), and this endpoint is awaited on the addon's event
-    # loop, so blocking here stalls every other request too.
-    with get_search_db_read() as session:
-        header = (
-            session.query(PickupProfile)
-            .filter_by(drive_id=drive, viewer_id=viewer_id)
-            .first()
-        )
-        if header is None or header.total == 0:
-            return {"file_ids": [], "total": 0}
-        total = header.total
+    # alignment), so waiting on it would hold this request for that long.
+    def _read() -> tuple[int, list[str]] | None:
+        with get_search_db_read() as session:
+            header = (
+                session.query(PickupProfile)
+                .filter_by(drive_id=drive, viewer_id=viewer_id)
+                .first()
+            )
+            if header is None or header.total == 0:
+                return None
+            total = header.total
 
-        query = (
-            session.query(PickupItem.file_id)
-            .filter_by(drive_id=drive, viewer_id=viewer_id)
-            .order_by(PickupItem.rank)
-        )
-        if window == "daily":
-            pool = [row[0] for row in query.limit(min(_WINDOW_POOL, total)).all()]
-        else:
-            pool = [
+            query = (
+                session.query(PickupItem.file_id)
+                .filter_by(drive_id=drive, viewer_id=viewer_id)
+                .order_by(PickupItem.rank)
+            )
+            if window == "daily":
+                return total, [
+                    row[0] for row in query.limit(min(_WINDOW_POOL, total)).all()
+                ]
+            return total, [
                 row[0] for row in query.offset(offset).limit(limit).all()
             ]
+
+    read = await asyncio.to_thread(_read)
+    if read is None:
+        return {"file_ids": [], "total": 0}
+    total, pool = read
 
     if window == "daily":
         stamp = date or datetime.now(UTC).strftime("%Y-%m-%d")

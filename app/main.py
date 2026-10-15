@@ -6,6 +6,7 @@ on application startup.
 """
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import logging
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
@@ -61,6 +62,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # the first reconcile is exactly as invisible as one at steady state.
     watchdog = LoopWatchdog(asyncio.get_running_loop())
     watchdog.start()
+
+    # Worker threads parked on the search-DB write lock hold their slot
+    # in the default executor until the writer finishes. The stock size,
+    # min(32, cpu + 4), is about the number of workers, so reads that
+    # take no lock would queue behind them.
+    asyncio.get_running_loop().set_default_executor(
+        ThreadPoolExecutor(max_workers=64, thread_name_prefix="offload")
+    )
 
     # The webhook gate fails closed once configured, and it needs the other
     # end to agree: core only sends X-Webhook-Secret when the listener in
@@ -500,10 +509,10 @@ def status_endpoint() -> StatusResponse:
     }
     filenames: dict[str, str] = {}
     if all_active_ids:
-        from app.database import get_search_db
+        from app.database import get_search_db_read
         from app.models import IndexedFile
 
-        with get_search_db() as session:
+        with get_search_db_read() as session:
             rows = (
                 session.query(IndexedFile.file_id, IndexedFile.filename)
                 .filter(IndexedFile.file_id.in_(all_active_ids))

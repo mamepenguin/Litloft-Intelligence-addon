@@ -42,6 +42,7 @@ for _mod in (
 import numpy as np  # noqa: E402
 from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
+from tests.search_db_doubles import read_session_from  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +482,7 @@ def citations_db(tmp_path, monkeypatch):
             session.close()
 
     monkeypatch.setattr("app.citations.get_search_db", _get_search_db)
+    monkeypatch.setattr('app.citations.get_search_db_read', read_session_from(_get_search_db), raising=False)
     return engine
 
 
@@ -716,6 +718,7 @@ class TestQueryTopChunksDenseExhaustive:
         monkeypatch.setattr(
             citations, "get_search_db", self._stub_fetch(rows),
         )
+        monkeypatch.setattr(citations, "get_search_db_read", read_session_from(self._stub_fetch(rows)), raising=False)
         results = citations._query_top_chunks_dense(
             "file-1",
             np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
@@ -731,6 +734,7 @@ class TestQueryTopChunksDenseExhaustive:
         monkeypatch.setattr(
             citations, "get_search_db", self._stub_fetch(rows),
         )
+        monkeypatch.setattr(citations, "get_search_db_read", read_session_from(self._stub_fetch(rows)), raising=False)
         results = citations._query_top_chunks_dense(
             "file-1",
             np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
@@ -753,6 +757,7 @@ class TestQueryTopChunksDenseExhaustive:
         monkeypatch.setattr(
             citations, "get_search_db", self._stub_fetch(rows),
         )
+        monkeypatch.setattr(citations, "get_search_db_read", read_session_from(self._stub_fetch(rows)), raising=False)
         results = citations._query_top_chunks_dense(
             "file-1",
             np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
@@ -774,6 +779,7 @@ class TestQueryTopChunksDenseExhaustive:
         monkeypatch.setattr(
             citations, "get_search_db", self._stub_fetch(rows),
         )
+        monkeypatch.setattr(citations, "get_search_db_read", read_session_from(self._stub_fetch(rows)), raising=False)
         results = citations._query_top_chunks_dense(
             "file-1",
             np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
@@ -790,6 +796,7 @@ class TestQueryTopChunksDenseExhaustive:
         monkeypatch.setattr(
             citations, "get_search_db", self._stub_fetch([]),
         )
+        monkeypatch.setattr(citations, "get_search_db_read", read_session_from(self._stub_fetch([])), raising=False)
         results = citations._query_top_chunks_dense(
             "file-1",
             np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
@@ -814,6 +821,7 @@ class TestQueryTopChunksDenseExhaustive:
         monkeypatch.setattr(
             citations, "get_search_db", self._stub_fetch(rows),
         )
+        monkeypatch.setattr(citations, "get_search_db_read", read_session_from(self._stub_fetch(rows)), raising=False)
         results = citations._query_top_chunks_dense(
             "file-1",
             np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
@@ -834,6 +842,7 @@ class TestQueryTopChunksDenseExhaustive:
         monkeypatch.setattr(
             citations, "get_search_db", self._stub_fetch(rows),
         )
+        monkeypatch.setattr(citations, "get_search_db_read", read_session_from(self._stub_fetch(rows)), raising=False)
         results = citations._query_top_chunks_dense(
             "file-1",
             np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
@@ -851,6 +860,7 @@ class TestQueryTopChunksDenseExhaustive:
         monkeypatch.setattr(
             citations, "get_search_db", self._stub_fetch(rows),
         )
+        monkeypatch.setattr(citations, "get_search_db_read", read_session_from(self._stub_fetch(rows)), raising=False)
         results = citations._query_top_chunks_dense(
             "file-1",
             np.zeros(4, dtype=np.float32),
@@ -1175,6 +1185,10 @@ class TestQueryTopChunksBm25:
                 text_content_rows=[("1",), ("3",)],
             ),
         )
+        monkeypatch.setattr(citations, "get_search_db_read", read_session_from(self._stub_fts_rows(
+                transcript_rows=[(0,), (2,), (5,)],
+                text_content_rows=[("1",), ("3",)],
+            )), raising=False)
         results = citations._query_top_chunks_bm25(
             "file-1", "保存期間", top_k=10
         )
@@ -1201,6 +1215,10 @@ class TestQueryTopChunksBm25:
                 text_content_rows=[("1",), ("page-extra",), ("4",)],
             ),
         )
+        monkeypatch.setattr(citations, "get_search_db_read", read_session_from(self._stub_fts_rows(
+                transcript_rows=[],
+                text_content_rows=[("1",), ("page-extra",), ("4",)],
+            )), raising=False)
         results = citations._query_top_chunks_bm25(
             "file-1", "保存期間", top_k=10
         )
@@ -1219,6 +1237,7 @@ class TestQueryTopChunksBm25:
             yield _BrokenSession()
 
         monkeypatch.setattr(citations, "get_search_db", _broken_db)
+        monkeypatch.setattr(citations, "get_search_db_read", read_session_from(_broken_db), raising=False)
         results = citations._query_top_chunks_bm25(
             "file-1", "機械学習", top_k=5
         )
@@ -2192,6 +2211,7 @@ class TestDenseAndBm25ChunkRangeFilter:
             yield _FakeSession()
 
         monkeypatch.setattr(citations, "get_search_db", _db)
+        monkeypatch.setattr(citations, "get_search_db_read", read_session_from(_db), raising=False)
         results = citations._query_top_chunks_bm25(
             "file-1", "機械学習", top_k=10, chunk_range=(5, 15)
         )

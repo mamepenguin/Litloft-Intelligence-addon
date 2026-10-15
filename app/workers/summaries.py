@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from sqlalchemy import text as sql_text
 
 from app.config import settings
-from app.database import get_search_db
+from app.database import get_search_db, get_search_db_read
 from app import llm_routing
 from app.llm_routing import Resolved
 from app.models import IndexedFile, TranscriptChunk, generate_insight_id
@@ -402,7 +402,7 @@ def classify_missing_reason(file_id: str) -> str:
 
 def _get_indexed_file(file_id: str) -> dict | None:
     """Fetch basic indexed-file info for a file, or None if not indexed."""
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         f = (
             session.query(IndexedFile)
             .filter(
@@ -426,7 +426,7 @@ def _get_indexed_file(file_id: str) -> dict | None:
 
 def _get_full_transcript(file_id: str) -> str:
     """Load the entire Whisper transcript for a file as one string."""
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         chunks = (
             session.query(TranscriptChunk)
             .filter(TranscriptChunk.file_id == file_id)
@@ -447,7 +447,7 @@ def _get_full_document_text(file_id: str) -> str:
     chunk text written during indexing. Chunks are concatenated in
     numeric chunk_index order.
     """
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         # chunk_index is stored as a string in the FTS5 table, so we cast
         # to INTEGER for correct ordering (otherwise "10" sorts before "2").
         rows = session.execute(
@@ -470,7 +470,7 @@ def _get_pdf_markdown(file_id: str) -> str | None:
     empty by design — see ``PdfMarkdown.extractor`` docstring) so the
     caller can fall back to the chunk-concatenated raw text path.
     """
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         row = session.execute(
             sql_text("SELECT markdown FROM pdf_markdown WHERE file_id = :fid"),
             {"fid": file_id},
@@ -818,7 +818,7 @@ def _get_detailed_summary(file_id: str) -> dict | None:
     Returns ``None`` when there is neither an active insight nor any
     workflow-state marker in ``file_summaries``.
     """
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         active = session.execute(
             sql_text(
                 "SELECT content, metadata_json, created_at, created_by "

@@ -23,7 +23,7 @@ import numpy as np
 from sqlalchemy import text as sql_text
 
 from app.config import RagConfig
-from app.database import get_search_db
+from app.database import get_search_db_read
 from app.document_sections import EPUB_MIME
 from app.models import Embedding, TranscriptChunk
 from app.rag.keyword_filter import filter_keywords
@@ -136,7 +136,7 @@ def _fetch_transcript_chunks_around(
     lo = max(0.0, start - window_seconds)
     hi = end + window_seconds
 
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         rows = (
             session.query(TranscriptChunk)
             .filter(
@@ -178,7 +178,7 @@ def _fetch_document_chunks_around(
     lo = max(0, chunk_index - 1)
     hi = chunk_index + 1
 
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         rows = session.execute(
             sql_text(
                 "SELECT chunk_index, text, page FROM fts_text_content "
@@ -253,7 +253,7 @@ def _fetch_document_chunks_by_vector(
     knn_k = min(200, max(top_n * 20, 40))
 
     try:
-        with get_search_db() as session:
+        with get_search_db_read() as session:
             rows = session.execute(
                 sql_text(
                     "SELECT v.embedding_id, v.distance "
@@ -321,7 +321,7 @@ def _fetch_document_chunks_by_keyword_or(
     fts_query = " OR ".join(quoted)
 
     try:
-        with get_search_db() as session:
+        with get_search_db_read() as session:
             rows = session.execute(
                 sql_text(
                     "SELECT chunk_index "
@@ -384,7 +384,7 @@ def _fetch_transcript_chunks_by_vector(
     knn_k = min(200, max(top_n * 20, 40))
 
     try:
-        with get_search_db() as session:
+        with get_search_db_read() as session:
             rows = session.execute(
                 sql_text(
                     "SELECT v.embedding_id, v.distance "
@@ -422,7 +422,7 @@ def _fetch_transcript_chunks_by_vector(
     if not chunk_indices:
         return []
 
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         chunks = (
             session.query(TranscriptChunk)
             .filter(
@@ -469,7 +469,7 @@ def _fetch_transcript_chunks_by_keyword_or(
     fts_query = " OR ".join(quoted)
 
     try:
-        with get_search_db() as session:
+        with get_search_db_read() as session:
             rows = session.execute(
                 sql_text(
                     "SELECT chunk_index "
@@ -505,7 +505,7 @@ def _fetch_transcript_chunks_by_keyword_or(
     if not chunk_indices:
         return []
 
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         chunks = (
             session.query(TranscriptChunk)
             .filter(
@@ -533,7 +533,7 @@ def _fetch_blip_caption(file_id: str) -> str | None:
     Returns:
         The caption string, or None if no BLIP row exists.
     """
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         rows = (
             session.query(Embedding)
             .filter(

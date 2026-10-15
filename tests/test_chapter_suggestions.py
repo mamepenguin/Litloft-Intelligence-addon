@@ -26,6 +26,7 @@ from app.workers.chapter_suggestions import (
     promote_chapters_to_core,
 )
 from app.workers.transcription.errors import TransientError
+from tests.search_db_doubles import read_session_from  # noqa: E402
 
 
 @pytest.fixture()
@@ -57,11 +58,13 @@ def chapter_db(tmp_path, monkeypatch):
             session.close()
 
     monkeypatch.setattr("app.database.get_search_db", db)
-    monkeypatch.setattr("app.database.get_search_db_read", db)
+    monkeypatch.setattr("app.database.get_search_db_read", read_session_from(db))
     # indexer imports the helpers by value; in a full-suite run it may have
     # been imported before this fixture, so patch that reference as well.
     monkeypatch.setattr("app.indexer.get_search_db", db)
+    monkeypatch.setattr('app.indexer.get_search_db_read', read_session_from(db), raising=False)
     monkeypatch.setattr("app.routers.chapter_suggestions.get_search_db", db)
+    monkeypatch.setattr('app.routers.chapter_suggestions.get_search_db_read', read_session_from(db), raising=False)
     return db
 
 

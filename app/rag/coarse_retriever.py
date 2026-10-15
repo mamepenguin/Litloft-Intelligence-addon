@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import text as sql_text
 
-from app.database import get_search_db, get_search_engine
+from app.database import get_search_db_read, get_search_engine
 from app.search import _l2_to_cosine_similarity
 from app.workers.embedder import embed_query
 
@@ -80,45 +80,49 @@ async def coarse_retrieve(
     # (drives × types vs. just type).
     over_fetch = max(top_k * 50, 500)
 
-    engine = get_search_engine()
-    with engine.connect() as conn:
-        # sqlite-vec rejects ``ORDER BY ... LIMIT`` on the outer SELECT
-        # when JOINs sit between the MATCH and the LIMIT — the LIMIT
-        # cannot be pushed into the vec0 KNN scan, and vec0 fails with
-        # "A LIMIT or 'k = ?' constraint is required on vec0 knn
-        # queries". Isolate the KNN scan in a CTE so the limit binds
-        # directly to vec_text, then JOIN the post-filter on the
-        # over-fetched id set.
-        rows = conn.execute(
-            sql_text(
-                "WITH knn AS ("
-                "  SELECT embedding_id, distance "
-                "  FROM vec_text "
-                "  WHERE vector MATCH :vec "
-                "  ORDER BY distance "
-                "  LIMIT :over_fetch"
-                ") "
-                "SELECT i.file_id, knn.distance "
-                "FROM knn "
-                "JOIN embeddings e ON e.id = knn.embedding_id "
-                "JOIN indexed_files i ON i.file_id = e.file_id "
-                "WHERE e.embedding_type = 'metadata' "
-                "  AND i.drive = :drive "
-                "  AND i.active = 1 "
-                "ORDER BY knn.distance"
-            ),
-            {"vec": vec_bytes, "drive": drive, "over_fetch": over_fetch},
-        ).fetchall()
+    def _query() -> tuple[list, int]:
+        engine = get_search_engine()
+        with engine.connect() as conn:
+            # sqlite-vec rejects ``ORDER BY ... LIMIT`` on the outer SELECT
+            # when JOINs sit between the MATCH and the LIMIT — the LIMIT
+            # cannot be pushed into the vec0 KNN scan, and vec0 fails with
+            # "A LIMIT or 'k = ?' constraint is required on vec0 knn
+            # queries". Isolate the KNN scan in a CTE so the limit binds
+            # directly to vec_text, then JOIN the post-filter on the
+            # over-fetched id set.
+            rows = conn.execute(
+                sql_text(
+                    "WITH knn AS ("
+                    "  SELECT embedding_id, distance "
+                    "  FROM vec_text "
+                    "  WHERE vector MATCH :vec "
+                    "  ORDER BY distance "
+                    "  LIMIT :over_fetch"
+                    ") "
+                    "SELECT i.file_id, knn.distance "
+                    "FROM knn "
+                    "JOIN embeddings e ON e.id = knn.embedding_id "
+                    "JOIN indexed_files i ON i.file_id = e.file_id "
+                    "WHERE e.embedding_type = 'metadata' "
+                    "  AND i.drive = :drive "
+                    "  AND i.active = 1 "
+                    "ORDER BY knn.distance"
+                ),
+                {"vec": vec_bytes, "drive": drive, "over_fetch": over_fetch},
+            ).fetchall()
 
-    with get_search_db() as session:
-        count_row = session.execute(
-            sql_text(
-                "SELECT COUNT(*) FROM indexed_files "
-                "WHERE drive = :drive AND active = 1"
-            ),
-            {"drive": drive},
-        ).fetchone()
-        drive_file_count = int(count_row[0]) if count_row else 0
+        with get_search_db_read() as session:
+            count_row = session.execute(
+                sql_text(
+                    "SELECT COUNT(*) FROM indexed_files "
+                    "WHERE drive = :drive AND active = 1"
+                ),
+                {"drive": drive},
+            ).fetchone()
+            drive_file_count = int(count_row[0]) if count_row else 0
+        return rows, drive_file_count
+
+    rows, drive_file_count = await asyncio.to_thread(_query)
 
     if not rows:
         return ShortlistResult(

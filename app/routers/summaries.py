@@ -22,6 +22,7 @@ via pre_check rules; this router assumes the caller has permission
 for the file_ids it receives.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -35,7 +36,7 @@ from fastapi.responses import Response
 from sqlalchemy import text as sql_text
 
 from app.config import settings
-from app.database import get_search_db
+from app.database import get_search_db, get_search_db_read
 from app.dependencies import get_summaries_worker
 from app.llm_routing import Resolved
 from app.routers.llm_gate import require_llm
@@ -108,7 +109,7 @@ async def _clear_knowledge_active_summary(file_id: str) -> None:
 
 def _require_file_in_drive(file_id: str, drive: str) -> None:
     """Raise 404 unless ``file_id`` belongs to ``drive``."""
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         row = (
             session.query(IndexedFile.drive)
             .filter(
@@ -211,20 +212,22 @@ async def get_summary(
     if settings.features.summaries == "false":
         return SummaryResponse(available=False)
 
-    _require_file_in_drive(file_id, drive)
+    def _load() -> object | None:
+        _require_file_in_drive(file_id, drive)
+        with get_search_db_read() as session:
+            return session.execute(
+                sql_text(
+                    "SELECT s.file_id, s.short_summary, s.long_summary, s.model, "
+                    "s.context_type, s.was_truncated, s.status, s.created_at, "
+                    "s.edited_at, s.short_original, s.long_original "
+                    "FROM file_summaries s "
+                    "INNER JOIN indexed_files f ON s.file_id = f.file_id "
+                    "WHERE s.file_id = :fid AND f.active = 1"
+                ),
+                {"fid": file_id},
+            ).fetchone()
 
-    with get_search_db() as session:
-        row = session.execute(
-            sql_text(
-                "SELECT s.file_id, s.short_summary, s.long_summary, s.model, "
-                "s.context_type, s.was_truncated, s.status, s.created_at, "
-                "s.edited_at, s.short_original, s.long_original "
-                "FROM file_summaries s "
-                "INNER JOIN indexed_files f ON s.file_id = f.file_id "
-                "WHERE s.file_id = :fid AND f.active = 1"
-            ),
-            {"fid": file_id},
-        ).fetchone()
+    row = await asyncio.to_thread(_load)
 
     if row is None:
         # Classify *why* there's no summary so the frontend can render
@@ -233,7 +236,7 @@ async def get_summary(
         # silently skip when the file lacks usable content.
         return SummaryResponse(
             available=False,
-            reason=classify_missing_reason(file_id),
+            reason=await asyncio.to_thread(classify_missing_reason, file_id),
         )
 
     return SummaryResponse(
@@ -269,21 +272,27 @@ async def regenerate_summary(
     """
     requested = body.profile if body is not None else None
     resolved = await _require_llm_enabled(drive, requested)
-    _require_file_in_drive(file_id, drive)
+
+    def _preflight() -> str:
+        _require_file_in_drive(file_id, drive)
+        return classify_missing_reason(file_id)
 
     # Pre-flight: surface skip reasons as 400 so the frontend can show
     # them immediately instead of waiting for a worker that will no-op.
-    reason = classify_missing_reason(file_id)
+    reason = await asyncio.to_thread(_preflight)
     if reason in ("unsupported_type", "insufficient_content", "file_not_found"):
         raise HTTPException(status_code=400, detail=reason)
 
     summaries_worker = get_summaries_worker()
 
-    with get_search_db() as session:
-        session.execute(
-            sql_text("DELETE FROM file_summaries WHERE file_id = :fid"),
-            {"fid": file_id},
-        )
+    def _delete() -> None:
+        with get_search_db() as session:
+            session.execute(
+                sql_text("DELETE FROM file_summaries WHERE file_id = :fid"),
+                {"fid": file_id},
+            )
+
+    await asyncio.to_thread(_delete)
 
     # Approach B: drop the long_summary contribution from the metadata
     # embedding. The next worker pass will re-embed again with the new
@@ -361,49 +370,51 @@ async def edit_summary(
     feature only gates new generation, not curation of existing records.
     ``status = "hidden"`` is preserved (editing does not un-hide).
     """
-    _require_file_in_drive(file_id, drive)
-
     now = datetime.now(UTC).isoformat()
 
-    with get_search_db() as session:
-        existing = session.execute(
-            sql_text(
-                "SELECT short_summary, long_summary, short_original, long_original "
-                "FROM file_summaries WHERE file_id = :fid"
-            ),
-            {"fid": file_id},
-        ).fetchone()
+    def _apply() -> object | None:
+        _require_file_in_drive(file_id, drive)
+        with get_search_db() as session:
+            existing = session.execute(
+                sql_text(
+                    "SELECT short_summary, long_summary, short_original, long_original "
+                    "FROM file_summaries WHERE file_id = :fid"
+                ),
+                {"fid": file_id},
+            ).fetchone()
 
-        if existing is None:
-            raise HTTPException(status_code=404, detail="No summary to edit")
+            if existing is None:
+                raise HTTPException(status_code=404, detail="No summary to edit")
 
-        # Snapshot the AI output only on the first edit. On re-edit, keep
-        # the snapshot pinned to the original AI version so revert always
-        # reaches "the generation this row started with" rather than a
-        # previous user edit.
-        short_original = existing[2] if existing[2] is not None else existing[0]
-        long_original = existing[3] if existing[3] is not None else existing[1]
+            # Snapshot the AI output only on the first edit. On re-edit, keep
+            # the snapshot pinned to the original AI version so revert always
+            # reaches "the generation this row started with" rather than a
+            # previous user edit.
+            short_original = existing[2] if existing[2] is not None else existing[0]
+            long_original = existing[3] if existing[3] is not None else existing[1]
 
-        session.execute(
-            sql_text(
-                "UPDATE file_summaries SET "
-                "short_summary = :short, long_summary = :long, "
-                "short_original = :short_original, "
-                "long_original = :long_original, "
-                "edited_at = :edited_at "
-                "WHERE file_id = :fid"
-            ),
-            {
-                "fid": file_id,
-                "short": body.short_summary,
-                "long": body.long_summary,
-                "short_original": short_original,
-                "long_original": long_original,
-                "edited_at": now,
-            },
-        )
+            session.execute(
+                sql_text(
+                    "UPDATE file_summaries SET "
+                    "short_summary = :short, long_summary = :long, "
+                    "short_original = :short_original, "
+                    "long_original = :long_original, "
+                    "edited_at = :edited_at "
+                    "WHERE file_id = :fid"
+                ),
+                {
+                    "fid": file_id,
+                    "short": body.short_summary,
+                    "long": body.long_summary,
+                    "short_original": short_original,
+                    "long_original": long_original,
+                    "edited_at": now,
+                },
+            )
 
-        row = _fetch_summary_row(session, file_id)
+            return _fetch_summary_row(session, file_id)
+
+    row = await asyncio.to_thread(_apply)
 
     # ``row`` is never None here — we just updated it inside the same
     # session. Build the response directly so edit works regardless of
@@ -428,41 +439,43 @@ async def revert_summary(
     Fails with 400 when no snapshot exists (never edited, or the row was
     regenerated after an edit — regenerate starts fresh with NULL originals).
     """
-    _require_file_in_drive(file_id, drive)
+    def _apply() -> object | None:
+        _require_file_in_drive(file_id, drive)
+        with get_search_db() as session:
+            existing = session.execute(
+                sql_text(
+                    "SELECT short_original, long_original "
+                    "FROM file_summaries WHERE file_id = :fid"
+                ),
+                {"fid": file_id},
+            ).fetchone()
 
-    with get_search_db() as session:
-        existing = session.execute(
-            sql_text(
-                "SELECT short_original, long_original "
-                "FROM file_summaries WHERE file_id = :fid"
-            ),
-            {"fid": file_id},
-        ).fetchone()
+            if existing is None:
+                raise HTTPException(status_code=404, detail="No summary found")
 
-        if existing is None:
-            raise HTTPException(status_code=404, detail="No summary found")
+            if existing[0] is None or existing[1] is None:
+                raise HTTPException(
+                    status_code=400, detail="No AI version to revert to"
+                )
 
-        if existing[0] is None or existing[1] is None:
-            raise HTTPException(
-                status_code=400, detail="No AI version to revert to"
+            session.execute(
+                sql_text(
+                    "UPDATE file_summaries SET "
+                    "short_summary = :short, long_summary = :long, "
+                    "short_original = NULL, long_original = NULL, "
+                    "edited_at = NULL "
+                    "WHERE file_id = :fid"
+                ),
+                {
+                    "fid": file_id,
+                    "short": existing[0],
+                    "long": existing[1],
+                },
             )
 
-        session.execute(
-            sql_text(
-                "UPDATE file_summaries SET "
-                "short_summary = :short, long_summary = :long, "
-                "short_original = NULL, long_original = NULL, "
-                "edited_at = NULL "
-                "WHERE file_id = :fid"
-            ),
-            {
-                "fid": file_id,
-                "short": existing[0],
-                "long": existing[1],
-            },
-        )
+            return _fetch_summary_row(session, file_id)
 
-        row = _fetch_summary_row(session, file_id)
+    row = await asyncio.to_thread(_apply)
 
     assert row is not None
     # Approach B: revert restores the AI long_summary, which differs
@@ -487,9 +500,7 @@ async def batch_summaries(
 
     summaries_worker = get_summaries_worker()
 
-    in_drive: set[str] = set()
-    existing: set[str] = set()
-    if body.file_ids:
+    def _classify() -> tuple[set[str], set[str]]:
         with get_search_db() as session:
             in_drive = {
                 row.file_id
@@ -503,13 +514,21 @@ async def batch_summaries(
             }
             placeholders = ",".join(f":id{i}" for i in range(len(body.file_ids)))
             params = {f"id{i}": fid for i, fid in enumerate(body.file_ids)}
-            for row in session.execute(
-                sql_text(
-                    f"SELECT file_id FROM file_summaries WHERE file_id IN ({placeholders})"
-                ),
-                params,
-            ).fetchall():
-                existing.add(row[0])
+            existing = {
+                row[0]
+                for row in session.execute(
+                    sql_text(
+                        f"SELECT file_id FROM file_summaries WHERE file_id IN ({placeholders})"
+                    ),
+                    params,
+                ).fetchall()
+            }
+        return in_drive, existing
+
+    in_drive: set[str] = set()
+    existing: set[str] = set()
+    if body.file_ids:
+        in_drive, existing = await asyncio.to_thread(_classify)
 
     queued = 0
     skipped = 0
@@ -530,7 +549,7 @@ async def batch_summaries(
 
 def _get_indexed_file_basics(file_id: str) -> tuple[str, str] | None:
     """Return ``(drive, filename)`` for an active file, or None if absent."""
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         row = (
             session.query(IndexedFile.drive, IndexedFile.filename)
             .filter(
@@ -584,13 +603,17 @@ async def get_detailed_summary_route(
     if settings.features.detailed_summaries == "false":
         return DetailedSummaryResponse(available=False)
 
-    _require_file_in_drive(file_id, drive)
+    def _load() -> dict | None:
+        _require_file_in_drive(file_id, drive)
+        return _get_detailed_summary(file_id)
 
-    data = _get_detailed_summary(file_id)
+    data = await asyncio.to_thread(_load)
     if data is None:
         return DetailedSummaryResponse(
             available=False,
-            reason=classify_detailed_missing_reason(file_id),
+            reason=await asyncio.to_thread(
+                classify_detailed_missing_reason, file_id
+            ),
         )
 
     return _detailed_row_to_response(file_id, data)
@@ -621,22 +644,26 @@ async def start_detailed_summary(
     resolved = await _require_detailed_enabled(
         drive, body.profile if body is not None else None
     )
-    _require_file_in_drive(file_id, drive)
 
-    reason = classify_detailed_missing_reason(file_id)
-    if reason in (
-        "unsupported_type", "insufficient_content", "file_not_found",
-    ):
-        raise HTTPException(status_code=400, detail=reason)
+    def _preflight() -> None:
+        _require_file_in_drive(file_id, drive)
 
-    if _has_detailed_summary(file_id):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Detailed summary already exists — "
-                "DELETE first to regenerate"
-            ),
-        )
+        reason = classify_detailed_missing_reason(file_id)
+        if reason in (
+            "unsupported_type", "insufficient_content", "file_not_found",
+        ):
+            raise HTTPException(status_code=400, detail=reason)
+
+        if _has_detailed_summary(file_id):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Detailed summary already exists — "
+                    "DELETE first to regenerate"
+                ),
+            )
+
+    await asyncio.to_thread(_preflight)
 
     background_tasks.add_task(
         generate_detailed_summary, file_id, resolved
@@ -660,9 +687,11 @@ async def delete_detailed_summary_route(
     then POSTs a new generation request. Returns 404 when no row was
     touched so clients don't silently get a success for stray IDs.
     """
-    _require_file_in_drive(file_id, drive)
+    def _delete() -> bool:
+        _require_file_in_drive(file_id, drive)
+        return _delete_detailed_summary(file_id)
 
-    deleted = _delete_detailed_summary(file_id)
+    deleted = await asyncio.to_thread(_delete)
     if not deleted:
         raise HTTPException(status_code=404, detail="No summary to delete")
 
@@ -705,13 +734,13 @@ async def download_detailed_summary(
     if settings.features.detailed_summaries == "false":
         raise HTTPException(status_code=404, detail="Feature disabled")
 
-    basics = _get_indexed_file_basics(file_id)
+    basics = await asyncio.to_thread(_get_indexed_file_basics, file_id)
     if basics is None:
         raise HTTPException(status_code=404, detail="File not indexed")
     file_drive, filename = basics
     assert_file_in_drive(file_drive, drive)
 
-    data = _get_detailed_summary(file_id)
+    data = await asyncio.to_thread(_get_detailed_summary, file_id)
     if (
         data is None
         or data["detailed_status"] != DETAILED_STATUS_GENERATED
@@ -763,14 +792,14 @@ async def get_detailed_summary_citations(
     generating, or an older summary that predates this feature — run
     the backfill script to populate).
     """
-    _require_file_in_drive(file_id, drive)
+    await asyncio.to_thread(_require_file_in_drive, file_id, drive)
 
     # Import lazily so test suites that stub out app.citations still
     # work — the module imports embedder which pulls sentence-transformers
     # at import time in some paths.
     from app.citations import get_citations
 
-    rows = get_citations(file_id)
+    rows = await asyncio.to_thread(get_citations, file_id)
     return DetailedSummaryCitationsResponse(
         file_id=file_id,
         citations=[DetailedSummaryCitationItem(**row) for row in rows],
@@ -917,46 +946,50 @@ async def edit_detailed_summary_section(
     reflected on reload.
     """
     _require_detailed_feature_enabled()
-    _require_file_in_drive(file_id, drive)
 
     now = datetime.now(UTC).isoformat()
 
-    with get_search_db() as session:
-        state = _fetch_detailed_edit_state(session, file_id)
-        if state is None or state[0] is None:
-            raise HTTPException(
-                status_code=404, detail="No detailed summary to edit"
+    def _apply() -> str:
+        _require_file_in_drive(file_id, drive)
+        with get_search_db() as session:
+            state = _fetch_detailed_edit_state(session, file_id)
+            if state is None or state[0] is None:
+                raise HTTPException(
+                    status_code=404, detail="No detailed summary to edit"
+                )
+            current = state[0]
+
+            # Lazy-import so the parser is only paid for on the edit path.
+            from app.summary_parser import splice_section
+
+            try:
+                new_summary = splice_section(
+                    current,
+                    body.section_heading,
+                    body.subsection_heading,
+                    body.new_content,
+                )
+            except ValueError as e:
+                # 409 (not 400): anchor missing = stale client state, not
+                # a malformed request. Frontend prompts a reload.
+                raise HTTPException(status_code=409, detail=str(e)) from e
+
+            # Step 2b: the body + original + edited_at no longer live on
+            # ``file_summaries``. Appending the manual FileInsight row is
+            # the sole write — the previous active insight is marked
+            # superseded (so revert can surface the pre-edit AI body) and
+            # the new manual row carries ``metadata.edited_at`` for audit.
+            _append_detailed_summary_insight(
+                session,
+                file_id=file_id,
+                content=new_summary,
+                created_by="manual",
+                metadata={"edited_at": now},
+                created_at=now,
             )
-        current = state[0]
+            return new_summary
 
-        # Lazy-import so the parser is only paid for on the edit path.
-        from app.summary_parser import splice_section
-
-        try:
-            new_summary = splice_section(
-                current,
-                body.section_heading,
-                body.subsection_heading,
-                body.new_content,
-            )
-        except ValueError as e:
-            # 409 (not 400): anchor missing = stale client state, not
-            # a malformed request. Frontend prompts a reload.
-            raise HTTPException(status_code=409, detail=str(e)) from e
-
-        # Step 2b: the body + original + edited_at no longer live on
-        # ``file_summaries``. Appending the manual FileInsight row is
-        # the sole write — the previous active insight is marked
-        # superseded (so revert can surface the pre-edit AI body) and
-        # the new manual row carries ``metadata.edited_at`` for audit.
-        _append_detailed_summary_insight(
-            session,
-            file_id=file_id,
-            content=new_summary,
-            created_by="manual",
-            metadata={"edited_at": now},
-            created_at=now,
-        )
+    new_summary = await asyncio.to_thread(_apply)
 
     # Cheap WS notification — emit synchronously so the frontend knows
     # the summary body changed before the (slow) citation recompute
@@ -974,7 +1007,7 @@ async def edit_detailed_summary_section(
     # emits ``citations_ready`` itself when the work completes.
     background_tasks.add_task(_recalculate_citations, file_id, new_summary)
 
-    data = _get_detailed_summary(file_id)
+    data = await asyncio.to_thread(_get_detailed_summary, file_id)
     if data is None:
         # Defensive: we just wrote the row, so this should be impossible.
         raise HTTPException(
@@ -1003,35 +1036,39 @@ async def revert_detailed_summary(
     for the matching pattern.
     """
     _require_detailed_feature_enabled()
-    _require_file_in_drive(file_id, drive)
 
-    with get_search_db() as session:
-        state = _fetch_detailed_edit_state(session, file_id)
-        if state is None:
-            raise HTTPException(
-                status_code=404, detail="No detailed summary found"
-            )
-        _current, original, _edited_at = state
-        if original is None:
-            raise HTTPException(
-                status_code=400, detail="No AI version to revert to"
-            )
+    def _apply() -> str:
+        _require_file_in_drive(file_id, drive)
+        with get_search_db() as session:
+            state = _fetch_detailed_edit_state(session, file_id)
+            if state is None:
+                raise HTTPException(
+                    status_code=404, detail="No detailed summary found"
+                )
+            _current, original, _edited_at = state
+            if original is None:
+                raise HTTPException(
+                    status_code=400, detail="No AI version to revert to"
+                )
 
-        # Step 2b: body + snapshot + edited_at are no longer stored
-        # on ``file_summaries``; the FileInsight append alone restores
-        # the AI version. ``reverted_from_manual`` metadata marks the
-        # new active row as a user-initiated restore.
-        _append_detailed_summary_insight(
-            session,
-            file_id=file_id,
-            content=original,
-            created_by="intelligence",
-            metadata={
-                "reverted_from_manual": True,
-                "reverted_at": datetime.now(UTC).isoformat(),
-            },
-            created_at=datetime.now(UTC).isoformat(),
-        )
+            # Step 2b: body + snapshot + edited_at are no longer stored
+            # on ``file_summaries``; the FileInsight append alone restores
+            # the AI version. ``reverted_from_manual`` metadata marks the
+            # new active row as a user-initiated restore.
+            _append_detailed_summary_insight(
+                session,
+                file_id=file_id,
+                content=original,
+                created_by="intelligence",
+                metadata={
+                    "reverted_from_manual": True,
+                    "reverted_at": datetime.now(UTC).isoformat(),
+                },
+                created_at=datetime.now(UTC).isoformat(),
+            )
+            return original
+
+    original = await asyncio.to_thread(_apply)
 
     await _emit_ws_event(
         "intelligence.detailed_summary.updated",
@@ -1044,7 +1081,7 @@ async def revert_detailed_summary(
     # Defer citation recompute — see edit_detailed_summary_section.
     background_tasks.add_task(_recalculate_citations, file_id, original)
 
-    data = _get_detailed_summary(file_id)
+    data = await asyncio.to_thread(_get_detailed_summary, file_id)
     if data is None:
         raise HTTPException(
             status_code=500, detail="Detailed summary vanished post-revert"
@@ -1077,117 +1114,120 @@ async def regenerate_detailed_summary(
     resolved = await _require_detailed_enabled(
         drive, body.profile if body is not None else None
     )
-    _require_file_in_drive(file_id, drive)
-
     force = bool(body.force) if body is not None else False
 
-    reason = classify_detailed_missing_reason(file_id)
-    if reason in (
-        "unsupported_type", "insufficient_content", "file_not_found",
-    ):
-        raise HTTPException(status_code=400, detail=reason)
+    def _reset_and_mark_generating() -> None:
+        _require_file_in_drive(file_id, drive)
 
-    # Atomic conflict-check + delete: hold a single session across the
-    # check and the clear so a concurrent edit cannot slip in between
-    # ``_fetch_detailed_edit_state`` and the row wipe. Without this
-    # guard, an edit landing mid-window would silently be overwritten
-    # instead of producing 409. The delete logic is inlined (rather
-    # than calling ``_delete_detailed_summary`` which opens its own
-    # session) so the write lock is held continuously.
-    with get_search_db() as session:
-        state = _fetch_detailed_edit_state(session, file_id)
-        edited_at = state[2] if state is not None else None
-        if edited_at is not None and not force:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Detailed summary has user edits — "
-                    "pass force=true to overwrite"
+        reason = classify_detailed_missing_reason(file_id)
+        if reason in (
+            "unsupported_type", "insufficient_content", "file_not_found",
+        ):
+            raise HTTPException(status_code=400, detail=reason)
+
+        # Atomic conflict-check + delete: hold a single session across the
+        # check and the clear so a concurrent edit cannot slip in between
+        # ``_fetch_detailed_edit_state`` and the row wipe. Without this
+        # guard, an edit landing mid-window would silently be overwritten
+        # instead of producing 409. The delete logic is inlined (rather
+        # than calling ``_delete_detailed_summary`` which opens its own
+        # session) so the write lock is held continuously.
+        with get_search_db() as session:
+            state = _fetch_detailed_edit_state(session, file_id)
+            edited_at = state[2] if state is not None else None
+            if edited_at is not None and not force:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Detailed summary has user edits — "
+                        "pass force=true to overwrite"
+                    ),
+                )
+
+            # Clear any existing row (AI or edited) so the generation path
+            # starts from a pristine state — mirrors the DELETE + POST flow
+            # the frontend previously did in two steps. Kept in the same
+            # session as the edit-flag check above to close the TOCTOU
+            # window.
+            row = session.execute(
+                sql_text(
+                    "SELECT short_summary, long_summary FROM file_summaries "
+                    "WHERE file_id = :fid"
                 ),
+                {"fid": file_id},
+            ).fetchone()
+            if row is not None:
+                short_val = row[0] or ""
+                long_val = row[1] or ""
+                if short_val or long_val:
+                    # Keep the file_summaries row (short/long are live
+                    # data) but clear the remaining two detailed_* workflow
+                    # columns. Status is re-seeded below so the frontend's
+                    # slot never flashes "hidden" during the
+                    # regenerate→worker handoff.
+                    session.execute(
+                        sql_text(
+                            "UPDATE file_summaries SET "
+                            "detailed_status = NULL, "
+                            "detailed_error = NULL "
+                            "WHERE file_id = :fid"
+                        ),
+                        {"fid": file_id},
+                    )
+                else:
+                    # Placeholder row with no short/long content — drop it
+                    # so repeat generation starts from the pristine state.
+                    # _set_detailed_status below will INSERT OR IGNORE a
+                    # fresh placeholder carrying the 'generating' marker.
+                    session.execute(
+                        sql_text(
+                            "DELETE FROM file_summaries WHERE file_id = :fid"
+                        ),
+                        {"fid": file_id},
+                    )
+
+            # Citations are tied to the active body's section anchors so
+            # they become meaningless the moment we swap the body out.
+            # Drop them unconditionally; the next save will recompute
+            # against the new summary.
+            session.execute(
+                sql_text(
+                    "DELETE FROM detailed_summary_citations "
+                    "WHERE file_id = :fid"
+                ),
+                {"fid": file_id},
+            )
+            # FileInsight: supersede the current active row instead of
+            # deleting history. Regenerating no longer loses the
+            # pre-regenerate lineage — the old body, model metadata and
+            # edit trail remain queryable as ``status='superseded'`` rows
+            # so a future history UI can surface or restore them. The
+            # ``_save_detailed_summary`` call that follows will insert
+            # a fresh ``active`` row for the new generation.
+            session.execute(
+                sql_text(
+                    "UPDATE file_insights SET status = 'superseded' "
+                    "WHERE file_id = :fid AND kind = 'detailed_summary' "
+                    "AND status = 'active'"
+                ),
+                {"fid": file_id},
             )
 
-        # Clear any existing row (AI or edited) so the generation path
-        # starts from a pristine state — mirrors the DELETE + POST flow
-        # the frontend previously did in two steps. Kept in the same
-        # session as the edit-flag check above to close the TOCTOU
-        # window.
-        row = session.execute(
-            sql_text(
-                "SELECT short_summary, long_summary FROM file_summaries "
-                "WHERE file_id = :fid"
-            ),
-            {"fid": file_id},
-        ).fetchone()
-        if row is not None:
-            short_val = row[0] or ""
-            long_val = row[1] or ""
-            if short_val or long_val:
-                # Keep the file_summaries row (short/long are live
-                # data) but clear the remaining two detailed_* workflow
-                # columns. Status is re-seeded below so the frontend's
-                # slot never flashes "hidden" during the
-                # regenerate→worker handoff.
-                session.execute(
-                    sql_text(
-                        "UPDATE file_summaries SET "
-                        "detailed_status = NULL, "
-                        "detailed_error = NULL "
-                        "WHERE file_id = :fid"
-                    ),
-                    {"fid": file_id},
-                )
-            else:
-                # Placeholder row with no short/long content — drop it
-                # so repeat generation starts from the pristine state.
-                # _set_detailed_status below will INSERT OR IGNORE a
-                # fresh placeholder carrying the 'generating' marker.
-                session.execute(
-                    sql_text(
-                        "DELETE FROM file_summaries WHERE file_id = :fid"
-                    ),
-                    {"fid": file_id},
-                )
-
-        # Citations are tied to the active body's section anchors so
-        # they become meaningless the moment we swap the body out.
-        # Drop them unconditionally; the next save will recompute
-        # against the new summary.
-        session.execute(
-            sql_text(
-                "DELETE FROM detailed_summary_citations "
-                "WHERE file_id = :fid"
-            ),
-            {"fid": file_id},
+        # Mark the file as ``generating`` synchronously before yielding
+        # control to the background worker. Without this, the reader
+        # would see "no active insight + no workflow status" in the
+        # window between this endpoint returning and the worker's first
+        # ``_set_detailed_status('generating')`` call, causing the
+        # frontend to hide the slot entirely. With the marker in place,
+        # subsequent polls render the "generating" spinner instead.
+        from app.workers.summaries import (
+            DETAILED_STATUS_GENERATING, _set_detailed_status,
         )
-        # FileInsight: supersede the current active row instead of
-        # deleting history. Regenerating no longer loses the
-        # pre-regenerate lineage — the old body, model metadata and
-        # edit trail remain queryable as ``status='superseded'`` rows
-        # so a future history UI can surface or restore them. The
-        # ``_save_detailed_summary`` call that follows will insert
-        # a fresh ``active`` row for the new generation.
-        session.execute(
-            sql_text(
-                "UPDATE file_insights SET status = 'superseded' "
-                "WHERE file_id = :fid AND kind = 'detailed_summary' "
-                "AND status = 'active'"
-            ),
-            {"fid": file_id},
+        _set_detailed_status(
+            file_id, DETAILED_STATUS_GENERATING, model=resolved.profile.config.model,
         )
 
-    # Mark the file as ``generating`` synchronously before yielding
-    # control to the background worker. Without this, the reader
-    # would see "no active insight + no workflow status" in the
-    # window between this endpoint returning and the worker's first
-    # ``_set_detailed_status('generating')`` call, causing the
-    # frontend to hide the slot entirely. With the marker in place,
-    # subsequent polls render the "generating" spinner instead.
-    from app.workers.summaries import (
-        DETAILED_STATUS_GENERATING, _set_detailed_status,
-    )
-    _set_detailed_status(
-        file_id, DETAILED_STATUS_GENERATING, model=resolved.profile.config.model,
-    )
+    await asyncio.to_thread(_reset_and_mark_generating)
 
     # Promotion to knowledge (Phase 3) records the current note as the
     # file's active summary in core. Regenerating the AI draft

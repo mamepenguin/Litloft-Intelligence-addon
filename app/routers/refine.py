@@ -34,6 +34,7 @@ from app.workers.refine import (
     is_feature_enabled,
     realign_words_for_chunk,
     recompute_chunk_embeddings,
+    refine_chunk_ids,
     start_refine_job,
 )
 
@@ -108,17 +109,21 @@ async def refine_file(
     await _require_drive_policy(drive)
     resolved = await require_llm(drive, "transcript_refine")
 
-    with get_search_db() as session:
-        indexed = _fetch_indexed_file(session, file_id, drive)
-        if indexed is None:
-            raise HTTPException(status_code=404, detail="File not found")
+    def _read() -> tuple[int, list[int]]:
+        with get_search_db() as session:
+            indexed = _fetch_indexed_file(session, file_id, drive)
+            if indexed is None:
+                raise HTTPException(status_code=404, detail="File not found")
 
-        chunk_count = (
-            session.query(TranscriptChunk)
-            .filter(TranscriptChunk.file_id == file_id)
-            .count()
-        )
-        job_id = start_refine_job(session, file_id, resolved)
+            chunk_count = (
+                session.query(TranscriptChunk)
+                .filter(TranscriptChunk.file_id == file_id)
+                .count()
+            )
+            return chunk_count, refine_chunk_ids(session, file_id)
+
+    chunk_count, chunk_ids = await asyncio.to_thread(_read)
+    job_id = start_refine_job(file_id, chunk_ids, resolved)
 
     return {"job_id": job_id, "chunk_count": chunk_count}
 
@@ -157,8 +162,11 @@ async def refine_folder(
     await _require_drive_policy(drive)
     resolved = await require_llm(drive, "transcript_refine")
 
-    with get_search_db() as session:
-        file_ids = filter_transcript_file_ids(session, drive, raw_ids)
+    def _filter() -> list[str]:
+        with get_search_db() as session:
+            return filter_transcript_file_ids(session, drive, raw_ids)
+
+    file_ids = await asyncio.to_thread(_filter)
 
     if len(file_ids) > MAX_FOLDER_FILES:
         raise HTTPException(
@@ -175,10 +183,14 @@ async def refine_folder(
     sem = asyncio.Semaphore(FOLDER_CONCURRENCY)
     queued_ids: list[str] = []
 
+    def _chunk_ids(fid: str) -> list[int]:
+        with get_search_db() as session:
+            return refine_chunk_ids(session, fid)
+
     async def _enqueue(fid: str) -> None:
         async with sem:
-            with get_search_db() as session:
-                start_refine_job(session, fid, resolved)
+            chunk_ids = await asyncio.to_thread(_chunk_ids, fid)
+            start_refine_job(fid, chunk_ids, resolved)
             queued_ids.append(fid)
 
     if file_ids:
@@ -200,5 +212,6 @@ __all__ = [
     "refine_file",
     "refine_folder",
     "settings",
+    "refine_chunk_ids",
     "start_refine_job",
 ]

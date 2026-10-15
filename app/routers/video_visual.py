@@ -17,6 +17,7 @@ Access gates (applied in order), mirroring ``app.routers.vision``:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -127,45 +128,49 @@ async def get_visual_index(
         raise HTTPException(status_code=404, detail="Feature disabled")
     await _require_drive_policy(drive)
 
-    file_row = _fetch_indexed_file(file_id)
+    file_row = await asyncio.to_thread(_fetch_indexed_file, file_id)
     if file_row is None or getattr(file_row, "drive", None) != drive:
         raise HTTPException(status_code=404, detail="File not found")
 
     if getattr(file_row, "mime_type", None) not in VIDEO_TYPES:
         return VideoVisualIndexResponse(eligible=False, file_id=file_id)
 
-    with get_search_db_read() as session:
-        active = (
-            session.query(VideoVisualRun)
-            .filter(VideoVisualRun.file_id == file_id, VideoVisualRun.is_active.is_(True))
-            .first()
-        )
-        staged_query = session.query(VideoVisualRun).filter(
-            VideoVisualRun.file_id == file_id,
-            VideoVisualRun.status.in_(("queued", "running", "partial", "failed")),
-        )
-        if active is not None:
-            staged_query = staged_query.filter(
-                VideoVisualRun.id != active.id,
-                VideoVisualRun.created_at > active.created_at,
+    def _load_runs() -> tuple[Any, Any, list[VideoVisualSceneItem]]:
+        with get_search_db_read() as session:
+            active = (
+                session.query(VideoVisualRun)
+                .filter(VideoVisualRun.file_id == file_id, VideoVisualRun.is_active.is_(True))
+                .first()
             )
-        staged = staged_query.order_by(VideoVisualRun.created_at.desc()).first()
+            staged_query = session.query(VideoVisualRun).filter(
+                VideoVisualRun.file_id == file_id,
+                VideoVisualRun.status.in_(("queued", "running", "partial", "failed")),
+            )
+            if active is not None:
+                staged_query = staged_query.filter(
+                    VideoVisualRun.id != active.id,
+                    VideoVisualRun.created_at > active.created_at,
+                )
+            staged = staged_query.order_by(VideoVisualRun.created_at.desc()).first()
 
-        scenes: list[VideoVisualSceneItem] = []
-        if active is not None:
-            scene_rows = (
-                session.query(VideoVisualScene)
-                .filter(VideoVisualScene.run_id == active.id)
-                .order_by(VideoVisualScene.ordering)
-                .all()
-            )
-            scenes = [_scene_to_item(s) for s in scene_rows]
+            scenes: list[VideoVisualSceneItem] = []
+            if active is not None:
+                scene_rows = (
+                    session.query(VideoVisualScene)
+                    .filter(VideoVisualScene.run_id == active.id)
+                    .order_by(VideoVisualScene.ordering)
+                    .all()
+                )
+                scenes = [_scene_to_item(s) for s in scene_rows]
+        return active, staged, scenes
+
+    active, staged, scenes = await asyncio.to_thread(_load_runs)
 
     stale = False
     if active is not None:
         from app.workers.video_visual import PIPELINE_VERSION, _load_candidates
 
-        candidates, _duration = _load_candidates(file_id)
+        candidates, _duration = await asyncio.to_thread(_load_candidates, file_id)
         stale = (
             active.pipeline_version != PIPELINE_VERSION
             or compute_candidate_fingerprint(candidates) != active.candidate_fingerprint
@@ -204,7 +209,7 @@ async def generate_visual_index(
     _require_feature_available()
     await _require_drive_policy(drive)
 
-    file_row = _fetch_indexed_file(file_id)
+    file_row = await asyncio.to_thread(_fetch_indexed_file, file_id)
     if file_row is None or getattr(file_row, "drive", None) != drive:
         raise HTTPException(status_code=404, detail="File not found")
     if getattr(file_row, "mime_type", None) not in VIDEO_TYPES:
@@ -241,7 +246,7 @@ async def retry_visual_index(
     _require_feature_available()
     await _require_drive_policy(drive)
 
-    file_row = _fetch_indexed_file(file_id)
+    file_row = await asyncio.to_thread(_fetch_indexed_file, file_id)
     if file_row is None or getattr(file_row, "drive", None) != drive:
         raise HTTPException(status_code=404, detail="File not found")
 

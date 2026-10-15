@@ -275,7 +275,7 @@ class IndexManager:
 
     def get_index_status(self) -> IndexStatus:
         """Get overall indexing status from the database."""
-        with get_search_db() as session:
+        with get_search_db_read() as session:
             active_files = session.query(IndexedFile).filter(
                 IndexedFile.active.is_(True)
             )

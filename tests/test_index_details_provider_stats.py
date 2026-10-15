@@ -41,6 +41,7 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.database import Base  # noqa: E402
 from app.models import IndexedFile, JobRecord  # noqa: E402
+from tests.search_db_doubles import read_session_from  # noqa: E402
 
 
 @pytest.fixture()
@@ -84,7 +85,9 @@ def search_db(tmp_path, monkeypatch):
             s.close()
 
     monkeypatch.setattr("app.database.get_search_db", _get_search_db)
+    monkeypatch.setattr('app.database.get_search_db_read', read_session_from(_get_search_db), raising=False)
     monkeypatch.setattr("app.routers.files.get_search_db", _get_search_db, raising=False)
+    monkeypatch.setattr('app.routers.files.get_search_db_read', read_session_from(_get_search_db), raising=False)
     return Session
 
 

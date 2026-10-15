@@ -57,6 +57,7 @@ from app.routers.summaries import (  # noqa: E402
     get_detailed_summary_route,
     start_detailed_summary,
 )
+from tests.search_db_doubles import read_session_from  # noqa: E402
 
 
 @pytest.fixture()
@@ -123,8 +124,11 @@ def search_db(tmp_path, monkeypatch):
     # Both the router and the worker module bind get_search_db at
     # import-time, so patch both surfaces.
     monkeypatch.setattr("app.database.get_search_db", _get_search_db)
+    monkeypatch.setattr('app.database.get_search_db_read', read_session_from(_get_search_db), raising=False)
     monkeypatch.setattr("app.routers.summaries.get_search_db", _get_search_db)
+    monkeypatch.setattr('app.routers.summaries.get_search_db_read', read_session_from(_get_search_db), raising=False)
     monkeypatch.setattr("app.workers.summaries.get_search_db", _get_search_db)
+    monkeypatch.setattr('app.workers.summaries.get_search_db_read', read_session_from(_get_search_db), raising=False)
     return engine, Session
 
 

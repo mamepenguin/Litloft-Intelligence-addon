@@ -148,6 +148,42 @@ class TestRefineFileGating:
         assert exc.value.status_code == 404
 
     @pytest.mark.asyncio
+    async def test_job_starts_on_the_loop_with_the_files_chunks(
+        self, feature_manual, monkeypatch
+    ):
+        import asyncio
+
+        session = MagicMock()
+        session.query.return_value.filter.return_value.first.return_value = (
+            MagicMock(file_id="abc", drive="family", active=True)
+        )
+        session.query.return_value.filter.return_value.count.return_value = 2
+
+        class _Ctx:
+            def __enter__(self):
+                return session
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr("app.routers.refine.get_search_db", lambda: _Ctx())
+        monkeypatch.setattr(
+            "app.routers.refine.refine_chunk_ids",
+            lambda s, fid: [11, 12] if fid == "abc" else [],
+        )
+        started: list[tuple] = []
+
+        def _start(file_id, chunk_ids, resolved):
+            asyncio.get_running_loop()
+            started.append((file_id, chunk_ids))
+            return "job-1"
+
+        monkeypatch.setattr("app.routers.refine.start_refine_job", _start)
+
+        await refine_file(file_id="abc", drive="family")
+
+        assert started == [("abc", [11, 12])]
+
+    @pytest.mark.asyncio
     async def test_manual_mode_starts_job(self, feature_manual, monkeypatch):
         """Happy path returns a job_id and chunk_count."""
         session = MagicMock()
@@ -229,6 +265,43 @@ class TestRefineFolder:
             queued = resp.get("queued")
         assert queued == 2 or queued == ["f1", "f2"]
 
+
+    @pytest.mark.asyncio
+    async def test_folder_starts_each_job_on_the_loop_with_its_chunks(
+        self, feature_manual, monkeypatch
+    ):
+        import asyncio
+
+        monkeypatch.setattr(
+            "app.routers.refine.filter_transcript_file_ids",
+            MagicMock(return_value=["f1", "f2"]),
+        )
+
+        class _Ctx:
+            def __enter__(self):
+                return MagicMock()
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr("app.routers.refine.get_search_db", lambda: _Ctx())
+        monkeypatch.setattr(
+            "app.routers.refine.refine_chunk_ids",
+            lambda s, fid: {"f1": [1], "f2": [2, 3]}[fid],
+        )
+        started: list[tuple] = []
+
+        def _start(file_id, chunk_ids, resolved):
+            asyncio.get_running_loop()
+            started.append((file_id, chunk_ids))
+            return f"job-{file_id}"
+
+        monkeypatch.setattr("app.routers.refine.start_refine_job", _start)
+
+        await refine_folder(
+            body={"drive": "family", "file_ids": ["f1", "f2"]}, drive="family"
+        )
+
+        assert sorted(started) == [("f1", [1]), ("f2", [2, 3])]
 
     @pytest.mark.asyncio
     async def test_folder_resolves_the_request_drive_before_starting(

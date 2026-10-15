@@ -885,7 +885,9 @@ async def _run_hierarchical_retrieval(
     # ``[keywords]`` so the downstream loop runs the equivalent of the
     # legacy single-keyword path without any branching here.
     clue_count = max(1, cfg.clue_count)
-    summary_map = fetch_long_summaries(list(filtered_shortlist.file_ids))
+    summary_map = await asyncio.to_thread(
+        fetch_long_summaries, list(filtered_shortlist.file_ids)
+    )
     summaries = [
         summary_map[fid]
         for fid in filtered_shortlist.file_ids
@@ -1248,7 +1250,9 @@ async def _answer_question(
         )
 
     # Stage 2: build per-file contexts under budget.
-    contexts = assemble_contexts(candidates, rag_config, query=query)
+    contexts = await asyncio.to_thread(
+        assemble_contexts, candidates, rag_config, query=query
+    )
 
     # Stage 3: LLM call.
     llm = llm_routing.bound_client()
@@ -1280,9 +1284,12 @@ async def _answer_question(
             took_ms=int((time.monotonic() - start) * 1000),
         )
 
-    citations = [
-        _to_citation_dict(c, candidates, contexts=contexts) for c in parsed.citations
-    ]
+    citations = await asyncio.to_thread(
+        lambda: [
+            _to_citation_dict(c, candidates, contexts=contexts)
+            for c in parsed.citations
+        ]
+    )
 
     return AnswerResponse(
         query=query,
@@ -1694,7 +1701,9 @@ async def _stream_answer(
         return
 
     # Stage 2: build per-file contexts under budget.
-    contexts = assemble_contexts(candidates, rag_config, query=query)
+    contexts = await asyncio.to_thread(
+        assemble_contexts, candidates, rag_config, query=query
+    )
 
     # Stage 3: stream the LLM answer.
     llm = llm_routing.bound_client()
@@ -1749,7 +1758,8 @@ async def _stream_answer(
                         kind="answer_chunk", data={"delta": cleaned}
                     )
             for raw in citation_extractor.feed(delta):
-                event = _build_progressive_citation_event(
+                event = await asyncio.to_thread(
+                    _build_progressive_citation_event,
                     raw,
                     allowed,
                     candidates,
@@ -1779,7 +1789,8 @@ async def _stream_answer(
         # streams but may return late objects in future tolerant-parse
         # modes. Apply the same hallucination filter + dedup gate.
         for raw in citation_extractor.finalize():
-            event = _build_progressive_citation_event(
+            event = await asyncio.to_thread(
+                _build_progressive_citation_event,
                 raw,
                 allowed,
                 candidates,
@@ -1810,9 +1821,12 @@ async def _stream_answer(
     if parsed is None:
         citations: list[dict[str, Any]] = []
     else:
-        citations = [
-            _to_citation_dict(c, candidates, contexts=contexts) for c in parsed.citations
-        ]
+        citations = await asyncio.to_thread(
+            lambda: [
+                _to_citation_dict(c, candidates, contexts=contexts)
+                for c in parsed.citations
+            ]
+        )
 
     yield AnswerEvent(kind="citations", data={"citations": citations})
     yield _empty_done_event(

@@ -363,7 +363,7 @@ def _patch_db(monkeypatch, *, rows):
     def _get_search_db():
         yield session
 
-    monkeypatch.setattr(cg_mod, "get_search_db", _get_search_db)
+    monkeypatch.setattr(cg_mod, "get_search_db_read", _get_search_db)
     return session
 
 
@@ -397,10 +397,10 @@ class TestFetchLongSummaries:
         # No DB call — fast path.
         @contextmanager
         def _should_not_be_called():
-            raise AssertionError("get_search_db must not be invoked")
+            raise AssertionError("get_search_db_read must not be invoked")
             yield  # pragma: no cover
 
-        monkeypatch.setattr(cg_mod, "get_search_db", _should_not_be_called)
+        monkeypatch.setattr(cg_mod, "get_search_db_read", _should_not_be_called)
 
         result = fetch_long_summaries([])
 

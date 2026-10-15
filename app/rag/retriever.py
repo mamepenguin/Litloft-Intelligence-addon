@@ -31,7 +31,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.credentials import CallerCredential
-from app.database import get_search_db
+from app.database import get_search_db_read
 from app.models import IndexedFile
 from app.rag.query_transform import (  # re-export
     RequiredTerm,
@@ -233,7 +233,7 @@ def _get_indexed_files_meta(file_ids: list[str]) -> dict[str, dict]:
     if not file_ids:
         return {}
 
-    with get_search_db() as session:
+    with get_search_db_read() as session:
         rows = (
             session.query(IndexedFile)
             .filter(IndexedFile.file_id.in_(file_ids))
@@ -405,8 +405,8 @@ async def retrieve_with_keywords(
     if not allowed_results:
         return []
 
-    meta_by_id = _get_indexed_files_meta(
-        [r.file_id for r in allowed_results]
+    meta_by_id = await asyncio.to_thread(
+        _get_indexed_files_meta, [r.file_id for r in allowed_results]
     )
 
     return [

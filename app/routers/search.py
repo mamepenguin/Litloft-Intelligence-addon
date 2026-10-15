@@ -139,7 +139,8 @@ async def search_compare_endpoint(
 ) -> CompareResponseModel:
     """Compare RRF vs cosine-similarity scoring side by side."""
     try:
-        compare = execute_search_compare(
+        compare = await run_in_threadpool(
+            execute_search_compare,
             query=q, limit=limit, file_type=type, drive=drive,
         )
     except Exception as e:
