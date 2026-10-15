@@ -419,14 +419,30 @@ def test_spec_addon_021_a_matching_rule_version_changes_nothing(idx):
     assert _meta(idx) == [(api.rules_version(),)]
 
 
-def test_spec_addon_021_a_failing_rule_version_check_changes_neither_flags_nor_version(idx):
-    assert api.rules_version() != "an-older-version"
-    _seed_indexed(idx)
+def _fail_the_version_write(idx):
     idx.sql(
         "CREATE TABLE index_meta (key TEXT PRIMARY KEY, "
         "value TEXT CHECK (value = 'an-older-version'))"
     )
     idx.sql("INSERT INTO index_meta VALUES ('idf_term_rules', 'an-older-version')")
+
+
+def _fail_the_flag_reset(idx):
+    idx.sql("CREATE TABLE index_meta (key TEXT PRIMARY KEY, value TEXT)")
+    idx.sql("INSERT INTO index_meta VALUES ('idf_term_rules', 'an-older-version')")
+    idx.sql(
+        "CREATE TRIGGER fail_reset BEFORE UPDATE ON indexed_files "
+        "BEGIN SELECT RAISE(ABORT, 'reset failed'); END"
+    )
+
+
+@pytest.mark.parametrize("fault", [_fail_the_version_write, _fail_the_flag_reset])
+def test_spec_addon_021_a_failing_rule_version_check_changes_neither_flags_nor_version(
+    idx, fault,
+):
+    assert api.rules_version() != "an-older-version"
+    _seed_indexed(idx)
+    fault(idx)
 
     with contextlib.suppress(Exception):
         api.check_rules()

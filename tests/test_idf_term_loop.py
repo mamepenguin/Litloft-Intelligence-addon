@@ -275,3 +275,70 @@ async def test_spec_addon_021_cancelling_the_loop_terminates_its_child(
     assert no_children(timeout=5)
     assert idx.state("k1") == (False, 0)
     assert idx.terms("k1") == set()
+
+
+@pytest.mark.asyncio
+async def test_spec_addon_021_cancelling_the_loop_mid_pass_starts_no_later_batch(
+    idx, fast, monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(tfidf, "_TOKENIZER_FACTORY", MarkerTokenizer)
+    monkeypatch.setattr(tfidf, "_CORPUS_BATCH_FILES", 1)
+    spawned: list[int] = []
+
+    class CountingChild(tfidf.TokenizerChild):
+        def __init__(self):
+            spawned.append(1)
+            super().__init__()
+
+    monkeypatch.setattr(tfidf, "TokenizerChild", CountingChild)
+    gate = Path(tmp_path)
+    idx.add_file("k1", transcript="GATEWORD " + WORDS)
+    idx.add_file("k2", transcript=RARE)
+    idx.add_file("k3", transcript=RARE)
+
+    task = asyncio.create_task(api.run_loop())
+    assert await _until(lambda: (gate / "entered").exists())
+    task.cancel()
+    with contextlib.suppress(BaseException):
+        await asyncio.wait_for(task, timeout=5)
+    await asyncio.sleep(2.0)
+
+    assert len(spawned) == 1
+    assert no_children(timeout=5)
+    assert [idx.state(f) for f in ("k1", "k2", "k3")] == [(False, 0)] * 3
+
+
+@pytest.mark.asyncio
+async def test_spec_addon_021_the_loop_goes_idle_after_the_pass_a_request_caused(idx, fast):
+    idx.add_file("k1", transcript=WORDS)
+
+    async with _loop():
+        assert await _until(lambda: idx.state("k1")[0])
+        api.request()
+        assert await _until(lambda: not api.request_pending())
+        await asyncio.sleep(0.5)
+        assert not api.request_pending()
+
+
+@pytest.mark.asyncio
+async def test_spec_addon_021_startup_checks_the_rules_first_and_shutdown_ends_the_backfill(
+    idx, fast, monkeypatch, tmp_path,
+):
+    from app import main
+
+    monkeypatch.setattr(
+        "app.database._resolve_search_db_path", lambda: Path(str(idx.engine.url.database)),
+    )
+    idx.sql("DROP TABLE vec_text")
+    monkeypatch.setattr(main, "init_litloft_db", lambda: None)
+    monkeypatch.setattr(tfidf, "_TOKENIZER_FACTORY", MarkerTokenizer)
+    gate = Path(tmp_path)
+    idx.add_file("k1", transcript="GATEWORD " + WORDS, indexed=True)
+
+    async with main.lifespan(main.app):
+        assert await _until(lambda: (gate / "entered").exists())
+        assert multiprocessing.active_children()
+
+    assert no_children(timeout=5)
+    assert idx.state("k1") == (False, 0)
+    assert idx.terms("k1") == set()

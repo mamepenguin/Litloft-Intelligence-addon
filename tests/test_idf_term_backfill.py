@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from pathlib import Path
 
 import pytest
 
-from app import database, tfidf
+from app import database, dependencies, tfidf
 from app.models import Embedding
 from tests import idf_backfill_api as api
 from tests.idf_doubles import ExplodingTokenizer, MarkerTokenizer
@@ -398,3 +399,61 @@ def test_spec_addon_021_the_backfill_leaves_embeddings_and_keyword_flags_alone(i
         idx.rows("SELECT * FROM embeddings"),
         idx.rows("SELECT * FROM vec_text"),
     ) == before
+
+
+def test_spec_addon_021_a_change_committed_while_the_inputs_are_read_is_not_written_as_current(
+    idx, monkeypatch,
+):
+    idx.add_file("k1", transcript=WORDS)
+    read = tfidf._get_transcript_text
+    changed: list[str] = []
+
+    def read_then_change(session, file_id):
+        text = read(session, file_id)
+        if not changed:
+            changed.append(file_id)
+            _change_inputs(idx)
+        return text
+
+    monkeypatch.setattr(tfidf, "_get_transcript_text", read_then_change)
+    api.run_pass()
+
+    assert changed == ["k1"]
+    assert idx.state("k1") == (False, 1)
+    assert idx.terms("k1") == set()
+
+    api.run_pass()
+
+    assert idx.state("k1") == (True, 1)
+    assert idx.terms("k1") == idx.term_set("k1")
+    assert "共通語" not in idx.terms("k1")
+
+
+def test_spec_addon_021_a_paused_queue_holds_the_one_file_at_a_time_retry(
+    idx, monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(tfidf, "_TOKENIZER_FACTORY", MarkerTokenizer)
+    gate = Path(tmp_path)
+    idx.add_file("k1", transcript="GATEWORD " + WORDS)
+    idx.add_file("k2", transcript="BOOMWORD " + RARE)
+    idx.add_file("k3", transcript=RARE)
+    manager = dependencies.get_index_manager()
+
+    runner, out = _run_in_thread(api.run_pass)
+    assert wait_for(lambda: (gate / "entered").exists())
+    manager.pause()
+    (gate / "release").touch()
+    time.sleep(2.0)
+
+    assert idx.state("k1") == (False, 0)
+    assert idx.state("k3") == (False, 0)
+    assert runner.is_alive()
+
+    manager.resume()
+    runner.join(timeout=30)
+
+    assert "error" not in out, out.get("error")
+    assert idx.state("k1") == (True, 0)
+    assert idx.state("k3") == (True, 0)
+    assert idx.state("k2") == (False, 0)
+    assert no_children()
