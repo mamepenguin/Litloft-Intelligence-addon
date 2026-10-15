@@ -5,6 +5,7 @@ without the 100MB model. The pure scoring paths (_tfidf_vector,
 _top_keywords_with_scores, IDF filters) are what these tests exercise.
 """
 
+import math
 import threading
 import time
 from unittest.mock import MagicMock
@@ -266,6 +267,13 @@ class TestCorpusIdfCache:
         tfidf.reset_corpus_idf_cache()
 
 
+def test_document_frequency_counts_a_word_once_per_document():
+    idf = tfidf._compute_idf({"x": ["料理", "料理", "旅行"], "y": ["料理"]})
+
+    assert idf["料理"] == pytest.approx(1.0)
+    assert idf["旅行"] == pytest.approx(math.log(2) + 1.0)
+
+
 class TestCorpusIdfRebuildIsSingleFlight:
     """One rebuild per drive at a time; the others do not pile up behind it."""
 
@@ -306,20 +314,44 @@ class TestCorpusIdfRebuildIsSingleFlight:
         thread.start()
         return thread, out
 
-    def test_a_stale_idf_is_served_while_another_caller_rebuilds(self, monkeypatch):
-        tfidf._corpus_idf_by_drive["d"] = ({"旧": 1.0}, 3, time.monotonic() - 10_000)
+    @staticmethod
+    def _wait_for_no_build(drive):
+        deadline = time.monotonic() + 5
+        while drive in tfidf._corpus_builds and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert drive not in tfidf._corpus_builds
+
+    def test_a_stale_idf_is_served_at_once_and_rebuilt_in_the_background(
+        self, monkeypatch,
+    ):
+        stale = ({"旧": 1.0}, 3)
+        tfidf._corpus_idf_by_drive["d"] = (*stale, time.monotonic() - 10_000)
         started, release, calls = self._blocking_build(monkeypatch)
 
-        owner, owner_out = self._call_in_thread("d")
-        assert started.wait(timeout=5)
         try:
-            assert tfidf._get_corpus_idf("d") == ({"旧": 1.0}, 3)
+            assert tfidf._get_corpus_idf("d") == stale
+            assert started.wait(timeout=5)
+            assert tfidf._get_corpus_idf("d") == stale
         finally:
             release.set()
-            owner.join(timeout=5)
+        self._wait_for_no_build("d")
 
         assert calls == ["d"]
-        assert owner_out["value"] == ({"新": 2.0}, 7)
+        assert tfidf._get_corpus_idf("d") == ({"新": 2.0}, 7)
+
+    def test_a_failed_background_rebuild_keeps_the_stale_idf(self, monkeypatch):
+        stale = ({"旧": 1.0}, 3)
+        tfidf._corpus_idf_by_drive["d"] = (*stale, time.monotonic() - 10_000)
+        started, release, calls = self._blocking_build(monkeypatch, fail_first=True)
+
+        assert tfidf._get_corpus_idf("d") == stale
+        assert started.wait(timeout=5)
+        release.set()
+        self._wait_for_no_build("d")
+
+        assert tfidf._get_corpus_idf("d") == stale
+        self._wait_for_no_build("d")
+        assert calls == ["d", "d"]
         assert tfidf._get_corpus_idf("d") == ({"新": 2.0}, 7)
 
     def test_a_caller_with_no_idf_waits_for_the_build_in_flight(self, monkeypatch):

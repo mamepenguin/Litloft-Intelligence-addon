@@ -16,6 +16,7 @@ surface while tagging a file in drive A.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import sys
 from contextlib import contextmanager
@@ -317,15 +318,66 @@ def test_document_frequency_counts_only_the_drives_own_files(index, monkeypatch)
     tfidf_mod.reset_corpus_idf_cache()
 
 
-def test_the_corpus_is_tokenized_outside_this_process(index, monkeypatch):
+def _put_file(index, file_id: str, filename: str, *, active: bool = True) -> None:
+    session = index._maker()
+    try:
+        session.add(IndexedFile(
+            file_id=file_id, drive="a", filename=filename,
+            file_path=f"/drives/a/{filename}", file_type="video",
+            mime_type="video/mp4", file_size=1, active=active,
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_the_idf_counts_every_batch_and_only_active_files_with_words(
+    index, monkeypatch,
+):
+    monkeypatch.setattr(tfidf_mod, "_CORPUS_BATCH_FILES", 2)
+    monkeypatch.setattr(tfidf_mod, "_TOKENIZER_FACTORY", WordTokenizer)
+    for fid, filename, words in [
+        ("k1", "1.mp4", "共通語 " * 10),
+        ("k2", "2.mp4", "共通語 " * 10),
+        ("k3", "3.mp4", "珍語 " * 10),
+        ("k4", "題名.mp4", None),
+        ("k5", "5.mp4", "短い"),
+    ]:
+        _put_file(index, fid, filename)
+        if words is not None:
+            _say(index, fid, words)
+    _put_file(index, "k6", "6.mp4", active=False)
+    _say(index, "k6", "共通語 " * 10)
+
+    idf, n_docs = tfidf_mod._build_corpus_idf("a")
+
+    assert n_docs == 4
+    assert idf == pytest.approx({
+        "共通語": math.log(2) + 1.0,
+        "珍語": math.log(4) + 1.0,
+        "題名": math.log(4) + 1.0,
+    })
+
+
+def test_the_corpus_is_tokenized_in_a_spawned_process(index, monkeypatch):
     """Tokenizing a drive takes minutes of pure-Python CPU; inside this
-    process it would hold the GIL against every thread that reads rows."""
+    process it would hold the GIL against every thread that reads rows.
+    A fork would copy locks other threads hold at that instant."""
     index.add_file("a1", "a", distance=None)
     _say(index, "a1", "共通語 " * 10)
     monkeypatch.setattr(tfidf_mod, "_TOKENIZER_FACTORY", PidTokenizer)
+    methods = []
+    real_get_context = tfidf_mod.multiprocessing.get_context
+
+    def recording_get_context(method=None):
+        methods.append(method)
+        return real_get_context(method)
+
+    monkeypatch.setattr(tfidf_mod.multiprocessing, "get_context", recording_get_context)
 
     idf, _ = tfidf_mod._build_corpus_idf("a")
 
     pid_tokens = {t for t in idf if t.startswith("pid")}
     assert pid_tokens
     assert f"pid{os.getpid()}" not in pid_tokens
+    assert methods == ["spawn"]

@@ -670,11 +670,12 @@ def _get_corpus_idf(
 ) -> tuple[dict[str, float], int]:
     """Return a cached per-drive IDF + doc count, rebuilding if stale.
 
-    A drive has at most one rebuild in flight. While it runs, callers
-    get the stale IDF when there is one, and wait for the rebuild only
-    when there is nothing to serve. A rebuild takes minutes, so letting
-    every caller start its own multiplied the CPU spent on it. If the
-    rebuild a caller waited for fails, that caller tries one itself.
+    A drive has at most one rebuild in flight. When a stale IDF exists,
+    every caller gets it at once and the rebuild runs on a background
+    thread. Only a caller with nothing to serve waits, building itself
+    when no rebuild is in flight or the one it waited for failed. A
+    rebuild takes minutes, so letting every caller start its own
+    multiplied the CPU spent on it.
     """
     while True:
         with _corpus_cache_lock:
@@ -687,11 +688,20 @@ def _get_corpus_idf(
             if fresh:
                 return cached[0], cached[1]
             in_flight = _corpus_builds.get(drive)
+            serve_stale = cached is not None and not force_reload
             if in_flight is None:
                 done = threading.Event()
                 _corpus_builds[drive] = done
+                if serve_stale:
+                    threading.Thread(
+                        target=_rebuild_in_background,
+                        args=(drive, done),
+                        name=f"corpus-idf-{drive}",
+                        daemon=True,
+                    ).start()
+                    return cached[0], cached[1]
                 break
-            if cached is not None and not force_reload:
+            if serve_stale:
                 return cached[0], cached[1]
         in_flight.wait()
         with _corpus_cache_lock:
@@ -699,6 +709,10 @@ def _get_corpus_idf(
             if cached is not None and _corpus_builds.get(drive) is None:
                 return cached[0], cached[1]
 
+    return _rebuild(drive, done)
+
+
+def _rebuild(drive: str, done: threading.Event) -> tuple[dict[str, float], int]:
     try:
         logger.info(
             "Rebuilding corpus IDF for TF-IDF keyword extraction (drive=%s)",
@@ -714,6 +728,17 @@ def _get_corpus_idf(
         with _corpus_cache_lock:
             del _corpus_builds[drive]
         done.set()
+
+
+def _rebuild_in_background(drive: str, done: threading.Event) -> None:
+    try:
+        _rebuild(drive, done)
+    except Exception:
+        logger.exception(
+            "Corpus IDF rebuild failed (drive=%s); the stale IDF stays "
+            "until the next attempt",
+            drive,
+        )
 
 
 def reset_corpus_idf_cache() -> None:
