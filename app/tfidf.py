@@ -18,9 +18,8 @@ import re
 import threading
 import time
 from collections import Counter
-from collections.abc import Iterator
-from concurrent.futures import Executor, ProcessPoolExecutor
-from contextlib import contextmanager
+
+from sqlalchemy import text as sql_text
 
 from app.database import get_search_db, get_search_db_read
 from app.models import IndexedFile, TranscriptChunk
@@ -28,11 +27,9 @@ from app.models import IndexedFile, TranscriptChunk
 logger = logging.getLogger(__name__)
 
 # --- Corpus IDF cache for single-file keyword extraction ---
-# The cache is invalidated on a time-based TTL. Rebuilding IDF
-# means tokenizing every indexed file's transcript+filename, so a
-# per-call rebuild is prohibitive during batch auto-tagging. A 10
-# minute window gives new files a chance to appear in IDF without
-# pinning stale counts across long-running sessions.
+# Batch auto-tagging asks for the same drive's IDF once per file, so the
+# aggregate is cached; the TTL bounds staleness the backfill does not
+# report through drop_corpus_idf.
 _IDF_CACHE_TTL_SECONDS = 600
 
 _corpus_cache_lock = threading.Lock()
@@ -43,6 +40,9 @@ _corpus_cache_lock = threading.Lock()
 _corpus_idf_by_drive: dict[str, tuple[dict[str, float], int, float]] = {}
 #: drive -> set when its rebuild in flight ends, successfully or not.
 _corpus_builds: dict[str, threading.Event] = {}
+#: drive -> bumped by drop_corpus_idf; a rebuild caches its result only
+#: when the epoch it started under is still current.
+_corpus_epochs: dict[str, int] = {}
 
 # Files per message to the tokenizer process: big enough that pickling
 # is noise next to tokenizing, small enough not to copy a whole drive's
@@ -566,61 +566,100 @@ def _janome_tokenizer():
 #: Called in the tokenizer process; a module-level name so it pickles.
 _TOKENIZER_FACTORY = _janome_tokenizer
 
-_child_tokenizer = None
+#: Bump whenever ``_document_tokens`` would give a different output for the
+#: same input (stopwords, POS filter, filename boost, tokenizer). Stored term
+#: sets were made under the recorded version; a mismatch at startup flags
+#: every file for re-tokenization.
+IDF_TERM_RULES_VERSION = "1"
 
 
-def _load_child_tokenizer(factory) -> None:
-    global _child_tokenizer
-    _child_tokenizer = factory()
+class TokenizerChildFailed(Exception):
+    """The tokenizer process died, raised, or ran past its time limit."""
 
 
-def _count_document_frequencies(
-    docs: list[tuple[str, str]],
-) -> tuple[Counter, int]:
-    """Document frequency over ``(filename, transcript)`` pairs.
+def _tokenizer_child_main(conn, factory) -> None:
+    tokenizer = factory()
+    while True:
+        try:
+            docs = conn.recv()
+        except EOFError:
+            return
+        try:
+            result = [
+                sorted(set(_document_tokens(filename, transcript, tokenizer)))
+                for filename, transcript in docs
+            ]
+        except Exception as exc:  # noqa: BLE001 — reported to the parent
+            conn.send(("error", repr(exc)))
+        else:
+            conn.send(("ok", result))
 
-    Runs in the tokenizer process. Returns the counts and how many
-    documents produced any token, which is the IDF's document count.
+
+class TokenizerChild:
+    """A spawned process holding a tokenizer, which the parent can terminate.
+
+    Spawned rather than forked: the parent runs model and DB threads, and
+    a fork copies whatever locks they hold at that instant. Not a
+    ``ProcessPoolExecutor``: its worker cannot be killed while it runs.
     """
-    doc_freq: Counter = Counter()
-    n_docs = 0
-    for filename, transcript in docs:
-        tokens = _document_tokens(filename, transcript, _child_tokenizer)
-        if tokens:
-            n_docs += 1
-            doc_freq.update(set(tokens))
-    return doc_freq, n_docs
+
+    def __init__(self) -> None:
+        ctx = multiprocessing.get_context("spawn")
+        self._conn, child_conn = ctx.Pipe()
+        self._process = ctx.Process(
+            target=_tokenizer_child_main,
+            args=(child_conn, _TOKENIZER_FACTORY),
+            daemon=True,
+        )
+        self._process.start()
+        child_conn.close()
+
+    def term_sets(
+        self, docs: list[tuple[str, str]], timeout: float,
+    ) -> list[list[str]]:
+        """Distinct ``_document_tokens`` of each ``(filename, transcript)``."""
+        try:
+            self._conn.send(docs)
+            if not self._conn.poll(timeout):
+                raise TokenizerChildFailed(f"no answer within {timeout:g} s")
+            status, payload = self._conn.recv()
+        except (EOFError, OSError, ValueError) as exc:
+            raise TokenizerChildFailed(f"the process ended: {exc!r}") from exc
+        if status != "ok":
+            raise TokenizerChildFailed(payload)
+        return payload
+
+    def stop_process(self) -> None:
+        """End the process. Safe from another thread while ``term_sets`` waits:
+        the pipe stays open, so the waiting call sees the end and raises."""
+        if self._process.is_alive():
+            self._process.terminate()
+            self._process.join(5)
+        if self._process.is_alive():
+            self._process.kill()
+            self._process.join(5)
+
+    def terminate(self) -> None:
+        self.stop_process()
+        self._conn.close()
 
 
-@contextmanager
-def _tokenizer_process() -> Iterator[Executor]:
-    """One child process holding a tokenizer, for the length of a build.
-
-    Spawned rather than forked: the parent runs model and DB threads,
-    and a fork copies whatever locks they hold at that instant.
-    """
-    pool = ProcessPoolExecutor(
-        max_workers=1,
-        mp_context=multiprocessing.get_context("spawn"),
-        initializer=_load_child_tokenizer,
-        initargs=(_TOKENIZER_FACTORY,),
-    )
-    try:
-        yield pool
-    finally:
-        pool.shutdown(cancel_futures=True)
+_IDF_AGGREGATE_SQL = sql_text(
+    "WITH docs AS ("
+    "  SELECT t.file_id, t.term FROM idf_doc_terms t"
+    "  JOIN indexed_files f ON f.file_id = t.file_id"
+    "  WHERE f.active = 1 AND f.drive = :drive"
+    ") "
+    "SELECT term, COUNT(*), (SELECT COUNT(DISTINCT file_id) FROM docs) "
+    "FROM docs GROUP BY term"
+)
 
 
 def _build_corpus_idf(drive: str) -> tuple[dict[str, float], int]:
-    """Build IDF over one drive's active files (transcripts + filenames).
+    """Build IDF over one drive's active files from their stored term sets.
 
-    Covers every indexable file type (video/audio/document), not just
-    video, so the resulting IDF is meaningful for any caller. The
-    tokenizing happens in a child process: it is minutes of pure-Python
-    CPU on a large drive, and in this process it would take the GIL
-    from every thread that steps through SQLite rows, slowing each of
-    them by orders of magnitude. The child exits when the build ends,
-    so Janome's ~100MB is not kept between builds.
+    One statement, so the document frequencies and the document count
+    come from the same snapshot.
 
     Args:
         drive: Only this drive's files contribute to the counts.
@@ -631,36 +670,11 @@ def _build_corpus_idf(drive: str) -> tuple[dict[str, float], int]:
         a minimum-document-frequency filter into an IDF upper bound.
     """
     with get_search_db_read() as session:
-        files = (
-            session.query(
-                IndexedFile.file_id, IndexedFile.filename
-            )
-            .filter(
-                IndexedFile.active.is_(True),
-                IndexedFile.drive == drive,
-            )
-            .all()
-        )
-
-    if not files:
+        rows = session.execute(_IDF_AGGREGATE_SQL, {"drive": drive}).all()
+    if not rows:
         return {}, 0
-
-    doc_freq: Counter = Counter()
-    n_docs = 0
-    with _tokenizer_process() as pool:
-        for start in range(0, len(files), _CORPUS_BATCH_FILES):
-            batch = files[start:start + _CORPUS_BATCH_FILES]
-            with get_search_db_read() as session:
-                docs = [
-                    (fname, _get_transcript_text(session, fid))
-                    for fid, fname in batch
-                ]
-            batch_freq, batch_docs = pool.submit(
-                _count_document_frequencies, docs
-            ).result()
-            doc_freq.update(batch_freq)
-            n_docs += batch_docs
-
+    n_docs = int(rows[0][2])
+    doc_freq = Counter({term: int(df) for term, df, _ in rows})
     return _idf_from_doc_freq(doc_freq, n_docs), n_docs
 
 
@@ -714,15 +728,14 @@ def _get_corpus_idf(
 
 def _rebuild(drive: str, done: threading.Event) -> tuple[dict[str, float], int]:
     try:
-        logger.info(
-            "Rebuilding corpus IDF for TF-IDF keyword extraction (drive=%s)",
-            drive,
-        )
+        with _corpus_cache_lock:
+            epoch = _corpus_epochs.get(drive, 0)
         new_idf, new_n_docs = _build_corpus_idf(drive)
         with _corpus_cache_lock:
-            _corpus_idf_by_drive[drive] = (
-                new_idf, new_n_docs, time.monotonic(),
-            )
+            if _corpus_epochs.get(drive, 0) == epoch:
+                _corpus_idf_by_drive[drive] = (
+                    new_idf, new_n_docs, time.monotonic(),
+                )
         return new_idf, new_n_docs
     finally:
         with _corpus_cache_lock:
@@ -739,6 +752,19 @@ def _rebuild_in_background(drive: str, done: threading.Event) -> None:
             "until the next attempt",
             drive,
         )
+
+
+def drop_corpus_idf(drives) -> None:
+    """Forget the cached IDF of ``drives`` after their term rows changed.
+
+    A build of one of them already in flight read the rows before the
+    change, so it returns its result to its own caller but does not
+    cache it.
+    """
+    with _corpus_cache_lock:
+        for drive in drives:
+            _corpus_idf_by_drive.pop(drive, None)
+            _corpus_epochs[drive] = _corpus_epochs.get(drive, 0) + 1
 
 
 def reset_corpus_idf_cache() -> None:

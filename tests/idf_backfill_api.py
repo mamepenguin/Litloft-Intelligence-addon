@@ -7,31 +7,31 @@ implementation means editing this file only; no assertion lives here.
 
 from __future__ import annotations
 
-from app import database, tfidf
+from app import database, idf_backfill, tfidf
 
 
 def run_pass() -> None:
     """One backfill pass, synchronously, on the calling thread."""
-    tfidf.run_idf_backfill_pass()
+    idf_backfill.run_idf_backfill_pass()
 
 
 async def run_loop() -> None:
     """The per-process backfill loop the lifespan starts."""
-    await tfidf.idf_backfill_loop()
+    await idf_backfill.idf_backfill_loop()
 
 
 def request() -> None:
-    tfidf.request_idf_backfill()
+    idf_backfill.request_idf_backfill()
 
 
 def request_pending() -> bool:
-    return tfidf.idf_backfill_requested()
+    return idf_backfill.idf_backfill_requested()
 
 
 def reset_state() -> None:
     """Forget the request flag and the files held after failing on their own,
     as a fresh process would."""
-    tfidf.reset_idf_backfill_state()
+    idf_backfill.reset_idf_backfill_state()
 
 
 def rules_version() -> str:
@@ -53,8 +53,8 @@ def set_timings(
     """Shorten the 300 s child limit, the 5 s coalescing wait and the 60 s
     retry wait."""
     if child_timeout is not None:
-        monkeypatch.setattr(tfidf, "_IDF_BACKFILL_CHILD_TIMEOUT_SECONDS", child_timeout)
+        monkeypatch.setattr(idf_backfill, "_IDF_BACKFILL_CHILD_TIMEOUT_SECONDS", child_timeout)
     if coalesce is not None:
-        monkeypatch.setattr(tfidf, "_IDF_BACKFILL_COALESCE_SECONDS", coalesce)
+        monkeypatch.setattr(idf_backfill, "_IDF_BACKFILL_COALESCE_SECONDS", coalesce)
     if retry is not None:
-        monkeypatch.setattr(tfidf, "_IDF_BACKFILL_RETRY_SECONDS", retry)
+        monkeypatch.setattr(idf_backfill, "_IDF_BACKFILL_RETRY_SECONDS", retry)

@@ -34,6 +34,7 @@ from sqlalchemy import text as sql_text
 
 import app.config as config
 from app.database import get_search_db, get_search_db_read, upsert_fts_transcripts
+from app.idf_backfill import mark_idf_terms_stale
 from app.llm_routing import Resolved
 from app.models import Embedding, IndexedFile, TranscriptChunk, TranscriptWord
 from app.prompt_loader import render
@@ -382,6 +383,7 @@ def rechunk_from_words(
         session.delete(emb)
 
     session.query(TranscriptChunk).filter_by(file_id=file_id).delete()
+    mark_idf_terms_stale(session, file_id)
     session.flush()
 
     now = datetime.now(UTC)
@@ -803,6 +805,7 @@ async def _run_refine_job(
                                     aligner_skipped_total += 1
                                 applied_ids.append(int(orm.id))
                             _reindex_keywords(session, file_id)
+                            mark_idf_terms_stale(session, file_id)
                         return applied_ids
 
                     applied_ids = await asyncio.to_thread(_apply)
