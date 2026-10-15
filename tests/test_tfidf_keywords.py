@@ -5,6 +5,8 @@ without the 100MB model. The pure scoring paths (_tfidf_vector,
 _top_keywords_with_scores, IDF filters) are what these tests exercise.
 """
 
+import threading
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -262,3 +264,112 @@ class TestCorpusIdfCache:
         tfidf._get_corpus_idf("d", force_reload=True)
         assert len(build_calls) == 2
         tfidf.reset_corpus_idf_cache()
+
+
+class TestCorpusIdfRebuildIsSingleFlight:
+    """One rebuild per drive at a time; the others do not pile up behind it."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_cache(self):
+        tfidf.reset_corpus_idf_cache()
+        yield
+        tfidf.reset_corpus_idf_cache()
+
+    @staticmethod
+    def _blocking_build(monkeypatch, result=({"新": 2.0}, 7), fail_first=False):
+        started = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def fake_build(drive):
+            calls.append(drive)
+            started.set()
+            assert release.wait(timeout=10)
+            if fail_first and len(calls) == 1:
+                raise RuntimeError("build failed")
+            return result
+
+        monkeypatch.setattr(tfidf, "_build_corpus_idf", fake_build)
+        return started, release, calls
+
+    @staticmethod
+    def _call_in_thread(drive):
+        out = {}
+
+        def run():
+            try:
+                out["value"] = tfidf._get_corpus_idf(drive)
+            except Exception as exc:
+                out["error"] = exc
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        return thread, out
+
+    def test_a_stale_idf_is_served_while_another_caller_rebuilds(self, monkeypatch):
+        tfidf._corpus_idf_by_drive["d"] = ({"旧": 1.0}, 3, time.monotonic() - 10_000)
+        started, release, calls = self._blocking_build(monkeypatch)
+
+        owner, owner_out = self._call_in_thread("d")
+        assert started.wait(timeout=5)
+        try:
+            assert tfidf._get_corpus_idf("d") == ({"旧": 1.0}, 3)
+        finally:
+            release.set()
+            owner.join(timeout=5)
+
+        assert calls == ["d"]
+        assert owner_out["value"] == ({"新": 2.0}, 7)
+        assert tfidf._get_corpus_idf("d") == ({"新": 2.0}, 7)
+
+    def test_a_caller_with_no_idf_waits_for_the_build_in_flight(self, monkeypatch):
+        started, release, calls = self._blocking_build(monkeypatch)
+
+        owner, owner_out = self._call_in_thread("d")
+        assert started.wait(timeout=5)
+        waiter, waiter_out = self._call_in_thread("d")
+        waiter.join(timeout=0.2)
+        assert waiter.is_alive()
+
+        release.set()
+        owner.join(timeout=5)
+        waiter.join(timeout=5)
+
+        assert calls == ["d"]
+        assert waiter_out["value"] == ({"新": 2.0}, 7)
+
+    def test_a_waiter_builds_itself_when_the_build_it_waited_for_failed(
+        self, monkeypatch,
+    ):
+        started, release, calls = self._blocking_build(monkeypatch, fail_first=True)
+
+        owner, owner_out = self._call_in_thread("d")
+        assert started.wait(timeout=5)
+        waiter, waiter_out = self._call_in_thread("d")
+        waiter.join(timeout=0.2)
+
+        release.set()
+        owner.join(timeout=5)
+        waiter.join(timeout=5)
+
+        assert isinstance(owner_out["error"], RuntimeError)
+        assert calls == ["d", "d"]
+        assert waiter_out["value"] == ({"新": 2.0}, 7)
+
+    def test_drives_rebuild_independently(self, monkeypatch):
+        started, release, calls = self._blocking_build(monkeypatch)
+
+        owner, _ = self._call_in_thread("a")
+        assert started.wait(timeout=5)
+        other, other_out = self._call_in_thread("b")
+        deadline = time.monotonic() + 5
+        while len(calls) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        building_both = len(calls) == 2
+
+        release.set()
+        owner.join(timeout=5)
+        other.join(timeout=5)
+        assert building_both
+        assert sorted(calls) == ["a", "b"]
+        assert other_out["value"] == ({"新": 2.0}, 7)

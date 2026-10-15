@@ -16,6 +16,7 @@ surface while tagging a file in drive A.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from contextlib import contextmanager
 from unittest.mock import MagicMock
@@ -31,8 +32,9 @@ from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app import tfidf as tfidf_mod  # noqa: E402
-from app.models import Base, Embedding, IndexedFile  # noqa: E402
+from app.models import Base, Embedding, IndexedFile, TranscriptChunk  # noqa: E402
 from app.workers import clip_concepts, tag_knn  # noqa: E402
+from tests.idf_doubles import PidTokenizer, WordTokenizer  # noqa: E402
 
 DIM = 4
 
@@ -277,6 +279,18 @@ def test_concept_cache_is_keyed_by_drive(
 # ---------------------------------------------------------------------------
 
 
+def _say(index, file_id: str, words: str) -> None:
+    session = index._maker()
+    try:
+        session.add(TranscriptChunk(
+            file_id=file_id, chunk_index=0, text=words,
+            timestamp_start=0.0, timestamp_end=1.0,
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+
 def test_document_frequency_counts_only_the_drives_own_files(index, monkeypatch):
     """``min_doc_freq`` must not be satisfied by files in another drive."""
     index.add_file("a1", "a", distance=None)
@@ -284,11 +298,11 @@ def test_document_frequency_counts_only_the_drives_own_files(index, monkeypatch)
         index.add_file(f"b{i}", "b", distance=None)
 
     # "共通語" is the whole of drive a, but one file in three in drive b.
-    monkeypatch.setattr(
-        tfidf_mod,
-        "_tokenize_file",
-        lambda fid, fn, tok: ["共通語"] if fid in ("a1", "b0") else ["他"],
-    )
+    for fid in ("a1", "b0"):
+        _say(index, fid, "共通語 " * 10)
+    for fid in ("b1", "b2"):
+        _say(index, fid, "別の話題 " * 10)
+    monkeypatch.setattr(tfidf_mod, "_TOKENIZER_FACTORY", WordTokenizer)
     tfidf_mod.reset_corpus_idf_cache()
 
     idf_a, n_docs_a = tfidf_mod._build_corpus_idf("a")
@@ -301,3 +315,17 @@ def test_document_frequency_counts_only_the_drives_own_files(index, monkeypatch)
     assert idf_a["共通語"] == pytest.approx(1.0)
     assert idf_b["共通語"] > idf_a["共通語"]
     tfidf_mod.reset_corpus_idf_cache()
+
+
+def test_the_corpus_is_tokenized_outside_this_process(index, monkeypatch):
+    """Tokenizing a drive takes minutes of pure-Python CPU; inside this
+    process it would hold the GIL against every thread that reads rows."""
+    index.add_file("a1", "a", distance=None)
+    _say(index, "a1", "共通語 " * 10)
+    monkeypatch.setattr(tfidf_mod, "_TOKENIZER_FACTORY", PidTokenizer)
+
+    idf, _ = tfidf_mod._build_corpus_idf("a")
+
+    pid_tokens = {t for t in idf if t.startswith("pid")}
+    assert pid_tokens
+    assert f"pid{os.getpid()}" not in pid_tokens
