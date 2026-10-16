@@ -2,15 +2,9 @@
 
 ``vec_text`` holds whisper, text_content, metadata and tfidf_keywords
 side by side; ``vec_clip`` holds scene frames beside representative
-ones. ``MATCH`` ranks across all of them, so without a filter the
+ones. Unless the lookup is confined to the requested type, the
 "TF-IDF second opinion" behind every video and audio answer is mostly
-whisper chunks wearing a TF-IDF label, and the representative-frame
-route that spec 2026-05-02 chose over scene CLIP silently gets scene
-CLIP anyway.
-
-Measured on a real index before the filter: a tfidf_keywords query came
-back 49 tfidf rows against 326 whisper, and a clip_thumbnail query 238
-representative against 146 scene.
+whisper chunks wearing a TF-IDF label.
 """
 
 from __future__ import annotations
@@ -53,7 +47,7 @@ def index(monkeypatch, tmp_path):
     with engine.begin() as conn:
         conn.execute(text(
             "CREATE TABLE vec_text (embedding_id TEXT PRIMARY KEY, "
-            "vector BLOB, distance REAL)"
+            "embedding_type TEXT, vector BLOB, distance REAL)"
         ))
 
     rows = []
@@ -78,16 +72,16 @@ def index(monkeypatch, tmp_path):
             ))
             # The impostors sit *closer* than the real match, which is
             # what makes an unfiltered fetch return only impostors.
-            rows.append((eid, _vec(1.0).tobytes(), 0.0 + i * 0.1))
+            rows.append((eid, etype, _vec(1.0).tobytes(), 0.0 + i * 0.1))
         s.commit()
     finally:
         s.close()
 
     with engine.begin() as conn:
-        for eid, blob, dist in rows:
+        for eid, etype, blob, dist in rows:
             conn.execute(
-                text("INSERT INTO vec_text VALUES (:i, :v, :d)"),
-                {"i": eid, "v": blob, "d": dist},
+                text("INSERT INTO vec_text VALUES (:i, :t, :v, :d)"),
+                {"i": eid, "t": etype, "v": blob, "d": dist},
             )
 
     @contextmanager
@@ -104,7 +98,10 @@ def index(monkeypatch, tmp_path):
     # distance column instead, which is what MATCH would have produced.
     monkeypatch.setattr(
         search_mod, "sql_text",
-        lambda q: text(q.replace("WHERE vector MATCH :vec", "WHERE :vec IS NOT NULL")),
+        lambda q: text(
+            q.replace("vector MATCH :vec AND k = :k", ":vec IS NOT NULL")
+            .replace("ORDER BY distance", "ORDER BY distance LIMIT :k")
+        ),
     )
     return engine
 

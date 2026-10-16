@@ -33,6 +33,7 @@ from typing import Any
 from sqlalchemy import text as sql_text
 
 import app.config as config
+from app.vec_partition import insert_vector_sql
 from app.database import get_search_db, get_search_db_read, upsert_fts_transcripts
 from app.idf_backfill import mark_idf_terms_stale
 from app.llm_routing import Resolved
@@ -530,11 +531,8 @@ async def recompute_chunk_embeddings(chunk_ids: list[int]) -> None:
                 session.flush()
                 try:
                     session.execute(
-                        sql_text(
-                            "INSERT INTO vec_text(embedding_id, vector) "
-                            "VALUES(:id, :vec)"
-                        ),
-                        {"id": embedding_id, "vec": vec.tobytes()},
+                        sql_text(insert_vector_sql("vec_text")),
+                        {"id": embedding_id, "type": "whisper", "vec": vec.tobytes()},
                     )
                 except Exception as e:
                     logger.warning(

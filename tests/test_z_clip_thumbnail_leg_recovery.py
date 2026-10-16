@@ -48,7 +48,7 @@ def search_engine(tmp_path):
     Base.metadata.create_all(engine)
     with engine.begin() as conn:
         conn.execute(text(
-            "CREATE TABLE vec_clip (embedding_id TEXT PRIMARY KEY, vector BLOB)"
+            "CREATE TABLE vec_clip (embedding_id TEXT PRIMARY KEY, embedding_type TEXT, vector BLOB)"
         ))
     return engine
 

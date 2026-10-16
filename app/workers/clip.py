@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from app.vec_partition import insert_vector_sql
 from app.config import settings, validate_file_path
 from app.database import get_search_db
 from app.models import Embedding, IndexedFile
@@ -1204,8 +1205,8 @@ def _store_clip_embedding(
 
     vec_bytes = vector.tobytes()
     session.execute(
-        sql_text("INSERT INTO vec_clip(embedding_id, vector) VALUES(:id, :vec)"),
-        {"id": embedding_id, "vec": vec_bytes},
+        sql_text(insert_vector_sql("vec_clip")),
+        {"id": embedding_id, "type": embedding_type, "vec": vec_bytes},
     )
 
 

@@ -34,6 +34,7 @@ from sqlalchemy.exc import OperationalError
 
 import app.config as config
 from app import llm_routing
+from app.vec_partition import insert_vector_sql
 from app.config import is_video_visual_index_available, settings
 from app.database import get_search_db, get_search_db_read, get_search_engine
 from app.frame_cache import ensure_frame_cached
@@ -319,8 +320,8 @@ def _embed_scene(
         session.flush()
         try:
             session.execute(
-                sql_text("INSERT INTO vec_text(embedding_id, vector) VALUES(:id, :vec)"),
-                {"id": embedding_id, "vec": vec.tobytes()},
+                sql_text(insert_vector_sql("vec_text")),
+                {"id": embedding_id, "type": "video_visual_scene", "vec": vec.tobytes()},
             )
         except Exception as e:
             logger.warning("video_visual: vec_text insert failed (%s)", type(e).__name__)

@@ -15,6 +15,7 @@ from typing import Any
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
+from app.vec_partition import insert_vector_sql
 from app.config import settings
 from app.database import (
     get_search_db,
@@ -191,8 +192,8 @@ def _store_embedding(
     table = validate_vector_table(vector_table)
     vec_bytes = vector.tobytes()
     session.execute(
-        sql_text(f"INSERT INTO {table}(embedding_id, vector) VALUES(:id, :vec)"),
-        {"id": embedding_id, "vec": vec_bytes},
+        sql_text(insert_vector_sql(table)),
+        {"id": embedding_id, "type": embedding_type, "vec": vec_bytes},
     )
 
 

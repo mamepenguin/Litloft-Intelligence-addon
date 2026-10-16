@@ -44,6 +44,7 @@ from sqlalchemy import text as sql_text
 from sqlalchemy.exc import OperationalError
 
 import app.config as config
+from app.vec_partition import insert_vector_sql
 from app.config import settings
 from app import llm_routing
 from app.database import get_search_db
@@ -455,10 +456,8 @@ def _embed_and_store(file_id: str, description_text: str) -> None:
         session.flush()
         try:
             session.execute(
-                sql_text(
-                    "INSERT INTO vec_text(embedding_id, vector) VALUES(:id, :vec)"
-                ),
-                {"id": embedding_id, "vec": vec.tobytes()},
+                sql_text(insert_vector_sql("vec_text")),
+                {"id": embedding_id, "type": "vision_description", "vec": vec.tobytes()},
             )
         except Exception as e:
             logger.warning(

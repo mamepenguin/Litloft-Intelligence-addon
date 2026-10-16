@@ -21,6 +21,12 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from app.config import settings
+from app.vec_partition import (
+    is_partitioned as _vec_is_partitioned,
+    migrate_if_needed as _vec_partition_migrate,
+    rekey_vector as _rekey_vector,
+    vec_table_ddl,
+)
 
 Base = declarative_base()
 
@@ -146,6 +152,7 @@ def init_search_db() -> None:
     # Phase 4: rebrand legacy image clip embeddings as clip_thumbnail.
     # Spec 2026-05-02-thumbnail-clip-default-shallow-search.md.
     _migrate_image_clip_to_clip_thumbnail()
+    _migrate_vec_partition_if_needed()
 
     # Migrate transcript_chunks for AI refine columns (idempotent).
     with _search_engine.begin() as conn:
@@ -751,11 +758,24 @@ def _migrate_image_clip_to_clip_thumbnail() -> None:
         len(file_ids),
     )
 
+    with _search_engine.connect() as conn:
+        rekey = _vec_is_partitioned(conn, "vec_clip")
+
     chunk = _IMAGE_MIGRATION_CHUNK
     migrated = 0
     for start in range(0, len(file_ids), chunk):
         batch = file_ids[start:start + chunk]
         with _search_engine.begin() as conn:
+            if rekey:
+                rewritten = conn.execute(
+                    text(
+                        "SELECT id FROM embeddings "
+                        "WHERE embedding_type = 'clip' AND file_id IN :ids"
+                    ).bindparams(bindparam("ids", expanding=True)),
+                    {"ids": batch},
+                ).fetchall()
+                for (embedding_id,) in rewritten:
+                    _rekey_vector(conn, "vec_clip", embedding_id, "clip_thumbnail")
             conn.execute(
                 text(
                     "UPDATE embeddings SET embedding_type = 'clip_thumbnail' "
@@ -782,6 +802,17 @@ def _migrate_image_clip_to_clip_thumbnail() -> None:
         migrated,
     )
 
+
+
+def _migrate_vec_partition_if_needed() -> None:
+    """Rebuild an unpartitioned ``vec_text`` / ``vec_clip`` keyed by embedding type.
+
+    Runs after ``_migrate_image_clip_to_clip_thumbnail`` so the types it copies
+    are final.
+    """
+    if _search_engine is None:
+        return
+    _vec_partition_migrate(_search_engine, _resolve_search_db_path())
 
 # Tunable for tests. Production value chosen so the per-batch write
 # lock is sub-second on a typical SSD: 500 files × ~1 row each ≈ ~500
@@ -1213,18 +1244,11 @@ def _create_job_records_table(conn: object) -> None:
 
 def _create_vec_tables(conn: object) -> None:
     """Create sqlite-vec virtual tables if they don't exist."""
-    text_dim = _get_text_embedding_dim()
-    # Text embedding vectors (dimension depends on configured model)
     conn.execute(text(
-        f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_text "
-        f"USING vec0(embedding_id TEXT PRIMARY KEY, vector float[{text_dim}])"
+        vec_table_ddl("vec_text", _get_text_embedding_dim(), if_not_exists=True)
     ))
-
-    # CLIP embedding vectors (dimension depends on configured model)
-    clip_dim = _get_clip_embedding_dim()
     conn.execute(text(
-        f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_clip "
-        f"USING vec0(embedding_id TEXT PRIMARY KEY, vector float[{clip_dim}])"
+        vec_table_ddl("vec_clip", _get_clip_embedding_dim(), if_not_exists=True)
     ))
 
     # Generic index-level metadata key/value store. Created alongside

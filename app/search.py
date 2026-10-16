@@ -1925,6 +1925,33 @@ def _select_embedding_types(
     return type_map.get(file_type, ("metadata", None))
 
 
+def _visible_neighbours(
+    session,
+    embedding_ids: list[str],
+    embedding_type: str,
+    source_file_id: str,
+    drive: str | None,
+) -> list[tuple[str, str]]:
+    """``(embedding_id, file_id)`` of the neighbours that may be shown.
+
+    Rows of another type, of the source, of inactive files and of other
+    drives are dropped.
+    """
+    query = (
+        session.query(Embedding.id, Embedding.file_id)
+        .join(IndexedFile, IndexedFile.file_id == Embedding.file_id)
+        .filter(
+            Embedding.id.in_(embedding_ids),
+            Embedding.embedding_type == embedding_type,
+            Embedding.file_id != source_file_id,
+            IndexedFile.active.is_(True),
+        )
+    )
+    if drive:
+        query = query.filter(IndexedFile.drive == drive)
+    return query.all()
+
+
 def _find_similar_by_embedding(
     file_id: str,
     embedding_type: str,
@@ -2019,14 +2046,9 @@ def _find_similar_by_embedding(
     # Must fetch enough to look past the source file's own embeddings
     # (e.g. a video with 89 CLIP frames will occupy the top ~89 slots).
     #
-    # Both vector tables are shared between embedding types — vec_text
-    # holds whisper, text_content, metadata and tfidf_keywords; vec_clip
-    # holds scene frames beside representative ones — and MATCH is a
-    # global KNN that knows nothing about the type. Measured on a real
-    # index, a tfidf_keywords query came back 85% whisper, and a
-    # clip_thumbnail query 38% scene frames, each scored as though it
-    # were the requested channel. So the type filter is applied here,
-    # and the fetch is widened until enough rows survive it.
+    # The partition constraint keeps the scan inside the requested type,
+    # but drive, activity and the source itself are still filtered after
+    # the KNN, so the fetch is widened until enough files survive them.
     source_count = len(embedding_ids)
     base_limit = source_count + limit + 20
     distances: dict[str, float] = {}
@@ -2038,11 +2060,11 @@ def _find_similar_by_embedding(
                 sql_text(
                     f"SELECT embedding_id, distance "
                     f"FROM {vec_table} "
-                    f"WHERE vector MATCH :vec "
-                    f"ORDER BY distance "
-                    f"LIMIT :limit"
+                    f"WHERE vector MATCH :vec AND k = :k "
+                    f"AND embedding_type = :type "
+                    f"ORDER BY distance"
                 ),
-                {"vec": avg_vector.tobytes(), "limit": asked},
+                {"vec": avg_vector.tobytes(), "k": asked, "type": embedding_type},
             ).fetchall()
 
         if not rows:
@@ -2054,36 +2076,25 @@ def _find_similar_by_embedding(
             break
         with get_search_db_read() as session:
             usable = {
-                fid for (fid,) in session.query(Embedding.file_id)
-                .filter(
-                    Embedding.id.in_(list(distances)),
-                    Embedding.embedding_type == embedding_type,
+                fid for _, fid in _visible_neighbours(
+                    session, list(distances), embedding_type, file_id, drive,
                 )
-                .distinct()
-                .all()
             }
-        if len(usable - {file_id}) >= limit:
+        if len(usable) >= limit:
             break
 
-    # Look up file info for neighbor embeddings
+    # Only neighbours the viewer can be shown reach the quality filters, so
+    # another drive's files cannot move their gap, margin or spread.
     with get_search_db_read() as session:
-        neighbor_embeddings = (
-            session.query(Embedding)
-            .filter(
-                Embedding.id.in_(list(distances)),
-                Embedding.embedding_type == embedding_type,
-            )
-            .all()
+        neighbours = _visible_neighbours(
+            session, list(distances), embedding_type, file_id, drive,
         )
 
-        # Map embedding -> file_id with best score per file
         file_best_score: dict[str, float] = {}
-        for emb in neighbor_embeddings:
-            if emb.file_id == file_id:
-                continue  # exclude self
-            score = _l2_to_cosine_similarity(distances.get(emb.id, 2.0))
-            if score > file_best_score.get(emb.file_id, 0.0):
-                file_best_score[emb.file_id] = score
+        for emb_id, neighbour_file_id in neighbours:
+            score = _l2_to_cosine_similarity(distances.get(emb_id, 2.0))
+            if score > file_best_score.get(neighbour_file_id, 0.0):
+                file_best_score[neighbour_file_id] = score
 
         if not file_best_score:
             return []

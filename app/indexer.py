@@ -22,6 +22,7 @@ from app.database import (
     delete_fts_text_content,
     delete_fts_transcripts,
     get_litloft_db,
+    get_search_engine,
     get_search_db,
     get_search_db_read,
     upsert_fts_file,
@@ -30,6 +31,7 @@ from app.database import (
 from app.idf_backfill import mark_idf_terms_stale, request_idf_backfill
 from app.models import Embedding, IndexedFile, TranscriptChunk, TranscriptWord
 from app.sidecar_match import match_siblings
+from app.vec_partition import repair_unkeyed_rows
 from app.workers.blip import check_idle_unload as check_blip_idle_unload
 from app.workers.clip_concepts import check_idle_unload as check_clip_concepts_idle_unload
 from app.workers.clip import (
@@ -1918,6 +1920,11 @@ def cleanup_orphaned_embeddings() -> int:
 
 
 # --- Helper functions for Litloft DB interaction ---
+
+
+def repair_unkeyed_vec_rows() -> dict[str, int]:
+    """Re-key vec rows stored without a partition value. Called once at startup."""
+    return repair_unkeyed_rows(get_search_engine())
 
 
 def _get_litloft_files_by_ids(file_ids: list[str]) -> dict[str, dict]:

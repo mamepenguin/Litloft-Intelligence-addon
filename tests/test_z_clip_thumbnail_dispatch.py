@@ -64,6 +64,7 @@ def search_engine(tmp_path):
         conn.execute(text(
             "CREATE TABLE vec_clip ("
             "  embedding_id TEXT PRIMARY KEY,"
+            "  embedding_type TEXT,"
             "  vector BLOB"
             ")"
         ))
