@@ -73,6 +73,7 @@ def _create_aux_tables(conn: object) -> None:
     conn.execute(text(
         "CREATE TABLE IF NOT EXISTS vec_text ("
         "  embedding_id TEXT PRIMARY KEY,"
+        "  embedding_type TEXT,"
         "  vector BLOB NOT NULL"
         ")"
     ))

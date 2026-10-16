@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 
 import numpy as np
 
+from app.vec_partition import insert_vector_sql
 from app.config import settings, validate_file_path
 from app.digit_separator import is_digit_separator
 from app.database import delete_fts_transcripts, get_search_db, get_search_db_read, upsert_fts_transcripts
@@ -1299,10 +1300,8 @@ def _index_tfidf_keywords(file_id: str, chunk_texts: list[str]) -> None:
         session.flush()
 
         session.execute(
-            sql_text(
-                "INSERT INTO vec_text(embedding_id, vector) VALUES(:id, :vec)"
-            ),
-            {"id": embedding_id, "vec": vector.tobytes()},
+            sql_text(insert_vector_sql("vec_text")),
+            {"id": embedding_id, "type": "tfidf_keywords", "vec": vector.tobytes()},
         )
 
         session.execute(
@@ -1472,10 +1471,8 @@ def _persist_transcript(
 
                     vec_bytes = vectors[text_idx].tobytes()
                     session.execute(
-                        sql_text(
-                            "INSERT INTO vec_text(embedding_id, vector) VALUES(:id, :vec)"
-                        ),
-                        {"id": embedding_id, "vec": vec_bytes},
+                        sql_text(insert_vector_sql("vec_text")),
+                        {"id": embedding_id, "type": "whisper", "vec": vec_bytes},
                     )
 
                     text_idx += 1
@@ -1829,10 +1826,8 @@ def _index_loft_vtt(file_id: str, file_path: str) -> bool:
 
                     vec_bytes = vectors[text_idx].tobytes()
                     session.execute(
-                        sql_text(
-                            "INSERT INTO vec_text(embedding_id, vector) VALUES(:id, :vec)"
-                        ),
-                        {"id": embedding_id, "vec": vec_bytes},
+                        sql_text(insert_vector_sql("vec_text")),
+                        {"id": embedding_id, "type": "whisper", "vec": vec_bytes},
                     )
                     text_idx += 1
                 except Exception as e:
