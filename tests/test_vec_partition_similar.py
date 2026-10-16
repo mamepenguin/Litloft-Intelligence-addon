@@ -100,6 +100,7 @@ def test_spec_addon_023_nearer_rows_of_another_type_do_not_crowd_out_the_request
 
 NOISE = [
     pytest.param(dict(drive=OTHER, active=True), 40, id="other-drive-fills-first-fetch"),
+    pytest.param(dict(drive=OTHER, active=True), 22, id="other-drive-fills-part-of-first-fetch"),
     pytest.param(dict(drive=HOME, active=False), 40, id="inactive-fills-first-fetch"),
     pytest.param(dict(drive=OTHER, active=False), 40, id="inactive-other-drive"),
     pytest.param(dict(drive=OTHER, active=True, near=0.10, far=0.11), 1,
@@ -161,3 +162,20 @@ def test_spec_addon_023_find_similar_returns_only_the_drives_active_files(search
     ids = [r["file_id"] if isinstance(r, dict) else r.file_id for r in result.results]
     assert ids, "the drive holds ten similar files"
     assert set(ids) <= {f"c{i}" for i in range(len(CANDIDATES))}
+
+
+def test_spec_addon_023_a_source_with_several_rows_is_never_its_own_neighbour(search_index):
+    """A document or audio source has several rows; their average is not any one of
+    them, so the source's own rows score below the 0.999 duplicate cut."""
+    table, etype = "vec_text", "text_content"
+    dim = search_index.dim(table)
+    search_index.add_many([
+        ("src", HOME, True, f"e_src{i}", etype, table, at_distance(dim, 0.08, 1 + i))
+        for i in range(3)
+    ])
+    _candidates(search_index, table, etype, [0.30 + 0.02 * i for i in range(10)], "c")
+
+    got = [fid for fid, _ in _similar(etype)]
+
+    assert got, "the drive holds ten similar files"
+    assert "src" not in got
