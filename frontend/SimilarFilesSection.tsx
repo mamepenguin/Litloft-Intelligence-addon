@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { useTranslations } from "next-intl";
@@ -12,13 +12,11 @@ interface SimilarFilesSectionProps {
   drive: string;
 }
 
-type Status = "idle" | "loading" | "loaded" | "unavailable";
+type Status = "loading" | "loaded" | "unavailable";
 
-// Heavy similarity computations frequently exceed the 15 s addon
-// proxy timeout on the first request for a cold file. The backend
-// keeps computing and caches the result, so a follow-up request a
-// few seconds later hits the cache. We auto-retry up to twice with
-// growing delays before surrendering to the unavailable state.
+// A request to an addon that is still starting can exceed the 15 s addon
+// proxy timeout; the backend keeps computing and caches the result, so a
+// later attempt hits the cache.
 const RETRY_DELAYS_MS = [6000, 12000];
 
 // One ghost per neighbour the request asks for, so a full result set
@@ -31,59 +29,58 @@ const GHOST_CARDS = SIMILAR_FILES_LIMIT;
 
 export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSectionProps) {
   const t = useTranslations("file");
+  const pair = `${drive}\u0000${fileId}`;
+  const [shownPair, setShownPair] = useState(pair);
   const [results, setResults] = useState<SimilarFileItem[]>([]);
-  const [status, setStatus] = useState<Status>("idle");
-  const [isOpen, setIsOpen] = useState(false);
-  const requestIdRef = useRef(0);
+  const [status, setStatus] = useState<Status>("loading");
+  const [isOpen, setIsOpen] = useState(true);
+  const [attempt, setAttempt] = useState(0);
 
-  // Reset to idle whenever we navigate to a different file. Detection
-  // is heavy on the backend (CLIP / tf-idf / whisper similarity), so it
-  // never runs on mount — opening the disclosure is what asks for it.
-  useEffect(() => {
-    requestIdRef.current += 1;
+  // Reset during render rather than in an effect: an effect runs after
+  // the paint, so the previous file's results would flash for a frame
+  // under the new file.
+  if (shownPair !== pair) {
+    setShownPair(pair);
     setResults([]);
-    setStatus("idle");
-    setIsOpen(false);
-  }, [fileId]);
-
-  const fetchSimilar = useCallback(async () => {
-    const reqId = ++requestIdRef.current;
     setStatus("loading");
+    setIsOpen(true);
+  }
 
-    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
+  useEffect(() => {
+    const controller = new AbortController();
+    let backoff: ReturnType<typeof setTimeout> | undefined;
+
+    // Whether a request was aborted is read from its own signal, not from
+    // what it settled with: an aborted fetch may still resolve, or reject
+    // with an error that is not an AbortError.
+    const run = async (retry: number) => {
       try {
-        const data = await getSimilarFiles(fileId, drive);
-        if (reqId !== requestIdRef.current) return; // stale (file changed / re-clicked)
+        const data = await getSimilarFiles(fileId, drive, { signal: controller.signal });
+        if (controller.signal.aborted) return;
         setResults(data.results);
         setStatus("loaded");
-        return;
       } catch {
-        if (attempt === RETRY_DELAYS_MS.length) {
-          if (reqId !== requestIdRef.current) return;
+        if (controller.signal.aborted) return;
+        if (retry === RETRY_DELAYS_MS.length) {
           setResults([]);
           setStatus("unavailable");
           return;
         }
-        // Wait for the backend to finish + populate the cache, then retry.
-        await new Promise((resolve) =>
-          setTimeout(resolve, RETRY_DELAYS_MS[attempt]),
-        );
-        if (reqId !== requestIdRef.current) return;
+        backoff = setTimeout(() => void run(retry + 1), RETRY_DELAYS_MS[retry]);
       }
-    }
-  }, [fileId, drive]);
+    };
+    void run(0);
 
-  // Opening is the trigger. That works under either reading of how long
-  // detection takes: on a warm file the answer lands before the ghosts
-  // have said much, and on a cold one the retries above cover the addon
-  // proxy timeout — while a file nobody opens this on never computes at
-  // all. Only the first open fetches; `unavailable` keeps its own retry
-  // button rather than re-firing on every open/close.
-  const handleToggle = useCallback(() => {
-    const next = !isOpen;
-    setIsOpen(next);
-    if (next && status === "idle") void fetchSimilar();
-  }, [isOpen, status, fetchSimilar]);
+    return () => {
+      controller.abort();
+      clearTimeout(backoff);
+    };
+  }, [fileId, drive, attempt]);
+
+  const retry = () => {
+    setStatus("loading");
+    setAttempt((n) => n + 1);
+  };
 
   const countLabel = status === "loaded" ? ` (${results.length})` : "";
 
@@ -96,8 +93,7 @@ export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSecti
     // cross-origin iframe renders the subtree rotated and spinning on
     // iOS Safari. hako 7bFYOh3vFZP9EEuf9Ym_5.
     <div className="@container">
-      {/* Collapsed by default, and the same disclosure shape as the
-          other two derived views.
+      {/* The same disclosure shape as the other two derived views.
 
           The weight is the group's, not a section's: this entry is in
           core's `file-relations` slot, which draws it under one
@@ -109,7 +105,7 @@ export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSecti
           thing keeping the pair in step. */}
       <button
         type="button"
-        onClick={handleToggle}
+        onClick={() => setIsOpen((open) => !open)}
         aria-expanded={isOpen}
         aria-controls={`similar-files-${fileId}`}
         className="flex w-full cursor-pointer items-center gap-2 text-xs font-medium text-text-muted transition-colors hover:text-text-primary"
@@ -170,7 +166,7 @@ export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSecti
               </p>
               <button
                 type="button"
-                onClick={() => void fetchSimilar()}
+                onClick={retry}
                 className="rounded-lg bg-bg-elevated px-2.5 py-1 text-xs text-text-primary transition-colors hover:bg-bg-card"
               >
                 {t("similarFilesRetry")}
@@ -196,6 +192,7 @@ export default function SimilarFilesSection({ fileId, drive }: SimilarFilesSecti
                     <img
                       src={`/api/files/${item.file_id}/thumbnail`}
                       alt=""
+                      loading="lazy"
                       className="h-full w-full object-cover transition-transform group-hover:scale-105"
                       onError={(e) => {
                         e.currentTarget.style.display = "none";

@@ -325,14 +325,6 @@ export async function getSearchStatus(
 }
 
 /**
- * Fetch similar files. Throws on transport failure so callers can
- * distinguish "addon proxy timed out / 5xx" from a successful empty
- * response. The first call against a cold file commonly hits the
- * 15 s proxy timeout while CLIP / tf-idf / whisper similarity is
- * computed; the backend continues and caches the result, so a retry
- * a few seconds later succeeds instantly.
- */
-/**
  * How many neighbours a similar-files request asks for.
  *
  * Exported because the section reserves exactly this many ghost cards
@@ -342,14 +334,19 @@ export async function getSearchStatus(
  */
 export const SIMILAR_FILES_LIMIT = 6;
 
+/**
+ * Fetch similar files. Throws on transport failure so callers can
+ * distinguish "addon proxy timed out / 5xx" from a successful empty
+ * response.
+ */
 export async function getSimilarFiles(
   fileId: string,
   drive: string,
-  limit: number = SIMILAR_FILES_LIMIT,
+  { limit = SIMILAR_FILES_LIMIT, signal }: { limit?: number; signal?: AbortSignal } = {},
 ): Promise<SimilarFilesResponse> {
   const response = await fetchJSON<Omit<SimilarFilesResponse, "available">>(
     `${API_BASE}/addons/intelligence/similar/${fileId}?limit=${limit}`,
-    { headers: driveHeaders(drive) },
+    { headers: driveHeaders(drive), signal },
   );
   return {
     available: true,
