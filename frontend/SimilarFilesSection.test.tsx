@@ -1,21 +1,16 @@
 /**
- * Tests for SimilarFilesSection's disclosure shape and what starts it.
- *
- * The section used to draw a heading and a "Find similar files" button
- * on every file detail page whether or not anyone ever pressed it. The
- * heading became a disclosure first; the button is gone now too —
- * opening the disclosure is the request. That keeps detection off the
- * mount path (a file nobody opens this on never computes) while costing
- * the person who does want it a press rather than two.
+ * SPEC-ADDON-024: the Similar files section searches on mount, starts
+ * expanded, and aborts its open request on a new file/drive pair and on
+ * unmount.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, render, screen, fireEvent } from "@testing-library/react";
 
 vi.mock("@/addons/intelligence/api", async () => {
   // Only the request is stubbed. `SIMILAR_FILES_LIMIT` stays the real
-  // one, because a test that stubbed it could not tell whether the
-  // ghosts and the wire still agree — which is the thing worth pinning.
+  // one, so the ghosts are checked against the limit the wire uses.
   const actual = await vi.importActual<
     typeof import("@/addons/intelligence/api")
   >("@/addons/intelligence/api");
@@ -28,7 +23,13 @@ import {
   SIMILAR_FILES_LIMIT,
 } from "@/addons/intelligence/api";
 
-const results = [
+type Result = {
+  file_id: string;
+  filename: string;
+  shared_keywords: { word: string; score: number }[];
+};
+
+const results: Result[] = [
   {
     file_id: "other1",
     filename: "neighbour.mp4",
@@ -36,292 +37,546 @@ const results = [
   },
 ];
 
-function renderSection(fileId = "f1") {
-  return render(<SimilarFilesSection fileId={fileId} drive="media" />);
+const staleResults: Result[] = [
+  {
+    file_id: "stale1",
+    filename: "stale.mp4",
+    shared_keywords: [{ word: "desert", score: 0.8 }],
+  },
+];
+
+type Call = {
+  fileId: string;
+  drive: string;
+  signal: AbortSignal | undefined;
+  resolve: (value: unknown) => void;
+  reject: (reason: unknown) => void;
+};
+
+/** Every call gets its own promise, settled by the test. */
+function deferEveryCall(): Call[] {
+  const calls: Call[] = [];
+  vi.mocked(getSimilarFiles).mockImplementation(((
+    fileId: string,
+    drive: string,
+    opts?: { signal?: AbortSignal },
+  ) =>
+    new Promise((resolve, reject) => {
+      calls.push({ fileId, drive, signal: opts?.signal, resolve, reject });
+    })) as never);
+  return calls;
+}
+
+function section(fileId = "f1", drive = "media") {
+  return <SimilarFilesSection fileId={fileId} drive={drive} />;
 }
 
 const header = () => screen.getByRole("button", { name: /Similar files/ });
+const ghosts = () => screen.queryByTestId("similar-files-ghosts");
+const unavailable = () =>
+  screen.queryByText(/Similar file detection unavailable/i);
+
+async function flush(ms = 0) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getSimilarFiles).mockResolvedValue({ results } as never);
 });
 
-describe("SimilarFilesSection", () => {
-  it("starts collapsed and asks the backend for nothing", () => {
-    renderSection();
+afterEach(() => {
+  vi.useRealTimers();
+});
 
-    expect(header()).toHaveAttribute("aria-expanded", "false");
-    // The mount path is the one this section must stay off: it is the
-    // path every file detail page takes, opened or not.
-    expect(getSimilarFiles).not.toHaveBeenCalled();
-  });
-
-  it("has no detect button, collapsed or expanded", async () => {
-    renderSection();
-    expect(screen.queryByRole("button", { name: /Find similar files/ })).toBeNull();
-
-    fireEvent.click(header());
-    expect(await screen.findByText("neighbour.mp4")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Find similar files/ })).toBeNull();
-  });
-
-  it("opening the disclosure is what fetches", async () => {
-    renderSection();
-    fireEvent.click(header());
+describe("SimilarFilesSection on mount (SPEC-ADDON-024)", () => {
+  it("SPEC-ADDON-024 I1/I2: mounts expanded, shows the ghosts and sends one request with its own signal", () => {
+    const calls = deferEveryCall();
+    render(section("f1", "media"));
 
     expect(header()).toHaveAttribute("aria-expanded", "true");
-    expect(await screen.findByText("neighbour.mp4")).toBeInTheDocument();
-    expect(getSimilarFiles).toHaveBeenCalledWith("f1", "media");
+    expect(ghosts()).not.toBeNull();
+    expect(ghosts()!.children).toHaveLength(SIMILAR_FILES_LIMIT);
+    expect(header().textContent).not.toContain("(");
+
+    expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].fileId).toBe("f1");
+    expect(calls[0].drive).toBe("media");
+    expect(calls[0].signal).toBeInstanceOf(AbortSignal);
+    expect(calls[0].signal!.aborted).toBe(false);
   });
 
-  it("draws one ghost per neighbour it asked for, until the answer lands", async () => {
-    let settle: (value: unknown) => void = () => {};
-    vi.mocked(getSimilarFiles).mockReturnValue(
-      new Promise((resolve) => {
-        settle = resolve;
-      }) as never,
-    );
+  it("SPEC-ADDON-024 item 2: never shows a detect button, before or after the answer", async () => {
+    render(section());
+    expect(screen.queryByRole("button", { name: /Find similar files/ })).toBeNull();
+    expect(await screen.findByText("neighbour.mp4")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Find similar files/ })).toBeNull();
+  });
 
-    renderSection();
+  it("SPEC-ADDON-024 item 3: the answer replaces the ghosts and the heading counts it", async () => {
+    const calls = deferEveryCall();
+    render(section());
+    expect(calls).toHaveLength(1);
+
+    await act(async () => {
+      calls[0].resolve({ results });
+    });
+
+    expect(screen.getByText("neighbour.mp4")).toBeInTheDocument();
+    expect(ghosts()).toBeNull();
+    expect(header().textContent).toContain("Similar files (1)");
+    expect(header()).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("SPEC-ADDON-024 item 3: an empty answer shows the empty text and (0)", async () => {
+    const calls = deferEveryCall();
+    render(section());
+    expect(calls).toHaveLength(1);
+
+    await act(async () => {
+      calls[0].resolve({ results: [] });
+    });
+
+    expect(screen.getByText("No similar files found")).toBeInTheDocument();
+    expect(ghosts()).toBeNull();
+    expect(header().textContent).toContain("Similar files (0)");
+  });
+
+  it("SPEC-ADDON-024 item 6: a remount on the same file shows the ghosts and asks again", async () => {
+    const first = render(section("f1"));
+    await screen.findByText("neighbour.mp4");
+    first.unmount();
+
+    const calls = deferEveryCall();
+    render(section("f1"));
+
+    expect(header()).toHaveAttribute("aria-expanded", "true");
+    expect(ghosts()).not.toBeNull();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].fileId).toBe("f1");
+    expect(getSimilarFiles).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("SimilarFilesSection with the same pair (SPEC-ADDON-024 I3/I4)", () => {
+  it("SPEC-ADDON-024 I3: collapsing and expanding sends no request and shows the results again", async () => {
+    render(section());
+    await screen.findByText("neighbour.mp4");
+
     fireEvent.click(header());
+    expect(header()).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("neighbour.mp4")).toBeNull();
 
-    const ghosts = await screen.findByTestId("similar-files-ghosts");
-    // Read from the request's own limit, not from a 6 written out here:
-    // the two agreeing is the whole mechanism, so a test that hard-coded
-    // the number would go on passing after they stopped agreeing.
-    expect(ghosts.children).toHaveLength(SIMILAR_FILES_LIMIT);
-    // One request, not one per ghost or one per render.
+    fireEvent.click(header());
+    expect(header()).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("neighbour.mp4")).toBeInTheDocument();
+    expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+  });
+
+  it("SPEC-ADDON-024 I3: re-rendering with the same fileId and drive sends no request", async () => {
+    const { rerender } = render(section("f1", "media"));
+    await screen.findByText("neighbour.mp4");
+
+    rerender(section("f1", "media"));
+    rerender(section("f1", "media"));
+
+    expect(screen.getByText("neighbour.mp4")).toBeInTheDocument();
+    expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+  });
+
+  it("SPEC-ADDON-024 I3: re-rendering while the request is pending neither aborts it nor sends another", async () => {
+    const calls = deferEveryCall();
+    const { rerender } = render(section("f1", "media"));
+
+    rerender(section("f1", "media"));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].signal!.aborted).toBe(false);
+    await act(async () => {
+      calls[0].resolve({ results });
+    });
+    expect(screen.getByText("neighbour.mp4")).toBeInTheDocument();
+  });
+
+  it("SPEC-ADDON-024 I4: collapsing while pending keeps the request, and its answer does not re-expand", async () => {
+    const calls = deferEveryCall();
+    render(section());
+
+    fireEvent.click(header());
+    expect(header()).toHaveAttribute("aria-expanded", "false");
+    expect(calls[0].signal!.aborted).toBe(false);
+
+    await act(async () => {
+      calls[0].resolve({ results });
+    });
+
+    expect(header()).toHaveAttribute("aria-expanded", "false");
+    expect(header().textContent).toContain("(1)");
+    expect(screen.queryByText("neighbour.mp4")).toBeNull();
     expect(getSimilarFiles).toHaveBeenCalledTimes(1);
 
-    await act(async () => {
-      settle({ results });
-    });
-
-    expect(await screen.findByText("neighbour.mp4")).toBeInTheDocument();
-    expect(screen.queryByTestId("similar-files-ghosts")).toBeNull();
-    // Whether the swap moves the page is a question about heights, which
-    // jsdom does not compute. The ghost card mirrors the real card's
-    // text block in the component; that pairing is on the manual pass.
+    fireEvent.click(header());
+    expect(screen.getByText("neighbour.mp4")).toBeInTheDocument();
+    expect(getSimilarFiles).toHaveBeenCalledTimes(1);
   });
+});
 
-  it("does not reopen itself when a result lands after the reader closed it", async () => {
-    let settle: (value: unknown) => void = () => {};
-    vi.mocked(getSimilarFiles).mockReturnValue(
-      new Promise((resolve) => {
-        settle = resolve;
-      }) as never,
-    );
-
-    renderSection();
-    fireEvent.click(header());
-    await screen.findByTestId("similar-files-ghosts");
-
-    // Away again before the backend answers.
-    fireEvent.click(header());
-    expect(header()).toHaveAttribute("aria-expanded", "false");
-
-    await act(async () => {
-      settle({ results });
-    });
-
-    // The answer is kept — the header counts it — but it does not pull
-    // the section back open over whatever the reader moved on to.
-    expect(header()).toHaveAttribute("aria-expanded", "false");
-    await waitFor(() => expect(header().textContent).toContain("(1)"));
-    expect(screen.queryByText("neighbour.mp4")).toBeNull();
-  });
-
-  it("names the count in the header once results are in", async () => {
-    renderSection();
-    fireEvent.click(header());
-
+describe("SimilarFilesSection on a new pair (SPEC-ADDON-024 I2/I5)", () => {
+  it("SPEC-ADDON-024 I2: a new fileId after a collapse resets to expanded and loading and asks once for it", async () => {
+    const { rerender } = render(section("f1"));
     await screen.findByText("neighbour.mp4");
+    fireEvent.click(header());
+
+    const calls = deferEveryCall();
+    rerender(section("f2"));
+
+    expect(header()).toHaveAttribute("aria-expanded", "true");
+    expect(ghosts()).not.toBeNull();
+    expect(header().textContent).not.toContain("(");
+    expect(screen.queryByText("neighbour.mp4")).toBeNull();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].fileId).toBe("f2");
+    expect(calls[0].drive).toBe("media");
+  });
+
+  it("SPEC-ADDON-024 I2: a new drive with the same fileId asks again with that drive", async () => {
+    const { rerender } = render(section("f1", "media"));
+    await screen.findByText("neighbour.mp4");
+
+    const calls = deferEveryCall();
+    rerender(section("f1", "other"));
+
+    expect(header()).toHaveAttribute("aria-expanded", "true");
+    expect(ghosts()).not.toBeNull();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].fileId).toBe("f1");
+    expect(calls[0].drive).toBe("other");
+  });
+
+  it("SPEC-ADDON-024 I5: a new fileId aborts the old request and the old answer is never shown", async () => {
+    const calls = deferEveryCall();
+    const { rerender } = render(section("f1"));
+
+    rerender(section("f2"));
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0].signal!.aborted).toBe(true);
+    expect(calls[1].fileId).toBe("f2");
+    expect(calls[1].signal!.aborted).toBe(false);
+
+    await act(async () => {
+      calls[0].resolve({ results: staleResults });
+    });
+    expect(screen.queryByText("stale.mp4")).toBeNull();
+    expect(ghosts()).not.toBeNull();
+    expect(header().textContent).not.toContain("(");
+
+    await act(async () => {
+      calls[1].resolve({ results });
+    });
+    expect(screen.getByText("neighbour.mp4")).toBeInTheDocument();
+    expect(screen.queryByText("stale.mp4")).toBeNull();
     expect(header().textContent).toContain("(1)");
   });
 
-  it("collapses again without losing the results or asking twice", async () => {
-    renderSection();
-    fireEvent.click(header());
-    await screen.findByText("neighbour.mp4");
+  it("SPEC-ADDON-024 I5: the old answer landing after the new one does not replace it", async () => {
+    const calls = deferEveryCall();
+    const { rerender } = render(section("f1"));
+    rerender(section("f2"));
+    expect(calls).toHaveLength(2);
 
-    fireEvent.click(header());
-    expect(screen.queryByText("neighbour.mp4")).toBeNull();
-    fireEvent.click(header());
+    await act(async () => {
+      calls[1].resolve({ results });
+    });
+    await act(async () => {
+      calls[0].resolve({ results: staleResults });
+    });
+
     expect(screen.getByText("neighbour.mp4")).toBeInTheDocument();
-    // Detection ran once, not once per open.
+    expect(screen.queryByText("stale.mp4")).toBeNull();
+    expect(header().textContent).toContain("(1)");
+  });
+
+  it("SPEC-ADDON-024 I5: a new fileId during a backoff clears it; no retry for the old file is sent", async () => {
+    vi.useFakeTimers();
+    const calls = deferEveryCall();
+    const { rerender } = render(section("f1"));
+    expect(calls).toHaveLength(1);
+
+    await act(async () => {
+      calls[0].reject(new Error("cold"));
+    });
+    await flush(0);
+    expect(calls).toHaveLength(1);
+
+    rerender(section("f2"));
+    expect(calls).toHaveLength(2);
+
+    await flush(60_000);
+
+    expect(calls.filter((c) => c.fileId === "f1")).toHaveLength(1);
+    expect(calls.filter((c) => c.fileId === "f2")).toHaveLength(1);
+    expect(unavailable()).toBeNull();
+    expect(ghosts()).not.toBeNull();
+  });
+
+  it("SPEC-ADDON-024 I5: the old pair's unavailable state is not carried to the new pair", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getSimilarFiles).mockRejectedValue(new Error("boom"));
+    const { rerender } = render(section("f1"));
+    await flush(20_000);
+    expect(unavailable()).not.toBeNull();
+
+    const calls = deferEveryCall();
+    rerender(section("f2"));
+
+    expect(unavailable()).toBeNull();
+    expect(ghosts()).not.toBeNull();
+    expect(header()).toHaveAttribute("aria-expanded", "true");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].fileId).toBe("f2");
+  });
+});
+
+describe("SimilarFilesSection failures and retry (SPEC-ADDON-024 I2/I6/I10)", () => {
+  it("SPEC-ADDON-024 I6/I2: retries after 6 s and 12 s, ghosts and no count during both backoffs, then unavailable", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getSimilarFiles).mockRejectedValue(new Error("boom"));
+    render(section());
+
+    await flush(0);
     expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+    expect(ghosts()).not.toBeNull();
+    expect(header().textContent).not.toContain("(");
+    expect(unavailable()).toBeNull();
+
+    await flush(5_999);
+    expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+    await flush(1);
+    expect(getSimilarFiles).toHaveBeenCalledTimes(2);
+    expect(ghosts()).not.toBeNull();
+    expect(header().textContent).not.toContain("(");
+    expect(unavailable()).toBeNull();
+
+    await flush(11_999);
+    expect(getSimilarFiles).toHaveBeenCalledTimes(2);
+    expect(unavailable()).toBeNull();
+    await flush(1);
+    expect(getSimilarFiles).toHaveBeenCalledTimes(3);
+    expect(unavailable()).not.toBeNull();
+    expect(ghosts()).toBeNull();
+    expect(screen.getByRole("button", { name: /Search again/ })).toBeInTheDocument();
+
+    await flush(60_000);
+    expect(getSimilarFiles).toHaveBeenCalledTimes(3);
   });
 
-  it("keeps both backoff waits before it reports the backend unavailable", async () => {
-    vi.mocked(getSimilarFiles).mockRejectedValue(new Error("boom"));
+  it("SPEC-ADDON-024 I6: the retry button sends a new request and shows its answer", async () => {
     vi.useFakeTimers();
-    try {
-      renderSection();
-      fireEvent.click(header());
-
-      // First failure: still trying, and still holding the height.
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
-      expect(screen.getByTestId("similar-files-ghosts")).toBeInTheDocument();
-      expect(getSimilarFiles).toHaveBeenCalledTimes(1);
-
-      // One millisecond short of the first backoff, nothing has moved.
-      // Advancing straight to 6 s would also pass with a 5 s delay, or a
-      // 1 s one — it would bound the wait rather than pin it.
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(5_999);
-      });
-      expect(getSimilarFiles).toHaveBeenCalledTimes(1);
-
-      // The millisecond that reaches it starts the second attempt.
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1);
-      });
-      expect(getSimilarFiles).toHaveBeenCalledTimes(2);
-      expect(screen.getByTestId("similar-files-ghosts")).toBeInTheDocument();
-
-      // The same boundary again for the second backoff.
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(11_999);
-      });
-      expect(getSimilarFiles).toHaveBeenCalledTimes(2);
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1);
-      });
-      expect(
-        screen.getByText(/Similar file detection unavailable/i),
-      ).toBeInTheDocument();
-      expect(getSimilarFiles).toHaveBeenCalledTimes(3);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("offers a retry that succeeds after an unavailable backend", async () => {
     vi.mocked(getSimilarFiles).mockRejectedValue(new Error("boom"));
-    vi.useFakeTimers();
-    try {
-      renderSection();
-      fireEvent.click(header());
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(20_000);
-      });
-      expect(
-        screen.getByText(/Similar file detection unavailable/i),
-      ).toBeInTheDocument();
-    } finally {
-      vi.useRealTimers();
-    }
+    render(section());
+    await flush(20_000);
+    expect(unavailable()).not.toBeNull();
 
     vi.mocked(getSimilarFiles).mockResolvedValue({ results } as never);
     fireEvent.click(screen.getByRole("button", { name: /Search again/ }));
+    await flush(0);
 
-    expect(await screen.findByText("neighbour.mp4")).toBeInTheDocument();
+    expect(getSimilarFiles).toHaveBeenCalledTimes(4);
+    expect(screen.getByText("neighbour.mp4")).toBeInTheDocument();
+    expect(unavailable()).toBeNull();
   });
 
-  it("goes back to asking nothing when the file changes under it", async () => {
-    const { rerender } = renderSection("f1");
-    fireEvent.click(header());
-    await screen.findByText("neighbour.mp4");
-    expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+  it("SPEC-ADDON-024 item 2: the retry button starts the same 6 s / 12 s sequence", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getSimilarFiles).mockRejectedValue(new Error("boom"));
+    render(section());
+    await flush(20_000);
+    expect(getSimilarFiles).toHaveBeenCalledTimes(3);
 
-    rerender(<SimilarFilesSection fileId="f2" drive="media" />);
+    fireEvent.click(screen.getByRole("button", { name: /Search again/ }));
+    await flush(0);
+    expect(getSimilarFiles).toHaveBeenCalledTimes(4);
+    expect(ghosts()).not.toBeNull();
+    expect(unavailable()).toBeNull();
 
-    // Asserted directly: the reset runs inside the rerender's own act,
-    // so it has already happened. A `waitFor` here would find its
-    // condition true on the first poll and return before anything else
-    // it was meant to settle — the shape this suite exists to avoid.
-    expect(header()).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByText("neighbour.mp4")).toBeNull();
-    // The new file gets the same deal the old one did: nothing until asked.
-    expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+    await flush(5_999);
+    expect(getSimilarFiles).toHaveBeenCalledTimes(4);
+    await flush(1);
+    expect(getSimilarFiles).toHaveBeenCalledTimes(5);
+    await flush(11_999);
+    expect(getSimilarFiles).toHaveBeenCalledTimes(5);
+    await flush(1);
+    expect(getSimilarFiles).toHaveBeenCalledTimes(6);
+    expect(unavailable()).not.toBeNull();
   });
 
-  /**
-   * The `act()` warning this test prints is intrinsic to its subject: the
-   * late response it is about lands, by construction, on a component that
-   * has moved on. Silencing it would mean asserting on a settled screen,
-   * which is the state this test exists to say cannot be reached.
-   */
-  it("drops a slow answer that arrives after the reader moved to another file", async () => {
-    // The case the `requestIdRef` guard exists for, and the only one:
-    // the previous test changes the file with nothing in flight, so it
-    // passes with the guard deleted. This one holds the request open
-    // across the change.
-    //
-    // Without the guard: the file-change effect resets to idle and
-    // closed, then file A's response lands and writes `loaded` with A's
-    // neighbours. File B's header then reads "(1)", opening it shows
-    // another file's results, and it never refetches — opening only
-    // fetches from `idle`. Wrong data, silent, and permanent for as long
-    // as that file is open.
-    let settle: (value: unknown) => void = () => {};
-    vi.mocked(getSimilarFiles).mockReturnValue(
-      new Promise((resolve) => {
-        settle = resolve;
-      }) as never,
-    );
+  it("SPEC-ADDON-024 I10: unavailable survives collapse, expand and a same-pair re-render without a request", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getSimilarFiles).mockRejectedValue(new Error("boom"));
+    const { rerender } = render(section("f1", "media"));
+    await flush(20_000);
+    expect(unavailable()).not.toBeNull();
 
-    const { rerender } = renderSection("f1");
     fireEvent.click(header());
-    await screen.findByTestId("similar-files-ghosts");
+    fireEvent.click(header());
+    rerender(section("f1", "media"));
+    await flush(60_000);
 
-    rerender(<SimilarFilesSection fileId="f2" drive="media" />);
+    expect(unavailable()).not.toBeNull();
+    expect(ghosts()).toBeNull();
+    expect(getSimilarFiles).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("SimilarFilesSection on unmount (SPEC-ADDON-024 I7)", () => {
+  it("SPEC-ADDON-024 I7: unmounting with a request open aborts it, and its later failure sends nothing", async () => {
+    vi.useFakeTimers();
+    const calls = deferEveryCall();
+    const { unmount } = render(section());
+    expect(calls).toHaveLength(1);
+
+    unmount();
+    expect(calls[0].signal!.aborted).toBe(true);
+
     await act(async () => {
-      settle({ results });
+      calls[0].reject(new Error("boom"));
+    });
+    await flush(60_000);
+
+    expect(calls).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("SPEC-ADDON-024 I7: unmounting during a backoff leaves no timer and sends no retry", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getSimilarFiles).mockRejectedValue(new Error("boom"));
+    const { unmount } = render(section());
+    await flush(0);
+    expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+
+    await flush(60_000);
+    expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+  });
+
+  it("SPEC-ADDON-024 I7: under StrictMode it asks exactly twice, aborts the first, and ends loaded with the second's answer", async () => {
+    const calls = deferEveryCall();
+    render(<StrictMode>{section("f1", "media")}</StrictMode>);
+
+    expect(getSimilarFiles).toHaveBeenCalledTimes(2);
+    expect(calls[0].signal!.aborted).toBe(true);
+    expect(calls[1].signal!.aborted).toBe(false);
+    expect(calls[1].fileId).toBe("f1");
+    expect(calls[1].drive).toBe("media");
+
+    await act(async () => {
+      calls[1].resolve({ results });
+    });
+    await act(async () => {
+      calls[0].resolve({ results: staleResults });
     });
 
-    expect(header().textContent).not.toContain("(1)");
-    fireEvent.click(header());
-    expect(screen.queryByText("neighbour.mp4")).toBeNull();
+    expect(screen.getByText("neighbour.mp4")).toBeInTheDocument();
+    expect(screen.queryByText("stale.mp4")).toBeNull();
+    expect(header().textContent).toContain("(1)");
+    expect(getSimilarFiles).toHaveBeenCalledTimes(2);
   });
 
-  it("drops one that arrives after a backoff, too", async () => {
-    // The same guard, at the other exit the retry loop can take: the
-    // sleep between attempts is where a slow file spends most of its
-    // time, so it is the likeliest moment for the reader to move on.
-    vi.mocked(getSimilarFiles).mockRejectedValueOnce(new Error("cold"));
+  it("SPEC-ADDON-024 I7: under StrictMode the first run's answer landing first does not end the loading", async () => {
+    const calls = deferEveryCall();
+    render(<StrictMode>{section("f1", "media")}</StrictMode>);
+    expect(calls).toHaveLength(2);
+
+    await act(async () => {
+      calls[0].resolve({ results: staleResults });
+    });
+    expect(screen.queryByText("stale.mp4")).toBeNull();
+    expect(ghosts()).not.toBeNull();
+
+    await act(async () => {
+      calls[1].resolve({ results });
+    });
+    expect(screen.getByText("neighbour.mp4")).toBeInTheDocument();
+  });
+});
+
+describe("SimilarFilesSection and aborted requests (SPEC-ADDON-024 I8)", () => {
+  it.each([
+    ["an AbortError", () => new DOMException("aborted", "AbortError")],
+    ["an ordinary error", () => new Error("boom")],
+  ])(
+    "SPEC-ADDON-024 I8: an aborted request rejecting with %s starts no backoff and shows nothing",
+    async (_label, makeError) => {
+      vi.useFakeTimers();
+      const calls = deferEveryCall();
+      const { rerender } = render(section("f1"));
+      rerender(section("f2"));
+      expect(calls).toHaveLength(2);
+      expect(calls[0].signal!.aborted).toBe(true);
+
+      await act(async () => {
+        calls[0].reject(makeError());
+      });
+      await flush(60_000);
+
+      expect(calls.filter((c) => c.fileId === "f1")).toHaveLength(1);
+      expect(calls).toHaveLength(2);
+      expect(unavailable()).toBeNull();
+      expect(ghosts()).not.toBeNull();
+    },
+  );
+
+  it("SPEC-ADDON-024 I8: under StrictMode a rejected first run starts no backoff", async () => {
     vi.useFakeTimers();
-    try {
-      const { rerender } = renderSection("f1");
-      fireEvent.click(header());
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
-      // In the backoff now, with a second attempt scheduled.
-      expect(getSimilarFiles).toHaveBeenCalledTimes(1);
+    const calls = deferEveryCall();
+    render(<StrictMode>{section("f1", "media")}</StrictMode>);
+    expect(calls).toHaveLength(2);
 
-      rerender(<SimilarFilesSection fileId="f2" drive="media" />);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(6_000);
-      });
+    await act(async () => {
+      calls[0].reject(new DOMException("aborted", "AbortError"));
+    });
+    await flush(60_000);
+    expect(getSimilarFiles).toHaveBeenCalledTimes(2);
+    expect(unavailable()).toBeNull();
 
-      // The retired loop returns after its sleep instead of firing the
-      // next attempt against the file the reader has left.
-      expect(getSimilarFiles).toHaveBeenCalledTimes(1);
-      expect(header()).toHaveAttribute("aria-expanded", "false");
-      expect(header().textContent).not.toContain("(");
-    } finally {
-      vi.useRealTimers();
+    await act(async () => {
+      calls[1].resolve({ results });
+    });
+    expect(screen.getByText("neighbour.mp4")).toBeInTheDocument();
+  });
+});
+
+describe("SimilarFilesSection thumbnails (SPEC-ADDON-024 I9)", () => {
+  it("SPEC-ADDON-024 I9: every result thumbnail loads lazily", async () => {
+    const many: Result[] = Array.from({ length: SIMILAR_FILES_LIMIT }, (_, i) => ({
+      file_id: `n${i}`,
+      filename: `neighbour-${i}.mp4`,
+      shared_keywords: [{ word: "ocean", score: 0.9 }],
+    }));
+    vi.mocked(getSimilarFiles).mockResolvedValue({ results: many } as never);
+    const { container } = render(section());
+    await screen.findByText("neighbour-0.mp4");
+
+    const imgs = Array.from(container.querySelectorAll("img"));
+    expect(imgs.length).toBeGreaterThanOrEqual(SIMILAR_FILES_LIMIT);
+    for (const img of imgs) {
+      expect(img.getAttribute("loading")).toBe("lazy");
     }
   });
 });
 
 describe("SimilarFilesSection — its weight inside the Related group", () => {
   it("draws its heading at the group weight, not at section weight", async () => {
-    // This entry is in core's `file-relations` slot, which draws it under
-    // one "Related" heading beside core's own relations. At section
-    // weight it matched the heading above it and the two read as sibling
-    // lists rather than as a group and its member.
-    //
-    // The values are `DESIGN.md` §The Related group, and the other member
-    // of that group is in the core repository — so this assertion and
-    // core's `RelatedFilesSection` test are the only things holding the
-    // pair in step, the way the duplicated frontmatter parsers are.
-    renderSection();
+    // The values are `DESIGN.md` §The Related group; core's
+    // `RelatedFilesSection` test holds the other member of the group, so
+    // the two assertions are what keep the pair in step.
+    render(section());
 
     const heading = await screen.findByRole("button", { name: /Similar files/i });
     for (const cls of ["text-xs", "font-medium", "text-text-muted"]) {
