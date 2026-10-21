@@ -591,8 +591,8 @@ def _vector_search_clip(
             2026-05-02-thumbnail-clip-default-shallow-search.md).
             When ``True``, scene-frame ``embedding_type="clip"`` rows
             are added — the "scene with X" / shipped-from-the-toggle
-            route. Both types share ``vec_clip`` (same dim/model) so
-            this is a post-MATCH filter on ``embeddings.embedding_type``.
+            route. The default KNN reads only the ``clip_thumbnail``
+            partition, so scene rows cannot take its candidate slots.
 
     Returns:
         List of vector matches.
@@ -600,15 +600,29 @@ def _vector_search_clip(
     engine = get_search_engine()
     vec_bytes = query_vector.tobytes()
 
+    # Scene search keeps the unconstrained KNN: constraining it to both
+    # partitions scans nearly the whole table anyway, and the candidate
+    # pool would change from the global nearest rows.
+    if include_scene_clip:
+        knn_sql = (
+            "SELECT embedding_id, distance "
+            "FROM vec_clip "
+            "WHERE vector MATCH :vec "
+            "ORDER BY distance "
+            "LIMIT :limit"
+        )
+    else:
+        knn_sql = (
+            "SELECT embedding_id, distance "
+            "FROM vec_clip "
+            "WHERE vector MATCH :vec AND k = :limit "
+            "AND embedding_type = 'clip_thumbnail' "
+            "ORDER BY distance"
+        )
+
     with engine.connect() as conn:
         rows = conn.execute(
-            sql_text(
-                "SELECT embedding_id, distance "
-                "FROM vec_clip "
-                "WHERE vector MATCH :vec "
-                "ORDER BY distance "
-                "LIMIT :limit"
-            ),
+            sql_text(knn_sql),
             {"vec": vec_bytes, "limit": limit},
         ).fetchall()
 

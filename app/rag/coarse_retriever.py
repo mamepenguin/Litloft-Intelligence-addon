@@ -64,20 +64,9 @@ async def coarse_retrieve(
     query_vector = await asyncio.to_thread(embed_query, query)
     vec_bytes = query_vector.tobytes()
 
-    # sqlite-vec MATCH returns the GLOBAL top-K nearest neighbors across
-    # the entire vec_text table. When multiple drives × multiple
-    # embedding types (transcript / text_content / blip_caption /
-    # metadata) share the table, a naive ``LIMIT :top_k`` followed by
-    # post-WHERE filters can yield zero target-drive metadata rows even
-    # when the drive's metadata channel has plenty of strong matches —
-    # the global neighborhood is dominated by other drives / channels.
-    #
-    # Mitigation: over-fetch by a wide constant so the post-filter has
-    # a generous candidate pool. The pattern mirrors the per-file
-    # similar-files code path in ``app/search.py`` (~line 1640) which
-    # over-fetches by ``source_count + limit + 20``. Here we use a
-    # multiplicative bump because the post-filter is more aggressive
-    # (drives × types vs. just type).
+    # The KNN reads only the ``metadata`` partition but spans every drive,
+    # so other drives' summaries can fill a ``LIMIT :top_k`` before the
+    # drive filter runs. Over-fetch so the filter has a generous pool.
     over_fetch = max(top_k * 50, 500)
 
     def _query() -> tuple[list, int]:
@@ -95,9 +84,9 @@ async def coarse_retrieve(
                     "WITH knn AS ("
                     "  SELECT embedding_id, distance "
                     "  FROM vec_text "
-                    "  WHERE vector MATCH :vec "
-                    "  ORDER BY distance "
-                    "  LIMIT :over_fetch"
+                    "  WHERE vector MATCH :vec AND k = :over_fetch "
+                    "  AND embedding_type = 'metadata' "
+                    "  ORDER BY distance"
                     ") "
                     "SELECT i.file_id, knn.distance "
                     "FROM knn "
