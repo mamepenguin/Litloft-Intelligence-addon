@@ -279,7 +279,7 @@ def search(
         _f_clip = (
             _pool.submit(
                 _vector_search_clip, clip_vector, candidates,
-                mode=mode, include_scene_clip=include_scene_clip,
+                mode=mode, include_scene_clip=include_scene_clip, drive=drive,
             )
             if clip_vector is not None and not skip_clip
             else None
@@ -562,12 +562,60 @@ def _vector_search_text(
         return results
 
 
+#: sqlite-vec refuses a KNN ``k`` above 4096.
+_CLIP_DRIVE_FETCH_MAX = 4096
+_CLIP_DRIVE_FETCH_FACTORS = (4, 16, 64)
+
+
+def _drive_thumbnail_neighbours(
+    engine,
+    knn_sql: str,
+    vec_bytes: bytes,
+    limit: int,
+    drive: str,
+) -> list[tuple[str, float]]:
+    """The ``limit`` nearest thumbnail rows of ``drive``'s active files.
+
+    The thumbnail partition spans every drive, so the fetch widens until
+    ``limit`` rows of the drive survive or the partition is exhausted.
+    """
+    sizes = sorted(
+        {min(limit * f, _CLIP_DRIVE_FETCH_MAX) for f in _CLIP_DRIVE_FETCH_FACTORS}
+        | {_CLIP_DRIVE_FETCH_MAX}
+    )
+    kept: list[tuple[str, float]] = []
+    for asked in sizes:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                sql_text(knn_sql), {"vec": vec_bytes, "limit": asked}
+            ).fetchall()
+        if not rows:
+            return []
+        with get_search_db_read() as session:
+            visible = {
+                emb_id
+                for (emb_id,) in session.query(Embedding.id)
+                .join(IndexedFile, IndexedFile.file_id == Embedding.file_id)
+                .filter(
+                    Embedding.id.in_([row[0] for row in rows]),
+                    IndexedFile.drive == drive,
+                    IndexedFile.active.is_(True),
+                )
+                .all()
+            }
+        kept = [(row[0], row[1]) for row in rows if row[0] in visible][:limit]
+        if len(kept) >= limit or len(rows) < asked:
+            break
+    return kept
+
+
 def _vector_search_clip(
     query_vector: np.ndarray,
     limit: int,
     *,
     mode: SearchMode = "precision",
     include_scene_clip: bool = False,
+    drive: str | None = None,
 ) -> list[_VectorMatch]:
     """Search the CLIP vector table for similar embeddings.
 
@@ -593,6 +641,9 @@ def _vector_search_clip(
             are added — the "scene with X" / shipped-from-the-toggle
             route. The default KNN reads only the ``clip_thumbnail``
             partition, so scene rows cannot take its candidate slots.
+        drive: The requested drive. With Scene search off, the
+            candidates are this drive's active files only, so the
+            score gates judge them and not other drives' thumbnails.
 
     Returns:
         List of vector matches.
@@ -620,11 +671,14 @@ def _vector_search_clip(
             "ORDER BY distance"
         )
 
-    with engine.connect() as conn:
-        rows = conn.execute(
-            sql_text(knn_sql),
-            {"vec": vec_bytes, "limit": limit},
-        ).fetchall()
+    if drive and not include_scene_clip:
+        rows = _drive_thumbnail_neighbours(engine, knn_sql, vec_bytes, limit, drive)
+    else:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                sql_text(knn_sql),
+                {"vec": vec_bytes, "limit": limit},
+            ).fetchall()
 
     if not rows:
         return []
@@ -2421,7 +2475,7 @@ def execute_search_compare(
 
     text_matches = _vector_search_text(text_vector, candidates)
     clip_matches = (
-        _vector_search_clip(clip_vector, candidates)
+        _vector_search_clip(clip_vector, candidates, drive=drive)
         if clip_vector is not None
         else []
     )
