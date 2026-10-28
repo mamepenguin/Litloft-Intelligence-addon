@@ -97,7 +97,10 @@ class TestExtractArguments:
             extract_frame_to_cache("/tmp/video.mp4", cache_path, 1.0)
             extract_frame_to_cache("/tmp/video.mp4", cache_path, 1.0, "small")
             extract_frame_to_cache("/tmp/video.mp4", cache_path, 1.0, size="small")
-        assert cmds[0] == cmds[1] == cmds[2]
+        # The output is a uuid-named temp file beside the cache path, so it
+        # differs per call; every argument before it must not.
+        assert cmds[0][:-1] == cmds[1][:-1] == cmds[2][:-1]
+        assert all(Path(c[-1]).name.startswith(cache_path.name) for c in cmds)
         joined = " ".join(cmds[0])
         assert "libwebp" in joined
         assert "-q:v 70" in joined

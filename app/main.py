@@ -28,6 +28,7 @@ from app.routers import (
     queue,
     rag,
     refine,
+    scenes,
     search,
     similar,
     summaries,
@@ -462,6 +463,7 @@ app.include_router(llm_choices.router)
 app.include_router(refine.router)
 app.include_router(vision.router)
 app.include_router(video_visual.router)
+app.include_router(scenes.router)
 app.include_router(admin.router)
 
 

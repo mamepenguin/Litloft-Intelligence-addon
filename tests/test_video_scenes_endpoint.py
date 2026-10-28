@@ -361,8 +361,14 @@ class TestSideEffects:
 
 class TestRouteDeclaration:
     def test_spec_addon_031_handler_is_sync_so_it_runs_in_the_thread_pool(self, env):
+        # FastAPI keeps an included router's routes behind an _IncludedRouter
+        # entry rather than flattening them into app.routes.
+        flat = []
+        for r in env["app"].routes:
+            included = getattr(r, "original_router", None)
+            flat.extend(included.routes if included is not None else [r])
         routes = [
-            r for r in env["app"].routes
+            r for r in flat
             if getattr(r, "path", None) == "/files/{file_id}/scenes"
             and "GET" in getattr(r, "methods", set())
         ]

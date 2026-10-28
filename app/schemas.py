@@ -322,6 +322,25 @@ class VideoVisualIndexResponse(BaseModel):
     stale: bool = False
 
 
+class VideoScenesWindow(BaseModel):
+    start: float
+    end: float | None
+
+
+class VideoSceneItem(BaseModel):
+    start: float
+    end: float | None
+    transcript_excerpt: str | None
+
+
+class VideoScenesResponse(BaseModel):
+    file_id: str
+    duration: float | None
+    window: VideoScenesWindow | None
+    candidate_count: int
+    scenes: list[VideoSceneItem]
+
+
 # --- Summaries ---
 
 

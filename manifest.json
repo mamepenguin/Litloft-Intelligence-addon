@@ -360,6 +360,18 @@
         "response_filter": null
       },
       {
+        "path": "/files/{file_id}/scenes",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null,
+        "timeout": 30
+      },
+      {
         "path": "/files/{file_id}/pdf-markdown",
         "methods": [
           "GET"
