@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from urllib.parse import unquote
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
@@ -814,6 +814,7 @@ from app.frame_cache import (  # noqa: E402
 def get_frame(
     file_id: str,
     t: float = Query(..., ge=0, description="Timestamp in seconds"),
+    size: Literal["small", "large"] = Query(default="small"),
     x_hv_drive: Annotated[str | None, Header(alias="X-Lit-Drive")] = None,
 ) -> Response:
     """Serve a single cached video frame, extracting via ffmpeg on miss.
@@ -861,7 +862,8 @@ def get_frame(
     if indexed["file_type"] != "video":
         raise HTTPException(status_code=400, detail="Not a video file")
 
-    cache_path = _frame_cache_path(file_id, t)
+    size_args = ("large",) if size == "large" else ()
+    cache_path = _frame_cache_path(file_id, t, *size_args)
     cache_headers = {"Cache-Control": "public, max-age=86400, immutable"}
 
     if cache_path.exists() and cache_path.stat().st_size > 0:
@@ -875,7 +877,7 @@ def get_frame(
     if not abs_path or not validate_file_path(abs_path):
         raise HTTPException(status_code=404, detail="Video file not accessible")
 
-    _extract_frame_to_cache(abs_path, cache_path, t)
+    _extract_frame_to_cache(abs_path, cache_path, t, *size_args)
 
     return FileResponse(
         path=str(cache_path),

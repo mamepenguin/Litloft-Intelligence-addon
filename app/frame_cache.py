@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from fastapi import HTTPException
 
@@ -37,6 +38,20 @@ logger = logging.getLogger(__name__)
 
 _FRAME_CACHE_SUBDIR = "frames"
 _FRAME_FFMPEG_TIMEOUT = 15
+
+FrameSize = Literal["small", "large"]
+
+# Large frames are for reading on-screen text: the long edge is bounded
+# rather than the width, so a portrait clip does not come out 2276 px tall.
+_LARGE_LONG_EDGE = 1280
+_SCALE_FILTERS: dict[str, str] = {
+    "small": "scale=320:-1",
+    "large": (
+        f"scale='if(gte(iw,ih),min({_LARGE_LONG_EDGE},iw),-2)'"
+        f":'if(gte(iw,ih),-2,min({_LARGE_LONG_EDGE},ih))'"
+    ),
+}
+_QUALITIES: dict[str, str] = {"small": "70", "large": "80"}
 
 
 def frame_cache_dir(file_id: str) -> Path:
@@ -51,7 +66,9 @@ def frame_cache_dir(file_id: str) -> Path:
     return Path(settings.intelligence_data_dir) / _FRAME_CACHE_SUBDIR / file_id
 
 
-def frame_cache_path(file_id: str, timestamp_seconds: float) -> Path:
+def frame_cache_path(
+    file_id: str, timestamp_seconds: float, size: FrameSize = "small"
+) -> Path:
     """Resolve the WebP cache path for ``(file_id, timestamp)``.
 
     Timestamps are quantised to milliseconds in the filename so the
@@ -61,13 +78,15 @@ def frame_cache_path(file_id: str, timestamp_seconds: float) -> Path:
     correct).
     """
     ms = int(round(timestamp_seconds * 1000))
-    return frame_cache_dir(file_id) / f"{ms}.webp"
+    suffix = ".large.webp" if size == "large" else ".webp"
+    return frame_cache_dir(file_id) / f"{ms}{suffix}"
 
 
 def extract_frame_to_cache(
     abs_path: str,
     cache_path: Path,
     timestamp_seconds: float,
+    size: FrameSize = "small",
 ) -> None:
     """Run ffmpeg to extract one frame and atomically write it to ``cache_path``.
 
@@ -86,9 +105,9 @@ def extract_frame_to_cache(
                 "-ss", str(timestamp_seconds),
                 "-i", abs_path,
                 "-frames:v", "1",
-                "-vf", "scale=320:-1",
+                "-vf", _SCALE_FILTERS[size],
                 "-c:v", "libwebp",
-                "-q:v", "70",
+                "-q:v", _QUALITIES[size],
                 # ``-f webp`` is required because the temp filename ends
                 # in ``.webp.tmp`` — ffmpeg can't infer the muxer from
                 # the dotted extension and otherwise errors out with
