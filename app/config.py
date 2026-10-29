@@ -351,6 +351,9 @@ class HierarchicalRagConfig:
     # Reserved for Phase 3 (multi-query clue generation). Unused in
     # Phases 1 / 2.
     clue_count: int = 3
+    # A keyword token that appears in at most this many files of the drive
+    # adds those files to the shortlist. 0 turns the step off.
+    exact_match_max_files: int = 10
 
 
 @dataclass(frozen=True)
@@ -745,6 +748,34 @@ def _parse_nested(data: dict[str, Any], key: str, cls: type) -> Any:
 
 _RAG_NESTED_KEYS = ("hierarchical", "personal_history", "category_expansion")
 
+_EXACT_MATCH_MAX_FILES_DEFAULT = HierarchicalRagConfig().exact_match_max_files
+
+
+def _checked_hierarchical(section: dict[str, Any]) -> dict[str, Any]:
+    """Return ``section`` with ``exact_match_max_files`` made valid.
+
+    Absent or null falls back to the default silently; any other value
+    that is not an integer >= 0 (``bool`` is an ``int`` subclass, so it is
+    excluded explicitly) logs one warning and falls back as well.
+    """
+    raw = section.get("hierarchical")
+    if not isinstance(raw, dict) or "exact_match_max_files" not in raw:
+        return section
+    value = raw["exact_match_max_files"]
+    if value is not None and (
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
+    ):
+        logger.warning(
+            "rag.hierarchical.exact_match_max_files must be an integer >= 0, "
+            "got %r; using %d",
+            value, _EXACT_MATCH_MAX_FILES_DEFAULT,
+        )
+        value = None
+    if value is not None:
+        return section
+    cleaned = {k: v for k, v in raw.items() if k != "exact_match_max_files"}
+    return {**section, "hierarchical": cleaned}
+
 
 def _parse_rag(
     data: dict[str, Any],
@@ -770,6 +801,8 @@ def _parse_rag(
         from app.rag_overrides import merge_into_rag_dict
 
         section = merge_into_rag_dict(section, overrides)
+
+    section = _checked_hierarchical(section)
 
     flat_kwargs = {
         k: v

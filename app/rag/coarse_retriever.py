@@ -29,13 +29,16 @@ class ShortlistResult:
     shortlist is empty so callers can compare against
     ``coarse_score_threshold`` without special-casing emptiness.
     ``drive_file_count`` is the active-file count for the drive,
-    used by the small-drive bypass.
+    used by the small-drive bypass. ``exact_match_file_ids`` holds the
+    files added by the rare-keyword lookup; they carry no score and are
+    not part of ``file_ids``.
     """
 
     file_ids: tuple[str, ...]
     scores: tuple[float, ...]
     top_score: float
     drive_file_count: int
+    exact_match_file_ids: tuple[str, ...] = ()
 
 
 async def coarse_retrieve(
