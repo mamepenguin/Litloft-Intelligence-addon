@@ -824,14 +824,6 @@ async def _run_hierarchical_retrieval(
         )
         return candidates, None, None
 
-    # Access-filter the shortlist BEFORE forwarding it anywhere. The
-    # coarse retriever is drive-scoped but does not consult the host's
-    # per-drive locked/unlocked state — a caller without the unlock
-    # cookie for a protected drive must not see the file_ids those
-    # rows belong to, and must not have the scoped retrieval pass them
-    # through (downstream ``retrieve_with_keywords`` already filters,
-    # but the SSE event the streaming path emits is built from the
-    # ShortlistResult and must reflect the same gate).
     # Rare keyword tokens add the files that mention them, which the
     # summary embeddings miss. They go through the same access filter as
     # the coarse files but never reach the clue generator.
@@ -850,6 +842,14 @@ async def _run_hierarchical_retrieval(
             and (pre_scope_set is None or fid in pre_scope_set)
         )
 
+    # Access-filter the shortlist BEFORE forwarding it anywhere. The
+    # coarse retriever is drive-scoped but does not consult the host's
+    # per-drive locked/unlocked state — a caller without the unlock
+    # cookie for a protected drive must not see the file_ids those
+    # rows belong to, and must not have the scoped retrieval pass them
+    # through (downstream ``retrieve_with_keywords`` already filters,
+    # but the SSE event the streaming path emits is built from the
+    # ShortlistResult and must reflect the same gate).
     accessible = await _filter_file_ids_via_internal_api(
         [*shortlist.file_ids, *exact_match_ids], credential
     )
