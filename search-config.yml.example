@@ -364,6 +364,9 @@ rag:
     clue_count: 3                        # Stage 2 multi-query expansion target
                                          # (1 = legacy single-keyword path;
                                          # 2-4 expands via shortlist summaries)
+    exact_match_max_files: 10            # a keyword found in at most this many
+                                         # files of the drive adds those files
+                                         # to the shortlist (0 = off)
   # Personal-history scoping (Stage A/B/D). Enabled by default to
   # answer "先週観た〜" / "今月観てない〜" style queries by narrowing
   # retrieval to file_ids the caller has actually opened. Requires the
