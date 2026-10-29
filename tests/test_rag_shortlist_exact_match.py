@@ -350,11 +350,16 @@ async def test_spec_addon_035_a_duplicate_token_is_looked_up_once(ask, seed, sta
 # --- the cap and what counts -------------------------------------------------
 
 
-@pytest.mark.parametrize(("count", "added"), [(1, True), (3, True), (4, False)])
-async def test_spec_addon_035_a_token_adds_files_only_up_to_the_cap(ask, seed, count, added):
+@pytest.mark.parametrize(
+    ("cap", "count", "added"),
+    [(3, 1, True), (3, 3, True), (3, 4, False), (1, 1, True), (1, 2, False)],
+)
+async def test_spec_addon_035_a_token_adds_files_only_up_to_the_cap(
+    ask, seed, cap, count, added
+):
     for i in range(count):
         mention(seed, f"f{i}")
-    out = await ask(keywords=TOKEN, cap=3)
+    out = await ask(keywords=TOKEN, cap=cap)
 
     if added:
         assert out.shortlist()["exact_match_file_ids"] == [f"f{i}" for i in range(count)]
