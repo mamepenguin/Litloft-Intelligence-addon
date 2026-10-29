@@ -46,46 +46,7 @@ class OfficeExtractor(ContentExtractor):
             logger.warning("Skipping .docx (size %d > %d): %s", size, MAX_DOCX_BYTES, file_path)
             return empty
 
-        import docx
-
-        doc = docx.Document(file_path)
-        sections: list[str] = []
-        current_heading = ""
-        current_lines: list[str] = []
-
-        def flush() -> None:
-            block = "\n".join(current_lines).strip()
-            if block:
-                sections.append(block)
-            current_lines.clear()
-
-        for para in doc.paragraphs:
-            text = para.text.strip()
-            if not text:
-                continue
-            style_name = para.style.name if para.style else ""
-            if style_name.startswith("Heading"):
-                flush()
-                try:
-                    level = int(style_name.split()[-1])
-                except ValueError:
-                    level = 1
-                prefix = "#" * min(level, 6)
-                current_heading = f"{prefix} {text}"
-                current_lines.append(current_heading)
-            else:
-                current_lines.append(text)
-
-        for table in doc.tables:
-            flush()
-            for row in table.rows:
-                cells = [cell.text.strip() for cell in row.cells]
-                if any(cells):
-                    current_lines.append(" | ".join(cells))
-
-        flush()
-
-        full_text = "\n\n".join(sections)
+        full_text, current_heading = docx_text(file_path)
         if not full_text.strip():
             return empty
 
@@ -158,27 +119,14 @@ class OfficeExtractor(ContentExtractor):
         all_chunks: list[TextChunk] = []
 
         for slide_num, slide in enumerate(prs.slides, start=1):
-            lines: list[str] = []
-
-            title_shape = slide.shapes.title
-            title_text = title_shape.text.strip() if title_shape and title_shape.has_text_frame else ""
-
-            for shape in slide.shapes:
-                if not shape.has_text_frame:
-                    continue
-                if shape is title_shape:
-                    continue
-                for para in shape.text_frame.paragraphs:
-                    text = para.text.strip()
-                    if text:
-                        lines.append(text)
+            title_text, lines = slide_text(slide)
 
             if not title_text and not lines:
                 continue
 
             heading = f"## Slide {slide_num}: {title_text}" if title_text else f"## Slide {slide_num}"
-            slide_text = heading + ("\n\n" + "\n".join(lines) if lines else "")
-            raw_chunks = self.chunk_text(slide_text)
+            slide_body = heading + ("\n\n" + "\n".join(lines) if lines else "")
+            raw_chunks = self.chunk_text(slide_body)
 
             for c in raw_chunks:
                 all_chunks.append(TextChunk(text=c, metadata=f"slide: {slide_num}"))
@@ -186,3 +134,79 @@ class OfficeExtractor(ContentExtractor):
         if not all_chunks:
             return empty
         return ExtractionResult(chunks=all_chunks, markdown=None, extractor=EXTRACTOR_NAME)
+
+
+def docx_text(file_path: str) -> tuple[str, str]:
+    """The document's text as indexing builds it, and the last heading seen."""
+    import docx
+
+    doc = docx.Document(file_path)
+    sections: list[str] = []
+    current_heading = ""
+    current_lines: list[str] = []
+
+    def flush() -> None:
+        block = "\n".join(current_lines).strip()
+        if block:
+            sections.append(block)
+        current_lines.clear()
+
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if not text:
+            continue
+        style_name = para.style.name if para.style else ""
+        if style_name.startswith("Heading"):
+            flush()
+            try:
+                level = int(style_name.split()[-1])
+            except ValueError:
+                level = 1
+            prefix = "#" * min(level, 6)
+            current_heading = f"{prefix} {text}"
+            current_lines.append(current_heading)
+        else:
+            current_lines.append(text)
+
+    for table in doc.tables:
+        flush()
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells]
+            if any(cells):
+                current_lines.append(" | ".join(cells))
+
+    flush()
+
+    return "\n\n".join(sections), current_heading
+
+
+def slide_text(slide) -> tuple[str, list[str]]:
+    """A slide's title and its text lines, as indexing reads them."""
+    lines: list[str] = []
+
+    title_shape = slide.shapes.title
+    title_text = title_shape.text.strip() if title_shape and title_shape.has_text_frame else ""
+
+    for shape in slide.shapes:
+        if not shape.has_text_frame:
+            continue
+        if shape is title_shape:
+            continue
+        for para in shape.text_frame.paragraphs:
+            text = para.text.strip()
+            if text:
+                lines.append(text)
+    return title_text, lines
+
+
+def sheet_rows(ws) -> tuple[list[str], bool]:
+    """A worksheet's non-empty rows as indexing joins them, and whether rows past the cap exist."""
+    rows_text: list[str] = []
+    for row in ws.iter_rows(values_only=True):
+        cells = [str(c) for c in row if c is not None and str(c).strip()]
+        if not cells:
+            continue
+        if len(rows_text) >= MAX_XLSX_ROWS_PER_SHEET:
+            return rows_text, True
+        rows_text.append(" ".join(cells))
+    return rows_text, False

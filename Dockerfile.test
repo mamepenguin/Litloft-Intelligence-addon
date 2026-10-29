@@ -42,6 +42,11 @@ RUN pip install --no-cache-dir -r requirements-dev.txt
 # the worker — individual tests opt into real PIL via ``pillow_real``
 # fixture in test_vision_worker.py.
 RUN pip install --no-cache-dir pillow
+# The document readers, pinned as in requirements.txt, so document-text tests
+# build and read real PDF, Office and EPUB files.
+RUN pip install --no-cache-dir \
+    PyMuPDF==1.25.5 pymupdf4llm==0.0.17 \
+    "python-docx>=1.1.0" "openpyxl>=3.1.0" "python-pptx>=1.0.0"
 
 COPY app/ ./app/
 COPY tests/ ./tests/

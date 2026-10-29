@@ -379,6 +379,27 @@ class SceneSearchResponse(BaseModel):
     results: list[SceneSearchResult]
 
 
+class DocumentTextUnit(BaseModel):
+    number: int
+    title: str | None
+    text: str
+    truncated: bool
+    extractor: str
+
+
+class DocumentTextCursor(BaseModel):
+    start: int
+    offset: int
+
+
+class DocumentTextResponse(BaseModel):
+    file_id: str
+    unit: str
+    unit_count: int
+    units: list[DocumentTextUnit]
+    next: DocumentTextCursor | None
+
+
 # --- Summaries ---
 
 

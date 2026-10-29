@@ -420,9 +420,7 @@ def _extract_sections(
                 headings = {**headings, section.number: heading}
             if not wants_text:
                 continue
-            markdown = html_to_markdown(
-                data, ignore_links=True, drop_tags=_RUBY_ANNOTATION_TAGS,
-            ).strip()[:chars_left]
+            markdown = _section_markdown(data)[:chars_left]
             chars_left -= len(markdown)
             pieces = ContentExtractor.chunk_text(
                 markdown,
@@ -434,6 +432,36 @@ def _extract_sections(
             continue
         chunks = [*chunks, *(TextChunk(text=p, page=section.number) for p in pieces)]
     return chunks, headings
+
+
+def _section_markdown(data: bytes) -> str:
+    return html_to_markdown(
+        data, ignore_links=True, drop_tags=_RUBY_ANNOTATION_TAGS,
+    ).strip()
+
+
+def section_text(
+    zf: zipfile.ZipFile,
+    entries: dict[str, zipfile.ZipInfo],
+    book: _Book,
+    section: _Section,
+    budget: _ByteBudget,
+) -> str:
+    """One section's text as indexing builds it; empty where indexing builds none."""
+    if section.is_nav or not section.is_html or not book.readable(section.path):
+        return ""
+    info = entries.get(section.path)
+    if info is None:
+        return ""
+    data = _read_member(zf, info, SECTION_MAX_BYTES, budget)
+    if data is None:
+        return ""
+    try:
+        _refuse_entities(data)
+        return _section_markdown(data)
+    except Exception as e:
+        logger.warning("EPUB section %d skipped: %s", section.number, e)
+        return ""
 
 
 def _assign_titles(
