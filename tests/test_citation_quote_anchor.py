@@ -31,6 +31,7 @@ from app.config import HierarchicalRagConfig, LLMConfig, RagConfig  # noqa: E402
 from app.rag.context import (  # noqa: E402
     ContextSnippet,
     FileContext,
+    _cap_snippets,
     build_file_context,
 )
 from app.rag.prompt import build_user_prompt  # noqa: E402
@@ -271,6 +272,40 @@ class TestNeighbourAnchor:
         assert snippet.anchor == 0
         assert _quote_of(ctx, snippet) == "The cited paragraph.\n\nFollowing."
 
+    def test_empty_chunk_before_the_target_adds_no_separator(self, monkeypatch) -> None:
+        """SPEC-ADDON-037 step 4, I2"""
+        ctx = _document_ctx(monkeypatch, [
+            (2, "", 7),
+            (3, "Cited.", 8),
+            (4, "Next.", 8),
+        ])
+        snippet = _neighbour_snippet(ctx, "Next.")
+
+        assert snippet.anchor == 0
+        assert _quote_of(ctx, snippet) == "Cited.\n\nNext."
+
+    def test_vector_selected_chunk_is_not_anchored_past_its_start(self, monkeypatch) -> None:
+        """SPEC-ADDON-037 step 5, I4"""
+        monkeypatch.setattr(
+            "app.rag.context._fetch_document_chunks_around",
+            MagicMock(return_value=[
+                (2, "Prev.", 1), (3, "Vector hit.", 1), (4, "Next.", 1),
+            ]),
+        )
+        monkeypatch.setattr(
+            "app.rag.context._fetch_document_chunks_by_vector",
+            MagicMock(return_value=[3]),
+        )
+        ctx = build_file_context(
+            _document(chunk_index=9),
+            RagConfig(max_context_chars_per_file=100000, document_vector_top_n=4),
+            query_vector=MagicMock(),
+        )
+
+        vector = [s for s in ctx.snippets if s.source == "text_content_vector"]
+        assert [s.text for s in vector] == ["Vector hit."]
+        assert vector[0].anchor == 0
+
     def test_missing_target_chunk_anchors_at_zero(self, monkeypatch) -> None:
         """SPEC-ADDON-037 section 2 failure case"""
         ctx = _document_ctx(monkeypatch, [
@@ -368,6 +403,12 @@ class TestQuoteFromAnchor:
         ctx = _ctx([ContextSnippet("transcript", text, "1:00", anchor=50)])
         assert _quote_from_contexts("f", [ctx]) == "c" * 200 + "…"
 
+    def test_whitespace_at_the_cap_is_not_kept_before_the_ellipsis(self) -> None:
+        """SPEC-ADDON-037 I9"""
+        text = "L" * 5 + "c" * 199 + " " + "d" * 10
+        ctx = _ctx([ContextSnippet("transcript", text, "1:00", anchor=5)])
+        assert _quote_from_contexts("f", [ctx]) == "c" * 199 + "…"
+
     def test_exactly_the_cap_has_no_ellipsis(self) -> None:
         """SPEC-ADDON-037 I9 boundary"""
         text = "L" * 5 + "c" * 200
@@ -418,6 +459,15 @@ def _clip_chunks():
 
 
 class TestBudgetClip:
+    @pytest.mark.parametrize("budget", [0, len("ab。cited。mid")])
+    def test_a_snippet_that_fits_is_kept_whole_with_its_anchor(self, budget) -> None:
+        """SPEC-ADDON-037 step 6 (kept whole): no budget, and an exact fit"""
+        snippet = ContextSnippet("transcript", "ab。cited。mid", "1:00", anchor=3)
+
+        kept, _total = _cap_snippets([snippet], budget)
+
+        assert [(s.text, s.anchor) for s in kept] == [("ab。cited。mid", 3)]
+
     def test_whole_snippet_keeps_its_anchor(self, monkeypatch) -> None:
         """SPEC-ADDON-037 step 6 (kept whole)"""
         ctx = _build_window(monkeypatch, _clip_chunks(), budget=100000)

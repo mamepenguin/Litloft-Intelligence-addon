@@ -2337,6 +2337,10 @@ class TestTrimToSentenceBoundaryWithOffset:
             ("  \n  ", "", 5),
             ("  \nabc", "abc", 3),
             ("", "", 0),
+            # leading cut exactly at the midpoint is still taken
+            ("abc。efgh", "abc。efgh", 0),
+            # fallback: trailing whitespace is not counted as removed
+            ("。 x  ", "。 x", 0),
         ],
     )
     def test_spec_addon_037_removed_counts_front_characters(
