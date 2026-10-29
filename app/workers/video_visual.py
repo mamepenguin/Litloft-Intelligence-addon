@@ -301,7 +301,7 @@ def _embed_scene(
     except Exception as e:
         logger.warning("video_visual: embed_passages failed (%s)", type(e).__name__)
         return
-    if not vectors:
+    if vectors is None or len(vectors) == 0:
         return
     vec = vectors[0]
     embedding_id = _scene_embedding_id(scene_id)
