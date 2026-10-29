@@ -33,8 +33,20 @@ def trim_to_sentence_boundary(snippet: str) -> str:
     Returns:
         The snippet with incomplete fragments at each edge removed.
     """
+    return trim_to_sentence_boundary_with_offset(snippet)[0]
+
+
+def trim_to_sentence_boundary_with_offset(snippet: str) -> tuple[str, int]:
+    """Like ``trim_to_sentence_boundary``, also reporting the front cut.
+
+    Returns:
+        ``(trimmed, removed)`` where ``removed`` is the number of
+        characters dropped from the front of ``snippet``: the leading
+        fragment plus the whitespace stripped after it, or, when the
+        result falls back to ``snippet.strip()``, the leading whitespace.
+    """
     if not snippet:
-        return snippet
+        return snippet, 0
 
     # Find the first sentence boundary after the first char (leading trim).
     leading_cut = 0
@@ -57,5 +69,8 @@ def trim_to_sentence_boundary(snippet: str) -> str:
             trailing_cut = i + 1
             break
 
-    trimmed = snippet[leading_cut:trailing_cut].strip()
-    return trimmed or snippet.strip()
+    window = snippet[leading_cut:trailing_cut]
+    trimmed = window.strip()
+    if trimmed:
+        return trimmed, leading_cut + (len(window) - len(window.lstrip()))
+    return snippet.strip(), len(snippet) - len(snippet.lstrip())

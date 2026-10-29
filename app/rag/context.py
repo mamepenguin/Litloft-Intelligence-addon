@@ -29,7 +29,7 @@ from app.models import Embedding, TranscriptChunk
 from app.rag.keyword_filter import filter_keywords
 from app.rag.retriever import RetrievedFile
 from app.search import MatchInfo, SegmentGroup
-from app.text_utils import trim_to_sentence_boundary
+from app.text_utils import trim_to_sentence_boundary_with_offset
 from app.workers.embedder import embed_query
 from app.workers.whisper import LOFT_MIME
 
@@ -43,6 +43,9 @@ class ContextSnippet:
     source: str  # "transcript" | "text_content" | "clip" | "metadata"
     text: str
     location: str | None  # e.g. "0:45", "page 3"
+    # Offset in ``text`` where the passage named by ``location`` begins;
+    # ``len(text)`` means the budget clipped that passage away.
+    anchor: int = 0
 
 
 @dataclass(frozen=True)
@@ -613,14 +616,22 @@ def _cap_snippets(
             running += len(text)
             continue
         # This snippet would overflow: clip + sentence-boundary trim.
-        clipped = trim_to_sentence_boundary(text[:remaining])
+        clipped, removed = trim_to_sentence_boundary_with_offset(text[:remaining])
         if clipped:
+            shifted = snippet.anchor - removed
+            if removed > snippet.anchor:
+                anchor = 0
+            elif shifted < len(clipped):
+                anchor = shifted
+            else:
+                anchor = len(clipped)
             kept = [
                 *kept,
                 ContextSnippet(
                     source=snippet.source,
                     text=clipped,
                     location=snippet.location,
+                    anchor=anchor,
                 ),
             ]
             running += len(clipped)
@@ -636,6 +647,18 @@ def _overlaps_any(
 ) -> bool:
     """Check if a time range overlaps any of the already-covered ranges."""
     return any(s <= end and start <= e for s, e in covered)
+
+
+def _joined_offset(texts: list[str], index: int | None, separator: str) -> int:
+    """Offset of ``texts[index]`` inside ``separator.join(texts)``.
+
+    Counted by position while joining, never by searching: adjacent chunks
+    can have identical text and a search would land on the earlier copy.
+    Returns 0 when ``index`` is ``None``.
+    """
+    if index is None:
+        return 0
+    return sum(len(t) + len(separator) for t in texts[:index])
 
 
 def _collect_transcript_snippets(
@@ -732,9 +755,16 @@ def _collect_transcript_snippets(
         )
         if not chunks:
             continue
-        text = " ".join(c[0] for c in chunks if c[0])
+        kept_chunks = [c for c in chunks if c[0]]
+        texts = [c[0] for c in kept_chunks]
+        text = " ".join(texts)
         if not text:
             continue
+        anchor = _joined_offset(
+            texts,
+            next((i for i, c in enumerate(kept_chunks) if c[2] > start), None),
+            " ",
+        )
         location = _format_timestamp(start)
         snippets = [
             *snippets,
@@ -742,6 +772,7 @@ def _collect_transcript_snippets(
                 source="transcript",
                 text=text,
                 location=location,
+                anchor=anchor,
             ),
         ]
         # Record the actual covered range (with window expansion).
@@ -790,7 +821,17 @@ def _collect_document_snippets(
         if expand:
             if not chunks:
                 return
-            text = "\n\n".join(c[1] for c in chunks if c[1])
+            kept_chunks = [c for c in chunks if c[1]]
+            texts = [c[1] for c in kept_chunks]
+            text = "\n\n".join(texts)
+            anchor = _joined_offset(
+                texts,
+                next(
+                    (i for i, c in enumerate(kept_chunks) if c[0] == chunk_idx),
+                    None,
+                ),
+                "\n\n",
+            )
         else:
             # Vector-selected chunks don't need ±1 neighbor padding —
             # vector similarity already picked the right passage, and
@@ -800,6 +841,7 @@ def _collect_document_snippets(
             text = next(
                 (c[1] for c in chunks if c[0] == chunk_idx and c[1]), ""
             )
+            anchor = 0
         if not text:
             return
         # Use the PDF page number of the target chunk when available so
@@ -813,6 +855,7 @@ def _collect_document_snippets(
                 source=source_tag,
                 text=text,
                 location=location,
+                anchor=anchor,
             ),
         ]
 

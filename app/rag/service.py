@@ -303,7 +303,7 @@ def _quote_from_contexts(
                     chosen = snippet
                     break
 
-        text = chosen.text.strip()
+        text = chosen.text[getattr(chosen, "anchor", 0):].strip()
         if len(text) > max_chars:
             text = text[:max_chars].rstrip() + "…"
         return text
