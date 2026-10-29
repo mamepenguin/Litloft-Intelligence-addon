@@ -14,6 +14,7 @@ import pytest
 
 from tests.llm_helpers import resolved_with
 
+from app.text_utils import trim_to_sentence_boundary_with_offset
 from app.config import FeaturesConfig, LLMConfig, SummariesConfig
 from app.workers.summaries import (
     DETAILED_STATUS_FAILED,
@@ -2314,3 +2315,38 @@ class TestClassifyDetailedMissingReason:
             transcript="a" * 500,
         )
         assert classify_detailed_missing_reason("abc") == "not_generated"
+
+
+class TestTrimToSentenceBoundaryWithOffset:
+    """SPEC-ADDON-037: the trim reports how much it removed from the front."""
+
+    @pytest.mark.parametrize(
+        ("snippet", "trimmed", "removed"),
+        [
+            # leading cut plus whitespace stripped after it
+            ("frag。  Whole one。tail", "Whole one。", 7),
+            # boundary at index 0 is a leading cut of 1
+            ("。Whole one。tail", "Whole one。", 1),
+            # no leading boundary: only the stripped trailing side changes
+            ("Whole one。tail", "Whole one。", 0),
+            # no boundary anywhere: leading whitespace is stripped
+            ("  no boundary  ", "no boundary", 2),
+            # first boundary past the midpoint: leading cut is skipped
+            ("A B C D E F G H I J。 tail", "A B C D E F G H I J。", 0),
+            # fallback branch: trimmed is empty, so snippet.strip() with leading whitespace
+            ("  \n  ", "", 5),
+            ("  \nabc", "abc", 3),
+            ("", "", 0),
+            # leading cut exactly at the midpoint is still taken
+            ("abc。efgh", "abc。efgh", 0),
+            # fallback: trailing whitespace is not counted as removed
+            ("。 x  ", "。 x", 0),
+        ],
+    )
+    def test_spec_addon_037_removed_counts_front_characters(
+        self, snippet, trimmed, removed
+    ):
+        result = trim_to_sentence_boundary_with_offset(snippet)
+        assert result == (trimmed, removed)
+        assert result[0] == _trim_to_sentence_boundary(snippet)
+        assert snippet[removed:].startswith(trimmed)
