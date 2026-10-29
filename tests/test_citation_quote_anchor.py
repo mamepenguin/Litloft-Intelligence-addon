@@ -1,4 +1,4 @@
-"""SPEC-ADDON-037: an Ask citation quotes the passage at its location, not the
+"""SPEC-ADDON-038: an Ask citation quotes the passage at its location, not the
 context before it.
 
 Each test names the spec item it checks (step N of Required items, or an
@@ -127,11 +127,11 @@ def _build_window(monkeypatch, chunks, *, start=100.0, budget=100000):
 
 class TestAnchorField:
     def test_default_is_zero(self) -> None:
-        """SPEC-ADDON-037 step 1"""
+        """SPEC-ADDON-038 step 1"""
         assert ContextSnippet(source="clip", text="x", location=None).anchor == 0
 
     def test_is_stored_and_frozen(self) -> None:
-        """SPEC-ADDON-037 step 1"""
+        """SPEC-ADDON-038 step 1"""
         s = ContextSnippet(source="transcript", text="abcdef", location="0:01", anchor=3)
         assert s.anchor == 3
         with pytest.raises(Exception):
@@ -145,7 +145,7 @@ class TestAnchorField:
 
 class TestWindowAnchor:
     def test_quote_starts_at_first_chunk_ending_after_start(self, monkeypatch) -> None:
-        """SPEC-ADDON-037 step 2, I1"""
+        """SPEC-ADDON-038 step 2, I1"""
         ctx = _build_window(monkeypatch, [
             ("lead one", 40.0, 70.0),
             ("lead two", 70.0, 99.0),
@@ -159,7 +159,7 @@ class TestWindowAnchor:
         assert _quote_of(ctx, snippet) == "cited passage after"
 
     def test_chunk_ending_exactly_at_start_is_not_the_target(self, monkeypatch) -> None:
-        """SPEC-ADDON-037 step 2 (strictly greater)"""
+        """SPEC-ADDON-038 step 2 (strictly greater)"""
         ctx = _build_window(monkeypatch, [
             ("ends at start", 70.0, 100.0),
             ("begins at start", 100.0, 130.0),
@@ -169,7 +169,7 @@ class TestWindowAnchor:
         assert _quote_of(ctx, snippet) == "begins at start"
 
     def test_identical_earlier_chunk_does_not_capture_the_anchor(self, monkeypatch) -> None:
-        """SPEC-ADDON-037 step 4, I1"""
+        """SPEC-ADDON-038 step 4, I1"""
         ctx = _build_window(monkeypatch, [
             ("[音楽]", 40.0, 70.0),
             ("[音楽]", 70.0, 130.0),
@@ -181,7 +181,7 @@ class TestWindowAnchor:
         assert _quote_of(ctx, snippet) == "[音楽] then words"
 
     def test_empty_chunks_before_the_target_add_no_separator(self, monkeypatch) -> None:
-        """SPEC-ADDON-037 step 4"""
+        """SPEC-ADDON-038 step 4"""
         ctx = _build_window(monkeypatch, [
             ("lead", 40.0, 60.0),
             ("", 60.0, 80.0),
@@ -193,7 +193,7 @@ class TestWindowAnchor:
         assert _quote_of(ctx, snippet) == "target"
 
     def test_no_chunk_ends_after_start_anchors_at_zero(self, monkeypatch) -> None:
-        """SPEC-ADDON-037 section 2 failure case"""
+        """SPEC-ADDON-038 section 2 failure case"""
         ctx = _build_window(monkeypatch, [
             ("early one", 10.0, 40.0),
             ("early two", 40.0, 90.0),
@@ -204,7 +204,7 @@ class TestWindowAnchor:
         assert _quote_of(ctx, snippet) == _rule(snippet.text)
 
     def test_long_quote_is_capped_from_the_anchor(self, monkeypatch) -> None:
-        """SPEC-ADDON-037 step 7, I9"""
+        """SPEC-ADDON-038 step 7, I9"""
         target = "t" * 500
         ctx = _build_window(monkeypatch, [
             ("lead-in " * 20, 40.0, 90.0),
@@ -238,7 +238,7 @@ def _neighbour_snippet(ctx: FileContext, needle: str) -> ContextSnippet:
 
 class TestNeighbourAnchor:
     def test_quote_is_the_target_chunk_not_the_one_before(self, monkeypatch) -> None:
-        """SPEC-ADDON-037 step 3, I2"""
+        """SPEC-ADDON-038 step 3, I2"""
         ctx = _document_ctx(monkeypatch, [
             (2, "Earlier paragraph.", 7),
             (3, "The cited paragraph.", 8),
@@ -250,7 +250,7 @@ class TestNeighbourAnchor:
         assert _quote_of(ctx, snippet) == "The cited paragraph.\n\nFollowing paragraph."
 
     def test_identical_previous_chunk_does_not_capture_the_anchor(self, monkeypatch) -> None:
-        """SPEC-ADDON-037 step 4, I2"""
+        """SPEC-ADDON-038 step 4, I2"""
         ctx = _document_ctx(monkeypatch, [
             (2, "Boilerplate.", 7),
             (3, "Boilerplate.", 8),
@@ -262,7 +262,7 @@ class TestNeighbourAnchor:
         assert _quote_of(ctx, snippet) == "Boilerplate.\n\nReal content."
 
     def test_target_is_first_chunk_of_the_fetch(self, monkeypatch) -> None:
-        """SPEC-ADDON-037 step 3 boundary: nothing before the target"""
+        """SPEC-ADDON-038 step 3 boundary: nothing before the target"""
         ctx = _document_ctx(monkeypatch, [
             (3, "The cited paragraph.", 8),
             (4, "Following.", 8),
@@ -273,7 +273,7 @@ class TestNeighbourAnchor:
         assert _quote_of(ctx, snippet) == "The cited paragraph.\n\nFollowing."
 
     def test_empty_chunk_before_the_target_adds_no_separator(self, monkeypatch) -> None:
-        """SPEC-ADDON-037 step 4, I2"""
+        """SPEC-ADDON-038 step 4, I2"""
         ctx = _document_ctx(monkeypatch, [
             (2, "", 7),
             (3, "Cited.", 8),
@@ -285,7 +285,7 @@ class TestNeighbourAnchor:
         assert _quote_of(ctx, snippet) == "Cited.\n\nNext."
 
     def test_vector_selected_chunk_is_not_anchored_past_its_start(self, monkeypatch) -> None:
-        """SPEC-ADDON-037 step 5, I4"""
+        """SPEC-ADDON-038 step 5, I4"""
         monkeypatch.setattr(
             "app.rag.context._fetch_document_chunks_around",
             MagicMock(return_value=[
@@ -307,7 +307,7 @@ class TestNeighbourAnchor:
         assert vector[0].anchor == 0
 
     def test_missing_target_chunk_anchors_at_zero(self, monkeypatch) -> None:
-        """SPEC-ADDON-037 section 2 failure case"""
+        """SPEC-ADDON-038 section 2 failure case"""
         ctx = _document_ctx(monkeypatch, [
             (2, "Earlier paragraph.", 7),
             (4, "Following paragraph.", 8),
@@ -325,7 +325,7 @@ class TestNeighbourAnchor:
 
 class TestOtherSnippetsKeepZero:
     def test_keyword_and_vector_transcript_snippets(self, monkeypatch) -> None:
-        """SPEC-ADDON-037 step 5, I4"""
+        """SPEC-ADDON-038 step 5, I4"""
         monkeypatch.setattr(
             "app.rag.context._fetch_transcript_chunks_around",
             MagicMock(return_value=[("window", 10.0, 20.0)]),
@@ -352,7 +352,7 @@ class TestOtherSnippetsKeepZero:
         assert [s.anchor for s in extra] == [0, 0]
 
     def test_image_caption_and_metadata_snippets(self, monkeypatch) -> None:
-        """SPEC-ADDON-037 step 5, I4"""
+        """SPEC-ADDON-038 step 5, I4"""
         match = MatchInfo(match_type="clip", text="a sunset", score=0.7)
         image = RetrievedFile(
             file_id="i1", drive="Photos", filename="s.jpg", file_type="image",
@@ -376,53 +376,53 @@ class TestOtherSnippetsKeepZero:
 
 class TestQuoteFromAnchor:
     def test_quote_starts_at_anchor(self) -> None:
-        """SPEC-ADDON-037 step 7"""
+        """SPEC-ADDON-038 step 7"""
         text = "lead-in words. cited words"
         ctx = _ctx([ContextSnippet("transcript", text, "1:00", anchor=text.index("cited"))])
         assert _quote_from_contexts("f", [ctx]) == "cited words"
 
     def test_leading_whitespace_after_anchor_is_stripped(self) -> None:
-        """SPEC-ADDON-037 step 7, I9"""
+        """SPEC-ADDON-038 step 7, I9"""
         ctx = _ctx([ContextSnippet("transcript", "lead\n\n  cited  ", "1:00", anchor=4)])
         assert _quote_from_contexts("f", [ctx]) == "cited"
 
     def test_anchor_at_end_means_lost_and_quote_is_empty(self) -> None:
-        """SPEC-ADDON-037 step 7, I6"""
+        """SPEC-ADDON-038 step 7, I6"""
         text = "only lead-in text"
         ctx = _ctx([ContextSnippet("transcript", text, "1:00", anchor=len(text))])
         assert _quote_from_contexts("f", [ctx]) == ""
 
     def test_whitespace_only_remainder_is_empty(self) -> None:
-        """SPEC-ADDON-037 section 2 failure case"""
+        """SPEC-ADDON-038 section 2 failure case"""
         ctx = _ctx([ContextSnippet("transcript", "lead   \n ", "1:00", anchor=4)])
         assert _quote_from_contexts("f", [ctx]) == ""
 
     def test_cap_applies_to_the_text_after_the_anchor(self) -> None:
-        """SPEC-ADDON-037 step 7, I9"""
+        """SPEC-ADDON-038 step 7, I9"""
         text = "L" * 50 + "c" * 250
         ctx = _ctx([ContextSnippet("transcript", text, "1:00", anchor=50)])
         assert _quote_from_contexts("f", [ctx]) == "c" * 200 + "…"
 
     def test_whitespace_at_the_cap_is_not_kept_before_the_ellipsis(self) -> None:
-        """SPEC-ADDON-037 I9"""
+        """SPEC-ADDON-038 I9"""
         text = "L" * 5 + "c" * 199 + " " + "d" * 10
         ctx = _ctx([ContextSnippet("transcript", text, "1:00", anchor=5)])
         assert _quote_from_contexts("f", [ctx]) == "c" * 199 + "…"
 
     def test_exactly_the_cap_has_no_ellipsis(self) -> None:
-        """SPEC-ADDON-037 I9 boundary"""
+        """SPEC-ADDON-038 I9 boundary"""
         text = "L" * 5 + "c" * 200
         ctx = _ctx([ContextSnippet("transcript", text, "1:00", anchor=5)])
         assert _quote_from_contexts("f", [ctx]) == "c" * 200
 
     def test_quote_never_contains_text_before_the_anchor(self) -> None:
-        """SPEC-ADDON-037 I5"""
+        """SPEC-ADDON-038 I5"""
         text = "SECRETLEAD cited"
         ctx = _ctx([ContextSnippet("transcript", text, "1:00", anchor=11)])
         assert "SECRETLEAD" not in _quote_from_contexts("f", [ctx])
 
     def test_snippet_choice_is_unchanged_and_each_uses_its_own_anchor(self) -> None:
-        """SPEC-ADDON-037 step 7, I7"""
+        """SPEC-ADDON-038 step 7, I7"""
         ctx = _ctx([
             ContextSnippet("transcript", "aaa first", "0:15", anchor=4),
             ContextSnippet("transcript", "bbb second", "1:30", anchor=4),
@@ -434,7 +434,7 @@ class TestQuoteFromAnchor:
         assert _quote_from_contexts("f", [ctx], location="99:99") == "first"
 
     def test_whole_token_location_match_still_wins(self) -> None:
-        """SPEC-ADDON-037 step 7, I7"""
+        """SPEC-ADDON-038 step 7, I7"""
         ctx = _ctx([
             ContextSnippet("transcript", "xx later", "10:45", anchor=3),
             ContextSnippet("transcript", "yy embedded", "transcript @ 0:45", anchor=3),
@@ -461,7 +461,7 @@ def _clip_chunks():
 class TestBudgetClip:
     @pytest.mark.parametrize("budget", [0, len("ab。cited。mid")])
     def test_a_snippet_that_fits_is_kept_whole_with_its_anchor(self, budget) -> None:
-        """SPEC-ADDON-037 step 6 (kept whole): no budget, and an exact fit"""
+        """SPEC-ADDON-038 step 6 (kept whole): no budget, and an exact fit"""
         snippet = ContextSnippet("transcript", "ab。cited。mid", "1:00", anchor=3)
 
         kept, _total = _cap_snippets([snippet], budget)
@@ -469,7 +469,7 @@ class TestBudgetClip:
         assert [(s.text, s.anchor) for s in kept] == [("ab。cited。mid", 3)]
 
     def test_whole_snippet_keeps_its_anchor(self, monkeypatch) -> None:
-        """SPEC-ADDON-037 step 6 (kept whole)"""
+        """SPEC-ADDON-038 step 6 (kept whole)"""
         ctx = _build_window(monkeypatch, _clip_chunks(), budget=100000)
         snippet = _window_snippet(ctx)
 
@@ -477,7 +477,7 @@ class TestBudgetClip:
         assert snippet.anchor == len(_sentences("A", 10)) + 1
 
     def test_passage_that_survives_the_clip_is_still_the_quote_start(self, monkeypatch) -> None:
-        """SPEC-ADDON-037 step 6, I6"""
+        """SPEC-ADDON-038 step 6, I6"""
         ctx = _build_window(monkeypatch, _clip_chunks(), budget=700)
         snippet = _window_snippet(ctx)
 
@@ -488,7 +488,7 @@ class TestBudgetClip:
         assert _quote_of(ctx, snippet).startswith("TARGETSTART")
 
     def test_lost_passage_has_anchor_at_end_and_empty_quote(self, monkeypatch) -> None:
-        """SPEC-ADDON-037 step 6, step 7, I5, I6"""
+        """SPEC-ADDON-038 step 6, step 7, I5, I6"""
         ctx = _build_window(monkeypatch, _clip_chunks(), budget=200)
         snippet = _window_snippet(ctx)
 
@@ -498,7 +498,7 @@ class TestBudgetClip:
 
     @pytest.mark.parametrize("budget", [150, 200, 300, 450, 600, 700, 900, 1100])
     def test_anchor_is_always_within_the_clipped_text(self, monkeypatch, budget) -> None:
-        """SPEC-ADDON-037 step 6 (0 <= anchor <= len)"""
+        """SPEC-ADDON-038 step 6 (0 <= anchor <= len)"""
         ctx = _build_window(monkeypatch, _clip_chunks(), budget=budget)
         snippet = _window_snippet(ctx)
 
@@ -512,7 +512,7 @@ class TestBudgetClip:
     def test_clip_that_starts_inside_the_passage_anchors_at_the_clipped_start(
         self, monkeypatch,
     ) -> None:
-        """SPEC-ADDON-037 step 6 (removed > anchor), I6"""
+        """SPEC-ADDON-038 step 6 (removed > anchor), I6"""
         chunks = [
             ("cut。" + _sentences("T", 10), 100.0, 130.0),
             (_sentences("B", 10), 130.0, 160.0),
@@ -526,7 +526,7 @@ class TestBudgetClip:
     def test_leading_fragment_cut_shifts_the_anchor_by_what_was_removed(
         self, monkeypatch,
     ) -> None:
-        """SPEC-ADDON-037 step 6 (anchor - removed): the clipped text starts
+        """SPEC-ADDON-038 step 6 (anchor - removed): the clipped text starts
         after the leading fragment, and the anchor still points at the passage."""
         chunks = [
             ("fragment。" + _sentences("A", 9), 40.0, 90.0),
@@ -547,7 +547,7 @@ class TestBudgetClip:
 
 class TestPromptUnchanged:
     def test_anchor_is_not_rendered(self) -> None:
-        """SPEC-ADDON-037 I3"""
+        """SPEC-ADDON-038 I3"""
         plain = _ctx([ContextSnippet("transcript", "lead cited", "1:00")])
         anchored = _ctx([ContextSnippet("transcript", "lead cited", "1:00", anchor=5)])
 
@@ -618,7 +618,7 @@ class TestCitationDict:
     async def test_accepted_location_keeps_seek_target_and_gets_anchored_quote(
         self, monkeypatch, rag_on,
     ) -> None:
-        """SPEC-ADDON-037 step 9, I7"""
+        """SPEC-ADDON-038 step 9, I7"""
         text = "futon dryer passage panel heater passage"
         snippet = ContextSnippet(
             "transcript", text, "28:02", anchor=text.index("panel"),
@@ -632,7 +632,7 @@ class TestCitationDict:
     async def test_unaccepted_location_is_chosen_from_the_cited_passage(
         self, monkeypatch, rag_on,
     ) -> None:
-        """SPEC-ADDON-037 step 9: seek target chosen from the anchored quote"""
+        """SPEC-ADDON-038 step 9: seek target chosen from the anchored quote"""
         text = "futon dryer passage panel heater passage"
         snippet = ContextSnippet(
             "transcript", text, "28:02", anchor=text.index("panel"),
@@ -646,7 +646,7 @@ class TestCitationDict:
     async def test_lost_passage_unaccepted_location_falls_back_to_first_match(
         self, monkeypatch, rag_on,
     ) -> None:
-        """SPEC-ADDON-037 step 9, section 9"""
+        """SPEC-ADDON-038 step 9, section 9"""
         text = "panel heater passage"
         snippet = ContextSnippet("transcript", text, "28:02", anchor=len(text))
         cit = await _ask(monkeypatch, snippet, {"location": "the heater part"})
@@ -658,7 +658,7 @@ class TestCitationDict:
     async def test_lost_passage_accepted_location_keeps_seek_target(
         self, monkeypatch, rag_on,
     ) -> None:
-        """SPEC-ADDON-037 step 9, section 9"""
+        """SPEC-ADDON-038 step 9, section 9"""
         text = "panel heater passage"
         snippet = ContextSnippet("transcript", text, "28:02", anchor=len(text))
         cit = await _ask(monkeypatch, snippet, {"location": "28:02"})
@@ -668,7 +668,7 @@ class TestCitationDict:
 
     @pytest.mark.asyncio
     async def test_llm_supplied_quote_is_kept(self, monkeypatch, rag_on) -> None:
-        """SPEC-ADDON-037 step 8, I8"""
+        """SPEC-ADDON-038 step 8, I8"""
         text = "futon dryer passage panel heater passage"
         snippet = ContextSnippet(
             "transcript", text, "28:02", anchor=text.index("panel"),

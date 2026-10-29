@@ -2318,7 +2318,7 @@ class TestClassifyDetailedMissingReason:
 
 
 class TestTrimToSentenceBoundaryWithOffset:
-    """SPEC-ADDON-037: the trim reports how much it removed from the front."""
+    """SPEC-ADDON-038: the trim reports how much it removed from the front."""
 
     @pytest.mark.parametrize(
         ("snippet", "trimmed", "removed"),
@@ -2343,7 +2343,7 @@ class TestTrimToSentenceBoundaryWithOffset:
             ("。 x  ", "。 x", 0),
         ],
     )
-    def test_spec_addon_037_removed_counts_front_characters(
+    def test_spec_addon_038_removed_counts_front_characters(
         self, snippet, trimmed, removed
     ):
         result = trim_to_sentence_boundary_with_offset(snippet)
