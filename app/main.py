@@ -22,6 +22,7 @@ from app.loop_watchdog import LoopWatchdog
 from app.routers import (
     admin,
     chapter_suggestions,
+    document_text,
     exact_search,
     files,
     llm_choices,
@@ -466,6 +467,7 @@ app.include_router(vision.router)
 app.include_router(video_visual.router)
 app.include_router(scenes.router)
 app.include_router(exact_search.router)
+app.include_router(document_text.router)
 app.include_router(admin.router)
 
 

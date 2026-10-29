@@ -407,6 +407,18 @@
         "response_filter": null
       },
       {
+        "path": "/files/{file_id}/document-text",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null,
+        "timeout": 25
+      },
+      {
         "path": "/files/{file_id}/frame",
         "methods": [
           "GET"
