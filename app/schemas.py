@@ -341,6 +341,44 @@ class VideoScenesResponse(BaseModel):
     scenes: list[VideoSceneItem]
 
 
+class ExactSearchSegment(BaseModel):
+    file_id: str
+    filename: str
+    source: Literal["text", "transcript", "scene"]
+    chunk_index: int | None
+    page: int | None
+    section: int | None
+    section_title: str | None
+    start_time: float | None
+    end_time: float | None
+    field: Literal["scene_label", "visible_text"] | None
+    match_count: int
+    snippet: str
+
+
+class ExactSearchResponse(BaseModel):
+    query: str
+    sources: list[str]
+    total: int
+    offset: int
+    segments: list[ExactSearchSegment]
+
+
+class SceneSearchResult(BaseModel):
+    file_id: str
+    filename: str
+    start_time: float
+    end_time: float | None
+    scene_label: str | None
+    visible_text: str | None
+    score: float
+
+
+class SceneSearchResponse(BaseModel):
+    query: str
+    results: list[SceneSearchResult]
+
+
 # --- Summaries ---
 
 
