@@ -433,7 +433,7 @@ def _embed_and_store(file_id: str, description_text: str) -> None:
     except Exception as e:
         logger.warning("vision: embed_passages failed (%s)", type(e).__name__)
         return
-    if not vectors:
+    if vectors is None or len(vectors) == 0:
         return
     vec = vectors[0]
 
