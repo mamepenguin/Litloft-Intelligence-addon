@@ -6,6 +6,7 @@ lists, and tables survive into the embedding chunks. Fallback: PyMuPDF
 """
 
 import logging
+import threading
 from pathlib import Path
 
 from app.config import settings
@@ -25,6 +26,11 @@ MAX_PAGES = 500
 # Joiner placed between per-page Markdown blocks so consumers can split
 # the full document back into pages if needed.
 PAGE_SEPARATOR = "\n\n---\n\n"
+
+# PyMuPDF does not support use from several threads at once: a conversion that
+# overlaps another fails over to plain text or returns wrong text. Every
+# PyMuPDF call in the addon holds this lock.
+PYMUPDF_LOCK = threading.Lock()
 
 EXTRACTOR_PRIMARY = "pymupdf4llm"
 EXTRACTOR_FALLBACK = "fitz_fallback"
@@ -55,11 +61,12 @@ class PdfExtractor(ContentExtractor):
         if path is None:
             return _empty_fallback()
 
-        primary = _extract_with_pymupdf4llm(path)
-        if primary is not None:
-            return primary
+        with PYMUPDF_LOCK:
+            primary = _extract_with_pymupdf4llm(path)
+            if primary is not None:
+                return primary
 
-        return _extract_with_fitz_fallback(path)
+            return _extract_with_fitz_fallback(path)
 
 
 def _validate_pdf_path(file_path: str) -> Path | None:
