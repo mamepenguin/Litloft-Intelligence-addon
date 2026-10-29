@@ -53,7 +53,7 @@ async def _visual_index_open(drive: str) -> bool:
     if settings.features.video_visual_index == "false":
         return False
     try:
-        return await is_feature_enabled(drive, "video_visual_index")
+        return await is_feature_enabled(drive, "video_visual_index", default_on_failure=False)
     except Exception:
         return False
 

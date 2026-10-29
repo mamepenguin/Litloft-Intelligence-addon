@@ -13,9 +13,11 @@ from tests.search_endpoint_db import (  # noqa: F401
     EPUB,
     OTHER,
     api,
+    patch_everywhere,
     search_index,
     seed,
     statements,
+    unreadable_policy,
     visual,
 )
 
@@ -278,6 +280,18 @@ class TestVisualIndexGate:
         assert everything["total"] == 2
         assert scenes_only["segments"] == []
         assert scenes_only["total"] == 0
+
+    def test_spec_addon_032_an_unreadable_policy_that_falls_back_instead_of_raising_closes_scenes(
+        self, api, seed, visual, monkeypatch,
+    ):
+        seed.file("vid", "talk.mp4", mime="video/mp4")
+        seed.scene(seed.run("vid"), 5.0, 9.0, label="needle")
+        visual(enabled=True)
+        patch_everywhere(monkeypatch, "is_feature_enabled", unreadable_policy)
+
+        body = _ok(api(PATH, {"q": "needle", "sources": "scene"}))
+
+        assert body["segments"] == []
 
     def test_spec_addon_032_another_drives_policy_does_not_close_this_drives_scenes(
         self, api, seed, visual,

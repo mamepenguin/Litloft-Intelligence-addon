@@ -21,6 +21,7 @@ from tests.search_endpoint_db import (  # noqa: F401
     search_index,
     seed,
     statements,
+    unreadable_policy,
     visual,
 )
 from tests.vec_partition_db import at_distance, unit
@@ -327,6 +328,18 @@ class TestVisualIndexGate:
         scenes.add("vid-a", 0.2, 1.0, label="secret label")
         assert _ok(api(PATH, {"q": "cat"}))["results"]
         visual(enabled=enabled, policy=policy)
+
+        response = api(PATH, {"q": "cat"})
+
+        assert response.status_code == 404
+        assert "secret label" not in response.text
+
+    def test_spec_addon_033_an_unreadable_policy_that_falls_back_instead_of_raising_is_404(
+        self, api, scenes, visual, monkeypatch,
+    ):
+        scenes.add("vid-a", 0.2, 1.0, label="secret label")
+        visual(enabled=True)
+        patch_everywhere(monkeypatch, "is_feature_enabled", unreadable_policy)
 
         response = api(PATH, {"q": "cat"})
 

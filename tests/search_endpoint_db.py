@@ -229,3 +229,7 @@ def statements(search_index):  # noqa: F811
     finally:
         event.remove(engine, "before_cursor_execute", log._before)
 
+
+async def unreadable_policy(*_args, default_on_failure: bool = True, **_kwargs) -> bool:
+    """The real policy client when the core cannot be read: no exception, the fallback."""
+    return default_on_failure
