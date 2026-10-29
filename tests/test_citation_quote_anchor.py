@@ -35,7 +35,8 @@ from app.rag.context import (  # noqa: E402
 )
 from app.rag.prompt import build_user_prompt  # noqa: E402
 from app.rag.retriever import RetrievedFile  # noqa: E402
-from app.rag.service import _quote_from_contexts, answer_question  # noqa: E402
+from app.rag.service import _answer_question as answer_question  # noqa: E402
+from app.rag.service import _quote_from_contexts  # noqa: E402
 from app.search import MatchInfo, SegmentGroup  # noqa: E402
 
 
