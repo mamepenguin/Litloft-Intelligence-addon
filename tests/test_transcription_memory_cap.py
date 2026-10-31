@@ -40,6 +40,7 @@ from app.workers.transcription.splitting_transcriber import (  # noqa: E402
 # already exercised in test_provider_capabilities.py.
 _PROVIDERS = [
     ("whisper_local", None),
+    ("haas_local", None),
     ("openai_compatible", "OPENAI_API_KEY"),
     ("deepgram", "DEEPGRAM_API_KEY"),
     ("elevenlabs_scribe", "ELEVENLABS_API_KEY"),

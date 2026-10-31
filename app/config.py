@@ -213,6 +213,14 @@ class GeminiProviderConfig:
 
 
 @dataclass(frozen=True)
+class HaasLocalProviderConfig:
+    """On-host Japanese transcription via sherpa-onnx (``haas_local``)."""
+
+    num_threads: int = 4
+    max_segment_seconds: int = 45
+
+
+@dataclass(frozen=True)
 class TranscriptionConfig:
     """Top-level transcription settings.
 
@@ -227,6 +235,9 @@ class TranscriptionConfig:
     language_hint: str = ""
     hotwords: tuple[str, ...] = ()
     whisper_local: WhisperLocalConfig = field(default_factory=WhisperLocalConfig)
+    haas_local: HaasLocalProviderConfig = field(
+        default_factory=HaasLocalProviderConfig
+    )
     openai_compatible: OpenAICompatibleProviderConfig = field(
         default_factory=OpenAICompatibleProviderConfig
     )
@@ -777,6 +788,48 @@ def _checked_hierarchical(section: dict[str, Any]) -> dict[str, Any]:
     return {**section, "hierarchical": cleaned}
 
 
+_HAAS_LOCAL_RANGES = {
+    "num_threads": (1, None),
+    "max_segment_seconds": (15, 120),
+}
+
+
+def _parse_haas_local(section: dict[str, Any]) -> HaasLocalProviderConfig:
+    """Build the ``haas_local`` config, replacing out-of-range values.
+
+    Absent or null falls back to the default silently; any other value
+    that is not an integer in range (``bool`` is an ``int`` subclass, so
+    it is excluded explicitly) logs one warning and falls back as well.
+    """
+    raw = section.get("haas_local")
+    raw = raw if isinstance(raw, dict) else {}
+    defaults = HaasLocalProviderConfig()
+    values: dict[str, int] = {}
+    for key, (low, high) in _HAAS_LOCAL_RANGES.items():
+        default = getattr(defaults, key)
+        value = raw.get(key)
+        if value is None:
+            values[key] = default
+        elif (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < low
+            or (high is not None and value > high)
+        ):
+            logger.warning(
+                "transcription.haas_local.%s must be an integer %s, got %r; "
+                "using %d",
+                key,
+                f">= {low}" if high is None else f"from {low} to {high}",
+                value,
+                default,
+            )
+            values[key] = default
+        else:
+            values[key] = value
+    return HaasLocalProviderConfig(**values)
+
+
 def _parse_rag(
     data: dict[str, Any],
     overrides: "RagOverrides | None" = None,  # type: ignore[name-defined]
@@ -920,6 +973,7 @@ def _parse_transcription(data: dict[str, Any]) -> TranscriptionConfig:
         language_hint=language_hint_value,
         hotwords=hotwords_value,
         whisper_local=whisper_local,
+        haas_local=_parse_haas_local(new_section),
         openai_compatible=_parse_nested(
             new_section, "openai_compatible", OpenAICompatibleProviderConfig
         ),

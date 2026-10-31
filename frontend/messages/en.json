@@ -9,7 +9,7 @@
     "policyFeatures": {
       "transcriptionCloud": {
         "label": "Allow cloud transcription",
-        "help": "Sends audio to external services such as Deepgram / OpenAI / ElevenLabs Scribe. When OFF, this drive uses local Whisper only.",
+        "help": "Sends audio to external services such as Deepgram / OpenAI / ElevenLabs Scribe. When OFF, this drive uses a local engine only.",
         "warning": "Cloud transcription jobs already in progress will continue after you turn this OFF. Restart the container to apply the change immediately."
       },
       "chapterSuggestions": {
@@ -656,6 +656,7 @@
       "resetFailed": "Failed to reset",
       "providers": {
         "whisper_local": "Whisper local (faster-whisper)",
+        "haas_local": "Haas local (Japanese only)",
         "openai_compatible": "OpenAI-compatible (Whisper API / Groq / Fireworks)",
         "deepgram": "Deepgram (Nova)",
         "elevenlabs_scribe": "ElevenLabs Scribe",

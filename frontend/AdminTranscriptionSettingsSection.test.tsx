@@ -15,6 +15,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 import AdminTranscriptionSettingsSection from "./AdminTranscriptionSettingsSection";
+import enMessages from "./messages/en.json";
+import jaMessages from "./messages/ja.json";
 
 const mockFetch = vi.fn();
 
@@ -43,6 +45,7 @@ function defaultPayload(overrides: Record<string, unknown> = {}) {
     hotwords: [],
     available_providers: [
       "whisper_local",
+      "haas_local",
       "openai_compatible",
       "deepgram",
       "elevenlabs_scribe",
@@ -51,6 +54,7 @@ function defaultPayload(overrides: Record<string, unknown> = {}) {
     ],
     api_keys_present: {
       whisper_local: true,
+      haas_local: true,
       openai_compatible: false,
       deepgram: true,
       elevenlabs_scribe: false,
@@ -60,6 +64,7 @@ function defaultPayload(overrides: Record<string, unknown> = {}) {
     overrides_present: false,
     search_config_summary: {
       whisper_local: { "models.whisper": "openai/whisper-large-v3-turbo" },
+      haas_local: { model: "oboroge0/Haas-ja-v1.0-onnx-quantized" },
       openai_compatible: { model: "whisper-1", base_url: "https://api.openai.com/v1" },
       deepgram: { model: "nova-3" },
       elevenlabs_scribe: { model_id: "scribe_v1" },
@@ -250,5 +255,55 @@ describe("AdminTranscriptionSettingsSection", () => {
     );
     // Banner stays visible because the override is still on disk.
     expect(screen.getByTestId("overrides-banner")).toBeInTheDocument();
+  });
+
+  it("SPEC-ADDON-039 I10: renders the Haas local radio second, with its model line and no API key row", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(defaultPayload()));
+    render(<AdminTranscriptionSettingsSection />);
+
+    const radio = await screen.findByRole("radio", {
+      name: /Haas local \(Japanese only\)/,
+    });
+    expect(screen.getAllByRole("radio")[1]).toBe(radio);
+    const card = radio.closest("label") as HTMLElement;
+    expect(card.textContent).toContain(
+      "model=oboroge0/Haas-ja-v1.0-onnx-quantized",
+    );
+    expect(card.textContent).not.toMatch(/API_KEY|set|missing/i);
+  });
+
+  it("SPEC-ADDON-039 I10: selecting Haas local keeps save enabled and PUTs it", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(defaultPayload()));
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ status: "saved", restart_required: true, core_notified: "ok" }),
+    );
+    render(<AdminTranscriptionSettingsSection />);
+
+    fireEvent.click(
+      await screen.findByRole("radio", { name: /Haas local/ }),
+    );
+    const save = screen.getByRole("button", { name: /save/i });
+    expect(save).not.toBeDisabled();
+    fireEvent.click(save);
+
+    await waitFor(() => {
+      const put = mockFetch.mock.calls.find((c) => c[1]?.method === "PUT");
+      const body = JSON.parse(String(put?.[1]?.body ?? "{}"));
+      expect(body.provider).toBe("haas_local");
+    });
+  });
+
+  it("SPEC-ADDON-039 I10: labels the provider in both locales", () => {
+    const label = (m: typeof enMessages) =>
+      (m as unknown as {
+        settings: { transcription: { providers: Record<string, string> } };
+      }).settings.transcription.providers.haas_local;
+    expect(label(enMessages)).toBe("Haas local (Japanese only)");
+    expect(label(jaMessages)).toBe("Haas local（日本語専用）");
+  });
+
+  it("SPEC-ADDON-039: the cloud-policy help no longer says OFF means local Whisper only", () => {
+    const help = enMessages.intelligence.policyFeatures.transcriptionCloud.help;
+    expect(help).not.toMatch(/local Whisper only/);
   });
 });

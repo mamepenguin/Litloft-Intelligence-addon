@@ -47,6 +47,7 @@ from app.transcription_overrides import (
     write_overrides,
 )
 from app.workers.transcription import build_inner_provider, get_provider
+from app.workers.transcription.haas_local import MODEL_REPO
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 # list rather than failing later inside ``get_provider``.
 ALL_PROVIDERS: tuple[str, ...] = (
     "whisper_local",
+    "haas_local",
     "openai_compatible",
     "deepgram",
     "elevenlabs_scribe",
@@ -68,6 +70,7 @@ ALL_PROVIDERS: tuple[str, ...] = (
 # means the provider does not need an env (whisper_local).
 _PROVIDER_API_KEY_ENV: dict[str, str | None] = {
     "whisper_local": None,
+    "haas_local": None,
     "openai_compatible": "OPENAI_API_KEY",
     "deepgram": "DEEPGRAM_API_KEY",
     "elevenlabs_scribe": "ELEVENLABS_API_KEY",
@@ -268,6 +271,9 @@ def _frozen_subconfig_summary() -> dict[str, Any]:
         # The worker loads models.whisper; whisper_local.model is parsed but unused.
         "whisper_local": {
             "models.whisper": config.settings.models.whisper,
+        },
+        "haas_local": {
+            "model": MODEL_REPO,
         },
         "openai_compatible": {
             "model": base.openai_compatible.model,

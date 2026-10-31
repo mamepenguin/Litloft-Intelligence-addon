@@ -24,6 +24,7 @@ const ENDPOINT = "/api/addons/intelligence/admin/transcription";
 
 const PROVIDER_KEY_ENV: Record<string, string | null> = {
   whisper_local: null,
+  haas_local: null,
   openai_compatible: "OPENAI_API_KEY",
   deepgram: "DEEPGRAM_API_KEY",
   elevenlabs_scribe: "ELEVENLABS_API_KEY",
@@ -33,6 +34,7 @@ const PROVIDER_KEY_ENV: Record<string, string | null> = {
 
 interface SearchConfigSummary {
   whisper_local?: { "models.whisper"?: string };
+  haas_local?: { model?: string };
   openai_compatible?: { model?: string; base_url?: string };
   deepgram?: { model?: string };
   elevenlabs_scribe?: { model_id?: string };

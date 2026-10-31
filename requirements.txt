@@ -40,3 +40,4 @@ python-pptx>=1.0.0
 beautifulsoup4>=4.12
 html2text>=2024.2.26
 lxml>=5.0
+sherpa-onnx==2.0.1

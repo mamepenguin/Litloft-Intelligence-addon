@@ -45,11 +45,18 @@ logger = logging.getLogger(__name__)
 
 ALL_PROVIDERS: tuple[str, ...] = (
     "whisper_local",
+    "haas_local",
     "openai_compatible",
     "deepgram",
     "elevenlabs_scribe",
     "assemblyai",
     "gemini",
+)
+
+# haas_local is Japanese only and downloads its model, so a run that names
+# no providers leaves it out.
+DEFAULT_PROVIDERS: tuple[str, ...] = tuple(
+    n for n in ALL_PROVIDERS if n != "haas_local"
 )
 
 
@@ -119,13 +126,13 @@ class _CapsOverride:
 def resolve_providers(requested: list[str] | None) -> list[_ProviderInstance]:
     """Build a provider instance per requested name.
 
-    ``requested=None`` resolves all known providers. Unknown names
-    in ``requested`` raise ``ValueError`` so the CLI can fail loud
+    ``requested=None`` resolves every provider but ``haas_local``.
+    Unknown names in ``requested`` raise ``ValueError`` so the CLI can fail loud
     with the available list (the dispatch loop must not silently
     skip a typo).
     """
     if requested is None:
-        names = list(ALL_PROVIDERS)
+        names = list(DEFAULT_PROVIDERS)
     else:
         unknown = [n for n in requested if n not in ALL_PROVIDERS]
         if unknown:

@@ -125,6 +125,11 @@ def _build_inner(name: str) -> TranscriptionProvider:
                 WhisperLocalProvider,
             )
             return WhisperLocalProvider()
+        case "haas_local":
+            from app.workers.transcription.haas_local import (
+                HaasLocalProvider,
+            )
+            return HaasLocalProvider()
         case "openai_compatible":
             from app.workers.transcription.openai_compatible import (
                 OpenAICompatibleProvider,

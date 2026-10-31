@@ -87,6 +87,45 @@ def test_resolve_providers_skips_when_get_provider_raises_fatal() -> None:
     assert "DEEPGRAM_API_KEY" in (result[1].skipped_reason or "")
 
 
+def test_spec_addon_039_i10_runner_accepts_haas_local_by_name_only() -> None:
+    assert "haas_local" in ALL_PROVIDERS
+
+    def fake_get_provider(name):
+        mock = MagicMock()
+        mock.name = name
+        return mock
+
+    with patch(
+        "app.evals_transcription.runner.get_provider",
+        side_effect=fake_get_provider,
+    ):
+        named = resolve_providers(["haas_local"])
+        default = resolve_providers(None)
+
+    assert [p.name for p in named] == ["haas_local"]
+    assert named[0].provider is not None
+    assert "haas_local" not in [p.name for p in default]
+    assert [p.name for p in default]
+
+
+def test_spec_addon_039_i10_cli_help_matches_the_default_run(
+    capsys, monkeypatch
+) -> None:
+    from app.evals_transcription.__main__ import main
+
+    # argparse wraps to COLUMNS and breaks the comma-joined list mid-name.
+    monkeypatch.setenv("COLUMNS", "500")
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    text = " ".join(capsys.readouterr().out.split())
+
+    default = text.split("Default: ")[1].split(". ")[0]
+    assert default.split(",") == [
+        n for n in ALL_PROVIDERS if n != "haas_local"
+    ]
+    assert "haas_local runs only when named" in text
+
+
 # ---------------------------------------------------------------------------
 # run_eval
 # ---------------------------------------------------------------------------

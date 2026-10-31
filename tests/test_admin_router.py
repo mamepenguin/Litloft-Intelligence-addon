@@ -78,11 +78,12 @@ def test_get_returns_baseline_when_no_overrides(client, monkeypatch) -> None:
     assert "provider" in body
     assert "available_providers" in body
     assert set(body["available_providers"]) == {
-        "whisper_local", "openai_compatible", "deepgram",
+        "whisper_local", "haas_local", "openai_compatible", "deepgram",
         "elevenlabs_scribe", "assemblyai", "gemini",
     }
     assert body["api_keys_present"] == {
         "whisper_local": True,
+        "haas_local": True,
         "openai_compatible": False,
         "deepgram": False,
         "elevenlabs_scribe": False,
@@ -396,6 +397,43 @@ def test_whisper_local_does_not_require_api_key(
             json={"provider": "whisper_local", "hotwords": []},
         )
     assert response.status_code == 200
+
+
+def test_spec_addon_039_i10_haas_local_is_listed_second(client) -> None:
+    body = client.get("/admin/transcription").json()
+    assert body["available_providers"][:2] == ["whisper_local", "haas_local"]
+    assert body["available_providers"][2:] == [
+        "openai_compatible", "deepgram", "elevenlabs_scribe",
+        "assemblyai", "gemini",
+    ]
+
+
+def test_spec_addon_039_i10_haas_local_saves_without_any_api_key(
+    client, admin_app, monkeypatch
+) -> None:
+    for env in (
+        "OPENAI_API_KEY", "DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY",
+        "ASSEMBLYAI_API_KEY", "GEMINI_API_KEY",
+    ):
+        monkeypatch.delenv(env, raising=False)
+    from app.routers import admin as admin_module
+
+    monkeypatch.setattr(
+        admin_module, "_notify_core_restart_pending", _ok_notify()
+    )
+    response = client.put(
+        "/admin/transcription",
+        json={"provider": "haas_local", "hotwords": []},
+    )
+    assert response.status_code == 200
+    assert client.get("/admin/transcription").json()["provider"] == "haas_local"
+
+
+def test_spec_addon_039_i10_haas_local_summary_reports_the_repository(client) -> None:
+    summary = client.get("/admin/transcription").json()["search_config_summary"]
+    assert summary["haas_local"] == {
+        "model": "oboroge0/Haas-ja-v1.0-onnx-quantized"
+    }
 
 
 # ---------------------------------------------------------------------------
