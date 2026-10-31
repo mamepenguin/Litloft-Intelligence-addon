@@ -339,6 +339,21 @@ async def test_spec_addon_039_i2_words_stay_ordered_inside_span(
         assert a.end <= b.start
 
 
+async def test_spec_addon_039_i2_token_past_span_end_sits_at_span_end(haas):
+    haas.spans = [(1.0, 2.0)]
+    haas.results = [result(["あ", "い", "う"], [0.2, 1.5, 3.0], [0.1, 0.1, 0.1])]
+    (seg,) = await _run(haas.inner(), haas)
+
+    assert [w.text for w in seg.words] == ["あ", "い", "う"]
+    for w in seg.words:
+        assert 1.0 <= w.start <= w.end <= 2.0
+    for a, b in zip(seg.words, seg.words[1:]):
+        assert a.end <= b.start
+    assert seg.words[-1].start == pytest.approx(2.0)
+    assert seg.words[-1].end == pytest.approx(2.0)
+    assert seg.end == pytest.approx(2.0)
+
+
 @pytest.mark.parametrize(
     "tokens",
     [[], [" "], ["", "  "], ["<0xFF>"], ["<0xFF>", " "]],
@@ -779,3 +794,52 @@ async def test_spec_addon_039_i9_not_released_during_a_call_and_pass_does_not_bl
 
     assert pass_seconds < 0.5
     assert len(haas.builds) == 1
+
+
+async def test_spec_addon_039_i9_not_released_while_a_call_waits_with_the_lock_free(
+    haas,
+):
+    haas.configure(idle_unload=1)
+    provider = haas.inner()
+    await _run(provider, haas)
+    indexer = haas.indexer()
+    await asyncio.sleep(1.3)
+
+    haas.ffmpeg_delay(0.6)
+    second = asyncio.create_task(_run(provider, haas))
+    await asyncio.sleep(0.2)
+    await haas.idle_pass(indexer)
+    segs = await second
+
+    assert len(haas.builds) == 1
+    assert len(segs) == 1
+
+
+async def test_spec_addon_039_i5_idle_check_before_any_load_imports_nothing(
+    haas, monkeypatch
+):
+    import importlib.abc
+    import sys
+
+    class Guard(importlib.abc.MetaPathFinder):
+        hits: list[str] = []
+
+        def find_spec(self, name, path, target=None):
+            if name.split(".")[0] in {"sherpa_onnx", "huggingface_hub"}:
+                self.hits.append(name)
+                raise ImportError(name)
+            return None
+
+    for name in ("sherpa_onnx", "huggingface_hub", "huggingface_hub.errors",
+                 "huggingface_hub.utils"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    guard = Guard()
+    monkeypatch.setattr(sys, "meta_path", [guard, *sys.meta_path])
+    haas.configure(idle_unload=1)
+    haas.fresh_module()
+    indexer = haas.indexer()
+
+    await haas.idle_pass(indexer)
+
+    assert guard.hits == []
+    assert haas.builds == []

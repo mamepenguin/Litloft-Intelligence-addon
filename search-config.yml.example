@@ -450,11 +450,12 @@ search:
 # matrix (capabilities, env vars, caveats).
 #
 # Per-drive override: set `addons.intelligence.transcription_cloud: false`
-# in drives.json to force `whisper_local` for sensitive drives even when
-# `provider` here points at a cloud provider.
+# in drives.json to use a local engine (the selected one when it is local,
+# otherwise `whisper_local`) for sensitive drives even when `provider` here
+# points at a cloud provider.
 transcription:
-  # whisper_local | openai_compatible | deepgram | elevenlabs_scribe |
-  # assemblyai | gemini
+  # whisper_local | haas_local | openai_compatible | deepgram |
+  # elevenlabs_scribe | assemblyai | gemini
   provider: whisper_local
   # Optional ISO language code hint passed to the provider (empty = auto-detect)
   language_hint: ""
@@ -472,6 +473,15 @@ transcription:
     compression_ratio_threshold: 2.0
     no_speech_threshold: 0.45
     log_prob_threshold: -1.0
+
+  # Japanese-only local engine (Haas-ja-v1.0 through sherpa-onnx, CPU).
+  # Other languages produce meaningless text without an error. The model
+  # (about 460 MB) is fetched from Hugging Face on first use into
+  # the models/ folder of the intelligence data directory and stays there
+  # after you deselect the provider.
+  haas_local:
+    num_threads: 4  # integer >= 1
+    max_segment_seconds: 45  # integer 15-120; higher uses more memory
 
   # OpenAI Whisper API + base_url override (works for Groq, Fireworks,
   # self-hosted whisper). Requires OPENAI_API_KEY env var.
@@ -608,7 +618,8 @@ workers:
 # CLIP and text_embedding stay resident because they are used by
 # the search query path on every request.
 memory:
-  # Unload Whisper model after idle (seconds, 0 = never unload)
+  # Unload the Whisper model, or the Haas recognizer when haas_local is in
+  # use, after idle (seconds, 0 = never unload)
   # Lower this (e.g. 60-120) if you run a local LLM alongside intelligence
   # and want Whisper to release RAM sooner between indexing bursts.
   whisper_idle_unload: 300

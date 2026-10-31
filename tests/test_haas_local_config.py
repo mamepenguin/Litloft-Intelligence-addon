@@ -65,7 +65,7 @@ def test_spec_addon_039_i3_max_segment_seconds_accepted(
     assert not [r for r in caplog.records if "max_segment_seconds" in r.getMessage()]
 
 
-@pytest.mark.parametrize("threads", [0, -1, 2.5, "4"])
+@pytest.mark.parametrize("threads", [0, -1, 2.5, "4", True, 4.0])
 def test_spec_addon_039_i3_num_threads_out_of_range_falls_back_with_one_warning(
     tmp_path, monkeypatch, caplog, threads
 ):
@@ -76,7 +76,9 @@ def test_spec_addon_039_i3_num_threads_out_of_range_falls_back_with_one_warning(
     assert len([r for r in caplog.records if "num_threads" in r.getMessage()]) == 1
 
 
-@pytest.mark.parametrize("seconds", [0, 14, 121, 1000, -45, 45.5, "45"])
+@pytest.mark.parametrize(
+    "seconds", [0, 14, 121, 1000, -45, 45.5, "45", True, 45.0]
+)
 def test_spec_addon_039_i3_max_segment_seconds_out_of_range_falls_back_with_one_warning(
     tmp_path, monkeypatch, caplog, seconds
 ):
@@ -88,6 +90,17 @@ def test_spec_addon_039_i3_max_segment_seconds_out_of_range_falls_back_with_one_
         len([r for r in caplog.records if "max_segment_seconds" in r.getMessage()])
         == 1
     )
+
+
+@pytest.mark.parametrize("key", ["num_threads", "max_segment_seconds"])
+def test_spec_addon_039_i3_null_falls_back_silently(
+    tmp_path, monkeypatch, caplog, key
+):
+    with caplog.at_level(logging.WARNING):
+        cfg = _haas(tmp_path, monkeypatch, {key: None})
+
+    assert (cfg.num_threads, cfg.max_segment_seconds) == (4, 45)
+    assert not [r for r in caplog.records if key in r.getMessage()]
 
 
 def test_spec_addon_039_i3_one_bad_value_leaves_the_other(tmp_path, monkeypatch):

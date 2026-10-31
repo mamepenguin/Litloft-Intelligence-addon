@@ -43,6 +43,9 @@ from app.workers.clip import (
     VIDEO_TYPES,
 )
 from app.workers.metadata import index_metadata_batch, index_text_content
+from app.workers.transcription.haas_local import (
+    check_idle_unload as check_haas_idle_unload,
+)
 from app.workers.whisper import (
     check_idle_unload as check_whisper_idle_unload,
     index_tfidf_keywords_backfill,
@@ -1639,6 +1642,7 @@ class IndexManager:
                 check_whisper_idle_unload()
                 check_blip_idle_unload()
                 check_clip_concepts_idle_unload()
+                check_haas_idle_unload()
             except asyncio.CancelledError:
                 return
             except Exception as e:

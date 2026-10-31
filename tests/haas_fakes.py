@@ -383,7 +383,7 @@ class Haas:
         import app.indexer as indexer_mod
 
         self.mp.setattr(indexer_mod, "settings", self.settings)
-        return indexer_mod.Indexer()
+        return indexer_mod.IndexManager()
 
     async def idle_pass(self, indexer) -> float:
         """Run one iteration of the indexer's idle-unload worker; return seconds taken."""

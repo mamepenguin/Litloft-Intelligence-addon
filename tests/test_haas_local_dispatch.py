@@ -38,7 +38,7 @@ FILE_ID = "f00000000001"
 
 
 @pytest.fixture()
-def session_factory(tmp_path, monkeypatch):
+def session_factory(tmp_path, monkeypatch, haas):
     eng = create_engine(
         f"sqlite:///{tmp_path / 'search.db'}",
         connect_args={"check_same_thread": False},
@@ -75,7 +75,7 @@ def session_factory(tmp_path, monkeypatch):
         file_id=FILE_ID,
         drive="d1",
         filename="x.mp3",
-        file_path="/drives/d1/x.mp3",
+        file_path=str(haas.audio_file),
         file_type="video",
         mime_type="video/mp4",
         file_size=1000,

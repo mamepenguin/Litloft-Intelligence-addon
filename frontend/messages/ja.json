@@ -9,7 +9,7 @@
     "policyFeatures": {
       "transcriptionCloud": {
         "label": "クラウド文字起こしを許可",
-        "help": "Deepgram / OpenAI / ElevenLabs Scribeなどの外部サービスに音声を送信します。OFFにすると、このドライブではローカルWhisperだけを使います。",
+        "help": "Deepgram / OpenAI / ElevenLabs Scribeなどの外部サービスに音声を送信します。OFFにすると、このドライブではローカルのエンジンだけを使います。",
         "warning": "OFFに切り替えた後も、進行中のクラウド文字起こしは継続されます。すぐに反映するにはコンテナの再起動が必要です。"
       },
       "chapterSuggestions": {
@@ -656,6 +656,7 @@
       "resetFailed": "リセットに失敗しました",
       "providers": {
         "whisper_local": "Whisper local (faster-whisper)",
+        "haas_local": "Haas local（日本語専用）",
         "openai_compatible": "OpenAI互換 (Whisper API / Groq / Fireworks)",
         "deepgram": "Deepgram (Nova)",
         "elevenlabs_scribe": "ElevenLabs Scribe",
