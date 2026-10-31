@@ -260,6 +260,18 @@
         "timeout": 30
       },
       {
+        "path": "/search/scene-segments",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "search"
+        },
+        "response_filter": null,
+        "timeout": 30
+      },
+      {
         "path": "/search/scenes",
         "methods": [
           "GET"

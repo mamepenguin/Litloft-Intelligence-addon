@@ -1,5 +1,6 @@
 """Search endpoints: semantic search, compare, and debug."""
 
+import asyncio
 import logging
 from typing import Any, Literal
 
@@ -9,14 +10,17 @@ from fastapi.concurrency import run_in_threadpool
 from app.document_sections import EPUB_MIME
 from app.drive_context import require_drive
 from app.file_hydrate import hydrate_files
+from app import scene_segments
 from app.schemas import (
     CompareResponseModel,
+    SceneSegmentsResponse,
     SearchResponseModel,
     SearchResultItem,
     SearchResultSegment,
     SearchResultSegmentMatch,
     SourceCountsModel,
 )
+from app.workers.clip import embed_text_clip
 from app.search import execute_search_compare, search as execute_search
 
 logger = logging.getLogger(__name__)
@@ -160,3 +164,35 @@ async def search_compare_endpoint(
             text_content_keyword=compare.source_counts.text_content_keyword,
         ),
     )
+
+
+@router.get("/search/scene-segments", response_model=SceneSegmentsResponse)
+async def scene_segments_endpoint(
+    q: str = Query(...),
+    limit: int = Query(default=20, ge=1, le=50),
+    drive: str = Depends(require_drive),
+) -> SceneSegmentsResponse:
+    query = q.strip()
+    if not 1 <= len(query) <= 200:
+        raise HTTPException(
+            status_code=422, detail="q must be 1 to 200 characters after stripping"
+        )
+    try:
+        frames = await asyncio.to_thread(scene_segments.count_frames, drive)
+    except Exception as e:
+        logger.error("Scene segment search failed: %s", e)
+        raise HTTPException(status_code=500, detail="Search failed") from e
+    if frames == 0:
+        return SceneSegmentsResponse(query=query, segments=[], partial=False)
+    try:
+        vector = await asyncio.to_thread(embed_text_clip, query)
+    except Exception as e:
+        logger.warning("Scene segment embedding failed (%s)", type(e).__name__)
+        raise HTTPException(status_code=503, detail="Embedding unavailable") from e
+    try:
+        return await asyncio.to_thread(
+            scene_segments.find_segments, vector, query, drive, limit, frames,
+        )
+    except Exception as e:
+        logger.error("Scene segment search failed: %s", e)
+        raise HTTPException(status_code=500, detail="Search failed") from e
