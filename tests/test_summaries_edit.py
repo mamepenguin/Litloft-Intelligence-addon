@@ -21,7 +21,7 @@ from __future__ import annotations
 import sys
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -46,11 +46,13 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 from app.config import FeaturesConfig  # noqa: E402
 from app.database import Base, _create_file_summaries_table  # noqa: E402
 from app.routers.summaries import (  # noqa: E402
+    batch_summaries,
     edit_summary,
     get_summary,
+    regenerate_summary,
     revert_summary,
 )
-from app.schemas import SummaryEditRequest  # noqa: E402
+from app.schemas import BatchSummariesRequest, SummaryEditRequest  # noqa: E402
 from tests.search_db_doubles import read_session_from  # noqa: E402
 
 
@@ -209,6 +211,99 @@ class TestGetSummaryNewFields:
         assert result.short_summary == "user short"
         assert result.has_original is True
         assert result.edited_at is not None
+
+
+def _mark_detailed_only(engine, *, short: str) -> None:
+    """Leave the seeded row holding a detailed summary and the given short text."""
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE file_summaries SET short_summary = :s, long_summary = '', "
+                "status = 'hidden', detailed_status = 'generated' "
+                "WHERE file_id = 'abc123'"
+            ),
+            {"s": short},
+        )
+
+
+class TestRowWithoutShortSummary:
+    """A row holding only a detailed summary has no short summary."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("short", "available"), [("", False), ("AI short", True)]
+    )
+    async def test_get_reports_short_summary_by_its_text(
+        self, search_db, feature_manual, short, available
+    ):
+        engine, _ = search_db
+        _mark_detailed_only(engine, short=short)
+        result = await get_summary("abc123", "drive1")
+        assert result.available is available
+        if not available:
+            assert result.reason == "not_generated"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("short", "queued"), [("", 1), ("AI short", 0)]
+    )
+    async def test_batch_queues_files_without_short_summary(
+        self, search_db, feature_manual, monkeypatch, short, queued
+    ):
+        engine, _ = search_db
+        _mark_detailed_only(engine, short=short)
+        worker = MagicMock()
+        worker.enqueue = AsyncMock()
+        monkeypatch.setattr(
+            "app.routers.summaries.get_summaries_worker", lambda: worker
+        )
+        monkeypatch.setattr(
+            "app.routers.summaries.require_llm", AsyncMock()
+        )
+        result = await batch_summaries(
+            BatchSummariesRequest(file_ids=["abc123"]), "drive1"
+        )
+        assert result.queued == queued
+        assert worker.enqueue.await_count == queued
+
+    @pytest.mark.asyncio
+    async def test_regenerate_keeps_the_detailed_summary(
+        self, search_db, feature_manual, monkeypatch
+    ):
+        engine, _ = search_db
+        _mark_detailed_only(engine, short="")
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE file_summaries SET edited_at = 'x', "
+                    "short_original = 's', long_original = 'l' "
+                    "WHERE file_id = 'abc123'"
+                )
+            )
+        worker = MagicMock()
+        worker.enqueue = AsyncMock()
+        monkeypatch.setattr(
+            "app.routers.summaries.get_summaries_worker", lambda: worker
+        )
+        monkeypatch.setattr("app.routers.summaries.require_llm", AsyncMock())
+        monkeypatch.setattr(
+            "app.routers.summaries._reembed_metadata_after_summary_change",
+            AsyncMock(),
+        )
+        monkeypatch.setattr(
+            "app.routers.summaries.classify_missing_reason",
+            lambda _fid: "not_generated",
+        )
+        await regenerate_summary("abc123", drive="drive1", body=None)
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT detailed_status, edited_at, short_original "
+                    "FROM file_summaries WHERE file_id = 'abc123'"
+                )
+            ).fetchone()
+        assert row == ("generated", None, None)
+        worker.enqueue.assert_awaited_once_with("abc123")
 
 
 class TestEditSummary:
