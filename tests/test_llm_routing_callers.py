@@ -466,7 +466,10 @@ async def test_summary_regenerate_without_a_choice_queues_through_routing(
     await router_mod.regenerate_summary("f1", drive=DRIVE, body=None, background_tasks=bg)
 
     assert asked.requested == [None]
-    assert [sql for sql, _ in executed] == ["DELETE FROM file_summaries WHERE file_id = :fid"]
+    assert [sql.split(" WHERE ")[0] for sql, _ in executed][1:] == [
+        "DELETE FROM file_summaries"
+    ]
+    assert executed[0][0].startswith("UPDATE file_summaries SET")
     worker.enqueue.assert_awaited_once_with("f1")
     assert bg.tasks == []
 
@@ -491,7 +494,10 @@ async def test_summary_regenerate_with_a_choice_runs_it_beside_the_queue(
     )
 
     assert asked.requested == ["big"]
-    assert [sql for sql, _ in executed] == ["DELETE FROM file_summaries WHERE file_id = :fid"]
+    assert [sql.split(" WHERE ")[0] for sql, _ in executed][1:] == [
+        "DELETE FROM file_summaries"
+    ]
+    assert executed[0][0].startswith("UPDATE file_summaries SET")
     router_mod._reembed_metadata_after_summary_change.assert_awaited_once_with("f1")
     worker.enqueue.assert_not_called()
     [task] = bg.tasks

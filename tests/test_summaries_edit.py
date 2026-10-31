@@ -234,9 +234,13 @@ class TestRowWithoutShortSummary:
         ("short", "available"), [("", False), ("AI short", True)]
     )
     async def test_get_reports_short_summary_by_its_text(
-        self, search_db, feature_manual, short, available
+        self, search_db, feature_manual, monkeypatch, short, available
     ):
         engine, _ = search_db
+        monkeypatch.setattr(
+            "app.routers.summaries.classify_missing_reason",
+            lambda _fid: "not_generated",
+        )
         _mark_detailed_only(engine, short=short)
         result = await get_summary("abc123", "drive1")
         assert result.available is available
