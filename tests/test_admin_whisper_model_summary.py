@@ -161,7 +161,9 @@ def test_spec_addon_016_i4_other_providers_entries_are_unchanged(tmp_path, monke
         },
     )
 
-    assert {k: v for k, v in summary.items() if k != "whisper_local"} == OTHER_PROVIDERS
+    assert {
+        k: v for k, v in summary.items() if k not in ("whisper_local", "haas_local")
+    } == OTHER_PROVIDERS
 
 
 @pytest.mark.parametrize(

@@ -87,6 +87,27 @@ def test_resolve_providers_skips_when_get_provider_raises_fatal() -> None:
     assert "DEEPGRAM_API_KEY" in (result[1].skipped_reason or "")
 
 
+def test_spec_addon_039_i10_runner_accepts_haas_local_by_name_only() -> None:
+    assert "haas_local" in ALL_PROVIDERS
+
+    def fake_get_provider(name):
+        mock = MagicMock()
+        mock.name = name
+        return mock
+
+    with patch(
+        "app.evals_transcription.runner.get_provider",
+        side_effect=fake_get_provider,
+    ):
+        named = resolve_providers(["haas_local"])
+        default = resolve_providers(None)
+
+    assert [p.name for p in named] == ["haas_local"]
+    assert named[0].provider is not None
+    assert "haas_local" not in [p.name for p in default]
+    assert [p.name for p in default]
+
+
 # ---------------------------------------------------------------------------
 # run_eval
 # ---------------------------------------------------------------------------
