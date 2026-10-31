@@ -171,16 +171,11 @@ def check_idle_unload() -> None:
     timeout = config.settings.memory.whisper_idle_unload
     if timeout <= 0 or _recognizer is None or _inflight:
         return
-    if time.monotonic() - _last_used <= timeout:
-        return
+    # A cancelled call can leave its worker thread still holding the lock.
     if not _lock.acquire(blocking=False):
         return
     try:
-        if (
-            _recognizer is not None
-            and not _inflight
-            and time.monotonic() - _last_used > timeout
-        ):
+        if _recognizer is not None and time.monotonic() - _last_used > timeout:
             _release_recognizer()
     finally:
         _lock.release()

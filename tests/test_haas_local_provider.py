@@ -843,3 +843,36 @@ async def test_spec_addon_039_i5_idle_check_before_any_load_imports_nothing(
 
     assert guard.hits == []
     assert haas.builds == []
+
+
+async def test_spec_addon_039_i9_cancelled_call_still_holding_the_lock_is_not_waited_on(
+    haas,
+):
+    haas.configure(idle_unload=1)
+    gate = threading.Event()
+    entered = threading.Event()
+
+    def hold(_n):
+        entered.set()
+        gate.wait(10)
+
+    provider = haas.inner()
+    await _run(provider, haas)
+    haas.decode_hook = hold
+    indexer = haas.indexer()
+    running = asyncio.create_task(_run(provider, haas))
+    while not entered.is_set():
+        await asyncio.sleep(0.01)
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    await asyncio.sleep(1.3)
+
+    pass_seconds = await haas.idle_pass(indexer)
+    gate.set()
+    haas.decode_hook = None
+
+    assert pass_seconds < 0.5
+    await asyncio.sleep(0.2)
+    await _run(provider, haas)
+    assert len(haas.builds) == 1
