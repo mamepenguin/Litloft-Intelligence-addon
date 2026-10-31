@@ -517,6 +517,36 @@ async def test_spec_addon_039_i7_vanished_remote_is_fatal(haas, error):
     assert REPO in str(exc.value)
 
 
+async def test_spec_addon_039_i7_named_file_the_commit_lacks_is_fatal(haas):
+    haas.remote_lacks = {"NOTICE"}
+    with pytest.raises(FatalError) as exc:
+        await _run(haas.inner(), haas)
+
+    assert REPO in str(exc.value)
+    assert haas.hf_file_calls[0]["revision"] == COMMIT
+    assert haas.builds == []
+
+
+async def test_spec_addon_039_i7_offline_fetch_returning_partial_cache_is_transient(
+    haas,
+):
+    haas.precache([f for f in MODEL_FILES if f != "tokens.txt"])
+    haas.offline_returns_cache = True
+    with pytest.raises(TransientError) as exc:
+        await _run(haas.inner(), haas)
+
+    assert REPO in str(exc.value)
+    assert haas.builds == []
+
+
+async def test_spec_addon_039_fetch_failure_message_names_repo_directory(haas):
+    haas.net_error = ConnectionError("down")
+    with pytest.raises(TransientError) as exc:
+        await _run(haas.inner(), haas)
+
+    assert str(haas.model_dir.parents[1]) in str(exc.value)
+
+
 async def test_spec_addon_039_fetch_failure_then_next_attempt_resumes(haas):
     provider = haas.inner()
     haas.net_error = ConnectionError("down")
@@ -568,6 +598,8 @@ async def test_spec_addon_039_i7_load_failure_is_fatal_names_repo_and_dir(haas):
 
     assert REPO in str(exc.value)
     assert str(haas.model_dir) in str(exc.value)
+    # Deleting only the snapshot relinks the same blobs.
+    assert f"delete {haas.model_dir.parents[1]} " in str(exc.value)
 
 
 async def test_spec_addon_039_failed_load_is_retried_by_next_job(haas):

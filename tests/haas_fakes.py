@@ -101,8 +101,11 @@ class Haas:
         self.decode_hook = None
 
         self.hf_calls: list[dict] = []
+        self.hf_file_calls: list[dict] = []
         self.net_error: BaseException | None = None
         self.net_hook = None
+        self.remote_lacks: set[str] = set()
+        self.offline_returns_cache = False
 
         self.builds: list[dict] = []
         self.build_exc: BaseException | None = None
@@ -270,15 +273,30 @@ class Haas:
                     h.net_hook()
                 if h.net_error is not None:
                     raise h.net_error
+                if h.offline_returns_cache:
+                    return str(h.model_dir)
                 h.model_dir.mkdir(parents=True, exist_ok=True)
                 for name in MODEL_FILES:
-                    (h.model_dir / name).write_bytes(b"0")
+                    if name not in h.remote_lacks:
+                        (h.model_dir / name).write_bytes(b"0")
                 return str(h.model_dir)
             finally:
                 h._exit()
 
+        def hf_hub_download(repo_id, filename, *, revision=None, cache_dir=None):
+            h.hf_file_calls.append(
+                {"repo_id": repo_id, "filename": filename, "revision": revision}
+            )
+            if h.offline_returns_cache:
+                raise LocalEntryNotFoundError("offline")
+            if filename in h.remote_lacks:
+                raise EntryNotFoundError("404")
+            (h.model_dir / filename).write_bytes(b"0")
+            return str(h.model_dir / filename)
+
         hub = types.ModuleType("huggingface_hub")
         hub.snapshot_download = snapshot_download
+        hub.hf_hub_download = hf_hub_download
         errors = types.ModuleType("huggingface_hub.errors")
         utils = types.ModuleType("huggingface_hub.utils")
         for mod in (hub, errors, utils):

@@ -55,9 +55,20 @@ _last_used: float = 0.0
 _inflight = 0
 
 
+def _model_repo_dir() -> Path:
+    """The cache directory to delete to fetch the model again.
+
+    A snapshot directory only links blobs kept beside it, so deleting just
+    the snapshot relinks the same bytes.
+    """
+    return Path(config.settings.model_cache_dir) / (
+        f"models--{MODEL_REPO.replace('/', '--')}"
+    )
+
+
 def _fetch_model_dir() -> Path:
     try:
-        from huggingface_hub import snapshot_download
+        from huggingface_hub import hf_hub_download, snapshot_download
         from huggingface_hub.errors import (
             EntryNotFoundError,
             LocalEntryNotFoundError,
@@ -91,11 +102,23 @@ def _fetch_model_dir() -> Path:
         pass
 
     logger.info("Fetching %s@%s", MODEL_REPO, MODEL_COMMIT)
+    repo_dir = _model_repo_dir()
     try:
         fetched = download(local_files_only=False)
+        # snapshot_download raises nothing for a named file the commit lacks,
+        # and offline it returns whatever is cached. Asking for the file
+        # itself tells the two apart.
+        for name in MODEL_FILES:
+            if not (fetched / name).exists():
+                hf_hub_download(
+                    MODEL_REPO,
+                    name,
+                    revision=MODEL_COMMIT,
+                    cache_dir=cache_dir,
+                )
     except LocalEntryNotFoundError as exc:
         raise TransientError(
-            f"Could not fetch {MODEL_REPO}: {exc}"
+            f"Could not fetch {MODEL_REPO} into {repo_dir}: {exc}"
         ) from exc
     except (
         RepositoryNotFoundError,
@@ -103,14 +126,16 @@ def _fetch_model_dir() -> Path:
         EntryNotFoundError,
     ) as exc:
         raise FatalError(
-            f"{MODEL_REPO}@{MODEL_COMMIT} is not available on Hugging Face: "
-            f"{exc}"
+            f"{MODEL_REPO}@{MODEL_COMMIT} is not available on Hugging Face "
+            f"(cache: {repo_dir}): {exc}"
         ) from exc
     except Exception as exc:
-        raise TransientError(f"Could not fetch {MODEL_REPO}: {exc}") from exc
+        raise TransientError(
+            f"Could not fetch {MODEL_REPO} into {repo_dir}: {exc}"
+        ) from exc
     if not complete(fetched):
         raise TransientError(
-            f"Fetched snapshot of {MODEL_REPO} is incomplete in {fetched}"
+            f"Fetched snapshot of {MODEL_REPO} is incomplete in {repo_dir}"
         )
     return fetched
 
@@ -137,8 +162,8 @@ def _load_recognizer() -> object:
         )
     except Exception as exc:
         raise FatalError(
-            f"Could not load {MODEL_REPO} from {model_dir}; delete that "
-            f"directory to fetch it again: {exc}"
+            f"Could not load {MODEL_REPO} from {model_dir}; delete "
+            f"{_model_repo_dir()} to fetch it again: {exc}"
         ) from exc
 
     _recognizer = recognizer
