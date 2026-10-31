@@ -26,6 +26,7 @@ from tests.haas_fakes import (
     SAMPLE_RATE,
     EntryNotFoundError,
     HfHubHTTPError,
+    LocalEntryNotFoundError,
     RepositoryNotFoundError,
     RevisionNotFoundError,
     haas,  # noqa: F401  (fixture)
@@ -539,8 +540,13 @@ async def test_spec_addon_039_i7_offline_fetch_returning_partial_cache_is_transi
     assert haas.builds == []
 
 
-async def test_spec_addon_039_fetch_failure_message_names_repo_directory(haas):
-    haas.net_error = ConnectionError("down")
+@pytest.mark.parametrize(
+    "error",
+    [ConnectionError("down"), LocalEntryNotFoundError("offline")],
+    ids=["other", "local-entry"],
+)
+async def test_spec_addon_039_fetch_failure_message_names_repo_directory(haas, error):
+    haas.net_error = error
     with pytest.raises(TransientError) as exc:
         await _run(haas.inner(), haas)
 
