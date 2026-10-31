@@ -57,6 +57,7 @@ from app.schemas import (
     SummaryResponse,
 )
 from app.workers.summaries import (
+    _HAS_SHORT_SUMMARY,
     DETAILED_STATUS_GENERATED,
     DETAILED_STATUS_GENERATING,
     _delete_detailed_summary,
@@ -222,7 +223,8 @@ async def get_summary(
                     "s.edited_at, s.short_original, s.long_original "
                     "FROM file_summaries s "
                     "INNER JOIN indexed_files f ON s.file_id = f.file_id "
-                    "WHERE s.file_id = :fid AND f.active = 1"
+                    "WHERE s.file_id = :fid AND f.active = 1 "
+                    f"AND {_HAS_SHORT_SUMMARY}"
                 ),
                 {"fid": file_id},
             ).fetchone()
@@ -286,9 +288,25 @@ async def regenerate_summary(
     summaries_worker = get_summaries_worker()
 
     def _delete() -> None:
+        # A row carrying a detailed summary's workflow state outlives the
+        # short/long text; deleting it would orphan the detailed body.
         with get_search_db() as session:
             session.execute(
-                sql_text("DELETE FROM file_summaries WHERE file_id = :fid"),
+                sql_text(
+                    "UPDATE file_summaries SET short_summary = '', "
+                    "long_summary = '', model = '', context_type = '', "
+                    "context_chars = 0, was_truncated = 0, status = 'hidden', "
+                    "edited_at = NULL, short_original = NULL, "
+                    "long_original = NULL "
+                    "WHERE file_id = :fid AND detailed_status IS NOT NULL"
+                ),
+                {"fid": file_id},
+            )
+            session.execute(
+                sql_text(
+                    "DELETE FROM file_summaries "
+                    "WHERE file_id = :fid AND detailed_status IS NULL"
+                ),
                 {"fid": file_id},
             )
 
@@ -518,7 +536,8 @@ async def batch_summaries(
                 row[0]
                 for row in session.execute(
                     sql_text(
-                        f"SELECT file_id FROM file_summaries WHERE file_id IN ({placeholders})"
+                        "SELECT file_id FROM file_summaries "
+                        f"WHERE file_id IN ({placeholders}) AND {_HAS_SHORT_SUMMARY}"
                     ),
                     params,
                 ).fetchall()
