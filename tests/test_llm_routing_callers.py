@@ -451,6 +451,20 @@ def _regenerate_router(monkeypatch) -> tuple[MagicMock, list]:
     return worker, executed
 
 
+_CLEAR_KEPT_ROW_SQL = (
+    "UPDATE file_summaries SET short_summary = '', "
+    "long_summary = '', model = '', context_type = '', "
+    "context_chars = 0, was_truncated = 0, status = 'hidden', "
+    "edited_at = NULL, short_original = NULL, "
+    "long_original = NULL "
+    "WHERE file_id = :fid AND detailed_status IS NOT NULL"
+)
+_DELETE_BARE_ROW_SQL = (
+    "DELETE FROM file_summaries "
+    "WHERE file_id = :fid AND detailed_status IS NULL"
+)
+
+
 @pytest.mark.asyncio
 async def test_summary_regenerate_without_a_choice_queues_through_routing(
     monkeypatch, use_llm
@@ -466,10 +480,7 @@ async def test_summary_regenerate_without_a_choice_queues_through_routing(
     await router_mod.regenerate_summary("f1", drive=DRIVE, body=None, background_tasks=bg)
 
     assert asked.requested == [None]
-    assert [sql.split(" WHERE ")[0] for sql, _ in executed][1:] == [
-        "DELETE FROM file_summaries"
-    ]
-    assert executed[0][0].startswith("UPDATE file_summaries SET")
+    assert [sql for sql, _ in executed] == [_CLEAR_KEPT_ROW_SQL, _DELETE_BARE_ROW_SQL]
     worker.enqueue.assert_awaited_once_with("f1")
     assert bg.tasks == []
 
@@ -494,10 +505,7 @@ async def test_summary_regenerate_with_a_choice_runs_it_beside_the_queue(
     )
 
     assert asked.requested == ["big"]
-    assert [sql.split(" WHERE ")[0] for sql, _ in executed][1:] == [
-        "DELETE FROM file_summaries"
-    ]
-    assert executed[0][0].startswith("UPDATE file_summaries SET")
+    assert [sql for sql, _ in executed] == [_CLEAR_KEPT_ROW_SQL, _DELETE_BARE_ROW_SQL]
     router_mod._reembed_metadata_after_summary_change.assert_awaited_once_with("f1")
     worker.enqueue.assert_not_called()
     [task] = bg.tasks

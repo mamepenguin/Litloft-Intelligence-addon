@@ -271,18 +271,35 @@ class TestRowWithoutShortSummary:
         assert worker.enqueue.await_count == queued
 
     @pytest.mark.asyncio
-    async def test_regenerate_keeps_the_detailed_summary(
-        self, search_db, feature_manual, monkeypatch
+    @pytest.mark.parametrize(
+        ("short", "long", "detailed_status", "expected"),
+        [
+            ("", "", "generated", ("", "", "hidden", None, None, None, "generated")),
+            (
+                "AI short",
+                "AI long",
+                "generated",
+                ("", "", "hidden", None, None, None, "generated"),
+            ),
+            ("AI short", "AI long", None, None),
+        ],
+        ids=["detailed-only", "short-and-detailed", "no-detailed"],
+    )
+    async def test_regenerate_clears_short_text_and_keeps_detailed_state(
+        self, search_db, feature_manual, monkeypatch,
+        short, long, detailed_status, expected,
     ):
         engine, _ = search_db
-        _mark_detailed_only(engine, short="")
         with engine.begin() as conn:
             conn.execute(
                 text(
-                    "UPDATE file_summaries SET edited_at = 'x', "
-                    "short_original = 's', long_original = 'l' "
+                    "UPDATE file_summaries SET short_summary = :s, "
+                    "long_summary = :l, status = 'generated', "
+                    "detailed_status = :d, edited_at = 'x', "
+                    "short_original = 'os', long_original = 'ol' "
                     "WHERE file_id = 'abc123'"
-                )
+                ),
+                {"s": short, "l": long, "d": detailed_status},
             )
         worker = MagicMock()
         worker.enqueue = AsyncMock()
@@ -302,11 +319,12 @@ class TestRowWithoutShortSummary:
         with engine.connect() as conn:
             row = conn.execute(
                 text(
-                    "SELECT detailed_status, edited_at, short_original "
+                    "SELECT short_summary, long_summary, status, edited_at, "
+                    "short_original, long_original, detailed_status "
                     "FROM file_summaries WHERE file_id = 'abc123'"
                 )
             ).fetchone()
-        assert row == ("generated", None, None)
+        assert (tuple(row) if row else None) == expected
         worker.enqueue.assert_awaited_once_with("abc123")
 
 
