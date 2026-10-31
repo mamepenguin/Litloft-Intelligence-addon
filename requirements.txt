@@ -21,6 +21,9 @@ torchaudio==2.5.1
 # explicitly so rebuilds don't drop it.
 matplotlib==3.10.8
 faster-whisper==1.1.0
+# av 19 removed the metadata_errors argument that faster-whisper passes to
+# av.open, so every transcription fails. faster-whisper 1.2.1 still passes it.
+av==18.1.0
 whisperx==3.3.1
 open-clip-torch==2.30.0
 pillow==11.1.0

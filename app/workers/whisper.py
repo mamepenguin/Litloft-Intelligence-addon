@@ -543,6 +543,12 @@ def _transcribe_sequential(
 
             return segments
 
+        except (TypeError, AttributeError, ImportError) as e:
+            # A dependency's API changing under us fails every file. Closing
+            # each one as a zero-segment success would hide that.
+            raise FatalError(
+                f"faster-whisper could not run on {file_path}: {e}"
+            ) from e
         except (IndexError, RuntimeError) as e:
             if attempt == 0:
                 logger.warning(
