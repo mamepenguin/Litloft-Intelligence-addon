@@ -15,11 +15,14 @@ behaviour is covered by the legacy whisper tests; here we only verify:
 from __future__ import annotations
 
 import threading
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from app.workers import whisper
 from app.workers.transcription import (
+    FatalError,
     ProviderCapabilities,
     TranscriptionProvider,
     TranscriptionSegment,
@@ -217,3 +220,69 @@ async def test_transcribe_passes_file_path_through() -> None:
         await provider.transcribe("/drives/foo/bar.mp4")
 
     assert seen["path"] == "/drives/foo/bar.mp4"
+
+
+def _whisper_config() -> SimpleNamespace:
+    return SimpleNamespace(
+        beam_size=1,
+        batch_size=2,
+        condition_on_previous_text=False,
+        compression_ratio_threshold=0,
+        no_speech_threshold=0,
+        log_prob_threshold=0,
+    )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TypeError("open() got an unexpected keyword argument 'metadata_errors'"),
+        AttributeError("module 'av' has no attribute 'open'"),
+        ImportError("cannot import name 'open' from 'av'"),
+    ],
+    ids=["type", "attribute", "import"],
+)
+def test_dependency_contract_error_fails_the_job_instead_of_an_empty_success(
+    error,
+) -> None:
+    model = MagicMock()
+    model.transcribe.side_effect = error
+
+    with pytest.raises(FatalError) as exc:
+        whisper._transcribe_sequential(model, "/a.mp4", _whisper_config(), None)
+
+    assert str(error) in str(exc.value)
+    assert model.transcribe.call_count == 1
+
+
+def test_dependency_contract_error_survives_the_batched_fallback() -> None:
+    error = TypeError("open() got an unexpected keyword argument 'metadata_errors'")
+    pipeline = MagicMock()
+    pipeline.transcribe.side_effect = error
+    model = MagicMock()
+    model.transcribe.side_effect = error
+
+    with (
+        patch("app.workers.whisper._ensure_loaded", return_value=(model, pipeline)),
+        pytest.raises(FatalError),
+    ):
+        whisper._transcribe_batched(pipeline, "/a.mp4", _whisper_config(), None)
+
+
+@pytest.mark.parametrize(
+    ("error", "attempts"),
+    [
+        (IndexError("tuple index out of range"), 2),
+        (RuntimeError("decode failed"), 2),
+        (ValueError("Invalid data found when processing input"), 1),
+    ],
+    ids=["no-audio", "runtime", "corrupt"],
+)
+def test_undecodable_input_stays_an_empty_result(error, attempts) -> None:
+    model = MagicMock()
+    model.transcribe.side_effect = error
+
+    assert (
+        whisper._transcribe_sequential(model, "/a.mp4", _whisper_config(), None) == []
+    )
+    assert model.transcribe.call_count == attempts
