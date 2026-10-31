@@ -144,6 +144,13 @@
     "more": "件以上",
     "showMore": "もっと見る"
   },
+  "sceneCandidates": {
+    "heading": "シーン候補",
+    "loading": "シーンを探しています",
+    "failed": "シーンを検索できませんでした",
+    "partial": "このドライブのシーンを見逃している可能性があります",
+    "noIndex": "このドライブにはシーンの索引がありません"
+  },
   "askSearch": {
     "loading": "回答を作成中...",
     "thinking": "回答を作成中…",

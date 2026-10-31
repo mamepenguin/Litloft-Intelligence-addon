@@ -13,6 +13,13 @@
     "priority": 10
   },
   "slots": {
+    "search-results-top": [
+      {
+        "id": "scene-segments",
+        "label": "Scene candidates",
+        "priority": 10
+      }
+    ],
     "search-modes": [
       {
         "id": "find-mode",

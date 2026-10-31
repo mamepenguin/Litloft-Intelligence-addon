@@ -12,6 +12,7 @@ export const slotComponents: Record<string, React.LazyExoticComponent<React.Comp
   "failed-jobs": lazy(() => import("./FailedJobsAlert")),
   "visual-index": lazy(() => import("./VisualIndexSection")),
   "clip-frames": lazy(() => import("./ClipFramesSection")),
+  "scene-segments": lazy(() => import("./SceneCandidatesSection")),
   "index-details": lazy(() => import("./IndexDetailsMenuItem")),
 "transcript": lazy(() => import("./TranscriptSection")),
   "unverified-source": lazy(() => import("./UnverifiedSourceSection")),
