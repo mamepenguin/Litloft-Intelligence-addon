@@ -379,11 +379,41 @@ class Haas:
 
     def indexer(self):
         """An Indexer imported after the provider module, so both see the same one."""
+        import app
+
+        if not hasattr(self, "_indexer_before"):
+            self._indexer_before = (
+                sys.modules.get("app.indexer"),
+                getattr(app, "indexer", None),
+            )
         self.mp.delitem(sys.modules, "app.indexer", raising=False)
         import app.indexer as indexer_mod
 
         self.mp.setattr(indexer_mod, "settings", self.settings)
         return indexer_mod.IndexManager()
+
+    def restore_indexer(self) -> None:
+        """Put back the ``app.indexer`` that was loaded before ``indexer()``.
+
+        Tests that patch ``"app.indexer.x"`` resolve it through the ``app``
+        package attribute, which importing a second copy would leave pointing
+        at that copy.
+        """
+        before = getattr(self, "_indexer_before", None)
+        if before is None:
+            return
+        import app
+
+        module, attribute = before
+        if module is None:
+            sys.modules.pop("app.indexer", None)
+        else:
+            sys.modules["app.indexer"] = module
+        if attribute is None:
+            if hasattr(app, "indexer"):
+                delattr(app, "indexer")
+        else:
+            app.indexer = attribute
 
     async def idle_pass(self, indexer) -> float:
         """Run one iteration of the indexer's idle-unload worker; return seconds taken."""
@@ -407,4 +437,6 @@ class Haas:
 
 @pytest.fixture()
 def haas(monkeypatch, tmp_path, make_settings):
-    return Haas(monkeypatch, tmp_path, make_settings)
+    h = Haas(monkeypatch, tmp_path, make_settings)
+    yield h
+    h.restore_indexer()
