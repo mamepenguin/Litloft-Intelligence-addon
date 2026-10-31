@@ -27,7 +27,7 @@ except ImportError as exc:  # pragma: no cover - exercised manually
 from app.evals_transcription.loader import load_cases
 from app.evals_transcription.report import write_report
 from app.evals_transcription.runner import (
-    ALL_PROVIDERS,
+    DEFAULT_PROVIDERS,
     resolve_providers,
     run_eval,
 )
@@ -41,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m app.evals_transcription",
         description=(
-            "Run every available transcription provider over the "
+            "Run transcription providers over the "
             "curated case set and emit a comparison report."
         ),
     )
@@ -66,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "Comma-separated subset of providers to run. Default: "
-            f"all available ({','.join(ALL_PROVIDERS)})."
+            f"{','.join(DEFAULT_PROVIDERS)}. haas_local runs only when named."
         ),
     )
     parser.add_argument(

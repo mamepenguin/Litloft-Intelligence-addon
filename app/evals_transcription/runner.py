@@ -55,7 +55,7 @@ ALL_PROVIDERS: tuple[str, ...] = (
 
 # haas_local is Japanese only and downloads its model, so a run that names
 # no providers leaves it out.
-_DEFAULT_PROVIDERS: tuple[str, ...] = tuple(
+DEFAULT_PROVIDERS: tuple[str, ...] = tuple(
     n for n in ALL_PROVIDERS if n != "haas_local"
 )
 
@@ -132,7 +132,7 @@ def resolve_providers(requested: list[str] | None) -> list[_ProviderInstance]:
     skip a typo).
     """
     if requested is None:
-        names = list(_DEFAULT_PROVIDERS)
+        names = list(DEFAULT_PROVIDERS)
     else:
         unknown = [n for n in requested if n not in ALL_PROVIDERS]
         if unknown:
