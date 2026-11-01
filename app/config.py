@@ -58,8 +58,8 @@ class SearchConfig:
     # frames. Worth a looser threshold and a stronger weight in its
     # own knob so tuning ``clip`` does not move ``clip_thumbnail``.
     min_score_clip_thumbnail: float = 0.05
-    # Score gap analysis: if (top_score - mean_score) < this threshold,
-    # the result set is "flat" (no standout match) and discarded entirely.
+    # Text channel only: if (top_score - mean_score) < this threshold, the
+    # result set is "flat" (no standout match) and discarded entirely.
     score_gap_threshold: float = 0.02
     # Dynamic cutoff: discard results below (top_score - margin)
     score_cutoff_margin: float = 0.05

@@ -562,6 +562,8 @@ def _vector_search_text(
         return results
 
 
+_CLIP_MATCH_TYPES = frozenset({"clip", "clip_thumbnail"})
+
 #: sqlite-vec refuses a KNN ``k`` above 4096.
 _CLIP_DRIVE_FETCH_MAX = 4096
 _CLIP_DRIVE_FETCH_FACTORS = (4, 16, 64)
@@ -619,15 +621,16 @@ def _vector_search_clip(
 ) -> list[_VectorMatch]:
     """Search the CLIP vector table for similar embeddings.
 
-    Applies the same filtering stages as text vector search:
-    absolute threshold, score gap analysis, and margin cutoff.
+    Applies an absolute threshold and a margin cutoff. Unlike the text
+    channel it has no flat-set check: a subject with many pictures fills
+    the nearest rows with near-equal scores, so a flat set here means many
+    true matches, not none.
 
     In ``mode="recall"`` the ``min_score_clip`` absolute threshold is
     deliberately **not** loosened — the CLIP channel weight is already
     reduced in the RRF combiner, and keeping the entry threshold firm
     prevents low-quality image matches from crowding out text hits in
-    the top_k window. Only the gap check (disabled) and the margin
-    cutoff (widened) are relaxed.
+    the top_k window. Only the margin cutoff is widened.
 
     Args:
         query_vector: CLIP query embedding vector.
@@ -643,7 +646,7 @@ def _vector_search_clip(
             partition, so scene rows cannot take its candidate slots.
         drive: The requested drive. With Scene search off, the
             candidates are this drive's active files only, so the
-            score gates judge them and not other drives' thumbnails.
+            margin is measured from this drive's best thumbnail.
 
     Returns:
         List of vector matches.
@@ -686,42 +689,13 @@ def _vector_search_clip(
     embedding_ids = [row[0] for row in rows]
     distances = {row[0]: row[1] for row in rows}
 
-    # Score gap analysis for CLIP
-    all_scores = [_l2_to_cosine_similarity(row[1]) for row in rows]
     search_config = settings.search
     # min_score_clip is NOT loosened in recall mode (see docstring).
-    # Only the gap check is disabled and the margin widened.
-    if mode == "recall":
-        gap_threshold = _RECALL_PARAMS.score_gap_threshold
-        margin = _RECALL_PARAMS.score_cutoff_margin
-    else:
-        gap_threshold = search_config.score_gap_threshold
-        margin = search_config.score_cutoff_margin
-
-    if all_scores and gap_threshold > 0:
-        top_score = all_scores[0]
-        mean_score = sum(all_scores) / len(all_scores)
-        gap = top_score - mean_score
-
-        if gap < gap_threshold:
-            logger.debug(
-                "CLIP score gap too small (%.4f < %.4f), "
-                "discarding all %d candidates",
-                gap, gap_threshold, len(all_scores),
-            )
-            return []
-
-        # Coefficient of variation check (same as text vector)
-        if len(all_scores) >= 5 and mean_score > 0:
-            std = (sum((s - mean_score) ** 2 for s in all_scores) / len(all_scores)) ** 0.5
-            cv = std / mean_score
-            if cv < 0.01:
-                logger.debug(
-                    "CLIP vector CV too small (%.4f), "
-                    "discarding all %d candidates",
-                    cv, len(all_scores),
-                )
-                return []
+    margin = (
+        _RECALL_PARAMS.score_cutoff_margin
+        if mode == "recall"
+        else search_config.score_cutoff_margin
+    )
 
     # Default: ``clip_thumbnail`` only. Scene CLIP is opt-in via
     # ``include_scene_clip`` (search-modes "シーン検索" toggle, Ask
@@ -1531,7 +1505,14 @@ def _build_results(
             cutoff_ratio = settings.search.score_cutoff_ratio
         top_score = results[0].score
         min_combined = top_score * cutoff_ratio
-        results = [r for r in results if r.score >= min_combined]
+        # Image cosines sit on a far lower scale than keyword scores, so the
+        # ratio would remove every picture as soon as one document mentions
+        # the word.
+        results = [
+            r for r in results
+            if r.score >= min_combined
+            or (mode != "recall" and _CLIP_MATCH_TYPES & set(r.match_types))
+        ]
 
     return results[:limit]
 
