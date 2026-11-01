@@ -465,6 +465,40 @@ export function getFrameUrl(fileId: string, timestamp: number): string {
   return `${API_BASE}/addons/intelligence/files/${fileId}/frame?t=${timestamp}`;
 }
 
+export interface SceneSegment {
+  file_id: string;
+  filename: string;
+  start: number;
+  end: number;
+  peak: number;
+  score: number;
+}
+
+export interface SceneSegmentsResponse {
+  query: string;
+  segments: SceneSegment[];
+  partial: boolean;
+}
+
+/**
+ * Scene candidates for a query. Resolves to `null` on 404, which is how the
+ * proxy answers a drive whose `search` policy is off.
+ */
+export async function fetchSceneSegments(
+  query: string,
+  drive: string,
+  signal?: AbortSignal,
+): Promise<SceneSegmentsResponse | null> {
+  const qs = new URLSearchParams({ q: query });
+  const res = await fetch(
+    `${API_BASE}/addons/intelligence/search/scene-segments?${qs}`,
+    { credentials: "include", headers: driveHeaders(drive), signal },
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
+  return res.json();
+}
+
 // Suggested tags types and API
 export interface SuggestedTagsResponse {
   available: boolean;

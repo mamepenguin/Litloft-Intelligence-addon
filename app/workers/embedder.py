@@ -110,6 +110,9 @@ def _ensure_loaded() -> object:
             return _model
 
         try:
+            from app.workers import ml_imports
+
+            ml_imports.import_ml_libraries()
             from sentence_transformers import SentenceTransformer
 
             from app.config import settings

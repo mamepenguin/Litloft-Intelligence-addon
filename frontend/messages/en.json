@@ -144,6 +144,13 @@
     "more": "more",
     "showMore": "Show more"
   },
+  "sceneCandidates": {
+    "heading": "Scene candidates",
+    "loading": "Searching for scenes",
+    "failed": "Couldn't search scenes",
+    "partial": "Some scenes in this drive may have been missed",
+    "noIndex": "This drive has no scene index"
+  },
   "askSearch": {
     "loading": "Creating answer...",
     "thinking": "Creating answer…",

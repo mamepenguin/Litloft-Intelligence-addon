@@ -379,6 +379,21 @@ class SceneSearchResponse(BaseModel):
     results: list[SceneSearchResult]
 
 
+class SceneSegment(BaseModel):
+    file_id: str
+    filename: str
+    start: float
+    end: float
+    peak: float
+    score: float
+
+
+class SceneSegmentsResponse(BaseModel):
+    query: str
+    segments: list[SceneSegment]
+    partial: bool
+
+
 class DocumentTextUnit(BaseModel):
     number: int
     title: str | None

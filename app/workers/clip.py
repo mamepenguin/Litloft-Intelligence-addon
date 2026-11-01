@@ -22,7 +22,7 @@ from app.vec_partition import insert_vector_sql
 from app.config import settings, validate_file_path
 from app.database import get_search_db
 from app.models import Embedding, IndexedFile
-from app.workers import blip
+from app.workers import blip, ml_imports
 from sqlalchemy import text as sql_text
 
 logger = logging.getLogger(__name__)
@@ -108,6 +108,7 @@ def _ensure_loaded() -> tuple[object, object, object]:
             return _model, _preprocess, _tokenizer
 
         try:
+            ml_imports.import_ml_libraries()
             import open_clip
 
             model_name = settings.models.clip
@@ -226,6 +227,7 @@ def _ensure_siglip_text_loaded() -> tuple[object, object]:
         if _siglip_text_loaded and _siglip_text_model is not None:
             return _siglip_text_model, _siglip_processor
 
+        ml_imports.import_ml_libraries()
         from transformers import AutoProcessor, SiglipTextModel
 
         model_name = settings.models.clip

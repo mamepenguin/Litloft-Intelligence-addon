@@ -13,6 +13,13 @@
     "priority": 10
   },
   "slots": {
+    "search-results-top": [
+      {
+        "id": "scene-segments",
+        "label": "Scene candidates",
+        "priority": 10
+      }
+    ],
     "search-modes": [
       {
         "id": "find-mode",
@@ -249,6 +256,18 @@
       },
       {
         "path": "/search/exact",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "search"
+        },
+        "response_filter": null,
+        "timeout": 30
+      },
+      {
+        "path": "/search/scene-segments",
         "methods": [
           "GET"
         ],
