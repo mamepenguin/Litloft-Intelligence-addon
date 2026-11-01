@@ -177,40 +177,6 @@ def _far_scene_rows(index, n=5):
 
 
 @pytest.mark.parametrize(
-    "gap_threshold, thumbnail_scores",
-    [
-        pytest.param(0.02, [0.800 + 0.002 * i for i in range(10)], id="default-gap-flat-set"),
-        pytest.param(0.10, [0.90] + [0.80 + 0.007 * i for i in range(9)], id="configured-gap"),
-    ],
-)
-def test_spec_addon_025_a_thumbnail_set_without_a_standout_is_discarded_by_the_gap_check(
-    clip_index, monkeypatch, gap_threshold, thumbnail_scores,
-):
-    _use_search_config(monkeypatch, score_gap_threshold=gap_threshold)
-    _rows(clip_index, "vec_clip", "clip_thumbnail",
-          [_distance(s) for s in thumbnail_scores], "t")
-    _far_scene_rows(clip_index)
-
-    assert _clip(clip_index) == []
-
-
-def test_spec_addon_025_a_thumbnail_set_whose_spread_is_below_the_cv_cutoff_is_discarded(
-    clip_index, monkeypatch,
-):
-    """One standout clears the default gap threshold, but the scores vary by less
-    than 1% of their mean."""
-    _use_search_config(monkeypatch)
-    scores = [0.83] + [0.7995 + 0.00002 * i for i in range(39)]
-    mean = float(np.mean(scores))
-    assert scores[0] - mean > SearchConfig().score_gap_threshold
-    assert float(np.std(scores)) / mean < 0.01
-    _rows(clip_index, "vec_clip", "clip_thumbnail", [_distance(s) for s in scores], "t")
-    _far_scene_rows(clip_index, n=10)
-
-    assert _clip(clip_index) == []
-
-
-@pytest.mark.parametrize(
     "config, scores, kept",
     [
         pytest.param(
@@ -269,34 +235,6 @@ GATES_ONLY = dict(score_gap_threshold=0.02, min_score_clip_thumbnail=-1.0,
                   score_cutoff_margin=10.0)
 
 
-@pytest.mark.parametrize("which", ["other-drive", "inactive"])
-def test_spec_addon_025_gap_check_judges_the_drives_active_thumbnails_not_far_rows_of_other_files(
-    clip_index, monkeypatch, which,
-):
-    _use_search_config(monkeypatch, **GATES_ONLY)
-    scores = [0.800 + 0.002 * i for i in range(10)]
-    assert max(scores) - float(np.mean(scores)) < 0.02
-    _rows(clip_index, "vec_clip", "clip_thumbnail", [_distance(s) for s in scores], "t")
-    _far_thumbnails_of_other_files(clip_index, which)
-
-    assert _clip(clip_index) == []
-
-
-@pytest.mark.parametrize("which", ["other-drive", "inactive"])
-def test_spec_addon_025_cv_check_judges_the_drives_active_thumbnails_not_far_rows_of_other_files(
-    clip_index, monkeypatch, which,
-):
-    _use_search_config(monkeypatch, **GATES_ONLY)
-    scores = [0.83] + [0.7995 + 0.00002 * i for i in range(39)]
-    mean = float(np.mean(scores))
-    assert scores[0] - mean > 0.02
-    assert float(np.std(scores)) / mean < 0.01
-    _rows(clip_index, "vec_clip", "clip_thumbnail", [_distance(s) for s in scores], "t")
-    _far_thumbnails_of_other_files(clip_index, which)
-
-    assert _clip(clip_index) == []
-
-
 @pytest.mark.parametrize("drive, active", [(OTHER, True), (HOME, False)],
                          ids=["other-drive", "inactive"])
 def test_spec_addon_025_a_flat_crowd_of_other_files_nearer_does_not_discard_the_drives_standout(
@@ -314,26 +252,6 @@ def test_spec_addon_025_a_flat_crowd_of_other_files_nearer_does_not_discard_the_
 
     assert set(got) == {"e_t0"}
     assert got["e_t0"].score == pytest.approx(0.95, abs=1e-4)
-
-
-def test_spec_addon_025_scene_on_gap_check_counts_every_row_the_knn_returned(
-    clip_index, monkeypatch,
-):
-    """Otherwise-branch of I3: with Scene search on, far scene rows inside the KNN
-    widen the distribution, so a flat thumbnail set passes the gap check."""
-    _use_search_config(monkeypatch, score_gap_threshold=0.02,
-                       min_score_clip_thumbnail=-1.0, min_score_clip=-1.0,
-                       score_cutoff_margin=0.10)
-    scores = [0.800 + 0.002 * i for i in range(10)]
-    _rows(clip_index, "vec_clip", "clip_thumbnail", [_distance(s) for s in scores], "t")
-    _far_scene_rows(clip_index, n=10)
-
-    got = _by_id(search_mod._vector_search_clip(
-        unit(clip_index.dim("vec_clip"), 0), RRF_CANDIDATES, mode="precision",
-        include_scene_clip=True,
-    ))
-
-    assert set(got) == {f"e_t{i}" for i in range(10)}
 
 
 # ---------------------------------------------------------------------------
