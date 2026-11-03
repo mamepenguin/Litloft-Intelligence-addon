@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import text as sql_text
 
+from app.addon_events import post_addon_event
 from app.config import settings
 from app.database import get_search_db, get_search_db_read
 from app import llm_routing
@@ -37,37 +38,19 @@ logger = logging.getLogger(__name__)
 async def _emit_ws_event(event: str, data: dict) -> None:
     """Best-effort WebSocket event emission via the host's internal API.
 
-    Mirrors ``app.workers.refine._emit_ws_event``. The host forwards
-    the posted JSON to its WebSocket broadcaster; delivery failures
-    are swallowed so citation calculation never fails a detailed-
-    summary generation. Tests monkeypatch this function.
+    The host forwards the posted JSON to its WebSocket broadcaster;
+    delivery failures are swallowed so citation calculation never fails
+    a detailed-summary generation. Tests monkeypatch this function.
 
-    Drive scoping: when ``data`` carries a ``drive`` key we lift it to
-    the top-level ``AddonEventRequest.drive`` so the host's
+    Drive scoping happens in :func:`app.addon_events.post_addon_event`,
+    which lifts ``data["drive"]`` to the top-level
+    ``AddonEventRequest.drive`` so the host's
     ``ConnectionManager.broadcast`` filter can suppress delivery to
     viewers without access to the protected drive (hako pattern
     ``HpeftQ_io8n7sJ5xxlasC``).
     """
-    import os
-
     logger.info("summaries-event %s %s", event, data)
-
-    base = os.environ.get(
-        "HOMEVAULT_INTERNAL_API_URL", "http://backend:8000/api/internal"
-    )
-    url = f"{base}/addon-events"
-    payload: dict = {"event": event, "data": data}
-    drive = data.get("drive") if isinstance(data, dict) else None
-    if drive:
-        payload["drive"] = drive
-    try:
-        import httpx
-
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            await client.post(url, json=payload)
-    except Exception:
-        # Host endpoint is optional; never fail the worker on WS.
-        return
+    await post_addon_event(event, data)
 
 
 async def _recalculate_citations(file_id: str, summary_text: str) -> None:

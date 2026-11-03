@@ -24,16 +24,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import uuid
 from datetime import UTC, datetime
 
-import httpx
 from sqlalchemy import or_, text as sql_text
 from sqlalchemy.exc import OperationalError
 
 import app.config as config
 from app import llm_routing
+from app.addon_events import post_addon_event
 from app.vec_partition import insert_vector_sql
 from app.config import is_video_visual_index_available, settings
 from app.database import get_search_db, get_search_db_read, get_search_engine
@@ -78,8 +77,6 @@ ALLOWED_SCENE_TYPES = frozenset(
 # Transcript excerpt selection (design doc §7 step 4).
 TRANSCRIPT_WINDOW_SECONDS = 15.0
 TRANSCRIPT_EXCERPT_MAX_CHARS = 1200
-
-_CORE_INTERNAL_API_DEFAULT = "http://backend:8000/api/internal"
 
 _READY_EVENTS = {
     "succeeded": "intelligence.video_visual.succeeded",
@@ -372,17 +369,7 @@ async def emit_video_visual_event(event: str, data: dict) -> None:
 
     Mirrors ``app.workers.chapter_suggestions.emit_chapter_suggestions_event``.
     """
-    base = os.environ.get("HOMEVAULT_INTERNAL_API_URL", _CORE_INTERNAL_API_DEFAULT).rstrip("/")
-    secret = os.environ.get("CORE_INTERNAL_SECRET", "")
-    headers = {"X-Internal-Secret": secret} if secret else {}
-    payload: dict = {"event": event, "data": data}
-    if drive := data.get("drive"):
-        payload["drive"] = drive
-    try:
-        async with httpx.AsyncClient(timeout=3.0, trust_env=False) as client:
-            response = await client.post(f"{base}/addon-events", headers=headers, json=payload)
-            response.raise_for_status()
-    except httpx.HTTPError:
+    if not await post_addon_event(event, data):
         logger.warning("video_visual: could not emit event %s", event)
 
 

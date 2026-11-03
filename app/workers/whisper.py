@@ -15,7 +15,6 @@ Spec: ``2026-05-07-cloud-transcription-providers.md``.
 
 import asyncio
 import logging
-import os
 import re
 import subprocess
 import threading
@@ -26,6 +25,7 @@ from datetime import UTC, datetime
 
 import numpy as np
 
+from app.addon_events import post_addon_event
 from app.vec_partition import insert_vector_sql
 from app.config import settings, validate_file_path
 from app.digit_separator import is_digit_separator
@@ -61,36 +61,20 @@ logger = logging.getLogger(__name__)
 async def _emit_ws_event(event: str, data: dict) -> None:
     """Best-effort WebSocket event emission via the host's internal API.
 
-    Mirrors :func:`app.workers.refine._emit_ws_event` /
-    :func:`app.workers.summaries._emit_ws_event`. The host forwards
-    the posted JSON to its WebSocket broadcaster; delivery failures
-    are swallowed so a flaky core never fails a transcription job.
-    Tests monkeypatch this function.
+    The host forwards the posted JSON to its WebSocket broadcaster;
+    delivery failures are swallowed so a flaky core never fails a
+    transcription job. Tests monkeypatch this function.
 
-    Drive scoping: when ``data`` carries a ``drive`` key we lift it to
-    the top-level ``AddonEventRequest.drive`` so the host's
+    Drive scoping happens in :func:`app.addon_events.post_addon_event`,
+    which lifts ``data["drive"]`` to the top-level
+    ``AddonEventRequest.drive`` so the host's
     ``ConnectionManager.broadcast`` filter can suppress delivery to
     viewers without access to the protected drive. Without this, the
     event would broadcast to every connected viewer (hako pattern
     ``HpeftQ_io8n7sJ5xxlasC``).
     """
     logger.info("transcription-event %s %s", event, data)
-
-    base = os.environ.get(
-        "HOMEVAULT_INTERNAL_API_URL", "http://backend:8000/api/internal"
-    )
-    url = f"{base}/addon-events"
-    payload: dict = {"event": event, "data": data}
-    drive = data.get("drive") if isinstance(data, dict) else None
-    if drive:
-        payload["drive"] = drive
-    try:
-        import httpx
-
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            await client.post(url, json=payload)
-    except Exception:
-        return
+    await post_addon_event(event, data)
 
 # Model state (lazy-loaded, with idle unload support)
 _lock = threading.Lock()

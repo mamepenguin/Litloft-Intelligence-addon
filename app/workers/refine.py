@@ -33,6 +33,7 @@ from typing import Any
 from sqlalchemy import text as sql_text
 
 import app.config as config
+from app.addon_events import post_addon_event
 from app.vec_partition import insert_vector_sql
 from app.database import get_search_db, get_search_db_read, upsert_fts_transcripts
 from app.idf_backfill import mark_idf_terms_stale
@@ -611,38 +612,19 @@ async def is_feature_enabled(drive: str) -> bool:
 async def _emit_ws_event(event: str, data: dict) -> None:
     """Best-effort progress event emission.
 
-    The host currently has no internal addon→ws endpoint — this hook
-    is a forward-compatible stub that logs the intended payload and
-    posts it to ``HOMEVAULT_INTERNAL_API_URL + /addon-events`` when
-    configured. Tests monkeypatch this function, so production
-    behaviour is decoupled from the worker logic under test.
+    The host forwards the posted JSON to its WebSocket broadcaster;
+    delivery failures are swallowed so a flaky core never fails the
+    refine job. Tests monkeypatch this function.
 
-    Drive scoping: when ``data`` carries a ``drive`` key we lift it to
-    the top-level ``AddonEventRequest.drive`` so the host's
+    Drive scoping happens in :func:`app.addon_events.post_addon_event`,
+    which lifts ``data["drive"]`` to the top-level
+    ``AddonEventRequest.drive`` so the host's
     ``ConnectionManager.broadcast`` filter can suppress delivery to
     viewers without access to the protected drive (hako pattern
     ``HpeftQ_io8n7sJ5xxlasC``).
     """
-    import os
-
     logger.info("refine-event %s %s", event, data)
-
-    base = os.environ.get(
-        "HOMEVAULT_INTERNAL_API_URL", "http://backend:8000/api/internal"
-    )
-    url = f"{base}/addon-events"
-    payload: dict = {"event": event, "data": data}
-    drive = data.get("drive") if isinstance(data, dict) else None
-    if drive:
-        payload["drive"] = drive
-    try:
-        import httpx
-
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            await client.post(url, json=payload)
-    except Exception:
-        # Host endpoint is optional; never fail the worker on WS.
-        return
+    await post_addon_event(event, data)
 
 
 # Module-level set of refine jobs currently in flight, keyed by file_id.

@@ -36,7 +36,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import mimetypes
-import os
 from datetime import UTC, datetime
 from typing import Any
 
@@ -44,6 +43,7 @@ from sqlalchemy import text as sql_text
 from sqlalchemy.exc import OperationalError
 
 import app.config as config
+from app.addon_events import post_addon_event
 from app.vec_partition import insert_vector_sql
 from app.config import settings
 from app import llm_routing
@@ -473,17 +473,7 @@ def _embed_and_store(file_id: str, description_text: str) -> None:
 async def _emit_ws_event(event: str, data: dict) -> None:
     """Best-effort progress event emission — mirrors refine worker."""
     logger.info("vision-event %s %s", event, data)
-    base = os.environ.get(
-        "HOMEVAULT_INTERNAL_API_URL", "http://backend:8000/api/internal"
-    )
-    url = f"{base}/addon-events"
-    try:
-        import httpx
-
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            await client.post(url, json={"event": event, "data": data})
-    except Exception:
-        return
+    await post_addon_event(event, data)
 
 
 # ---------------------------------------------------------------------------
