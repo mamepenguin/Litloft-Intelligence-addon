@@ -1017,6 +1017,7 @@ async def edit_detailed_summary_section(
         "intelligence.detailed_summary.updated",
         {
             "file_id": file_id,
+            "drive": drive,
             "edited_at": now,
             "citations_ready": False,
         },
@@ -1024,7 +1025,9 @@ async def edit_detailed_summary_section(
     # Defer the expensive embedding work to a BackgroundTask so the
     # HTTP response goes out immediately. ``_recalculate_citations``
     # emits ``citations_ready`` itself when the work completes.
-    background_tasks.add_task(_recalculate_citations, file_id, new_summary)
+    background_tasks.add_task(
+        _recalculate_citations, file_id, new_summary, drive
+    )
 
     data = await asyncio.to_thread(_get_detailed_summary, file_id)
     if data is None:
@@ -1093,12 +1096,13 @@ async def revert_detailed_summary(
         "intelligence.detailed_summary.updated",
         {
             "file_id": file_id,
+            "drive": drive,
             "edited_at": None,
             "citations_ready": False,
         },
     )
     # Defer citation recompute — see edit_detailed_summary_section.
-    background_tasks.add_task(_recalculate_citations, file_id, original)
+    background_tasks.add_task(_recalculate_citations, file_id, original, drive)
 
     data = await asyncio.to_thread(_get_detailed_summary, file_id)
     if data is None:

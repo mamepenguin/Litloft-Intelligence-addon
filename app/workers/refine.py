@@ -652,10 +652,6 @@ async def _run_refine_job(
 ) -> None:
     """Background task body for a single-file refine job."""
     _active_refine_files.add(file_id)
-    await _emit_ws_event(
-        "intelligence.refine.started",
-        {"file_id": file_id, "chunk_count": len(chunk_ids_snapshot), "job_id": job_id},
-    )
 
     llm = resolved.client
 
@@ -666,7 +662,7 @@ async def _run_refine_job(
     # intelligence endpoint (including /status) for the entire job.
     from types import SimpleNamespace
 
-    def _snapshot() -> tuple[list[SimpleNamespace], str | None]:
+    def _snapshot() -> tuple[list[SimpleNamespace], str | None, str | None]:
         with get_search_db() as session:
             rows = (
                 session.query(TranscriptChunk)
@@ -690,23 +686,46 @@ async def _run_refine_job(
             file_row = (
                 session.query(IndexedFile).filter_by(file_id=file_id).first()
             )
-            return snapshots, (file_row.file_path if file_row is not None else None)
+            return (
+                snapshots,
+                file_row.file_path if file_row is not None else None,
+                file_row.drive if file_row is not None else None,
+            )
 
+    drive: str | None = None
     try:
-        snapshots, audio_path = await asyncio.to_thread(_snapshot)
+        snapshots, audio_path, drive = await asyncio.to_thread(_snapshot)
     except Exception as e:
         logger.exception("refine job snapshot failed for %s", file_id)
         await _emit_ws_event(
             "intelligence.refine.failed",
-            {"file_id": file_id, "job_id": job_id, "error": str(e)},
+            {
+                "file_id": file_id,
+                "drive": drive,
+                "job_id": job_id,
+                "error": str(e),
+            },
         )
         return
+
+    # The snapshot row is the only drive lookup this job makes; emit
+    # started after it so the event can name that drive.
+    await _emit_ws_event(
+        "intelligence.refine.started",
+        {
+            "file_id": file_id,
+            "drive": drive,
+            "chunk_count": len(chunk_ids_snapshot),
+            "job_id": job_id,
+        },
+    )
 
     if not snapshots:
         await _emit_ws_event(
             "intelligence.refine.completed",
             {
                 "file_id": file_id,
+                "drive": drive,
                 "job_id": job_id,
                 "refined_count": 0,
                 "skipped_count": 0,
@@ -798,6 +817,7 @@ async def _run_refine_job(
                     "intelligence.refine.progress",
                     {
                         "file_id": file_id,
+                        "drive": drive,
                         "job_id": job_id,
                         "done": min(offset + WINDOW_SIZE, total),
                         "total": total,
@@ -830,6 +850,7 @@ async def _run_refine_job(
             "intelligence.refine.completed",
             {
                 "file_id": file_id,
+                "drive": drive,
                 "job_id": job_id,
                 "refined_count": refined_total,
                 "skipped_count": skipped_total,
@@ -842,7 +863,12 @@ async def _run_refine_job(
         logger.exception("refine job failed for %s", file_id)
         await _emit_ws_event(
             "intelligence.refine.failed",
-            {"file_id": file_id, "job_id": job_id, "error": str(e)},
+            {
+                "file_id": file_id,
+                "drive": drive,
+                "job_id": job_id,
+                "error": str(e),
+            },
         )
     finally:
         _active_refine_files.discard(file_id)

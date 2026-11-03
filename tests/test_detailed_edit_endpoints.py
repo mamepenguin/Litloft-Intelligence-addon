@@ -253,13 +253,13 @@ def stub_side_effects(monkeypatch):
     Returns a dict exposing the mocks for assertions.
     """
     ws_calls: list[tuple[str, dict]] = []
-    cit_calls: list[tuple[str, str]] = []
+    cit_calls: list[tuple[str, str, str]] = []
 
     async def fake_ws(event, data):
         ws_calls.append((event, data))
 
-    async def fake_cit(file_id, summary):
-        cit_calls.append((file_id, summary))
+    async def fake_cit(file_id, summary, drive):
+        cit_calls.append((file_id, summary, drive))
 
     monkeypatch.setattr(
         "app.routers.summaries._emit_ws_event", fake_ws
@@ -522,6 +522,12 @@ class TestEditDetailedSummarySection:
             ev[0] == "intelligence.detailed_summary.updated"
             for ev in events
         )
+        updated = [
+            data
+            for event, data in events
+            if event == "intelligence.detailed_summary.updated"
+        ]
+        assert updated[0]["drive"] == "drive1"
         # Citations should NOT have been awaited inline — they must be
         # queued on BackgroundTasks to keep the user-facing request
         # snappy.
@@ -532,6 +538,7 @@ class TestEditDetailedSummarySection:
         await bg()
         assert stub_side_effects["citations"]
         assert stub_side_effects["citations"][0][0] == "abc123"
+        assert stub_side_effects["citations"][0][2] == "drive1"
 
 
 class TestRevertDetailedSummary:
@@ -564,6 +571,13 @@ class TestRevertDetailedSummary:
         assert result.edited_at is None
         assert result.has_original is False
 
+        updated = [
+            data
+            for event, data in stub_side_effects["ws"]
+            if event == "intelligence.detailed_summary.updated"
+        ]
+        assert updated[0]["drive"] == "drive1"
+
         # Citation recompute is deferred to BackgroundTasks so the
         # revert response does not block on embedding work.
         assert stub_side_effects["citations"] == []
@@ -572,6 +586,7 @@ class TestRevertDetailedSummary:
         assert stub_side_effects["citations"]
         assert stub_side_effects["citations"][0][0] == "abc123"
         assert stub_side_effects["citations"][0][1] == _SAMPLE_SUMMARY
+        assert stub_side_effects["citations"][0][2] == "drive1"
 
     @pytest.mark.asyncio
     async def test_revert_400_when_no_snapshot(

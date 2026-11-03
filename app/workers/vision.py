@@ -762,7 +762,7 @@ class VisionDescribeWorker:
 
         await _emit_ws_event(
             "intelligence.vision_describe.started",
-            {"file_id": file_id, "model": vision_model},
+            {"file_id": file_id, "drive": drive, "model": vision_model},
         )
 
         # Mark pending so concurrent readers see "in flight" instead of
@@ -785,7 +785,7 @@ class VisionDescribeWorker:
             )
             await _emit_ws_event(
                 "intelligence.vision_describe.failed",
-                {"file_id": file_id, "reason": "load"},
+                {"file_id": file_id, "drive": drive, "reason": "load"},
             )
             return
 
@@ -804,7 +804,7 @@ class VisionDescribeWorker:
             )
             await _emit_ws_event(
                 "intelligence.vision_describe.failed",
-                {"file_id": file_id, "reason": "decode"},
+                {"file_id": file_id, "drive": drive, "reason": "decode"},
             )
             return
 
@@ -841,7 +841,7 @@ class VisionDescribeWorker:
             )
             await _emit_ws_event(
                 "intelligence.vision_describe.unsupported",
-                {"file_id": file_id, "model": vision_model},
+                {"file_id": file_id, "drive": drive, "model": vision_model},
             )
             return
 
@@ -867,6 +867,7 @@ class VisionDescribeWorker:
                 "intelligence.vision_describe.failed",
                 {
                     "file_id": file_id,
+                    "drive": drive,
                     "reason": result.failure or FAILURE_REQUEST_FAILED,
                 },
             )
@@ -915,6 +916,7 @@ class VisionDescribeWorker:
             "intelligence.vision_describe.succeeded",
             {
                 "file_id": file_id,
+                "drive": drive,
                 "model": vision_model,
                 "generated_at": generated_at,
             },

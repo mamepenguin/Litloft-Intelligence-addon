@@ -53,7 +53,9 @@ async def _emit_ws_event(event: str, data: dict) -> None:
     await post_addon_event(event, data)
 
 
-async def _recalculate_citations(file_id: str, summary_text: str) -> None:
+async def _recalculate_citations(
+    file_id: str, summary_text: str, drive: str
+) -> None:
     """Recompute detailed_summary_citations for ``file_id``.
 
     Executes the synchronous ``calculate_and_store`` in the default
@@ -79,6 +81,7 @@ async def _recalculate_citations(file_id: str, summary_text: str) -> None:
             "intelligence.detailed_summary.citations_ready",
             {
                 "file_id": file_id,
+                "drive": drive,
                 "citation_count": with_count,
                 "no_citation_count": without_count,
             },
@@ -1129,7 +1132,7 @@ async def generate_detailed_summary(
     # source badges onto the freshly generated summary. Failures are
     # logged + swallowed inside ``_recalculate_citations`` — they must
     # not mark the summary itself as failed.
-    await _recalculate_citations(file_id, saved_text)
+    await _recalculate_citations(file_id, saved_text, indexed_file["drive"])
 
 
 async def _generate_short_long(

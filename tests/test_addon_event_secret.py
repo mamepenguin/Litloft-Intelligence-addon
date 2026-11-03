@@ -10,6 +10,10 @@ One helper owns the endpoint, the URL resolution, the header and the
 best-effort failure posture. The detector below fails when a module posts
 to ``addon-events`` on its own, so a new poster cannot bypass the helper
 and reintroduce the 403.
+
+The calls below name a drive because the helper refuses a post that has
+none (SPEC-ADDON-057 I14), and a refused post would make every assertion
+here vacuous.
 """
 
 from __future__ import annotations
@@ -77,7 +81,9 @@ async def test_async_post_sends_secret_header_when_configured(
     captured: list[dict] = []
     _install(monkeypatch, captured)
 
-    await post_addon_event("intelligence.test.event", {"file_id": "f-1"})
+    await post_addon_event(
+        "intelligence.test.event", {"file_id": "f-1"}, drive="d1"
+    )
 
     assert len(captured) == 1
     assert captured[0]["headers"].get("x-internal-secret") == "s3cret"
@@ -90,7 +96,9 @@ async def test_async_post_omits_secret_header_when_unset(monkeypatch) -> None:
     captured: list[dict] = []
     _install(monkeypatch, captured)
 
-    await post_addon_event("intelligence.test.event", {"file_id": "f-1"})
+    await post_addon_event(
+        "intelligence.test.event", {"file_id": "f-1"}, drive="d1"
+    )
 
     assert len(captured) == 1
     assert "x-internal-secret" not in captured[0]["headers"]
@@ -103,7 +111,9 @@ async def test_async_post_swallows_transport_failure(monkeypatch) -> None:
     captured: list[dict] = []
     _install(monkeypatch, captured, fail=True)
 
-    await post_addon_event("intelligence.test.event", {"file_id": "f-1"})
+    await post_addon_event(
+        "intelligence.test.event", {"file_id": "f-1"}, drive="d1"
+    )
 
 
 def test_sync_post_sends_secret_header_when_configured(monkeypatch) -> None:
@@ -113,7 +123,9 @@ def test_sync_post_sends_secret_header_when_configured(monkeypatch) -> None:
     captured: list[dict] = []
     _install(monkeypatch, captured)
 
-    post_addon_event_sync("intelligence.test.event", {"file_id": "f-1"})
+    post_addon_event_sync(
+        "intelligence.test.event", {"file_id": "f-1"}, drive="d1"
+    )
 
     assert len(captured) == 1
     assert captured[0]["headers"].get("x-internal-secret") == "s3cret"
@@ -126,7 +138,9 @@ def test_sync_post_omits_secret_header_when_unset(monkeypatch) -> None:
     captured: list[dict] = []
     _install(monkeypatch, captured)
 
-    post_addon_event_sync("intelligence.test.event", {"file_id": "f-1"})
+    post_addon_event_sync(
+        "intelligence.test.event", {"file_id": "f-1"}, drive="d1"
+    )
 
     assert len(captured) == 1
     assert "x-internal-secret" not in captured[0]["headers"]
@@ -139,7 +153,9 @@ def test_sync_post_swallows_transport_failure(monkeypatch) -> None:
     captured: list[dict] = []
     _install(monkeypatch, captured, fail=True)
 
-    post_addon_event_sync("intelligence.test.event", {"file_id": "f-1"})
+    post_addon_event_sync(
+        "intelligence.test.event", {"file_id": "f-1"}, drive="d1"
+    )
 
 
 def test_processing_updated_carries_the_secret_header(monkeypatch) -> None:
