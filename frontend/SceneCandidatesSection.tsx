@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useId, useState, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
+
+import { cardGridTemplate, useCardColumns } from "@/lib/cardGrid";
 
 import { fetchSceneSegments, getFrameUrl } from "./api";
 import type { SceneSegment } from "./api";
@@ -52,7 +54,7 @@ function SceneCard({ segment }: { segment: SceneSegment }) {
     <a
       href={href}
       onClick={open}
-      className="group w-48 shrink-0 overflow-hidden rounded-lg bg-bg-card focus-visible:outline-2 focus-visible:outline-accent hover:outline-2 hover:outline-accent"
+      className="group min-w-0 overflow-hidden rounded-lg bg-bg-card focus-visible:outline-2 focus-visible:outline-accent hover:outline-2 hover:outline-accent"
     >
       {frameFailed ? (
         <div className="aspect-video w-full bg-bg-elevated" />
@@ -83,6 +85,9 @@ export default function SceneCandidatesSection({
   smartFolderId,
 }: SceneCandidatesSectionProps) {
   const t = useTranslations("sceneCandidates");
+  const { ref, columns } = useCardColumns();
+  const gridId = useId();
+  const [expanded, setExpanded] = useState(false);
 
   // Scene candidates are videos of the whole drive, so a narrower listing
   // would contradict them.
@@ -99,6 +104,7 @@ export default function SceneCandidatesSection({
   // Adjusted during render so no frame shows the previous inputs' answer.
   if (seenInputs !== inputs) {
     setSeenInputs(inputs);
+    setExpanded(false);
     setView({ status: eligible ? "loading" : "idle" });
   }
 
@@ -143,24 +149,37 @@ export default function SceneCandidatesSection({
       </div>
       {hasRow && (
         <div
-          tabIndex={0}
+          ref={ref}
+          id={gridId}
           aria-label={t("heading")}
           aria-busy={view.status === "loading"}
-          className="scrollbar-hover flex h-47.5 items-start gap-2 overflow-x-auto px-1 pb-1 pt-2"
+          className="grid items-start gap-3 px-1 pb-1 pt-2"
+          style={{ gridTemplateColumns: cardGridTemplate(columns) }}
         >
           {view.status === "loading"
-            ? [0, 1, 2, 3, 4, 5].map((i) => (
+            ? [0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
                 <div
                   key={i}
                   aria-hidden
-                  className="h-27 w-48 shrink-0 animate-pulse rounded-lg bg-bg-elevated motion-reduce:animate-none"
+                  className="aspect-video min-w-0 animate-pulse rounded-lg bg-bg-elevated motion-reduce:animate-none"
                 />
               ))
             : view.status === "loaded" &&
-              view.segments.map((segment) => (
+              view.segments.slice(0, expanded ? undefined : 8).map((segment) => (
                 <SceneCard key={`${segment.file_id}:${segment.start}`} segment={segment} />
               ))}
         </div>
+      )}
+      {view.status === "loaded" && view.segments.length > 8 && (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={gridId}
+          onClick={() => setExpanded(!expanded)}
+          className="mt-2 rounded-lg bg-sand px-3 py-2 text-sm hover:bg-sand-hover focus-visible:outline-2 focus-visible:outline-accent"
+        >
+          {expanded ? t("collapse") : t("showAll", { count: view.segments.length })}
+        </button>
       )}
       {view.status === "failed" && (
         <p className="mt-1.5 px-1 text-xs text-text-muted">{t("failed")}</p>

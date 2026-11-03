@@ -145,6 +145,8 @@
     "showMore": "もっと見る"
   },
   "sceneCandidates": {
+    "showAll": "すべて表示（全{count}件）",
+    "collapse": "折りたたむ",
     "heading": "シーン候補",
     "loading": "シーンを探しています",
     "failed": "シーンを検索できませんでした",
