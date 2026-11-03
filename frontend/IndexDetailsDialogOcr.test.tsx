@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 
 vi.mock("@/addons/intelligence/api", () => ({
   getIndexDetails: vi.fn(),
@@ -57,6 +57,9 @@ function details(overrides: Record<string, unknown> = {}) {
 }
 
 function open(props: { mimeType?: string; fileType?: string } = {}) {
+  // A test opens twice to compare two payloads; the first tree has to go
+  // or both menu entries match.
+  cleanup();
   render(
     <ShortcutsProvider>
       <IndexDetailsMenuItem

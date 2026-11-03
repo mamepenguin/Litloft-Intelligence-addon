@@ -139,8 +139,8 @@ export interface QueueTaskBreakdown {
   processing: QueueProcessingFile[];
 }
 
-// Task kinds that may appear under queue.tasks. The four indexing
-// types (metadata, clip, whisper, text_content) are always present;
+// Task kinds that may appear under queue.tasks. The five indexing
+// types (metadata, clip, whisper, text_content, ocr) are always present;
 // LLM-task entries (auto_tags, summaries, vision_describe,
 // transcript_refine, retrieval_keywords, chapter_suggestions) are only present when their
 // worker is running.
@@ -149,6 +149,7 @@ export type QueueTaskKind =
   | "clip"
   | "whisper"
   | "text_content"
+  | "ocr"
   | "auto_tags"
   | "summaries"
   | "vision_describe"
@@ -166,6 +167,7 @@ export interface SearchServiceStatus {
     clip: number;
     whisper: number;
     text?: number;
+    ocr?: number;
   };
   pending?: {
     total: number;
@@ -173,6 +175,7 @@ export interface SearchServiceStatus {
     clip: number;
     whisper: number;
     text?: number;
+    ocr?: number;
   };
   queue?: {
     processing: number;
@@ -1757,12 +1760,16 @@ export interface IndexDetailsStatus {
   clip: boolean;
   whisper: boolean;
   text: boolean;
+  ocr: boolean;
 }
 
 export interface IndexDetailsResponse {
   file_id: string;
   drive: string;
   filename: string;
+  // The OCR mode, so the dialog can omit a row whose reindex the backend
+  // would refuse.
+  image_ocr?: string;
   status: IndexDetailsStatus;
   indexed_at: string;
   // The embeddings + provider_stats payload is opaque to the
@@ -1773,7 +1780,7 @@ export interface IndexDetailsResponse {
   provider_stats?: Record<string, unknown>;
 }
 
-export type ReindexTask = "metadata" | "clip" | "whisper" | "text";
+export type ReindexTask = "metadata" | "clip" | "whisper" | "text" | "ocr";
 
 export interface ReindexResponse {
   status: "accepted" | "already_queued";

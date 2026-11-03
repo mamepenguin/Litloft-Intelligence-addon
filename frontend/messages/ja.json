@@ -51,6 +51,7 @@
     "clipFiles": "画像分析完了 {done} / {total} 件",
     "textLabel": "テキスト解析済み",
     "textFiles": "テキスト解析完了 {done} / {total} 件",
+    "ocrFiles": "画像の文字 {done} / {total} 件",
     "queueLabel": "処理キュー",
     "queueStatus": "{processing}件処理中 / {waiting}件待機",
     "pause": "一時停止",
@@ -106,6 +107,9 @@
       },
       "text_content": {
         "label": "テキスト抽出"
+      },
+      "ocr": {
+        "label": "画像の文字"
       },
       "auto_tags": {
         "label": "AIタグ候補"
@@ -451,6 +455,10 @@
         "video_visual_index": {
           "label": "ビジュアルインデックス",
           "help": "代表的な動画フレームをAIが説明文付きでシーク可能にインデックス化します。フレーム画像と付近の文字起こしが設定されたVisionモデルに送信されます。プライベートなライブラリでは「無効」かローカルのvisionモデルをおすすめします。利用するにはllm.vision_modelの設定が必要です。"
+        },
+        "image_ocr": {
+          "label": "画像の文字",
+          "help": "画像内の文字をローカルのOCRエンジンで読み取り、検索できるようにします。OCR自体では画像をコンテナ外に送りません。読み取った文字は本文テキストと同じように扱われ、ドライブの「クラウドLLMへの送信」の設定に従います。"
         }
       },
       "columns": {

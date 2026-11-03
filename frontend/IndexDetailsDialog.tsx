@@ -26,6 +26,7 @@ import {
   Loader2,
   Mic,
   RefreshCw,
+  ScanText,
   ScrollText,
   X,
 } from "lucide-react";
@@ -49,11 +50,11 @@ export interface IndexDetailsDialogProps {
 interface TaskSpec {
   task: ReindexTask;
   // Existing ``semanticSearch.tasks.*.label`` keys live under
-  // ``metadata`` / ``clip`` / ``whisper`` / ``text_content``. The
+  // ``metadata`` / ``clip`` / ``whisper`` / ``text_content`` / ``ocr``. The
   // reindex API speaks ``text`` instead of ``text_content`` (it lines
   // up with the IndexedFile ``text_indexed`` flag) so we map here
   // rather than rename the long-lived translation key.
-  i18nKey: "metadata" | "clip" | "whisper" | "text_content";
+  i18nKey: "metadata" | "clip" | "whisper" | "text_content" | "ocr";
   icon: LucideIcon;
 }
 
@@ -62,6 +63,7 @@ const TASK_SPECS: TaskSpec[] = [
   { task: "clip", i18nKey: "clip", icon: ImageIcon },
   { task: "whisper", i18nKey: "whisper", icon: Mic },
   { task: "text", i18nKey: "text_content", icon: FileText },
+  { task: "ocr", i18nKey: "ocr", icon: ScanText },
 ];
 
 // .loft files are remote-URL wrappers (YouTube / Vimeo / Soundcloud).
@@ -70,6 +72,18 @@ const TASK_SPECS: TaskSpec[] = [
 // indexer because the mime is not in TEXT_MIMES. Neither task is
 // meaningful to show the user.
 const LOFT_MIME = "application/vnd.litloft.loft+json";
+
+// The reindex path answers 422 for a picture outside this set, so the
+// dialog must not offer OCR for one.
+const OCR_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/bmp",
+  "image/heic",
+  "image/heif",
+]);
 
 /**
  * Decide whether a given task is applicable to the file's mime/type.
@@ -86,11 +100,14 @@ const LOFT_MIME = "application/vnd.litloft.loft+json";
  *   (loft markdown, plain text, etc.). PDFs surface as
  *   ``application/pdf`` which the text pipeline also handles.
  *   .loft is auto-skipped (mime not in TEXT_MIMES) — hidden here.
+ * - ``ocr`` covers pictures the OCR worker reads, while the mode is not
+ *   ``false``: the reindex path refuses it otherwise.
  */
 function isTaskApplicable(
   task: ReindexTask,
   mimeType: string | undefined,
   fileType: string | undefined,
+  imageOcr: string | undefined,
 ): boolean {
   const mt = (mimeType ?? "").toLowerCase();
   const ft = (fileType ?? "").toLowerCase();
@@ -125,6 +142,10 @@ function isTaskApplicable(
       // Hidden only for pure image files where there is no text
       // content to extract.
       return !(mt.startsWith("image/") || ft === "image");
+    case "ocr":
+      // "false" refuses an OCR reindex, so a row would only fail.
+      if (imageOcr === undefined || imageOcr === "false") return false;
+      return OCR_MIME_TYPES.has(mt);
     default:
       return false;
   }
@@ -242,7 +263,7 @@ export default function IndexDetailsDialog({
 
   // Only render rows whose task applies to this file's mime/type.
   const visibleTasks = TASK_SPECS.filter((spec) =>
-    isTaskApplicable(spec.task, mimeType, fileType),
+    isTaskApplicable(spec.task, mimeType, fileType, details?.image_ocr),
   );
 
   return createPortal(
