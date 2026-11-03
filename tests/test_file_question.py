@@ -167,6 +167,20 @@ async def question(call, file_id: str, text: str = "what is this") -> dict:
     return dict(frames(response.text))
 
 
+def _toward_first_axis(db: Seeder):
+    """A query embedding whose cosine to each seeded chunk is that seed's ``cos``.
+
+    ``toward(dim, cos)`` seeds make the chunk vectors' similarity to the first
+    axis the number each test ranks by, so the question's own embedding has to
+    point down that axis for a rank to be observable at all.
+    """
+
+    def _embed_query(_text: str):
+        return toward(db.db.dim, 1.0)
+
+    return _embed_query
+
+
 # ---------------------------------------------------------------------------
 # Availability
 # ---------------------------------------------------------------------------
@@ -590,7 +604,7 @@ class TestWhenEveryChunkFits:
 
 class TestWhenOnlySomeChunksFit:
     async def test_the_ranked_chunks_are_sent_in_file_order_within_the_budget(
-        self, db, addon, llm, call,
+        self, db, addon, llm, call, monkeypatch,
     ):
         """SPEC-ADDON-053 I2: rank picks, overflows are skipped, file order sends."""
         addon(budget=100)
@@ -599,6 +613,7 @@ class TestWhenOnlySomeChunksFit:
         db.file(MEDIA)
         for offset, (text, cos) in enumerate(zip(texts, cosines)):
             db.transcript(text, start=offset * 10, cos=cos)
+        patch_everywhere(monkeypatch, "embed_query", _toward_first_axis(db))
         recording = llm.serve(RecordingLLM(deltas=("answer",)))
 
         events = await question(call, MEDIA)
@@ -608,13 +623,16 @@ class TestWhenOnlySomeChunksFit:
         assert sum(len(text) for text in (texts[1], texts[3])) <= 100
         assert events["meta"] == {"partial": True}
 
-    async def test_the_best_ranked_chunk_is_cut_when_none_fits(self, db, addon, llm, call):
+    async def test_the_best_ranked_chunk_is_cut_when_none_fits(
+        self, db, addon, llm, call, monkeypatch,
+    ):
         """SPEC-ADDON-053 I2: when no chunk fits whole, the best-ranked one is cut to the budget."""
         addon(budget=10)
         texts = [chunk("c0", 50), chunk("c1", 50)]
         db.file(MEDIA)
         for offset, (text, cos) in enumerate(zip(texts, (0.4, 0.8))):
             db.transcript(text, start=offset * 10, cos=cos)
+        patch_everywhere(monkeypatch, "embed_query", _toward_first_axis(db))
         recording = llm.serve(RecordingLLM(deltas=("answer",)))
 
         events = await question(call, MEDIA)

@@ -84,6 +84,14 @@
         "priority": 10
       }
     ],
+    "inspector-tabs": [
+      {
+        "id": "ask",
+        "label": "Ask",
+        "i18n_key": "intelligence.slots.ask",
+        "priority": 10
+      }
+    ],
     "drive-home-sections": [
       {
         "id": "pickup",
@@ -754,6 +762,31 @@
           "type": "file_access",
           "param": "file_id"
         },
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/ask",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "addon_feature": "rag",
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/ask",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "addon_feature": "rag",
+        "stream": true,
         "response_filter": null
       },
       {

@@ -4,7 +4,8 @@
       "label": "質問"
     },
     "slots": {
-      "transcript": "文字起こし"
+      "transcript": "文字起こし",
+      "ask": "質問"
     },
     "policyFeatures": {
       "transcriptionCloud": {

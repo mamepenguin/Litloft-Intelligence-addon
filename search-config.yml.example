@@ -349,6 +349,10 @@ rag:
   max_total_context_chars: 17500    # hard cap on combined context size
   max_tokens: 2048                  # LLM max_tokens override for answer generation
   transcript_window_seconds: 60.0   # context window around each timestamped match
+  file_question_max_chars: 16000    # characters of this one file's chunk text a
+                                    # question about it may send (1,000-200,000).
+                                    # Above it, the chunks nearest the question
+                                    # are chosen and the answer is marked partial.
   # Hierarchical retrieval (Stage 1 coarse shortlist). Enabled by default;
   # set ``enabled: false`` to skip the per-file
   # AI-summary embedding shortlist. See spec

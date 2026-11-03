@@ -4,7 +4,8 @@
       "label": "Ask"
     },
     "slots": {
-      "transcript": "Transcript"
+      "transcript": "Transcript",
+      "ask": "Ask"
     },
     "policyFeatures": {
       "transcriptionCloud": {

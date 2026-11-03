@@ -118,3 +118,37 @@ def build_user_prompt(
         query=query,
         context_blocks=context_blocks,
     )
+
+
+def build_file_question_system_prompt(output_language: str) -> str:
+    """Return the system prompt for a question about one file.
+
+    The language line follows ``build_system_prompt``: ``"auto"`` lets the
+    model mirror the question, ``"ja"`` / ``"en"`` name the language, and
+    any other tag is passed through as one.
+    """
+    lang = output_language
+    lang_line = _LANGUAGE_INSTRUCTIONS.get(
+        lang,
+        f"- Answer in {lang}\n" if lang and lang != "auto" else "",
+    )
+    return render(
+        "rag/file_question_system.jinja2",
+        language_instruction=lang_line,
+    )
+
+
+def build_file_question_user_prompt(
+    question: str,
+    passages: list[str],
+) -> str:
+    """Serialize one file's chunks, numbered from 1, and the question.
+
+    Numbering runs across everything sent in file order, so the ``[n]`` the
+    answer cites names exactly the passage the prompt gave it.
+    """
+    return render(
+        "rag/file_question_user.jinja2",
+        question=question,
+        passages=passages,
+    )
