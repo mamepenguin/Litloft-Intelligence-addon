@@ -511,13 +511,7 @@ def status_endpoint() -> StatusResponse:
     if dependencies._vision_worker is not None:
         tasks["vision_describe"] = dependencies._vision_worker.get_status()
     if dependencies._video_visual_worker is not None:
-        # This worker's snapshot reads search.db, unlike the in-memory
-        # queues above; it can still be registered before the DB is
-        # initialised (startup) or after it is disposed (shutdown).
-        try:
-            tasks["video_visual"] = dependencies._video_visual_worker.get_status()
-        except RuntimeError:
-            logger.debug("video_visual status unavailable: search DB not ready")
+        tasks["video_visual"] = dependencies._video_visual_worker.get_status()
     if dependencies._retrieval_keywords_worker is not None:
         tasks["retrieval_keywords"] = (
             dependencies._retrieval_keywords_worker.get_status()

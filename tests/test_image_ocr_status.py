@@ -55,6 +55,9 @@ def manage(search_db, monkeypatch):
 
     manager = main.IndexManager()
     monkeypatch.setattr(main.dependencies, "get_index_manager", lambda: manager)
+    # An earlier test's lifespan can leave this worker bound to a disposed
+    # search.db; /status would read through it.
+    monkeypatch.setattr(main.dependencies, "_video_visual_worker", None)
     return manager, main
 
 
