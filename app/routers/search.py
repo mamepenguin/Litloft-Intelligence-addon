@@ -21,14 +21,22 @@ from app.schemas import (
     SourceCountsModel,
 )
 from app.workers.clip import embed_text_clip
-from app.search import execute_search_compare, search as execute_search
+from app.search import (
+    execute_search_compare,
+    search as execute_search,
+    search_images as execute_search_images,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["search"])
 
 
-async def _to_response_model(result: Any) -> SearchResponseModel:
+async def _to_response_model(
+    result: Any,
+    *,
+    hydrate_map: dict[str, Any] | None = None,
+) -> SearchResponseModel:
     """Convert an internal SearchResponse to the API response model.
 
     Calls ``POST /api/internal/files/bulk`` once per response to enrich
@@ -36,9 +44,13 @@ async def _to_response_model(result: Any) -> SearchResponseModel:
     the frontend can render the same ``FileCard`` as filename-match
     results. Hydration failures degrade silently — the IndexedFile
     snapshot fields on each result remain valid for basic display.
+
+    ``hydrate_map`` lets a caller that already hydrated its own batches
+    reuse the answer instead of asking again.
     """
-    file_ids = [r.file_id for r in result.results]
-    hydrate_map = await hydrate_files(file_ids)
+    if hydrate_map is None:
+        file_ids = [r.file_id for r in result.results]
+        hydrate_map = await hydrate_files(file_ids)
 
     return SearchResponseModel(
         results=[
@@ -71,6 +83,26 @@ async def _to_response_model(result: Any) -> SearchResponseModel:
     )
 
 
+_HYDRATE_BATCH_SIZE = 500
+
+
+async def _hydrate_batches(file_ids: list[str]) -> dict[str, Any]:
+    """Hydrate ids in batches, failing the whole answer when a batch does.
+
+    ``hydrate_files`` reports a transport or protocol failure as an empty
+    mapping. A continuation row without hydration is dropped by the trust
+    filter, so this route must not answer with one.
+    """
+    hydrated: dict[str, Any] = {}
+    for start in range(0, len(file_ids), _HYDRATE_BATCH_SIZE):
+        batch = file_ids[start : start + _HYDRATE_BATCH_SIZE]
+        part = await hydrate_files(batch)
+        if not part:
+            raise HTTPException(status_code=503, detail="Hydration unavailable")
+        hydrated.update(part)
+    return hydrated
+
+
 def _segment_match(
     m: Any, mime_type: str | None, section_titles: dict[int, str],
 ) -> SearchResultSegmentMatch:
@@ -93,7 +125,7 @@ def _segment_match(
 @router.get("/search", response_model=SearchResponseModel)
 async def search_endpoint(
     q: str = Query(..., min_length=1, description="Search query"),
-    limit: int = Query(default=20, ge=1, le=100, description="Max results"),
+    limit: int = Query(default=20, ge=1, le=1000, description="Max results"),
     type: str | None = Query(default=None, description="File type filter"),
     mode: Literal["precision", "recall"] = Query(
         default="precision",
@@ -132,6 +164,30 @@ async def search_endpoint(
         raise HTTPException(status_code=500, detail="Search failed") from e
 
     return await _to_response_model(result)
+
+
+@router.get("/search/images", response_model=SearchResponseModel)
+async def search_images_endpoint(
+    q: str = Query(..., min_length=1, description="Search query"),
+    type: str | None = Query(default=None, description="File type filter"),
+    drive: str = Depends(require_drive),
+) -> SearchResponseModel:
+    """Rank the request drive's representative frames by similarity to ``q``."""
+    try:
+        vector = await asyncio.to_thread(embed_text_clip, q)
+    except Exception as e:
+        logger.warning("Image search embedding failed (%s)", e.__class__.__name__)
+        raise HTTPException(status_code=503, detail="Embedding unavailable") from e
+    try:
+        result = await run_in_threadpool(
+            execute_search_images, vector, file_type=type, drive=drive,
+        )
+    except Exception as e:
+        logger.error("Search images failed: %s", e)
+        raise HTTPException(status_code=500, detail="Search failed") from e
+
+    hydrate_map = await _hydrate_batches([r.file_id for r in result.results])
+    return await _to_response_model(result, hydrate_map=hydrate_map)
 
 
 @router.get("/search/compare", response_model=CompareResponseModel)

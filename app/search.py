@@ -217,6 +217,14 @@ def search(
         search_config.max_limit,
     )
     candidates = search_config.rrf_candidates
+    # The cosine cutoff, not the candidate depth, ends a precision image list,
+    # so the depth has to reach as far as the caller asked to see. Scene search
+    # and recall mode keep the fixed candidate window.
+    clip_depth = (
+        max(effective_limit, candidates)
+        if mode == "precision" and not include_scene_clip
+        else candidates
+    )
 
     # Required-keyword hard filter (Phase 2 of the structured retriever).
     # Computed before any retrieval channel runs so the filter narrows
@@ -278,7 +286,7 @@ def search(
         _f_text = _pool.submit(_vector_search_text, text_vector, candidates, mode=mode)
         _f_clip = (
             _pool.submit(
-                _vector_search_clip, clip_vector, candidates,
+                _vector_search_clip, clip_vector, clip_depth,
                 mode=mode, include_scene_clip=include_scene_clip, drive=drive,
             )
             if clip_vector is not None and not skip_clip
@@ -751,6 +759,120 @@ def _vector_search_clip(
         results = [c for c in candidates if c.score >= best_score - margin]
 
         return results
+
+
+#: ``/search/images`` answers at most this many files.
+_IMAGE_SEARCH_LIMIT = 2000
+#: A statement's variable count is capped, so vectors are read in chunks.
+_IMAGE_VECTOR_BATCH = 500
+
+
+def search_images(
+    query_vector: np.ndarray,
+    *,
+    file_type: str | None = None,
+    drive: str | None = None,
+) -> SearchResponse:
+    """Rank the requested drive's representative frames against a CLIP vector.
+
+    Every active file of the drive with a ``clip_thumbnail`` row is scored, so
+    the result does not depend on how many nearer frames other drives keep in
+    the shared partition. There is no margin cutoff; the absolute floor and the
+    2000-file ceiling decide the list.
+    """
+    with get_search_db_read() as session:
+        query = (
+            session.query(
+                Embedding.id,
+                Embedding.file_id,
+                Embedding.content_preview,
+            )
+            .join(IndexedFile, IndexedFile.file_id == Embedding.file_id)
+            .filter(
+                Embedding.embedding_type == "clip_thumbnail",
+                IndexedFile.active.is_(True),
+            )
+        )
+        query = apply_kind_filter(query, file_type)
+        if drive:
+            query = query.filter(IndexedFile.drive == drive)
+        rows = query.all()
+
+    floor = settings.search.min_score_clip_thumbnail
+    engine = get_search_engine()
+    best_by_file: dict[str, tuple[float, str, str]] = {}
+
+    for start in range(0, len(rows), _IMAGE_VECTOR_BATCH):
+        batch = rows[start : start + _IMAGE_VECTOR_BATCH]
+        placeholders = ",".join(f":id{i}" for i in range(len(batch)))
+        params = {f"id{i}": row.id for i, row in enumerate(batch)}
+        with engine.connect() as conn:
+            vectors = conn.execute(
+                sql_text(
+                    "SELECT embedding_id, vector FROM vec_clip "
+                    f"WHERE embedding_id IN ({placeholders})"
+                ),
+                params,
+            ).fetchall()
+        stored = {row[0]: row[1] for row in vectors}
+        for row in batch:
+            blob = stored.get(row.id)
+            if not blob:
+                continue
+            vector = np.frombuffer(blob, dtype=np.float32)
+            score = _l2_to_cosine_similarity(
+                float(np.linalg.norm(query_vector - vector))
+            )
+            if score < floor:
+                continue
+            current = best_by_file.get(row.file_id)
+            if current is None or score > current[0]:
+                best_by_file[row.file_id] = (
+                    score, row.id, row.content_preview,
+                )
+
+    ranked = sorted(
+        best_by_file.items(), key=lambda item: (-item[1][0], item[0]),
+    )[:_IMAGE_SEARCH_LIMIT]
+
+    clip_matches = [
+        _VectorMatch(
+            embedding_id=embedding_id,
+            file_id=file_id,
+            score=score,
+            embedding_type="clip_thumbnail",
+            content_preview=content_preview,
+            timestamp_start=None,
+            timestamp_end=None,
+        )
+        for file_id, (score, embedding_id, content_preview) in ranked
+    ]
+    file_scores = _combine_scores_cosine(
+        text_matches=[],
+        clip_matches=clip_matches,
+        keyword_matches=[],
+        transcript_keyword_matches=[],
+    )
+    results = _build_results(
+        file_scores,
+        file_type,
+        drive,
+        _IMAGE_SEARCH_LIMIT,
+        skip_cutoff=True,
+    )
+    results = sorted(results, key=lambda r: (-r.score, r.file_id))
+
+    with get_search_db_read() as session:
+        indexed_count = session.query(IndexedFile).filter(
+            IndexedFile.active.is_(True)
+        ).count()
+
+    return SearchResponse(
+        results=tuple(results),
+        total=len(results),
+        indexed_files=indexed_count,
+        service_version=settings.service_version,
+    )
 
 
 @dataclass

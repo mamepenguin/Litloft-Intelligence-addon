@@ -436,7 +436,6 @@ search:
 
   # Default result limit
   default_limit: 20
-  max_limit: 100
 
   # Pre-filter: minimum cosine similarity to include as a candidate.
   # SigLIP2 models (waon-siglip2, google/siglip2) produce lower absolute cosine
