@@ -393,3 +393,56 @@ class TestLoadSettingsRag:
         assert result.features.rag is True
         # LLM defaults remain disabled-looking (no provider).
         assert result.llm.provider == "disabled"
+
+
+# ---------------------------------------------------------------------------
+# rag.file_question_max_chars
+# ---------------------------------------------------------------------------
+
+
+class TestFileQuestionBudget:
+    """How much of one file's text a question may send (SPEC-ADDON-053 10)."""
+
+    def test_default_is_16000(self, make_settings):
+        """SPEC-ADDON-053 10: the fallback is 16,000 characters."""
+        assert make_settings().rag.file_question_max_chars == 16_000
+
+    @pytest.mark.parametrize("budget", [1_000, 16_000, 200_000])
+    def test_a_value_in_range_is_kept(self, budget, tmp_path, monkeypatch):
+        """SPEC-ADDON-053 10: an integer from 1,000 to 200,000 is the budget."""
+        assert _loaded_rag(tmp_path, monkeypatch, f"  file_question_max_chars: {budget}\n") \
+            .file_question_max_chars == budget
+
+    @pytest.mark.parametrize(
+        "written",
+        ["999", "200001", "0", "-5000", '"many"', "true", "16000.5"],
+        ids=["below-min", "above-max", "zero", "negative", "not-int", "bool", "float"],
+    )
+    def test_a_value_out_of_range_falls_back_with_a_warning(
+        self, written, tmp_path, monkeypatch, caplog
+    ):
+        """SPEC-ADDON-053 10: an unusable value logs a warning and falls back to 16,000."""
+        with caplog.at_level("WARNING"):
+            rag = _loaded_rag(tmp_path, monkeypatch, f"  file_question_max_chars: {written}\n")
+
+        assert rag.file_question_max_chars == 16_000
+        assert "file_question_max_chars" in caplog.text
+
+    def test_an_absent_key_keeps_the_default_silently(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """SPEC-ADDON-053 10: a missing key is not a warning, only a default."""
+        with caplog.at_level("WARNING"):
+            rag = _loaded_rag(tmp_path, monkeypatch, "  top_k: 3\n")
+
+        assert rag.file_question_max_chars == 16_000
+        assert "file_question_max_chars" not in caplog.text
+
+
+def _loaded_rag(tmp_path, monkeypatch, rag_body: str) -> RagConfig:
+    config_file = tmp_path / "search-config.yml"
+    config_file.write_text("rag:\n" + rag_body)
+    monkeypatch.setenv("INTELLIGENCE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("HOMEVAULT_DB_PATH", str(tmp_path / "hv.db"))
+    monkeypatch.setenv("SEARCH_CONFIG_PATH", str(config_file))
+    return load_settings().rag
