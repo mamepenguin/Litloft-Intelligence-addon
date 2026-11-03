@@ -170,9 +170,8 @@ def test_a_reached_but_unreadable_picture_ends_indexed_with_no_rows(
     path = builder(tmp_path / f"{case}.png")
     seed_indexed_file(search_db, "pic1", "image/png", path, **ALL_DONE)
     seed_ocr_rows(search_db, "pic1", ("stale",))
-    harness = install(
-        monkeypatch, lines=["never reached"], engine_error=engine_error
-    )
+    harness = install(monkeypatch, lines=[] if case == "no-lines" else ["never reached"])
+    harness.engine.error = engine_error
 
     run_worker(harness, "pic1")
 

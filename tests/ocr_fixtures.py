@@ -352,7 +352,7 @@ class SearchDB:
 
     def ocr_fts(self, file_id: str) -> list[tuple[int, Any, str]]:
         return self.rows(
-            "SELECT chunk_index, page, text FROM fts_text_content "
+            "SELECT CAST(chunk_index AS INTEGER), page, text FROM fts_text_content "
             "WHERE file_id = :f ORDER BY CAST(chunk_index AS INTEGER)",
             f=file_id,
         )
@@ -485,9 +485,10 @@ def seed_ocr_rows(
         for index, chunk in enumerate(texts):
             conn.execute(
                 text(
-                    "INSERT INTO embeddings(embedding_id, file_id, embedding_type, "
-                    "vector_table, content_preview, page, chunk_index) "
-                    "VALUES(:id, :f, 'text_content', 'vec_text', :preview, 3, :idx)"
+                    "INSERT INTO embeddings(id, file_id, embedding_type, "
+                    "vector_table, content_preview, page, chunk_index, created_at) "
+                    "VALUES(:id, :f, 'text_content', 'vec_text', :preview, 3, :idx, "
+                    "CURRENT_TIMESTAMP)"
                 ),
                 {
                     "id": f"chars-{file_id}-{index}",
