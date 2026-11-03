@@ -145,6 +145,8 @@
     "showMore": "Show more"
   },
   "sceneCandidates": {
+    "showAll": "Show all ({count} total)",
+    "collapse": "Collapse",
     "heading": "Scene candidates",
     "loading": "Searching for scenes",
     "failed": "Couldn't search scenes",
