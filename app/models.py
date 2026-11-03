@@ -85,6 +85,11 @@ class IndexedFile(Base):
     text_indexed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )
+    # True when the picture's OCR text has been read (stored, empty, or
+    # unreadable). Meaningful for pictures only. SPEC-ADDON-050.
+    ocr_indexed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
     tfidf_keywords_indexed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )

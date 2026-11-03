@@ -77,6 +77,7 @@ class FeaturesStatus(BaseModel):
     transcript_refine: str = "false"
     chapter_suggestions: str = "false"
     video_visual_index: str = "false"
+    image_ocr: str = "on_index"
 
 
 class ChapterSuggestionItem(BaseModel):

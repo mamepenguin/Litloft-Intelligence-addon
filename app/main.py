@@ -511,7 +511,13 @@ def status_endpoint() -> StatusResponse:
     if dependencies._vision_worker is not None:
         tasks["vision_describe"] = dependencies._vision_worker.get_status()
     if dependencies._video_visual_worker is not None:
-        tasks["video_visual"] = dependencies._video_visual_worker.get_status()
+        # This worker's snapshot reads search.db, unlike the in-memory
+        # queues above; it can still be registered before the DB is
+        # initialised (startup) or after it is disposed (shutdown).
+        try:
+            tasks["video_visual"] = dependencies._video_visual_worker.get_status()
+        except RuntimeError:
+            logger.debug("video_visual status unavailable: search DB not ready")
     if dependencies._retrieval_keywords_worker is not None:
         tasks["retrieval_keywords"] = (
             dependencies._retrieval_keywords_worker.get_status()
@@ -565,6 +571,7 @@ def status_endpoint() -> StatusResponse:
             "clip": index_status.clip_indexed,
             "whisper": index_status.whisper_indexed,
             "text": index_status.text_indexed,
+            "ocr": index_status.ocr_indexed,
         },
         pending={
             "total": (
@@ -572,11 +579,21 @@ def status_endpoint() -> StatusResponse:
                 + index_status.pending_clip
                 + index_status.pending_whisper
                 + index_status.pending_text
+                + (
+                    index_status.pending_ocr
+                    if settings.features.image_ocr == "on_index"
+                    else 0
+                )
             ),
             "metadata": index_status.pending_metadata,
             "clip": index_status.pending_clip,
             "whisper": index_status.pending_whisper,
             "text": index_status.pending_text,
+            "ocr": (
+                index_status.pending_ocr
+                if settings.features.image_ocr == "on_index"
+                else 0
+            ),
         },
         queue={
             "processing": queue_status.processing_count,
@@ -598,6 +615,7 @@ def status_endpoint() -> StatusResponse:
             transcript_refine=settings.features.transcript_refine,
             chapter_suggestions=settings.features.chapter_suggestions,
             video_visual_index=settings.features.video_visual_index,
+            image_ocr=settings.features.image_ocr,
         ),
         llm=_llm_status(),
     )

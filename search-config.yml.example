@@ -98,6 +98,16 @@ features:
                       # enable with care on large libraries. Excludes
                       # `.loft` remote-media pointers (no locally probeable
                       # video bytes) and audio/image/document files.
+  image_ocr: "on_index"
+                      # "false" | "manual" | "on_index" — local OCR reads
+                      # the words in pictures (JPEG, PNG, WebP, GIF, BMP,
+                      # HEIC, HEIF) and stores them as the picture's text
+                      # chunks, so search and Ask find them like a document.
+                      # Runs inside the container; no picture is sent
+                      # anywhere. "on_index" also reads existing pictures in
+                      # the background after the upgrade. A change takes
+                      # effect after a restart. Turning it off keeps the text
+                      # already stored.
 
 # LLM provider configuration (required for auto_tags and future LLM features)
 # Supported providers:
@@ -624,3 +634,5 @@ memory:
   whisper_idle_unload: 300
   # Unload BLIP model after idle (seconds, 0 = never unload)
   blip_idle_unload: 300
+  # Unload the OCR engine after idle (seconds, 0 = never unload)
+  ocr_idle_unload: 300

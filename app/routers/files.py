@@ -13,6 +13,7 @@ from app.config import settings
 from app.dependencies import get_auto_tags_worker, get_index_manager
 from app.document_sections import EPUB_MIME, load_section_titles
 from app.drive_context import assert_file_in_drive, require_drive
+from app.workers.ocr import OCR_IMAGE_TYPES
 from app.schemas import (
     BatchSuggestedTagsRequest,
     BatchSuggestedTagsResponse,
@@ -69,6 +70,7 @@ def _get_indexed_file_or_404(file_id: str, drive: str) -> dict[str, Any]:
             "clip_indexed": indexed.clip_indexed,
             "whisper_indexed": indexed.whisper_indexed,
             "text_indexed": indexed.text_indexed,
+            "ocr_indexed": indexed.ocr_indexed,
             "indexed_at": indexed.indexed_at.isoformat() if indexed.indexed_at else "",
         }
 
@@ -189,7 +191,9 @@ async def get_subtitles_vtt(
 # Spec §2.1 fixes the task vocabulary; the handler validates the
 # body against this set before touching any DB row so a malformed
 # payload can never reset a flag partially.
-_REINDEX_ALLOWED_TASKS: tuple[str, ...] = ("metadata", "clip", "whisper", "text")
+_REINDEX_ALLOWED_TASKS: tuple[str, ...] = (
+    "metadata", "clip", "whisper", "text", "ocr",
+)
 
 # Spec task name → ``IndexedFile`` column name. The frontend speaks
 # spec names; the DB column for the text-content leg is
@@ -200,6 +204,7 @@ _REINDEX_FLAG_COLUMN: dict[str, str] = {
     "clip": "clip_indexed",
     "whisper": "whisper_indexed",
     "text": "text_indexed",
+    "ocr": "ocr_indexed",
 }
 
 # (file_id, task) pairs a reindex request has passed the ``is_queued``
@@ -273,7 +278,23 @@ async def reindex_file(
     # ---- Layer 2: drive boundary + soft-delete check ----
     # 404 (not 403) on cross-drive / soft-deleted / unknown — keeps the
     # drive boundary opaque to the caller.
-    await asyncio.to_thread(_get_indexed_file_or_404, file_id, drive)
+    indexed = await asyncio.to_thread(
+        _get_indexed_file_or_404, file_id, drive
+    )
+
+    # OCR has no meaning for a document, and "false" refuses the request
+    # rather than silently ignoring it.
+    if "ocr" in tasks and (
+        settings.features.image_ocr == "false"
+        or indexed["mime_type"] not in OCR_IMAGE_TYPES
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Task 'ocr' applies only to pictures and is unavailable "
+                "while features.image_ocr is false"
+            ),
+        )
 
     # ---- Layer 3: split tasks into already-queued vs fresh ----
     manager = get_index_manager()
@@ -398,6 +419,7 @@ async def get_index_details(
             "clip": indexed["clip_indexed"],
             "whisper": indexed["whisper_indexed"],
             "text": indexed["text_indexed"],
+            "ocr": indexed["ocr_indexed"],
         },
         indexed_at=indexed["indexed_at"],
         embeddings=embeddings_by_type,

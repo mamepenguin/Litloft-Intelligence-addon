@@ -43,6 +43,11 @@ from app.workers.clip import (
     VIDEO_TYPES,
 )
 from app.workers.metadata import index_metadata_batch, index_text_content
+from app.workers.ocr import (
+    check_idle_unload as check_ocr_idle_unload,
+    index_ocr,
+    OCR_IMAGE_TYPES,
+)
 from app.workers.transcription.haas_local import (
     check_idle_unload as check_haas_idle_unload,
 )
@@ -80,6 +85,7 @@ class TaskType(str, Enum):
     WHISPER = "whisper"
     TEXT_CONTENT = "text_content"
     TFIDF_KEYWORDS = "tfidf_keywords"
+    OCR = "ocr"
 
 
 class QueueState(str, Enum):
@@ -116,12 +122,14 @@ class IndexStatus:
     whisper_indexed: int = 0
     text_indexed: int = 0
     tfidf_keywords_indexed: int = 0
+    ocr_indexed: int = 0
     pending_metadata: int = 0
     pending_clip: int = 0
     pending_clip_thumbnail: int = 0
     pending_whisper: int = 0
     pending_text: int = 0
     pending_tfidf_keywords: int = 0
+    pending_ocr: int = 0
 
 
 def _loft_needs_reset(file_path: str, chunked: bool) -> bool | None:
@@ -228,6 +236,7 @@ class IndexManager:
             asyncio.create_task(
                 self._tfidf_keywords_worker(), name="tfidf_keywords_worker"
             ),
+            asyncio.create_task(self._ocr_worker(), name="ocr_worker"),
             asyncio.create_task(
                 self._reconciliation_worker(), name="reconciliation_worker"
             ),
@@ -317,6 +326,12 @@ class IndexManager:
                 IndexedFile.mime_type.in_(list(TEXT_MIMES)),
             ).count()
 
+            ocr_types = list(OCR_IMAGE_TYPES)
+            ocr = active_files.filter(
+                IndexedFile.ocr_indexed.is_(True),
+                IndexedFile.mime_type.in_(ocr_types),
+            ).count()
+
             tfidf_kw_types = whisper_types  # same MIME scope
             tfidf_kw = active_files.filter(
                 IndexedFile.tfidf_keywords_indexed.is_(True),
@@ -347,6 +362,11 @@ class IndexManager:
                 IndexedFile.mime_type.in_(list(TEXT_MIMES)),
             ).count()
 
+            pending_ocr = active_files.filter(
+                IndexedFile.ocr_indexed.is_(False),
+                IndexedFile.mime_type.in_(ocr_types),
+            ).count()
+
             pending_tfidf_kw = active_files.filter(
                 IndexedFile.tfidf_keywords_indexed.is_(False),
                 IndexedFile.whisper_indexed.is_(True),
@@ -361,12 +381,14 @@ class IndexManager:
                 whisper_indexed=whisper,
                 text_indexed=text,
                 tfidf_keywords_indexed=tfidf_kw,
+                ocr_indexed=ocr,
                 pending_metadata=pending_metadata,
                 pending_clip=pending_clip,
                 pending_clip_thumbnail=pending_clip_thumbnail,
                 pending_whisper=pending_whisper,
                 pending_text=pending_text,
                 pending_tfidf_keywords=pending_tfidf_kw,
+                pending_ocr=pending_ocr,
             )
 
     async def reconcile(self) -> dict[str, int]:
@@ -712,7 +734,7 @@ class IndexManager:
         clip_mimes = IMAGE_TYPES | VIDEO_TYPES | THUMBNAIL_FALLBACK_TYPES
 
         def _collect_incomplete() -> list[
-            tuple[str, str, bool, bool, bool, bool, bool, bool]
+            tuple[str, str, bool, bool, bool, bool, bool, bool, bool]
         ]:
             with get_search_db() as session:
                 from sqlalchemy import or_
@@ -733,6 +755,7 @@ class IndexManager:
                             IndexedFile.whisper_indexed.is_(False),
                             IndexedFile.text_indexed.is_(False),
                             IndexedFile.tfidf_keywords_indexed.is_(False),
+                            IndexedFile.ocr_indexed.is_(False),
                         ),
                     )
                     .all()
@@ -765,6 +788,8 @@ class IndexManager:
                         and f.mime_type != LOFT_MIME
                     ):
                         f.tfidf_keywords_indexed = True
+                    if not f.ocr_indexed and f.mime_type not in OCR_IMAGE_TYPES:
+                        f.ocr_indexed = True
 
                 # Snapshot what we need for queuing
                 return [
@@ -777,6 +802,7 @@ class IndexManager:
                         f.whisper_indexed,
                         f.text_indexed,
                         f.tfidf_keywords_indexed,
+                        f.ocr_indexed,
                     )
                     for f in incomplete
                 ]
@@ -786,7 +812,7 @@ class IndexManager:
         for (
             file_id, mime_type,
             meta_done, clip_done, thumb_done, whisper_done, text_done,
-            tfidf_kw_done,
+            tfidf_kw_done, ocr_done,
         ) in file_tasks:
             queued_any = False
 
@@ -826,6 +852,16 @@ class IndexManager:
                 ))
                 queued_any = True
 
+            # OCR backlog waits behind fresh on_index work.
+            if (
+                not ocr_done
+                and settings.features.image_ocr == "on_index"
+            ):
+                await self._enqueue(IndexTask(
+                    file_id=file_id, task_type=TaskType.OCR, priority=-10
+                ))
+                queued_any = True
+
             if queued_any:
                 resumed += 1
 
@@ -849,6 +885,15 @@ class IndexManager:
         if mime_type in IMAGE_TYPES or mime_type in VIDEO_TYPES:
             await self._enqueue(IndexTask(
                 file_id=file_id, task_type=TaskType.CLIP
+            ))
+
+        # Read the words in a picture on the same pass, like CLIP.
+        if (
+            mime_type in OCR_IMAGE_TYPES
+            and settings.features.image_ocr == "on_index"
+        ):
+            await self._enqueue(IndexTask(
+                file_id=file_id, task_type=TaskType.OCR
             ))
 
         # Vision-describe for images runs in parallel with CLIP — they
@@ -945,6 +990,14 @@ class IndexManager:
                         file_id=file_id, task_type=TaskType.TEXT_CONTENT,
                         priority=100,
                     ))
+                if (
+                    not file.ocr_indexed
+                    and file.mime_type in OCR_IMAGE_TYPES
+                    and settings.features.image_ocr != "false"
+                ):
+                    pending.append(IndexTask(
+                        file_id=file_id, task_type=TaskType.OCR, priority=100
+                    ))
             return pending
 
         # Off the loop: the row lookup is O(1), but taking the write lock
@@ -981,6 +1034,7 @@ class IndexManager:
         "clip": TaskType.CLIP,
         "whisper": TaskType.WHISPER,
         "text": TaskType.TEXT_CONTENT,
+        "ocr": TaskType.OCR,
     }
 
     def is_queued(self, file_id: str, task: str) -> bool:
@@ -1440,6 +1494,40 @@ class IndexManager:
                 logger.error("Text content worker error: %s", e)
                 await asyncio.sleep(5)
 
+    async def _ocr_worker(self) -> None:
+        """Read pictures one at a time, off the event loop."""
+        while True:
+            try:
+                await self._pause_event.wait()
+                batch = await self._collect_batch(TaskType.OCR, 1)
+
+                if not batch:
+                    await asyncio.sleep(2)
+                    continue
+
+                task = batch[0]
+                self._processing_count += 1
+                self._processing_by_type[TaskType.OCR].append(task.file_id)
+
+                try:
+                    await asyncio.to_thread(index_ocr, task.file_id)
+                except Exception as e:
+                    logger.error(
+                        "OCR indexing failed for %s: %s", task.file_id, e
+                    )
+                finally:
+                    self._processing_count -= 1
+                    try:
+                        self._processing_by_type[TaskType.OCR].remove(task.file_id)
+                    except ValueError:
+                        pass
+
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.error("OCR worker error: %s", e)
+                await asyncio.sleep(5)
+
     async def _enqueue_vision_describe(self, file_id: str) -> None:
         """Hand the file to the VisionDescribeWorker (on_index hook).
 
@@ -1643,6 +1731,7 @@ class IndexManager:
                 check_blip_idle_unload()
                 check_clip_concepts_idle_unload()
                 check_haas_idle_unload()
+                check_ocr_idle_unload()
             except asyncio.CancelledError:
                 return
             except Exception as e:
