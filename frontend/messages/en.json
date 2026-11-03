@@ -681,6 +681,14 @@
       "openaiFileTooLarge": "OpenAI Whisper API cannot process files over 25MB. For long audio, use Deepgram / ElevenLabs Scribe / Groq / self-hosted Whisper."
     }
   },
+  "askTab": {
+    "placeholder": "Ask about this file",
+    "submit": "Ask",
+    "partial": "Answered from part of the file",
+    "noModel": "No model is available for this question",
+    "busy": "Busy. Try again in a moment",
+    "failed": "Could not answer"
+  },
   "llmChoice": {
     "regenerateWith": "Regenerate with…",
     "offhost": "External server",

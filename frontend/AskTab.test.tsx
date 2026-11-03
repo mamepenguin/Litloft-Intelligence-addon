@@ -202,7 +202,7 @@ function tabProps(overrides: Record<string, unknown> = {}): TabProps {
     onFileChange: () => {},
     fillHeight: true,
     labelledByHost: true,
-    onAvailability: () => {},
+    onAvailability: vi.fn(),
     ...overrides,
   } as TabProps;
 }
@@ -289,7 +289,7 @@ describe("SPEC-ADDON-056 I7 - the tab is listed only for a file it can answer ab
     expect(callsTo("GET", "/files/vid000000001/ask")[0].url).toBe(
       "/api/addons/intelligence/files/vid000000001/ask",
     );
-    expect(callsTo("GET", "/files/vid000000001/ask")[0].headers["X-Lit-Drive"]).toBe("family");
+    expect(callsTo("GET", "/files/vid000000001/ask")[0].headers["x-lit-drive"]).toBe("family");
   });
 
   it.each([
@@ -314,7 +314,7 @@ describe("SPEC-ADDON-056 I7 - the tab is listed only for a file it can answer ab
 
   it("asks again on a fileId change without a remount", async () => {
     net.availability = (call) =>
-      json({ available: call.url.includes("vid000000002") });
+      json({ available: !call.url.includes("vid000000002") });
     const onAvailability = vi.fn();
 
     const { rerender } = render(<AskTab {...tabProps({ onAvailability })} />);
