@@ -414,6 +414,7 @@ async def get_index_details(
         file_id=file_id,
         drive=indexed["drive"],
         filename=indexed["filename"],
+        image_ocr=settings.features.image_ocr,
         status={
             "metadata": indexed["metadata_indexed"],
             "clip": indexed["clip_indexed"],
