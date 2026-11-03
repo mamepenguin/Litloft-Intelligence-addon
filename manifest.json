@@ -252,7 +252,24 @@
           "type": "current_drive_only",
           "array_path": "results",
           "drive_field": "drive"
-        }
+        },
+        "timeout": 30
+      },
+      {
+        "path": "/search/images",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "search"
+        },
+        "response_filter": {
+          "type": "current_drive_only",
+          "array_path": "results",
+          "drive_field": "drive"
+        },
+        "timeout": 30
       },
       {
         "path": "/search/exact",

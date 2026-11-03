@@ -47,7 +47,7 @@ class SearchConfig:
     rrf_candidates: int = 50
     # Result limits
     default_limit: int = 20
-    max_limit: int = 100
+    max_limit: int = 1000
     # Pre-filter thresholds (exclude candidates below these before ranking)
     min_score_text: float = 0.85
     min_score_clip: float = 0.05

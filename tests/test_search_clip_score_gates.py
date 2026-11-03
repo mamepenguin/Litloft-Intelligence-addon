@@ -340,21 +340,29 @@ def embedded_query(clip_index, monkeypatch):
     return clip_index
 
 
-def test_spec_addon_043_search_returns_the_50_nearest_of_60_flat_thumbnails(embedded_query):
+def test_spec_addon_044_i9_search_returns_all_60_in_band_thumbnails_at_limit_100_and_the_50_nearest_at_limit_50(
+    embedded_query,
+):
+    """SPEC-ADDON-044 I9 (revised): 60 thumbnails inside a 0.01 band above the
+    floor, and no other match."""
     _rows(embedded_query, "vec_clip", "clip_thumbnail",
-          _spread(60, _distance(0.07), _distance(0.06)), "pic")
+          [_distance(s) for s in _spread(60, 0.051, 0.061)], "pic")
 
-    response = search_mod.search("zzzz", limit=100, drive=HOME)
+    at_100 = [r.file_id for r in search_mod.search("zzzz", limit=100, drive=HOME).results]
+    at_50 = [r.file_id for r in search_mod.search("zzzz", limit=50, drive=HOME).results]
 
-    got = {r.file_id for r in response.results}
-    assert got == {f"pic{i}" for i in range(RRF_CANDIDATES)}
+    assert len(at_100) == 60
+    assert set(at_100) == {f"pic{i}" for i in range(60)}
+    # The band rises with the index, so the 50 nearest are pic10..pic59.
+    assert len(at_50) == 50
+    assert set(at_50) == {f"pic{i}" for i in range(10, 60)}
 
 
-def test_spec_addon_044_search_lists_a_keyword_match_first_and_all_image_matches_after_it(
+def test_spec_addon_044_i9_search_lists_a_keyword_match_first_and_all_60_image_matches_after_it(
     embedded_query,
 ):
     _rows(embedded_query, "vec_clip", "clip_thumbnail",
-          _spread(60, _distance(0.07), _distance(0.06)), "pic")
+          [_distance(s) for s in _spread(60, 0.051, 0.061)], "pic")
     embedded_query.add_file("doc", drive=HOME)
     embedded_query.sql(
         "INSERT INTO fts_files(file_id, filename, title, description, tags_text) "
@@ -363,5 +371,6 @@ def test_spec_addon_044_search_lists_a_keyword_match_first_and_all_image_matches
 
     ids = [r.file_id for r in search_mod.search("zzzz", limit=100, drive=HOME).results]
 
+    assert len(ids) == 61
     assert ids[0] == "doc"
-    assert set(ids[1:]) == {f"pic{i}" for i in range(RRF_CANDIDATES)}
+    assert set(ids[1:]) == {f"pic{i}" for i in range(60)}

@@ -79,6 +79,35 @@ def _clip(index, limit=RRF_CANDIDATES, mode="precision", drive=HOME):
     )
 
 
+def _depth(mode: str, limit: int) -> int:
+    """The depth ``search()`` passes in precision mode, ``rrf_candidates`` in recall."""
+    if mode == "precision":
+        return max(limit, RRF_CANDIDATES)
+    return RRF_CANDIDATES
+
+
+@pytest.fixture()
+def embedded_search(search_index, monkeypatch):  # noqa: F811
+    dim = search_index.dim("vec_clip")
+    text_dim = search_index.dim("vec_text")
+    monkeypatch.setattr(search_mod, "embed_text_clip", lambda *_a, **_k: unit(dim, 0))
+    monkeypatch.setattr(search_mod, "embed_query", lambda *_a, **_k: unit(text_dim, 0))
+
+
+@pytest.fixture()
+def image_depth(monkeypatch):
+    """Every ``limit`` ``search()`` hands ``_vector_search_clip``, in call order."""
+    depths: list[int] = []
+    real = search_mod._vector_search_clip
+
+    def _record(query_vector, limit, **kwargs):
+        depths.append(limit)
+        return real(query_vector, limit, **kwargs)
+
+    monkeypatch.setattr(search_mod, "_vector_search_clip", _record)
+    return depths
+
+
 def _other_drive_and_inactive_thumbnails_nearer_than_everything(
     index, n=RRF_CANDIDATES + 10,
 ):
@@ -104,31 +133,62 @@ def _by_id(matches):
 
 
 @pytest.mark.parametrize(
-    "n_thumbnails, limit",
+    "mode, limit, n_thumbnails",
     [
-        pytest.param(2, RRF_CANDIDATES, id="two-thumbnails"),
-        pytest.param(10, RRF_CANDIDATES, id="fewer-than-rrf_candidates"),
-        pytest.param(RRF_CANDIDATES, RRF_CANDIDATES, id="exactly-rrf_candidates"),
-        pytest.param(RRF_CANDIDATES + 10, RRF_CANDIDATES, id="more-than-rrf_candidates"),
-        pytest.param(30, 20, id="smaller-limit"),
+        pytest.param("precision", 2, 2, id="two-thumbnails"),
+        pytest.param("precision", 10, 10, id="fewer-than-rrf_candidates"),
+        pytest.param("precision", RRF_CANDIDATES, RRF_CANDIDATES, id="exactly-rrf_candidates"),
+        pytest.param(
+            "precision", RRF_CANDIDATES, RRF_CANDIDATES + 10,
+            id="more-than-rrf_candidates",
+        ),
+        pytest.param("precision", 20, 60, id="requested-limit-below-rrf_candidates"),
+        pytest.param("precision", 100, 60, id="requested-limit-above-rrf_candidates"),
+        pytest.param("recall", 100, 60, id="recall"),
     ],
 )
-def test_spec_addon_025_scene_off_returns_the_drives_nearest_active_thumbnails_however_many_other_rows_are_nearer(
-    clip_index, monkeypatch, n_thumbnails, limit,
+def test_spec_addon_025_scene_off_returns_the_min_depth_nearest_active_thumbnails_however_many_other_rows_are_nearer(
+    clip_index, monkeypatch, mode, limit, n_thumbnails,
 ):
+    """SPEC-ADDON-025 I1 (revised): ``min(D, N)``, where D is the depth ``search()``
+    passes — ``max(effective_limit, rrf_candidates)`` in precision mode,
+    ``rrf_candidates`` in recall mode."""
     _use_search_config(monkeypatch, **PERMISSIVE)
-    distances = _spread(n_thumbnails, 0.30, 1.20)
-    _rows(clip_index, "vec_clip", "clip_thumbnail", distances, "t")
+    depth = _depth(mode, limit)
+    scores = _spread(n_thumbnails, 0.80, 0.90)
+    _rows(clip_index, "vec_clip", "clip_thumbnail", [_distance(s) for s in scores], "t")
     _scene_rows_nearer_than_everything(clip_index)
     _other_drive_and_inactive_thumbnails_nearer_than_everything(clip_index)
 
-    got = _by_id(_clip(clip_index, limit=limit))
+    got = _by_id(_clip(clip_index, limit=depth, mode=mode))
 
-    expected = {f"e_t{i}": distances[i] for i in range(min(limit, n_thumbnails))}
+    first = n_thumbnails - min(depth, n_thumbnails)
+    expected = {f"e_t{i}": scores[i] for i in range(first, n_thumbnails)}
     assert set(got) == set(expected)
     assert all(m.embedding_type == "clip_thumbnail" for m in got.values())
-    for emb_id, d in expected.items():
-        assert got[emb_id].score == pytest.approx(_score(d), abs=1e-4)
+    for emb_id, score in expected.items():
+        assert got[emb_id].score == pytest.approx(score, abs=1e-4)
+
+
+@pytest.mark.parametrize(
+    "mode, limit",
+    [
+        pytest.param("precision", 20, id="precision-limit-20"),
+        pytest.param("precision", 50, id="precision-limit-50"),
+        pytest.param("precision", 100, id="precision-limit-100"),
+        pytest.param("recall", 100, id="recall"),
+    ],
+)
+def test_spec_addon_025_scene_off_search_passes_the_depth_the_invariant_names_to_the_clip_channel(
+    clip_index, monkeypatch, embedded_search, image_depth, mode, limit,
+):
+    """SPEC-ADDON-025 I1 (revised): the depth is ``max(effective_limit,
+    rrf_candidates)`` in precision mode and ``rrf_candidates`` in recall mode."""
+    _use_search_config(monkeypatch, **PERMISSIVE)
+
+    search_mod.search("zzzz", limit=limit, drive=HOME, mode=mode)
+
+    assert image_depth == [_depth(mode, limit)]
 
 
 def test_spec_addon_025_scene_off_never_returns_a_thumbnail_row_without_a_partition_value(
