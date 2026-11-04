@@ -526,6 +526,32 @@ class TestBuildFileContextImageOcr:
             assert [s.source for s in ctx.snippets] == ["clip", "metadata"]
 
 
+class TestAssembleContextsPictureOcr:
+    """SPEC-ADDON-050 I11: Ask embeds the query when only pictures were found."""
+
+    def test_picture_only_candidates_embed_the_query_for_ocr_chunks(
+        self, monkeypatch
+    ):
+        embed_spy = MagicMock(return_value=MagicMock())
+        monkeypatch.setattr("app.rag.context.embed_query", embed_spy)
+        monkeypatch.setattr(
+            "app.rag.context._fetch_blip_caption",
+            MagicMock(return_value="A printed receipt on a desk."),
+        )
+        _install_text_rows(monkeypatch, {"pic1": {3: "請求書 合計 38,500円"}})
+
+        contexts = assemble_contexts(
+            [_retrieved_picture()], RagConfig(), query="合計金額はいくら？"
+        )
+
+        assert embed_spy.call_count == 1
+        assert any(
+            "請求書 合計 38,500円" in s.text
+            for s in contexts[0].snippets
+            if s.source.startswith("text_content")
+        )
+
+
 # ---------------------------------------------------------------------------
 # build_file_context: per-file budget
 # ---------------------------------------------------------------------------
