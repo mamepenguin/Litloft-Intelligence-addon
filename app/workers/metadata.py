@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.vec_partition import insert_vector_sql
 from app.config import settings
+from app.addon_events import post_addon_event_sync
 from app.database import (
     get_search_db,
     get_search_db_read,
@@ -24,7 +25,7 @@ from app.database import (
     validate_vector_table,
 )
 from app.document_sections import replace_document_sections
-from app.extractors.base import ExtractionResult
+from app.extractors.base import ExtractionResult, TextChunk
 from app.extractors.epub import EpubExtractor
 from app.extractors.html import HtmlExtractor
 from app.extractors.office import OfficeExtractor
@@ -349,6 +350,7 @@ def index_text_content(file_id: str) -> bool:
     if file is None:
         return False
 
+    is_pdf = file.mime_type == "application/pdf"
     result = _extract_file_content(file)
     chunks = list(result.chunks)
     if not chunks:
@@ -372,57 +374,65 @@ def index_text_content(file_id: str) -> bool:
             emit_processing_updated(changed_drive, [file_id])
         return True
 
-    # --- Phase 2: Compute embeddings (no DB lock, may be slow) ---
-    chunk_texts = [c.text for c in chunks]
+    unchanged = is_pdf and _pdf_chunks_unchanged(file_id, chunks)
 
-    try:
-        vectors = embed_passages(chunk_texts)
-    except Exception as e:
-        logger.error("Text content embedding failed for %s: %s", file_id, e)
-        return False
+    # --- Phase 2: Compute embeddings (no DB lock, may be slow) ---
+    vectors: list[Any] = []
+    if not unchanged:
+        chunk_texts = [c.text for c in chunks]
+
+        try:
+            vectors = embed_passages(chunk_texts)
+        except Exception as e:
+            logger.error("Text content embedding failed for %s: %s", file_id, e)
+            return False
 
     # --- Phase 3: Write results to DB (short transaction) ---
     changed_drive = None
+    drive = ""
     with get_search_db() as session:
         file_record = session.query(IndexedFile).filter_by(
             file_id=file_id, active=True
         ).first()
         if file_record is None:
             return False
+        drive = file_record.drive
 
-        # Remove old text content embeddings
-        _remove_embeddings(session, file_id, "text_content")
+        if not unchanged:
+            # Remove old text content embeddings
+            _remove_embeddings(session, file_id, "text_content")
 
-        for idx, (chunk, vector) in enumerate(zip(chunks, vectors)):
-            try:
-                embedding_id = f"txt_{file_id}_{idx}_{uuid.uuid4().hex[:8]}"
-                _store_embedding(
-                    session=session,
-                    embedding_id=embedding_id,
-                    file_id=file_id,
-                    embedding_type="text_content",
-                    vector_table="vec_text",
-                    vector=vector,
-                    content_preview=chunk.text[:200],
-                    page=chunk.page,
-                    chunk_index=idx,
-                )
-            except Exception as e:
-                logger.error(
-                    "Failed to store text embedding %d for %s: %s",
-                    idx, file_id, e,
-                )
+            for idx, (chunk, vector) in enumerate(zip(chunks, vectors)):
+                try:
+                    embedding_id = f"txt_{file_id}_{idx}_{uuid.uuid4().hex[:8]}"
+                    _store_embedding(
+                        session=session,
+                        embedding_id=embedding_id,
+                        file_id=file_id,
+                        embedding_type="text_content",
+                        vector_table="vec_text",
+                        vector=vector,
+                        content_preview=chunk.text[:200],
+                        page=chunk.page,
+                        chunk_index=idx,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to store text embedding %d for %s: %s",
+                        idx, file_id, e,
+                    )
 
-        # Write full text chunks to FTS5 for keyword search
-        fts_chunks = [
-            {
-                "chunk_index": idx,
-                "page": chunk.page,
-                "text": chunk.text,
-            }
-            for idx, chunk in enumerate(chunks)
-        ]
-        upsert_fts_text_content(session, file_id, fts_chunks)
+            # Write full text chunks to FTS5 for keyword search
+            fts_chunks = [
+                {
+                    "chunk_index": idx,
+                    "page": chunk.page,
+                    "text": chunk.text,
+                }
+                for idx, chunk in enumerate(chunks)
+            ]
+            upsert_fts_text_content(session, file_id, fts_chunks)
+
         replace_document_sections(session, file_id, result.section_titles)
 
         _upsert_pdf_markdown(session, file_id, result)
@@ -433,7 +443,89 @@ def index_text_content(file_id: str) -> bool:
 
     if changed_drive:
         emit_processing_updated(changed_drive, [file_id])
+    if is_pdf and not unchanged:
+        _recompute_citations(file_id, drive)
     return True
+
+
+def _pdf_chunks_unchanged(file_id: str, chunks: list[TextChunk]) -> bool:
+    """Whether the stored embeddings and FTS rows already hold ``chunks``."""
+    with get_search_db_read() as session:
+        stored = session.execute(
+            sql_text(
+                "SELECT CAST(chunk_index AS INTEGER), page, text "
+                "FROM fts_text_content WHERE file_id = :f "
+                "ORDER BY CAST(chunk_index AS INTEGER)"
+            ),
+            {"f": file_id},
+        ).fetchall()
+        if len(stored) != len(chunks):
+            return False
+        for (_index, page, text), chunk in zip(stored, chunks):
+            if not _same_page(page, chunk.page) or text != chunk.text:
+                return False
+        embedded = session.execute(
+            sql_text(
+                "SELECT chunk_index FROM embeddings "
+                "WHERE file_id = :f AND embedding_type = 'text_content'"
+            ),
+            {"f": file_id},
+        ).fetchall()
+
+    indices = [row[0] for row in embedded]
+    return len(indices) == len(stored) and set(indices) == {
+        row[0] for row in stored
+    }
+
+
+def _same_page(stored: Any, page: int | None) -> bool:
+    if stored is None or stored == "":
+        return page is None
+    try:
+        return int(stored) == page
+    except (TypeError, ValueError):
+        return False
+
+
+def _recompute_citations(file_id: str, drive: str) -> None:
+    """Re-anchor a PDF's stored citations after its chunk indices moved."""
+    try:
+        with get_search_db_read() as session:
+            summary = session.execute(
+                sql_text(
+                    "SELECT content FROM file_insights "
+                    "WHERE file_id = :f AND kind = 'detailed_summary' "
+                    "AND status = 'active' LIMIT 1"
+                ),
+                {"f": file_id},
+            ).scalar()
+            if not summary or not summary.strip():
+                return
+            has_citations = session.execute(
+                sql_text(
+                    "SELECT 1 FROM detailed_summary_citations "
+                    "WHERE file_id = :f LIMIT 1"
+                ),
+                {"f": file_id},
+            ).first()
+        if has_citations is None:
+            return
+
+        from app.citations import calculate_and_store
+
+        with_count, without_count = calculate_and_store(file_id, summary)
+        post_addon_event_sync(
+            "intelligence.detailed_summary.citations_ready",
+            {
+                "file_id": file_id,
+                "drive": drive,
+                "citation_count": with_count,
+                "no_citation_count": without_count,
+            },
+            drive=drive,
+        )
+    except Exception as e:
+        logger.warning("Citation recalculation failed for %s: %s", file_id, e)
 
 
 def _upsert_pdf_markdown(
