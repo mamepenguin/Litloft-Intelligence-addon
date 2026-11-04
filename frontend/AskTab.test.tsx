@@ -246,6 +246,10 @@ async function ask(text: string): Promise<void> {
   await waitFor(() => expect(callsTo("POST", "/ask")).toHaveLength(1));
 }
 
+function pageClosed(fileId: string): CustomEvent<{ fileId: string }> {
+  return new CustomEvent("litloft:file-page-closed", { detail: { fileId } });
+}
+
 async function push(stream: { push: (frame: string) => void }, text: string): Promise<void> {
   await act(async () => {
     stream.push(text);
@@ -772,17 +776,124 @@ describe("SPEC-ADDON-056 6 and I11 - what belongs to the file", () => {
     await waitFor(() => expect(inFlight.signal?.aborted).toBe(true));
   });
 
-  it("aborts the stream when the file page unmounts", async () => {
+  it("SPEC-ADDON-056 I11 - aborts the stream when the file page closes", async () => {
     const stream = sse();
     net.answer = () => stream.response;
-    const view = await renderTab();
+    await renderTab();
     await ask("who wrote this");
     await push(stream, frame("answer_chunk", { delta: "Half an answer." }));
     const inFlight = callsTo("POST", "/ask")[0];
 
-    view.unmount();
+    act(() => {
+      window.dispatchEvent(pageClosed("vid000000001"));
+    });
 
     await waitFor(() => expect(inFlight.signal?.aborted).toBe(true));
+  });
+
+  it("SPEC-ADDON-056 I11 - keeps a streaming answer across a tab unmount and shows it whole on return", async () => {
+    const stream = sse();
+    net.answer = () => stream.response;
+    const view = await renderTab({ fileId: "vid000000011" });
+    await ask("who wrote this");
+    await push(stream, frame("answer_chunk", { delta: "Half an answer." }));
+
+    view.unmount();
+    await push(stream, frame("answer_chunk", { delta: " The rest." }));
+    await push(stream, frame("done", {}));
+
+    render(<AskTab {...view.props} />);
+
+    expect(await screen.findByDisplayValue("who wrote this")).toBeTruthy();
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("Half an answer. The rest."),
+    );
+    expect(callsTo("POST", "/ask")).toHaveLength(1);
+  });
+
+  it("SPEC-ADDON-056 I11 - shows the text so far when the tab returns mid-stream and continues into it", async () => {
+    const stream = sse();
+    net.answer = () => stream.response;
+    const view = await renderTab({ fileId: "vid000000012" });
+    await ask("who wrote this");
+    await push(stream, frame("answer_chunk", { delta: "Half an answer." }));
+
+    view.unmount();
+    render(<AskTab {...view.props} />);
+
+    expect(await screen.findByDisplayValue("who wrote this")).toBeTruthy();
+    expect(document.body.textContent).toContain("Half an answer.");
+
+    await push(stream, frame("answer_chunk", { delta: " The rest." }));
+
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("Half an answer. The rest."),
+    );
+    expect(callsTo("POST", "/ask")).toHaveLength(1);
+  });
+
+  it("SPEC-ADDON-056 I11 - the file-page-closed event aborts the file's stream and forgets it", async () => {
+    const stream = sse();
+    net.answer = () => stream.response;
+    const view = await renderTab({ fileId: "vid000000013" });
+    await ask("who wrote this");
+    await push(stream, frame("answer_chunk", { delta: "Half an answer." }));
+    const inFlight = callsTo("POST", "/ask")[0];
+
+    act(() => {
+      window.dispatchEvent(pageClosed("vid000000013"));
+    });
+
+    await waitFor(() => expect(inFlight.signal?.aborted).toBe(true));
+
+    view.unmount();
+    render(<AskTab {...view.props} />);
+
+    expect((await questionBox()).value).toBe("");
+    expect(document.body.textContent).not.toContain("Half an answer.");
+  });
+
+  it("SPEC-ADDON-056 I11 - the file-page-closed event for another file changes nothing", async () => {
+    const stream = sse();
+    net.answer = () => stream.response;
+    await renderTab({ fileId: "vid000000014" });
+    await ask("who wrote this");
+    await push(stream, frame("answer_chunk", { delta: "Half an answer." }));
+    const inFlight = callsTo("POST", "/ask")[0];
+
+    act(() => {
+      window.dispatchEvent(pageClosed("vid000000099"));
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(inFlight.signal?.aborted).toBe(false);
+    expect(document.body.textContent).toContain("Half an answer.");
+
+    await push(stream, frame("answer_chunk", { delta: " The rest." }));
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("Half an answer. The rest."),
+    );
+  });
+
+  it("SPEC-ADDON-056 I11 - a settled answer is forgotten when the file page closes", async () => {
+    const stream = sse();
+    net.answer = () => stream.response;
+    const view = await renderTab({ fileId: "vid000000016" });
+    await ask("who wrote this");
+    await push(stream, frame("answer_chunk", { delta: "The author [1]." }));
+    await push(stream, frame("done", {}));
+    await waitFor(() => expect(document.body.textContent).toContain("The author"));
+
+    act(() => {
+      window.dispatchEvent(pageClosed("vid000000016"));
+    });
+    view.unmount();
+    render(<AskTab {...view.props} />);
+
+    expect((await questionBox()).value).toBe("");
+    expect(document.body.textContent).not.toContain("The author");
   });
 
   it("sends no second request while an answer is streaming", async () => {
