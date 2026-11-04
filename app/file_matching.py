@@ -62,6 +62,8 @@ class SearchFilter(BaseModel):
             tag = raw.strip()
             if not tag:
                 continue
+            if len(tag) > TAG_MAX_LENGTH:
+                raise ValueError(f"a tag is at most {TAG_MAX_LENGTH} characters")
             key = tag.lower()
             if key in seen:
                 continue
@@ -69,8 +71,6 @@ class SearchFilter(BaseModel):
             tags.append(tag)
         if len(tags) > TAG_MAX_COUNT:
             raise ValueError(f"at most {TAG_MAX_COUNT} tags")
-        if any(len(tag) > TAG_MAX_LENGTH for tag in tags):
-            raise ValueError(f"a tag is at most {TAG_MAX_LENGTH} characters")
 
         kinds: list[str] = []
         seen_kinds: set[str] = set()

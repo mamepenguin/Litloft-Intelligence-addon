@@ -177,6 +177,10 @@ INVALID_FILTERS = [
         {"tags": [f"t{i}" for i in range(19)] + ["straße", "STRASSE"]},
         id="casefold-only-pair-is-two-tags",
     ),
+    pytest.param(
+        {"tags": ["\u0130" * 101, "i\u0307" * 101]},
+        id="long-duplicate-checked-before-dedup",
+    ),
     pytest.param({"kinds": ["bogus"]}, id="unknown-kind"),
     pytest.param({"tags": "budget"}, id="tags-not-a-list"),
     pytest.param({"tags": [1]}, id="tag-not-a-string"),
