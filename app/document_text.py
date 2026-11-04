@@ -144,28 +144,46 @@ def _pdf_range(path: Path, start: int, end: int) -> Extracted:
         if doc.needs_pass:
             raise Unreadable("password-protected")
         unit_count = doc.page_count
+        try:
+            edges = pdf.read_edge_lines(doc, path.name)
+        except Exception as exc:
+            logger.warning(
+                "document-text: edge lines unavailable for %s (%s)",
+                path.name,
+                type(exc).__name__,
+            )
+            edges = {}
         units = tuple(
-            _pdf_page(path, doc, number)
+            _pdf_page(path, doc, number, edges.get(number))
             for number in range(start, min(end, unit_count) + 1)
         )
     return Extracted(unit_count, units)
 
 
-def _pdf_page(path: Path, doc, number: int) -> Unit:
+def _pdf_page(
+    path: Path, doc, number: int, edges: pdf.PageEdges | None
+) -> Unit:
     import pymupdf4llm
 
     try:
-        pages = pymupdf4llm.to_markdown(str(path), pages=[number - 1], page_chunks=True)
+        pages = pymupdf4llm.to_markdown(
+            str(path),
+            pages=[number - 1],
+            page_chunks=True,
+            margins=pdf.PAGE_MARGINS,
+        )
         text = pdf._page_text(list(pages)[0]).strip() if pages else ""
-        extractor = pdf.EXTRACTOR_PRIMARY
     except Exception as e:
         logger.warning(
             "document-text: page %d of %s fell back to plain text (%s)",
             number, path.name, type(e).__name__,
         )
         text = (doc[number - 1].get_text("text") or "").strip()
-        extractor = pdf.EXTRACTOR_FALLBACK
-    return Unit(number, None, text, False, extractor)
+        return Unit(number, None, text, False, pdf.EXTRACTOR_FALLBACK)
+    return Unit(
+        number, None, pdf.page_text_with_edges(text, edges), False,
+        pdf.EXTRACTOR_PRIMARY,
+    )
 
 
 def _docx_units(file_path: str, start: int, end: int, _deadline: float) -> Extracted:

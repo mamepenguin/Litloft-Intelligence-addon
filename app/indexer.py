@@ -851,7 +851,7 @@ class IndexManager:
 
             if not text_done:
                 await self._enqueue(IndexTask(
-                    file_id=file_id, task_type=TaskType.TEXT_CONTENT
+                    file_id=file_id, task_type=TaskType.TEXT_CONTENT, priority=-10
                 ))
                 queued_any = True
 

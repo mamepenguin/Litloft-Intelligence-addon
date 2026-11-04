@@ -35,6 +35,20 @@ def make_pdf(path: Path, pages: list[str], *, user_password: str | None = None) 
     return path
 
 
+def make_pdf_lines(path: Path, pages: list[list[tuple[str, int, int]]]) -> Path:
+    """One page per list of ``(text, x, y)``, each line at its own baseline."""
+    import fitz
+
+    doc = fitz.open()
+    for lines in pages:
+        page = doc.new_page()
+        for text, x, y in lines:
+            page.insert_text((x, y), text, fontsize=11)
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
 def make_docx(
     path: Path,
     *,

@@ -1130,6 +1130,50 @@ def check_idf_term_rules() -> None:
         logger.exception("IDF term rule check failed; continuing startup")
 
 
+_PDF_TEXT_RULES_KEY = "pdf_text_rules"
+
+
+def check_pdf_text_rules() -> None:
+    """Flag every PDF for re-extraction when the page-edge rules changed.
+
+    Run by the lifespan before the index manager starts, so the first
+    reconcile queues the reset files. The flag reset and the recorded
+    version commit together, so a failure leaves both as they were and the
+    next start checks again.
+
+    The eval snapshot starts no indexer, so it only records the version:
+    resetting there would drop rows nothing can rebuild.
+    """
+    from app.extractors.pdf import PDF_TEXT_RULES_VERSION
+
+    logger = logging.getLogger(__name__)
+    try:
+        with get_search_db() as session:
+            conn = session.connection()
+            if (
+                _read_index_meta(conn, _PDF_TEXT_RULES_KEY)
+                == PDF_TEXT_RULES_VERSION
+            ):
+                return
+            count = 0
+            if not os.environ.get("INTELLIGENCE_SEARCH_DB_PATH", "").strip():
+                result = conn.execute(text(
+                    "UPDATE indexed_files SET text_indexed = 0 "
+                    "WHERE mime_type = 'application/pdf'"
+                ))
+                count = result.rowcount or 0
+            _upsert_index_meta(
+                conn, _PDF_TEXT_RULES_KEY, PDF_TEXT_RULES_VERSION
+            )
+        logger.info(
+            "PDF text rules are now %s; %d PDFs will be re-extracted",
+            PDF_TEXT_RULES_VERSION,
+            count,
+        )
+    except Exception:
+        logger.exception("PDF text rule check failed; continuing startup")
+
+
 def _migrate_transcript_chunks_if_needed(conn: object) -> None:
     """Evolve ``transcript_chunks`` schema for AI refine + re-chunking.
 
