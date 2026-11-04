@@ -132,6 +132,32 @@ def _retrieved_image(
     )
 
 
+def _retrieved_picture(
+    file_id: str = "pic1",
+    title: str = "Receipt",
+    description: str = "Scanned receipt",
+    score: float = 0.9,
+) -> RetrievedFile:
+    """A picture found by its thumbnail, with no recognised-text match yet."""
+    match = MatchInfo(
+        match_type="clip_thumbnail",
+        text="a printed receipt on a desk",
+        score=0.7,
+    )
+    return RetrievedFile(
+        file_id=file_id,
+        drive="Photos",
+        filename="receipt.png",
+        file_type="image",
+        mime_type="image/png",
+        title=title,
+        description=description,
+        score=score,
+        match_types=("clip_thumbnail",),
+        segments=(SegmentGroup(time_range=None, matches=(match,)),),
+    )
+
+
 # ---------------------------------------------------------------------------
 # build_file_context: video / audio
 # ---------------------------------------------------------------------------
@@ -386,6 +412,144 @@ class TestBuildFileContextImage:
         # Without a caption we still produce *some* context from metadata.
         joined = " ".join(s.text for s in ctx.snippets)
         assert "Mountain" in joined or "hills" in joined or "sunset.jpg" in joined
+
+
+class _PictureTextRows:
+    """A picture's text chunks, served through the document fetch helpers.
+
+    OCR text is stored in the same ``text_content`` rows a document has, so
+    a picture's context can only reach it through the same selection.
+    """
+
+    def __init__(self, rows: dict[str, dict[int, str]]) -> None:
+        self.rows = rows
+
+    def around(self, file_id: str, chunk_index: int):
+        rows = self.rows.get(file_id, {})
+        return [
+            (index, rows[index], None)
+            for index in (chunk_index - 1, chunk_index, chunk_index + 1)
+            if index in rows
+        ]
+
+    def keyword(self, file_id: str, keywords: str, top_n: int) -> list[int]:
+        rows = self.rows.get(file_id, {})
+        terms = [term for term in keywords.split() if term]
+        return [
+            index
+            for index in sorted(rows)
+            if any(term in rows[index] for term in terms)
+        ][:top_n]
+
+    def vector(self, file_id: str, query_vector, top_n: int) -> list[int]:
+        return sorted(self.rows.get(file_id, {}))[:top_n]
+
+
+def _install_text_rows(monkeypatch, rows: dict[str, dict[int, str]]):
+    store = _PictureTextRows(rows)
+    monkeypatch.setattr(
+        "app.rag.context._fetch_document_chunks_around", store.around
+    )
+    monkeypatch.setattr(
+        "app.rag.context._fetch_document_chunks_by_keyword_or", store.keyword
+    )
+    monkeypatch.setattr(
+        "app.rag.context._fetch_document_chunks_by_vector", store.vector
+    )
+    return store
+
+
+class TestBuildFileContextImageOcr:
+    """SPEC-ADDON-050 I11: recognised text joins a picture's Ask context."""
+
+    _CAPTION = "A printed receipt on a desk."
+    _LINE = "請求書 合計 38,500円 支払期限 12月5日"
+    _OTHER_FILE_LINE = "会議室の予約は 14時から"
+
+    @pytest.mark.parametrize(
+        ("evidence", "rows", "present", "absent"),
+        [
+            pytest.param(
+                {"keywords": "支払期限"},
+                {"pic1": {2: _LINE}},
+                (_LINE,),
+                (),
+                id="keyword-match",
+            ),
+            pytest.param(
+                {"query_vector": MagicMock()},
+                {"pic1": {3: _LINE}},
+                (_LINE,),
+                (),
+                id="vector-match",
+            ),
+            pytest.param(
+                {},
+                {},
+                (),
+                (_LINE,),
+                id="no-ocr-rows",
+            ),
+            pytest.param(
+                {"keywords": "支払期限"},
+                {"pic1": {2: _LINE}, "other": {0: _OTHER_FILE_LINE}},
+                (_LINE,),
+                (_OTHER_FILE_LINE,),
+                id="another-files-rows",
+            ),
+        ],
+    )
+    def test_picture_context_carries_matching_ocr_chunks(
+        self, monkeypatch, evidence, rows, present, absent
+    ):
+        monkeypatch.setattr(
+            "app.rag.context._fetch_blip_caption",
+            MagicMock(return_value=self._CAPTION),
+        )
+        _install_text_rows(monkeypatch, rows)
+
+        ctx = build_file_context(_retrieved_picture(), RagConfig(), **evidence)
+
+        text_snippets = [
+            s for s in ctx.snippets if s.source.startswith("text_content")
+        ]
+        for line in present:
+            assert any(line in s.text for s in text_snippets)
+        for line in absent:
+            assert not any(line in s.text for s in ctx.snippets)
+
+        joined = " ".join(s.text for s in ctx.snippets)
+        assert self._CAPTION in joined
+        assert "receipt.png" in joined
+
+        if not rows:
+            assert [s.source for s in ctx.snippets] == ["clip", "metadata"]
+
+
+class TestAssembleContextsPictureOcr:
+    """SPEC-ADDON-050 I11: Ask embeds the query when only pictures were found."""
+
+    def test_picture_only_candidates_embed_the_query_for_ocr_chunks(
+        self, monkeypatch
+    ):
+        embed_spy = MagicMock(return_value=MagicMock())
+        monkeypatch.setattr("app.rag.context.embed_query", embed_spy)
+        monkeypatch.setattr(
+            "app.rag.context._fetch_blip_caption",
+            MagicMock(return_value="A printed receipt on a desk."),
+        )
+        _install_text_rows(monkeypatch, {"pic1": {3: "請求書 合計 38,500円"}})
+
+        contexts = assemble_contexts(
+            [_retrieved_picture()], RagConfig(), query="合計金額はいくら？"
+        )
+
+        assert embed_spy.call_count == 1
+        assert any(
+            "請求書 合計 38,500円" in s.text
+            for s in contexts[0].snippets
+            if s.source.startswith("text_content")
+        )
 
 
 # ---------------------------------------------------------------------------

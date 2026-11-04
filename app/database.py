@@ -130,6 +130,7 @@ def init_search_db() -> None:
     # pipeline-v2 label field.
     with _search_engine.begin() as conn:
         _migrate_video_visual_scenes_if_needed(conn)
+        _migrate_ocr_indexed_column(conn)
 
     _SearchSession = sessionmaker(bind=_search_engine, expire_on_commit=False)
 
@@ -695,6 +696,30 @@ def _migrate_vec_text_if_needed(conn: object) -> None:
             "whisper_indexed = 0, "
             "tfidf_keywords_indexed = 0"
         ))
+
+        # The dropped vec_text also held the pictures' OCR chunks, so
+        # their own text is read again. Documents keep their flag; their
+        # text is re-extracted by the TEXT_CONTENT pass.
+        columns = {
+            row[1]
+            for row in conn.execute(
+                text("PRAGMA table_info(indexed_files)")
+            ).fetchall()
+        }
+        if "ocr_indexed" in columns:
+            from app.workers.ocr import OCR_IMAGE_TYPES
+
+            ocr_mimes = sorted(OCR_IMAGE_TYPES)
+            placeholders = ", ".join(
+                f":ocr_mime{i}" for i in range(len(ocr_mimes))
+            )
+            conn.execute(
+                text(
+                    "UPDATE indexed_files SET ocr_indexed = 0 "
+                    f"WHERE mime_type IN ({placeholders})"
+                ),
+                {f"ocr_mime{i}": mime for i, mime in enumerate(ocr_mimes)},
+            )
         conn.execute(
             text("DELETE FROM detailed_summary_citations")
         )
@@ -1018,6 +1043,33 @@ def _migrate_tfidf_keywords_indexed(conn: object) -> None:
                 "CREATE INDEX IF NOT EXISTS "
                 "idx_indexed_files_tfidf_keywords_indexed "
                 "ON indexed_files(tfidf_keywords_indexed)"
+            )
+        )
+
+
+def _migrate_ocr_indexed_column(conn: object) -> None:
+    """Add ``ocr_indexed`` for the picture OCR state (SPEC-ADDON-050).
+
+    Idempotent: an existing column is left untouched, so a second run
+    keeps the rows a first run already set.
+    """
+    cols = {
+        row[1]
+        for row in conn.execute(
+            text("PRAGMA table_info(indexed_files)")
+        ).fetchall()
+    }
+    if "ocr_indexed" not in cols:
+        conn.execute(
+            text(
+                "ALTER TABLE indexed_files ADD COLUMN "
+                "ocr_indexed BOOLEAN NOT NULL DEFAULT 0"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_indexed_files_ocr_indexed "
+                "ON indexed_files(ocr_indexed)"
             )
         )
 

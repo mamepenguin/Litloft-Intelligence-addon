@@ -5,6 +5,10 @@ pyyaml==6.0.2
 httpx==0.28.1
 numpy==2.2.4
 onnxruntime==1.21.0
+# Picture OCR (SPEC-ADDON-050). RapidOCR ships its PP-OCRv6 models in the
+# wheel, so nothing is downloaded when the engine first loads.
+rapidocr==3.10.0
+opencv-python-headless==5.0.0.93
 tokenizers==0.21.1
 transformers==4.50.3
 sentence-transformers==4.1.0
@@ -27,6 +31,8 @@ av==18.1.0
 whisperx==3.3.1
 open-clip-torch==2.30.0
 pillow==11.1.0
+# HEIC/HEIF decoding for picture OCR (and the vision worker).
+pillow-heif==0.22.0
 PyMuPDF==1.25.5
 pymupdf4llm==0.0.17
 janome==0.5.0

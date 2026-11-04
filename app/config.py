@@ -284,6 +284,7 @@ class MemoryConfig:
     whisper_idle_unload: int = 300
     blip_idle_unload: int = 300  # seconds; 0 = never unload
     clip_concepts_idle_unload: int = 600  # seconds; 0 = never unload
+    ocr_idle_unload: int = 300  # seconds; 0 = never unload
 
 
 @dataclass(frozen=True)
@@ -331,6 +332,10 @@ class FeaturesConfig:
     # and nearby transcript text are sent to the configured Vision
     # provider. Requires ``llm.vision_model`` (shared with vision_describe).
     video_visual_index: str = "false"
+    # Local picture OCR ("false" | "manual" | "on_index"). Reads the words
+    # in pictures with RapidOCR and stores them as text chunks. Local only,
+    # so the picture bytes never leave the container (SPEC-ADDON-050).
+    image_ocr: str = "on_index"
 
 
 @dataclass(frozen=True)

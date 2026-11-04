@@ -310,6 +310,7 @@ _FEATURES_ENUM_FIELDS = (
     "retrieval_keywords",
     "chapter_suggestions",
     "video_visual_index",
+    "image_ocr",
 )
 _FEATURES_TRISTATE = ("false", "manual", "on_index")
 
@@ -329,6 +330,7 @@ class FeaturesUpdate(BaseModel):
     retrieval_keywords: str | None = None
     chapter_suggestions: str | None = None
     video_visual_index: str | None = None
+    image_ocr: str | None = None
 
 
 @router.get("/features")
@@ -365,6 +367,7 @@ async def get_features_config() -> dict[str, Any]:
         "retrieval_keywords": resolve("retrieval_keywords"),
         "chapter_suggestions": resolve("chapter_suggestions"),
         "video_visual_index": resolve("video_visual_index"),
+        "image_ocr": resolve("image_ocr"),
         "tristate_values": list(_FEATURES_TRISTATE),
         "overrides_present": overrides is not None,
     }
@@ -387,6 +390,7 @@ async def update_features_config(payload: FeaturesUpdate) -> dict[str, Any]:
         retrieval_keywords=payload.retrieval_keywords,
         chapter_suggestions=payload.chapter_suggestions,
         video_visual_index=payload.video_visual_index,
+        image_ocr=payload.image_ocr,
     )
     path = fo.write_overrides(
         overrides, updated_at=datetime.now(UTC).isoformat()

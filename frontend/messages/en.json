@@ -57,6 +57,7 @@
     "clipFiles": "Image analysis {done} / {total}",
     "textLabel": "Text Analyzed",
     "textFiles": "Text analysis {done} / {total}",
+    "ocrFiles": "Text in image {done} / {total}",
     "queueLabel": "Task queue",
     "queueStatus": "{processing} processing / {waiting} waiting",
     "pause": "Pause",
@@ -112,6 +113,9 @@
       },
       "text_content": {
         "label": "Text extraction"
+      },
+      "ocr": {
+        "label": "Text in image"
       },
       "auto_tags": {
         "label": "AI tag candidates"
@@ -457,6 +461,10 @@
         "video_visual_index": {
           "label": "Visual index",
           "help": "Builds a seekable index of representative video frames with AI-written descriptions. Frame images and nearby transcript text are sent to the configured Vision model. For private libraries, use Off or a local vision model. Requires llm.vision_model to be set."
+        },
+        "image_ocr": {
+          "label": "Text in image",
+          "help": "Reads the text in pictures with a local OCR engine so search can find it. Nothing leaves the container for the OCR itself; the recognised text is then handled like document text and follows the drive's LLM cloud policy."
         }
       },
       "columns": {
