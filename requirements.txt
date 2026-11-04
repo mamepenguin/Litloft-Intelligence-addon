@@ -8,7 +8,7 @@ onnxruntime==1.21.0
 # Picture OCR (SPEC-ADDON-050). RapidOCR ships its PP-OCRv6 models in the
 # wheel, so nothing is downloaded when the engine first loads.
 rapidocr==3.10.0
-opencv-python-headless
+opencv-python-headless==5.0.0.93
 tokenizers==0.21.1
 transformers==4.50.3
 sentence-transformers==4.1.0
