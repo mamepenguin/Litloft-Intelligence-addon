@@ -17,7 +17,7 @@ touching the real search database.
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 from sqlalchemy import text as sql_text
@@ -892,10 +892,6 @@ def _collect_document_snippets(
     # for the LLM to interpret.
     for segment in candidate.segments:
         for match in segment.matches:
-            # A picture's clip match carries no chunk; falling back to index
-            # 0 there would pull a chunk the question never matched.
-            if match.match_type != "text_content":
-                continue
             chunk_idx = match.chunk_index if match.chunk_index is not None else 0
             _emit(chunk_idx, "text_content", expand=True)
 
@@ -914,8 +910,22 @@ def _collect_image_snippets(
     the document selection applies unchanged; the caption and metadata are
     appended after it.
     """
-    snippets = _collect_document_snippets(
+    # A picture's thumbnail match carries no chunk, and the document path
+    # reads a chunkless match as chunk 0, a chunk the question never matched.
+    text_matches_only = replace(
         candidate,
+        segments=tuple(
+            SegmentGroup(
+                time_range=segment.time_range,
+                matches=tuple(
+                    m for m in segment.matches if m.match_type == "text_content"
+                ),
+            )
+            for segment in candidate.segments
+        ),
+    )
+    snippets = _collect_document_snippets(
+        text_matches_only,
         rag_config,
         query_vector=query_vector,
         keywords=keywords,
