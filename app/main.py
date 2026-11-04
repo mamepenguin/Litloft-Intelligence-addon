@@ -565,6 +565,7 @@ def status_endpoint() -> StatusResponse:
             "clip": index_status.clip_indexed,
             "whisper": index_status.whisper_indexed,
             "text": index_status.text_indexed,
+            "ocr": index_status.ocr_indexed,
         },
         pending={
             "total": (
@@ -572,11 +573,21 @@ def status_endpoint() -> StatusResponse:
                 + index_status.pending_clip
                 + index_status.pending_whisper
                 + index_status.pending_text
+                + (
+                    index_status.pending_ocr
+                    if settings.features.image_ocr == "on_index"
+                    else 0
+                )
             ),
             "metadata": index_status.pending_metadata,
             "clip": index_status.pending_clip,
             "whisper": index_status.pending_whisper,
             "text": index_status.pending_text,
+            "ocr": (
+                index_status.pending_ocr
+                if settings.features.image_ocr == "on_index"
+                else 0
+            ),
         },
         queue={
             "processing": queue_status.processing_count,
@@ -598,6 +609,7 @@ def status_endpoint() -> StatusResponse:
             transcript_refine=settings.features.transcript_refine,
             chapter_suggestions=settings.features.chapter_suggestions,
             video_visual_index=settings.features.video_visual_index,
+            image_ocr=settings.features.image_ocr,
         ),
         llm=_llm_status(),
     )

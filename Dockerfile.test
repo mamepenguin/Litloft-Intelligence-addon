@@ -41,7 +41,7 @@ RUN pip install --no-cache-dir -r requirements-dev.txt
 # still patches ``sys.modules["PIL"]`` to MagicMock before importing
 # the worker — individual tests opt into real PIL via ``pillow_real``
 # fixture in test_vision_worker.py.
-RUN pip install --no-cache-dir pillow
+RUN pip install --no-cache-dir pillow pillow-heif==0.22.0
 # The document readers, pinned as in requirements.txt, so document-text tests
 # build and read real PDF, Office and EPUB files.
 RUN pip install --no-cache-dir \
@@ -57,6 +57,8 @@ COPY .coveragerc .
 # asserts every /admin/* route in app/routers/admin.py is paired with
 # an admin-gated entry in the host-proxy manifest.
 COPY manifest.json .
+# The committed example config is read by tests that pin documented keys.
+COPY search-config.yml.example .
 
 RUN mkdir -p /intelligence-data/models
 

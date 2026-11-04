@@ -16,6 +16,7 @@ import {
   Mic,
   Pause,
   Play,
+  ScanText,
   ScrollText,
   SearchX,
   Sparkles,
@@ -39,13 +40,14 @@ import type {
 const POLL_INTERVAL = 10_000;
 
 // Display order on the dashboard. Indexing pipeline first (metadata →
-// clip → whisper → text), then LLM-driven tasks. Items without backend
+// clip → whisper → text → ocr), then LLM-driven tasks. Items without backend
 // state are filtered out at render time.
 const TASK_ORDER: QueueTaskKind[] = [
   "metadata",
   "clip",
   "whisper",
   "text_content",
+  "ocr",
   "auto_tags",
   "summaries",
   "vision_describe",
@@ -60,6 +62,7 @@ const TASK_ICON: Record<QueueTaskKind, LucideIcon> = {
   clip: ImageIcon,
   whisper: Mic,
   text_content: FileText,
+  ocr: ScanText,
   auto_tags: Tags,
   summaries: MessageSquareText,
   vision_describe: Sparkles,
@@ -200,6 +203,9 @@ function StatusContent({
   const textTotal = indexed
     ? (indexed.text ?? 0) + (pending?.text ?? 0)
     : 0;
+  const ocrTotal = indexed
+    ? (indexed.ocr ?? 0) + (pending?.ocr ?? 0)
+    : 0;
 
   const taskMap = queue?.tasks ?? {};
   const taskRows = TASK_ORDER.map((kind) => ({ kind, breakdown: taskMap[kind] }))
@@ -209,8 +215,8 @@ function StatusContent({
     );
 
   // Reporting a queue's state is not the same as the queue doing
-  // anything. Every kind the backend knows answers, so all eleven used
-  // to draw a card, and ten of them said "Idle" on a machine at rest —
+  // anything. Every kind the backend knows answers, so all twelve used
+  // to draw a card, and eleven of them said "Idle" on a machine at rest —
   // the summary line right above already says how much work exists.
   const activeRows = taskRows.filter(
     ({ breakdown }) => breakdown.processing.length > 0 || breakdown.waiting > 0,
@@ -275,6 +281,17 @@ function StatusContent({
             label={t("textFiles", {
               done: (indexed.text ?? 0).toLocaleString(),
               total: textTotal.toLocaleString(),
+            })}
+          />
+        )}
+
+        {indexed && ocrTotal > 0 && (
+          <ProgressBar
+            done={indexed.ocr ?? 0}
+            total={ocrTotal}
+            label={t("ocrFiles", {
+              done: (indexed.ocr ?? 0).toLocaleString(),
+              total: ocrTotal.toLocaleString(),
             })}
           />
         )}

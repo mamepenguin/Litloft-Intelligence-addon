@@ -78,7 +78,7 @@ async function renderWith(routes: Routes) {
 describe("AdminFeaturesSettingsSection", () => {
   it("a mode select per feature, no profile column, and a pointer to LLM profiles", async () => {
     await renderWith({});
-    expect(screen.getAllByRole("combobox", { name: /^When .* runs$/ })).toHaveLength(11);
+    expect(screen.getAllByRole("combobox", { name: /^When .* runs$/ })).toHaveLength(12);
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
       "Feature",
       "When it runsRestart required",

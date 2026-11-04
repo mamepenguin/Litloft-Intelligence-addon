@@ -19,6 +19,7 @@ search-config.yml):
 * ``retrieval_keywords``    — same enum
 * ``chapter_suggestions``   — same enum
 * ``video_visual_index``    — same enum
+* ``image_ocr``             — same enum
 
 Defence in depth: any other key in the on-disk file is silently
 dropped during read so a buggy writer cannot smuggle additional
@@ -56,6 +57,7 @@ ENUM_FIELDS = (
     "retrieval_keywords",
     "chapter_suggestions",
     "video_visual_index",
+    "image_ocr",
 )
 
 
@@ -77,6 +79,7 @@ class FeaturesOverrides:
     retrieval_keywords: str | None = None
     chapter_suggestions: str | None = None
     video_visual_index: str | None = None
+    image_ocr: str | None = None
 
 
 def overrides_path(data_dir: str | os.PathLike[str] | None = None) -> Path:

@@ -17,6 +17,7 @@ const TRISTATE_FIELDS = [
   "retrieval_keywords",
   "chapter_suggestions",
   "video_visual_index",
+  "image_ocr",
 ] as const;
 const BOOL_FIELDS = ["indexing", "search", "rag"] as const;
 const FIELDS = [...BOOL_FIELDS, ...TRISTATE_FIELDS] as const;
