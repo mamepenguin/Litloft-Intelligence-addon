@@ -5,6 +5,7 @@ to provide high-quality search results ranked by combined score.
 Results are grouped at file level with segment timestamps.
 """
 
+import json
 import logging
 import threading
 from collections import OrderedDict
@@ -157,6 +158,20 @@ class SearchResponse:
     service_version: str
 
 
+def empty_search_response() -> SearchResponse:
+    """An answer with no results, for a filter scope that names no file."""
+    with get_search_db_read() as session:
+        indexed_count = session.query(IndexedFile).filter(
+            IndexedFile.active.is_(True)
+        ).count()
+    return SearchResponse(
+        results=(),
+        total=0,
+        indexed_files=indexed_count,
+        service_version=settings.service_version,
+    )
+
+
 def search(
     query: str,
     limit: int | None = None,
@@ -168,6 +183,7 @@ def search(
     file_id_scope: list[str] | None = None,
     required: "tuple[RequiredTerm, ...] | None" = None,
     include_scene_clip: bool = False,
+    file_id_constraint: list[str] | None = None,
 ) -> SearchResponse:
     """Execute a hybrid search query.
 
@@ -207,6 +223,12 @@ def search(
             toggle. The toggle is meant for cases where the user
             specifically wants to find a moment inside a long video
             rather than a video whose subject matches the query.
+        file_id_constraint: Optional allow-list of file_ids applied inside
+            every retrieval channel, so candidate limits, score
+            normalisation and relative cutoffs see in-scope rows only.
+            The search UI's ``filter`` sets it; ``file_id_scope`` remains
+            the post-filter for Ask and Find. ``None`` disables it; an
+            empty list answers zero results without embedding the query.
 
     Returns:
         SearchResponse with ranked results.
@@ -258,6 +280,14 @@ def search(
                     service_version=settings.service_version,
                 )
 
+    if file_id_constraint is not None:
+        if not file_id_constraint:
+            return empty_search_response()
+        # ``_build_results`` measures its ratio cutoff over the ids it is
+        # given, so the channel constraint also becomes its post-filter.
+        if file_id_scope is None:
+            file_id_scope = list(file_id_constraint)
+
     # Generate query embeddings. ``semantic_query`` is the natural-language
     # phrasing used for vector channels, which benefit from full context
     # (question form, particles, etc.). ``query`` is used unchanged for
@@ -283,20 +313,34 @@ def search(
     # The retrieval_keywords channel is intentionally additive: a fresh
     # DB without Phase 1 data simply returns [] and contributes nothing.
     with ThreadPoolExecutor(max_workers=6) as _pool:
-        _f_text = _pool.submit(_vector_search_text, text_vector, candidates, mode=mode)
+        _f_text = _pool.submit(
+            _vector_search_text, text_vector, candidates,
+            mode=mode, file_id_constraint=file_id_constraint,
+        )
         _f_clip = (
             _pool.submit(
                 _vector_search_clip, clip_vector, clip_depth,
                 mode=mode, include_scene_clip=include_scene_clip, drive=drive,
+                file_id_constraint=file_id_constraint,
             )
             if clip_vector is not None and not skip_clip
             else None
         )
-        _f_kw = _pool.submit(_keyword_search, query, candidates)
-        _f_tr = _pool.submit(_keyword_search_transcripts, query, candidates)
-        _f_tc = _pool.submit(_keyword_search_text_content, query, candidates)
+        _f_kw = _pool.submit(
+            _keyword_search, query, candidates,
+            file_id_constraint=file_id_constraint,
+        )
+        _f_tr = _pool.submit(
+            _keyword_search_transcripts, query, candidates,
+            file_id_constraint=file_id_constraint,
+        )
+        _f_tc = _pool.submit(
+            _keyword_search_text_content, query, candidates,
+            file_id_constraint=file_id_constraint,
+        )
         _f_rk = _pool.submit(
-            _keyword_search_retrieval_keywords, query, candidates
+            _keyword_search_retrieval_keywords, query, candidates,
+            file_id_constraint=file_id_constraint,
         )
 
         text_matches = _f_text.result()
@@ -413,6 +457,143 @@ def _safe_clip_embed(query: str) -> np.ndarray | None:
         return None
 
 
+#: A scope with at most this many rows of a vector table is ranked exactly;
+#: above it the KNN is widened instead, because one read per row stops being
+#: cheap. Matches the size ``/search/images`` already reads in one request.
+_SCOPE_EXACT_ROWS = 20_000
+#: A statement's variable count is capped, so vectors are read in chunks.
+_SCOPE_READ_BATCH = 500
+#: sqlite-vec refuses a KNN ``k`` above 4096.
+_SCOPE_FETCH_MAX = 4096
+_SCOPE_FETCH_FACTORS = (4, 16, 64)
+
+
+def _scope_type_sql(
+    allowed_types: tuple[str, ...] | None,
+    excluded_types: tuple[str, ...],
+) -> tuple[str, dict[str, str]]:
+    """The ``embedding_type`` predicates a scoped channel reads, and their params."""
+    parts: list[str] = []
+    params: dict[str, str] = {}
+    if allowed_types is not None:
+        names = []
+        for i, value in enumerate(allowed_types):
+            key = f"allowed_{i}"
+            params[key] = value
+            names.append(f":{key}")
+        parts.append("(" + " OR ".join(f"embedding_type = {n}" for n in names) + ")")
+    for i, value in enumerate(excluded_types):
+        key = f"excluded_{i}"
+        params[key] = value
+        parts.append(f"embedding_type != :{key}")
+    return "".join(f" AND {part}" for part in parts), params
+
+
+def _scoped_vector_rows(
+    engine,
+    *,
+    table: str,
+    vec_bytes: bytes,
+    limit: int,
+    scope: list[str],
+    knn_sql: str,
+    allowed_types: tuple[str, ...] | None = None,
+    excluded_types: tuple[str, ...] = (),
+) -> list[tuple[str, float]]:
+    """The scope's nearest ``limit`` rows of ``table``, as ``(id, distance)``.
+
+    Up to ``_SCOPE_EXACT_ROWS`` scope rows are read by id and ranked exactly,
+    so a narrow scope is never crowded out by nearer rows outside it. Above
+    that the unconstrained KNN is widened, keeping in-scope rows until
+    ``limit`` survives or the table is exhausted.
+    """
+    scope_json = json.dumps(scope)
+    type_sql, type_params = _scope_type_sql(allowed_types, excluded_types)
+    type_params = {"table": table, **type_params}
+
+    with engine.connect() as conn:
+        count = conn.execute(
+            sql_text(
+                "SELECT COUNT(*) FROM embeddings WHERE "
+                "file_id IN (SELECT value FROM json_each(:scope)) "
+                "AND vector_table = :table" + type_sql
+            ),
+            {"scope": scope_json, **type_params},
+        ).scalar_one()
+
+    if count <= _SCOPE_EXACT_ROWS:
+        with engine.connect() as conn:
+            embedding_ids = [
+                row[0]
+                for row in conn.execute(
+                    sql_text(
+                        "SELECT id FROM embeddings WHERE "
+                        "file_id IN (SELECT value FROM json_each(:scope)) "
+                        "AND vector_table = :table" + type_sql
+                    ),
+                    {"scope": scope_json, **type_params},
+                ).fetchall()
+            ]
+        scored: list[tuple[float, str]] = []
+        query_vector = np.frombuffer(vec_bytes, dtype=np.float32)
+        with engine.connect() as conn:
+            for start in range(0, len(embedding_ids), _SCOPE_READ_BATCH):
+                batch = embedding_ids[start : start + _SCOPE_READ_BATCH]
+                placeholders = ",".join(f":id{i}" for i in range(len(batch)))
+                stored = conn.execute(
+                    sql_text(
+                        f"SELECT embedding_id, vector FROM {table} "
+                        f"WHERE embedding_id IN ({placeholders})"
+                    ),
+                    {f"id{i}": value for i, value in enumerate(batch)},
+                ).fetchall()
+                if not stored:
+                    continue
+                matrix = np.stack(
+                    [np.frombuffer(row[1], dtype=np.float32) for row in stored]
+                )
+                distances = np.linalg.norm(matrix - query_vector, axis=1)
+                scored.extend(
+                    zip(distances.tolist(), [row[0] for row in stored])
+                )
+        scored.sort(key=lambda item: item[0])
+        return [(embedding_id, distance) for distance, embedding_id in scored[:limit]]
+
+    sizes = sorted(
+        {min(limit * factor, _SCOPE_FETCH_MAX) for factor in _SCOPE_FETCH_FACTORS}
+        | {_SCOPE_FETCH_MAX}
+    )
+    kept: list[tuple[str, float]] = []
+    for asked in sizes:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                sql_text(knn_sql), {"vec": vec_bytes, "limit": asked}
+            ).fetchall()
+        if not rows:
+            return []
+        with engine.connect() as conn:
+            visible = {
+                row[0]
+                for row in conn.execute(
+                    sql_text(
+                        "SELECT e.id FROM embeddings e WHERE "
+                        "e.id IN (SELECT value FROM json_each(:ids)) "
+                        "AND e.file_id IN (SELECT value FROM json_each(:scope)) "
+                        "AND e.vector_table = :table" + type_sql
+                    ),
+                    {
+                        "ids": json.dumps([row[0] for row in rows]),
+                        "scope": scope_json,
+                        **type_params,
+                    },
+                ).fetchall()
+            }
+        kept = [(row[0], row[1]) for row in rows if row[0] in visible][:limit]
+        if len(kept) >= limit or len(rows) < asked:
+            break
+    return kept
+
+
 @dataclass
 class _VectorMatch:
     """Internal vector search match."""
@@ -434,6 +615,7 @@ def _vector_search_text(
     *,
     mode: SearchMode = "precision",
     include_video_visual_scene: bool = False,
+    file_id_constraint: list[str] | None = None,
 ) -> list[_VectorMatch]:
     """Search the text vector table for similar embeddings.
 
@@ -459,6 +641,9 @@ def _vector_search_text(
             evidence is excluded from default file search / shallow Ask
             and reserved for explicit scene search / file-scoped
             retrieval (a future caller opts in here).
+        file_id_constraint: Optional allow-list of file_ids. When set, only
+            this scope's rows are ranked, and the flat-set gap and CV
+            checks are skipped: a narrow scope is flat by construction.
 
     Returns:
         List of vector matches.
@@ -466,17 +651,32 @@ def _vector_search_text(
     engine = get_search_engine()
     vec_bytes = query_vector.tobytes()
 
-    with engine.connect() as conn:
-        rows = conn.execute(
-            sql_text(
-                "SELECT embedding_id, distance "
-                "FROM vec_text "
-                "WHERE vector MATCH :vec "
-                "ORDER BY distance "
-                "LIMIT :limit"
+    knn_sql = (
+        "SELECT embedding_id, distance "
+        "FROM vec_text "
+        "WHERE vector MATCH :vec "
+        "ORDER BY distance "
+        "LIMIT :limit"
+    )
+
+    if file_id_constraint is not None:
+        rows = _scoped_vector_rows(
+            engine,
+            table="vec_text",
+            vec_bytes=vec_bytes,
+            limit=limit,
+            scope=file_id_constraint,
+            excluded_types=(
+                () if include_video_visual_scene else ("video_visual_scene",)
             ),
-            {"vec": vec_bytes, "limit": limit},
-        ).fetchall()
+            knn_sql=knn_sql,
+        )
+    else:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                sql_text(knn_sql),
+                {"vec": vec_bytes, "limit": limit},
+            ).fetchall()
 
     if not rows:
         return []
@@ -501,7 +701,7 @@ def _vector_search_text(
     # If top score barely exceeds the mean, everything is equally irrelevant.
     # Recall mode disables this (gap_threshold=0) so borderline candidates
     # survive for the LLM to filter.
-    if all_scores and gap_threshold > 0:
+    if file_id_constraint is None and all_scores and gap_threshold > 0:
         top_score = all_scores[0]  # already sorted by distance
         mean_score = sum(all_scores) / len(all_scores)
         gap = top_score - mean_score
@@ -626,6 +826,7 @@ def _vector_search_clip(
     mode: SearchMode = "precision",
     include_scene_clip: bool = False,
     drive: str | None = None,
+    file_id_constraint: list[str] | None = None,
 ) -> list[_VectorMatch]:
     """Search the CLIP vector table for similar embeddings.
 
@@ -655,6 +856,9 @@ def _vector_search_clip(
         drive: The requested drive. With Scene search off, the
             candidates are this drive's active files only, so the
             margin is measured from this drive's best thumbnail.
+        file_id_constraint: Optional allow-list of file_ids. When set, only
+            this scope's rows are ranked and the drive widening is
+            unnecessary: the ids already belong to the request drive.
 
     Returns:
         List of vector matches.
@@ -682,7 +886,21 @@ def _vector_search_clip(
             "ORDER BY distance"
         )
 
-    if drive and not include_scene_clip:
+    if file_id_constraint is not None:
+        rows = _scoped_vector_rows(
+            engine,
+            table="vec_clip",
+            vec_bytes=vec_bytes,
+            limit=limit,
+            scope=file_id_constraint,
+            allowed_types=(
+                ("clip_thumbnail", "clip")
+                if include_scene_clip
+                else ("clip_thumbnail",)
+            ),
+            knn_sql=knn_sql,
+        )
+    elif drive and not include_scene_clip:
         rows = _drive_thumbnail_neighbours(engine, knn_sql, vec_bytes, limit, drive)
     else:
         with engine.connect() as conn:
@@ -772,6 +990,7 @@ def search_images(
     *,
     file_type: str | None = None,
     drive: str | None = None,
+    file_id_constraint: list[str] | None = None,
 ) -> SearchResponse:
     """Rank the requested drive's representative frames against a CLIP vector.
 
@@ -779,7 +998,13 @@ def search_images(
     the result does not depend on how many nearer frames other drives keep in
     the shared partition. There is no margin cutoff; the absolute floor and the
     2000-file ceiling decide the list.
+
+    ``file_id_constraint`` narrows the scored rows to a filter scope; an empty
+    scope answers no results without reading a vector.
     """
+    if file_id_constraint is not None and not file_id_constraint:
+        return empty_search_response()
+
     with get_search_db_read() as session:
         query = (
             session.query(
@@ -796,6 +1021,12 @@ def search_images(
         query = apply_kind_filter(query, file_type)
         if drive:
             query = query.filter(IndexedFile.drive == drive)
+        if file_id_constraint is not None:
+            query = query.filter(
+                sql_text(
+                    "embeddings.file_id IN (SELECT value FROM json_each(:scope))"
+                ).bindparams(scope=json.dumps(file_id_constraint))
+            )
         rows = query.all()
 
     floor = settings.search.min_score_clip_thumbnail
@@ -922,7 +1153,7 @@ class _RetrievalKeywordMatch:
 
 
 def _keyword_search_transcripts(
-    query: str, limit: int
+    query: str, limit: int, *, file_id_constraint: list[str] | None = None
 ) -> list[_TranscriptKeywordMatch]:
     """Search transcript chunks using FTS5 trigram index.
 
@@ -931,6 +1162,9 @@ def _keyword_search_transcripts(
     Args:
         query: The search query.
         limit: Maximum results.
+        file_id_constraint: Optional allow-list joined into the ``MATCH``
+            query, so ``limit`` and the score normalisation see in-scope
+            rows only.
 
     Returns:
         List of transcript keyword matches with timestamps.
@@ -940,17 +1174,23 @@ def _keyword_search_transcripts(
         return []
 
     engine = get_search_engine()
+    params: dict[str, object] = {"query": fts_query, "limit": limit}
+    scope_sql = ""
+    if file_id_constraint is not None:
+        scope_sql = " AND file_id IN (SELECT value FROM json_each(:scope))"
+        params["scope"] = json.dumps(file_id_constraint)
 
     with engine.connect() as conn:
         rows = conn.execute(
             sql_text(
                 "SELECT file_id, chunk_index, text, -rank AS relevance "
                 "FROM fts_transcripts "
-                "WHERE fts_transcripts MATCH :query "
-                "ORDER BY rank "
+                "WHERE fts_transcripts MATCH :query"
+                + scope_sql
+                + " ORDER BY rank "
                 "LIMIT :limit"
             ),
-            {"query": fts_query, "limit": limit},
+            params,
         ).fetchall()
 
     if not rows:
@@ -1064,7 +1304,9 @@ def _build_fts_query(query: str) -> str:
     return " AND ".join(term_clauses)
 
 
-def _keyword_search(query: str, limit: int) -> list[_KeywordMatch]:
+def _keyword_search(
+    query: str, limit: int, *, file_id_constraint: list[str] | None = None
+) -> list[_KeywordMatch]:
     """Search indexed files using FTS5 trigram index.
 
     Uses SQLite FTS5 with trigram tokenizer for efficient substring
@@ -1073,6 +1315,9 @@ def _keyword_search(query: str, limit: int) -> list[_KeywordMatch]:
     Args:
         query: The search query.
         limit: Maximum results.
+        file_id_constraint: Optional allow-list joined into the ``MATCH``
+            query, so ``limit`` and the score normalisation see in-scope
+            rows only.
 
     Returns:
         List of keyword matches with relevance scores.
@@ -1082,6 +1327,11 @@ def _keyword_search(query: str, limit: int) -> list[_KeywordMatch]:
         return []
 
     engine = get_search_engine()
+    params: dict[str, object] = {"query": fts_query, "limit": limit}
+    scope_sql = ""
+    if file_id_constraint is not None:
+        scope_sql = " AND f.file_id IN (SELECT value FROM json_each(:scope))"
+        params["scope"] = json.dumps(file_id_constraint)
 
     with engine.connect() as conn:
         # FTS5 rank is negative (more negative = more relevant)
@@ -1089,11 +1339,12 @@ def _keyword_search(query: str, limit: int) -> list[_KeywordMatch]:
             sql_text(
                 "SELECT f.file_id, -f.rank AS relevance "
                 "FROM fts_files f "
-                "WHERE fts_files MATCH :query "
-                "ORDER BY f.rank "
+                "WHERE fts_files MATCH :query"
+                + scope_sql
+                + " ORDER BY f.rank "
                 "LIMIT :limit"
             ),
-            {"query": fts_query, "limit": limit},
+            params,
         ).fetchall()
 
     if not rows:
@@ -1128,7 +1379,7 @@ def _keyword_search(query: str, limit: int) -> list[_KeywordMatch]:
 
 
 def _keyword_search_retrieval_keywords(
-    query: str, limit: int
+    query: str, limit: int, *, file_id_constraint: list[str] | None = None
 ) -> list[_RetrievalKeywordMatch]:
     """Search SIRA-style LLM-expanded retrieval keywords (fts_retrieval_keywords).
 
@@ -1144,6 +1395,9 @@ def _keyword_search_retrieval_keywords(
             the literal form.
         limit: Maximum results returned to the caller (the combiner
             slices further if needed).
+        file_id_constraint: Optional allow-list joined into the ``MATCH``
+            query, so ``limit`` and the score normalisation see in-scope
+            rows only.
 
     Returns:
         Ranked list of ``_RetrievalKeywordMatch``. Scores are
@@ -1156,6 +1410,11 @@ def _keyword_search_retrieval_keywords(
         return []
 
     engine = get_search_engine()
+    params: dict[str, object] = {"query": fts_query, "limit": limit}
+    scope_sql = ""
+    if file_id_constraint is not None:
+        scope_sql = " AND file_id IN (SELECT value FROM json_each(:scope))"
+        params["scope"] = json.dumps(file_id_constraint)
 
     with engine.connect() as conn:
         # Defensive: fts_retrieval_keywords lands in the Phase 1
@@ -1167,11 +1426,12 @@ def _keyword_search_retrieval_keywords(
                 sql_text(
                     "SELECT file_id, keywords, -rank AS relevance "
                     "FROM fts_retrieval_keywords "
-                    "WHERE fts_retrieval_keywords MATCH :query "
-                    "ORDER BY rank "
+                    "WHERE fts_retrieval_keywords MATCH :query"
+                    + scope_sql
+                    + " ORDER BY rank "
                     "LIMIT :limit"
                 ),
-                {"query": fts_query, "limit": limit},
+                params,
             ).fetchall()
         except Exception:
             return []
@@ -1210,7 +1470,7 @@ def _keyword_search_retrieval_keywords(
 
 
 def _keyword_search_text_content(
-    query: str, limit: int
+    query: str, limit: int, *, file_id_constraint: list[str] | None = None
 ) -> list[_TextContentKeywordMatch]:
     """Search text content chunks using FTS5 trigram index.
 
@@ -1219,6 +1479,9 @@ def _keyword_search_text_content(
     Args:
         query: The search query.
         limit: Maximum results.
+        file_id_constraint: Optional allow-list joined into the ``MATCH``
+            query, so ``limit`` and the score normalisation see in-scope
+            rows only.
 
     Returns:
         List of text content keyword matches with page info.
@@ -1228,17 +1491,23 @@ def _keyword_search_text_content(
         return []
 
     engine = get_search_engine()
+    params: dict[str, object] = {"query": fts_query, "limit": limit}
+    scope_sql = ""
+    if file_id_constraint is not None:
+        scope_sql = " AND file_id IN (SELECT value FROM json_each(:scope))"
+        params["scope"] = json.dumps(file_id_constraint)
 
     with engine.connect() as conn:
         rows = conn.execute(
             sql_text(
                 "SELECT file_id, chunk_index, page, text, -rank AS relevance "
                 "FROM fts_text_content "
-                "WHERE fts_text_content MATCH :query "
-                "ORDER BY rank "
+                "WHERE fts_text_content MATCH :query"
+                + scope_sql
+                + " ORDER BY rank "
                 "LIMIT :limit"
             ),
-            {"query": fts_query, "limit": limit},
+            params,
         ).fetchall()
 
     if not rows:
