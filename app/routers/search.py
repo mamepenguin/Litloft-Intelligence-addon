@@ -20,6 +20,7 @@ from app import scene_segments
 from app.schemas import (
     CompareResponseModel,
     SceneSegmentsResponse,
+    SearchPassage as SearchPassageModel,
     SearchResponseModel,
     SearchResultItem,
     SearchResultSegment,
@@ -81,6 +82,27 @@ async def _to_response_model(
                     for s in r.segments
                 ],
                 file=hydrate_map.get(r.file_id),
+                passages=(
+                    [
+                        SearchPassageModel(
+                            kind=p.kind,
+                            start=p.start,
+                            end=p.end,
+                            page=p.page,
+                            section=p.section,
+                            section_title=p.section_title,
+                            chunk_index=p.chunk_index,
+                            text=p.text,
+                            score=p.score,
+                            keyword=p.keyword,
+                            highlight_terms=list(p.highlight_terms),
+                            frame_url=p.frame_url,
+                        )
+                        for p in r.passages
+                    ]
+                    if r.passages is not None
+                    else None
+                ),
             )
             for r in result.results
         ],
@@ -172,6 +194,13 @@ async def search_endpoint(
             "resolved to a file-id scope through the core's Internal API."
         ),
     ),
+    passages: bool = Query(
+        default=False,
+        description=(
+            "When true, each result also lists the places inside the file that "
+            "its matches point at (speech, scene, page, section, picture text)."
+        ),
+    ),
     drive: str = Depends(require_drive),
 ) -> SearchResponseModel:
     """Execute a semantic search query within the request's drive.
@@ -202,6 +231,7 @@ async def search_endpoint(
             execute_search,
             query=q, limit=limit, file_type=type, drive=drive, mode=mode,
             include_scene_clip=include_scene_clip, file_id_constraint=scope,
+            passages=passages,
         )
     except Exception as e:
         logger.error("Search failed: %s", e)
