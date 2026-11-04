@@ -7,9 +7,10 @@ Results are grouped at file level with segment timestamps.
 
 import json
 import logging
+import math
 import threading
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
@@ -24,6 +25,7 @@ from app.file_kind import apply_kind_filter
 from app.models import Embedding, IndexedFile, TranscriptChunk
 from app.workers.clip import embed_text_clip
 from app.workers.embedder import embed_query
+from app.workers.whisper import LOFT_MIME
 
 if TYPE_CHECKING:
     from app.rag.query_transform import RequiredTerm
@@ -122,6 +124,31 @@ class MatchInfo:
     timestamp_end: float | None = None
     page: int | None = None
     chunk_index: int | None = None
+    # ``chunk_index`` is a text-chunk index only: ``rag/context.py`` reads it as
+    # an ``fts_text_content`` index, so a transcript chunk's index goes here.
+    transcript_chunk_index: int | None = None
+    channel: Literal["vector", "keyword"] | None = None
+    # The FTS row's whole stored text behind the 200-character ``text``; a
+    # vector match has none.
+    full_text: str | None = None
+
+
+@dataclass(frozen=True)
+class SearchPassage:
+    """One place inside a file that a search matched."""
+
+    kind: Literal["utterance", "scene", "section", "page", "picture_text", "text"]
+    start: float | None
+    end: float | None
+    page: int | None
+    section: int | None
+    section_title: str | None
+    chunk_index: int | None
+    text: str
+    score: float
+    keyword: bool
+    highlight_terms: tuple[str, ...]
+    frame_url: str | None
 
 
 @dataclass(frozen=True)
@@ -146,6 +173,9 @@ class SearchResult:
     mime_type: str | None = None
     # ``(page, title)`` for the matched sections of a sectioned document.
     section_titles: tuple[tuple[int, str], ...] = ()
+    # ``None`` when the caller did not ask for passages; an empty tuple means
+    # the file matched somewhere no passage describes.
+    passages: tuple[SearchPassage, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -184,6 +214,7 @@ def search(
     required: "tuple[RequiredTerm, ...] | None" = None,
     include_scene_clip: bool = False,
     file_id_constraint: list[str] | None = None,
+    passages: bool = False,
 ) -> SearchResponse:
     """Execute a hybrid search query.
 
@@ -229,6 +260,8 @@ def search(
             The search UI's ``filter`` sets it; ``file_id_scope`` remains
             the post-filter for Ask and Find. ``None`` disables it; an
             empty list answers zero results without embedding the query.
+        passages: When ``True``, each result also describes the places its
+            matches point at. Off by default so Ask and Find pay nothing.
 
     Returns:
         SearchResponse with ranked results.
@@ -425,6 +458,8 @@ def search(
         limit=effective_limit,
         mode=mode,
         file_id_scope=file_id_scope,
+        passages=passages,
+        query=query,
     )
 
     # Get total indexed count
@@ -1124,6 +1159,8 @@ class _TranscriptKeywordMatch:
     text: str
     timestamp_start: float | None
     timestamp_end: float | None
+    chunk_index: int | None = None
+    full_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -1135,6 +1172,7 @@ class _TextContentKeywordMatch:
     text: str
     page: int | None
     chunk_index: int | None = None
+    full_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -1242,6 +1280,8 @@ def _keyword_search_transcripts(
                 text=matched_text[:200],
                 timestamp_start=chunk.timestamp_start if chunk else None,
                 timestamp_end=chunk.timestamp_end if chunk else None,
+                chunk_index=chunk_idx,
+                full_text=matched_text,
             ),
         ]
 
@@ -1264,6 +1304,30 @@ def _to_hiragana(text: str) -> str:
     )
 
 
+def _term_variants(query: str) -> list[list[str]]:
+    """Each query term with its hiragana and katakana variants, deduplicated."""
+    term_variants: list[list[str]] = []
+    for term in (t.strip() for t in query.split()):
+        if not term:
+            continue
+        sanitized = term.replace(chr(34), "")
+        if not sanitized:
+            continue
+        katakana = _to_katakana(sanitized)
+        hiragana = _to_hiragana(sanitized)
+        term_variants.append(
+            list(dict.fromkeys([sanitized, katakana, hiragana]))
+        )
+    return term_variants
+
+
+def _highlight_terms(query: str) -> tuple[str, ...]:
+    """The strings ``_build_fts_query`` matched, deduplicated across terms."""
+    return tuple(dict.fromkeys(
+        variant for variants in _term_variants(query) for variant in variants
+    ))
+
+
 def _build_fts_query(query: str) -> str:
     """Build an FTS5 trigram query string with kana normalization.
 
@@ -1276,22 +1340,8 @@ def _build_fts_query(query: str) -> str:
     Returns:
         FTS5 query string safe for the trigram tokenizer.
     """
-    terms = [t.strip() for t in query.split() if t.strip()]
-    if not terms:
-        return ""
-
     term_clauses: list[str] = []
-    for term in terms:
-        sanitized = term.replace(chr(34), "")
-        if not sanitized:
-            continue
-
-        katakana = _to_katakana(sanitized)
-        hiragana = _to_hiragana(sanitized)
-
-        # Collect unique variants (original, katakana, hiragana)
-        variants = list(dict.fromkeys([sanitized, katakana, hiragana]))
-
+    for variants in _term_variants(query):
         if len(variants) == 1:
             term_clauses = [*term_clauses, f'"{variants[0]}"']
         else:
@@ -1547,6 +1597,7 @@ def _keyword_search_text_content(
                 text=row[3][:200],
                 page=page_num,
                 chunk_index=int(row[1]) if str(row[1]).isdigit() else None,
+                full_text=row[3],
             ),
         ]
 
@@ -1664,6 +1715,7 @@ def _combine_scores_rrf(
             timestamp_end=m.timestamp_end,
             page=m.page,
             chunk_index=m.chunk_index,
+            channel="vector",
         ))
 
     for m in clip_matches:
@@ -1677,6 +1729,7 @@ def _combine_scores_rrf(
             timestamp_end=m.timestamp_end,
             page=m.page,
             chunk_index=m.chunk_index,
+            channel="vector",
         ))
 
     for m in keyword_matches:
@@ -1690,6 +1743,9 @@ def _combine_scores_rrf(
             score=m.score,
             timestamp_start=m.timestamp_start,
             timestamp_end=m.timestamp_end,
+            transcript_chunk_index=m.chunk_index,
+            channel="keyword",
+            full_text=m.full_text,
         ))
 
     for m in (text_content_keyword_matches or []):
@@ -1700,6 +1756,8 @@ def _combine_scores_rrf(
             score=m.score,
             page=m.page,
             chunk_index=m.chunk_index,
+            channel="keyword",
+            full_text=m.full_text,
         ))
 
     # SIRA retrieval-keywords hits: contribute a chip-only entry. The
@@ -1713,6 +1771,7 @@ def _combine_scores_rrf(
             match_type="retrieval_keywords",
             text=m.matched_keyword,
             score=m.score,
+            channel="keyword",
         ))
 
     # --- Build per-system file rankings ---
@@ -1795,6 +1854,8 @@ def _build_results(
     skip_cutoff: bool = False,
     mode: SearchMode = "precision",
     file_id_scope: list[str] | None = None,
+    passages: bool = False,
+    query: str = "",
 ) -> list[SearchResult]:
     """Build final search results from aggregated scores.
 
@@ -1813,6 +1874,9 @@ def _build_results(
         file_id_scope: Optional allow-list. ``None`` disables; ``[]``
             short-circuits to zero results. Filter runs BEFORE the
             cutoff so cutoff thresholds reflect the in-scope cohort.
+        passages: When ``True``, each surviving result also describes the
+            places its matches point at.
+        query: The raw query, whose terms a keyword passage highlights.
 
     Returns:
         Sorted list of SearchResult objects.
@@ -1836,16 +1900,16 @@ def _build_results(
     file_ids = list(file_scores.keys())
 
     with get_search_db_read() as session:
-        query = session.query(IndexedFile).filter(
+        file_query = session.query(IndexedFile).filter(
             IndexedFile.file_id.in_(file_ids),
             IndexedFile.active.is_(True),
         )
 
-        query = apply_kind_filter(query, file_type)
+        file_query = apply_kind_filter(file_query, file_type)
         if drive:
-            query = query.filter(IndexedFile.drive == drive)
+            file_query = file_query.filter(IndexedFile.drive == drive)
 
-        files = {f.file_id: f for f in query.all()}
+        files = {f.file_id: f for f in file_query.all()}
         titles = load_section_titles(
             session,
             [
@@ -1905,7 +1969,21 @@ def _build_results(
             or (mode != "recall" and _CLIP_MATCH_TYPES & set(r.match_types))
         ]
 
-    return results[:limit]
+    results = results[:limit]
+
+    if passages:
+        terms = _highlight_terms(query)
+        results = [
+            replace(
+                result,
+                passages=_build_passages(
+                    result, file_scores[result.file_id].matches, terms,
+                ),
+            )
+            for result in results
+        ]
+
+    return results
 
 
 def _group_matches_into_segments(
@@ -1979,6 +2057,198 @@ def _group_matches_into_segments(
             ]
 
     return segments
+
+
+# ---------------------------------------------------------------------------
+# Passages: the places a hit's matches point at
+# ---------------------------------------------------------------------------
+
+_FRAME_URL = "/api/addons/intelligence/files/{file_id}/frame?t={second}"
+#: How much stored text precedes a keyword excerpt's first occurrence.
+_EXCERPT_LEAD = 40
+_EXCERPT_LENGTH = 200
+_CLIP_TYPES = ("clip", "clip_thumbnail")
+
+
+def _passage_kind(
+    match: MatchInfo, mime_type: str | None, file_type: str,
+) -> str | None:
+    """The kind of place ``match`` points at, or ``None`` when it points at none."""
+    if match.match_type == "whisper" and match.channel == "vector":
+        kind = "utterance"
+    elif match.match_type == "transcript" and match.channel == "keyword":
+        kind = "utterance"
+    elif match.match_type == "clip" and match.channel == "vector":
+        kind = "scene"
+    elif match.match_type == "text_content" and match.chunk_index is not None:
+        if mime_type == EPUB_MIME and match.page is not None:
+            kind = "section"
+        elif match.page is not None:
+            kind = "page"
+        elif file_type == "image":
+            kind = "picture_text"
+        else:
+            kind = "text"
+    else:
+        return None
+    if kind in ("utterance", "scene") and match.timestamp_start is None:
+        return None
+    return kind
+
+
+def _passage_place(kind: str, match: MatchInfo) -> tuple[float | int | None, ...]:
+    if kind == "utterance":
+        return (match.timestamp_start, match.timestamp_end)
+    if kind == "scene":
+        return (match.timestamp_start,)
+    return (match.chunk_index,)
+
+
+def _vector_weight(match: MatchInfo) -> float:
+    search_config = settings.search
+    if match.match_type in _CLIP_TYPES:
+        return getattr(
+            search_config,
+            _TYPE_WEIGHTS.get(match.match_type, "type_weight_clip"),
+            search_config.type_weight_clip,
+        )
+    return getattr(search_config, _TYPE_WEIGHTS.get(match.match_type, ""), 1.0)
+
+
+def _keyword_excerpt(match: MatchInfo, terms: tuple[str, ...]) -> str:
+    """The keyword match's stored text, windowed around the first occurrence."""
+    own = match.text
+    stored = match.full_text if match.full_text is not None else own
+    lowered = tuple(term.lower() for term in terms)
+    if any(term in own.lower() for term in lowered):
+        return own
+    positions = [
+        position
+        for position in (stored.lower().find(term) for term in lowered)
+        if position >= 0
+    ]
+    if not positions:
+        return own
+    start = max(min(positions) - _EXCERPT_LEAD, 0)
+    excerpt = stored[start : start + _EXCERPT_LENGTH]
+    if start > 0:
+        excerpt = "…" + excerpt
+    if start + _EXCERPT_LENGTH < len(stored):
+        excerpt = excerpt + "…"
+    return excerpt
+
+
+def _frame_url(
+    result: SearchResult, kind: str, start: float | None,
+) -> str | None:
+    if kind not in ("utterance", "scene") or start is None:
+        return None
+    if result.file_type != "video" or result.mime_type == LOFT_MIME:
+        return None
+    return _FRAME_URL.format(
+        file_id=result.file_id, second=math.floor(start),
+    )
+
+
+def _finish_passage(
+    kind: str,
+    matches: list[MatchInfo],
+    result: SearchResult,
+    section_titles: dict[int, str],
+    terms: tuple[str, ...],
+) -> SearchPassage:
+    vector_matches = [m for m in matches if m.channel == "vector"]
+    keyword_matches = [m for m in matches if m.channel == "keyword"]
+    best_vector = max(vector_matches, key=lambda m: m.score, default=None)
+    best_keyword = max(keyword_matches, key=lambda m: m.score, default=None)
+
+    start = end = page = section = section_title = chunk_index = None
+    if kind in ("utterance", "scene"):
+        start = matches[0].timestamp_start
+        end = matches[0].timestamp_end
+    elif kind == "section":
+        section = matches[0].page
+        section_title = section_titles.get(section) if section is not None else None
+        chunk_index = matches[0].chunk_index
+    elif kind == "page":
+        page = matches[0].page
+        chunk_index = matches[0].chunk_index
+    elif kind in ("picture_text", "text"):
+        chunk_index = matches[0].chunk_index
+
+    if kind == "utterance":
+        chunk_index = next(
+            (
+                m.transcript_chunk_index
+                for m in keyword_matches
+                if m.transcript_chunk_index is not None
+            ),
+            None,
+        )
+
+    if kind == "scene":
+        text = ""
+    elif best_keyword is not None:
+        text = _keyword_excerpt(best_keyword, terms)
+    else:
+        text = best_vector.text if best_vector is not None else ""
+
+    alpha = settings.search.alpha
+    best_vector_score = max(
+        (_vector_weight(m) * m.score for m in vector_matches), default=0.0,
+    )
+    best_keyword_score = max((m.score for m in keyword_matches), default=0.0)
+    score = round(
+        alpha * best_vector_score + (1.0 - alpha) * best_keyword_score, 4,
+    )
+
+    return SearchPassage(
+        kind=kind,  # type: ignore[arg-type]
+        start=start,
+        end=end,
+        page=page,
+        section=section,
+        section_title=section_title,
+        chunk_index=chunk_index,
+        text=text,
+        score=score,
+        keyword=bool(keyword_matches),
+        highlight_terms=terms if keyword_matches else (),
+        frame_url=_frame_url(result, kind, start),
+    )
+
+
+def _passage_order(passage: SearchPassage) -> tuple[float, float, int, int]:
+    return (
+        -passage.score,
+        passage.start if passage.start is not None else -1.0,
+        passage.page
+        if passage.page is not None
+        else (passage.section if passage.section is not None else -1),
+        passage.chunk_index if passage.chunk_index is not None else -1,
+    )
+
+
+def _build_passages(
+    result: SearchResult,
+    matches: list[MatchInfo],
+    terms: tuple[str, ...],
+) -> tuple[SearchPassage, ...]:
+    """One passage per distinct (kind, place) among ``matches``, by score."""
+    section_titles = dict(result.section_titles)
+    grouped: dict[tuple[str, tuple[float | int | None, ...]], list[MatchInfo]] = {}
+    for match in matches:
+        kind = _passage_kind(match, result.mime_type, result.file_type)
+        if kind is None:
+            continue
+        key = (kind, _passage_place(kind, match))
+        grouped.setdefault(key, []).append(match)
+
+    passages = [
+        _finish_passage(kind, group, result, section_titles, terms)
+        for (kind, _place), group in grouped.items()
+    ]
+    return tuple(sorted(passages, key=_passage_order))
 
 
 # ---------------------------------------------------------------------------
@@ -2704,6 +2974,7 @@ def _combine_scores_cosine(
             timestamp_end=m.timestamp_end,
             page=m.page,
             chunk_index=m.chunk_index,
+            channel="vector",
         ))
         weight = getattr(search_config, _TYPE_WEIGHTS.get(m.embedding_type, ""), 1.0)
         weighted = m.score * weight
@@ -2724,6 +2995,7 @@ def _combine_scores_cosine(
             timestamp_end=m.timestamp_end,
             page=m.page,
             chunk_index=m.chunk_index,
+            channel="vector",
         ))
         weight = getattr(
             search_config,
@@ -2747,6 +3019,9 @@ def _combine_scores_cosine(
             score=m.score,
             timestamp_start=m.timestamp_start,
             timestamp_end=m.timestamp_end,
+            transcript_chunk_index=m.chunk_index,
+            channel="keyword",
+            full_text=m.full_text,
         ))
         src = file_source_best["transcript_keyword"]
         src[m.file_id] = max(src.get(m.file_id, 0.0), m.score)
@@ -2759,6 +3034,8 @@ def _combine_scores_cosine(
             score=m.score,
             page=m.page,
             chunk_index=m.chunk_index,
+            channel="keyword",
+            full_text=m.full_text,
         ))
         src = file_source_best["text_content_keyword"]
         src[m.file_id] = max(src.get(m.file_id, 0.0), m.score)
@@ -2773,6 +3050,7 @@ def _combine_scores_cosine(
             match_type="retrieval_keywords",
             text=m.matched_keyword,
             score=m.score,
+            channel="keyword",
         ))
         src = file_source_best["retrieval_keywords"]
         src[m.file_id] = max(src.get(m.file_id, 0.0), m.score)

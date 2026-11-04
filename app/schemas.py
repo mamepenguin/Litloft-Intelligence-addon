@@ -25,6 +25,21 @@ class SearchResultSegment(BaseModel):
     matches: list[SearchResultSegmentMatch]
 
 
+class SearchPassage(BaseModel):
+    kind: str
+    start: float | None = None
+    end: float | None = None
+    page: int | None = None
+    section: int | None = None
+    section_title: str | None = None
+    chunk_index: int | None = None
+    text: str
+    score: float
+    keyword: bool
+    highlight_terms: list[str]
+    frame_url: str | None = None
+
+
 class SearchResultItem(BaseModel):
     file_id: str
     drive: str
@@ -40,6 +55,11 @@ class SearchResultItem(BaseModel):
     # file is missing/trashed — the frontend then falls back to the
     # IndexedFile-snapshot fields on this item itself.
     file: dict[str, Any] | None = None
+    # Absent, not null, unless the caller asked for passages: every other
+    # route shares this model and must answer byte-identically to before.
+    passages: list[SearchPassage] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
 
 
 class SearchResponseModel(BaseModel):
