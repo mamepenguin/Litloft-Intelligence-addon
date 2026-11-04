@@ -6,8 +6,11 @@ lists, and tables survive into the embedding chunks. Fallback: PyMuPDF
 """
 
 import logging
+import re
 import threading
+import unicodedata
 from pathlib import Path
+from typing import NamedTuple
 
 from app.config import settings
 from app.extractors.base import ContentExtractor, ExtractionResult, TextChunk
@@ -26,6 +29,33 @@ MAX_PAGES = 500
 # Joiner placed between per-page Markdown blocks so consumers can split
 # the full document back into pages if needed.
 PAGE_SEPARATOR = "\n\n---\n\n"
+
+# (left, top, right, bottom) in points. Passed to PyMuPDF4LLM explicitly so
+# the band the page-edge recovery reads is the band the conversion cut,
+# whatever the library's default becomes.
+PAGE_MARGINS = (0, 50, 0, 50)
+
+# Bumped when the rules below change: the startup check re-extracts every
+# PDF once for a new value.
+PDF_TEXT_RULES_VERSION = "1"
+
+# Characters the containment check ignores besides whitespace, because the
+# library writes Markdown and the recovered line is plain text.
+_MARKDOWN_MARKUP = frozenset("*_`#|>-")
+_DIGITS = re.compile(r"\d+")
+
+
+class PageEdges(NamedTuple):
+    """Band lines a page recovered, before the containment check."""
+
+    top: tuple[str, ...]
+    bottom: tuple[str, ...]
+
+
+class _BandLine(NamedTuple):
+    text: str
+    top: bool
+    box: tuple[float, float]
 
 # PyMuPDF does not support use from several threads at once: a conversion that
 # overlaps another fails over to plain text or returns wrong text. Every
@@ -118,13 +148,14 @@ def _extract_with_pymupdf4llm(path: Path) -> ExtractionResult | None:
             str(path),
             pages=list(range(MAX_PAGES)),
             page_chunks=True,
+            margins=PAGE_MARGINS,
         )
     except IndexError:
         # PDF has fewer than MAX_PAGES pages — common case. Retry
         # without an explicit page list so the library extracts all.
         try:
             page_chunks = pymupdf4llm.to_markdown(
-                str(path), page_chunks=True
+                str(path), page_chunks=True, margins=PAGE_MARGINS
             )
         except Exception as exc:
             logger.warning(
@@ -150,14 +181,172 @@ def _extract_with_pymupdf4llm(path: Path) -> ExtractionResult | None:
         )
 
     limited = list(page_chunks)[:MAX_PAGES]
-    chunks = _build_chunks_from_pages(limited)
-    full_markdown = _join_page_markdown(limited)
+    edges = _safe_edge_lines(path)
+    chunks = _build_chunks_from_pages(limited, edges)
+    full_markdown = _join_page_markdown(limited, edges)
     return ExtractionResult(
         chunks=chunks,
         markdown=full_markdown,
         extractor=EXTRACTOR_PRIMARY,
         page_count=len(limited),
     )
+
+
+def _safe_edge_lines(path: Path) -> dict[int, PageEdges]:
+    """Read the page edges, returning nothing rather than failing extraction."""
+    import fitz
+
+    try:
+        with fitz.open(str(path)) as doc:
+            return read_edge_lines(doc, path.name)
+    except Exception as exc:
+        logger.warning(
+            "PDF edge lines unavailable for %s (%s); using the library text",
+            path.name,
+            type(exc).__name__,
+        )
+        return {}
+
+
+def read_edge_lines(doc: object, file_name: str) -> dict[int, PageEdges]:
+    """Return the text overlapping each page's top and bottom bands.
+
+    Every line overlapping the top or bottom ``PAGE_MARGINS`` band is read
+    from the text layer, then filtered document-wide: lines with no letter
+    are dropped (page numbers), and a line whose key repeats on three or
+    more pages keeps only its first occurrence (running headers and
+    footers). The result is keyed by 1-based page number, up to
+    ``MAX_PAGES``.
+
+    A page whose text layer raises is skipped with a warning; a document
+    that cannot be walked raises to the caller.
+    """
+    page_count = min(getattr(doc, "page_count", 0) or 0, MAX_PAGES)
+    by_page: dict[int, list[_BandLine]] = {}
+    for index in range(page_count):
+        lines = _page_band_lines(doc[index], index + 1, file_name)
+        if lines:
+            by_page[index + 1] = lines
+    return _drop_repeated(_drop_letterless(by_page))
+
+
+def _page_band_lines(page: object, number: int, file_name: str) -> list[_BandLine]:
+    """The lines of one page that overlap a margin band, in reading order."""
+    try:
+        data = page.get_text("dict")
+    except Exception as exc:
+        logger.warning(
+            "PDF edge lines: page %d of %s unreadable (%s)",
+            number,
+            file_name,
+            type(exc).__name__,
+        )
+        return []
+
+    top_limit = float(PAGE_MARGINS[1])
+    bottom_limit = float(page.rect.height) - float(PAGE_MARGINS[3])
+    found: list[_BandLine] = []
+    for block in data.get("blocks", ()):
+        if block.get("type", 0) != 0:
+            continue
+        for line in block.get("lines", ()):
+            box = line.get("bbox")
+            if not box or len(box) < 4:
+                continue
+            text = "".join(
+                span.get("text", "") for span in line.get("spans", ())
+            ).strip()
+            if not text:
+                continue
+            at_top = box[1] < top_limit
+            at_bottom = box[3] > bottom_limit
+            if not at_top and not at_bottom:
+                continue
+            found.append(_BandLine(text, at_top, (box[1], box[0])))
+    found.sort(key=lambda line: line.box)
+    return found
+
+
+def _drop_letterless(by_page: dict[int, list[_BandLine]]) -> dict[int, list[_BandLine]]:
+    kept: dict[int, list[_BandLine]] = {}
+    for number, lines in by_page.items():
+        kept_lines = [line for line in lines if _has_letter(line.text)]
+        if kept_lines:
+            kept[number] = kept_lines
+    return kept
+
+
+def _drop_repeated(by_page: dict[int, list[_BandLine]]) -> dict[int, PageEdges]:
+    """Keep only the first occurrence of a key found on three or more pages."""
+    pages_by_key: dict[str, set[int]] = {}
+    for number, lines in by_page.items():
+        for line in lines:
+            pages_by_key.setdefault(_line_key(line.text), set()).add(number)
+    repeated = {
+        key for key, pages in pages_by_key.items() if len(pages) >= 3
+    }
+
+    seen: set[str] = set()
+    out: dict[int, PageEdges] = {}
+    for number in sorted(by_page):
+        top: list[str] = []
+        bottom: list[str] = []
+        for line in by_page[number]:
+            key = _line_key(line.text)
+            if key in repeated:
+                if key in seen:
+                    continue
+                seen.add(key)
+            (top if line.top else bottom).append(line.text)
+        if top or bottom:
+            out[number] = PageEdges(tuple(top), tuple(bottom))
+    return out
+
+
+def _has_letter(text: str) -> bool:
+    return any(unicodedata.category(ch).startswith("L") for ch in text)
+
+
+def _line_key(text: str) -> str:
+    """Identity of a line across pages, ignoring its digits' values."""
+    plain = "".join(unicodedata.normalize("NFKC", text).split())
+    return _DIGITS.sub("\x00", plain)
+
+
+def page_text_with_edges(markdown: str, edges: PageEdges | None) -> str:
+    """Put a page's recovered band lines around its Markdown.
+
+    Top-band lines go before the Markdown and bottom-band lines after it,
+    each separated by a blank line. A line the Markdown already contains is
+    dropped. A page with no kept line is returned unchanged.
+    """
+    if edges is None:
+        return markdown
+    normalised = _normalise(markdown)
+    top = tuple(t for t in edges.top if not _is_contained(t, normalised))
+    bottom = tuple(
+        t for t in edges.bottom if not _is_contained(t, normalised)
+    )
+    if not top and not bottom:
+        return markdown
+    text = markdown
+    if top:
+        text = "\n".join(top) + "\n\n" + text
+    if bottom:
+        text = text + "\n\n" + "\n".join(bottom)
+    return text
+
+
+def _normalise(text: str) -> str:
+    plain = unicodedata.normalize("NFKC", text)
+    return "".join(
+        ch for ch in plain if not ch.isspace() and ch not in _MARKDOWN_MARKUP
+    )
+
+
+def _is_contained(line: str, normalised_markdown: str) -> bool:
+    needle = _normalise(line)
+    return bool(needle) and needle in normalised_markdown
 
 
 def _page_text(page: object) -> str:
@@ -169,13 +358,18 @@ def _page_text(page: object) -> str:
     return ""
 
 
-def _build_chunks_from_pages(pages: list[object]) -> list[TextChunk]:
-    """Split each page's Markdown into TextChunks using the configured size."""
+def _build_chunks_from_pages(
+    pages: list[object], edges: dict[int, PageEdges] | None = None
+) -> list[TextChunk]:
+    """Split each page's text into TextChunks using the configured size."""
     chunk_config = settings.indexing.text_chunking
+    edges = edges or {}
     chunks: list[TextChunk] = []
     for index, page in enumerate(pages):
         page_num = index + 1
-        text = _page_text(page).strip()
+        text = page_text_with_edges(
+            _page_text(page), edges.get(page_num)
+        ).strip()
         if not text:
             continue
         sub_chunks = ContentExtractor.chunk_text(
@@ -195,9 +389,15 @@ def _build_chunks_from_pages(pages: list[object]) -> list[TextChunk]:
     return chunks
 
 
-def _join_page_markdown(pages: list[object]) -> str:
+def _join_page_markdown(
+    pages: list[object], edges: dict[int, PageEdges] | None = None
+) -> str:
     """Concatenate per-page Markdown with the page separator."""
-    parts = [_page_text(page) for page in pages]
+    edges = edges or {}
+    parts = [
+        page_text_with_edges(_page_text(page), edges.get(index + 1))
+        for index, page in enumerate(pages)
+    ]
     return PAGE_SEPARATOR.join(parts)
 
 

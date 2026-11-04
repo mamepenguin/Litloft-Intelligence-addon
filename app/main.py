@@ -376,6 +376,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         chapter_suggestions_worker=chapter_worker,
     )
     dependencies._index_manager = index_manager
+    from app.database import check_pdf_text_rules
+
+    await asyncio.to_thread(check_pdf_text_rules)
     try:
         await index_manager.start()
     except Exception as e:
