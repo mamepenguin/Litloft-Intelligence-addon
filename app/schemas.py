@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.llm_routing import PROFILE_NAME_PATTERN
 
@@ -671,6 +671,25 @@ class AskRequest(BaseModel):
     file_type: str | None = None
     drive: str | None = None
     profile: str | None = Field(default=None, pattern=PROFILE_NAME_PATTERN)
+
+
+class FileQuestionRequest(BaseModel):
+    """Request body for ``POST /files/{file_id}/ask`` (SPEC-ADDON-053 2).
+
+    The floor is three non-space characters, the same rule the tab uses
+    to enable its button; it has to be a validation error rather than a
+    4xx from the handler so a malformed question never reaches the gates.
+    """
+
+    question: str = Field(..., min_length=1, max_length=1000)
+    profile: str | None = Field(default=None, pattern=PROFILE_NAME_PATTERN)
+
+    @field_validator("question")
+    @classmethod
+    def _at_least_three_non_space(cls, value: str) -> str:
+        if sum(1 for char in value if not char.isspace()) < 3:
+            raise ValueError("question must hold at least 3 non-space characters")
+        return value
 
 
 class CitationModel(BaseModel):

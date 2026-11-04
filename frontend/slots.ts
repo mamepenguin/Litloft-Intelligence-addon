@@ -15,6 +15,7 @@ export const slotComponents: Record<string, React.LazyExoticComponent<React.Comp
   "scene-segments": lazy(() => import("./SceneCandidatesSection")),
   "index-details": lazy(() => import("./IndexDetailsMenuItem")),
 "transcript": lazy(() => import("./TranscriptSection")),
+  "ask": lazy(() => import("./AskTab")),
   "unverified-source": lazy(() => import("./UnverifiedSourceSection")),
   "suggested-tags": lazy(() => import("./SuggestedTagsSection")),
   "suggested-chapters": lazy(() => import("./SuggestedChaptersSection")),

@@ -472,6 +472,11 @@ class RagConfig:
     # (2-3 sentences) so more fit under the per-file budget.
     # 0 disables the additional passes.
     transcript_vector_top_n: int = 4
+    # Characters of chunk text a question about a single file may send
+    # (SPEC-ADDON-053). Above this, the chunks nearest the question are
+    # chosen and the answer is marked partial. Valid values are
+    # 1,000-200,000; anything else falls back to 16,000 with a warning.
+    file_question_max_chars: int = 16_000
     # Hierarchical retrieval (Stage 1 coarse shortlist). Enabled by default;
     # set ``rag.hierarchical.enabled: false`` to force legacy retrieval.
     hierarchical: HierarchicalRagConfig = field(
@@ -793,6 +798,41 @@ def _checked_hierarchical(section: dict[str, Any]) -> dict[str, Any]:
     return {**section, "hierarchical": cleaned}
 
 
+_FILE_QUESTION_MAX_CHARS_RANGE = (1_000, 200_000)
+
+_FILE_QUESTION_MAX_CHARS_DEFAULT = RagConfig().file_question_max_chars
+
+
+def _checked_file_question_budget(section: dict[str, Any]) -> dict[str, Any]:
+    """Return ``section`` with ``file_question_max_chars`` made valid.
+
+    Absent or null falls back to the default silently; any other value
+    that is not an integer in range (``bool`` is an ``int`` subclass, so it
+    is excluded explicitly) logs one warning and falls back as well.
+    """
+    if "file_question_max_chars" not in section:
+        return section
+    value = section["file_question_max_chars"]
+    low, high = _FILE_QUESTION_MAX_CHARS_RANGE
+    if value is not None and (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < low
+        or value > high
+    ):
+        logger.warning(
+            "rag.file_question_max_chars must be an integer from %d to %d, "
+            "got %r; using %d",
+            low, high, value, _FILE_QUESTION_MAX_CHARS_DEFAULT,
+        )
+        value = None
+    if value is not None:
+        return section
+    return {
+        k: v for k, v in section.items() if k != "file_question_max_chars"
+    }
+
+
 _HAAS_LOCAL_RANGES = {
     "num_threads": (1, None),
     "max_segment_seconds": (15, 120),
@@ -861,6 +901,7 @@ def _parse_rag(
         section = merge_into_rag_dict(section, overrides)
 
     section = _checked_hierarchical(section)
+    section = _checked_file_question_budget(section)
 
     flat_kwargs = {
         k: v

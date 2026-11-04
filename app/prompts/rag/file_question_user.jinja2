@@ -1,0 +1,8 @@
+{#- vars: question (string), passages (list[str]) — see rag/prompt.py:build_file_question_user_prompt -#}
+Question: {{ question }}
+
+Passages from the file:
+{% for passage in passages -%}
+[{{ loop.index }}]
+{{ passage }}
+{% endfor -%}

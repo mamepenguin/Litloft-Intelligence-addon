@@ -35,12 +35,17 @@ from app.credentials import CallerCredential
 from app.llm_routing import Resolved
 from app.routers.llm_gate import require_llm
 from app.drive_context import require_drive
+from app.rag import file_question
 from app.rag.service import (
     AnswerEvent,
     find_files,
     stream_answer,
 )
-from app.schemas import AskRequest, FindRequest
+from app.rag.prompt import (
+    build_file_question_system_prompt,
+    build_file_question_user_prompt,
+)
+from app.schemas import AskRequest, FileQuestionRequest, FindRequest
 
 logger = logging.getLogger(__name__)
 
@@ -297,6 +302,143 @@ async def ask_endpoint(
     except BaseException:
         semaphore.release()
         raise
+
+
+@router.get("/files/{file_id}/ask")
+async def file_ask_availability(
+    file_id: str,
+    drive: str = Depends(require_drive),
+) -> dict[str, bool]:
+    """Say whether this drive may ask about one file (SPEC-ADDON-053 1).
+
+    An active indexed file of the request drive with at least one text
+    chunk is askable. Anything else — another drive, not indexed, no
+    chunk — is ``available: false``, not an error: the tab simply has no
+    button, and reporting a failure there would look like a broken page.
+    """
+    return {
+        "available": await asyncio.to_thread(
+            file_question.available, file_id, drive
+        )
+    }
+
+
+@router.post("/files/{file_id}/ask")
+async def file_ask_endpoint(
+    file_id: str,
+    body: FileQuestionRequest,
+    drive: str = Depends(require_drive),
+) -> StreamingResponse:
+    """Answer a question about one file from that file's indexed text.
+
+    SPEC-ADDON-053. Gates are ``/ask``'s: ``features.rag``, the routed
+    LLM (honouring ``llm_cloud``), and the shared Ask semaphore, so a file
+    question in flight counts against the same limit. The material is
+    read before a slot is taken, so a file that cannot be asked about
+    neither waits for one nor sends anything to a model.
+
+    Streams ``answer_chunk``, then ``citations``, then ``meta``
+    (``partial``), then ``done``; a failure after the stream started ends
+    with ``done`` carrying ``error``.
+    """
+    resolved = await _require_rag_enabled(drive, body.profile)
+
+    material = await asyncio.to_thread(
+        file_question.load_material,
+        file_id=file_id,
+        drive=drive,
+        question=body.question,
+    )
+    if material is None:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    semaphore = _get_ask_semaphore()
+    try:
+        await asyncio.wait_for(semaphore.acquire(), timeout=0.001)
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=503,
+            detail="Too many concurrent Ask requests, please retry shortly",
+        )
+
+    try:
+        return StreamingResponse(
+            _file_question_stream(
+                file_id=file_id,
+                question=body.question,
+                material=material,
+                resolved=resolved,
+                semaphore=semaphore,
+            ),
+            media_type=_SSE_MEDIA_TYPE,
+            headers=_SSE_HEADERS,
+        )
+    except BaseException:
+        semaphore.release()
+        raise
+
+
+async def _file_question_stream(
+    file_id: str,
+    question: str,
+    material: file_question.Material,
+    resolved: Resolved,
+    semaphore: "asyncio.Semaphore",
+) -> AsyncIterator[str]:
+    """Adapt the routed model's answer to the file-question SSE wire format.
+
+    Owns the semaphore slot: it is released on the end of the stream, on a
+    mid-stream failure and on a client disconnect. The upstream stream is
+    closed explicitly rather than left to garbage collection, so a
+    disconnected tab tears the provider request down at once.
+    """
+    answer: list[str] = []
+    stream = resolved.client.generate_stream(
+        build_file_question_system_prompt(
+            resolved.profile.config.output_language
+        ),
+        build_file_question_user_prompt(
+            question, [chunk.text for chunk in material.chunks]
+        ),
+        max_tokens_override=settings.rag.max_tokens,
+    )
+    try:
+        async for delta in stream:
+            answer = [*answer, delta]
+            yield _format_sse_event(
+                AnswerEvent(kind="answer_chunk", data={"delta": delta})
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the stream must end, not die
+        logger.warning(
+            "file question failed: %s (file %s)",
+            type(exc).__name__,
+            file_id,
+        )
+        yield _format_sse_event(
+            AnswerEvent(
+                kind="done", data={"error": "Answer generation failed"},
+            )
+        )
+    else:
+        yield _format_sse_event(
+            AnswerEvent(
+                kind="citations",
+                data=file_question.citations(
+                    "".join(answer), material.chunks
+                ),
+            )
+        )
+        yield _format_sse_event(
+            AnswerEvent(kind="meta", data={"partial": material.partial})
+        )
+        yield _format_sse_event(AnswerEvent(kind="done", data={}))
+    finally:
+        try:
+            await stream.aclose()
+        finally:
+            semaphore.release()
 
 
 @router.post("/find")
