@@ -892,6 +892,10 @@ def _collect_document_snippets(
     # for the LLM to interpret.
     for segment in candidate.segments:
         for match in segment.matches:
+            # A picture's clip match carries no chunk; falling back to index
+            # 0 there would pull a chunk the question never matched.
+            if match.match_type != "text_content":
+                continue
             chunk_idx = match.chunk_index if match.chunk_index is not None else 0
             _emit(chunk_idx, "text_content", expand=True)
 
@@ -900,9 +904,22 @@ def _collect_document_snippets(
 
 def _collect_image_snippets(
     candidate: RetrievedFile,
+    rag_config: RagConfig,
+    query_vector: np.ndarray | None = None,
+    keywords: str | None = None,
 ) -> list[ContextSnippet]:
-    """Build snippets for an image: BLIP caption + metadata."""
-    snippets: list[ContextSnippet] = []
+    """Build snippets for an image: recognised text, BLIP caption + metadata.
+
+    OCR text is stored in the same ``text_content`` rows a document has, so
+    the document selection applies unchanged; the caption and metadata are
+    appended after it.
+    """
+    snippets = _collect_document_snippets(
+        candidate,
+        rag_config,
+        query_vector=query_vector,
+        keywords=keywords,
+    )
 
     caption = _fetch_blip_caption(candidate.file_id)
     if caption:
@@ -935,7 +952,8 @@ def build_file_context(
       segment, with a ``transcript_window_seconds`` window.
     * ``document``: FTS text-content chunks around each matched chunk
       index (the match and its immediate neighbors).
-    * ``image``: BLIP caption (if present) plus filename + description.
+    * ``image``: the document selection over the picture's recognised
+      text, then its BLIP caption (if present) plus filename + description.
     * other: filename + title + description only.
 
     The combined snippet text is capped at
@@ -963,7 +981,12 @@ def build_file_context(
             keywords=keywords,
         )
     elif file_type == "image":
-        snippets = _collect_image_snippets(candidate)
+        snippets = _collect_image_snippets(
+            candidate,
+            rag_config,
+            query_vector=query_vector,
+            keywords=keywords,
+        )
     else:
         snippets = []
 
@@ -1005,10 +1028,10 @@ def assemble_contexts(
     ``max_total_context_chars``, the remaining lower-scored files are
     dropped. Files with zero snippets are filtered out of the result.
 
-    When ``query`` is provided and any document file has
+    When ``query`` is provided and any document, text or picture file has
     ``document_vector_top_n > 0`` configured, the query is embedded
-    once here and the resulting vector is threaded into document
-    context builders so chunk selection can use semantic similarity
+    once here and the resulting vector is threaded into document (and
+    picture) context builders so chunk selection can use semantic similarity
     in addition to FTS keyword matches. Embedding failures fall back
     to keyword-only behaviour; the helper never raises.
     """
@@ -1017,11 +1040,13 @@ def assemble_contexts(
 
     # Embed the query once (rather than per-file) when it's worth
     # doing — i.e., the vector pass is enabled and at least one
-    # candidate is a document or transcript file.
+    # candidate is a document, picture or transcript file.
     query_vector: np.ndarray | None = None
     _needs_vector = (
         rag_config.document_vector_top_n > 0
-        and any(c.file_type in ("document", "text") for c in candidates)
+        and any(
+            c.file_type in ("document", "text", "image") for c in candidates
+        )
     ) or (
         rag_config.transcript_vector_top_n > 0
         and any(
