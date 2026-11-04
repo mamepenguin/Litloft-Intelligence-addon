@@ -295,7 +295,9 @@ def test_spec_addon_060_i7_rewritten_chunks_recompute_citations_and_announce_the
     assert any("NEWBODY" in text for text in texts)
     assert not any("OLDBODY" in text for text in texts)
     assert recompute.calls == [("f1", "ACTIVE SUMMARY")]
-    assert any("NEWBODY" in seen for seen in recompute.seen)
+    assert any(
+        any("NEWBODY" in text for text in seen) for seen in recompute.seen
+    )
     assert index.scalar(
         "SELECT segment_text FROM detailed_summary_citations WHERE file_id = 'f1'"
     ) == "RECOMPUTED"

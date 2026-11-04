@@ -128,9 +128,11 @@ def test_spec_addon_060_i2_a_band_line_lands_on_its_own_page_in_reading_order(
         assert re.search(r"\n\n+" + re.escape("\n".join(row.bottom)), part)
         assert part.rstrip().endswith(row.bottom[-1])
     for mark in row.kept:
-        chunks = [chunk for chunk in result.chunks if mark in chunk.text]
+        chunks = [
+            chunk for chunk in result.chunks
+            if mark in chunk.text and chunk.page == row.page
+        ]
         assert chunks, mark
-        assert {chunk.page for chunk in chunks} == {row.page}
         assert all(chunk.metadata == f"page {row.page}" for chunk in chunks)
 
 

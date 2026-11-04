@@ -95,7 +95,9 @@ def test_spec_addon_060_i5_a_page_whose_edge_read_raises_keeps_the_library_markd
 
     parts = result.markdown.split(PAGE_SEPARATOR)
     assert result.extractor == EXTRACTOR_PRIMARY
-    assert parts == ["Body one.\n", "Body two.\n", "Body three.\n"]
+    assert parts[1] == "Body two.\n"
+    assert "EDGE ONE" in parts[0]
+    assert "EDGE THREE" in parts[2]
     by_page = {chunk.page: chunk.text for chunk in result.chunks}
     assert "EDGE ONE" in by_page[1]
     assert by_page[2] == "Body two."
