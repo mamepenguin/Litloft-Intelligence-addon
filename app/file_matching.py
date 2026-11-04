@@ -62,7 +62,7 @@ class SearchFilter(BaseModel):
             tag = raw.strip()
             if not tag:
                 continue
-            key = tag.casefold()
+            key = tag.lower()
             if key in seen:
                 continue
             seen.add(key)

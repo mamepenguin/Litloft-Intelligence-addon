@@ -173,6 +173,10 @@ VALID_FILTERS = [
 INVALID_FILTERS = [
     pytest.param({"tags": [f"t{i}" for i in range(21)]}, id="twenty-one-tags"),
     pytest.param({"tags": ["x" * 201]}, id="tag-201-characters"),
+    pytest.param(
+        {"tags": [f"t{i}" for i in range(19)] + ["straße", "STRASSE"]},
+        id="casefold-only-pair-is-two-tags",
+    ),
     pytest.param({"kinds": ["bogus"]}, id="unknown-kind"),
     pytest.param({"tags": "budget"}, id="tags-not-a-list"),
     pytest.param({"tags": [1]}, id="tag-not-a-string"),
