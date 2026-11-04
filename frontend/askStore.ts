@@ -1,3 +1,8 @@
+import {
+  FILE_PAGE_CLOSED_EVENT,
+  type FilePageClosedDetail,
+} from "@/lib/addonEvents";
+
 import type { FileCitation } from "./askStream";
 
 export type AskStatus = "idle" | "streaming" | "answered" | "failed";
@@ -110,18 +115,12 @@ export function dropAskEntry(fileId: string): void {
   emit();
 }
 
-/**
- * Abort a stream when the tab goes away but keep a settled answer, so a
- * tab switch or a closed sheet finds the same conversation.
- */
-export function releaseAskEntry(fileId: string): void {
-  const entry = entries.get(fileId);
-  if (!entry) return;
-  entry.controller?.abort();
-  if (entry.status === "streaming") {
-    entries.delete(fileId);
-  } else if (entry.controller !== null) {
-    entries.set(fileId, { ...entry, controller: null });
-  }
-  emit();
+/** Registered here rather than from the tab, which a sheet close unmounts while its answer streams. */
+function dropOnPageClosed(event: Event): void {
+  const fileId = (event as CustomEvent<FilePageClosedDetail>).detail?.fileId;
+  if (typeof fileId === "string") dropAskEntry(fileId);
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener(FILE_PAGE_CLOSED_EVENT, dropOnPageClosed);
 }

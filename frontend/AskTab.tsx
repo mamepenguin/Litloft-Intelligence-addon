@@ -31,7 +31,6 @@ import {
   beginAsk,
   dropAskEntry,
   getAskEntry,
-  releaseAskEntry,
   setAskCitations,
   setAskPartial,
   setAskQuestion,
@@ -241,10 +240,6 @@ export default function AskTab({
       dropAskEntry(previous);
       previousFileRef.current = fileId;
     }
-  }, [fileId]);
-
-  useEffect(() => {
-    return () => releaseAskEntry(fileId);
   }, [fileId]);
 
   const { choices, refetch: refetchChoices } = useLLMChoices(

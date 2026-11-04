@@ -250,6 +250,17 @@ function pageClosed(fileId: string): CustomEvent<{ fileId: string }> {
   return new CustomEvent("litloft:file-page-closed", { detail: { fileId } });
 }
 
+/** The ids any test asks about; their store entries are module state. */
+const ASKED_FILE_IDS = [
+  "vid000000001",
+  "vid000000002",
+  "vid000000011",
+  "vid000000012",
+  "vid000000013",
+  "vid000000014",
+  "vid000000016",
+];
+
 async function push(stream: { push: (frame: string) => void }, text: string): Promise<void> {
   await act(async () => {
     stream.push(text);
@@ -265,6 +276,11 @@ beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
   fetchMock.mockClear();
+  // A stream one test leaves running would block the next test's ask, and
+  // the store is module state that no unmount clears any more.
+  for (const fileId of ASKED_FILE_IDS) {
+    window.dispatchEvent(pageClosed(fileId));
+  }
 });
 
 afterEach(() => {
