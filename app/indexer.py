@@ -30,6 +30,7 @@ from app.database import (
 )
 from app.idf_backfill import mark_idf_terms_stale, request_idf_backfill
 from app.models import Embedding, IndexedFile, TranscriptChunk, TranscriptWord
+from app.processing_events import emit_processing_updated
 from app.sidecar_match import match_siblings
 from app.vec_partition import repair_unkeyed_rows
 from app.workers.blip import check_idle_unload as check_blip_idle_unload
@@ -763,6 +764,7 @@ class IndexManager:
 
                 # Mark inapplicable index types as done so they don't appear
                 # as permanently incomplete (e.g., clip_indexed for audio)
+                newly_done: dict[str, list[str]] = {}
                 for f in incomplete:
                     if not f.clip_indexed and f.mime_type not in clip_mimes:
                         f.clip_indexed = True
@@ -777,8 +779,10 @@ class IndexManager:
                         and f.mime_type != LOFT_MIME
                     ):
                         f.whisper_indexed = True
+                        newly_done.setdefault(f.drive, []).append(f.file_id)
                     if not f.text_indexed and f.mime_type not in TEXT_MIMES:
                         f.text_indexed = True
+                        newly_done.setdefault(f.drive, []).append(f.file_id)
                     # tfidf_keywords: only video/loft files with whisper done
                     if not f.tfidf_keywords_indexed and not f.whisper_indexed:
                         f.tfidf_keywords_indexed = True
@@ -792,7 +796,7 @@ class IndexManager:
                         f.ocr_indexed = True
 
                 # Snapshot what we need for queuing
-                return [
+                snapshot = [
                     (
                         f.file_id,
                         f.mime_type,
@@ -806,6 +810,13 @@ class IndexManager:
                     )
                     for f in incomplete
                 ]
+
+            # After the write commits: the flags these files gained are
+            # the ones the drawer is waiting on.
+            for file_drive, changed_ids in newly_done.items():
+                emit_processing_updated(file_drive, changed_ids)
+
+            return snapshot
 
         file_tasks = await asyncio.to_thread(_collect_incomplete)
 

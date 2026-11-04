@@ -25,6 +25,10 @@ from app.schemas import (
     IndexDetailsResponse,
     MessageResponse,
     PdfMarkdownResponse,
+    ProcessingFile,
+    ProcessingRequest,
+    ProcessingResponse,
+    ProcessingStage,
     ProviderStats,
     ReindexResponse,
     SuggestedTagsResponse,
@@ -73,6 +77,123 @@ def _get_indexed_file_or_404(file_id: str, drive: str) -> dict[str, Any]:
             "ocr_indexed": indexed.ocr_indexed,
             "indexed_at": indexed.indexed_at.isoformat() if indexed.indexed_at else "",
         }
+
+
+_SEARCH_I18N_KEY = "intelligence.processing.search"
+_TEXT_I18N_KEY = "intelligence.processing.text"
+_TRANSCRIPT_I18N_KEY = "intelligence.processing.transcript"
+
+
+def _search_stage(row: Any) -> ProcessingStage:
+    """Required, ``done`` only for an active row of this drive that is indexed."""
+    done = row is not None and row.active and row.metadata_indexed
+    return ProcessingStage(
+        key="search",
+        i18n_key=_SEARCH_I18N_KEY,
+        state="done" if done else "pending",
+        required=True,
+    )
+
+
+def _text_stage(row: Any) -> ProcessingStage:
+    """Informational: this addon records no terminal "will not run" for text."""
+    return ProcessingStage(
+        key="text",
+        i18n_key=_TEXT_I18N_KEY,
+        state="done" if row.text_indexed else "pending",
+        required=False,
+    )
+
+
+def _transcript_stage(row: Any, latest_job: Any) -> ProcessingStage:
+    """Follow the newest transcription attempt and the whisper flag.
+
+    A failure is only reported when nothing will retry it: the row is
+    already ``whisper_indexed`` (a ``.loft`` whose temporary audio was
+    consumed) or the provider called it fatal. Transient, rate-limit,
+    circuit-breaker and container-restart failures stay ``pending``.
+    """
+    if latest_job is not None and latest_job.status == "running":
+        state = "running"
+    elif (
+        latest_job is not None
+        and latest_job.status == "failed"
+        and (row.whisper_indexed or latest_job.error_class == "FatalError")
+    ):
+        state = "failed"
+    elif row.whisper_indexed:
+        state = "done"
+    else:
+        state = "pending"
+    return ProcessingStage(
+        key="transcript",
+        i18n_key=_TRANSCRIPT_I18N_KEY,
+        state=state,
+        required=False,
+    )
+
+
+@router.post("/files/processing", response_model=ProcessingResponse)
+def get_files_processing(
+    body: ProcessingRequest,
+    drive: str = Depends(require_drive),
+) -> ProcessingResponse:
+    """Report the ingest stages of the requested files of the caller's drive.
+
+    SPEC-CORE-031 step 3 / SPEC-ADDON-057 I5. The core calls this on the
+    addon's proxy target directly, which is why the path is absent from
+    ``manifest.json``'s browser-facing route table.
+
+    An id with no row yet still answers with ``search`` pending: an
+    upload reaches the drawer before its first webhook creates the row.
+    A row of another drive is left out entirely, so the answer never
+    reveals a file outside the request drive.
+    """
+    from app.database import get_search_db_read
+    from app.indexer import TEXT_MIMES
+    from app.models import IndexedFile, JobRecord
+    from app.workers.whisper import LOFT_MIME, TRANSCRIBABLE_TYPES
+
+    requested = list(dict.fromkeys(body.file_ids))
+
+    with get_search_db_read() as db:
+        rows = {
+            row.file_id: row
+            for row in db.query(IndexedFile)
+            .filter(IndexedFile.file_id.in_(requested))
+            .all()
+        }
+
+        jobs = (
+            db.query(JobRecord)
+            .filter(
+                JobRecord.file_id.in_(requested),
+                JobRecord.job_kind == "transcription",
+            )
+            .order_by(JobRecord.id)
+            .all()
+        )
+        # Ascending id: the last row per file is its newest attempt.
+        latest_jobs = {job.file_id: job for job in jobs}
+
+        files: dict[str, ProcessingFile] = {}
+        for file_id in requested:
+            row = rows.get(file_id)
+            if row is not None and row.drive != drive:
+                continue
+
+            stages = [_search_stage(row)]
+            if row is not None and row.mime_type in TEXT_MIMES:
+                stages.append(_text_stage(row))
+            if row is not None and (
+                row.mime_type in TRANSCRIBABLE_TYPES
+                or row.mime_type == LOFT_MIME
+            ):
+                stages.append(_transcript_stage(row, latest_jobs.get(file_id)))
+
+            files[file_id] = ProcessingFile(stages=stages)
+
+    return ProcessingResponse(files=files)
 
 
 @router.get("/files/{file_id}/transcript", response_model=TranscriptResponse)

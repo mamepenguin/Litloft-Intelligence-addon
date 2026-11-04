@@ -36,6 +36,11 @@
       "empty": "Nothing to suggest yet.",
       "loading": "Loading…",
       "retry": "Try again"
+    },
+    "processing": {
+      "search": "Search index",
+      "text": "Text",
+      "transcript": "Transcript"
     }
   },
   "semanticSearch": {
