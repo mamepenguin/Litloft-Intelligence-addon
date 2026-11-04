@@ -10,6 +10,12 @@ from fastapi.concurrency import run_in_threadpool
 from app.document_sections import EPUB_MIME
 from app.drive_context import require_drive
 from app.file_hydrate import hydrate_files
+from app.file_matching import (
+    FilterUnavailable,
+    InvalidFilter,
+    fetch_matching_file_ids,
+    parse_search_filter,
+)
 from app import scene_segments
 from app.schemas import (
     CompareResponseModel,
@@ -22,6 +28,7 @@ from app.schemas import (
 )
 from app.workers.clip import embed_text_clip
 from app.search import (
+    empty_search_response,
     execute_search_compare,
     search as execute_search,
     search_images as execute_search_images,
@@ -103,6 +110,20 @@ async def _hydrate_batches(file_ids: list[str]) -> dict[str, Any]:
     return hydrated
 
 
+async def _filter_scope(drive: str, raw: str | None) -> list[str] | None:
+    """The file ids a ``filter`` names, or ``None`` when the request has none."""
+    if raw is None:
+        return None
+    try:
+        search_filter = parse_search_filter(raw)
+    except InvalidFilter as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        return await fetch_matching_file_ids(drive, search_filter)
+    except FilterUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Filter unavailable") from exc
+
+
 def _segment_match(
     m: Any, mime_type: str | None, section_titles: dict[int, str],
 ) -> SearchResultSegmentMatch:
@@ -144,6 +165,13 @@ async def search_endpoint(
             "Spec 2026-05-02-thumbnail-clip-default-shallow-search.md."
         ),
     ),
+    filter: str | None = Query(
+        default=None,
+        description=(
+            "JSON object of tag / kind / favourite / liked conditions, "
+            "resolved to a file-id scope through the core's Internal API."
+        ),
+    ),
     drive: str = Depends(require_drive),
 ) -> SearchResponseModel:
     """Execute a semantic search query within the request's drive.
@@ -153,11 +181,27 @@ async def search_endpoint(
     are constrained to that drive — cross-drive search is not exposed
     at all to keep drive-as-privacy-boundary intact.
     """
+    if filter is not None:
+        if include_scene_clip:
+            raise HTTPException(
+                status_code=422, detail="filter cannot include scene clips"
+            )
+        if type is not None:
+            raise HTTPException(status_code=422, detail="filter carries the kinds")
+        if mode != "precision":
+            raise HTTPException(
+                status_code=422, detail="filter is not available in recall mode"
+            )
+    scope = await _filter_scope(drive, filter)
+    if scope is not None and not scope:
+        return await _to_response_model(
+            await run_in_threadpool(empty_search_response)
+        )
     try:
         result = await run_in_threadpool(
             execute_search,
             query=q, limit=limit, file_type=type, drive=drive, mode=mode,
-            include_scene_clip=include_scene_clip,
+            include_scene_clip=include_scene_clip, file_id_constraint=scope,
         )
     except Exception as e:
         logger.error("Search failed: %s", e)
@@ -170,9 +214,23 @@ async def search_endpoint(
 async def search_images_endpoint(
     q: str = Query(..., min_length=1, description="Search query"),
     type: str | None = Query(default=None, description="File type filter"),
+    filter: str | None = Query(
+        default=None,
+        description=(
+            "JSON object of tag / kind / favourite / liked conditions, "
+            "resolved to a file-id scope through the core's Internal API."
+        ),
+    ),
     drive: str = Depends(require_drive),
 ) -> SearchResponseModel:
     """Rank the request drive's representative frames by similarity to ``q``."""
+    if filter is not None and type is not None:
+        raise HTTPException(status_code=422, detail="filter carries the kinds")
+    scope = await _filter_scope(drive, filter)
+    if scope is not None and not scope:
+        return await _to_response_model(
+            await run_in_threadpool(empty_search_response)
+        )
     try:
         vector = await asyncio.to_thread(embed_text_clip, q)
     except Exception as e:
@@ -181,6 +239,7 @@ async def search_images_endpoint(
     try:
         result = await run_in_threadpool(
             execute_search_images, vector, file_type=type, drive=drive,
+            file_id_constraint=scope,
         )
     except Exception as e:
         logger.error("Search images failed: %s", e)
