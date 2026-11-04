@@ -108,15 +108,15 @@ async def test_emit_ws_event_lifts_drive_to_top_level(
     [whisper, refine, summaries],
     ids=["whisper", "refine", "summaries"],
 )
-async def test_emit_ws_event_omits_drive_when_data_has_none(
+async def test_emit_ws_event_drops_a_post_without_a_drive(
     module, patched_httpx
 ) -> None:
-    """Global events (no drive in data) must NOT set top-level drive.
+    """A global (drive-less) event is refused rather than broadcast to all.
 
-    Setting drive=None on the AddonEventRequest would change the
-    broadcast filter behaviour from "global broadcast" to "drive-
-    scoped broadcast for None", which is undefined and risks dropping
-    events.
+    The core broadcasts an event whose payload has no top-level drive to
+    every connected viewer, so a worker event with no drive would leak
+    the file id to viewers of other drives. The poster drops it instead
+    (SPEC-ADDON-057 I14).
     """
     install, captured = patched_httpx
     install(_capture_post(captured))
@@ -126,9 +126,7 @@ async def test_emit_ws_event_omits_drive_when_data_has_none(
         {"file_id": "f-1"},
     )
 
-    assert len(captured) == 1
-    body = captured[0]
-    assert "drive" not in body or body["drive"] is None or body["drive"] == ""
+    assert captured == []
 
 
 @pytest.mark.asyncio

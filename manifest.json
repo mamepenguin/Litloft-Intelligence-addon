@@ -4,6 +4,9 @@
   "icon": "brain",
   "type": "external_service",
   "scope": "drive",
+  "processing_status": {
+    "path": "/files/processing"
+  },
   "href": "/drive/{drive}/addons/intelligence",
   "navigation": {
     "label": "Ask",

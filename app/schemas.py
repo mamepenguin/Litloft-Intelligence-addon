@@ -266,6 +266,37 @@ class ClipTimestampsResponse(BaseModel):
     timestamps: list[ClipTimestampItem]
 
 
+# --- Processing status (SPEC-CORE-031 / SPEC-ADDON-057) ---
+
+
+class ProcessingRequest(BaseModel):
+    """Ids the core asks about; the core batches at most 100 per call."""
+
+    file_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class ProcessingStage(BaseModel):
+    """One stage of one file's ingest, in display order.
+
+    ``i18n_key`` is translated by the browser. The core prepends its own
+    ``saved`` stage, and adds an ``unavailable`` stage for a file this
+    addon leaves out or answers badly.
+    """
+
+    key: str
+    i18n_key: str
+    state: Literal["pending", "running", "done", "failed"]
+    required: bool
+
+
+class ProcessingFile(BaseModel):
+    stages: list[ProcessingStage]
+
+
+class ProcessingResponse(BaseModel):
+    files: dict[str, ProcessingFile]
+
+
 # --- Suggested tags ---
 
 

@@ -18,6 +18,7 @@ from sqlalchemy import text as sql_text
 
 from app.config import settings
 from app import llm_routing
+from app.addon_events import post_addon_event
 from app.llm import FAILURE_TOKEN_BUDGET, LLMClient
 from app.llm_routing import Resolved
 from app.output_language import configured_language_requirement
@@ -235,23 +236,7 @@ async def promote_chapters_to_core(
 
 async def emit_chapter_suggestions_event(event: str, data: dict[str, Any]) -> None:
     """Best-effort, drive-scoped completion event through the core WS bridge."""
-    base = os.environ.get(
-        "HOMEVAULT_INTERNAL_API_URL", "http://backend:8000/api/internal"
-    ).rstrip("/")
-    secret = os.environ.get("CORE_INTERNAL_SECRET", "")
-    headers = {"X-Internal-Secret": secret} if secret else {}
-    payload: dict[str, Any] = {"event": event, "data": data}
-    if drive := data.get("drive"):
-        payload["drive"] = drive
-    try:
-        async with httpx.AsyncClient(timeout=3.0, trust_env=False) as client:
-            response = await client.post(
-                f"{base}/addon-events",
-                headers=headers,
-                json=payload,
-            )
-            response.raise_for_status()
-    except httpx.HTTPError:
+    if not await post_addon_event(event, data):
         logger.warning("Could not emit chapter suggestions event %s", event)
 
 

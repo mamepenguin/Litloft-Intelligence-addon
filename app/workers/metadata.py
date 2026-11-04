@@ -31,6 +31,7 @@ from app.extractors.office import OfficeExtractor
 from app.extractors.pdf import PdfExtractor
 from app.extractors.text import TextExtractor
 from app.models import Embedding, IndexedFile
+from app.processing_events import emit_processing_updated
 from app.workers.embedder import embed_passages
 
 logger = logging.getLogger(__name__)
@@ -281,6 +282,7 @@ def index_metadata_batch(file_ids: list[str]) -> int:
         return 0
 
     # --- Phase 3: Write results to DB (short transaction) ---
+    newly_indexed: dict[str, list[str]] = {}
     with get_search_db() as session:
         for file_id_val, vector, meta_text in zip(
             valid_file_ids, vectors, metadata_texts
@@ -304,8 +306,11 @@ def index_metadata_batch(file_ids: list[str]) -> int:
                 file = session.query(IndexedFile).filter_by(
                     file_id=file_id_val
                 ).first()
-                if file is not None:
+                if file is not None and not file.metadata_indexed:
                     file.metadata_indexed = True
+                    newly_indexed.setdefault(file.drive, []).append(
+                        file_id_val
+                    )
                 indexed_count += 1
 
             except Exception as e:
@@ -313,6 +318,9 @@ def index_metadata_batch(file_ids: list[str]) -> int:
                     "Failed to store metadata embedding for %s: %s",
                     file_id_val, e,
                 )
+
+    for drive, changed_ids in newly_indexed.items():
+        emit_processing_updated(drive, changed_ids)
 
     return indexed_count
 
@@ -348,6 +356,7 @@ def index_text_content(file_id: str) -> bool:
         # PyMuPDF4LLM extraction (markdown="") clears any stale
         # row from a prior re-index. markdown=None (fitz fallback /
         # non-PDF) is a no-op inside the helper.
+        changed_drive: str | None = None
         with get_search_db() as session:
             record = session.query(IndexedFile).filter_by(
                 file_id=file_id, active=True
@@ -356,7 +365,11 @@ def index_text_content(file_id: str) -> bool:
                 return False
             _upsert_pdf_markdown(session, file_id, result)
             replace_document_sections(session, file_id, result.section_titles)
-            record.text_indexed = True
+            if not record.text_indexed:
+                record.text_indexed = True
+                changed_drive = record.drive
+        if changed_drive:
+            emit_processing_updated(changed_drive, [file_id])
         return True
 
     # --- Phase 2: Compute embeddings (no DB lock, may be slow) ---
@@ -369,6 +382,7 @@ def index_text_content(file_id: str) -> bool:
         return False
 
     # --- Phase 3: Write results to DB (short transaction) ---
+    changed_drive = None
     with get_search_db() as session:
         file_record = session.query(IndexedFile).filter_by(
             file_id=file_id, active=True
@@ -413,8 +427,13 @@ def index_text_content(file_id: str) -> bool:
 
         _upsert_pdf_markdown(session, file_id, result)
 
-        file_record.text_indexed = True
-        return True
+        if not file_record.text_indexed:
+            file_record.text_indexed = True
+            changed_drive = file_record.drive
+
+    if changed_drive:
+        emit_processing_updated(changed_drive, [file_id])
+    return True
 
 
 def _upsert_pdf_markdown(

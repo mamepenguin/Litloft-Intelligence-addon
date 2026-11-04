@@ -15,7 +15,6 @@ Spec: ``2026-05-07-cloud-transcription-providers.md``.
 
 import asyncio
 import logging
-import os
 import re
 import subprocess
 import threading
@@ -26,6 +25,7 @@ from datetime import UTC, datetime
 
 import numpy as np
 
+from app.addon_events import post_addon_event
 from app.vec_partition import insert_vector_sql
 from app.config import settings, validate_file_path
 from app.digit_separator import is_digit_separator
@@ -38,6 +38,7 @@ from app.models import (
     TranscriptChunk,
     TranscriptWord,
 )
+from app.processing_events import emit_processing_updated
 from app.sidecar_match import match_siblings
 from app.workers.embedder import embed_passages
 from app.workers.transcription import get_provider
@@ -60,36 +61,20 @@ logger = logging.getLogger(__name__)
 async def _emit_ws_event(event: str, data: dict) -> None:
     """Best-effort WebSocket event emission via the host's internal API.
 
-    Mirrors :func:`app.workers.refine._emit_ws_event` /
-    :func:`app.workers.summaries._emit_ws_event`. The host forwards
-    the posted JSON to its WebSocket broadcaster; delivery failures
-    are swallowed so a flaky core never fails a transcription job.
-    Tests monkeypatch this function.
+    The host forwards the posted JSON to its WebSocket broadcaster;
+    delivery failures are swallowed so a flaky core never fails a
+    transcription job. Tests monkeypatch this function.
 
-    Drive scoping: when ``data`` carries a ``drive`` key we lift it to
-    the top-level ``AddonEventRequest.drive`` so the host's
+    Drive scoping happens in :func:`app.addon_events.post_addon_event`,
+    which lifts ``data["drive"]`` to the top-level
+    ``AddonEventRequest.drive`` so the host's
     ``ConnectionManager.broadcast`` filter can suppress delivery to
     viewers without access to the protected drive. Without this, the
     event would broadcast to every connected viewer (hako pattern
     ``HpeftQ_io8n7sJ5xxlasC``).
     """
     logger.info("transcription-event %s %s", event, data)
-
-    base = os.environ.get(
-        "HOMEVAULT_INTERNAL_API_URL", "http://backend:8000/api/internal"
-    )
-    url = f"{base}/addon-events"
-    payload: dict = {"event": event, "data": data}
-    drive = data.get("drive") if isinstance(data, dict) else None
-    if drive:
-        payload["drive"] = drive
-    try:
-        import httpx
-
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            await client.post(url, json=payload)
-    except Exception:
-        return
+    await post_addon_event(event, data)
 
 # Model state (lazy-loaded, with idle unload support)
 _lock = threading.Lock()
@@ -147,6 +132,19 @@ def _cleanup_loft_stt_temp(file_path: str | None) -> None:
         logger.warning("Failed to remove loft STT temp file: %s", file_path)
 
 
+def _mark_whisper_indexed(session: object, file_id: str) -> str | None:
+    """Set ``whisper_indexed``; return the drive when it moved false to true.
+
+    The caller posts ``processing.updated`` once its write commits, so
+    ``None`` means there is nothing to announce.
+    """
+    file = session.query(IndexedFile).filter_by(file_id=file_id).first()
+    if file is None or file.whisper_indexed:
+        return None
+    file.whisper_indexed = True
+    return file.drive
+
+
 def _mark_loft_stt_temp_consumed(file_id: str) -> None:
     """Close a one-shot temp-audio attempt after provider failure.
 
@@ -158,10 +156,11 @@ def _mark_loft_stt_temp_consumed(file_id: str) -> None:
     failed JobRecord being the terminal state.
     """
     try:
+        changed_drive: str | None = None
         with get_search_db() as session:
-            file = session.query(IndexedFile).filter_by(file_id=file_id).first()
-            if file is not None:
-                file.whisper_indexed = True
+            changed_drive = _mark_whisper_indexed(session, file_id)
+        if changed_drive:
+            emit_processing_updated(changed_drive, [file_id])
     except Exception:
         logger.exception("Failed to mark loft STT temp consumed for %s", file_id)
 
@@ -845,6 +844,7 @@ async def index_whisper(file_id: str) -> bool:
     def _resolve() -> tuple[str, str, str, bool] | None:
         """None means "no such active file"; else (mime, path, drive, skip)."""
         unsupported = False
+        flagged_drive: str | None = None
         with get_search_db() as session:
             file = session.query(IndexedFile).filter_by(
                 file_id=file_id, active=True
@@ -860,7 +860,7 @@ async def index_whisper(file_id: str) -> bool:
             # operators can answer "why isn't this file transcribed?"
             # without scraping logs (Phase 2F, hako A-gF1mK3kDjRjS_dfuq1B).
             if mime_type not in TRANSCRIBABLE_TYPES and mime_type != LOFT_MIME:
-                file.whisper_indexed = True
+                flagged_drive = _mark_whisper_indexed(session, file_id)
                 session.commit()
                 logger.info(
                     "File %s skipped for transcription: mime=%s not in "
@@ -868,6 +868,8 @@ async def index_whisper(file_id: str) -> bool:
                     file_id, mime_type,
                 )
                 unsupported = True
+        if flagged_drive:
+            emit_processing_updated(flagged_drive, [file_id])
         return mime_type, file_path, drive, unsupported
 
     # This coroutine is awaited straight from ``_whisper_worker``, so the
@@ -915,6 +917,7 @@ async def index_whisper(file_id: str) -> bool:
         )
         await _record_failed_job(
             file_id=file_id,
+            drive=drive,
             provider=configured,
             error=exc,
         )
@@ -961,7 +964,7 @@ async def index_whisper(file_id: str) -> bool:
                     file_id, exc,
                 )
                 await _record_failed_job(
-                    file_id=file_id, provider="whisper_local", error=exc,
+                    file_id=file_id, drive=drive, provider="whisper_local", error=exc,
                 )
                 return False
 
@@ -998,6 +1001,7 @@ async def index_whisper(file_id: str) -> bool:
 async def _record_failed_job(
     *,
     file_id: str,
+    drive: str,
     provider: str | None,
     error: Exception,
 ) -> None:
@@ -1005,7 +1009,8 @@ async def _record_failed_job(
 
     Called from ``index_whisper`` for early-exit failures (provider
     factory error, missing API key, fallback init failure) where no
-    "running" row exists yet.
+    "running" row exists yet. Ends the file's transcription ``failed``,
+    so it announces ``processing.updated`` once the row commits.
     """
     def _write() -> None:
         with get_search_db() as session:
@@ -1025,6 +1030,9 @@ async def _record_failed_job(
         # JobRecord write is best-effort observability; never fail the
         # caller because of an audit-log row.
         logger.exception("Failed to write JobRecord for %s", file_id)
+        return
+
+    await asyncio.to_thread(emit_processing_updated, drive, [file_id])
 
 
 def _record_skipped_job(file_id: str, reason: str) -> None:
@@ -1102,6 +1110,9 @@ async def _do_transcribe_and_index(
         await asyncio.to_thread(
             _finish_job_failed, job_id, exc,
         )
+        await asyncio.to_thread(
+            emit_processing_updated, drive, [file_id],
+        )
         await _emit_ws_event(
             "intelligence.transcription.failed",
             {
@@ -1118,6 +1129,9 @@ async def _do_transcribe_and_index(
         # so the operator sees something but the job can be retried.
         logger.exception("Unclassified provider error for %s", file_id)
         await asyncio.to_thread(_finish_job_failed, job_id, exc)
+        await asyncio.to_thread(
+            emit_processing_updated, drive, [file_id],
+        )
         await _emit_ws_event(
             "intelligence.transcription.failed",
             {
@@ -1392,10 +1406,11 @@ def _persist_transcript(
     re-attempted forever.
     """
     if not raw_segments:
+        changed_drive: str | None = None
         with get_search_db() as session:
-            file = session.query(IndexedFile).filter_by(file_id=file_id).first()
-            if file is not None:
-                file.whisper_indexed = True
+            changed_drive = _mark_whisper_indexed(session, file_id)
+        if changed_drive:
+            emit_processing_updated(changed_drive, [file_id])
         _finish_job_succeeded(job_id)
         return
 
@@ -1408,10 +1423,11 @@ def _persist_transcript(
     )
 
     if not chunks:
+        changed_drive = None
         with get_search_db() as session:
-            file = session.query(IndexedFile).filter_by(file_id=file_id).first()
-            if file is not None:
-                file.whisper_indexed = True
+            changed_drive = _mark_whisper_indexed(session, file_id)
+        if changed_drive:
+            emit_processing_updated(changed_drive, [file_id])
         _finish_job_succeeded(job_id)
         return
 
@@ -1497,9 +1513,7 @@ def _persist_transcript(
         if fts_chunks:
             upsert_fts_transcripts(session, file_id, fts_chunks)
 
-        file = session.query(IndexedFile).filter_by(file_id=file_id).first()
-        if file is not None:
-            file.whisper_indexed = True
+        changed_drive = _mark_whisper_indexed(session, file_id)
 
         # Mark the JobRecord succeeded inside the same session so the
         # state flip and the transcript write commit atomically.
@@ -1507,6 +1521,9 @@ def _persist_transcript(
         if record is not None:
             record.status = "succeeded"
             record.completed_at = datetime.now(UTC)
+
+    if changed_drive:
+        emit_processing_updated(changed_drive, [file_id])
 
     _index_tfidf_keywords(file_id, chunk_texts)
 
@@ -1555,6 +1572,22 @@ def fail_orphaned_running_jobs() -> None:
             "Marked %d orphaned 'running' transcription job(s) as failed",
             len(running),
         )
+
+        failed_ids = [record.file_id for record in running]
+        drives = {
+            row.file_id: row.drive
+            for row in session.query(IndexedFile.file_id, IndexedFile.drive)
+            .filter(IndexedFile.file_id.in_(failed_ids))
+            .all()
+        }
+
+    by_drive: dict[str, list[str]] = {}
+    for failed_id in failed_ids:
+        file_drive = drives.get(failed_id)
+        if file_drive:
+            by_drive.setdefault(file_drive, []).append(failed_id)
+    for file_drive, changed_ids in by_drive.items():
+        emit_processing_updated(file_drive, changed_ids)
 
 
 def _remove_whisper_data(session: object, file_id: str) -> None:
@@ -1734,6 +1767,14 @@ def _dedup_rolling_cues(cues: list[dict]) -> list[dict]:
     return deduped
 
 
+def _flag_loft_indexed(file_id: str) -> None:
+    """Mark a ``.loft`` transcript leg done and announce the flag move."""
+    with get_search_db() as session:
+        changed_drive = _mark_whisper_indexed(session, file_id)
+    if changed_drive:
+        emit_processing_updated(changed_drive, [file_id])
+
+
 def _index_loft_vtt(file_id: str, file_path: str) -> bool:
     """Index a .loft file using adjacent .vtt subtitles instead of Whisper.
 
@@ -1754,10 +1795,7 @@ def _index_loft_vtt(file_id: str, file_path: str) -> bool:
         vtt_candidates = []
     if not vtt_candidates:
         logger.info("No adjacent VTT for loft ref %s, marking as indexed", file_id)
-        with get_search_db() as session:
-            file = session.query(IndexedFile).filter_by(file_id=file_id).first()
-            if file is not None:
-                file.whisper_indexed = True
+        _flag_loft_indexed(file_id)
         return True
 
     exact_name = unicodedata.normalize("NFC", f"{stem}.vtt")
@@ -1769,10 +1807,7 @@ def _index_loft_vtt(file_id: str, file_path: str) -> bool:
     raw_segments = _dedup_rolling_cues(_parse_vtt_cues(str(best_vtt)))
     if not raw_segments:
         logger.info("VTT empty for loft ref %s, marking as indexed", file_id)
-        with get_search_db() as session:
-            file = session.query(IndexedFile).filter_by(file_id=file_id).first()
-            if file is not None:
-                file.whisper_indexed = True
+        _flag_loft_indexed(file_id)
         return True
 
     whisper_config = settings.transcription.whisper_local
@@ -1783,10 +1818,7 @@ def _index_loft_vtt(file_id: str, file_path: str) -> bool:
     )
 
     if not chunks:
-        with get_search_db() as session:
-            file = session.query(IndexedFile).filter_by(file_id=file_id).first()
-            if file is not None:
-                file.whisper_indexed = True
+        _flag_loft_indexed(file_id)
         return True
 
     chunk_texts = [c["text"] for c in chunks if c["text"].strip()]
@@ -1850,9 +1882,10 @@ def _index_loft_vtt(file_id: str, file_path: str) -> bool:
         if fts_chunks:
             upsert_fts_transcripts(session, file_id, fts_chunks)
 
-        file = session.query(IndexedFile).filter_by(file_id=file_id).first()
-        if file is not None:
-            file.whisper_indexed = True
+        changed_drive = _mark_whisper_indexed(session, file_id)
+
+    if changed_drive:
+        emit_processing_updated(changed_drive, [file_id])
 
     _index_tfidf_keywords(file_id, chunk_texts)
     logger.info("Indexed loft ref VTT transcript for %s (%d chunks)", file_id, len(chunks))
