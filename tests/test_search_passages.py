@@ -330,7 +330,7 @@ def test_spec_addon_048_i3_a_vector_and_a_keyword_match_of_one_transcript_stretc
         start=10.0, end=20.0,
     )
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     (passage,) = _passages(body, "vid")
     assert set(passage) == PASSAGE_FIELDS
@@ -350,7 +350,7 @@ def test_spec_addon_048_i3_a_vector_and_a_keyword_match_of_one_text_chunk_are_on
         page=2, chunk_index=4,
     )
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     (passage,) = _passages(body, "pdf")
     assert passage["kind"] == "page"
@@ -367,7 +367,7 @@ def test_spec_addon_048_i3_two_places_of_one_file_are_two_passages(
     seed.transcript("vid", 0, "warehouse first", times=(10.0, 20.0))
     seed.transcript("vid", 5, "warehouse second", times=(90.0, 100.0))
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     passages = _passages(body, "vid")
     assert [passage["kind"] for passage in passages] == ["utterance", "utterance"]
@@ -432,7 +432,7 @@ def test_spec_addon_048_i3_each_match_type_in_the_table_makes_its_kind(
 ):
     seed_one(Seed(search_index), search_index)
 
-    body = _ok(api("/search", {"q": "warehouse", **extra}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse", **extra}))
 
     assert [passage["kind"] for passage in _passages(body, "f")] == [kind]
 
@@ -481,7 +481,7 @@ def test_spec_addon_048_i3_a_match_type_outside_the_table_makes_no_passage(
 ):
     seed_one(Seed(search_index), search_index)
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     assert _hit(body, "f")["passages"] == []
 
@@ -493,7 +493,7 @@ def test_spec_addon_048_i3_an_untimed_transcript_match_makes_no_passage(
     _file(search_index, "vid", file_type="video", mime="video/mp4")
     seed.transcript("vid", 0, "warehouse", times=None)
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     assert _hit(body, "vid")["passages"] == []
 
@@ -523,7 +523,7 @@ def test_spec_addon_048_i3_a_text_match_without_a_chunk_index_makes_no_passage(
 ):
     seed_one(Seed(search_index), search_index)
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     assert _hit(body, "f")["passages"] == []
 
@@ -549,7 +549,7 @@ def test_spec_addon_048_i15_an_epub_chunk_is_a_section_passage(
     if title is not None:
         seed.section("book", 3, title)
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     (passage,) = _passages(body, "book")
     assert passage["kind"] == "section"
@@ -566,7 +566,7 @@ def test_spec_addon_048_i15_a_paged_chunk_outside_an_epub_is_a_page_passage(
     _file(search_index, "pdf", mime="application/pdf")
     seed.text_chunk("pdf", 4, "warehouse page", page="7")
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     (passage,) = _passages(body, "pdf")
     assert passage["kind"] == "page"
@@ -590,7 +590,7 @@ def test_spec_addon_048_i15_picture_text_and_text_carry_the_text_chunk_index(
     _file(search_index, "f", file_type=file_type, mime=mime)
     seed.text_chunk("f", 9, "warehouse")
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     (passage,) = _passages(body, "f")
     assert passage["kind"] == kind
@@ -625,7 +625,7 @@ def test_spec_addon_048_i15_an_utterance_carries_only_a_keyword_transcript_chunk
 ):
     seed_one(Seed(search_index), search_index)
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     (passage,) = _passages(body, "vid")
     assert passage["kind"] == "utterance"
@@ -648,7 +648,7 @@ def test_spec_addon_048_i4_a_passage_score_is_alpha_times_vector_plus_keyword(
         start=10.0, end=20.0,
     )
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     alpha = search_mod.settings.search.alpha
     (vector,) = _matches(body, "vid", "whisper")
@@ -667,7 +667,7 @@ def test_spec_addon_048_i4_a_vector_score_is_weighted_as_the_file_score_weights_
         page=2, chunk_index=0,
     )
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     config = search_mod.settings.search
     (match,) = _matches(body, "pdf", "text_content")
@@ -689,7 +689,7 @@ def test_spec_addon_048_i4_a_passage_takes_the_best_of_its_own_matches(
         start=10.0, end=20.0,
     )
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     alpha = search_mod.settings.search.alpha
     best = max(match["score"] for match in _matches(body, "vid", "whisper"))
@@ -710,7 +710,7 @@ def test_spec_addon_048_i4_passages_are_sorted_by_score_descending(
         start=10.0, end=20.0,
     )
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     passages = _passages(body, "vid")
     assert [passage["start"] for passage in passages] == [100.0, 10.0]
@@ -732,7 +732,7 @@ def test_spec_addon_048_i4_equal_scores_are_ordered_by_start(
         start=10.0, end=20.0,
     )
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     assert [passage["start"] for passage in _passages(body, "vid")] == [10.0, 30.0]
 
@@ -750,7 +750,7 @@ def test_spec_addon_048_i4_equal_scores_are_ordered_by_chunk_index(
         chunk_index=1,
     )
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     assert [
         passage["chunk_index"] for passage in _passages(body, "note")
@@ -785,7 +785,7 @@ def test_spec_addon_048_i5_highlight_terms_are_the_query_terms_with_their_kana_v
     _file(search_index, "f")
     seed.text_chunk("f", 0, query)
 
-    body = _ok(api("/search", {"q": query}))
+    body = _ok(api("/search", {"passages": "true", "q": query}))
 
     (passage,) = _passages(body, "f")
     assert passage["keyword"] is True
@@ -801,7 +801,7 @@ def test_spec_addon_048_i5_a_vector_only_passage_is_not_keyword_and_keeps_the_st
         chunk_index=0, preview="the stored content preview",
     )
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     (passage,) = _passages(body, "note")
     assert passage["keyword"] is False
@@ -820,7 +820,7 @@ def test_spec_addon_048_i5_a_keyword_match_elsewhere_in_the_file_does_not_mark_a
         chunk_index=5, preview="unrelated body",
     )
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     by_kind = {passage["kind"]: passage for passage in _passages(body, "vid")}
     assert by_kind["utterance"]["keyword"] is True
@@ -876,7 +876,7 @@ def test_spec_addon_048_i6_a_keyword_passage_excerpt_is_the_window_around_its_ma
     _file(search_index, "note")
     seed.text_chunk("note", 0, stored)
 
-    body = _ok(api("/search", {"q": query}))
+    body = _ok(api("/search", {"passages": "true", "q": query}))
 
     (passage,) = _passages(body, "note")
     assert passage["keyword"] is True
@@ -895,7 +895,7 @@ def test_spec_addon_048_i7_a_video_utterance_carries_its_frame_at_the_floored_st
     _file(search_index, "vid", file_type="video", mime="video/mp4")
     seed.transcript("vid", 0, "warehouse", times=(12.9, 20.0))
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     (passage,) = _passages(body, "vid")
     assert passage["kind"] == "utterance"
@@ -911,7 +911,7 @@ def test_spec_addon_048_i7_a_scene_passage_carries_its_frame_and_the_stored_end(
         start=30.7, end=60.7,
     )
 
-    body = _ok(api("/search", {"q": "warehouse", "include_scene_clip": "true"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse", "include_scene_clip": "true"}))
 
     (passage,) = _passages(body, "vid")
     assert passage["kind"] == "scene"
@@ -968,7 +968,7 @@ def test_spec_addon_048_i7_only_utterances_and_scenes_of_a_video_carry_a_frame_u
 ):
     seed_one(Seed(search_index), search_index)
 
-    body = _ok(api("/search", {"q": "warehouse"}))
+    body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     (passage,) = _passages(body, "f")
     assert passage["frame_url"] is None
@@ -993,6 +993,7 @@ def test_spec_addon_048_i7_a_scene_passage_exists_only_with_include_scene_clip(
     )
 
     body = _ok(api("/search", {
+        "passages": "true",
         "q": "warehouse", "include_scene_clip": toggle,
     }))
 
