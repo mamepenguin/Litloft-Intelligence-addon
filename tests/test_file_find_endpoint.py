@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from app.extractors.base import ContentExtractor
 from tests.search_endpoint_db import (  # noqa: F401
     DRIVE,
     EPUB,
@@ -22,6 +23,7 @@ from tests.search_endpoint_db import (  # noqa: F401
 MANIFEST = Path(__file__).resolve().parent.parent / "manifest.json"
 PDF = "application/pdf"
 VIDEO = "video/mp4"
+DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 ROW_CAP = 2000
 
 
@@ -89,12 +91,19 @@ def _chunked(unit: str, size: int, replay: int) -> list[str]:
 
 
 class TestTextUnits:
-    @pytest.mark.parametrize("replay", [20, 80, 200])
+    @pytest.mark.parametrize(
+        "replay,mime",
+        [
+            pytest.param(20, "text/markdown", id="text-20"),
+            pytest.param(80, "text/markdown", id="text-80"),
+            pytest.param(200, DOCX, id="office-200"),
+        ],
+    )
     def test_spec_addon_061_an_occurrence_in_a_replayed_overlap_counts_once(
-        self, api, seed, visual, replay,
+        self, api, seed, visual, replay, mime,
     ):
         visual(enabled=True)
-        _doc(seed)
+        _doc(seed, mime=mime)
         unit = _distinct(500, "a") + " needle " + _distinct(500, "b")
         at = unit.index("needle")
         chunks = _chunked(unit, at + replay - 2, replay)
@@ -164,6 +173,64 @@ class TestTextUnits:
 
         assert body["total"] == 1
 
+    @pytest.mark.parametrize(
+        "mime,unit,term,count",
+        [
+            pytest.param(
+                "text/markdown", "- [ ] check the lighthouse lamp\n" * 120,
+                "lamp", 120, id="repeated-checklist-line",
+            ),
+            pytest.param(
+                "text/plain", "we will sing the chorus line tonight\n" * 40,
+                "chorus", 40, id="repeated-chorus-line",
+            ),
+            pytest.param(
+                "text/csv", "id,name,note\n" + "1,lighthouse,lamp\n" * 100,
+                "lamp", 100, id="csv-of-identical-rows",
+            ),
+        ],
+    )
+    def test_spec_addon_061_every_repeated_line_across_a_chunk_boundary_is_counted(
+        self, api, seed, visual, mime, unit, term, count,
+    ):
+        visual(enabled=True)
+        _doc(seed, mime=mime)
+        chunks = ContentExtractor.chunk_text(unit, overlap=80)
+        assert len(chunks) > 1
+        for i, chunk in enumerate(chunks):
+            seed.text_chunk("doc", i, chunk)
+
+        body = _find(api, term)
+
+        assert body["total"] == count
+        assert len(body["rows"]) == count
+
+    @pytest.mark.parametrize(
+        "mime,flags",
+        [
+            pytest.param(DOCX, {"text_indexed": True}, id="office"),
+            pytest.param(
+                "image/png", {"text_indexed": False, "ocr_indexed": True},
+                id="picture-ocr",
+            ),
+        ],
+    )
+    def test_spec_addon_061_office_and_picture_ocr_merge_the_chunk_text_default_replay(
+        self, api, seed, visual, mime, flags,
+    ):
+        visual(enabled=True)
+        seed.file("doc", mime=mime)
+        _flag(seed, "doc", **flags)
+        unit = "- [ ] check the lighthouse lamp\n" * 120
+        chunks = ContentExtractor.chunk_text(unit)
+        assert len(chunks) > 1
+        for i, chunk in enumerate(chunks):
+            seed.text_chunk("doc", i, chunk)
+
+        body = _find(api, "lamp")
+
+        assert body["total"] == 120
+
     def test_spec_addon_061_chunks_are_merged_in_chunk_index_order_not_insertion_order(
         self, api, seed, visual,
     ):
@@ -178,6 +245,22 @@ class TestTextUnits:
 
         assert body["total"] == 2
         assert [r["snippet"].endswith("needle") for r in body["rows"]] == [False, True]
+
+    def test_spec_addon_061_twelve_or_more_chunks_merge_in_numeric_chunk_index_order(
+        self, api, seed, visual,
+    ):
+        visual(enabled=True)
+        _doc(seed)
+        unit = _distinct(100, "a") + " needle " + _distinct(700, "b")
+        chunks = _chunked(unit, 120, 80)
+        assert len(chunks) >= 12
+        for i, chunk in enumerate(chunks):
+            seed.text_chunk("doc", i, chunk)
+
+        body = _find(api, "needle")
+
+        assert body["total"] == 1
+        assert [r["ordinal"] for r in body["rows"]] == [1]
 
     def test_spec_addon_061_an_occurrence_across_a_newline_join_is_not_found(
         self, api, seed, visual,
@@ -280,6 +363,24 @@ class TestTextKinds:
         assert [(r["section"], r["section_title"], r["ordinal"]) for r in body["rows"]] == [
             (1, None, 1), (5, "Five", 1), (5, "Five", 2),
         ]
+
+    def test_spec_addon_061_a_section_title_comes_from_the_files_own_sections(
+        self, api, seed, visual,
+    ):
+        visual(enabled=True)
+        for file_id, drive, name, title in (
+            ("first", DRIVE, "first.epub", "First Chapter Three"),
+            ("second", OTHER, "second.epub", "Second Chapter Three"),
+        ):
+            _doc(seed, file_id, mime=EPUB, name=name, drive=drive)
+            seed.section(file_id, 3, title)
+            seed.text_chunk(file_id, 0, "needle", page="3")
+
+        first = _find(api, "needle", "first", drive=DRIVE)
+        second = _find(api, "needle", "second", drive=OTHER)
+
+        assert [r["section_title"] for r in first["rows"]] == ["First Chapter Three"]
+        assert [r["section_title"] for r in second["rows"]] == ["Second Chapter Three"]
 
 
 class TestTranscript:

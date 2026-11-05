@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy import text as sql_text
 
+from app.config import settings
 from app.database import get_search_db_read
 from app.exact_search import (
     SNIPPET_CONTEXT_CHARS,
@@ -24,9 +25,14 @@ from app.search import text_content_kind
 
 ROW_CAP = 2000
 _OVERLAP_MIN = 20
-#: The larger of the two replays the extractors use: the document pipeline's
-#: configured overlap (typically 80) and ``chunk_text``'s default of 200.
-_OVERLAP_MAX = 200
+#: ``ContentExtractor.chunk_text``'s default, which Office extraction and
+#: picture OCR use because they pass no overlap.
+_CHUNK_TEXT_OVERLAP = 200
+_OFFICE_MIMES = frozenset({
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+})
 
 _MEDIA = 0
 _DOCUMENT = 1
@@ -45,21 +51,27 @@ def _stage_done(indexed) -> bool:
     return bool(getattr(indexed, stage))
 
 
-def _overlap(text: str, chunk: str) -> int:
-    limit = min(_OVERLAP_MAX, len(text), len(chunk))
+def _replay_limit(mime_type: str, file_type: str) -> int:
+    if file_type == "image" or mime_type in _OFFICE_MIMES:
+        return _CHUNK_TEXT_OVERLAP
+    return settings.indexing.text_chunking.overlap
+
+
+def _overlap(text: str, chunk: str, limit: int) -> int:
+    limit = min(limit, len(text), len(chunk))
     for size in range(limit, _OVERLAP_MIN - 1, -1):
         if text.endswith(chunk[:size]):
             return size
     return 0
 
 
-def _merge_chunks(chunks: list[str]) -> str:
+def _merge_chunks(chunks: list[str], limit: int) -> str:
     text = ""
     for chunk in chunks:
         if not text:
             text = chunk
             continue
-        overlap = _overlap(text, chunk)
+        overlap = _overlap(text, chunk, limit)
         if overlap:
             text += chunk[overlap:]
         else:
@@ -131,9 +143,10 @@ def _text_occurrences(
             ).fetchall()
         }
 
+    limit = _replay_limit(mime_type, file_type)
     out: list[tuple[tuple, dict[str, Any]]] = []
     for page, chunks in units.items():
-        text = _merge_chunks(chunks)
+        text = _merge_chunks(chunks, limit)
         kind = text_content_kind(mime_type, page, file_type)
         location: dict[str, Any] = {}
         if kind == "section":
