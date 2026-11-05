@@ -549,22 +549,81 @@ class TestTotalsAndCap:
 
 class TestIndexed:
     @pytest.mark.parametrize(
-        "flags,indexed",
+        "mime,flags,indexed",
         [
-            pytest.param({}, False, id="no-flag"),
-            pytest.param({"text_indexed": True}, True, id="text"),
-            pytest.param({"whisper_indexed": True}, True, id="whisper"),
-            pytest.param({"ocr_indexed": True}, True, id="ocr"),
+            pytest.param("text/markdown", {}, False, id="no-flag"),
+            pytest.param("text/markdown", {"text_indexed": True}, True, id="text"),
+            pytest.param(VIDEO, {"whisper_indexed": True}, True, id="whisper"),
+            pytest.param("image/png", {"ocr_indexed": True}, True, id="ocr"),
         ],
     )
     def test_spec_addon_061_indexed_follows_the_files_index_flags(
-        self, api, seed, visual, flags, indexed,
+        self, api, seed, visual, mime, flags, indexed,
     ):
         visual(enabled=True)
-        seed.file("doc")
+        seed.file("doc", mime=mime)
         _flag(seed, "doc", **flags)
 
         assert _find(api, "needle")["indexed"] is indexed
+
+    @pytest.mark.parametrize(
+        "mime,flags,indexed",
+        [
+            pytest.param(PDF, {"text_indexed": True}, True, id="pdf-own-stage-done"),
+            pytest.param(
+                PDF,
+                {"text_indexed": False, "whisper_indexed": True, "ocr_indexed": True},
+                False,
+                id="pdf-own-stage-not-done",
+            ),
+            pytest.param("image/png", {"ocr_indexed": True}, True, id="image-own-stage-done"),
+            pytest.param(
+                "image/png",
+                {"ocr_indexed": False, "text_indexed": True},
+                False,
+                id="image-own-stage-not-done",
+            ),
+            pytest.param(VIDEO, {"whisper_indexed": True}, True, id="video-own-stage-done"),
+            pytest.param(
+                VIDEO,
+                {"whisper_indexed": False, "text_indexed": True, "ocr_indexed": True},
+                False,
+                id="video-own-stage-not-done",
+            ),
+            pytest.param("audio/mpeg", {"whisper_indexed": True}, True, id="audio-own-stage-done"),
+            pytest.param(
+                "audio/mpeg",
+                {"whisper_indexed": False, "text_indexed": True, "ocr_indexed": True},
+                False,
+                id="audio-own-stage-not-done",
+            ),
+        ],
+    )
+    def test_spec_addon_061_indexed_follows_the_stage_of_the_files_kind(
+        self, api, seed, visual, mime, flags, indexed,
+    ):
+        visual(enabled=True)
+        seed.file("doc", mime=mime)
+        _flag(seed, "doc", **flags)
+
+        assert _find(api, "needle")["indexed"] is indexed
+
+    @pytest.mark.parametrize(
+        "enabled,indexed",
+        [
+            pytest.param(True, True, id="open"),
+            pytest.param(False, False, id="closed"),
+        ],
+    )
+    def test_spec_addon_061_a_video_whose_whisper_stage_is_unfinished_is_indexed_by_its_active_visual_run(
+        self, api, seed, visual, enabled, indexed,
+    ):
+        visual(enabled=enabled)
+        seed.file("vid", "vid.mp4", mime=VIDEO)
+        _flag(seed, "vid", whisper_indexed=False, text_indexed=True, ocr_indexed=True)
+        seed.run("vid")
+
+        assert _find(api, "needle", "vid")["indexed"] is indexed
 
     @pytest.mark.parametrize(
         "enabled,active,indexed",

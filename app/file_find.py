@@ -32,6 +32,18 @@ _MEDIA = 0
 _DOCUMENT = 1
 _TEXT = 2
 
+_STAGE_BY_KIND = {
+    "video": "whisper_indexed",
+    "audio": "whisper_indexed",
+    "image": "ocr_indexed",
+}
+_STAGE_FOR_OTHER_KINDS = "text_indexed"
+
+
+def _stage_done(indexed) -> bool:
+    stage = _STAGE_BY_KIND.get(indexed.file_type, _STAGE_FOR_OTHER_KINDS)
+    return bool(getattr(indexed, stage))
+
 
 def _overlap(text: str, chunk: str) -> int:
     limit = min(_OVERLAP_MAX, len(text), len(chunk))
@@ -237,10 +249,7 @@ def find_in_file(
     occurrences.sort(key=lambda item: item[0])
     total = len(occurrences)
     rows = [row for _key, row in occurrences[:ROW_CAP]]
-    is_indexed = bool(
-        indexed.text_indexed or indexed.whisper_indexed or indexed.ocr_indexed
-        or has_visual_run
-    )
+    is_indexed = _stage_done(indexed) or has_visual_run
     return {
         "query": q,
         "indexed": is_indexed,
