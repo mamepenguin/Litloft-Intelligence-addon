@@ -11,7 +11,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import unicodedata
+from collections.abc import Callable
+from decimal import Decimal
 
 import httpx
 from pydantic import (
@@ -39,6 +42,56 @@ FOLDER_MAX_COUNT = 10
 FOLDER_MAX_LENGTH = 1024
 COLLECTION_MAX_COUNT = 10
 COLLECTION_MAX_LENGTH = 100
+RANGE_MAX_COUNT = 4
+MAX_SIZE_BYTES = 2**53 - 1
+MAX_DURATION_SECONDS = Decimal("10000000")
+
+_WIRE_FORM = re.compile(r"^(gt|gte|lt|lte):(.*)$")
+_SIZE_NUMBER = re.compile(r"^(0|[1-9]\d*)$")
+
+
+def _plain_decimal(text: str, places: int) -> str | None:
+    if not re.fullmatch(r"(0|[1-9]\d*)(\.\d+)?", text):
+        return None
+    if "." in text:
+        fraction = text.split(".", 1)[1]
+        if len(fraction) > places or fraction.endswith("0"):
+            return None
+    return text
+
+
+def _parse_size(item: str) -> str:
+    match = _WIRE_FORM.match(item)
+    if match is None:
+        raise ValueError(f"invalid size comparison: {item!r}")
+    operator, amount = match.groups()
+    if not _SIZE_NUMBER.fullmatch(amount) or int(amount) > MAX_SIZE_BYTES:
+        raise ValueError(f"invalid size comparison: {item!r}")
+    return f"{operator}:{int(amount)}"
+
+
+def _parse_duration(item: str) -> str:
+    match = _WIRE_FORM.match(item)
+    if match is None:
+        raise ValueError(f"invalid duration comparison: {item!r}")
+    operator, amount = match.groups()
+    text = _plain_decimal(amount, 3)
+    if text is None or Decimal(text) > MAX_DURATION_SECONDS:
+        raise ValueError(f"invalid duration comparison: {item!r}")
+    return f"{operator}:{text}"
+
+
+def _normalise_comparisons(
+    values: list[str], parse: Callable[[str], str], label: str
+) -> list[str]:
+    comparisons: list[str] = []
+    for raw in values:
+        comparison = parse(raw)
+        if comparison not in comparisons:
+            comparisons.append(comparison)
+    if len(comparisons) > RANGE_MAX_COUNT:
+        raise ValueError(f"at most {RANGE_MAX_COUNT} {label}")
+    return comparisons
 
 KINDS = frozenset(
     {"video", "image", "audio", "document", "archive", "other", "text", "pdf"}
@@ -151,10 +204,16 @@ class SearchFilter(BaseModel):
     liked: StrictBool | None = None
     folders: list[str] = Field(default_factory=list)
     collections: list[str] = Field(default_factory=list)
+    sizes: list[str] = Field(default_factory=list)
+    durations: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _normalise(self) -> "SearchFilter":
         apply_filter_normalisation(self)
+        self.sizes = _normalise_comparisons(self.sizes, _parse_size, "sizes")
+        self.durations = _normalise_comparisons(
+            self.durations, _parse_duration, "durations"
+        )
         return self
 
 
