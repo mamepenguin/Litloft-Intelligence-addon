@@ -24,6 +24,7 @@ from app.routers import (
     chapter_suggestions,
     document_text,
     exact_search,
+    file_find,
     files,
     llm_choices,
     pickup,
@@ -470,6 +471,7 @@ app.include_router(vision.router)
 app.include_router(video_visual.router)
 app.include_router(scenes.router)
 app.include_router(exact_search.router)
+app.include_router(file_find.router)
 app.include_router(document_text.router)
 app.include_router(admin.router)
 

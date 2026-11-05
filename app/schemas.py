@@ -419,6 +419,27 @@ class ExactSearchResponse(BaseModel):
     segments: list[ExactSearchSegment]
 
 
+class FileFindRow(BaseModel):
+    kind: Literal["utterance", "scene", "page", "section", "picture_text", "text"]
+    start: float | None = None
+    end: float | None = None
+    page: int | None = None
+    section: int | None = None
+    section_title: str | None = None
+    ordinal: int
+    snippet: str
+    match_start: int
+    match_length: int
+
+
+class FileFindResponse(BaseModel):
+    query: str
+    indexed: bool
+    total: int
+    truncated: bool
+    rows: list[FileFindRow]
+
+
 class SceneSearchResult(BaseModel):
     file_id: str
     filename: str

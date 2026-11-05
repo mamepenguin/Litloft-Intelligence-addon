@@ -466,6 +466,19 @@
         "timeout": 25
       },
       {
+        "path": "/files/{file_id}/find",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "addon_feature": "search",
+        "response_filter": null,
+        "timeout": 30
+      },
+      {
         "path": "/files/{file_id}/frame",
         "methods": [
           "GET"

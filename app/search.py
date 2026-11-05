@@ -2070,6 +2070,19 @@ _EXCERPT_LENGTH = 200
 _CLIP_TYPES = ("clip", "clip_thumbnail")
 
 
+def text_content_kind(
+    mime_type: str | None, page: int | None, file_type: str,
+) -> str:
+    """The passage kind of a ``text_content`` chunk at ``page``."""
+    if mime_type == EPUB_MIME and page is not None:
+        return "section"
+    if page is not None:
+        return "page"
+    if file_type == "image":
+        return "picture_text"
+    return "text"
+
+
 def _passage_kind(
     match: MatchInfo, mime_type: str | None, file_type: str,
 ) -> str | None:
@@ -2081,14 +2094,7 @@ def _passage_kind(
     elif match.match_type == "clip" and match.channel == "vector":
         kind = "scene"
     elif match.match_type == "text_content" and match.chunk_index is not None:
-        if mime_type == EPUB_MIME and match.page is not None:
-            kind = "section"
-        elif match.page is not None:
-            kind = "page"
-        elif file_type == "image":
-            kind = "picture_text"
-        else:
-            kind = "text"
+        kind = text_content_kind(mime_type, match.page, file_type)
     else:
         return None
     if kind in ("utterance", "scene") and match.timestamp_start is None:
