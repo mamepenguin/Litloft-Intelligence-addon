@@ -974,7 +974,7 @@ def get_frame(
     and is reused across requests / users / browser sessions. Cache
     misses spawn ffmpeg; hits short-circuit to a static FileResponse.
     """
-    from app.config import resolve_file_path, validate_file_path
+    from app.config import resolve_file_path, resolve_stored_path, validate_file_path
 
     drive = unquote(x_hv_drive) if x_hv_drive else None
     if drive is None:
@@ -1017,7 +1017,9 @@ def get_frame(
             headers=cache_headers,
         )
 
-    abs_path = resolve_file_path(indexed["drive"], indexed["file_path"])
+    abs_path = resolve_stored_path(
+        resolve_file_path(indexed["drive"], indexed["file_path"])
+    )
     if not abs_path or not validate_file_path(abs_path):
         raise HTTPException(status_code=404, detail="Video file not accessible")
 
