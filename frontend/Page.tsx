@@ -473,10 +473,17 @@ function IntelligenceAskPageInner() {
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [savedNote, setSavedNote] = useState<{ fileId: string; path: string } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const scopePayload = useMemo(
     () => askScopeFromString(scopeString),
     [scopeString],
   );
+
+  // Opened from a folder or collection entry point, the question is what the
+  // reader came to type; the chip above says what it will read.
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
 
   // `null` is Auto. Component state only: a costly model kept across
   // visits would stay selected without anyone noticing.
@@ -1108,6 +1115,7 @@ function IntelligenceAskPageInner() {
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-2">
           <textarea
+            ref={inputRef}
             value={input}
             onChange={handleInputChange}
             onKeyDown={handleInputKeyDown}
