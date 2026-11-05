@@ -46,6 +46,13 @@ import { useCurrentDrive } from "@/components/CurrentDriveProvider";
 import { useImeKeyGuard } from "@/lib/ime";
 import { Button } from "@/components/Button";
 import { PageFrame } from "@/components/PageFrame";
+import { SearchFilterChips } from "@/components/search/SearchFilterChips";
+import { ConditionMenu } from "@/components/search/ConditionMenu";
+import {
+  filterFromParsed,
+  formatOperatorToken,
+  parseSearchQuery,
+} from "@/lib/searchQuery";
 import { AskFindHeader } from "./AskFindHeader";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import { addSourceCapture } from "@/lib/sourceCapture";
@@ -53,6 +60,8 @@ import {
   askQuestionStream,
   getIntelligenceStatus,
   isProfileUnavailable,
+  isScopeUnavailable,
+  type AskScopePayload,
   type AskStreamEvent,
   type Citation,
   type DecomposedQueryPayload,
@@ -82,8 +91,53 @@ const MIN_QUERY_LENGTH = 3;
 // content from indexes that may have changed in the meantime.
 const ASK_CACHE_PREFIX = "intelligence-ask-cache:v1";
 
-function askCacheKey(drive: string, question: string): string {
-  return `${ASK_CACHE_PREFIX}:${drive}:${question}`;
+/** The Ask page's scope string: operator tokens only, in a fixed order. */
+function scopeStringFromRaw(raw: string): string {
+  const parsed = parseSearchQuery(raw ?? "");
+  return [
+    ...parsed.folders.map((folder) => formatOperatorToken("path", folder)),
+    ...parsed.collections.map((name) => formatOperatorToken("in", name)),
+    ...parsed.tags.map((tag) => formatOperatorToken("tag", tag)),
+    ...parsed.types.map((kind) => formatOperatorToken("type", kind)),
+  ].join(" ");
+}
+
+function askScopeFromString(raw: string): AskScopePayload | null {
+  const filter = filterFromParsed(parseSearchQuery(raw ?? ""), null);
+  const scope: AskScopePayload = {
+    folders: filter.folders,
+    collections: filter.collections,
+    tags: filter.tags,
+    kinds: filter.kinds,
+  };
+  return scope.folders.length
+    || scope.collections.length
+    || scope.tags.length
+    || scope.kinds.length
+    ? scope
+    : null;
+}
+
+/** JSON of the normalised scope, keys in the order folders/collections/tags/kinds. */
+function scopeCachePart(scope: AskScopePayload | null): string | null {
+  if (!scope) return null;
+  return JSON.stringify({
+    folders: scope.folders,
+    collections: scope.collections,
+    tags: scope.tags,
+    kinds: scope.kinds,
+  });
+}
+
+function askCacheKey(
+  drive: string,
+  question: string,
+  scope: AskScopePayload | null,
+): string {
+  const part = scopeCachePart(scope);
+  return part
+    ? `${ASK_CACHE_PREFIX}:${drive}:${part}:${question}`
+    : `${ASK_CACHE_PREFIX}:${drive}:${question}`;
 }
 
 interface CachedAnswered {
@@ -94,15 +148,19 @@ interface CachedAnswered {
   answer: string;
   citations: Citation[];
   tookMs: number | null;
+  matchedFileCount: number | null;
 }
 
 function readAskCache(
   drive: string,
   question: string,
+  scope: AskScopePayload | null,
 ): CachedAnswered | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.sessionStorage.getItem(askCacheKey(drive, question));
+    const raw = window.sessionStorage.getItem(
+      askCacheKey(drive, question, scope),
+    );
     if (!raw) return null;
     const parsed = JSON.parse(raw) as CachedAnswered;
     // Defensive shape check — sessionStorage is technically
@@ -111,6 +169,9 @@ function readAskCache(
     if (typeof parsed?.answer !== "string") return null;
     if (!Array.isArray(parsed?.citations)) return null;
     if (!Array.isArray(parsed?.sources)) return null;
+    // A scoped answer without its count cannot paint the scope line, so it
+    // is a miss rather than an answer restored under the wrong header.
+    if (scope && typeof parsed?.matchedFileCount !== "number") return null;
     return parsed;
   } catch {
     return null;
@@ -120,12 +181,13 @@ function readAskCache(
 function writeAskCache(
   drive: string,
   question: string,
+  scope: AskScopePayload | null,
   payload: CachedAnswered,
 ): void {
   if (typeof window === "undefined") return;
   try {
     window.sessionStorage.setItem(
-      askCacheKey(drive, question),
+      askCacheKey(drive, question, scope),
       JSON.stringify(payload),
     );
   } catch {
@@ -191,7 +253,8 @@ type AskState =
       kind: "error";
       message: string;
       retryable: boolean;
-    };
+    }
+  | { kind: "scope-empty" };
 
 /**
  * Build a file-detail URL from a citation. Highlight-target priority
@@ -378,23 +441,42 @@ function IntelligenceAskPageInner() {
   const t = useTranslations("askSearch");
   const tc = useTranslations("llmChoice");
   const searchParams = useSearchParams();
-  const seedQuery = searchParams?.get("q") ?? "";
+  // The URL is read on mount and on `popstate`, nowhere else. Capturing the
+  // router's params on the first render keeps a later `useSearchParams`
+  // change from re-reading (a replaceState writes no router navigation, so
+  // the URL and these params cannot disagree in practice).
+  const initialParams = useRef<URLSearchParams | null>(null);
+  if (initialParams.current === null) {
+    initialParams.current = searchParams ?? new URLSearchParams();
+  }
   // The page lives at /drive/{drive}/addons/intelligence so this is
   // always populated when the wrapper renders us. Guard anyway in case
   // of future scope changes.
   const drive = useCurrentDrive();
 
-  const [input, setInput] = useState(seedQuery);
+  const [input, setInput] = useState(
+    () => initialParams.current?.get("q") ?? "",
+  );
+  const [scopeString, setScopeString] = useState(() =>
+    scopeStringFromRaw(initialParams.current?.get("scope") ?? ""),
+  );
+  const [scopeMatchedCount, setScopeMatchedCount] = useState<number | null>(
+    null,
+  );
+  const [pendingRead, setPendingRead] = useState<{
+    q: string;
+    scope: AskScopePayload | null;
+  } | null>(null);
   const [state, setState] = useState<AskState>({ kind: "idle" });
   const [ragAvailable, setRagAvailable] = useState<boolean | null>(null);
   const ime = useImeKeyGuard();
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [savedNote, setSavedNote] = useState<{ fileId: string; path: string } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  // Guard so the seed-query auto-fire runs exactly once even when the
-  // status check re-renders the component. Without this an upstream
-  // router update could accidentally re-trigger the request.
-  const autoFiredRef = useRef(false);
+  const scopePayload = useMemo(
+    () => askScopeFromString(scopeString),
+    [scopeString],
+  );
 
   // `null` is Auto. Component state only: a costly model kept across
   // visits would stay selected without anyone noticing.
@@ -462,7 +544,9 @@ function IntelligenceAskPageInner() {
   }, []);
 
   const runAsk = useCallback(
-    async (rawQuery: string) => {
+    async (rawQuery: string, scopeOverride?: AskScopePayload | null) => {
+      const activeScope =
+        scopeOverride === undefined ? scopePayload : scopeOverride;
       const trimmed = rawQuery.trim();
       if (trimmed.length < MIN_QUERY_LENGTH) {
         setState({
@@ -524,6 +608,7 @@ function IntelligenceAskPageInner() {
         const stream = askQuestionStream(trimmed, drive, {
           signal: controller.signal,
           profile: askProfile,
+          scope: activeScope ?? undefined,
         });
 
         // Running state accumulators. We keep them in locals so
@@ -542,11 +627,17 @@ function IntelligenceAskPageInner() {
         let finalCitations: Citation[] = [];
         let finalTookMs: number | null = null;
         let finalError: string | null = null;
+        let scopeEmpty = false;
+        let liveMatchedCount: number | null = null;
 
         for await (const event of stream as AsyncIterable<AskStreamEvent>) {
           if (controller.signal.aborted) break;
 
           switch (event.kind) {
+            case "scope":
+              liveMatchedCount = event.matched_file_count;
+              setScopeMatchedCount(liveMatchedCount);
+              break;
             case "keywords":
               liveKeywords = event.keywords;
               setState({
@@ -737,6 +828,7 @@ function IntelligenceAskPageInner() {
               break;
             case "done":
               if (event.error) finalError = event.error;
+              if (event.scope_empty) scopeEmpty = true;
               if (typeof event.took_ms === "number")
                 finalTookMs = event.took_ms;
               break;
@@ -761,6 +853,14 @@ function IntelligenceAskPageInner() {
           return;
         }
 
+        if (scopeEmpty) {
+          // Nothing in the scope is worth an LLM call, so the backend sent
+          // no answer. The chips stay and the outcome is not cached: a later
+          // mount re-runs the request, which may find files by then.
+          setState({ kind: "scope-empty" });
+          return;
+        }
+
         if (!liveAnswer) {
           // Retrieval may have been empty, or the LLM returned no
           // output. Show the "no answer" state rather than a blank
@@ -781,6 +881,7 @@ function IntelligenceAskPageInner() {
           answer: liveAnswer,
           citations: finalCitations,
           tookMs: finalTookMs,
+          matchedFileCount: activeScope ? liveMatchedCount : null,
         };
         setState({ kind: "answered", ...answered });
         // Cache the answered snapshot so a citation click → back-nav
@@ -788,7 +889,10 @@ function IntelligenceAskPageInner() {
         // intentionally do not cache `streaming` / `error` states —
         // only fully resolved answers belong in the back-stack.
         if (drive) {
-          writeAskCache(drive, trimmed, answered);
+          writeAskCache(drive, trimmed, activeScope, answered);
+        }
+        if (activeScope && liveMatchedCount !== null) {
+          setScopeMatchedCount(liveMatchedCount);
         }
       } catch (err) {
         if (controller.signal.aborted) return;
@@ -798,6 +902,14 @@ function IntelligenceAskPageInner() {
           setState({
             kind: "error",
             message: tc("profileUnavailable"),
+            retryable: true,
+          });
+          return;
+        }
+        if (isScopeUnavailable(err)) {
+          setState({
+            kind: "error",
+            message: t("scopeUnavailable"),
             retryable: true,
           });
           return;
@@ -817,14 +929,14 @@ function IntelligenceAskPageInner() {
         }
       }
     },
-    [t, tc, drive, askProfile, refetchChoices],
+    [t, tc, drive, askProfile, refetchChoices, scopePayload],
   );
 
-  // --- Auto-fire on mount when the URL carries a seed query.
+  // --- Read the URL on mount and on `popstate`, nowhere else.
   //
-  // Two paths converge here:
+  // Two paths converge on `pendingRead`:
   //
-  //   1. Cache restore — when the URL has ?q= and sessionStorage
+  //   1. Cache restore — when the read has ?q= and sessionStorage
   //      holds a matching answered snapshot, paint it immediately.
   //      This is the back-navigation continuity the user expects
   //      after clicking a citation card and walking back to the Ask
@@ -841,22 +953,70 @@ function IntelligenceAskPageInner() {
   // replaceState and the cache, so a subsequent back navigation can
   // round-trip through path 1. ---
   useEffect(() => {
-    if (autoFiredRef.current) return;
-    const trimmed = seedQuery.trim();
-    if (!trimmed) return;
-    if (!drive) return;
+    const q = (initialParams.current?.get("q") ?? "").trim();
+    if (!q) return;
+    setPendingRead({
+      q,
+      scope: askScopeFromString(initialParams.current?.get("scope") ?? ""),
+    });
+  }, []);
 
-    const cached = readAskCache(drive, trimmed);
+  useEffect(() => {
+    const onPopState = () => {
+      const params = new URLSearchParams(window.location.search);
+      const canonical = scopeStringFromRaw(params.get("scope") ?? "");
+      const q = (params.get("q") ?? "").trim();
+      abortRef.current?.abort();
+      abortRef.current = null;
+      setState({ kind: "idle" });
+      setScopeString(canonical);
+      setScopeMatchedCount(null);
+      setInput(q);
+      setPendingRead(
+        q ? { q, scope: askScopeFromString(canonical) } : null,
+      );
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  useEffect(() => {
+    if (!pendingRead || !drive) return;
+
+    const cached = readAskCache(drive, pendingRead.q, pendingRead.scope);
     if (cached) {
-      autoFiredRef.current = true;
       setState({ kind: "answered", ...cached });
+      setScopeMatchedCount(cached.matchedFileCount ?? null);
+      setPendingRead(null);
       return;
     }
 
     if (ragAvailable !== true) return;
-    autoFiredRef.current = true;
-    void runAsk(seedQuery);
-  }, [seedQuery, ragAvailable, drive, runAsk]);
+    const question = pendingRead.q;
+    const scope = pendingRead.scope;
+    setPendingRead(null);
+    void runAsk(question, scope);
+  }, [pendingRead, ragAvailable, drive, runAsk]);
+
+  const applyScope = useCallback((next: string) => {
+    // A scope change invalidates any answer asked under the old one: it
+    // aborts the stream, clears what the screen showed, keeps the question
+    // in the input, and rewrites the URL without `?q=` so a reload never
+    // fires that question under a scope it was not asked with.
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setState({ kind: "idle" });
+    setSavedNote(null);
+    setScopeMatchedCount(null);
+    setScopeString(next);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      if (next.trim()) url.searchParams.set("scope", next.trim());
+      else url.searchParams.delete("scope");
+      url.searchParams.delete("q");
+      window.history.replaceState(null, "", url.toString());
+    }
+  }, []);
 
   const canSubmit = useMemo(() => {
     return (
@@ -905,10 +1065,33 @@ function IntelligenceAskPageInner() {
   return (
     <PageFrame
       width="reading"
-      header={<AskFindHeader current="ask" query={input} drive={drive} />}
+      header={
+        <AskFindHeader
+          current="ask"
+          query={input}
+          drive={drive}
+          scope={scopeString}
+          matchedCount={scopeMatchedCount}
+        />
+      }
     >
       {/* `px-4`, matching PageHeader's own padding. */}
       <div className="flex flex-col gap-4 px-4 pb-6 pt-2">
+
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <SearchFilterChips
+            query={scopeString}
+            onRemove={(next) => applyScope(scopeStringFromRaw(next))}
+          />
+          <ConditionMenu
+            drive={drive ?? ""}
+            query={scopeString}
+            typeFilter={null}
+            entries={["folder", "collection", "tag", "kind"]}
+            label={t("scopeAdd")}
+            onChoose={(next) => applyScope(scopeStringFromRaw(next))}
+          />
+        </div>
 
         {ragAvailable === false && (
           <div
@@ -1110,6 +1293,15 @@ function IntelligenceAskPageInner() {
           </div>
         )}
 
+        {state.kind === "scope-empty" && (
+          <section
+            data-testid="ask-scope-empty"
+            className="rounded-lg border border-bg-border bg-bg-card p-4 text-sm text-text-muted"
+          >
+            {t("scopeEmpty")}
+          </section>
+        )}
+
         {(state.kind === "streaming" || state.kind === "answered") && (
           <section
             aria-live="polite"
@@ -1225,7 +1417,12 @@ function IntelligenceAskPageInner() {
             open={saveDialogOpen}
             drive={drive}
             defaultFilename={queryToFilename(state.keywords ?? input)}
-            content={buildAskNoteMarkdown(input, state.answer, state.citations)}
+            content={buildAskNoteMarkdown(
+              input,
+              state.answer,
+              state.citations,
+              scopeString,
+            )}
             sourceFileIds={[...new Set(state.citations.map((c) => c.file_id))]}
             onClose={() => setSaveDialogOpen(false)}
             onSaved={(result) => {
