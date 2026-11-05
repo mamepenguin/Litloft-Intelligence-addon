@@ -171,8 +171,18 @@ async def get_related_files(
     # endpoint that can legitimately point at IDs in another drive
     # (the same-drive constraint is enforced on create but not on read).
     # Without this filter the citation allow-list would leak cross-drive.
+    # A scoped request checks only ids it could return, so an out-of-scope id
+    # costs no Internal API call.
+    checked_ids = (
+        candidate_ids
+        if context.file_id_constraint is None
+        else {
+            fid for fid in candidate_ids
+            if fid in context.file_id_constraint
+        }
+    )
     allowed_out = await ensure_access(
-        candidate_ids, credential=context.credential, drive=context.drive
+        checked_ids, credential=context.credential, drive=context.drive
     )
     relations = [
         r for r in raw_relations
