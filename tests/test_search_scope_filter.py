@@ -198,6 +198,41 @@ async def test_spec_addon_063_2_a_rejected_scope_makes_no_core_call(monkeypatch)
     assert core.matching_requests == []
 
 
+def test_spec_addon_063_2_folder_trimming_keeps_letters_at_either_end():
+    assert _parse(folders=["/X/Box X/"]).folders == ["X/Box X"]
+
+
+def test_spec_addon_063_2_collections_fold_with_lower_not_casefold():
+    parsed = _parse(collections=["Straße", "STRASSE"])
+
+    assert parsed.collections == ["Straße", "STRASSE"]
+
+
+@pytest.mark.parametrize(
+    ("conditions", "folders", "collections"),
+    [
+        (
+            {"folders": ["Photos/2024", *[f"f{i}" for i in range(9)], "/Photos/2024/"]},
+            ["Photos/2024", *[f"f{i}" for i in range(9)]],
+            [],
+        ),
+        (
+            {"collections": ["Trip", *[f"c{i}" for i in range(9)], "trip"]},
+            [],
+            ["Trip", *[f"c{i}" for i in range(9)]],
+        ),
+    ],
+    ids=["folders-raw-count-eleven", "collections-raw-count-eleven"],
+)
+def test_spec_addon_063_2_the_cap_counts_after_dedupe(
+    conditions, folders, collections
+):
+    parsed = _parse(**conditions)
+
+    assert parsed.folders == folders
+    assert parsed.collections == collections
+
+
 def test_spec_addon_063_i7_an_unknown_filter_key_answers_422(api, search_index, core):  # noqa: F811
     response = api(
         "/search",
