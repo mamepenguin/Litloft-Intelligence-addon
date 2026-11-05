@@ -42,6 +42,7 @@ from app.workers.clip import (
     IMAGE_TYPES,
     THUMBNAIL_FALLBACK_TYPES,
     VIDEO_TYPES,
+    check_idle_unload as check_clip_image_idle_unload,
 )
 from app.workers.metadata import index_metadata_batch, index_text_content
 from app.workers.ocr import (
@@ -1752,8 +1753,9 @@ class IndexManager:
         """Periodically check if heavy models should be unloaded.
 
         Models used only during indexing (Whisper, BLIP) are unloaded
-        after their configured idle timeout to free RAM. CLIP stays
-        loaded because it is also used in the search query path.
+        after their configured idle timeout to free RAM. The text CLIP
+        encoder stays loaded because the search query path uses it; the
+        full SigLIP model is released after its own idle timeout.
         """
         while True:
             try:
@@ -1763,6 +1765,7 @@ class IndexManager:
                 check_clip_concepts_idle_unload()
                 check_haas_idle_unload()
                 check_ocr_idle_unload()
+                check_clip_image_idle_unload()
             except asyncio.CancelledError:
                 return
             except Exception as e:

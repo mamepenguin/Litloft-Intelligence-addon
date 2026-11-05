@@ -11,6 +11,7 @@ import os
 import subprocess
 import tempfile
 import threading
+import time
 import uuid
 from functools import lru_cache
 from pathlib import Path
@@ -40,6 +41,8 @@ _siglip_text_model: object | None = None   # SiglipTextModel – search path, al
 _siglip_text_loaded = False
 _siglip_full_model: object | None = None   # AutoModel (vision+text) – indexing only
 _siglip_full_loaded = False
+_siglip_full_last_used = 0.0
+_siglip_image_calls = 0
 
 # Model name → embedding dimension mapping
 _CLIP_DIMS: dict[str, int] = {
@@ -278,6 +281,7 @@ def _ensure_siglip_full_loaded() -> tuple[object, object]:
         _siglip_full_model = AutoModel.from_pretrained(model_name, cache_dir=cache_dir)
         _siglip_full_model.eval()
         _siglip_full_loaded = True
+        _siglip_full_last_used = time.monotonic()
         logger.info("SigLIP full model loaded (vision + text)")
         return _siglip_full_model, _siglip_processor
 
@@ -316,6 +320,30 @@ def _embed_image_siglip(image: Image.Image) -> np.ndarray:
     return feats.squeeze().cpu().numpy().astype(np.float32)
 
 
+def unload_full_model() -> bool:
+    """Release the SigLIP vision tower, unless an image is being embedded."""
+    global _siglip_full_model, _siglip_full_loaded
+    with _lock:
+        if _siglip_image_calls > 0 or _siglip_full_model is None:
+            return False
+        _siglip_full_model = None
+        _siglip_full_loaded = False
+        return True
+
+
+def check_idle_unload() -> None:
+    """Release the SigLIP full model after ``memory.clip_image_idle_unload``."""
+    idle_timeout = settings.memory.clip_image_idle_unload
+    if idle_timeout <= 0 or _siglip_full_model is None:
+        return
+    if _siglip_image_calls > 0:
+        return
+    if time.monotonic() - _siglip_full_last_used <= idle_timeout:
+        return
+    if unload_full_model():
+        logger.info("Releasing SigLIP full model (idle timeout)")
+
+
 def embed_image(image: Image.Image) -> np.ndarray:
     """Generate CLIP embedding for a single image.
 
@@ -326,7 +354,16 @@ def embed_image(image: Image.Image) -> np.ndarray:
         Normalized embedding vector of shape (CLIP_DIM,).
     """
     if _is_siglip_model(settings.models.clip):
-        return _embed_image_siglip(image)
+        global _siglip_image_calls, _siglip_full_last_used
+        with _lock:
+            _siglip_image_calls += 1
+            _siglip_full_last_used = time.monotonic()
+        try:
+            return _embed_image_siglip(image)
+        finally:
+            with _lock:
+                _siglip_image_calls -= 1
+                _siglip_full_last_used = time.monotonic()
 
     import torch
 

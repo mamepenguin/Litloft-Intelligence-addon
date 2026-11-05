@@ -67,8 +67,9 @@ def _chunks(items: list, size: int):
         yield items[i : i + size]
 
 
-def _seeds(query_vector, drive: str) -> tuple[list[_Seed], int]:
-    """Eligible KNN rows with their scores, best first, and the row count the KNN returned."""
+def _seeds(query_vector, drive: str) -> tuple[list[_Seed], int, float | None]:
+    """Eligible KNN rows with their scores, best first, the row count the KNN
+    returned, and the score of its last row."""
     with get_search_engine().connect() as conn:
         rows = conn.execute(
             sql_text(_KNN_SQL),
@@ -86,7 +87,8 @@ def _seeds(query_vector, drive: str) -> tuple[list[_Seed], int]:
             for emb_id, file_id, timestamp in found:
                 seeds[emb_id] = _Seed(file_id, timestamp, scores[emb_id])
     ordered = [seeds[i] for i in scores if i in seeds]
-    return ordered, len(rows)
+    last_score = _l2_to_cosine_similarity(rows[-1][1]) if rows else None
+    return ordered, len(rows), last_score
 
 
 def _frame_times(file_ids: list[str]) -> dict[str, list[float]]:
@@ -136,10 +138,21 @@ def _groups(seeds: list[_Seed]) -> list[list[_Seed]]:
     return groups
 
 
-def find_segments(query_vector, query: str, drive: str, limit: int, frames: int) -> SceneSegmentsResponse:
+def find_segments(
+    query_vector, query: str, drive: str, limit: int, frames: int,
+    *, floor: float | None = None,
+) -> SceneSegmentsResponse:
     required = required_seeds(frames)
-    seeds, fetched = _seeds(query_vector, drive)
-    partial = fetched >= _CLIP_DRIVE_FETCH_MAX and len(seeds) < required
+    seeds, fetched, last_score = _seeds(query_vector, drive)
+    if floor is None:
+        partial = fetched >= _CLIP_DRIVE_FETCH_MAX and len(seeds) < required
+    else:
+        seeds = [seed for seed in seeds if seed.score >= floor]
+        partial = (
+            fetched >= _CLIP_DRIVE_FETCH_MAX
+            and last_score is not None
+            and last_score >= floor
+        )
     if not seeds:
         return SceneSegmentsResponse(query=query, segments=[], partial=partial)
 
