@@ -20,18 +20,29 @@ export default function FolderRefineButton({
   const t = useTranslations("file");
   const [loading, setLoading] = useState(false);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
+  const [skippedMessage, setSkippedMessage] = useState<string | null>(null);
 
   const handleClick = useCallback(async () => {
     if (fileIds.length === 0 || loading) return;
     setLoading(true);
     setResultMessage(null);
+    setSkippedMessage(null);
     try {
       const result = await refineFolderTranscripts(drive, fileIds);
       const queued = (result as { queued?: number } | null)?.queued ?? 0;
-      setResultMessage(
-        t("refineBatchQueued", { queued }),
-      );
-      setTimeout(() => setResultMessage(null), 5000);
+      const skipped =
+        (result as { skipped_corrected?: string[] } | null)?.skipped_corrected
+          ?.length ?? 0;
+      setResultMessage(t("refineBatchQueued", { queued }));
+      if (skipped > 0) {
+        setSkippedMessage(
+          t("refineBatchSkippedCorrected", { count: skipped }),
+        );
+      }
+      setTimeout(() => {
+        setResultMessage(null);
+        setSkippedMessage(null);
+      }, 5000);
     } catch {
       // non-critical — user can retry
     } finally {
@@ -57,6 +68,11 @@ export default function FolderRefineButton({
       {resultMessage && (
         <span className="text-xs text-text-muted animate-fade-in">
           {resultMessage}
+        </span>
+      )}
+      {skippedMessage && (
+        <span className="text-xs text-text-muted animate-fade-in">
+          {skippedMessage}
         </span>
       )}
     </div>

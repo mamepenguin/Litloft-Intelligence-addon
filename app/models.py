@@ -103,6 +103,36 @@ class IndexedFile(Base):
         Integer, nullable=False, default=0, server_default="0"
     )
 
+    # Extraction correction state, one triple per kind. ``*_corrected``
+    # marks a saved human correction; ``*_redo`` is the confirmed
+    # regenerate that may replace it; ``*_redo_ended`` reports a
+    # confirmed run that ended without a result; ``*_generation`` moves
+    # whenever the whole stored text of that kind is replaced.
+    transcript_corrected: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    picture_text_corrected: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    transcript_redo: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    picture_text_redo: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    transcript_redo_ended: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    picture_text_redo_ended: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    transcript_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    picture_text_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
     # Metadata snapshot (for keyword matching)
     title: Mapped[str] = mapped_column(String, nullable=False, default="")
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -222,6 +252,21 @@ class TranscriptChunk(Base):
     # not preserved across the realign).
     speaker_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Set when the owner saved a corrected text for this utterance.
+    corrected_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    # True until the follow-up worker has aligned the corrected text,
+    # or decided it cannot.
+    words_pending: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    # Counts only the attempts that may be retried (model load failure,
+    # unreachable audio); the third ends the utterance without words.
+    words_pending_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(UTC)
     )
@@ -264,6 +309,82 @@ class TranscriptWord(Base):
 
     __table_args__ = (
         Index("idx_transcript_words_file_ts", "file_id", "timestamp_start"),
+    )
+
+
+class KeptOriginal(Base):
+    """The one machine-produced text a file keeps per kind.
+
+    Written in the same transaction as the first correction or the first
+    applied Refine window, before that write; deleted by a restore, by a
+    stored machine result and by a purge. ``chunks_json`` / ``words_json``
+    hold a transcript snapshot; ``text`` holds a picture's text.
+    """
+
+    __tablename__ = "kept_originals"
+
+    file_id: Mapped[str] = mapped_column(String(12), primary_key=True)
+    # "transcript" | "picture_text"
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    # "correction" | "refine"
+    trigger: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    chunks_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    words_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class PictureText(Base):
+    """The text the OCR worker read from one picture, as one string."""
+
+    __tablename__ = "picture_texts"
+
+    file_id: Mapped[str] = mapped_column(String(12), primary_key=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class FollowupItem(Base):
+    """A queued unit of work for the extraction follow-up worker.
+
+    ``generation`` and ``expected_text`` are what make an item stale: a
+    write that replaces the stored text, or a newer correction of the
+    same utterance, makes the older item write nothing.
+    """
+
+    __tablename__ = "followup_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    file_id: Mapped[str] = mapped_column(String(12), nullable=False, index=True)
+    # "transcript" | "picture_text"
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    # "utterance" | "keyword" | "picture" | "rebuild" | "restore"
+    item_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    chunk_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    expected_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    last_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+    __table_args__ = (
+        Index("idx_followup_items_file", "file_id", "kind"),
     )
 
 

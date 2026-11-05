@@ -62,6 +62,11 @@
         "priority": 9
       },
       {
+        "id": "picture-text",
+        "label": "Text in image",
+        "priority": 10
+      },
+      {
         "id": "visual-index",
         "label": "Visual Index",
         "priority": 20
@@ -929,6 +934,55 @@
           "param": "file_id"
         },
         "addon_feature": "transcript_refine",
+        "require_drive": true,
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/transcript/utterances/{index}",
+        "methods": [
+          "PUT"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "require_drive": true,
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/transcript/restore",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "require_drive": true,
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/picture-text",
+        "methods": [
+          "GET",
+          "PUT"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "require_drive": true,
+        "response_filter": null
+      },
+      {
+        "path": "/files/{file_id}/picture-text/restore",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
         "require_drive": true,
         "response_filter": null
       },

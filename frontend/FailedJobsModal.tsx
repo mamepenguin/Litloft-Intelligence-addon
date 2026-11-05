@@ -14,7 +14,9 @@ import {
 } from "lucide-react";
 
 import { getFailedJobs, reindexFile, resolveFailedJob } from "./api";
+import { LLMRequestError } from "./api";
 import type { FailedJobItem, ReindexTask } from "./api";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 const PAGE_LIMIT = 50;
 
@@ -67,6 +69,7 @@ function formatAttempted(iso: string): { date: string; time: string | null } {
 
 export default function FailedJobsModal({ open, onClose }: FailedJobsModalProps) {
   const t = useTranslations("semanticSearch.failedJobs");
+  const tIndex = useTranslations("semanticSearch.indexDetails");
   const tc = useTranslations("common");
   const [items, setItems] = useState<FailedJobItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -74,6 +77,7 @@ export default function FailedJobsModal({ open, onClose }: FailedJobsModalProps)
   const [loading, setLoading] = useState(false);
   const [retrying, setRetrying] = useState<string | null>(null);
   const [resolving, setResolving] = useState<string | null>(null);
+  const [pendingCorrected, setPendingCorrected] = useState<FailedJobItem | null>(null);
   const mountedRef = useRef<boolean>(true);
 
   const load = useCallback(
@@ -136,14 +140,39 @@ export default function FailedJobsModal({ open, onClose }: FailedJobsModalProps)
         // IndexStatusWidget refreshes the count summary in the
         // background.
         removeVisibleGroup(row);
-      } catch {
-        // Leave the row in place — next poll will re-fetch.
+      } catch (err) {
+        if (
+          err instanceof LLMRequestError &&
+          err.status === 409 &&
+          typeof err.detail === "object" &&
+          err.detail !== null &&
+          (err.detail as { code?: string }).code === "corrected"
+        ) {
+          setPendingCorrected(row);
+        }
+        // Otherwise leave the row in place — next poll will re-fetch.
       } finally {
         setRetrying(null);
       }
     },
     [removeVisibleGroup],
   );
+
+  const handleConfirmCorrected = useCallback(async () => {
+    const row = pendingCorrected;
+    if (!row) return;
+    const task = jobKindToTask(row.job_kind);
+    setPendingCorrected(null);
+    setRetrying(`${row.file_id}:${task}`);
+    try {
+      await reindexFile(row.file_id, [task], row.drive, true);
+      removeVisibleGroup(row);
+    } catch {
+      // Leave the row in place — next poll will re-fetch.
+    } finally {
+      setRetrying(null);
+    }
+  }, [pendingCorrected, removeVisibleGroup]);
 
   const handleResolve = useCallback(
     async (row: FailedJobItem) => {
@@ -424,6 +453,14 @@ export default function FailedJobsModal({ open, onClose }: FailedJobsModalProps)
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={pendingCorrected !== null}
+        title={t("retry")}
+        message={tIndex("correctedWarning")}
+        confirmLabel={t("retry")}
+        onConfirm={handleConfirmCorrected}
+        onCancel={() => setPendingCorrected(null)}
+      />
     </div>
   );
 }

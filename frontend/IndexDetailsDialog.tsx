@@ -233,13 +233,19 @@ export default function IndexDetailsDialog({
   const handleConfirm = useCallback(async () => {
     if (!pendingTask) return;
     const task = pendingTask;
+    const overwrite =
+      task === "whisper"
+        ? Boolean(details?.corrected?.transcript)
+        : task === "ocr"
+          ? Boolean(details?.corrected?.picture_text)
+          : false;
     setPendingTask(null);
     setRegenerating(task);
     // Closing the dialog mid-flight invalidates the write, the same way
     // it invalidates a fetch.
     const requestId = requestIdRef.current;
     try {
-      await reindexFile(fileId, [task], drive);
+      await reindexFile(fileId, [task], drive, overwrite);
       if (requestId !== requestIdRef.current) return;
       // Optimistic flip — the *_indexed flag is False until the worker
       // produces a fresh embedding. The next poll / fetch will catch
@@ -257,7 +263,7 @@ export default function IndexDetailsDialog({
         setRegenerating(null);
       }
     }
-  }, [pendingTask, fileId, drive]);
+  }, [pendingTask, fileId, drive, details]);
 
   if (!open || !dialogHost) return null;
 
@@ -329,6 +335,14 @@ export default function IndexDetailsDialog({
                           </>
                         )}
                       </span>
+                      {((spec.task === "whisper" &&
+                        details?.redo_ended_without_result?.transcript) ||
+                        (spec.task === "ocr" &&
+                          details?.redo_ended_without_result?.picture_text)) && (
+                        <span className="text-danger">
+                          {tDetails("redoEndedWithoutResult")}
+                        </span>
+                      )}
                     </div>
                     <button
                       type="button"
@@ -357,13 +371,16 @@ export default function IndexDetailsDialog({
         title={tDetails("regenerate")}
         message={
           pendingTask
-            ? tDetails("confirmRegenerate", {
-                task: t(
-                  `tasks.${
-                    pendingTask === "text" ? "text_content" : pendingTask
-                  }.label`,
-                ),
-              })
+            ? (pendingTask === "whisper" && details?.corrected?.transcript) ||
+              (pendingTask === "ocr" && details?.corrected?.picture_text)
+              ? tDetails("correctedWarning")
+              : tDetails("confirmRegenerate", {
+                  task: t(
+                    `tasks.${
+                      pendingTask === "text" ? "text_content" : pendingTask
+                    }.label`,
+                  ),
+                })
             : ""
         }
         confirmLabel={tDetails("regenerate")}

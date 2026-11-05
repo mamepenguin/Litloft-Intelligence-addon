@@ -5,14 +5,18 @@ import { FileText, Quote, Sparkles } from "lucide-react";
 import { useTranslations } from "next-intl";
 
 import {
+  correctTranscriptUtterance,
   getFileTranscript,
   refineFileTranscript,
+  restoreTranscript,
 } from "./api";
 import type { TranscriptChunkItem } from "./api";
+import { LLMRequestError } from "./api";
 import { formatDuration } from "@/lib/format";
 import { getSubtitleUrl } from "@/lib/api";
 import type { SubtitleInfo } from "@/types";
 import { useAddonStatus } from "@/components/AddonSlotsProvider";
+import { useWebSocket } from "@/hooks/useWebSocket";
 import type { MediaController } from "@/lib/mediaController";
 import { getMediaClockSnapshot, subscribeMediaClock } from "@/lib/mediaClock";
 import { addSourceCapture } from "@/lib/sourceCapture";
@@ -209,6 +213,18 @@ export default function TranscriptSection({
   const refineEnabled =
     refineFeature !== false && refineFeature !== "false" && refineFeature !== undefined;
   const [refining, setRefining] = useState(false);
+  const [hasOriginal, setHasOriginal] = useState(false);
+  const [correctedFile, setCorrectedFile] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [followupsPending, setFollowupsPending] = useState(false);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editText, setEditText] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [confirmRestore, setConfirmRestore] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [confirmRefine, setConfirmRefine] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
   const [whisperChunks, setWhisperChunks] = useState<TranscriptChunkItem[]>([]);
   const [whisperWordCues, setWhisperWordCues] = useState<TranscriptChunkItem[]>([]);
   const [externalCues, setExternalCues] = useState<TranscriptChunkItem[]>([]);
@@ -266,17 +282,23 @@ export default function TranscriptSection({
       } else {
         setWhisperChunks([]);
       }
+      setHasOriginal(Boolean(res.has_original));
+      setCorrectedFile(Boolean(res.corrected));
+      setBusy(Boolean(res.busy));
+      setFollowupsPending(Boolean(res.followups_pending));
       setLoading(false);
     });
     return () => {
       cancelled = true;
     };
-  }, [fileId, drive]);
+  }, [fileId, drive, refreshTick]);
 
   useEffect(() => {
     let cancelled = false;
     setWordsSettled(false);
-    fetch(`/api/addons/intelligence/files/${fileId}/subtitles.vtt`)
+    fetch(`/api/addons/intelligence/files/${fileId}/subtitles.vtt`, {
+      cache: "no-store",
+    })
       .then((r) => (r.ok ? r.text() : ""))
       .then((text) => {
         if (!cancelled) setWhisperWordCues(text ? parseVttCues(text) : []);
@@ -290,7 +312,7 @@ export default function TranscriptSection({
     return () => {
       cancelled = true;
     };
-  }, [fileId]);
+  }, [fileId, refreshTick]);
 
   useEffect(() => {
     if (subtitles.length === 0) {
@@ -316,6 +338,16 @@ export default function TranscriptSection({
       cancelled = true;
     };
   }, [fileId, subtitles]);
+
+  const transcriptUpdated = useWebSocket("intelligence.transcript.updated");
+  useEffect(() => {
+    if (!transcriptUpdated) return;
+    const data = transcriptUpdated.data as { file_id?: string } | null;
+    if (data && data.file_id && data.file_id !== fileId) return;
+    if (!data || data.file_id === fileId) {
+      setRefreshTick((tick) => tick + 1);
+    }
+  }, [transcriptUpdated, fileId]);
 
   // Reset `source` to the first available one whenever availability changes.
   useEffect(() => {
@@ -625,6 +657,10 @@ export default function TranscriptSection({
     scrollActiveIntoView();
   }, [scrollActiveIntoView]);
 
+  useEffect(() => {
+    if (editingIndex !== null) setFollowing(false);
+  }, [editingIndex]);
+
   const seekTo = useCallback(
     (time: number) => {
       if (!mediaController) return;
@@ -656,22 +692,126 @@ export default function TranscriptSection({
     [drive, fileId, fileType, filename],
   );
 
-  const handleRefine = useCallback(async () => {
+  const errorText = useCallback(
+    (err: unknown, fallbackKey: string) => {
+      if (err instanceof LLMRequestError) {
+        const detail = err.detail as { code?: string } | string | undefined;
+        const code = typeof detail === "object" ? detail?.code : undefined;
+        if (code === "busy") return t("transcriptBusy");
+        if (code === "changed") return t("transcriptChanged");
+        if (code === "too_long") return t("transcriptTooLong");
+        if (code === "line_break") return t("transcriptTooLong");
+        if (code === "last_utterance") return t("transcriptLastUtterance");
+        if (err.status === 404) return t("transcriptUnavailable");
+      }
+      return t(fallbackKey);
+    },
+    [t],
+  );
+
+  const refreshAfterWrite = useCallback(() => {
+    setRefreshTick((tick) => tick + 1);
+  }, []);
+
+  const runRefine = useCallback(async () => {
     if (refining) return;
     setRefining(true);
+    setActionError(null);
     try {
-      await refineFileTranscript(fileId, drive);
-      // Re-fetch so refinedAt renders immediately; the backend
-      // processes asynchronously, so this may still show the
-      // pre-refine state. WebSocket push lands in a follow-up.
-      const res = await getFileTranscript(fileId, drive);
-      if (res.available && res.chunks) setWhisperChunks(res.chunks);
-    } catch {
-      // non-critical — user can retry
+      await refineFileTranscript(fileId, drive, correctedFile);
+      refreshAfterWrite();
+    } catch (err) {
+      setActionError(
+        err instanceof LLMRequestError && err.status === 409
+          ? err.detail && (err.detail as { code?: string }).code === "busy"
+            ? t("transcriptBusy")
+            : t("transcriptBusy")
+          : t("transcriptSaveFailed"),
+      );
     } finally {
       setRefining(false);
+      setConfirmRefine(false);
     }
-  }, [fileId, drive, refining]);
+  }, [fileId, drive, refining, correctedFile, refreshAfterWrite, t]);
+
+  const handleRefine = useCallback(() => {
+    if (refining) return;
+    if (correctedFile) {
+      setConfirmRefine(true);
+      return;
+    }
+    void runRefine();
+  }, [correctedFile, refining, runRefine]);
+
+  const beginEdit = useCallback((cue: TranscriptChunkItem) => {
+    setEditingIndex(cue.index);
+    setEditText(cue.text);
+    setActionError(null);
+  }, []);
+
+  const cancelEdit = useCallback(() => {
+    setEditingIndex(null);
+    setEditText("");
+    setActionError(null);
+  }, []);
+
+  const saveEdit = useCallback(
+    async (cue: TranscriptChunkItem) => {
+      if (savingEdit) return;
+      setSavingEdit(true);
+      setActionError(null);
+      try {
+        await correctTranscriptUtterance(
+          fileId,
+          cue.index,
+          editText,
+          cue.text,
+          cue.start,
+          drive,
+        );
+        setEditingIndex(null);
+        setEditText("");
+        refreshAfterWrite();
+      } catch (err) {
+        setActionError(errorText(err, "transcriptSaveFailed"));
+      } finally {
+        setSavingEdit(false);
+      }
+    },
+    [
+      fileId,
+      drive,
+      editText,
+      savingEdit,
+      refreshAfterWrite,
+      errorText,
+    ],
+  );
+
+  const doRestore = useCallback(async () => {
+    if (restoring) return;
+    setRestoring(true);
+    setActionError(null);
+    const hadOriginal = hasOriginal;
+    // The restore is in progress; the button must not accept a second
+    // press while the request runs.
+    setHasOriginal(false);
+    setConfirmRestore(false);
+    try {
+      const res = await restoreTranscript(fileId, drive);
+      setHasOriginal(Boolean(res.has_original));
+      setCorrectedFile(Boolean(res.corrected));
+      setBusy(Boolean(res.busy));
+      setFollowupsPending(Boolean(res.followups_pending));
+      if (res.chunks && res.chunks.length > 0) setWhisperChunks(res.chunks);
+      refreshAfterWrite();
+    } catch (err) {
+      setHasOriginal(hadOriginal);
+      setActionError(errorText(err, "transcriptRestoreFailed"));
+    } finally {
+      setRestoring(false);
+    }
+  }, [fileId, drive, restoring, hasOriginal, refreshAfterWrite, errorText]);
 
   if (loading || !hasAnything) return null;
 
@@ -719,20 +859,83 @@ export default function TranscriptSection({
             ))}
           </div>
         )}
-        {refineEnabled && source === "chunks" && (
-          <div className="ml-auto flex gap-1 text-xs">
-            <button
-              type="button"
-              onClick={handleRefine}
-              disabled={refining}
-              className="flex items-center gap-1 rounded-lg px-2 py-0.5 text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
-            >
-              <Sparkles size={11} className={refining ? "animate-pulse" : ""} />
-              {t("transcriptRefine")}
-            </button>
+        {source === "chunks" && (refineEnabled || hasOriginal) && (
+          <div className="ml-auto flex flex-wrap justify-end gap-1 text-xs">
+            {hasOriginal && (
+              <button
+                type="button"
+                onClick={() => setConfirmRestore(true)}
+                disabled={busy || restoring}
+                className="rounded-lg px-2 py-0.5 text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+              >
+                {t("transcriptRestoreOriginal")}
+              </button>
+            )}
+            {refineEnabled && (
+              <button
+                type="button"
+                onClick={handleRefine}
+                disabled={refining || busy || followupsPending}
+                className="flex items-center gap-1 rounded-lg px-2 py-0.5 text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+              >
+                <Sparkles size={11} className={refining ? "animate-pulse" : ""} />
+                {t("transcriptRefine")}
+              </button>
+            )}
           </div>
         )}
       </div>
+      {actionError && (
+        <p className="mb-2 text-xs text-danger" role="status">
+          {actionError}
+        </p>
+      )}
+      {confirmRestore && (
+        <div className="mb-2 rounded-lg border border-bg-border bg-bg-elevated p-3 text-xs">
+          <p className="mb-2 text-text-primary">{t("transcriptRestoreConfirm")}</p>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => void doRestore()}
+              disabled={restoring}
+              className="rounded-lg bg-accent px-2.5 py-1 font-medium text-white hover:bg-accent-hover disabled:opacity-50"
+            >
+              {t("transcriptRestoreConfirmAction")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmRestore(false)}
+              className="rounded-lg bg-bg-card px-2.5 py-1 font-medium text-text-primary hover:bg-bg-border"
+            >
+              {t("transcriptCancel")}
+            </button>
+          </div>
+        </div>
+      )}
+      {confirmRefine && (
+        <div className="mb-2 rounded-lg border border-bg-border bg-bg-elevated p-3 text-xs">
+          <p className="mb-2 text-text-primary">
+            {t("transcriptRefineCorrectedConfirm")}
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => void runRefine()}
+              disabled={refining}
+              className="rounded-lg bg-accent px-2.5 py-1 font-medium text-white hover:bg-accent-hover disabled:opacity-50"
+            >
+              {t("transcriptSave")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmRefine(false)}
+              className="rounded-lg bg-bg-card px-2.5 py-1 font-medium text-text-primary hover:bg-bg-border"
+            >
+              {t("transcriptCancel")}
+            </button>
+          </div>
+        </div>
+      )}
       <div
         className={`relative ${fillHeight ? "flex min-h-0 flex-1 flex-col" : ""}`}
       >
@@ -764,104 +967,95 @@ export default function TranscriptSection({
       >
         {cues.map((cue) => {
           const isRefined = Boolean(cue.refinedAt);
+          const isCorrected = Boolean(cue.correctedAt);
+          const isEditing = editingIndex === cue.index;
+          const rowClass = `group/cue flex w-full items-start rounded-lg text-sm transition-colors hover:bg-bg-primary pointer-coarse:min-h-11 ${
+            cue.index === activeIndex
+              ? "bg-accent/10 text-accent"
+              : "text-text-primary"
+          }`;
+          if (isEditing) {
+            return (
+              <div key={cue.index} data-cue-start={cue.start} className={rowClass}>
+                <span className="flex min-w-0 flex-1 items-start gap-3 px-2 py-1.5">
+                  <span className="shrink-0 font-mono text-xs text-text-muted">
+                    {formatDuration(cue.start)}
+                  </span>
+                  <input
+                    aria-label={t("transcriptEdit")}
+                    value={editText}
+                    autoFocus
+                    onChange={(event) => setEditText(event.target.value)}
+                    onKeyDown={(event) => {
+                      event.stopPropagation();
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void saveEdit(cue);
+                      } else if (event.key === "Escape") {
+                        event.preventDefault();
+                        cancelEdit();
+                      }
+                    }}
+                    className="min-w-0 flex-1 rounded-lg border border-bg-border bg-bg-primary px-2 py-1 text-sm text-text-primary outline-none focus:border-focus-ring"
+                  />
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void saveEdit(cue)}
+                  disabled={savingEdit}
+                  className="m-0.5 shrink-0 rounded-lg px-2 py-1 text-xs font-medium text-accent hover:bg-bg-elevated disabled:opacity-50"
+                >
+                  {t("transcriptSave")}
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelEdit}
+                  className="m-0.5 shrink-0 rounded-lg px-2 py-1 text-xs font-medium text-text-muted hover:bg-bg-elevated"
+                >
+                  {t("transcriptCancel")}
+                </button>
+              </div>
+            );
+          }
           return (
             <div
               key={cue.index}
               data-cue-start={cue.start}
-              // 44px of row on a coarse pointer, and 32px on a fine one.
-              // The floor is from the mobile sizing rules, so it is about
-              // touch and says nothing against a dense desktop list —
-              // where 32px already clears the 24px minimum for repeated
-              // icon-only controls (hako Prwd_iaXmCjWfY24KjFz2). Applying
-              // it everywhere would add 37% of height to a transcript
-              // that runs to hundreds of lines, in an environment the
-              // rule was not written for.
-              //
-              // It goes on the row, not on either control: the row is
-              // what both of them are asking to be big enough, and a
-              // 44px pitch is also what stops the quote button's
-              // pseudo-element overlapping its neighbour's.
-              className={`group/cue flex w-full items-start rounded-lg text-sm transition-colors hover:bg-bg-primary pointer-coarse:min-h-11 ${
-                cue.index === activeIndex
-                  ? "bg-accent/10 text-accent"
-                  : "text-text-primary"
-              }`}
+              className={rowClass}
             >
               <button
                 type="button"
                 ref={cue.index === activeIndex ? activeRef : undefined}
-                // Announces the row playback is currently on, and is
-                // the only handle a test has on the highlight.
                 aria-current={cue.index === activeIndex ? "true" : undefined}
                 onClick={() => seekTo(cue.start)}
-                // The row's primary action — tapping to move the
-                // playhead — so it takes the floor too. `items-start`
-                // means it does not inherit the row's height, and a
-                // list whose secondary control clears 44px while its
-                // main one does not has bought nothing.
                 className="flex min-w-0 flex-1 cursor-pointer gap-3 px-2 py-1.5 text-left pointer-coarse:min-h-11"
               >
                 <span className="shrink-0 font-mono text-xs text-text-muted">
                   {formatDuration(cue.start)}
                 </span>
                 <span className="min-w-0 flex-1">{cue.text}</span>
+                {isCorrected && (
+                  <span className="shrink-0 rounded-lg bg-accent-amber/15 px-1.5 py-0.5 text-[10px] font-medium text-accent-amber">
+                    {t("transcriptCorrectedBadge")}
+                  </span>
+                )}
                 {isRefined && (
                   <span className="shrink-0 rounded-lg bg-accent-teal/15 px-1.5 py-0.5 text-[10px] font-medium text-accent-teal">
                     {t("transcriptRefinedBadge")}
                   </span>
                 )}
               </button>
-              {/* One of these per cue, and a transcript runs to
-                  hundreds — drawn at all times they read as a grey rule
-                  down the right edge of the text they are meant to
-                  annotate. Revealed by the row instead, on the three
-                  signals that mean someone is working on that row:
-                  hovering it, focusing anything inside it (so the
-                  keyboard path opens with the pointer one), or having no
-                  hover to give in the first place.
-
-                  `opacity-0` and not `hidden` / `invisible`: those two
-                  take the button out of the tab order, and
-                  `group-focus-within` could then never fire.
-
-                  The accessible name carries the timestamp because the
-                  name is all a screen reader gets — several hundred
-                  identical "add to capture basket" leave no way to tell
-                  which line is about to be quoted (hako
-                  Prwd_iaXmCjWfY24KjFz2). It is the only name here: a
-                  `title` alongside it becomes the accessible
-                  *description*, which NVDA and JAWS read after the name,
-                  so the sentence would be announced twice.
-
-                  On a coarse pointer the target grows by overhanging
-                  the box rather than by enlarging it: a taller button
-                  would raise the row it sits in, and this list is capped
-                  at `max-h-80`, so every 12px costs roughly a quarter of
-                  the cues on a phone. Vertical space is scarcest exactly
-                  where the rule applies.
-
-                  That is 44px in both axes because the row is 44px on
-                  a coarse pointer: at a 46px pitch this pseudo-element
-                  ends 2px before the next row's begins, so nothing
-                  overlaps and no row wins a band of its neighbour's. On
-                  a fine pointer the row stays 36px and so does the
-                  32px box — the floor is a mobile rule, and a desktop
-                  transcript of several hundred lines is not what it was
-                  written about.
-
-                  A device reporting `pointer: fine` with `hover: none`
-                  — a stylus, some TV browsers — matches neither trigger
-                  and reaches the button only by focusing it.
-                  `[@media(hover:none)]:opacity-100` does close that, and
-                  compiles here; it is left out because it compiles *here*
-                  and not in Tailwind 4.3, while `package.json` asks for
-                  `^4`. A class that stops emitting on a patch bump fails
-                  exactly the way this whole control already failed once:
-                  silently invisible. `not-hover` is not an alternative —
-                  it emits `:not(:hover)` alongside the media query, which
-                  would draw the button on every desktop row the pointer
-                  is not over. Both measured against the pinned compiler,
-                  not assumed. */}
+              {source === "chunks" && (
+                <button
+                  type="button"
+                  onClick={() => beginEdit(cue)}
+                  disabled={busy}
+                  aria-label={t("transcriptEdit")}
+                  className="m-0.5 inline-flex h-8 flex-shrink-0 items-center justify-center rounded-lg px-2 text-xs font-medium text-text-muted opacity-0 transition-opacity hover:bg-bg-elevated hover:text-text-primary group-hover/cue:opacity-100 group-focus-within/cue:opacity-100 pointer-coarse:opacity-100 disabled:opacity-50"
+                >
+                  {t("transcriptEdit")}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => captureCue(cue)}

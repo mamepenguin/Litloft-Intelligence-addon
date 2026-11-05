@@ -596,3 +596,30 @@ def to_webvtt(cues: list[dict], language: str = "") -> str:
 def build_vtt(words: list[dict], language: str = "") -> str:
     """Shortcut: pack words and serialise to WebVTT in one call."""
     return to_webvtt(build_cues(words, language=language), language=language)
+
+
+def build_vtt_with_fallback(
+    words: list[dict],
+    fallback: list[dict],
+    language: str = "",
+) -> str:
+    """Pack ``words``, add one cue per ``fallback`` utterance, serialise.
+
+    A corrected utterance whose alignment produced no words has no word
+    row to pack; its own text is shown as one cue over its span, keeping
+    the existing no-overlap rule against the cues around it.
+    """
+    cues = build_cues(words, language=language) if words else []
+    cfg = CueConfig()
+    for cue in fallback:
+        text = _sanitise_cue_text(cue["text"])
+        if not text:
+            continue
+        cues.append(
+            _balance_two_lines(
+                {"start": float(cue["start"]), "end": float(cue["end"]), "text": text},
+                cfg.max_width // 2,
+            )
+        )
+    cues.sort(key=lambda c: (c["start"], c["end"], c["text"]))
+    return to_webvtt(_clamp_to_next_start(cues), language=language)

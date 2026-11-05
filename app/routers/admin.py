@@ -1275,11 +1275,24 @@ async def resolve_failed_job(
             if row is None:
                 raise HTTPException(status_code=404, detail="File not indexed")
 
-            setattr(row, flag_column, True)
-            if task == "clip":
-                row.clip_thumbnail_indexed = True
-            elif task == "whisper":
-                row.tfidf_keywords_indexed = True
+            from app import extraction
+
+            if task == "whisper" and row.transcript_corrected:
+                extraction.clear_redo(
+                    session, file_id, extraction.KIND_TRANSCRIPT
+                )
+                extraction.mark_redo_ended(
+                    session, file_id, extraction.KIND_TRANSCRIPT
+                )
+                extraction.queue_item(
+                    session, file_id, extraction.KIND_TRANSCRIPT, "rebuild"
+                )
+            else:
+                setattr(row, flag_column, True)
+                if task == "clip":
+                    row.clip_thumbnail_indexed = True
+                elif task == "whisper":
+                    row.tfidf_keywords_indexed = True
 
             session.add(JobRecord(
                 file_id=file_id,

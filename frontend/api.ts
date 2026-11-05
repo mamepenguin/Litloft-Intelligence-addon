@@ -236,10 +236,12 @@ export interface TranscriptChunkItem {
   end: number;
   // Populated when the chunk has been AI-refined. `refinedAt` is the
   // ISO timestamp of the refine run. Null / undefined for unrefined
-  // chunks. Originals are not preserved — refine re-chunks the
-  // transcript on punctuation boundaries, so per-chunk originals
-  // would no longer align.
+  // chunks.
   refinedAt?: string | null;
+  // Populated when the owner saved a corrected text for this utterance.
+  correctedAt?: string | null;
+  // True while the follow-up worker still has to align the text.
+  wordsPending?: boolean;
 }
 
 export interface TranscriptResponse {
@@ -248,6 +250,10 @@ export interface TranscriptResponse {
   drive?: string;
   language?: string;
   chunks?: TranscriptChunkItem[];
+  has_original?: boolean;
+  corrected?: boolean;
+  busy?: boolean;
+  followups_pending?: boolean;
 }
 
 export interface ClipTimestampItem {
@@ -418,9 +424,92 @@ export interface RefineFileResponse {
 export async function refineFileTranscript(
   fileId: string,
   drive: string,
+  overwriteCorrections: boolean = false,
 ): Promise<RefineFileResponse> {
-  return fetchJSON<RefineFileResponse>(
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  Object.assign(headers, driveHeaders(drive));
+  return fetchJSONWithDetail<RefineFileResponse>(
     `${API_BASE}/addons/intelligence/refine/files/${fileId}`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ overwrite_corrections: overwriteCorrections }),
+    },
+  );
+}
+
+export async function correctTranscriptUtterance(
+  fileId: string,
+  index: number,
+  text: string,
+  expectedText: string,
+  expectedStart: number,
+  drive: string,
+): Promise<TranscriptChunkItem> {
+  return fetchJSONWithDetail<TranscriptChunkItem>(
+    `${API_BASE}/addons/intelligence/files/${fileId}/transcript/utterances/${index}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...driveHeaders(drive) },
+      body: JSON.stringify({
+        text,
+        expected_text: expectedText,
+        expected_start: expectedStart,
+      }),
+    },
+  );
+}
+
+export async function restoreTranscript(
+  fileId: string,
+  drive: string,
+): Promise<TranscriptResponse> {
+  return fetchJSONWithDetail<TranscriptResponse>(
+    `${API_BASE}/addons/intelligence/files/${fileId}/transcript/restore`,
+    { method: "POST", headers: driveHeaders(drive) },
+  );
+}
+
+export interface PictureTextResponse {
+  file_id: string;
+  text: string;
+  corrected: boolean;
+  has_original: boolean;
+  busy: boolean;
+}
+
+export async function getPictureText(
+  fileId: string,
+  drive: string,
+): Promise<PictureTextResponse> {
+  return fetchJSONWithDetail<PictureTextResponse>(
+    `${API_BASE}/addons/intelligence/files/${fileId}/picture-text`,
+    { headers: driveHeaders(drive) },
+  );
+}
+
+export async function updatePictureText(
+  fileId: string,
+  text: string,
+  expectedText: string,
+  drive: string,
+): Promise<PictureTextResponse> {
+  return fetchJSONWithDetail<PictureTextResponse>(
+    `${API_BASE}/addons/intelligence/files/${fileId}/picture-text`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...driveHeaders(drive) },
+      body: JSON.stringify({ text, expected_text: expectedText }),
+    },
+  );
+}
+
+export async function restorePictureText(
+  fileId: string,
+  drive: string,
+): Promise<PictureTextResponse> {
+  return fetchJSONWithDetail<PictureTextResponse>(
+    `${API_BASE}/addons/intelligence/files/${fileId}/picture-text/restore`,
     { method: "POST", headers: driveHeaders(drive) },
   );
 }
@@ -428,6 +517,7 @@ export async function refineFileTranscript(
 export interface RefineFolderResponse {
   queued: number;
   jobs: string[];
+  skipped_corrected?: string[];
 }
 
 export async function refineFolderTranscripts(
@@ -1778,6 +1868,11 @@ export interface IndexDetailsResponse {
   // shared type to grow ahead of the consumer.
   embeddings?: Record<string, unknown>;
   provider_stats?: Record<string, unknown>;
+  corrected?: { transcript: boolean; picture_text: boolean };
+  redo_ended_without_result?: {
+    transcript: boolean;
+    picture_text: boolean;
+  };
 }
 
 export type ReindexTask = "metadata" | "clip" | "whisper" | "text" | "ocr";
@@ -1827,17 +1922,20 @@ export async function reindexFile(
   fileId: string,
   tasks: ReindexTask[] | string[],
   drive: string,
+  overwriteCorrections: boolean = false,
 ): Promise<ReindexResponse> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
   Object.assign(headers, driveHeaders(drive));
-  return fetchJSON<ReindexResponse>(
+  const body: Record<string, unknown> = { tasks };
+  if (overwriteCorrections) body.overwrite_corrections = true;
+  return fetchJSONWithDetail<ReindexResponse>(
     `${API_BASE}/addons/intelligence/files/${fileId}/reindex`,
     {
       method: "POST",
       headers,
-      body: JSON.stringify({ tasks }),
+      body: JSON.stringify(body),
     },
   );
 }
