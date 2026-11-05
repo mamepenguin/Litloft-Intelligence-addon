@@ -102,12 +102,16 @@ def test_spec_addon_047_i2_resolves_the_filter_with_one_internal_matching_call(
     assert request.headers["content-type"].startswith("application/json")
 
     sent = json.loads(request.content)
-    assert set(sent) <= {"drive", "tags", "kinds", "favorite", "liked"}
+    assert set(sent) <= {
+        "drive", "tags", "kinds", "favorite", "liked", "folders", "collections",
+    }
     assert sent["drive"] == DRIVE
     assert sent.get("tags") == ["budget"]
     assert sent.get("kinds") == ["text"]
     assert sent.get("favorite") is True
     assert sent.get("liked") is None
+    assert sent.get("folders") == []
+    assert sent.get("collections") == []
 
     names = {name.lower() for name in request.headers}
     assert "authorization" not in names
