@@ -58,6 +58,10 @@ async def test_spec_addon_062_a_worker_opens_the_file_through_the_reconciled_pat
     nfc_path = str(root / unicodedata.normalize("NFC", REL))
     idx.add_file("k1", drive=DRIVE, filename="ぱぴ.mp4", transcript=WORDS, indexed=True, gen=3)
     idx.sql(f"UPDATE indexed_files SET file_path = '{nfc_path}' WHERE file_id = 'k1'")
+    idx.sql(
+        "UPDATE indexed_files SET whisper_indexed = 1, clip_indexed = 1, "
+        "metadata_indexed = 1, text_indexed = 1 WHERE file_id = 'k1'"
+    )
     litloft("k1", drive=DRIVE, file_path=REL, filename="ぱぴ.mp4")
     transcriber = SplittingTranscriber(OpeningProvider(), cap_bytes=10_000)
 
@@ -66,6 +70,11 @@ async def test_spec_addon_062_a_worker_opens_the_file_through_the_reconciled_pat
 
     await _manager().reconcile()
     stored = idx.rows("SELECT file_path FROM indexed_files WHERE file_id = 'k1'")[0][0]
+
+    assert idx.rows(
+        "SELECT whisper_indexed, clip_indexed, metadata_indexed, text_indexed "
+        "FROM indexed_files WHERE file_id = 'k1'"
+    ) == [(1, 1, 1, 1)]
 
     segments = await transcriber.transcribe(stored)
     assert [s.text for s in segments] == ["ok"]
@@ -83,3 +92,21 @@ def test_spec_addon_062_a_repeat_resolve_reads_the_disk_again(tmp_path):
     second = make_file(tmp_path, "nfc:ぱぴ.mp4")
 
     assert diskpath.resolve_on_disk(tmp_path, rel) == second
+
+
+def test_spec_addon_062_a_listing_error_resolves_to_the_stored_path_without_raising(
+    tmp_path, monkeypatch,
+):
+    import os
+
+    from app import diskpath
+
+    make_file(tmp_path, "nfd:ぱぴ.mp4")
+
+    def denied(*args, **kwargs):
+        raise PermissionError("unreadable")
+
+    monkeypatch.setattr(os, "scandir", denied)
+    rel = unicodedata.normalize("NFC", "ぱぴ.mp4")
+
+    assert diskpath.resolve_on_disk(tmp_path, rel) == tmp_path / rel
