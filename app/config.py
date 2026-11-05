@@ -6,12 +6,15 @@ All config values are immutable after initialization.
 
 import dataclasses
 import logging
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from app import diskpath
 
 logger = logging.getLogger(__name__)
 
@@ -1278,6 +1281,19 @@ def resolve_file_path(drive: str, relative_path: str) -> str | None:
     if not mount:
         return None
     return str(Path(mount) / relative_path)
+
+
+def resolve_stored_path(path: str | None) -> str | None:
+    """The spelling of an absolute ``path`` that exists on disk.
+
+    ``resolve_file_path`` only joins; a file copied onto a drive with a
+    decomposed (NFD) name does not exist under the joined NFC spelling. Wraps
+    the join so the stored ``IndexedFile.file_path`` is the name a worker can
+    open. A path that exists in no spelling comes back unchanged.
+    """
+    if path is None or not os.path.isabs(path):
+        return path
+    return os.fspath(diskpath.resolve_on_disk("/", path.lstrip("/")))
 
 
 def validate_file_path(file_path: str) -> bool:
