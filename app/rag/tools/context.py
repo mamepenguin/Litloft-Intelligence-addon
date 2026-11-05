@@ -46,6 +46,10 @@ class ToolContext:
     drive: str | None = None
     viewer_id: str | None = None
     credential: CallerCredential | None = None
+    # The request's effective set. ``None`` means unscoped. An id outside it
+    # is treated like an inaccessible one, and never enters the citation
+    # allow-list.
+    file_id_constraint: "frozenset[str] | None" = None
     tool_returned_file_ids: set[str] = field(default_factory=set)
     tool_calls: list[str] = field(default_factory=list)
     cumulative_tokens: int = 0
@@ -59,6 +63,11 @@ class ToolContext:
         # would weaken citation-strict and the budget accounting).
         for fid in file_ids:
             if isinstance(fid, str) and fid:
+                if (
+                    self.file_id_constraint is not None
+                    and fid not in self.file_id_constraint
+                ):
+                    continue
                 if len(self.tool_returned_file_ids) >= ALLOW_LIST_CAP:
                     break
                 self.tool_returned_file_ids.add(fid)

@@ -60,6 +60,17 @@ async def get_related_files(
             warning="invalid file_id",
         )
 
+    if (
+        context.file_id_constraint is not None
+        and file_id not in context.file_id_constraint
+    ):
+        return ToolResultEnvelope(
+            payload={"file_id": file_id, "relations": [], "error": "not_found"},
+            token_estimate=0,
+            truncated=False,
+            warning="file not found",
+        )
+
     # Access gate on the **input** file_id.
     allowed_in = await ensure_access(
         [file_id], credential=context.credential, drive=context.drive
@@ -163,7 +174,14 @@ async def get_related_files(
     allowed_out = await ensure_access(
         candidate_ids, credential=context.credential, drive=context.drive
     )
-    relations = [r for r in raw_relations if r["file_id"] in allowed_out]
+    relations = [
+        r for r in raw_relations
+        if r["file_id"] in allowed_out
+        and (
+            context.file_id_constraint is None
+            or r["file_id"] in context.file_id_constraint
+        )
+    ]
 
     payload = {"file_id": file_id, "relations": relations}
     context.register_file_ids(r["file_id"] for r in relations)
