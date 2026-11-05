@@ -85,6 +85,51 @@ class CompareResponseModel(BaseModel):
     source_counts: SourceCountsModel
 
 
+class ImageHit(BaseModel):
+    file_id: str
+    drive: str
+    filename: str
+    file_type: str
+    score: float
+    match_types: list[str]
+    file: dict[str, Any] | None = None
+
+
+class SceneHit(BaseModel):
+    file_id: str
+    drive: str
+    filename: str
+    start: float
+    end: float
+    peak: float
+    score: float
+    frame_url: str
+    file: dict[str, Any] | None = None
+
+
+class DocumentHit(BaseModel):
+    file_id: str
+    drive: str
+    filename: str
+    file_type: str
+    score: float
+    passages: list[SearchPassage]
+    file: dict[str, Any] | None = None
+
+
+class ImageQueryText(BaseModel):
+    status: Literal["read", "too_short", "off", "failed"]
+    excerpt: str | None = None
+
+
+class ImageQueryResponse(BaseModel):
+    images: list[ImageHit]
+    scenes: list[SceneHit]
+    scenes_partial: bool
+    documents: list[DocumentHit]
+    text: ImageQueryText
+
+
 # --- Status ---
 
 

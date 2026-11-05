@@ -61,6 +61,8 @@ class SearchConfig:
     # frames. Worth a looser threshold and a stronger weight in its
     # own knob so tuning ``clip`` does not move ``clip_thumbnail``.
     min_score_clip_thumbnail: float = 0.05
+    # Floor for an image query's pictures and scene frames (SPEC-ADDON-049).
+    min_score_image_query: float = 0.70
     # Text channel only: if (top_score - mean_score) < this threshold, the
     # result set is "flat" (no standout match) and discarded entirely.
     score_gap_threshold: float = 0.02
@@ -288,6 +290,7 @@ class MemoryConfig:
     blip_idle_unload: int = 300  # seconds; 0 = never unload
     clip_concepts_idle_unload: int = 600  # seconds; 0 = never unload
     ocr_idle_unload: int = 300  # seconds; 0 = never unload
+    clip_image_idle_unload: int = 600  # seconds; 0 = never unload
 
 
 @dataclass(frozen=True)
