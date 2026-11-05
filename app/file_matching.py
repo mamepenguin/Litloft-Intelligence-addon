@@ -11,9 +11,17 @@ from __future__ import annotations
 import json
 import logging
 import os
+import unicodedata
 
 import httpx
-from pydantic import BaseModel, Field, StrictBool, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    ValidationError,
+    model_validator,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +35,10 @@ _MATCHING_PATH = "/files/matching"
 TAG_MAX_COUNT = 20
 TAG_MAX_LENGTH = 200
 KIND_MAX_COUNT = 8
+FOLDER_MAX_COUNT = 10
+FOLDER_MAX_LENGTH = 1024
+COLLECTION_MAX_COUNT = 10
+COLLECTION_MAX_LENGTH = 100
 
 KINDS = frozenset(
     {"video", "image", "audio", "document", "archive", "other", "text", "pdf"}
@@ -46,13 +58,21 @@ class SearchFilter(BaseModel):
     """The parsed operators of a search query, as the core's request model takes them.
 
     Normalisation matches core's: a blank tag is dropped, tags are deduplicated
-    case-insensitively, kinds after the ``markdown`` alias, then the caps apply.
+    case-insensitively, kinds after the ``markdown`` alias, folders are NFC-
+    normalised and trimmed of ``/``, collection names are trimmed and deduped
+    case-insensitively, then the caps apply.
     """
+
+    # A field the core does not know must fail here too; otherwise this addon
+    # would keep working against a core that had dropped a scope it asked for.
+    model_config = ConfigDict(extra="forbid")
 
     tags: list[str] = Field(default_factory=list)
     kinds: list[str] = Field(default_factory=list)
     favorite: StrictBool | None = None
     liked: StrictBool | None = None
+    folders: list[str] = Field(default_factory=list)
+    collections: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _normalise(self) -> "SearchFilter":
@@ -85,8 +105,46 @@ class SearchFilter(BaseModel):
         if len(kinds) > KIND_MAX_COUNT:
             raise ValueError(f"at most {KIND_MAX_COUNT} kinds")
 
+        folders: list[str] = []
+        for raw_folder in self.folders:
+            folder = unicodedata.normalize("NFC", raw_folder).strip("/")
+            if (
+                not folder
+                or "\x00" in folder
+                or any(
+                    segment in ("", ".", "..") for segment in folder.split("/")
+                )
+            ):
+                raise ValueError(f"invalid folder: {raw_folder!r}")
+            if len(folder) > FOLDER_MAX_LENGTH:
+                raise ValueError(f"a folder is at most {FOLDER_MAX_LENGTH} characters")
+            if folder not in folders:
+                folders.append(folder)
+        if len(folders) > FOLDER_MAX_COUNT:
+            raise ValueError(f"at most {FOLDER_MAX_COUNT} folders")
+
+        collections: list[str] = []
+        seen_collections: set[str] = set()
+        for raw_collection in self.collections:
+            name = raw_collection.strip()
+            if not name:
+                continue
+            if len(name) > COLLECTION_MAX_LENGTH:
+                raise ValueError(
+                    f"a collection is at most {COLLECTION_MAX_LENGTH} characters"
+                )
+            key = name.lower()
+            if key in seen_collections:
+                continue
+            seen_collections.add(key)
+            collections.append(name)
+        if len(collections) > COLLECTION_MAX_COUNT:
+            raise ValueError(f"at most {COLLECTION_MAX_COUNT} collections")
+
         self.tags = tags
         self.kinds = kinds
+        self.folders = folders
+        self.collections = collections
         return self
 
 
