@@ -216,13 +216,20 @@ def _seed_indexed(SearchSession, **kwargs):
 
 class TestReconcileDriftDetection:
     @pytest.mark.asyncio
-    async def test_drift_in_file_path_triggers_repair(self, patched, make_manager, caplog):
+    async def test_drift_in_file_path_triggers_repair(
+        self, patched, make_manager, caplog, monkeypatch, tmp_path
+    ):
         SearchSession, LitloftSession = patched
         _seed_litloft_active(LitloftSession)
         _seed_indexed(
             SearchSession,
             file_path="/drives/drive1/旧/x.mp4",  # diverges from litloft
         )
+        # A path difference counts as drift only when the new path exists.
+        moved = tmp_path / "新" / "移動先" / "x.mp4"
+        moved.parent.mkdir(parents=True)
+        moved.write_bytes(b"x")
+        monkeypatch.setattr("app.indexer.resolve_file_path", lambda *_a, **_k: str(moved))
 
         with caplog.at_level("WARNING"):
             manager = make_manager()
@@ -231,7 +238,7 @@ class TestReconcileDriftDetection:
         assert result.get("drift_repaired") == 1
         s = SearchSession()
         row = s.query(IndexedFile).filter_by(file_id="f1").first()
-        assert row.file_path == "/drives/drive1/新/移動先/x.mp4"
+        assert row.file_path == str(moved)
         s.close()
         # Log out the count for ops visibility.
         assert any("drift_repaired" in r.message or "drift" in r.message.lower()

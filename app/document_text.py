@@ -117,6 +117,7 @@ def _page_after(out: list[Unit], number: int, unit_count: int) -> Page:
 
 
 def _checked_path(file_path: str, max_bytes: int | None) -> Path:
+    file_path = config.resolve_stored_path(file_path)
     if not config.validate_file_path(file_path):
         raise Unreadable("path not allowed")
     path = Path(file_path)

@@ -19,6 +19,7 @@ STORED_NAME = "stored-name"
 LISTING_ONLY = "listing-only"
 
 INVENTORY: dict[tuple[str, str, str], tuple[int, str]] = {
+    ("app/diskpath.py", "_matching_entries", "os.scandir"): (1, STORED_NAME),
     ("app/evals/loader.py", "load_cases", "glob"): (2, LISTING_ONLY),
     ("app/evals_citations/loader.py", "load_cases", "glob"): (2, LISTING_ONLY),
     ("app/evals_transcription/loader.py", "load_cases", "glob.glob"): (1, LISTING_ONLY),

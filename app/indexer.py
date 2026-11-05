@@ -16,7 +16,7 @@ from typing import Any
 
 from sqlalchemy import text as sql_text
 
-from app.config import resolve_file_path, settings
+from app.config import resolve_file_path, resolve_stored_path, settings
 from app.database import (
     delete_fts_file,
     delete_fts_text_content,
@@ -133,13 +133,42 @@ class IndexStatus:
     pending_ocr: int = 0
 
 
+def _drifted_file_ids(rows: list[tuple[str, dict, dict]]) -> list[str]:
+    """File ids whose IndexedFile snapshot no longer matches core.
+
+    A different stored path counts only when the path core points at exists on
+    disk: a drive that cannot be read for one pass resolves every path to its
+    unresolved NFC spelling, and treating that as drift would flip rows between
+    spellings.
+    """
+    drifted: list[str] = []
+    for file_id, core, snap in rows:
+        expected_path = resolve_stored_path(
+            resolve_file_path(core["drive"], core["file_path"])
+        )
+        if expected_path is None:
+            continue
+        path_drift = snap["file_path"] != expected_path and os.path.exists(
+            expected_path
+        )
+        if (
+            snap["drive"] != core["drive"]
+            or path_drift
+            or snap["filename"] != core["filename"]
+            or snap.get("file_type") != core.get("file_type")
+            or snap.get("mime_type") != core.get("mime_type")
+        ):
+            drifted.append(file_id)
+    return drifted
+
+
 def _loft_needs_reset(file_path: str, chunked: bool) -> bool | None:
     """Whether an indexed loft must be transcribed again; None if unlistable.
 
     Temp STT audio is an explicit request from Media Import and must re-run
     even when the loft already has VTT chunks.
     """
-    loft_path = Path(file_path)
+    loft_path = Path(resolve_stored_path(file_path))
     stem = loft_path.stem
     parent = loft_path.parent
     try:
@@ -462,7 +491,7 @@ class IndexManager:
             # "trash → restored" since both flow through this branch)
             # and self-heal IndexedFile snapshot drift (webhook fallback).
             reactivate: set[str] = set()
-            drifted: list[str] = []
+            to_compare: list[tuple[str, dict, dict]] = []
             for file_id in litloft_active & indexed_files:
                 if not indexed_meta[file_id]["active"]:
                     reactivate.add(file_id)
@@ -471,19 +500,10 @@ class IndexManager:
                 snap = indexed_meta.get(file_id)
                 if core is None or snap is None:
                     continue
-                expected_path = resolve_file_path(
-                    core["drive"], core["file_path"]
-                )
-                if expected_path is None:
-                    continue
-                if (
-                    snap["drive"] != core["drive"]
-                    or snap["file_path"] != expected_path
-                    or snap["filename"] != core["filename"]
-                    or snap.get("file_type") != core.get("file_type")
-                    or snap.get("mime_type") != core.get("mime_type")
-                ):
-                    drifted.append(file_id)
+                to_compare.append((file_id, core, snap))
+
+            # Listing directories on a slow bind mount must not stall the loop.
+            drifted = await asyncio.to_thread(_drifted_file_ids, to_compare)
 
             await asyncio.to_thread(
                 _set_files_active_bulk, reactivate, active=True
@@ -589,9 +609,9 @@ class IndexManager:
 
                         # Resolve relative file_path to absolute using
                         # drive mounts
-                        abs_path = resolve_file_path(
+                        abs_path = resolve_stored_path(resolve_file_path(
                             file_data["drive"], file_data["file_path"]
-                        )
+                        ))
                         if not abs_path:
                             logger.warning(
                                 "No mount configured for drive %s, skipping %s",
@@ -1307,9 +1327,9 @@ class IndexManager:
                         # a new file when the drive's policy permits.
                         continue
 
-                    abs_path = resolve_file_path(
+                    abs_path = resolve_stored_path(resolve_file_path(
                         meta["drive"], meta["file_path"]
-                    )
+                    ))
                     if abs_path is None:
                         logger.warning(
                             "Cannot resolve path for %s after move (drive=%s)",
@@ -1865,7 +1885,7 @@ def _thumbnail_source_reachable(
     wasted decode per restart is not worth a column.
     """
     if mime_type in IMAGE_TYPES:
-        return os.path.exists(file_path)
+        return os.path.exists(resolve_stored_path(file_path))
     if not thumbnail_path:
         return False
     try:
