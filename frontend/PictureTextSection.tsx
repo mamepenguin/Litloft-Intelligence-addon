@@ -163,7 +163,7 @@ export default function PictureTextSection({
               type="button"
               onClick={() => void doRestore()}
               disabled={restoring}
-              className="rounded-lg bg-accent px-2.5 py-1 font-medium text-white hover:bg-accent-hover disabled:opacity-50"
+              className="rounded-lg bg-accent px-2.5 py-1 font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-sand disabled:text-warm-silver disabled:hover:bg-sand"
             >
               {t("transcriptRestoreConfirmAction")}
             </button>
@@ -203,7 +203,7 @@ export default function PictureTextSection({
               type="button"
               onClick={() => void save()}
               disabled={saving}
-              className="rounded-lg bg-accent px-2.5 py-1 font-medium text-white hover:bg-accent-hover disabled:opacity-50"
+              className="rounded-lg bg-accent px-2.5 py-1 font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-sand disabled:text-warm-silver disabled:hover:bg-sand"
             >
               {t("transcriptSave")}
             </button>

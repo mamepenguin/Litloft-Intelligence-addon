@@ -17,6 +17,7 @@ import { getSubtitleUrl } from "@/lib/api";
 import type { SubtitleInfo } from "@/types";
 import { useAddonStatus } from "@/components/AddonSlotsProvider";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import { useImeKeyGuard } from "@/lib/ime";
 import type { MediaController } from "@/lib/mediaController";
 import { getMediaClockSnapshot, subscribeMediaClock } from "@/lib/mediaClock";
 import { addSourceCapture } from "@/lib/sourceCapture";
@@ -205,6 +206,7 @@ export default function TranscriptSection({
   onAvailability,
 }: TranscriptSectionProps) {
   const t = useTranslations("searchIndex");
+  const ime = useImeKeyGuard();
   const addonStatus = useAddonStatus("intelligence");
   const refineFeature = addonStatus.features?.transcript_refine;
   // Backend sends either boolean false or the string "false" when the
@@ -898,7 +900,7 @@ export default function TranscriptSection({
               type="button"
               onClick={() => void doRestore()}
               disabled={restoring}
-              className="rounded-lg bg-accent px-2.5 py-1 font-medium text-white hover:bg-accent-hover disabled:opacity-50"
+              className="rounded-lg bg-accent px-2.5 py-1 font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-sand disabled:text-warm-silver disabled:hover:bg-sand"
             >
               {t("transcriptRestoreConfirmAction")}
             </button>
@@ -922,7 +924,7 @@ export default function TranscriptSection({
               type="button"
               onClick={() => void runRefine()}
               disabled={refining}
-              className="rounded-lg bg-accent px-2.5 py-1 font-medium text-white hover:bg-accent-hover disabled:opacity-50"
+              className="rounded-lg bg-accent px-2.5 py-1 font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-sand disabled:text-warm-silver disabled:hover:bg-sand"
             >
               {t("transcriptSave")}
             </button>
@@ -985,9 +987,11 @@ export default function TranscriptSection({
                     aria-label={t("transcriptEdit")}
                     value={editText}
                     autoFocus
+                    onCompositionEnd={ime.onCompositionEnd}
                     onChange={(event) => setEditText(event.target.value)}
                     onKeyDown={(event) => {
                       event.stopPropagation();
+                      if (ime.isImeKeystroke(event)) return;
                       if (event.key === "Enter") {
                         event.preventDefault();
                         void saveEdit(cue);
@@ -1045,27 +1049,29 @@ export default function TranscriptSection({
                   </span>
                 )}
               </button>
-              {source === "chunks" && (
+              <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover/cue:opacity-100 group-focus-within/cue:opacity-100 pointer-coarse:opacity-100">
+                {source === "chunks" && (
+                  <button
+                    type="button"
+                    onClick={() => beginEdit(cue)}
+                    disabled={busy}
+                    aria-label={t("transcriptEdit")}
+                    className="m-0.5 inline-flex h-8 flex-shrink-0 items-center justify-center rounded-lg px-2 text-xs font-medium text-text-muted hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+                  >
+                    {t("transcriptEdit")}
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={() => beginEdit(cue)}
-                  disabled={busy}
-                  aria-label={t("transcriptEdit")}
-                  className="m-0.5 inline-flex h-8 flex-shrink-0 items-center justify-center rounded-lg px-2 text-xs font-medium text-text-muted opacity-0 transition-opacity hover:bg-bg-elevated hover:text-text-primary group-hover/cue:opacity-100 group-focus-within/cue:opacity-100 pointer-coarse:opacity-100 disabled:opacity-50"
+                  onClick={() => captureCue(cue)}
+                  aria-label={t("transcriptCaptureCue", {
+                    time: formatDuration(cue.start),
+                  })}
+                  className="relative m-0.5 inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-text-muted hover:bg-bg-elevated hover:text-text-primary pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5 pointer-coarse:before:content-['']"
                 >
-                  {t("transcriptEdit")}
+                  <Quote size={14} />
                 </button>
-              )}
-              <button
-                type="button"
-                onClick={() => captureCue(cue)}
-                aria-label={t("transcriptCaptureCue", {
-                  time: formatDuration(cue.start),
-                })}
-                className="relative m-0.5 inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-text-muted opacity-0 transition-opacity hover:bg-bg-elevated hover:text-text-primary group-hover/cue:opacity-100 group-focus-within/cue:opacity-100 pointer-coarse:opacity-100 pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5 pointer-coarse:before:content-['']"
-              >
-                <Quote size={14} />
-              </button>
+              </div>
             </div>
           );
         })}
