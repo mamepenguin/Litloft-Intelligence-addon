@@ -127,7 +127,6 @@ def test_spec_addon_075_i3_the_kept_original_of_a_correction_holds_no_boxes(
     """SPEC-ADDON-075 I3: the original is the text only."""
     client, _ = api
     _seed_picture_with_lines(search_db)
-    _seed_lines(search_db, PICTURE, _machine_lines())
     assert client.get(f"/files/{PICTURE}/picture-text", headers=HEADERS).status_code == 200
 
     response = client.put(
@@ -154,6 +153,12 @@ def test_spec_addon_075_i3_a_text_embedding_model_purge_leaves_the_lines_row(
     db = build_search_db(tmp_path, monkeypatch)
     seed_picture(db, PICTURE, ["alpha beta\ngamma"])
     _seed_lines(db, PICTURE, _machine_lines())
+    db.execute(
+        "INSERT INTO picture_texts(file_id, text, updated_at) "
+        "VALUES(:f, :t, CURRENT_TIMESTAMP)",
+        f=PICTURE,
+        t="alpha beta\ngamma",
+    )
     before = _raw_row(db, PICTURE)
     db.execute("CREATE TABLE IF NOT EXISTS index_meta (key TEXT PRIMARY KEY, value TEXT)")
     db.execute(
