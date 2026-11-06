@@ -1478,7 +1478,6 @@ def _persist_transcript(
         except Exception as e:
             logger.error("Whisper embedding failed for %s: %s", file_id, e)
 
-    discarded = False
     changed_drive: str | None = None
     with get_search_db() as session:
         file_row = extraction.get_file(session, file_id)

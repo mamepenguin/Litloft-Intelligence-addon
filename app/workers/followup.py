@@ -360,11 +360,7 @@ def _realign_utterance(
         )
         if chunk is None or chunk.text != text:
             return
-        session.query(TranscriptWord).filter(
-            TranscriptWord.file_id == data["file_id"],
-            TranscriptWord.timestamp_start >= chunk.timestamp_start,
-            TranscriptWord.timestamp_end <= chunk.timestamp_end,
-        ).delete()
+        _delete_own_words(session, data["file_id"], chunk)
         for unit in units:
             session.add(TranscriptWord(
                 file_id=data["file_id"],
@@ -378,6 +374,35 @@ def _realign_utterance(
         chunk.words_pending_attempts = 0
 
 
+def _delete_own_words(session: Any, file_id: str, chunk: TranscriptChunk) -> None:
+    """Delete the utterance's words, keeping the neighbour's boundary word."""
+    earlier = (
+        session.query(TranscriptChunk.timestamp_end)
+        .filter(
+            TranscriptChunk.file_id == file_id,
+            TranscriptChunk.timestamp_start < chunk.timestamp_start,
+        )
+        .all()
+    )
+    prev_end = max((row[0] for row in earlier), default=None)
+    words = (
+        session.query(TranscriptWord)
+        .filter(
+            TranscriptWord.file_id == file_id,
+            TranscriptWord.timestamp_start >= chunk.timestamp_start,
+            TranscriptWord.timestamp_end <= chunk.timestamp_end,
+        )
+        .all()
+    )
+    for word in words:
+        if (
+            word.timestamp_start == word.timestamp_end == chunk.timestamp_start
+            and prev_end == chunk.timestamp_start
+        ):
+            continue
+        session.delete(word)
+
+
 def _clear_pending(file_id: str, chunk_index: int) -> None:
     with database.get_search_db() as session:
         chunk = (
@@ -388,11 +413,7 @@ def _clear_pending(file_id: str, chunk_index: int) -> None:
         if chunk is not None:
             chunk.words_pending = False
             chunk.words_pending_attempts = 0
-            session.query(TranscriptWord).filter(
-                TranscriptWord.file_id == file_id,
-                TranscriptWord.timestamp_start >= chunk.timestamp_start,
-                TranscriptWord.timestamp_end <= chunk.timestamp_end,
-            ).delete()
+            _delete_own_words(session, file_id, chunk)
 
 
 def _recompute_keywords(file_id: str, texts: list[str] | None = None) -> None:

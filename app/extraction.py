@@ -69,25 +69,6 @@ def is_corrected(session: Any, file_id: str, kind: str) -> bool:
     )
 
 
-def has_redo(session: Any, file_id: str, kind: str) -> bool:
-    row = get_file(session, file_id)
-    return bool(
-        isinstance(row, IndexedFile)
-        and getattr(row, _REDO_COLUMN[kind]) is True
-    )
-
-
-def is_protected(session: Any, file_id: str, kind: str) -> bool:
-    """A corrected file that no confirmed regenerate may replace."""
-    row = get_file(session, file_id)
-    if not isinstance(row, IndexedFile):
-        return False
-    return bool(
-        getattr(row, _FLAG_COLUMN[kind]) is True
-        and getattr(row, _REDO_COLUMN[kind]) is not True
-    )
-
-
 def mark_corrected(session: Any, file_id: str, kind: str) -> None:
     row = get_file(session, file_id)
     if row is not None:
@@ -111,12 +92,6 @@ def mark_redo_ended(session: Any, file_id: str, kind: str) -> None:
     row = get_file(session, file_id)
     if row is not None:
         setattr(row, _ENDED_COLUMN[kind], True)
-
-
-def clear_redo_ended(session: Any, file_id: str, kind: str) -> None:
-    row = get_file(session, file_id)
-    if row is not None:
-        setattr(row, _ENDED_COLUMN[kind], False)
 
 
 def generation(session: Any, file_id: str, kind: str) -> int:
@@ -524,7 +499,6 @@ __all__ = [
     "busy_in_session",
     "clear_corrections",
     "clear_redo",
-    "clear_redo_ended",
     "clear_redo_marks_on_start",
     "delete_original",
     "drop_items",
@@ -535,9 +509,7 @@ __all__ = [
     "get_picture_text",
     "has_original",
     "has_pending",
-    "has_redo",
     "is_corrected",
-    "is_protected",
     "mark_corrected",
     "mark_redo_ended",
     "pending_items",

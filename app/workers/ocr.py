@@ -258,16 +258,6 @@ def _mark_confirmed_ocr_failed(session: Any, file_id: str) -> None:
     )
 
 
-def _picture_is_protected(file_id: str) -> bool:
-    with get_search_db_read() as session:
-        file = session.query(IndexedFile).filter_by(
-            file_id=file_id, active=True
-        ).first()
-        if file is None:
-            return False
-        return bool(file.picture_text_corrected and not file.picture_text_redo)
-
-
 def _has_redo(file_id: str) -> bool:
     with get_search_db_read() as session:
         file = session.query(IndexedFile).filter_by(
