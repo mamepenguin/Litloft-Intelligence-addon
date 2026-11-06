@@ -59,15 +59,16 @@ class SearchDB:
 
     def file(
         self, file_id: str, *, drive: str = DRIVE, mime: str = "video/mp4",
-        active: bool = True,
+        active: bool = True, file_path: str | None = None,
+        file_size: int = 1, duration: float | None = None,
     ) -> None:
         name = f"{file_id}.bin"
         with database.get_search_db() as s:
             s.add(IndexedFile(
                 file_id=file_id, drive=drive, filename=name,
-                file_path=f"/drives/{drive}/{name}",
-                file_type=file_type_for(mime), mime_type=mime, file_size=1,
-                active=active,
+                file_path=file_path or f"/drives/{drive}/{name}",
+                file_type=file_type_for(mime), mime_type=mime,
+                file_size=file_size, duration=duration, active=active,
             ))
 
     # -- chunks --------------------------------------------------------------
