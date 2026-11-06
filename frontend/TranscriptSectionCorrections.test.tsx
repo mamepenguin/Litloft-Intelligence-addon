@@ -322,9 +322,11 @@ describe("SPEC-ADDON-065 — restore", () => {
         ),
       ).toBe(true),
     );
-    expect(
-      await screen.findByRole("button", { name: "元の結果に戻す" }),
-    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "元の結果に戻す" }),
+      ).not.toBeInTheDocument(),
+    );
   });
 
   it("closes the confirmation on キャンセル without posting", async () => {
