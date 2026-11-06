@@ -534,3 +534,129 @@ describe("SPEC-ADDON-064 the Ask page's scope", () => {
     expect(unscoped.textContent).not.toMatch(/^scope:/m);
   });
 });
+
+describe("SPEC-ADDON-064 the scope the page actually sends", () => {
+  it("sends the chip scope with Ask, Enter and retry", async () => {
+    await answer([
+      { kind: "answer_chunk", delta: "answer one" },
+      { kind: "citations", citations: [] },
+      { kind: "done", took_ms: 1 },
+    ] as unknown as AskStreamEvent[]);
+    setUrl("");
+    render(<IntelligenceAskPage />);
+    await screen.findByRole("button", { name: /Scope/ });
+
+    fireEvent.click(screen.getByRole("button", { name: /Scope/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Type" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Video" }));
+    await screen.findByRole("button", { name: "Remove Type Video" });
+
+    const input = screen.getByLabelText("Question input");
+    fireEvent.change(input, { target: { value: "cats" } });
+    fireEvent.click(screen.getByTestId("ask-submit"));
+
+    await waitFor(() => expect(askQuestionStream).toHaveBeenCalledTimes(1));
+    expect(
+      optionsScope(vi.mocked(askQuestionStream).mock.calls[0]),
+    ).toMatchObject({ kinds: ["video"] });
+    await screen.findByText("answer one");
+
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: false });
+    await waitFor(() => expect(askQuestionStream).toHaveBeenCalledTimes(2));
+    expect(
+      optionsScope(vi.mocked(askQuestionStream).mock.calls[1]),
+    ).toMatchObject({ kinds: ["video"] });
+    await screen.findByText("answer one");
+
+    stream.error = new LLMRequestError("503 Service Unavailable", 503, {
+      code: "scope_unavailable",
+      message: "Scope unavailable",
+    });
+    fireEvent.click(screen.getByTestId("ask-submit"));
+    await waitFor(() => expect(askQuestionStream).toHaveBeenCalledTimes(3));
+    expect(await screen.findByText("Could not load the scope")).toBeInTheDocument();
+
+    stream.error = null;
+    await answer([
+      { kind: "answer_chunk", delta: "answer two" },
+      { kind: "citations", citations: [] },
+      { kind: "done", took_ms: 1 },
+    ] as unknown as AskStreamEvent[]);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(askQuestionStream).toHaveBeenCalledTimes(4));
+    expect(
+      optionsScope(vi.mocked(askQuestionStream).mock.calls[3]),
+    ).toMatchObject({ kinds: ["video"] });
+  });
+
+  it("sends no scope after the last chip is removed", async () => {
+    await answer([
+      { kind: "answer_chunk", delta: "answer" },
+      { kind: "citations", citations: [] },
+      { kind: "done", took_ms: 1 },
+    ] as unknown as AskStreamEvent[]);
+    setUrl("?scope=type%3Avideo");
+    render(<IntelligenceAskPage />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Remove Type Video" }),
+    );
+    const input = screen.getByLabelText("Question input");
+    fireEvent.change(input, { target: { value: "cats" } });
+    fireEvent.click(screen.getByTestId("ask-submit"));
+
+    await waitFor(() => expect(askQuestionStream).toHaveBeenCalledTimes(1));
+    expect(optionsScope(vi.mocked(askQuestionStream).mock.calls[0])).toBeUndefined();
+  });
+
+  it("aborts the open stream on a popstate read", async () => {
+    let aborted = false;
+    vi.mocked(askQuestionStream).mockImplementation(async function* (
+      _query: string,
+      _drive: string,
+      options?: { signal?: AbortSignal },
+    ) {
+      yield {
+        kind: "sources",
+        sources: [
+          {
+            file_id: "f1",
+            drive: "family",
+            filename: "source.md",
+            file_type: "document",
+          },
+        ],
+      } as unknown as AskStreamEvent;
+      yield { kind: "answer_chunk", delta: "partial answer" } as AskStreamEvent;
+      await new Promise<void>((_resolve, reject) => {
+        const signal = options?.signal;
+        const abort = () => {
+          aborted = true;
+          reject(new DOMException("Aborted", "AbortError"));
+        };
+        if (!signal) {
+          reject(new Error("the page asked without an abort signal"));
+          return;
+        }
+        if (signal.aborted) abort();
+        else signal.addEventListener("abort", abort);
+      });
+    });
+    setUrl("?q=cats&scope=path%3AWork");
+    render(<IntelligenceAskPage />);
+    expect(await screen.findByText("partial answer")).toBeInTheDocument();
+
+    act(() => {
+      setUrl("?scope=path%3AWork");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+
+    await waitFor(() => expect(aborted).toBe(true));
+    await waitFor(() =>
+      expect(screen.queryByText("partial answer")).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.getByRole("button", { name: "Remove Folder Work" }),
+    ).toBeInTheDocument();
+  });
+});
