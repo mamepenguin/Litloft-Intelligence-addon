@@ -8,6 +8,7 @@ dropped, and the citation allow-list refuses them.
 
 from __future__ import annotations
 
+import json
 import sys
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -28,11 +29,20 @@ for _mod in (
 
 import pytest  # noqa: E402
 
-from app.rag.tools.context import ToolContext  # noqa: E402
+from app.config import AgenticModelEntry, LLMConfig, Settings  # noqa: E402
+from app.llm import ChatToolCall, ChatTurnResult  # noqa: E402
+from app.rag.agentic import AgenticAnswer, run_agentic_loop  # noqa: E402
+from app.rag.agentic_types import AgenticTelemetry  # noqa: E402
+from app.rag.service import _stream_answer  # noqa: E402
+from app.rag.tools.context import (  # noqa: E402
+    ToolContext,
+    ToolResultEnvelope,
+)
 from app.rag.tools.get_file_chunks import get_file_chunks  # noqa: E402
 from app.rag.tools.get_file_detail import get_file_detail  # noqa: E402
 from app.rag.tools.get_related_files import get_related_files  # noqa: E402
 from app.rag.tools.search_files import search_files  # noqa: E402
+from tests.llm_helpers import bind_llm  # noqa: E402
 
 IN_SCOPE = "s1"
 OUT_OF_SCOPE = "x9"
@@ -191,3 +201,129 @@ async def test_get_related_files_drops_related_files_outside_the_constraint(
         {"file_id": "s2", "kind": "cite", "direction": "outgoing"}
     ]
     assert context.tool_returned_file_ids == {"s2"}
+
+
+@pytest.fixture()
+def agentic_settings(monkeypatch):
+    """An agentic-capable profile so ``_stream_answer`` takes the loop."""
+    from pathlib import Path
+
+    settings = Settings(
+        intelligence_data_dir=Path("/tmp/x"),
+        litloft_db_path=Path("/tmp/x.db"),
+        model_cache_dir=Path("/tmp/models"),
+        search_db_path=Path("/tmp/search.db"),
+        llm=LLMConfig(
+            provider="openai_compatible",
+            base_url="http://localhost:11434/v1",
+            model="qwen2.5:14b",
+            agentic_mode="auto",
+            agentic_models=(
+                AgenticModelEntry(name="qwen2.5:14b", context_window=32768),
+            ),
+        ),
+    )
+    monkeypatch.setattr("app.config.settings", settings)
+    monkeypatch.setattr("app.rag.service.settings", settings)
+    llm_client = MagicMock()
+    llm_client.enabled = True
+    llm_client.generate_json = AsyncMock(return_value=None)
+    llm_client.chat_with_tools = AsyncMock()
+    bind_llm(monkeypatch, lambda: llm_client, config=settings.llm)
+    return settings
+
+
+@pytest.mark.asyncio
+async def test_scoped_stream_gives_the_agentic_loop_the_effective_set(
+    monkeypatch, agentic_settings
+):
+    """SPEC-ADDON-054 I1/I2: the agentic branch's E is S, not the drive."""
+    loop = AsyncMock(
+        return_value=AgenticAnswer(
+            answer="",
+            citations=[],
+            telemetry=AgenticTelemetry(
+                tool_calls=(), max_context_tokens_used=0, forced_answer=False
+            ),
+        )
+    )
+    monkeypatch.setattr("app.rag.service.run_agentic_loop", loop)
+
+    events = [
+        event
+        async for event in _stream_answer(
+            query="hello",
+            credential=None,
+            drive="family",
+            scope={
+                "folders": ["Work"],
+                "collections": [],
+                "tags": [],
+                "kinds": [],
+            },
+            scope_file_ids=["s1", "s2"],
+        )
+    ]
+
+    assert events[0].kind == "scope"
+    assert loop.await_args.kwargs["file_id_constraint"] == frozenset(
+        {"s1", "s2"}
+    )
+
+
+class _ScriptedLLM:
+    enabled = True
+
+    def __init__(self, turns: list[ChatTurnResult | None]) -> None:
+        self._turns = list(turns)
+
+    async def chat_with_tools(self, messages, tools=None, **kwargs):
+        return self._turns.pop(0)
+
+
+def _tool_call_turn(name: str, arguments: dict) -> ChatTurnResult:
+    return ChatTurnResult(
+        content=None,
+        tool_calls=(
+            ChatToolCall(
+                id="tc1",
+                name=name,
+                arguments_raw=json.dumps(arguments),
+            ),
+        ),
+        finish_reason="tool_calls",
+    )
+
+
+def _final_turn(payload: dict[str, Any]) -> ChatTurnResult:
+    return ChatTurnResult(
+        content=json.dumps(payload), tool_calls=(), finish_reason="stop"
+    )
+
+
+@pytest.mark.asyncio
+async def test_agentic_loop_context_carries_the_effective_set(monkeypatch):
+    """SPEC-ADDON-054 I2: the tools and citation allow-list see E."""
+    contexts: list[ToolContext] = []
+
+    async def _dispatch(name, arguments, *, context):
+        contexts.append(context)
+        return ToolResultEnvelope(payload={"files": []}, token_estimate=0)
+
+    monkeypatch.setattr("app.rag.agentic._dispatch_tool", _dispatch)
+    llm = _ScriptedLLM(
+        [
+            _tool_call_turn("search_files", {"query": "x"}),
+            _final_turn({"answer": "ok", "citations": []}),
+        ]
+    )
+
+    await run_agentic_loop(
+        query="x",
+        llm_client=llm,  # type: ignore[arg-type]
+        max_total_tokens=10_000,
+        file_id_constraint=frozenset({IN_SCOPE}),
+    )
+
+    assert contexts
+    assert contexts[0].file_id_constraint == frozenset({IN_SCOPE})

@@ -44,8 +44,10 @@ from app.config import (  # noqa: E402
     RagConfig,
 )
 from app.file_matching import FilterUnavailable  # noqa: E402
+from app.rag.coarse_retriever import ShortlistResult  # noqa: E402
 from app.rag.query_decomposer import DecomposedQuery, TimeRange  # noqa: E402
 from app.rag.query_transform import StructuredQuery  # noqa: E402
+from app.rag.service import _stream_answer  # noqa: E402
 from app.routers import rag as rag_module  # noqa: E402
 from app.routers.rag import ask_endpoint  # noqa: E402
 from app.schemas import AskRequest  # noqa: E402
@@ -267,7 +269,7 @@ async def test_scoped_stream_opens_with_one_normalised_scope_event(
     monkeypatch.setattr(
         rag_module, "fetch_matching_file_ids", _resolve, raising=False
     )
-    _stub_legacy_retrieval(monkeypatch)
+    retrieve = _stub_legacy_retrieval(monkeypatch)
 
     result = await ask_endpoint(
         body=AskRequest(query=QUESTION, scope=_scope_payload()),
@@ -288,8 +290,15 @@ async def test_scoped_stream_opens_with_one_normalised_scope_event(
         },
         "matched_file_count": 2,
     }
+    names = [name for name, _ in events]
+    assert "keywords" in names
     done = next(data for name, data in events if name == "done")
     assert "scope_empty" not in done
+    assert "error" not in done
+    # The scope event is a report, not the narrowing: the retriever itself
+    # must rank inside S and must not receive the old post-filter scope.
+    assert set(retrieve.await_args.kwargs["file_id_constraint"]) == {"s1", "s2"}
+    assert retrieve.await_args.kwargs.get("file_id_scope") is None
 
 
 @pytest.mark.asyncio
@@ -457,3 +466,142 @@ async def test_history_empty_intersection_graceful_falls_back_to_the_scope(
 
     assert "history_filter" not in [name for name, _ in events]
     assert set(retrieve.await_args.kwargs["file_id_constraint"]) == {"s1", "s2"}
+
+
+@pytest.mark.asyncio
+async def test_unscoped_request_stays_unscoped_through_the_stream(
+    monkeypatch, ask_env
+):
+    """SPEC-ADDON-054 I4: no scope in, no scope event and no constraint."""
+    retrieve = _stub_legacy_retrieval(monkeypatch)
+
+    result = await ask_endpoint(
+        body=AskRequest(query=QUESTION),
+        access_token="tok",
+        drive=HOME,
+    )
+    events = await _collect_sse(result)
+
+    names = [name for name, _ in events]
+    assert "scope" not in names
+    assert "keywords" in names
+    assert retrieve.await_args.kwargs.get("file_id_constraint") is None
+    done = next(data for name, data in events if name == "done")
+    assert "scope_empty" not in done
+    assert "error" not in done
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("history_ids", "expected"),
+    [
+        (None, ["s1", "s2", "s3"]),
+        (["s2", "h9"], ["s2"]),
+    ],
+    ids=["no-history", "history-intersection"],
+)
+async def test_scoped_hierarchical_keeps_the_effective_set_everywhere(
+    monkeypatch, make_settings, history_ids, expected
+):
+    """SPEC-ADDON-054 I1: the shortlist, exact match and clue retrievals all
+    rank inside E, and the scoped clue retrieval carries no post-filter."""
+    settings = make_settings(
+        features=type(make_settings().features)(rag=True),
+        llm=LLMConfig(provider="openai_compatible", model="llama3"),
+        rag=RagConfig(
+            hierarchical=HierarchicalRagConfig(
+                enabled=True,
+                coarse_top_k=5,
+                coarse_score_threshold=0.3,
+                min_drive_files_for_shortlist=1,
+                exact_match_max_files=10,
+                fallback_full_search=False,
+            ),
+            personal_history=PersonalHistoryConfig(
+                enabled=True, fallback_when_empty="graceful"
+            ),
+        ),
+    )
+    monkeypatch.setattr("app.config.settings", settings)
+    monkeypatch.setattr("app.rag.service.settings", settings)
+
+    if history_ids is None:
+        monkeypatch.setattr(
+            "app.rag.service._resolve_personal_history",
+            AsyncMock(return_value=_no_history()),
+        )
+    else:
+        _stub_history(monkeypatch, history_ids)
+    monkeypatch.setattr(
+        "app.rag.service.transform_query_structured",
+        AsyncMock(
+            return_value=StructuredQuery(
+                required=(), semantic=("kw",), raw_keywords="kw"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "app.rag.service._filter_file_ids_via_internal_api",
+        AsyncMock(side_effect=lambda ids, credential=None, **kw: set(ids)),
+    )
+    monkeypatch.setattr(
+        "app.rag.service.fetch_long_summaries", lambda ids: {}
+    )
+    monkeypatch.setattr(
+        "app.rag.service.generate_clues",
+        AsyncMock(return_value=["clue a", "clue b"]),
+    )
+
+    coarse_calls: list[list[str]] = []
+
+    async def _coarse(query, drive, *, top_k, file_id_constraint=None):
+        constraint = list(file_id_constraint or [])
+        coarse_calls.append(constraint)
+        ids = tuple(constraint[:2])
+        scores = tuple([0.9] * len(ids))
+        return ShortlistResult(
+            file_ids=ids,
+            scores=scores,
+            top_score=scores[0] if scores else 0.0,
+            drive_file_count=len(constraint),
+        )
+
+    exact_calls: list[list[str]] = []
+
+    async def _exact(keywords, drive, *, max_files, file_ids=None):
+        exact_calls.append(list(file_ids or []))
+        return ()
+
+    monkeypatch.setattr("app.rag.service.coarse_retrieve", _coarse)
+    monkeypatch.setattr("app.rag.service.lookup_exact_match_files", _exact)
+    retrieve = AsyncMock(return_value=[])
+    monkeypatch.setattr("app.rag.service.retrieve_with_keywords", retrieve)
+
+    events = [
+        event
+        async for event in _stream_answer(
+            query=QUESTION,
+            credential=None,
+            drive=HOME,
+            viewer_id="viewer-1",
+            scope={
+                "folders": ["Work/2024"],
+                "collections": ["読書メモ"],
+                "tags": ["会議"],
+                "kinds": ["text"],
+            },
+            scope_file_ids=["s1", "s2", "s3"],
+        )
+    ]
+
+    assert coarse_calls == [expected]
+    assert exact_calls == [expected]
+    assert retrieve.await_args_list
+    for call in retrieve.await_args_list:
+        assert set(call.kwargs["file_id_constraint"]) == set(expected)
+        assert call.kwargs.get("file_id_scope") is None
+
+    shortlist_event = next(e for e in events if e.kind == "shortlist")
+    assert set(shortlist_event.data["file_ids"]) <= set(expected)
+    done = next(e for e in events if e.kind == "done")
+    assert "error" not in done.data
