@@ -157,6 +157,7 @@
     "transcriptRestoreOriginal": "Restore original",
     "transcriptRestoreConfirm": "Undo every correction and put back what the machine produced.",
     "transcriptRestoreConfirmAction": "Restore",
+    "transcriptContinue": "Continue",
     "transcriptBusy": "Something is still running for this file, so it cannot be changed now.",
     "transcriptSaveFailed": "Couldn't save",
     "transcriptRestoreFailed": "Couldn't restore",

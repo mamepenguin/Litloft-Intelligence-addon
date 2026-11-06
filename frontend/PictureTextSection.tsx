@@ -12,13 +12,10 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Pencil } from "lucide-react";
 
-import {
-  getPictureText,
-  restorePictureText,
-  updatePictureText,
-} from "./api";
+import { getPictureText, restorePictureText, updatePictureText } from "./api";
 import type { PictureTextResponse } from "./api";
 import { LLMRequestError } from "./api";
+import { Button } from "@/components/Button";
 
 interface PictureTextSectionProps {
   fileId: string;
@@ -159,21 +156,21 @@ export default function PictureTextSection({
         <div className="mb-2 rounded-lg border border-bg-border bg-bg-elevated p-3 text-xs">
           <p className="mb-2 text-text-primary">{t("transcriptRestoreConfirm")}</p>
           <div className="flex justify-end gap-2">
-            <button
-              type="button"
+            <Button
+              variant="primary"
+              size="sm"
               onClick={() => void doRestore()}
               disabled={restoring}
-              className="rounded-lg bg-accent px-2.5 py-1 font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-sand disabled:text-warm-silver disabled:hover:bg-sand"
             >
               {t("transcriptRestoreConfirmAction")}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => setConfirmRestore(false)}
-              className="rounded-lg bg-bg-card px-2.5 py-1 font-medium text-text-primary hover:bg-bg-border"
             >
               {t("transcriptCancel")}
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -199,21 +196,21 @@ export default function PictureTextSection({
             className="w-full rounded-lg border border-bg-border bg-bg-primary p-2 text-sm text-text-primary outline-none focus:border-focus-ring"
           />
           <div className="mt-2 flex justify-end gap-2 text-xs">
-            <button
-              type="button"
+            <Button
+              variant="primary"
+              size="sm"
               onClick={() => void save()}
               disabled={saving}
-              className="rounded-lg bg-accent px-2.5 py-1 font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-sand disabled:text-warm-silver disabled:hover:bg-sand"
             >
               {t("transcriptSave")}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={cancelEdit}
-              className="rounded-lg bg-bg-elevated px-2.5 py-1 font-medium text-text-primary hover:bg-bg-border"
             >
               {t("transcriptCancel")}
-            </button>
+            </Button>
           </div>
         </div>
       ) : (

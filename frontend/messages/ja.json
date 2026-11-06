@@ -157,6 +157,7 @@
     "transcriptRestoreOriginal": "元の結果に戻す",
     "transcriptRestoreConfirm": "修正をすべて取り消し、機械が出した元の結果に戻します。",
     "transcriptRestoreConfirmAction": "戻す",
+    "transcriptContinue": "続ける",
     "transcriptBusy": "処理中のため、いまは操作できません。",
     "transcriptSaveFailed": "保存できませんでした",
     "transcriptRestoreFailed": "戻せませんでした",

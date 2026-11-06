@@ -16,6 +16,7 @@ import { formatDuration } from "@/lib/format";
 import { getSubtitleUrl } from "@/lib/api";
 import type { SubtitleInfo } from "@/types";
 import { useAddonStatus } from "@/components/AddonSlotsProvider";
+import { Button } from "@/components/Button";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useImeKeyGuard } from "@/lib/ime";
 import type { MediaController } from "@/lib/mediaController";
@@ -75,6 +76,10 @@ interface TranscriptSectionProps {
 type Source = "chunks" | "words" | "external";
 
 const CJK_LANGUAGES = /^(ja|zh|ko|th)/i;
+
+/** Reveals a row's secondary controls on hover, focus and a coarse pointer. */
+const REVEAL =
+  "opacity-0 transition-opacity group-hover/cue:opacity-100 group-focus-within/cue:opacity-100 pointer-coarse:opacity-100";
 
 function parseVttCues(vtt: string): TranscriptChunkItem[] {
   const lines = vtt.split(/\r?\n/);
@@ -896,21 +901,21 @@ export default function TranscriptSection({
         <div className="mb-2 rounded-lg border border-bg-border bg-bg-elevated p-3 text-xs">
           <p className="mb-2 text-text-primary">{t("transcriptRestoreConfirm")}</p>
           <div className="flex justify-end gap-2">
-            <button
-              type="button"
+            <Button
+              variant="primary"
+              size="sm"
               onClick={() => void doRestore()}
               disabled={restoring}
-              className="rounded-lg bg-accent px-2.5 py-1 font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-sand disabled:text-warm-silver disabled:hover:bg-sand"
             >
               {t("transcriptRestoreConfirmAction")}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => setConfirmRestore(false)}
-              className="rounded-lg bg-bg-card px-2.5 py-1 font-medium text-text-primary hover:bg-bg-border"
             >
               {t("transcriptCancel")}
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -920,21 +925,21 @@ export default function TranscriptSection({
             {t("transcriptRefineCorrectedConfirm")}
           </p>
           <div className="flex justify-end gap-2">
-            <button
-              type="button"
+            <Button
+              variant="primary"
+              size="sm"
               onClick={() => void runRefine()}
               disabled={refining}
-              className="rounded-lg bg-accent px-2.5 py-1 font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-sand disabled:text-warm-silver disabled:hover:bg-sand"
             >
-              {t("transcriptSave")}
-            </button>
-            <button
-              type="button"
+              {t("transcriptContinue")}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => setConfirmRefine(false)}
-              className="rounded-lg bg-bg-card px-2.5 py-1 font-medium text-text-primary hover:bg-bg-border"
             >
               {t("transcriptCancel")}
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -1049,29 +1054,27 @@ export default function TranscriptSection({
                   </span>
                 )}
               </button>
-              <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover/cue:opacity-100 group-focus-within/cue:opacity-100 pointer-coarse:opacity-100">
-                {source === "chunks" && (
-                  <button
-                    type="button"
-                    onClick={() => beginEdit(cue)}
-                    disabled={busy}
-                    aria-label={t("transcriptEdit")}
-                    className="m-0.5 inline-flex h-8 flex-shrink-0 items-center justify-center rounded-lg px-2 text-xs font-medium text-text-muted hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
-                  >
-                    {t("transcriptEdit")}
-                  </button>
-                )}
+              {source === "chunks" && (
                 <button
                   type="button"
-                  onClick={() => captureCue(cue)}
-                  aria-label={t("transcriptCaptureCue", {
-                    time: formatDuration(cue.start),
-                  })}
-                  className="relative m-0.5 inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-text-muted hover:bg-bg-elevated hover:text-text-primary pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5 pointer-coarse:before:content-['']"
+                  onClick={() => beginEdit(cue)}
+                  disabled={busy}
+                  aria-label={t("transcriptEdit")}
+                  className={`m-0.5 inline-flex h-8 flex-shrink-0 items-center justify-center rounded-lg px-2 text-xs font-medium text-text-muted hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50 ${REVEAL}`}
                 >
-                  <Quote size={14} />
+                  {t("transcriptEdit")}
                 </button>
-              </div>
+              )}
+              <button
+                type="button"
+                onClick={() => captureCue(cue)}
+                aria-label={t("transcriptCaptureCue", {
+                  time: formatDuration(cue.start),
+                })}
+                className={`relative m-0.5 inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-text-muted hover:bg-bg-elevated hover:text-text-primary pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5 pointer-coarse:before:content-[''] ${REVEAL}`}
+              >
+                <Quote size={14} />
+              </button>
             </div>
           );
         })}
