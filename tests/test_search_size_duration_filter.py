@@ -1,4 +1,4 @@
-"""SPEC-ADDON-064: ``sizes`` and ``durations`` on intelligence's filter.
+"""SPEC-ADDON-065: ``sizes`` and ``durations`` on intelligence's filter.
 
 The addon validates them exactly as the core's listing and request model do
 (SPEC-CORE-044 sending 5), rewrites them in the wire form with duplicates
@@ -105,7 +105,7 @@ REJECTED = [
 
 
 @pytest.mark.parametrize("conditions", ACCEPTED)
-def test_spec_addon_064_1_accepts_a_filter_the_core_accepts(conditions):
+def test_spec_addon_065_1_accepts_a_filter_the_core_accepts(conditions):
     parsed = _parse(**conditions)
 
     assert isinstance(parsed.sizes, list)
@@ -115,7 +115,7 @@ def test_spec_addon_064_1_accepts_a_filter_the_core_accepts(conditions):
 
 
 @pytest.mark.parametrize("conditions", REJECTED)
-def test_spec_addon_064_1_rejects_a_filter_the_core_rejects(conditions):
+def test_spec_addon_065_1_rejects_a_filter_the_core_rejects(conditions):
     field = next(iter(conditions))
     assert getattr(_parse(**{field: ["gte:0"]}), field) == ["gte:0"]
 
@@ -123,7 +123,7 @@ def test_spec_addon_064_1_rejects_a_filter_the_core_rejects(conditions):
         _parse(**conditions)
 
 
-def test_spec_addon_064_1_defaults_both_lists_to_empty():
+def test_spec_addon_065_1_defaults_both_lists_to_empty():
     parsed = _parse()
 
     assert parsed.sizes == []
@@ -163,7 +163,7 @@ def test_spec_addon_064_1_defaults_both_lists_to_empty():
         "the-cap-counts-after-dedupe",
     ],
 )
-def test_spec_addon_064_1_normalises_before_the_core_call(
+def test_spec_addon_065_1_normalises_before_the_core_call(
     conditions, sizes, durations
 ):
     parsed = _parse(**conditions)
@@ -172,14 +172,14 @@ def test_spec_addon_064_1_normalises_before_the_core_call(
     assert parsed.durations == durations
 
 
-def test_spec_addon_064_1_an_unknown_key_is_invalid():
+def test_spec_addon_065_1_an_unknown_key_is_invalid():
     raw = json.dumps({"sizes": [], "size": ["gte:1024"]})
 
     with pytest.raises(InvalidFilter):
         parse_search_filter(raw)
 
 
-async def test_spec_addon_064_1_passes_both_lists_to_files_matching(monkeypatch):
+async def test_spec_addon_065_1_passes_both_lists_to_files_matching(monkeypatch):
     core = install(monkeypatch, MatchingCore(file_ids=["a"]))
     parsed = _parse(
         tags=["budget"],
@@ -201,7 +201,7 @@ async def test_spec_addon_064_1_passes_both_lists_to_files_matching(monkeypatch)
     assert sent["tags"] == ["budget"]
 
 
-async def test_spec_addon_064_1_sends_empty_lists_when_no_range_was_given(monkeypatch):
+async def test_spec_addon_065_1_sends_empty_lists_when_no_range_was_given(monkeypatch):
     core = install(monkeypatch, MatchingCore(file_ids=[]))
 
     await fetch_matching_file_ids("main", _parse())
@@ -211,7 +211,7 @@ async def test_spec_addon_064_1_sends_empty_lists_when_no_range_was_given(monkey
     assert sent["durations"] == []
 
 
-async def test_spec_addon_064_1_an_impossible_range_is_passed_through(monkeypatch):
+async def test_spec_addon_065_1_an_impossible_range_is_passed_through(monkeypatch):
     core = install(monkeypatch, MatchingCore(file_ids=[]))
     parsed = _parse(sizes=["gt:1073741824", "lt:524288000"])
 
@@ -222,7 +222,7 @@ async def test_spec_addon_064_1_an_impossible_range_is_passed_through(monkeypatc
     assert sent["sizes"] == ["gt:1073741824", "lt:524288000"]
 
 
-async def test_spec_addon_064_1_a_rejected_range_makes_no_core_call(monkeypatch):
+async def test_spec_addon_065_1_a_rejected_range_makes_no_core_call(monkeypatch):
     core = install(monkeypatch, MatchingCore(file_ids=[]))
     assert _parse(durations=["gte:0"]).durations == ["gte:0"]
 
@@ -232,7 +232,7 @@ async def test_spec_addon_064_1_a_rejected_range_makes_no_core_call(monkeypatch)
     assert core.matching_requests == []
 
 
-def test_spec_addon_064_1_a_malformed_range_answers_422(api, search_index, core):  # noqa: F811
+def test_spec_addon_065_1_a_malformed_range_answers_422(api, search_index, core):  # noqa: F811
     response = api(
         "/search",
         {
@@ -245,7 +245,7 @@ def test_spec_addon_064_1_a_malformed_range_answers_422(api, search_index, core)
     assert core.matching_requests == []
 
 
-def test_spec_addon_064_1_an_accepted_range_reaches_the_core(api, search_index, core):  # noqa: F811
+def test_spec_addon_065_1_an_accepted_range_reaches_the_core(api, search_index, core):  # noqa: F811
     response = api(
         "/search",
         {
