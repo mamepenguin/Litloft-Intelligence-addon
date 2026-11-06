@@ -86,6 +86,21 @@ def _copy_trim(source: Path, target: Path, start: float) -> Path:
     return target
 
 
+def _tail_truncated(source: Path, target: Path, keep: float = 0.85) -> Path:
+    """A faststart remux with the tail bytes removed: ffprobe opens it, ffmpeg
+    decodes the early frames and then errors."""
+    subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-y", "-i", str(source),
+            "-c", "copy", "-movflags", "+faststart", str(target),
+        ],
+        check=True,
+    )
+    data = target.read_bytes()
+    target.write_bytes(data[: int(len(data) * keep)])
+    return target
+
+
 def _scanned_pdf(path: Path, pages: int = 2) -> Path:
     import fitz
 
@@ -117,6 +132,9 @@ def media(tmp_path_factory) -> dict[str, Path]:
         large_trim = _copy_trim(
             large_base, root / "large-trim.mp4", start=0.5,
         )
+        large_tail = _tail_truncated(
+            large_base, root / "large-tail.mp4", keep=0.85,
+        )
         corrupt = root / "corrupt.mp4"
         corrupt.write_bytes(b"this is not a video")
         scanned = _scanned_pdf(root / "scanned.pdf")
@@ -132,6 +150,7 @@ def media(tmp_path_factory) -> dict[str, Path]:
         "portrait": portrait,
         "large": large,
         "large_trim": large_trim,
+        "large_tail": large_tail,
         "corrupt": corrupt,
         "scanned": scanned,
         "text_pdf": text_pdf,
@@ -366,19 +385,61 @@ def test_spec_addon_066_i4_an_inactive_row_writes_nothing(
     assert _frame_rows(search_db) == []
 
 
-def test_spec_addon_066_a4_an_unparsable_key_frame_time_writes_nothing(
+def test_spec_addon_066_a4_showinfo_is_the_only_time_source():
+    """A showinfo line is the frame's time; a missing or unparsable one is not."""
+    import app.workers.frame_ocr as module
+
+    assert module._showinfo_time(
+        "[Parsed_showinfo_0 @ 0x1] n:0 pts:140 pts_time:1.4 duration:2"
+    ) == 1.4
+    assert module._showinfo_time(
+        "[Parsed_showinfo_0 @ 0x1] n:0 pts:0 pts_time:N/A duration:2"
+    ) is None
+    assert module._showinfo_time("no time here") is None
+
+
+def test_spec_addon_066_a4_a_missing_showinfo_time_writes_nothing(
     frame_reader, search_db, tmp_path, media, monkeypatch,
 ):
+    import os
+    import tempfile
+
     module, _engine = frame_reader
     _video(search_db, tmp_path, media["large_trim"])
-    real_run = module.subprocess.run
+    width, height = module._probe(str(media["large_trim"]))
+    stdout = tempfile.TemporaryFile()
+    stderr = tempfile.TemporaryFile()
+    stdout.write(b"\x00" * (width * height * 3))
+    stdout.seek(0)
+    stderr.write(
+        b"[Parsed_showinfo_0 @ 0x1] n:0 pts:0 pts_time:N/A\n"
+    )
+    stderr.seek(0)
 
-    def fake_run(command, *args, **kwargs):
-        if any("pts_time" in str(part) for part in command):
-            return SimpleNamespace(stdout="N/A\n", returncode=0)
-        return real_run(command, *args, **kwargs)
+    class _FakeProcess:
+        returncode = 0
 
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
+        def __init__(self):
+            self.stdout = stdout
+            self.stderr = stderr
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            return None
+
+    real_popen = module.subprocess.Popen
+
+    def fake_popen(command, *args, **kwargs):
+        if command and "ffprobe" in str(command[0]):
+            return real_popen(command, *args, **kwargs)
+        return _FakeProcess()
+
+    monkeypatch.setattr(module.subprocess, "Popen", fake_popen)
 
     assert module.index_frame_ocr("vid1") is False
     assert _frame_rows(search_db) == []
@@ -386,38 +447,21 @@ def test_spec_addon_066_a4_an_unparsable_key_frame_time_writes_nothing(
     assert search_db.flag("vid1", "frame_ocr_indexed") == 0
 
 
-def test_spec_addon_066_a4_a_key_frame_count_mismatch_writes_nothing(
-    frame_reader, search_db, tmp_path, media, monkeypatch,
+def test_spec_addon_066_failure_a_tail_cut_keeps_the_early_frames(
+    frame_reader, search_db, tmp_path, media,
 ):
+    """An early ffmpeg end stores the frames already read, with their times."""
     module, _engine = frame_reader
-    _video(search_db, tmp_path, media["large_trim"])
-    real_run = module.subprocess.run
+    _video(search_db, tmp_path, media["large_tail"])
 
-    def fake_run(command, *args, **kwargs):
-        text = " ".join(str(part) for part in command)
-        if "packet=pts_time" in text:
-            return SimpleNamespace(
-                stdout=(
-                    "1.4,K__\n3.4,K__\n5.4,K__\n7.4,K__\n"
-                    "9.4,K__\n11.4,K__\n13.4,K__\n"
-                ),
-                returncode=0,
-            )
-        if "frame=pts_time" in text:
-            return SimpleNamespace(
-                stdout=(
-                    "1.4\n3.4\n5.4\n7.4\n9.4\n11.4\n13.4\n"
-                ),
-                returncode=0,
-            )
-        return real_run(command, *args, **kwargs)
+    assert module.index_frame_ocr("vid1") is True
 
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
-
-    assert module.index_frame_ocr("vid1") is False
-    assert _frame_rows(search_db) == []
-    assert search_db.flag("vid1", "frame_ocr_read") == 0
-    assert search_db.flag("vid1", "frame_ocr_indexed") == 0
+    rows = _frame_rows(search_db)
+    assert rows
+    assert rows[0][1] == 0.0
+    assert all(row[1] >= 0 for row in rows)
+    assert search_db.flag("vid1", "frame_ocr_read") == 1
+    assert search_db.flag("vid1", "frame_ocr_indexed") == 1
 
 
 # ---------------------------------------------------------------------------

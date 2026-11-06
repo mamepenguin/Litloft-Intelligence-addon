@@ -11,9 +11,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
+import re
 import select
 import stat
 import subprocess
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -47,11 +50,12 @@ class _Unreadable(Exception):
     """The file was reached but cannot be decoded; close it as read."""
 
 
-class _ProbeError(Exception):
-    """The key-frame timestamps could not be listed; do not invent them."""
-
-    def __init__(self, detail: str) -> None:
-        super().__init__(detail)
+# Sentinels for the showinfo reader thread.
+_BAD = object()
+_END = object()
+_SHOWINFO_PTS = re.compile(
+    r"pts_time:([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"
+)
 
 
 @dataclass
@@ -82,11 +86,17 @@ def _reachable(path: str) -> bool:
 
 
 def _probe(path: str) -> tuple[int, int]:
-    """The first video stream's upright, even width and height.
+    """The first video stream's upright, even width and height."""
+    return _probe_geometry(path)[:2]
+
+
+def _probe_geometry(path: str) -> tuple[int, int, bool]:
+    """The upright even size, and whether a scale is needed to reach it.
 
     ffmpeg auto-rotates on decode, so a phone video's display matrix turns a
     coded 3840x2160 into 2160x3840. The reader must cut the raw frames at
     that post-rotation size, and the same size decides the short-side path.
+    An odd coded side needs the scale filter; an even one does not.
     """
     try:
         out = subprocess.run(
@@ -118,55 +128,36 @@ def _probe(path: str) -> tuple[int, int]:
     if abs(rotation) % 180 == 90:
         width, height = height, width
 
+    needs_scale = bool(width % 2 or height % 2)
     width -= width % 2
     height -= height % 2
     if width <= 0 or height <= 0:
         raise _Unreadable("no readable video stream")
-    return width, height
+    return width, height, needs_scale
 
 
-def _keyframe_times(path: str) -> list[float]:
-    """Key-frame timestamps from the same decoder the reader runs.
-
-    The packet list is not a substitute: a stream-copied MP4/MOV keeps a
-    leading ``KD_`` packet at a negative time that the decoder discards, so
-    the packet list would stamp every frame one GOP early. A failed listing,
-    a timeout, or a line whose ``pts_time`` does not parse raises
-    ``_ProbeError``: the reader must not fall back to the frame ordinal.
-    """
+def _showinfo_time(line: str) -> float | None:
+    """The ``pts_time`` of one ``showinfo`` line, or ``None`` when absent."""
+    match = _SHOWINFO_PTS.search(line)
+    if match is None:
+        return None
     try:
-        out = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-skip_frame", "nokey", "-show_entries", "frame=pts_time",
-             "-of", "csv=p=0", path],
-            capture_output=True, text=True, timeout=300,
-        )
-        if out.returncode != 0:
-            raise _ProbeError("ffprobe could not list frames")
-    except _ProbeError:
-        raise
-    except Exception as exc:
-        raise _ProbeError("ffprobe frame listing failed") from exc
-
-    times: list[float] = []
-    for line in out.stdout.splitlines():
-        value = line.strip().rstrip(",")
-        if not value:
-            continue
-        if not _is_float(value):
-            raise _ProbeError("a key frame has no parsable pts_time")
-        times.append(float(value))
-    if not times:
-        raise _ProbeError("no key frame was listed")
-    return sorted(times)
+        return float(match.group(1))
+    except ValueError:
+        return None
 
 
-def _is_float(value: str) -> bool:
+def _drain_showinfo(stream: Any, times: "queue.Queue[object]") -> None:
+    """Read ffmpeg's stderr, putting each showinfo PTS in frame order."""
     try:
-        float(value)
-    except (TypeError, ValueError):
-        return False
-    return True
+        for raw in stream:
+            line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+            if "Parsed_showinfo" not in line or "pts_time:" not in line:
+                continue
+            value = _showinfo_time(line)
+            times.put(value if value is not None else _BAD)
+    finally:
+        times.put(_END)
 
 
 def _dhash(image: Any) -> Any:
@@ -200,19 +191,29 @@ def _ocr_image(image: Any) -> Any:
     return image.resize((width, height))
 
 
-def _frame_command(path: str, width: int, height: int, keyframes: bool) -> list[str]:
+def _frame_command(
+    path: str, width: int, height: int, keyframes: bool, needs_scale: bool,
+) -> list[str]:
     if keyframes:
-        # -vsync 0: the rawvideo muxer otherwise repeats each key frame up to
-        # the container's frame rate.
+        # showinfo prints each decoded key frame's PTS to stderr, in the same
+        # order as the frames on stdout. -fps_mode passthrough prevents the
+        # rawvideo muxer from duplicating a frame to the container's rate.
+        video_filter = "showinfo"
+        if needs_scale:
+            video_filter += f",scale={width}:{height}"
         return [
-            "ffmpeg", "-v", "error", "-skip_frame", "nokey", "-i", path,
-            "-map", "0:v:0", "-vsync", "0",
-            "-vf", f"scale={width}:{height}",
+            "ffmpeg", "-hide_banner", "-v", "info",
+            "-skip_frame", "nokey", "-i", path,
+            "-map", "0:v:0", "-fps_mode", "passthrough",
+            "-vf", video_filter,
             "-pix_fmt", "rgb24", "-f", "rawvideo", "-",
         ]
+    video_filter = "fps=1"
+    if needs_scale:
+        video_filter += f",scale={width}:{height}"
     return [
         "ffmpeg", "-v", "error", "-i", path, "-map", "0:v:0",
-        "-vf", f"fps=1,scale={width}:{height}", "-pix_fmt", "rgb24",
+        "-vf", video_filter, "-pix_fmt", "rgb24",
         "-f", "rawvideo", "-",
     ]
 
@@ -223,14 +224,26 @@ def _read_video(
     """Decode, hash, select, OCR and build segments. Holds no DB lock."""
     from PIL import Image
 
-    width, height = _probe(path)
+    width, height, needs_scale = _probe_geometry(path)
     keyframes = min(width, height) > MAX_OCR_LINES
-    times = _keyframe_times(path) if keyframes else []
     result = _ReadResult()
-    command = _frame_command(path, width, height, keyframes)
-    process = subprocess.Popen(
-        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    command = _frame_command(
+        path, width, height, keyframes, needs_scale,
     )
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE if keyframes else subprocess.DEVNULL,
+    )
+    times: queue.Queue[object] = queue.Queue()
+    stderr_thread = None
+    if keyframes and process.stderr is not None:
+        stderr_thread = threading.Thread(
+            target=_drain_showinfo,
+            args=(process.stderr, times),
+            daemon=True,
+        )
+        stderr_thread.start()
     frame_size = width * height * 3
     buffer = bytearray()
     last_data = time.monotonic()
@@ -262,11 +275,17 @@ def _read_video(
                 raw = bytes(buffer[:frame_size])
                 del buffer[:frame_size]
                 if keyframes:
-                    if index >= len(times):
+                    try:
+                        item = times.get(timeout=10)
+                    except queue.Empty:
                         result.times_failed = True
                         process.kill()
                         return result
-                    t = times[index]
+                    if item is _END or item is _BAD:
+                        result.times_failed = True
+                        process.kill()
+                        return result
+                    t = float(item)
                 else:
                     t = float(index)
                 index += 1
@@ -307,9 +326,8 @@ def _read_video(
         except Exception:
             process.kill()
         result.exit_status = process.returncode
-    if keyframes and result.frames != len(times):
-        result.times_failed = True
-        return result
+        if stderr_thread is not None:
+            stderr_thread.join(timeout=5)
     if open_segment is not None:
         open_segment.end = result.last_time + 1.0
         result.segments.append(open_segment)
@@ -464,13 +482,6 @@ def index_frame_ocr(
 
     try:
         result = _read_video(path, paused=is_paused)
-    except _ProbeError as exc:
-        logger.warning(
-            "Frame OCR for %s: key-frame times unavailable (%s); "
-            "nothing written",
-            file_id, exc,
-        )
-        return False
     except _Unreadable as exc:
         if not _reachable(path):
             logger.warning(
