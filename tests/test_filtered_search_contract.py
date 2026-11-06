@@ -104,6 +104,7 @@ def test_spec_addon_047_i2_resolves_the_filter_with_one_internal_matching_call(
     sent = json.loads(request.content)
     assert set(sent) <= {
         "drive", "tags", "kinds", "favorite", "liked", "folders", "collections",
+        "sizes", "durations",
     }
     assert sent["drive"] == DRIVE
     assert sent.get("tags") == ["budget"]
