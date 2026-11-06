@@ -37,7 +37,8 @@ from app.file_matching import (
     SearchFilter,
     fetch_matching_file_ids,
 )
-from app.llm_routing import Resolved
+from app.llm import ImageRejected
+from app.llm_routing import Resolved, profile_can_see
 from app.routers.llm_gate import require_llm
 from app.drive_context import require_drive
 from app.rag import file_question
@@ -375,9 +376,11 @@ async def file_ask_endpoint(
     read before a slot is taken, so a file that cannot be asked about
     neither waits for one nor sends anything to a model.
 
-    Streams ``answer_chunk``, then ``citations``, then ``meta``
-    (``partial``), then ``done``; a failure after the stream started ends
-    with ``done`` carrying ``error``.
+    Streams ``answer_chunk``, then ``citations``, then ``meta``, then
+    ``done``; a failure after the stream started ends with ``done``
+    carrying ``error``. A picture or a playing video may attach one image
+    (SPEC-ADDON-071/-072); a text-less picture whose profile cannot see
+    is refused with 409 before the slot.
     """
     resolved = await _require_rag_enabled(drive, body.profile)
 
@@ -389,6 +392,13 @@ async def file_ask_endpoint(
     )
     if material is None:
         raise HTTPException(status_code=404, detail="File not found")
+
+    if (
+        file_question.is_picture(material)
+        and not material.chunks
+        and not profile_can_see(resolved)
+    ):
+        raise HTTPException(status_code=409, detail="picture_needs_vision")
 
     semaphore = _get_ask_semaphore()
     try:
@@ -407,6 +417,7 @@ async def file_ask_endpoint(
                 material=material,
                 resolved=resolved,
                 semaphore=semaphore,
+                position_seconds=body.position_seconds,
             ),
             media_type=_SSE_MEDIA_TYPE,
             headers=_SSE_HEADERS,
@@ -422,30 +433,127 @@ async def _file_question_stream(
     material: file_question.Material,
     resolved: Resolved,
     semaphore: "asyncio.Semaphore",
+    position_seconds: float | None = None,
 ) -> AsyncIterator[str]:
     """Adapt the routed model's answer to the file-question SSE wire format.
 
     Owns the semaphore slot: it is released on the end of the stream, on a
-    mid-stream failure and on a client disconnect. The upstream stream is
+    mid-stream failure and on a client disconnect. Image preparation and
+    the text-only retry run under that same slot. The upstream stream is
     closed explicitly rather than left to garbage collection, so a
     disconnected tab tears the provider request down at once.
     """
-    answer: list[str] = []
-    stream = resolved.client.generate_stream(
-        build_file_question_system_prompt(
-            resolved.profile.config.output_language
-        ),
-        build_file_question_user_prompt(
-            question, [chunk.text for chunk in material.chunks]
-        ),
-        max_tokens_override=settings.rag.max_tokens,
+    passages = [chunk.text for chunk in material.chunks]
+    position = (
+        position_seconds
+        if material.file_type in ("video", "audio")
+        else None
     )
+    can_see = profile_can_see(resolved)
+    image_applies = file_question.is_picture(material) or (
+        material.file_type == "video" and position_seconds is not None
+    )
+
+    image_status = "none"
+    image: file_question.ImageMaterial | None = None
+
+    def meta_event() -> AnswerEvent:
+        data: dict = {"partial": material.partial}
+        if image_applies or can_see:
+            data["image"] = image_status
+        return AnswerEvent(kind="meta", data=data)
+
+    def text_stream():
+        return resolved.client.generate_stream(
+            build_file_question_system_prompt(
+                resolved.profile.config.output_language,
+                has_passages=bool(passages),
+            ),
+            build_file_question_user_prompt(
+                question, passages, position_seconds=position,
+            ),
+            max_tokens_override=settings.rag.max_tokens,
+        )
+
+    stream = None
+    answer: list[str] = []
     try:
-        async for delta in stream:
-            answer = [*answer, delta]
+        if image_applies and can_see:
+            try:
+                image = await asyncio.to_thread(
+                    file_question.load_image, material, position_seconds,
+                )
+                image_status = "attached"
+            except file_question.ImageUnavailable as exc:
+                image_status = "unavailable"
+                logger.warning(
+                    "file question image failed: %s (file %s)",
+                    exc.failure,
+                    file_id,
+                )
+
+        if image_status == "unavailable" and not passages:
+            yield _format_sse_event(meta_event())
             yield _format_sse_event(
-                AnswerEvent(kind="answer_chunk", data={"delta": delta})
+                AnswerEvent(kind="done", data={"error": "image_unusable"})
             )
+            return
+
+        if image_status == "attached" and image is not None:
+            stream = resolved.client.generate_stream_with_image(
+                image.data,
+                image.mime_type,
+                build_file_question_system_prompt(
+                    resolved.profile.config.output_language,
+                    has_image=True,
+                    has_passages=bool(passages),
+                ),
+                build_file_question_user_prompt(
+                    question,
+                    passages,
+                    has_image=True,
+                    position_seconds=position,
+                ),
+                max_tokens_override=settings.rag.max_tokens,
+            )
+            try:
+                async for delta in stream:
+                    answer = [*answer, delta]
+                    yield _format_sse_event(
+                        AnswerEvent(kind="answer_chunk", data={"delta": delta})
+                    )
+            except ImageRejected:
+                logger.warning(
+                    "file question image failed: %s (file %s)",
+                    file_question.IMAGE_FAILURE_REJECTED,
+                    file_id,
+                )
+                image_status = "unavailable"
+                try:
+                    await stream.aclose()
+                finally:
+                    stream = None
+                if not passages:
+                    yield _format_sse_event(meta_event())
+                    yield _format_sse_event(
+                        AnswerEvent(
+                            kind="done", data={"error": "image_unusable"},
+                        )
+                    )
+                    return
+                stream = text_stream()
+                async for delta in stream:
+                    answer = [*answer, delta]
+                    yield _format_sse_event(
+                        AnswerEvent(kind="answer_chunk", data={"delta": delta})
+                    )
+        else:
+            stream = text_stream()
+            async for delta in stream:
+                answer = [*answer, delta]
+                yield _format_sse_event(
+                    AnswerEvent(kind="answer_chunk", data={"delta": delta})
+                )
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - the stream must end, not die
@@ -454,6 +562,7 @@ async def _file_question_stream(
             type(exc).__name__,
             file_id,
         )
+        yield _format_sse_event(meta_event())
         yield _format_sse_event(
             AnswerEvent(
                 kind="done", data={"error": "Answer generation failed"},
@@ -468,14 +577,15 @@ async def _file_question_stream(
                 ),
             )
         )
-        yield _format_sse_event(
-            AnswerEvent(kind="meta", data={"partial": material.partial})
-        )
+        yield _format_sse_event(meta_event())
         yield _format_sse_event(AnswerEvent(kind="done", data={}))
     finally:
-        try:
-            await stream.aclose()
-        finally:
+        if stream is not None:
+            try:
+                await stream.aclose()
+            finally:
+                semaphore.release()
+        else:
             semaphore.release()
 
 

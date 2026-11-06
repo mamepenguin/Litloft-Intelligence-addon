@@ -18,14 +18,24 @@ from typing import Any
 import numpy as np
 from sqlalchemy import text as sql_text
 
+import app.config as config
+from app import llm_routing
 from app.config import settings
 from app.database import get_search_db_read, get_search_engine
 from app.document_sections import EPUB_MIME
+from app.frame_cache import extract_frame_to_cache, frame_cache_path
 from app.workers.embedder import embed_query
+from app.workers.vision import _load_image_bytes, _preprocess_image
 
 logger = logging.getLogger(__name__)
 
 PDF_MIME = "application/pdf"
+
+#: Why an image could not be attached; the route logs the class, never
+#: the question or the bytes.
+IMAGE_FAILURE_PICTURE = "picture_unreadable"
+IMAGE_FAILURE_FRAME = "frame_failed"
+IMAGE_FAILURE_REJECTED = "image_rejected"
 
 # vec0 takes its ids as one parameter each, so they go in batches.
 _VECTOR_BATCH = 400
@@ -49,6 +59,27 @@ class Material:
     chunks: tuple[SelectedChunk, ...]
     #: True when only some of the file's chunks fit the budget.
     partial: bool
+    file_id: str
+    file_type: str
+    mime_type: str
+    file_path: str | None
+    duration: float | None
+
+
+@dataclass(frozen=True)
+class ImageMaterial:
+    """One image as the provider receives it."""
+
+    data: bytes
+    mime_type: str
+
+
+class ImageUnavailable(Exception):
+    """An image that applies to the question could not be prepared."""
+
+    def __init__(self, failure: str) -> None:
+        super().__init__(failure)
+        self.failure = failure
 
 
 @dataclass(frozen=True)
@@ -60,17 +91,27 @@ class _Row:
     order: int
 
 
+def _is_picture(file_type: str, mime_type: str) -> bool:
+    return file_type == "image" or mime_type.startswith("image/")
+
+
+def is_picture(material: Material) -> bool:
+    return _is_picture(material.file_type, material.mime_type)
+
+
 def available(file_id: str, drive: str) -> bool:
     """Whether this drive may ask about this file (SPEC-ADDON-053 I6).
 
     An active ``indexed_files`` row of the request drive with at least one
-    text chunk. Everything else is ``False`` rather than an error, so the
-    tab simply has no button.
+    text chunk. A picture with no text is askable when some profile can
+    see (SPEC-ADDON-074); every other kind still needs a chunk. Anything
+    else is ``False`` rather than an error, so the tab simply has no
+    button.
     """
     with get_search_db_read() as session:
         indexed = session.execute(
             sql_text(
-                "SELECT 1 FROM indexed_files "
+                "SELECT file_type, mime_type FROM indexed_files "
                 "WHERE file_id = :fid AND drive = :drive AND active = 1"
             ),
             {"fid": file_id, "drive": drive},
@@ -86,18 +127,26 @@ def available(file_id: str, drive: str) -> bool:
             ),
             {"fid": file_id},
         ).scalar()
-    return bool(chunks)
+    if chunks:
+        return True
+    if not _is_picture(indexed[0] or "", indexed[1] or ""):
+        return False
+    return llm_routing.any_profile_can_see(settings)
 
 
 def load_material(
     file_id: str, drive: str, question: str,
 ) -> Material | None:
-    """The chunks to send, or ``None`` when this file cannot be asked about."""
+    """The chunks to send, or ``None`` when this file cannot be asked about.
+
+    A picture is material even with no chunk; every other kind needs one.
+    """
     budget = settings.rag.file_question_max_chars
     with get_search_db_read() as session:
         indexed = session.execute(
             sql_text(
-                "SELECT mime_type, file_type FROM indexed_files "
+                "SELECT mime_type, file_type, file_path, duration "
+                "FROM indexed_files "
                 "WHERE file_id = :fid AND drive = :drive AND active = 1"
             ),
             {"fid": file_id, "drive": drive},
@@ -106,6 +155,8 @@ def load_material(
             return None
         mime = indexed[0] or ""
         file_type = indexed[1] or ""
+        file_path = indexed[2]
+        duration = indexed[3]
         transcripts = session.execute(
             sql_text(
                 "SELECT chunk_index, text, timestamp_start, timestamp_end "
@@ -121,7 +172,17 @@ def load_material(
             {"fid": file_id},
         ).fetchall()
         if not transcripts and not documents:
-            return None
+            if not _is_picture(file_type, mime):
+                return None
+            return Material(
+                chunks=(),
+                partial=False,
+                file_id=file_id,
+                file_type=file_type,
+                mime_type=mime,
+                file_path=file_path,
+                duration=duration,
+            )
         section_titles = {
             int(page): title
             for page, title in session.execute(
@@ -212,10 +273,75 @@ def load_material(
     if not rows:
         return None
 
+    material = dict(
+        file_id=file_id,
+        file_type=file_type,
+        mime_type=mime,
+        file_path=file_path,
+        duration=duration,
+    )
     if sum(len(row.text) for row in rows) <= budget:
-        return Material(_selected(rows), False)
+        return Material(chunks=_selected(rows), partial=False, **material)
 
-    return Material(_selected(_fit(_rank(rows, question), budget)), True)
+    return Material(
+        chunks=_selected(_fit(_rank(rows, question), budget)),
+        partial=True,
+        **material,
+    )
+
+
+def load_image(
+    material: Material, position_seconds: float | None,
+) -> ImageMaterial:
+    """Prepare the one image the question may carry.
+
+    A picture is re-encoded through the description worker's own helpers;
+    a video is one ``large`` frame at the millisecond key its cache uses.
+    Raises :class:`ImageUnavailable` with the class the route logs.
+    """
+    if is_picture(material):
+        loaded = _load_image_bytes(material.file_id)
+        if loaded is None:
+            raise ImageUnavailable(IMAGE_FAILURE_PICTURE)
+        raw, mime_type = loaded
+        processed = _preprocess_image(raw, mime_type)
+        if processed is None:
+            raise ImageUnavailable(IMAGE_FAILURE_PICTURE)
+        data, out_mime = processed
+        return ImageMaterial(data, out_mime)
+    if material.file_type == "video" and position_seconds is not None:
+        return _frame_image(material, position_seconds)
+    raise ImageUnavailable(IMAGE_FAILURE_FRAME)
+
+
+def _frame_image(material: Material, position_seconds: float) -> ImageMaterial:
+    if material.duration is not None and position_seconds > material.duration:
+        raise ImageUnavailable(IMAGE_FAILURE_FRAME)
+
+    ms = int(round(position_seconds * 1000))
+    timestamp = ms / 1000.0
+    cache_path = frame_cache_path(material.file_id, timestamp, "large")
+    if not (cache_path.exists() and cache_path.stat().st_size > 0):
+        if not material.file_path or not config.validate_file_path(
+            material.file_path
+        ):
+            raise ImageUnavailable(IMAGE_FAILURE_FRAME)
+        try:
+            extract_frame_to_cache(
+                material.file_path, cache_path, timestamp, size="large",
+            )
+        except Exception as exc:  # noqa: BLE001 - ffmpeg's result decides
+            logger.warning(
+                "file question frame extraction failed: %s",
+                type(exc).__name__,
+            )
+            raise ImageUnavailable(IMAGE_FAILURE_FRAME) from exc
+    if not (cache_path.exists() and cache_path.stat().st_size > 0):
+        raise ImageUnavailable(IMAGE_FAILURE_FRAME)
+    try:
+        return ImageMaterial(cache_path.read_bytes(), "image/webp")
+    except OSError as exc:
+        raise ImageUnavailable(IMAGE_FAILURE_FRAME) from exc
 
 
 def citations(

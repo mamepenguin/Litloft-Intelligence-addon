@@ -20,7 +20,7 @@ from typing import Any
 
 from app import policy_client
 from app.config import LLMConfig, parse_llm_config
-from app.llm import LLMClient, OllamaLLMClient, create_llm_client
+from app.llm import LLMClient, OllamaLLMClient, create_llm_client, is_vision_unsupported
 from app.llm_overrides import PROVIDER_ENUM
 
 logger = logging.getLogger(__name__)
@@ -437,16 +437,42 @@ def describe_route(feature: str, verdict: str, drive: str) -> str:
     return "sends" if picked is assigned else "falls_back"
 
 
-def has_vision_profile(settings: Any | None = None) -> bool:
-    """True when some profile can describe images under ``settings``."""
+def _active_for(settings: Any | None) -> _Active:
     import app.config as config
 
     if settings is None or settings is config.settings:
-        active = _current()
-    else:
-        active = _Active(
-            routing=_load_from_settings(settings), clients={}, settings=settings
+        return _current()
+    return _Active(
+        routing=_load_from_settings(settings), clients={}, settings=settings
+    )
+
+
+def profile_can_see(resolved: Resolved) -> bool:
+    """Whether this one profile can take an image on a question."""
+    config = resolved.profile.config
+    return (
+        resolved.client.enabled
+        and bool(config.vision_model.strip())
+        and not is_vision_unsupported(config.base_url, config.vision_model)
+    )
+
+
+def any_profile_can_see(settings: Any | None = None) -> bool:
+    """Whether some profile under ``settings`` can take an image."""
+    active = _active_for(settings)
+    return any(
+        profile.config.vision_model.strip()
+        and _client_for(active, profile).enabled
+        and not is_vision_unsupported(
+            profile.config.base_url, profile.config.vision_model
         )
+        for profile in active.routing.profiles.values()
+    )
+
+
+def has_vision_profile(settings: Any | None = None) -> bool:
+    """True when some profile can describe images under ``settings``."""
+    active = _active_for(settings)
     return any(
         p.config.vision_model.strip() and _client_for(active, p).enabled
         for p in active.routing.profiles.values()
