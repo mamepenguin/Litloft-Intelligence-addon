@@ -304,6 +304,9 @@ describe("SPEC-ADDON-070 — edit state follows the file", () => {
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "draft A0" } });
     fireEvent.click(screen.getByRole("button", { name: "修正" }));
     expect(screen.getByRole("textbox")).toHaveValue("text-A-1");
+    expect(screen.getByRole("button", { name: "修正" }).className).toContain(
+      "pointer-events-none",
+    );
     fireEvent.click(screen.getByRole("button", { name: "修正" }));
     expect(screen.getByRole("textbox")).toHaveValue("draft A0");
   });
@@ -321,12 +324,36 @@ describe("SPEC-ADDON-070 — Refine and picture events", () => {
         "このファイルには手で直した箇所があります。AIで整えると、修正後の文章も書き換わります。",
       ),
     ).toBeInTheDocument();
+    refineStatus = null;
     fireEvent.click(screen.getByRole("button", { name: "続ける" }));
 
     await waitFor(() => {
       const posts = requests.filter((r) => r.url.includes("/refine/files/"));
       expect(posts.at(-1)!.body).toMatchObject({ overwrite_corrections: true });
     });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "続ける" }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("closes the confirmation when the confirmed Refine answers busy", async () => {
+    files.A.corrected = true;
+    refineStatus = { status: 409, body: { detail: { code: "busy" } } };
+    transcript("A");
+    await screen.findByText("text-A-0");
+    fireEvent.click(screen.getByRole("button", { name: "AIで整える" }));
+    fireEvent.click(screen.getByRole("button", { name: "続ける" }));
+
+    expect(
+      await screen.findByText("処理中のため、いまは操作できません。"),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "続ける" }),
+      ).not.toBeInTheDocument(),
+    );
   });
 
   it("shows the busy text on 409 busy", async () => {
@@ -400,6 +427,39 @@ describe("SPEC-ADDON-070 — design requirements", () => {
     expect(edit.className).toContain("pointer-coarse:min-h-11");
     fireEvent.click(edit);
     expect(screen.getByRole("textbox").className).toContain("rounded-2xl");
+  });
+
+  it("puts the edit field and keys on the design's touch layout", async () => {
+    transcript("A");
+    await screen.findByText("text-A-0");
+    fireEvent.click(screen.getAllByRole("button", { name: "修正" })[0]);
+    const box = screen.getByRole("textbox");
+    expect(box.parentElement!.className).toContain("pointer-coarse:basis-full");
+    expect(screen.getByText("Esc / ↵").className).toContain(
+      "pointer-coarse:hidden",
+    );
+  });
+
+  it("portals the transcript confirmation out of the panel", async () => {
+    files.A.has_original = true;
+    transcript("A");
+    await screen.findByText("text-A-0");
+    fireEvent.click(screen.getByRole("button", { name: "元の結果に戻す" }));
+    const message = screen.getByText(
+      "修正をすべて取り消し、機械が出した元の結果に戻します。",
+    );
+    expect(message.closest("section")).toBeNull();
+  });
+
+  it("portals the picture confirmation out of the section", async () => {
+    files.A.has_original = true;
+    picture("A");
+    await screen.findByText("machine text");
+    fireEvent.click(screen.getByRole("button", { name: "元の結果に戻す" }));
+    const message = screen.getByText(
+      "修正をすべて取り消し、機械が出した元の結果に戻します。",
+    );
+    expect(message.closest("section")).toBeNull();
   });
 
   it("puts the picture controls under the text", async () => {

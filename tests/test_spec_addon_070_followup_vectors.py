@@ -251,10 +251,26 @@ class TestInactiveFile:
         assert len(set(seen)) > 1
         assert search_db.embeddings(OTHER, "whisper")
 
-    def test_a_retry_still_rebuilds_the_keywords_and_announces(
+        # A recovered file's parked item is still finished.
+        search_db.execute(
+            "UPDATE indexed_files SET active = 1 WHERE file_id = :f", f=FILE
+        )
+        search_db.execute(
+            "UPDATE followup_items SET last_attempt_at = NULL WHERE file_id = :f",
+            f=FILE,
+        )
+        while (item := followup.next_due_item_id()) is not None:
+            followup.process_item(item)
+        assert search_db.embeddings(FILE, "whisper")
+        with search_db.Session() as session:
+            assert (
+                session.query(FollowupItem).filter_by(file_id=FILE).count() == 0
+            )
+
+    def test_a_retry_rebuilds_the_keywords_but_does_not_announce(
         self, search_db, api, monkeypatch
     ):
-        """SPEC-ADDON-070 A8/A10: a retry does not hold the vector and event back."""
+        """SPEC-ADDON-070 A10/I15: a retry is not an ending."""
         from app.workers import followup
 
         client, _ = api
@@ -272,8 +288,33 @@ class TestInactiveFile:
         followup.process_item(item)
 
         assert bool(search_db.flag(FILE, "tfidf_keywords_indexed")) is True
-        assert any(e.get("reason") == "corrected" for e in events)
+        assert events == []
         with search_db.Session() as session:
             assert (
                 session.query(FollowupItem).filter_by(file_id=FILE).count() == 1
             )
+
+    def test_an_aligned_follow_up_announces_once(
+        self, search_db, api, monkeypatch
+    ):
+        """SPEC-ADDON-070 I15: one corrected event after the words exist."""
+        from app.workers import followup
+
+        client, _ = api
+        seed_transcript(search_db, FILE, _chunks(), words=_words())
+        assert _correct(client).status_code == 200
+        events: list[dict] = []
+        _stub(monkeypatch, search_db, "aligned")
+        monkeypatch.setattr(
+            followup,
+            "post_addon_event_sync",
+            lambda event, data: events.append({"event": event, **data}),
+        )
+
+        item = followup.next_due_item_id()
+        followup.process_item(item)
+
+        assert [e["reason"] for e in events if e["event"].endswith(".updated")] == [
+            "corrected"
+        ]
+        assert ("fixed", 5.1, 5.6, "en", None) in search_db.words(FILE)

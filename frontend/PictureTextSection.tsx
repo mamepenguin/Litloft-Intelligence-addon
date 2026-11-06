@@ -9,6 +9,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslations } from "next-intl";
 import { Pencil } from "lucide-react";
 
@@ -16,6 +17,7 @@ import { getPictureText, restorePictureText, updatePictureText } from "./api";
 import type { PictureTextResponse } from "./api";
 import { LLMRequestError } from "./api";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { useDialogPortalTarget } from "@/components/DialogPortal";
 import { Button } from "@/components/Button";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useImeKeyGuard } from "@/lib/ime";
@@ -31,6 +33,7 @@ export default function PictureTextSection({
 }: PictureTextSectionProps) {
   const t = useTranslations("searchIndex");
   const ime = useImeKeyGuard();
+  const dialogHost = useDialogPortalTarget();
   const [data, setData] = useState<PictureTextResponse | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -241,14 +244,18 @@ export default function PictureTextSection({
         </>
       )}
 
-      <ConfirmDialog
-        open={confirmRestore}
-        title={t("transcriptRestoreOriginal")}
-        message={t("transcriptRestoreConfirm")}
-        confirmLabel={t("transcriptRestoreConfirmAction")}
-        onConfirm={() => void doRestore()}
-        onCancel={() => setConfirmRestore(false)}
-      />
+      {dialogHost &&
+        createPortal(
+          <ConfirmDialog
+            open={confirmRestore}
+            title={t("transcriptRestoreOriginal")}
+            message={t("transcriptRestoreConfirm")}
+            confirmLabel={t("transcriptRestoreConfirmAction")}
+            onConfirm={() => void doRestore()}
+            onCancel={() => setConfirmRestore(false)}
+          />,
+          dialogHost,
+        )}
     </section>
   );
 }

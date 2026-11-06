@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { FileText, Quote, Sparkles } from "lucide-react";
 import { useTranslations } from "next-intl";
 
@@ -17,6 +18,7 @@ import { getSubtitleUrl } from "@/lib/api";
 import type { SubtitleInfo } from "@/types";
 import { useAddonStatus } from "@/components/AddonSlotsProvider";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { useDialogPortalTarget } from "@/components/DialogPortal";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useImeKeyGuard } from "@/lib/ime";
 import type { MediaController } from "@/lib/mediaController";
@@ -212,6 +214,7 @@ export default function TranscriptSection({
 }: TranscriptSectionProps) {
   const t = useTranslations("searchIndex");
   const ime = useImeKeyGuard();
+  const dialogHost = useDialogPortalTarget();
   const addonStatus = useAddonStatus("intelligence");
   const refineFeature = addonStatus.features?.transcript_refine;
   // Backend sends either boolean false or the string "false" when the
@@ -747,6 +750,7 @@ export default function TranscriptSection({
       if (refining) return;
       setRefining(true);
       setActionError(null);
+      let keepOpen = false;
       try {
         await refineFileTranscript(fileId, drive, overwrite);
         refreshAfterWrite();
@@ -758,7 +762,7 @@ export default function TranscriptSection({
             ? (err.detail as { code?: string }).code
             : undefined;
         if (code === "corrected") {
-          setConfirmRefine(true);
+          keepOpen = true;
         } else if (code === "busy") {
           setActionError(t("transcriptBusy"));
         } else {
@@ -766,6 +770,7 @@ export default function TranscriptSection({
         }
       } finally {
         setRefining(false);
+        setConfirmRefine(keepOpen);
       }
     },
     [fileId, drive, refining, refreshAfterWrite, t],
@@ -955,22 +960,28 @@ export default function TranscriptSection({
           {actionError}
         </p>
       )}
-      <ConfirmDialog
-        open={confirmRestore}
-        title={t("transcriptRestoreOriginal")}
-        message={t("transcriptRestoreConfirm")}
-        confirmLabel={t("transcriptRestoreConfirmAction")}
-        onConfirm={() => void doRestore()}
-        onCancel={() => setConfirmRestore(false)}
-      />
-      <ConfirmDialog
-        open={confirmRefine}
-        title={t("transcriptRefine")}
-        message={t("transcriptRefineCorrectedConfirm")}
-        confirmLabel={t("transcriptContinue")}
-        onConfirm={() => void runRefine(true)}
-        onCancel={() => setConfirmRefine(false)}
-      />
+      {dialogHost &&
+        createPortal(
+          <>
+            <ConfirmDialog
+              open={confirmRestore}
+              title={t("transcriptRestoreOriginal")}
+              message={t("transcriptRestoreConfirm")}
+              confirmLabel={t("transcriptRestoreConfirmAction")}
+              onConfirm={() => void doRestore()}
+              onCancel={() => setConfirmRestore(false)}
+            />
+            <ConfirmDialog
+              open={confirmRefine}
+              title={t("transcriptRefine")}
+              message={t("transcriptRefineCorrectedConfirm")}
+              confirmLabel={t("transcriptContinue")}
+              onConfirm={() => void runRefine(true)}
+              onCancel={() => setConfirmRefine(false)}
+            />
+          </>,
+          dialogHost,
+        )}
       <div
         className={`relative ${fillHeight ? "flex min-h-0 flex-1 flex-col" : ""}`}
       >
@@ -1012,7 +1023,7 @@ export default function TranscriptSection({
           if (isEditing) {
             return (
               <div key={cue.index} data-cue-start={cue.start} className={rowClass}>
-                <span className="flex min-w-0 flex-1 items-start gap-3 px-2 py-1.5">
+                <span className="flex min-w-0 flex-1 items-start gap-3 px-2 py-1.5 pointer-coarse:basis-full">
                   <span className="shrink-0 font-mono text-xs text-text-muted">
                     {formatDuration(cue.start)}
                   </span>
@@ -1033,10 +1044,10 @@ export default function TranscriptSection({
                         cancelEdit();
                       }
                     }}
-                    className="min-w-0 flex-1 rounded-2xl border border-bg-border bg-bg-primary px-2 py-1 text-sm text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring pointer-coarse:basis-full"
+                    className="min-w-0 flex-1 rounded-2xl border border-bg-border bg-bg-primary px-2 py-1 text-sm text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
                   />
                 </span>
-                <span className="shrink-0 self-center text-[10px] text-text-muted">
+                <span className="shrink-0 self-center text-[10px] text-text-muted pointer-coarse:hidden">
                   Esc / ↵
                 </span>
                 <button
@@ -1105,7 +1116,7 @@ export default function TranscriptSection({
                   onClick={() => beginEdit(cue)}
                   disabled={busy}
                   aria-label={t("transcriptEdit")}
-                  className={`m-0.5 inline-flex h-8 flex-shrink-0 items-center justify-center rounded-lg px-2 text-xs font-medium text-text-muted hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${REVEAL}`}
+                  className={`m-0.5 inline-flex h-8 flex-shrink-0 items-center justify-center rounded-lg px-2 text-xs font-medium text-text-muted hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${editingIndex !== null && editingIndex !== cue.index ? "pointer-events-none opacity-0" : ""} ${REVEAL}`}
                 >
                   {t("transcriptEdit")}
                 </button>

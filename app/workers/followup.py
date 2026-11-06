@@ -265,8 +265,11 @@ def _process_utterance(data: dict[str, Any]) -> None:
     if chunk_start is not None and text is not None:
         _embed_utterance(data["file_id"], data["chunk_index"], text, chunk_start, chunk_end)
     # A realignment that will be retried raises below; the keyword vector
-    # and the event do not depend on the alignment and must not wait for it.
+    # does not depend on the alignment and must not wait for it. The event
+    # does depend on the realignment having ended, so it stays after it.
     _recompute_keywords(data["file_id"], chunk_texts)
+    if chunk_start is not None and text is not None:
+        _realign_utterance(data, text, chunk_start, chunk_end, language)
     post_addon_event_sync(
         "intelligence.transcript.updated",
         {
@@ -275,8 +278,6 @@ def _process_utterance(data: dict[str, Any]) -> None:
             "reason": "corrected",
         },
     )
-    if chunk_start is not None and text is not None:
-        _realign_utterance(data, text, chunk_start, chunk_end, language)
 
 
 def _embed_utterance(
