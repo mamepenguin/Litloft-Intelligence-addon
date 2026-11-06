@@ -48,8 +48,8 @@ def _has_lines(seed, file_id: str) -> bool:
     ))
 
 
-def _seed_picture(seed, file_id: str) -> None:
-    seed.file(file_id, f"{file_id}.png", mime="image/png")
+def _seed_picture(seed, file_id: str, drive: str = DRIVE) -> None:
+    seed.file(file_id, f"{file_id}.png", drive=drive, mime="image/png")
     seed.index.sql(
         "UPDATE indexed_files SET text_indexed = 0, ocr_indexed = 1 "
         "WHERE file_id = :f",
@@ -72,6 +72,7 @@ def test_spec_addon_075_i7_every_purge_path_deletes_the_lines_row(
 ):
     """SPEC-ADDON-075 I7: the lines go with the picture_texts row."""
     _seed_picture(seed, "pic1")
+    _seed_picture(seed, "pic2", drive="other-drive")
     assert _has_lines(seed, "pic1")
 
     if entry == "file":
@@ -92,6 +93,7 @@ def test_spec_addon_075_i7_every_purge_path_deletes_the_lines_row(
     assert _one(
         seed, "SELECT 1 FROM picture_texts WHERE file_id = :f", f="pic1"
     ) == []
+    assert _has_lines(seed, "pic2")
 
 
 def _with_boxes(engine):
