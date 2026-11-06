@@ -366,6 +366,21 @@ class PictureText(Base):
     )
 
 
+class PictureLines(Base):
+    """Where each line of the OCR text sits in one picture."""
+
+    __tablename__ = "picture_lines"
+
+    file_id: Mapped[str] = mapped_column(String(12), primary_key=True)
+    lines_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
 class FollowupItem(Base):
     """A queued unit of work for the extraction follow-up worker.
 
