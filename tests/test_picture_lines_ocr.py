@@ -346,6 +346,7 @@ def test_spec_addon_075_a1_a_blank_kept_line_is_kept_so_the_lines_join_to_the_te
         "corrected-without-redo",
         "confirmed-redo-with-no-text",
         "left-the-index",
+        "corrected-while-reading",
     ],
 )
 def test_spec_addon_075_i3_i4_a_discarded_write_leaves_the_lines_byte_for_byte(
@@ -385,12 +386,17 @@ def test_spec_addon_075_i3_i4_a_discarded_write_leaves_the_lines_byte_for_byte(
         harness = install(monkeypatch, engine_error=RuntimeError("models missing"))
     elif case == "confirmed-redo-with-no-text":
         harness = install(monkeypatch, lines=[], boxes=ABSENT)
-    elif case == "left-the-index":
+    elif case in ("left-the-index", "corrected-while-reading"):
         engine = FakeEngine(
             ("late text",), boxes=_no_text_boxes(["late text"])
         )
+        column = (
+            "active" if case == "left-the-index" else "picture_text_corrected"
+        )
+        value = 0 if case == "left-the-index" else 1
         engine.on_call = lambda image: search_db.execute(
-            "UPDATE indexed_files SET active = 0 WHERE file_id = 'pic1'"
+            f"UPDATE indexed_files SET {column} = {value} "
+            "WHERE file_id = 'pic1'"
         )
         harness = install(monkeypatch, engine=engine)
     else:

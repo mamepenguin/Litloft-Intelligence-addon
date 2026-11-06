@@ -241,6 +241,13 @@ def test_spec_addon_075_i5_other_kinds_of_rows_never_have_boxes(api, seed, visua
     seed.file("doc", "doc.md", mime="text/markdown")
     _flag(seed, "doc", text_indexed=True)
     seed.text_chunk("doc", 0, "alpha written")
+    seed.index.sql(
+        "INSERT INTO picture_texts(file_id, text, updated_at) "
+        "VALUES('doc', 'alpha written', CURRENT_TIMESTAMP)"
+    )
+    _seed_lines(seed, "doc", [
+        {"text": "alpha written", "quad": [0, 0, 1, 0, 1, 1, 0, 1], "score": None},
+    ])
 
     video = _find(api, "alpha", "vid")
     document = _find(api, "alpha", "doc")
