@@ -257,7 +257,14 @@ function IntelligenceFindPageInner() {
   return (
     <PageFrame
       width="reading"
-      header={<AskFindHeader current="find" query={input} drive={drive} />}
+      header={
+        <AskFindHeader
+          current="find"
+          query={input}
+          drive={drive}
+          scope={searchParams?.get("scope") ?? ""}
+        />
+      }
     >
       {/* `px-4`, matching PageHeader's own padding. */}
       <div className="flex flex-col gap-4 px-4 pb-6 pt-2">

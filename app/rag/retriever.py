@@ -281,6 +281,7 @@ async def retrieve_with_keywords(
     *,
     original_query: str | None = None,
     file_id_scope: list[str] | None = None,
+    file_id_constraint: "frozenset[str] | list[str] | None" = None,
     required: tuple[RequiredTerm, ...] | None = None,
     include_scene_clip: bool = False,
     trust_tier: str | None = "verified",
@@ -325,18 +326,21 @@ async def retrieve_with_keywords(
     # app.search.search is a sync function — offload to a thread so we
     # don't block the event loop while it does DB / vector work.
     async def _run_search(limit: int, required_terms):
-        response = await asyncio.to_thread(
-            search,
-            keywords,
-            limit=limit,
-            file_type=file_type,
-            drive=drive,
-            mode="recall",
-            semantic_query=original_query,
-            file_id_scope=file_id_scope,
-            required=required_terms,
-            include_scene_clip=include_scene_clip,
-        )
+        kwargs: dict = {
+            "limit": limit,
+            "file_type": file_type,
+            "drive": drive,
+            "mode": "recall",
+            "semantic_query": original_query,
+            "file_id_scope": file_id_scope,
+            "required": required_terms,
+            "include_scene_clip": include_scene_clip,
+        }
+        # An unscoped call must send exactly the keyword set it sent before
+        # this parameter existed; ``None`` means "no constraint at all".
+        if file_id_constraint is not None:
+            kwargs["file_id_constraint"] = list(file_id_constraint)
+        response = await asyncio.to_thread(search, keywords, **kwargs)
         return list(response.results)
 
     async def _search_with_fallback(limit: int):

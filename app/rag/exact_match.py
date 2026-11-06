@@ -56,7 +56,11 @@ def _files_with_token(conn, table: str, token: str, drive: str) -> set[str]:
 
 
 def find_exact_match_files(
-    keywords: str, drive: str, *, max_files: int
+    keywords: str,
+    drive: str,
+    *,
+    max_files: int,
+    file_ids: "frozenset[str] | list[str] | None" = None,
 ) -> tuple[str, ...]:
     """Files of ``drive`` holding a keyword token that at most ``max_files`` files hold.
 
@@ -64,11 +68,16 @@ def find_exact_match_files(
     once. A token whose lookup fails on any table contributes nothing,
     because a count from fewer tables could fall under the cap by accident.
     Synchronous; call through ``asyncio.to_thread``.
+
+    ``file_ids`` restricts both the count and the addition to that corpus, so
+    a scoped Ask asks "is this token rare *in the scope*" rather than in the
+    whole drive.
     """
     tokens = clean_tokens(keywords)
     if not tokens:
         return ()
 
+    allowed = None if file_ids is None else set(file_ids)
     added: list[str] = []
     counts: dict[str, int] = {}
     over_cap: list[str] = []
@@ -88,6 +97,8 @@ def find_exact_match_files(
                     break
             if failed:
                 continue
+            if allowed is not None:
+                files &= allowed
             counts[token] = len(files)
             if not 1 <= len(files) <= max_files:
                 if len(files) > max_files:
@@ -103,12 +114,20 @@ def find_exact_match_files(
 
 
 async def lookup_exact_match_files(
-    keywords: str, drive: str, *, max_files: int
+    keywords: str,
+    drive: str,
+    *,
+    max_files: int,
+    file_ids: "frozenset[str] | list[str] | None" = None,
 ) -> tuple[str, ...]:
     """Run the lookup off the event loop; any failure adds nothing."""
     try:
         return await asyncio.to_thread(
-            find_exact_match_files, keywords, drive, max_files=max_files
+            find_exact_match_files,
+            keywords,
+            drive,
+            max_files=max_files,
+            file_ids=file_ids,
         )
     except Exception as exc:
         logger.warning("exact-match lookup failed entirely: %s", exc)

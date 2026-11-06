@@ -105,6 +105,7 @@ async def search_files(
         credential=token,
         drive=drive,
         original_query=query,
+        file_id_constraint=context.file_id_constraint,
     )
 
     # Single batched DB check so the LLM sees a reliable

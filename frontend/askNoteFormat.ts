@@ -99,13 +99,16 @@ export function buildAskNoteMarkdown(
   query: string,
   answer: string,
   citations: Citation[],
+  scope?: string | null,
 ): string {
   const savedAt = new Date().toISOString();
   const sourceIds = [...new Set(citations.map((c) => c.file_id))];
+  const trimmedScope = scope?.trim() ?? "";
   const fmLines = [
     "---",
     `origin: ask_answer`,
     `query: ${JSON.stringify(query)}`,
+    ...(trimmedScope ? [`scope: ${JSON.stringify(trimmedScope)}`] : []),
     `source_file_ids: [${sourceIds.map((id) => JSON.stringify(id)).join(", ")}]`,
     `saved_at: ${savedAt}`,
     "---",

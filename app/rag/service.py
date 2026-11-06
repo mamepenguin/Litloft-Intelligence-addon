@@ -655,6 +655,70 @@ async def _resolve_personal_history(
     )
 
 
+async def _scoped_category_retrieval(
+    *,
+    query: str,
+    keywords: str,
+    decomposed: DecomposedQuery | None,
+    credential: CallerCredential | None,
+    file_type: str | None,
+    drive: str | None,
+    top_k: int,
+    required: tuple[RequiredTerm, ...] | None,
+    file_id_constraint: list[str] | None,
+) -> tuple[
+    list[RetrievedFile],
+    "ShortlistResult | None",
+    "tuple[str, ...] | None",
+]:
+    """The legacy personal-history retrieval path, ranked inside the scope.
+
+    Same Stage C surface-form expansion as the unscoped history branch; every
+    per-term retrieval carries the constraint. The personal-history set is
+    already folded into ``file_id_constraint`` (S ∩ H) by the caller.
+    """
+    category_terms = await _resolve_category_expansion(decomposed)
+    if not category_terms:
+        candidates = await retrieve_with_keywords(
+            keywords=keywords,
+            top_k=top_k,
+            credential=credential,
+            file_type=file_type,
+            drive=drive,
+            original_query=query,
+            file_id_scope=None,
+            required=required,
+            file_id_constraint=file_id_constraint,
+        )
+        return candidates, None, None
+
+    effective_required = _drop_required_overlapping_with_expansion(
+        required, decomposed.semantic_query if decomposed else ""
+    )
+    per_term_results = await asyncio.gather(
+        *[
+            retrieve_with_keywords(
+                keywords=term,
+                top_k=top_k,
+                credential=credential,
+                file_type=file_type,
+                drive=drive,
+                original_query=term,
+                file_id_scope=None,
+                required=effective_required,
+                file_id_constraint=file_id_constraint,
+            )
+            for term in category_terms
+        ]
+    )
+    candidates = _rrf_merge_candidates(
+        list(per_term_results),
+        top_k=top_k,
+        weights=_category_expansion_weights(len(category_terms)),
+    )
+    return candidates, None, tuple(category_terms)
+
+
 async def _run_hierarchical_retrieval(
     *,
     query: str,
@@ -666,6 +730,7 @@ async def _run_hierarchical_retrieval(
     original_query: str | None = None,
     pre_scope_file_ids: list[str] | None = None,
     required: tuple[RequiredTerm, ...] | None = None,
+    file_id_constraint: list[str] | None = None,
 ) -> tuple[
     list[RetrievedFile],
     "ShortlistResult | None",
@@ -753,6 +818,7 @@ async def _run_hierarchical_retrieval(
             original_query=semantic,
             file_id_scope=bypass_scope,
             required=required,
+            file_id_constraint=file_id_constraint,
         )
         return candidates, None, None
 
@@ -760,6 +826,7 @@ async def _run_hierarchical_retrieval(
         query=query,
         drive=drive,
         top_k=cfg.coarse_top_k,
+        file_id_constraint=file_id_constraint,
     )
 
     # Project the coarse shortlist onto the personal-history scope when
@@ -821,6 +888,7 @@ async def _run_hierarchical_retrieval(
             original_query=semantic,
             file_id_scope=bypass_scope,
             required=required,
+            file_id_constraint=file_id_constraint,
         )
         return candidates, None, None
 
@@ -836,7 +904,10 @@ async def _run_hierarchical_retrieval(
         exact_match_ids = tuple(
             fid
             for fid in await lookup_exact_match_files(
-                keywords, drive, max_files=cfg.exact_match_max_files
+                keywords,
+                drive,
+                max_files=cfg.exact_match_max_files,
+                file_ids=file_id_constraint,
             )
             if fid not in coarse_set
             and (pre_scope_set is None or fid in pre_scope_set)
@@ -874,6 +945,7 @@ async def _run_hierarchical_retrieval(
             original_query=semantic,
             file_id_scope=bypass_scope,
             required=required,
+            file_id_constraint=file_id_constraint,
         )
         return candidates, None, None
 
@@ -936,8 +1008,11 @@ async def _run_hierarchical_retrieval(
                 file_type=file_type,
                 drive=drive,
                 original_query=semantic,
-                file_id_scope=scope_ids,
+                file_id_scope=(
+                    None if file_id_constraint is not None else scope_ids
+                ),
                 required=required,
+                file_id_constraint=file_id_constraint,
             )
             for clue in clues
         ]
@@ -972,6 +1047,7 @@ async def _run_hierarchical_retrieval(
             original_query=semantic,
             file_id_scope=pre_scope_file_ids,
             required=required,
+            file_id_constraint=file_id_constraint,
         )
         seen: set[str] = set()
         merged: list[RetrievedFile] = []
@@ -1037,6 +1113,7 @@ async def _run_agentic(
     drive: str | None,
     viewer_id: str | None,
     temperature: float | None,
+    file_id_constraint: "frozenset[str] | None" = None,
 ) -> AgenticAnswer:
     """Dispatch to ``run_agentic_loop`` with the active LLM config.
 
@@ -1055,6 +1132,7 @@ async def _run_agentic(
         drive=drive,
         viewer_id=viewer_id,
         credential=credential,
+        file_id_constraint=file_id_constraint,
         max_total_tokens=budget,
         language_instruction=_language_instruction(),
         temperature=temperature,
@@ -1418,6 +1496,7 @@ async def _stream_agentic(
     drive: str | None,
     viewer_id: str | None,
     start: float,
+    file_id_constraint: "frozenset[str] | None" = None,
 ) -> AsyncIterator[AnswerEvent]:
     """Run the agentic loop and adapt its single-shot result to the SSE
     event vocabulary the router (and existing UI) already speaks.
@@ -1449,6 +1528,7 @@ async def _stream_agentic(
         drive=drive,
         viewer_id=viewer_id,
         temperature=None,
+        file_id_constraint=file_id_constraint,
     )
 
     # Empty sources event keeps the existing UI's "sources" panel
@@ -1491,6 +1571,8 @@ async def _stream_answer(
     drive: str | None = None,
     *,
     viewer_id: str | None = None,
+    scope: dict | None = None,
+    scope_file_ids: list[str] | None = None,
 ) -> AsyncIterator[AnswerEvent]:
     """Run the RAG pipeline and yield SSE-ready events.
 
@@ -1529,6 +1611,30 @@ async def _stream_answer(
 
     start = time.monotonic()
 
+    # A scoped request behaves as Ask over a drive holding only S. The
+    # scope event is first, and an empty S answers without touching the
+    # LLM: no decomposition, no keyword transform, no answer.
+    scoped = scope is not None
+    effective_constraint: list[str] | None = None
+    if scoped:
+        matched = list(scope_file_ids or [])
+        effective_constraint = matched
+        yield AnswerEvent(
+            kind="scope",
+            data={"scope": scope, "matched_file_count": len(matched)},
+        )
+        logger.debug("ask scope resolved: drive=%s matched=%d", drive, len(matched))
+        if not matched:
+            yield AnswerEvent(kind="citations", data={"citations": []})
+            yield _empty_done_event(
+                extra={
+                    "retrieved_count": 0,
+                    "scope_empty": True,
+                    "took_ms": int((time.monotonic() - start) * 1000),
+                }
+            )
+            return
+
     # Phase 1.C agentic branch — same gate as ``_maybe_run_agentic``
     # in ``answer_question``. When the loop activates, it owns the
     # full event stream: legacy stages (personal-history, keyword
@@ -1541,6 +1647,9 @@ async def _stream_answer(
             drive=drive,
             viewer_id=viewer_id,
             start=start,
+            file_id_constraint=(
+                frozenset(effective_constraint) if scoped else None
+            ),
         ):
             yield event
         return
@@ -1558,7 +1667,55 @@ async def _stream_answer(
             kind="query_decomposed",
             data=_decomposed_to_event_payload(history.decomposed),
         )
-    if history.file_ids is not None:
+    if scoped and history.file_ids is not None:
+        # Personal history narrows the scope, never the other way round:
+        # E = S ∩ H, and an empty intersection falls back to S (graceful)
+        # or short-circuits (strict). A scoped request never widens to the
+        # whole drive.
+        history_set = set(history.file_ids)
+        intersection = [
+            fid for fid in scope_file_ids or [] if fid in history_set
+        ]
+        if history.short_circuit or not intersection:
+            if settings.rag.personal_history.fallback_when_empty == "strict":
+                yield AnswerEvent(
+                    kind="history_filter",
+                    data={
+                        "drive": drive,
+                        "kind": (
+                            history.decomposed.personal_scope
+                            if history.decomposed is not None
+                            else "viewed"
+                        ),
+                        "matched_file_count": 0,
+                    },
+                )
+                yield AnswerEvent(kind="citations", data={"citations": []})
+                yield _empty_done_event(
+                    extra={
+                        "retrieved_count": 0,
+                        "took_ms": int((time.monotonic() - start) * 1000),
+                    }
+                )
+                return
+            # Graceful empty intersection: E stays S and no history_filter
+            # event claims a narrowing that did not happen.
+            effective_constraint = list(scope_file_ids or [])
+        else:
+            effective_constraint = intersection
+            yield AnswerEvent(
+                kind="history_filter",
+                data={
+                    "drive": drive,
+                    "kind": (
+                        history.decomposed.personal_scope
+                        if history.decomposed is not None
+                        else "viewed"
+                    ),
+                    "matched_file_count": len(intersection),
+                },
+            )
+    elif history.file_ids is not None:
         yield AnswerEvent(
             kind="history_filter",
             data={
@@ -1571,7 +1728,8 @@ async def _stream_answer(
                 "matched_file_count": len(history.file_ids),
             },
         )
-    if history.short_circuit:
+
+    if not scoped and history.short_circuit:
         # ``fallback_when_empty="strict"`` + empty Stage B result.
         # No keywords / sources to emit — collapse straight to a
         # citation-less ``done`` so the UI surfaces "該当なし".
@@ -1609,7 +1767,48 @@ async def _stream_answer(
     # ``original_query`` carries the raw natural-language question
     # through so vector channels get full semantic context while FTS
     # only sees the noise-free keywords.
-    if history.file_ids and settings.rag.hierarchical.enabled and drive:
+    if scoped:
+        # E travels only as ``file_id_constraint``: ``file_id_scope`` is the
+        # post-filter this change replaces, and ``pre_scope_file_ids`` is a
+        # corpus to project onto rather than the corpus itself.
+        if history.file_ids and settings.rag.hierarchical.enabled and drive:
+            candidates, shortlist, clues = await _run_hierarchical_retrieval(
+                query=query,
+                keywords=keywords,
+                drive=drive,
+                credential=credential,
+                file_type=file_type,
+                top_k=effective_top_k,
+                original_query=query,
+                pre_scope_file_ids=None,
+                required=required,
+                file_id_constraint=effective_constraint,
+            )
+        elif history.file_ids:
+            candidates, shortlist, clues = await _scoped_category_retrieval(
+                query=query,
+                keywords=keywords,
+                decomposed=history.decomposed,
+                credential=credential,
+                file_type=file_type,
+                drive=drive,
+                top_k=effective_top_k,
+                required=required,
+                file_id_constraint=effective_constraint,
+            )
+        else:
+            candidates, shortlist, clues = await _run_hierarchical_retrieval(
+                query=query,
+                keywords=keywords,
+                drive=drive,
+                credential=credential,
+                file_type=file_type,
+                top_k=effective_top_k,
+                original_query=query,
+                required=required,
+                file_id_constraint=effective_constraint,
+            )
+    elif history.file_ids and settings.rag.hierarchical.enabled and drive:
         candidates, shortlist, clues = await _run_hierarchical_retrieval(
             query=query,
             keywords=keywords,

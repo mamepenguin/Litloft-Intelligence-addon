@@ -160,8 +160,20 @@
     ],
     "folder-bulk-actions-menu": [
       {
+        "id": "folder-ask",
+        "label": "Ask here",
+        "priority": 5
+      },
+      {
         "id": "folder-ai-actions",
         "label": "AI",
+        "priority": 10
+      }
+    ],
+    "collection-actions": [
+      {
+        "id": "collection-ask",
+        "label": "Ask here",
         "priority": 10
       }
     ]

@@ -54,6 +54,84 @@ class FilterUnavailable(RuntimeError):
     """The core did not answer ``/files/matching`` with a list of file ids."""
 
 
+def apply_filter_normalisation(model: BaseModel) -> None:
+    """Normalise the four condition lists on ``model`` in place.
+
+    Shared by the search ``filter`` and the Ask ``scope`` so the two name the
+    same files for the same values: a blank tag is dropped, tags and
+    collections are deduplicated case-insensitively, kinds go through the
+    ``markdown`` alias, folders are NFC-normalised and trimmed of ``/``, then
+    the caps apply. Raises ``ValueError`` for a value either model rejects.
+    """
+    tags: list[str] = []
+    seen: set[str] = set()
+    for raw in model.tags:
+        tag = raw.strip()
+        if not tag:
+            continue
+        if len(tag) > TAG_MAX_LENGTH:
+            raise ValueError(f"a tag is at most {TAG_MAX_LENGTH} characters")
+        key = tag.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        tags.append(tag)
+    if len(tags) > TAG_MAX_COUNT:
+        raise ValueError(f"at most {TAG_MAX_COUNT} tags")
+
+    kinds: list[str] = []
+    seen_kinds: set[str] = set()
+    for raw_kind in model.kinds:
+        kind = _KIND_ALIASES.get(raw_kind, raw_kind)
+        if kind not in KINDS:
+            raise ValueError(f"unknown kind: {raw_kind}")
+        if kind in seen_kinds:
+            continue
+        seen_kinds.add(kind)
+        kinds.append(kind)
+    if len(kinds) > KIND_MAX_COUNT:
+        raise ValueError(f"at most {KIND_MAX_COUNT} kinds")
+
+    folders: list[str] = []
+    for raw_folder in model.folders:
+        folder = unicodedata.normalize("NFC", raw_folder).strip("/")
+        if (
+            not folder
+            or "\x00" in folder
+            or any(segment in ("", ".", "..") for segment in folder.split("/"))
+        ):
+            raise ValueError(f"invalid folder: {raw_folder!r}")
+        if len(folder) > FOLDER_MAX_LENGTH:
+            raise ValueError(f"a folder is at most {FOLDER_MAX_LENGTH} characters")
+        if folder not in folders:
+            folders.append(folder)
+    if len(folders) > FOLDER_MAX_COUNT:
+        raise ValueError(f"at most {FOLDER_MAX_COUNT} folders")
+
+    collections: list[str] = []
+    seen_collections: set[str] = set()
+    for raw_collection in model.collections:
+        name = raw_collection.strip()
+        if not name:
+            continue
+        if len(name) > COLLECTION_MAX_LENGTH:
+            raise ValueError(
+                f"a collection is at most {COLLECTION_MAX_LENGTH} characters"
+            )
+        key = name.lower()
+        if key in seen_collections:
+            continue
+        seen_collections.add(key)
+        collections.append(name)
+    if len(collections) > COLLECTION_MAX_COUNT:
+        raise ValueError(f"at most {COLLECTION_MAX_COUNT} collections")
+
+    model.tags = tags
+    model.kinds = kinds
+    model.folders = folders
+    model.collections = collections
+
+
 class SearchFilter(BaseModel):
     """The parsed operators of a search query, as the core's request model takes them.
 
@@ -76,75 +154,7 @@ class SearchFilter(BaseModel):
 
     @model_validator(mode="after")
     def _normalise(self) -> "SearchFilter":
-        tags: list[str] = []
-        seen: set[str] = set()
-        for raw in self.tags:
-            tag = raw.strip()
-            if not tag:
-                continue
-            if len(tag) > TAG_MAX_LENGTH:
-                raise ValueError(f"a tag is at most {TAG_MAX_LENGTH} characters")
-            key = tag.lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            tags.append(tag)
-        if len(tags) > TAG_MAX_COUNT:
-            raise ValueError(f"at most {TAG_MAX_COUNT} tags")
-
-        kinds: list[str] = []
-        seen_kinds: set[str] = set()
-        for raw_kind in self.kinds:
-            kind = _KIND_ALIASES.get(raw_kind, raw_kind)
-            if kind not in KINDS:
-                raise ValueError(f"unknown kind: {raw_kind}")
-            if kind in seen_kinds:
-                continue
-            seen_kinds.add(kind)
-            kinds.append(kind)
-        if len(kinds) > KIND_MAX_COUNT:
-            raise ValueError(f"at most {KIND_MAX_COUNT} kinds")
-
-        folders: list[str] = []
-        for raw_folder in self.folders:
-            folder = unicodedata.normalize("NFC", raw_folder).strip("/")
-            if (
-                not folder
-                or "\x00" in folder
-                or any(
-                    segment in ("", ".", "..") for segment in folder.split("/")
-                )
-            ):
-                raise ValueError(f"invalid folder: {raw_folder!r}")
-            if len(folder) > FOLDER_MAX_LENGTH:
-                raise ValueError(f"a folder is at most {FOLDER_MAX_LENGTH} characters")
-            if folder not in folders:
-                folders.append(folder)
-        if len(folders) > FOLDER_MAX_COUNT:
-            raise ValueError(f"at most {FOLDER_MAX_COUNT} folders")
-
-        collections: list[str] = []
-        seen_collections: set[str] = set()
-        for raw_collection in self.collections:
-            name = raw_collection.strip()
-            if not name:
-                continue
-            if len(name) > COLLECTION_MAX_LENGTH:
-                raise ValueError(
-                    f"a collection is at most {COLLECTION_MAX_LENGTH} characters"
-                )
-            key = name.lower()
-            if key in seen_collections:
-                continue
-            seen_collections.add(key)
-            collections.append(name)
-        if len(collections) > COLLECTION_MAX_COUNT:
-            raise ValueError(f"at most {COLLECTION_MAX_COUNT} collections")
-
-        self.tags = tags
-        self.kinds = kinds
-        self.folders = folders
-        self.collections = collections
+        apply_filter_normalisation(self)
         return self
 
 
