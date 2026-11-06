@@ -1116,7 +1116,12 @@ export default function TranscriptSection({
                   onClick={() => beginEdit(cue)}
                   disabled={busy}
                   aria-label={t("transcriptEdit")}
-                  className={`m-0.5 inline-flex h-8 flex-shrink-0 items-center justify-center rounded-lg px-2 text-xs font-medium text-text-muted hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${editingIndex !== null && editingIndex !== cue.index ? "pointer-events-none opacity-0" : ""} ${REVEAL}`}
+                  style={
+                    editingIndex !== null && editingIndex !== cue.index
+                      ? { opacity: 0, pointerEvents: "none" }
+                      : undefined
+                  }
+                  className={`m-0.5 inline-flex h-8 flex-shrink-0 items-center justify-center rounded-lg px-2 text-xs font-medium text-text-muted hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${editingIndex !== null && editingIndex !== cue.index ? "pointer-events-none" : ""} ${REVEAL}`}
                 >
                   {t("transcriptEdit")}
                 </button>

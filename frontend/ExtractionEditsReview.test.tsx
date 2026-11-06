@@ -304,9 +304,7 @@ describe("SPEC-ADDON-070 — edit state follows the file", () => {
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "draft A0" } });
     fireEvent.click(screen.getByRole("button", { name: "修正" }));
     expect(screen.getByRole("textbox")).toHaveValue("text-A-1");
-    expect(screen.getByRole("button", { name: "修正" }).className).toContain(
-      "pointer-events-none",
-    );
+    expect(screen.getByRole("button", { name: "修正" }).style.opacity).toBe("0");
     fireEvent.click(screen.getByRole("button", { name: "修正" }));
     expect(screen.getByRole("textbox")).toHaveValue("draft A0");
   });
