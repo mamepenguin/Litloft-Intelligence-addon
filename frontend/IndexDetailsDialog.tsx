@@ -54,7 +54,14 @@ interface TaskSpec {
   // reindex API speaks ``text`` instead of ``text_content`` (it lines
   // up with the IndexedFile ``text_indexed`` flag) so we map here
   // rather than rename the long-lived translation key.
-  i18nKey: "metadata" | "clip" | "whisper" | "text_content" | "ocr";
+  i18nKey:
+    | "metadata"
+    | "clip"
+    | "whisper"
+    | "text_content"
+    | "ocr"
+    | "frame_ocr"
+    | "page_ocr";
   icon: LucideIcon;
 }
 
@@ -64,6 +71,8 @@ const TASK_SPECS: TaskSpec[] = [
   { task: "whisper", i18nKey: "whisper", icon: Mic },
   { task: "text", i18nKey: "text_content", icon: FileText },
   { task: "ocr", i18nKey: "ocr", icon: ScanText },
+  { task: "frame_ocr", i18nKey: "frame_ocr", icon: ScanText },
+  { task: "page_ocr", i18nKey: "page_ocr", icon: ScanText },
 ];
 
 // .loft files are remote-URL wrappers (YouTube / Vimeo / Soundcloud).
@@ -108,6 +117,8 @@ function isTaskApplicable(
   mimeType: string | undefined,
   fileType: string | undefined,
   imageOcr: string | undefined,
+  videoFrameOcr: string | undefined,
+  scannedPdfOcr: string | undefined,
 ): boolean {
   const mt = (mimeType ?? "").toLowerCase();
   const ft = (fileType ?? "").toLowerCase();
@@ -146,6 +157,13 @@ function isTaskApplicable(
       // "false" refuses an OCR reindex, so a row would only fail.
       if (imageOcr === undefined || imageOcr === "false") return false;
       return OCR_MIME_TYPES.has(mt);
+    case "frame_ocr":
+      if (videoFrameOcr === undefined || videoFrameOcr === "false") return false;
+      if (mt === LOFT_MIME) return false;
+      return mt.startsWith("video/") || ft === "video";
+    case "page_ocr":
+      if (scannedPdfOcr === undefined || scannedPdfOcr === "false") return false;
+      return mt === "application/pdf";
     default:
       return false;
   }
@@ -263,7 +281,14 @@ export default function IndexDetailsDialog({
 
   // Only render rows whose task applies to this file's mime/type.
   const visibleTasks = TASK_SPECS.filter((spec) =>
-    isTaskApplicable(spec.task, mimeType, fileType, details?.image_ocr),
+    isTaskApplicable(
+      spec.task,
+      mimeType,
+      fileType,
+      details?.image_ocr,
+      details?.video_frame_ocr,
+      details?.scanned_pdf_ocr,
+    ),
   );
 
   return createPortal(

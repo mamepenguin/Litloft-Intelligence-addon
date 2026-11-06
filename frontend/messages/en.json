@@ -137,8 +137,16 @@
       },
       "video_visual": {
         "label": "Visual index"
+      },
+      "frame_ocr": {
+        "label": "Text in video"
+      },
+      "page_ocr": {
+        "label": "Text in scanned pages"
       }
-    }
+    },
+    "frameOcrFiles": "Text in video {done} / {total}",
+    "pageOcrFiles": "Text in scanned pages {done} / {total}"
   },
   "searchIndex": {
     "transcriptTitle": "Transcript",
@@ -469,6 +477,14 @@
         "image_ocr": {
           "label": "Text in image",
           "help": "Reads the text in pictures with a local OCR engine so search can find it. Nothing leaves the container for the OCR itself; the recognised text is then handled like document text and follows the drive's LLM cloud policy."
+        },
+        "video_frame_ocr": {
+          "label": "Text in video",
+          "help": "Reads text shown in a video so search can find it. Frames are read at most every 10 seconds."
+        },
+        "scanned_pdf_ocr": {
+          "label": "Text in scanned pages",
+          "help": "Reads scanned PDF pages that have no text layer at 300 dpi so search can find them."
         }
       },
       "columns": {

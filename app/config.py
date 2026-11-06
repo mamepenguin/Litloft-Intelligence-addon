@@ -342,6 +342,11 @@ class FeaturesConfig:
     # in pictures with RapidOCR and stores them as text chunks. Local only,
     # so the picture bytes never leave the container (SPEC-ADDON-050).
     image_ocr: str = "on_index"
+    # Local OCR of video frames and of scanned PDF pages
+    # ("false" | "manual" | "on_index"). Both read text with the picture
+    # OCR engine and store it as text chunks (SPEC-ADDON-066/069).
+    video_frame_ocr: str = "on_index"
+    scanned_pdf_ocr: str = "on_index"
 
 
 @dataclass(frozen=True)

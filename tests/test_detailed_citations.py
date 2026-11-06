@@ -1144,8 +1144,14 @@ class TestQueryTopChunksBm25:
             def fetchall(self):
                 return list(self._data)
 
+        class _FakeOne:
+            def fetchone(self):
+                return ("document",)
+
         class _FakeSession:
-            def execute(self, _stmt, _params):
+            def execute(self, stmt, _params):
+                if "FROM indexed_files" in str(stmt):
+                    return _FakeOne()
                 return _FakeResult(next(results_iter))
 
         @contextmanager
@@ -2202,8 +2208,14 @@ class TestDenseAndBm25ChunkRangeFilter:
             def fetchall(self):
                 return list(self._data)
 
+        class _FakeOne:
+            def fetchone(self):
+                return ("document",)
+
         class _FakeSession:
-            def execute(self, _stmt, _params):
+            def execute(self, stmt, _params):
+                if "FROM indexed_files" in str(stmt):
+                    return _FakeOne()
                 return _FakeResult(next(results_iter))
 
         @contextmanager

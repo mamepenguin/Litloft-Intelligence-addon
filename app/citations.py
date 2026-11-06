@@ -46,6 +46,21 @@ from app.summary_parser import Segment, parse_segments
 
 logger = logging.getLogger(__name__)
 
+
+def _is_video(file_id: str) -> bool:
+    """Whether the file is a video, whose text_content rows are frame text."""
+    try:
+        with get_search_db_read() as session:
+            row = session.execute(
+                sql_text(
+                    "SELECT file_type FROM indexed_files WHERE file_id = :f"
+                ),
+                {"f": file_id},
+            ).fetchone()
+    except Exception:
+        return False
+    return row is not None and row[0] == "video"
+
 # Embedding id formats used by the indexer. We parse these to recover
 # a human-readable chunk identifier for ``citation_chunk_ids``.
 #
@@ -126,7 +141,7 @@ def _fetch_file_vectors(
         with get_search_db() as session:
             rows = session.execute(
                 sql_text(
-                    "SELECT v.embedding_id, v.vector "
+                    "SELECT v.embedding_id, v.vector, e.embedding_type "
                     "FROM vec_text v "
                     "JOIN embeddings e "
                     "ON CAST(e.id AS TEXT) = v.embedding_id "
@@ -141,9 +156,14 @@ def _fetch_file_vectors(
         )
         return []
 
+    video = _is_video(file_id)
     pairs: list[tuple[str, np.ndarray]] = []
     seen: set[str] = set()
-    for embedding_id, vec_bytes in rows:
+    for row in rows:
+        embedding_id, vec_bytes = row[0], row[1]
+        embedding_type = row[2] if len(row) > 2 else None
+        if video and embedding_type == "text_content":
+            continue
         chunk_id = _make_chunk_id(embedding_id or "")
         if chunk_id is None or chunk_id in seen:
             continue
@@ -373,7 +393,11 @@ def _query_top_chunks_bm25(
             # we try to parse it as an int to match the ``document:{N}``
             # convention; rows that don't parse are skipped rather than
             # surfacing an ambiguous chunk id to the UI. Range filter
-            # is applied in Python after the int parse.
+            # is applied in Python after the int parse. A video's
+            # text_content rows are frame text and carry no citation
+            # location a viewer can seek to, so they stay out (I10).
+            if _is_video(file_id):
+                return results[:top_k]
             rows = session.execute(
                 sql_text(
                     "SELECT chunk_index FROM fts_text_content "
@@ -1321,6 +1345,8 @@ def _fetch_max_chunk_per_kind(file_id: str) -> dict[str, int]:
                 ),
                 {"fid": file_id},
             ).fetchone()
+            if _is_video(file_id):
+                d_row = None
     except Exception as e:  # pragma: no cover - defensive
         logger.debug("_fetch_max_chunk_per_kind failed for %s: %s", file_id, e)
         return {}

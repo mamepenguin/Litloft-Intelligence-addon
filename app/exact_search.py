@@ -76,10 +76,30 @@ _MATCH = "instr(lower({col}), lower(:q)) > 0"
 _IN_DRIVE = "f.drive = :drive AND f.active = 1"
 
 
+def _frame_segments(
+    db, keys: list[tuple[str, int]],
+) -> dict[tuple[str, int], tuple[float, float]]:
+    if not keys:
+        return {}
+    file_ids = sorted({file_id for file_id, _ in keys})
+    rows = db.execute(
+        sql_text(
+            "SELECT file_id, chunk_index, start_time, end_time "
+            "FROM video_frame_texts WHERE file_id IN :ids"
+        ).bindparams(bindparam("ids", expanding=True)),
+        {"ids": file_ids},
+    ).fetchall()
+    return {
+        (row.file_id, int(row.chunk_index)): (row.start_time, row.end_time)
+        for row in rows
+    }
+
+
 def _text_hits(db, q: str, needle: str, drive: str) -> list[_Hit]:
     rows = db.execute(
         sql_text(
-            "SELECT f.file_id, f.filename, f.mime_type, t.chunk_index, t.page, t.text "
+            "SELECT f.file_id, f.filename, f.file_type, f.mime_type, "
+            "t.chunk_index, t.page, t.text "
             "FROM fts_text_content t JOIN indexed_files f ON f.file_id = t.file_id "
             f"WHERE {_IN_DRIVE} AND {_MATCH.format(col='t.text')}"
         ),
@@ -89,6 +109,11 @@ def _text_hits(db, q: str, needle: str, drive: str) -> list[_Hit]:
         (r.file_id, _int_or_none(r.page)) for r in rows if r.mime_type == EPUB_MIME
     }
     titles = _section_titles(db, epub_pages)
+    video_segments = _frame_segments(db, [
+        (r.file_id, int(r.chunk_index))
+        for r in rows
+        if r.file_type == "video"
+    ])
     hits = []
     for r in rows:
         index = int(r.chunk_index)
@@ -97,6 +122,14 @@ def _text_hits(db, q: str, needle: str, drive: str) -> list[_Hit]:
             location = {"section": page, "section_title": titles.get((r.file_id, page))}
         else:
             location = {"page": page}
+        if r.file_type == "video":
+            segment = video_segments.get((r.file_id, index))
+            if segment is not None:
+                location = {
+                    "page": page,
+                    "start_time": segment[0],
+                    "end_time": segment[1],
+                }
         hits.append(_Hit(
             (r.filename, r.file_id, 0, index),
             _segment(

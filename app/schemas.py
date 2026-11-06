@@ -144,6 +144,8 @@ class FeaturesStatus(BaseModel):
     chapter_suggestions: str = "false"
     video_visual_index: str = "false"
     image_ocr: str = "on_index"
+    video_frame_ocr: str = "on_index"
+    scanned_pdf_ocr: str = "on_index"
 
 
 class ChapterSuggestionItem(BaseModel):
@@ -317,6 +319,8 @@ class IndexDetailsResponse(BaseModel):
     # The dialog hides the OCR row while this is ``false``, so the mode
     # has to travel with the status it explains.
     image_ocr: Literal["on_index", "manual", "false"] = "on_index"
+    video_frame_ocr: Literal["on_index", "manual", "false"] = "on_index"
+    scanned_pdf_ocr: Literal["on_index", "manual", "false"] = "on_index"
     status: dict[str, bool]
     indexed_at: str
     embeddings: dict[str, IndexDetailType]

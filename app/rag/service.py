@@ -118,6 +118,29 @@ def _is_location_marker(loc: str) -> bool:
     return bool(_LOCATION_MARKER_RE.match(loc.strip()))
 
 
+def _frame_location(file_id: str, chunk_index: int) -> str | None:
+    """``m:ss`` of a video's frame-text chunk (SPEC-ADDON-066 A8)."""
+    from sqlalchemy import text as sql_text
+
+    from app.database import get_search_db_read
+
+    try:
+        with get_search_db_read() as session:
+            row = session.execute(
+                sql_text(
+                    "SELECT start_time FROM video_frame_texts "
+                    "WHERE file_id = :f AND chunk_index = :c"
+                ),
+                {"f": file_id, "c": chunk_index},
+            ).fetchone()
+    except Exception:
+        return None
+    if row is None:
+        return None
+    seconds = int(max(0.0, row[0]))
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
 def _segment_location_for(
     file_id: str,
     candidates: list[RetrievedFile],
@@ -165,6 +188,14 @@ def _segment_location_for(
         if best_match.page is not None:
             page_word = "section" if candidate.mime_type == EPUB_MIME else "page"
             return f"{page_word} {best_match.page}"
+        if (
+            candidate.file_type == "video"
+            and best_match.match_type == "text_content"
+            and best_match.chunk_index is not None
+        ):
+            location = _frame_location(file_id, best_match.chunk_index)
+            if location is not None:
+                return location
         break
 
     # Fallback: vector-selected document chunks have no MatchInfo entry.

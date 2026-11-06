@@ -48,6 +48,8 @@ const TASK_ORDER: QueueTaskKind[] = [
   "whisper",
   "text_content",
   "ocr",
+  "frame_ocr",
+  "page_ocr",
   "auto_tags",
   "summaries",
   "vision_describe",
@@ -63,6 +65,8 @@ const TASK_ICON: Record<QueueTaskKind, LucideIcon> = {
   whisper: Mic,
   text_content: FileText,
   ocr: ScanText,
+  frame_ocr: ScanText,
+  page_ocr: ScanText,
   auto_tags: Tags,
   summaries: MessageSquareText,
   vision_describe: Sparkles,
@@ -206,6 +210,12 @@ function StatusContent({
   const ocrTotal = indexed
     ? (indexed.ocr ?? 0) + (pending?.ocr ?? 0)
     : 0;
+  const frameOcrTotal = indexed
+    ? (indexed.frame_ocr ?? 0) + (pending?.frame_ocr ?? 0)
+    : 0;
+  const pageOcrTotal = indexed
+    ? (indexed.page_ocr ?? 0) + (pending?.page_ocr ?? 0)
+    : 0;
 
   const taskMap = queue?.tasks ?? {};
   const taskRows = TASK_ORDER.map((kind) => ({ kind, breakdown: taskMap[kind] }))
@@ -292,6 +302,28 @@ function StatusContent({
             label={t("ocrFiles", {
               done: (indexed.ocr ?? 0).toLocaleString(),
               total: ocrTotal.toLocaleString(),
+            })}
+          />
+        )}
+
+        {indexed && frameOcrTotal > 0 && (
+          <ProgressBar
+            done={indexed.frame_ocr ?? 0}
+            total={frameOcrTotal}
+            label={t("frameOcrFiles", {
+              done: (indexed.frame_ocr ?? 0).toLocaleString(),
+              total: frameOcrTotal.toLocaleString(),
+            })}
+          />
+        )}
+
+        {indexed && pageOcrTotal > 0 && (
+          <ProgressBar
+            done={indexed.page_ocr ?? 0}
+            total={pageOcrTotal}
+            label={t("pageOcrFiles", {
+              done: (indexed.page_ocr ?? 0).toLocaleString(),
+              total: pageOcrTotal.toLocaleString(),
             })}
           />
         )}
