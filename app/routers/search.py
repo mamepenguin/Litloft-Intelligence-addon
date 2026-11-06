@@ -4,9 +4,10 @@ import asyncio
 import logging
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 
+from app import image_query, scene_segments
 from app.document_sections import EPUB_MIME
 from app.drive_context import require_drive
 from app.file_hydrate import hydrate_files
@@ -16,9 +17,9 @@ from app.file_matching import (
     fetch_matching_file_ids,
     parse_search_filter,
 )
-from app import scene_segments
 from app.schemas import (
     CompareResponseModel,
+    ImageQueryResponse,
     SceneSegmentsResponse,
     SearchPassage as SearchPassageModel,
     SearchResponseModel,
@@ -238,6 +239,28 @@ async def search_endpoint(
         raise HTTPException(status_code=500, detail="Search failed") from e
 
     return await _to_response_model(result)
+
+
+@router.get("/search/by-image/available")
+async def search_by_image_available(
+    drive: str = Depends(require_drive),
+) -> dict:
+    """The image query route's own gate.
+
+    ``/api/addons/status`` filters on ``index``, so it cannot answer whether
+    the proxy lets ``POST /search/by-image`` through. This route carries the
+    same ``pre_check`` in the manifest, and a 200 means the proxy would.
+    """
+    return {}
+
+
+@router.post("/search/by-image", response_model=ImageQueryResponse)
+async def search_by_image_endpoint(
+    request: Request,
+    drive: str = Depends(require_drive),
+) -> ImageQueryResponse:
+    """Rank pictures, scene frames and document text by an image query."""
+    return await image_query.handle(request, drive)
 
 
 @router.get("/search/images", response_model=SearchResponseModel)

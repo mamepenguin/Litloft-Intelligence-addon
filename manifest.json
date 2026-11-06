@@ -165,8 +165,20 @@
     ],
     "folder-bulk-actions-menu": [
       {
+        "id": "folder-ask",
+        "label": "Ask here",
+        "priority": 5
+      },
+      {
         "id": "folder-ai-actions",
         "label": "AI",
+        "priority": 10
+      }
+    ],
+    "collection-actions": [
+      {
+        "id": "collection-ask",
+        "label": "Ask here",
         "priority": 10
       }
     ]
@@ -254,6 +266,36 @@
           "feature": "index"
         },
         "response_filter": null
+      },
+      {
+        "path": "/search/by-image/available",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "search"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/search/by-image",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "search"
+        },
+        "response_filter": {
+          "type": "current_drive_only_nested",
+          "paths": {
+            "images": "drive",
+            "scenes": "drive",
+            "documents": "drive"
+          }
+        },
+        "timeout": 28
       },
       {
         "path": "/search",

@@ -54,6 +54,8 @@ function payload(overrides: Record<string, unknown> = {}) {
     chapter_suggestions: "manual",
     video_visual_index: "false",
     image_ocr: "on_index",
+    video_frame_ocr: "on_index",
+    scanned_pdf_ocr: "on_index",
     tristate_values: ["false", "manual", "on_index"],
     overrides_present: false,
     ...overrides,
@@ -79,7 +81,7 @@ describe("AdminFeaturesSettingsSection OCR (SPEC-ADDON-050 I10)", () => {
     render(<AdminFeaturesSettingsSection />);
     await screen.findByRole("button", { name: "Save" });
 
-    expect(screen.getAllByRole("combobox", { name: /^When .* runs$/ })).toHaveLength(12);
+    expect(screen.getAllByRole("combobox", { name: /^When .* runs$/ })).toHaveLength(14);
 
     const select = screen.getByRole("combobox", { name: "When Text in image runs" });
     expect((select as HTMLSelectElement).value).toBe("on_index");

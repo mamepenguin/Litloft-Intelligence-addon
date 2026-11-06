@@ -253,6 +253,7 @@ async def run_agentic_loop(
     drive: str | None = None,
     viewer_id: str | None = None,
     credential: CallerCredential | None = None,
+    file_id_constraint: "frozenset[str] | None" = None,
     max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
     max_total_tokens: int,
     language_instruction: str = "",
@@ -265,7 +266,10 @@ async def run_agentic_loop(
     telemetry reflects whatever progress was made.
     """
     context = ToolContext(
-        drive=drive, viewer_id=viewer_id, credential=credential
+        drive=drive,
+        viewer_id=viewer_id,
+        credential=credential,
+        file_id_constraint=file_id_constraint,
     )
 
     system_prompt = _build_system_prompt(

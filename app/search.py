@@ -137,7 +137,10 @@ class MatchInfo:
 class SearchPassage:
     """One place inside a file that a search matched."""
 
-    kind: Literal["utterance", "scene", "section", "page", "picture_text", "text"]
+    kind: Literal[
+        "utterance", "scene", "section", "page", "picture_text", "text",
+        "screen_text",
+    ]
     start: float | None
     end: float | None
     page: int | None
@@ -1026,16 +1029,22 @@ def search_images(
     file_type: str | None = None,
     drive: str | None = None,
     file_id_constraint: list[str] | None = None,
+    floor: float | None = None,
+    limit: int | None = None,
+    raw_score: bool = False,
 ) -> SearchResponse:
     """Rank the requested drive's representative frames against a CLIP vector.
 
     Every active file of the drive with a ``clip_thumbnail`` row is scored, so
     the result does not depend on how many nearer frames other drives keep in
     the shared partition. There is no margin cutoff; the absolute floor and the
-    2000-file ceiling decide the list.
+    ceiling decide the list.
 
     ``file_id_constraint`` narrows the scored rows to a filter scope; an empty
-    scope answers no results without reading a vector.
+    scope answers no results without reading a vector. ``floor`` and ``limit``
+    default to ``min_score_clip_thumbnail`` and the route's ceiling when
+    omitted. ``raw_score`` answers each file's cosine itself, where the
+    precision search would scale it by the combiner's weights.
     """
     if file_id_constraint is not None and not file_id_constraint:
         return empty_search_response()
@@ -1064,7 +1073,8 @@ def search_images(
             )
         rows = query.all()
 
-    floor = settings.search.min_score_clip_thumbnail
+    floor = settings.search.min_score_clip_thumbnail if floor is None else floor
+    effective_limit = _IMAGE_SEARCH_LIMIT if limit is None else limit
     engine = get_search_engine()
     best_by_file: dict[str, tuple[float, str, str]] = {}
 
@@ -1099,7 +1109,7 @@ def search_images(
 
     ranked = sorted(
         best_by_file.items(), key=lambda item: (-item[1][0], item[0]),
-    )[:_IMAGE_SEARCH_LIMIT]
+    )[:effective_limit]
 
     clip_matches = [
         _VectorMatch(
@@ -1123,10 +1133,15 @@ def search_images(
         file_scores,
         file_type,
         drive,
-        _IMAGE_SEARCH_LIMIT,
+        effective_limit,
         skip_cutoff=True,
     )
     results = sorted(results, key=lambda r: (-r.score, r.file_id))
+    if raw_score:
+        results = [
+            replace(result, score=best_by_file[result.file_id][0])
+            for result in results
+        ]
 
     with get_search_db_read() as session:
         indexed_count = session.query(IndexedFile).filter(
@@ -1139,6 +1154,189 @@ def search_images(
         indexed_files=indexed_count,
         service_version=settings.service_version,
     )
+
+
+@dataclass(frozen=True)
+class DocumentPassageData:
+    kind: str
+    page: int | None
+    section: int | None
+    section_title: str | None
+    chunk_index: int | None
+    text: str
+    score: float
+
+
+@dataclass(frozen=True)
+class DocumentMatchData:
+    file_id: str
+    drive: str
+    filename: str
+    file_type: str
+    score: float
+    passages: tuple[DocumentPassageData, ...]
+
+
+#: ``/search/by-image`` keeps at most this many documents and passages per file.
+_DOCUMENT_SEARCH_LIMIT = 10
+_DOCUMENT_PASSAGES_PER_FILE = 3
+_DOCUMENT_CANDIDATES = 50
+
+_TEXT_KNN_SQL = (
+    "SELECT embedding_id, distance FROM vec_text "
+    "WHERE vector MATCH :vec AND k = :limit AND embedding_type = 'text_content' "
+    "ORDER BY distance"
+)
+
+
+def _drive_text_neighbours(
+    engine, vec_bytes: bytes, drive: str, limit: int = _DOCUMENT_CANDIDATES,
+) -> list[tuple[str, float]]:
+    """The ``limit`` nearest ``text_content`` rows of ``drive``'s active,
+    non-picture files. Widens past rows of other drives and pictures the way
+    the thumbnail fetch does."""
+    sizes = sorted(
+        {min(limit * factor, _CLIP_DRIVE_FETCH_MAX) for factor in _CLIP_DRIVE_FETCH_FACTORS}
+        | {_CLIP_DRIVE_FETCH_MAX}
+    )
+    kept: list[tuple[str, float]] = []
+    for asked in sizes:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                sql_text(_TEXT_KNN_SQL), {"vec": vec_bytes, "limit": asked}
+            ).fetchall()
+        if not rows:
+            return []
+        with get_search_db_read() as session:
+            visible = {
+                emb_id
+                for (emb_id,) in session.query(Embedding.id)
+                .join(IndexedFile, IndexedFile.file_id == Embedding.file_id)
+                .filter(
+                    Embedding.id.in_([row[0] for row in rows]),
+                    IndexedFile.drive == drive,
+                    IndexedFile.active.is_(True),
+                    IndexedFile.file_type != "image",
+                    IndexedFile.file_type != "video",
+                )
+                .all()
+            }
+        kept = [(row[0], row[1]) for row in rows if row[0] in visible][:limit]
+        if len(kept) >= limit or len(rows) < asked:
+            break
+    return kept
+
+
+def search_documents(
+    query_vector: np.ndarray,
+    drive: str,
+    *,
+    floor: float | None = None,
+    margin: float | None = None,
+    limit: int = _DOCUMENT_SEARCH_LIMIT,
+) -> list[DocumentMatchData]:
+    """Rank the drive's text chunks against a text query vector.
+
+    Candidates widen past nearer rows of other drives and of pictures until
+    ``_DOCUMENT_CANDIDATES`` chunks survive or the partition is exhausted.
+    Rows under ``min_score_text`` and more than ``score_cutoff_margin`` below
+    the best remaining row are dropped. Files are ordered by their best row
+    and keep their three best rows as passages.
+    """
+    rows = _drive_text_neighbours(
+        get_search_engine(), query_vector.tobytes(), drive,
+    )
+    if not rows:
+        return []
+
+    distances = {row[0]: row[1] for row in rows}
+    ids = list(distances)
+    with get_search_db_read() as session:
+        embeddings = (
+            session.query(Embedding).filter(Embedding.id.in_(ids)).all()
+        )
+        file_ids = {emb.file_id for emb in embeddings}
+        files = {
+            file.file_id: file
+            for file in session.query(IndexedFile)
+            .filter(IndexedFile.file_id.in_(file_ids))
+            .all()
+        }
+        titles = load_section_titles(
+            session,
+            [
+                (emb.file_id, emb.page)
+                for emb in embeddings
+                if emb.page is not None
+                and files.get(emb.file_id) is not None
+                and files[emb.file_id].mime_type == EPUB_MIME
+            ],
+        )
+
+    scored = [
+        (_l2_to_cosine_similarity(distances[emb.id]), emb)
+        for emb in embeddings
+        if emb.id in distances and emb.file_id in files
+    ]
+    if not scored:
+        return []
+
+    effective_floor = settings.search.min_score_text if floor is None else floor
+    scored = [item for item in scored if item[0] >= effective_floor]
+    if not scored:
+        return []
+
+    best_score = max(score for score, _ in scored)
+    effective_margin = (
+        settings.search.score_cutoff_margin if margin is None else margin
+    )
+    scored = [
+        item for item in scored if item[0] >= best_score - effective_margin
+    ]
+
+    by_file: dict[str, list[tuple[float, Embedding]]] = {}
+    for score, emb in scored:
+        by_file.setdefault(emb.file_id, []).append((score, emb))
+
+    ranked_files = sorted(
+        by_file.items(), key=lambda item: (-max(s for s, _ in item[1]), item[0]),
+    )[:limit]
+
+    matches: list[DocumentMatchData] = []
+    for file_id, items in ranked_files:
+        file = files[file_id]
+        items = sorted(
+            items,
+            key=lambda item: (
+                -item[0],
+                item[1].chunk_index if item[1].chunk_index is not None else 0,
+            ),
+        )[:_DOCUMENT_PASSAGES_PER_FILE]
+        passages = []
+        for score, emb in items:
+            kind = text_content_kind(file.mime_type, emb.page, file.file_type)
+            if kind == "section":
+                section, section_title = emb.page, titles.get((file_id, emb.page))
+            else:
+                section, section_title = None, None
+            passages.append(DocumentPassageData(
+                kind=kind,
+                page=emb.page,
+                section=section,
+                section_title=section_title,
+                chunk_index=emb.chunk_index,
+                text=emb.content_preview,
+                score=round(score, 4),
+            ))
+        matches.append(DocumentMatchData(
+            file_id=file_id,
+            drive=file.drive,
+            filename=file.filename,
+            file_type=file.file_type,
+            score=round(max(score for score, _ in items), 4),
+            passages=tuple(passages),
+        ))
+    return matches
 
 
 @dataclass
@@ -2094,7 +2292,10 @@ def _passage_kind(
     elif match.match_type == "clip" and match.channel == "vector":
         kind = "scene"
     elif match.match_type == "text_content" and match.chunk_index is not None:
-        kind = text_content_kind(mime_type, match.page, file_type)
+        if file_type == "video":
+            kind = "screen_text"
+        else:
+            kind = text_content_kind(mime_type, match.page, file_type)
     else:
         return None
     if kind in ("utterance", "scene") and match.timestamp_start is None:
@@ -2147,7 +2348,7 @@ def _keyword_excerpt(match: MatchInfo, terms: tuple[str, ...]) -> str:
 def _frame_url(
     result: SearchResult, kind: str, start: float | None,
 ) -> str | None:
-    if kind not in ("utterance", "scene") or start is None:
+    if kind not in ("utterance", "scene", "screen_text") or start is None:
         return None
     if result.file_type != "video" or result.mime_type == LOFT_MIME:
         return None
@@ -2156,13 +2357,27 @@ def _frame_url(
     )
 
 
+def _frame_segment(
+    file_id: str, chunk_index: int,
+) -> tuple[float, float] | None:
+    with get_search_db_read() as session:
+        row = session.execute(
+            sql_text(
+                "SELECT start_time, end_time FROM video_frame_texts "
+                "WHERE file_id = :f AND chunk_index = :c"
+            ),
+            {"f": file_id, "c": chunk_index},
+        ).fetchone()
+    return (row.start_time, row.end_time) if row is not None else None
+
+
 def _finish_passage(
     kind: str,
     matches: list[MatchInfo],
     result: SearchResult,
     section_titles: dict[int, str],
     terms: tuple[str, ...],
-) -> SearchPassage:
+) -> SearchPassage | None:
     vector_matches = [m for m in matches if m.channel == "vector"]
     keyword_matches = [m for m in matches if m.channel == "keyword"]
     best_vector = max(vector_matches, key=lambda m: m.score, default=None)
@@ -2179,6 +2394,16 @@ def _finish_passage(
     elif kind == "page":
         page = matches[0].page
         chunk_index = matches[0].chunk_index
+    elif kind == "screen_text":
+        chunk_index = matches[0].chunk_index
+        segment = (
+            _frame_segment(result.file_id, chunk_index)
+            if chunk_index is not None
+            else None
+        )
+        if segment is None:
+            return None
+        start, end = segment
     elif kind in ("picture_text", "text"):
         chunk_index = matches[0].chunk_index
 
@@ -2251,8 +2476,12 @@ def _build_passages(
         grouped.setdefault(key, []).append(match)
 
     passages = [
-        _finish_passage(kind, group, result, section_titles, terms)
-        for (kind, _place), group in grouped.items()
+        passage
+        for passage in (
+            _finish_passage(kind, group, result, section_titles, terms)
+            for (kind, _place), group in grouped.items()
+        )
+        if passage is not None
     ]
     return tuple(sorted(passages, key=_passage_order))
 

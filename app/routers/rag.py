@@ -32,6 +32,11 @@ from fastapi.responses import StreamingResponse
 
 from app.config import settings
 from app.credentials import CallerCredential
+from app.file_matching import (
+    FilterUnavailable,
+    SearchFilter,
+    fetch_matching_file_ids,
+)
 from app.llm_routing import Resolved
 from app.routers.llm_gate import require_llm
 from app.drive_context import require_drive
@@ -158,6 +163,8 @@ async def _sse_stream(
     viewer_id: str | None,
     semaphore: "asyncio.Semaphore",
     resolved: Resolved,
+    scope: dict | None = None,
+    scope_file_ids: list[str] | None = None,
 ) -> AsyncIterator[str]:
     """Adapt ``stream_answer`` to the text/event-stream wire format.
 
@@ -182,6 +189,8 @@ async def _sse_stream(
             drive=drive,
             viewer_id=viewer_id,
             resolved=resolved,
+            scope=scope,
+            scope_file_ids=scope_file_ids,
         ):
             yield _format_sse_event(event)
     except asyncio.CancelledError:
@@ -264,6 +273,33 @@ async def ask_endpoint(
     if body.drive and body.drive != drive:
         raise HTTPException(status_code=403, detail="Drive mismatch")
 
+    # Resolve the scope before a concurrency slot is taken: a slow core
+    # call must not hold one, and a failure must answer 503 rather than
+    # open a stream. The scope and a search filter with the same values
+    # name the same files (they share ``SearchFilter``'s validator), and
+    # resolution is per request with no cache.
+    scope_payload: dict | None = None
+    scope_file_ids: list[str] | None = None
+    if body.scope is not None:
+        scope_payload = body.scope.as_event_payload()
+        search_filter = SearchFilter(
+            folders=body.scope.folders,
+            collections=body.scope.collections,
+            tags=body.scope.tags,
+            kinds=body.scope.kinds,
+        )
+        try:
+            scope_file_ids = await fetch_matching_file_ids(drive, search_filter)
+        except FilterUnavailable:
+            logger.warning("ask scope resolution failed for drive %s", drive)
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "scope_unavailable",
+                    "message": "Scope unavailable",
+                },
+            )
+
     # Acquire a concurrency slot BEFORE opening the SSE stream. If the
     # semaphore is full, fail fast with 503 so the caller sees a real
     # HTTP error instead of an opaque "stream never produced anything"
@@ -293,6 +329,8 @@ async def ask_endpoint(
             viewer_id=viewer_id,
             semaphore=semaphore,
             resolved=resolved,
+            scope=scope_payload,
+            scope_file_ids=scope_file_ids,
         )
         return StreamingResponse(
             generator,

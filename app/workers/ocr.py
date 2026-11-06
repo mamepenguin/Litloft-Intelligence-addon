@@ -39,6 +39,7 @@ MAX_PIXELS = 50_000_000
 ENGINE_THREADS = 2
 
 _lock = threading.Lock()
+_engine_call_lock = threading.Lock()
 _engine: object | None = None
 _engine_failed = False
 _last_used = 0.0
@@ -119,6 +120,25 @@ def check_idle_unload() -> None:
     if time.monotonic() - _last_used > idle_timeout:
         logger.info("Releasing OCR engine (idle timeout)")
         unload_engine()
+
+
+def run_engine(engine: Any, image: Any, timeout: float | None = None) -> Any:
+    """Call ``engine(image)`` with one caller at a time.
+
+    RapidOCR's wrapper has no threading guarantee, and the indexer and an
+    image query share one engine. ``timeout`` is how long to wait for the
+    engine; ``None`` waits as long as the indexer takes.
+    """
+    if timeout is None:
+        acquired = _engine_call_lock.acquire()
+    else:
+        acquired = _engine_call_lock.acquire(timeout=timeout)
+    if not acquired:
+        raise TimeoutError("OCR engine is busy")
+    try:
+        return engine(image)
+    finally:
+        _engine_call_lock.release()
 
 
 def _to_rgb(image: Any) -> Any:
@@ -327,7 +347,7 @@ def index_ocr(file_id: str) -> bool:
         return _write(file_id, [], [])
 
     try:
-        result = engine(image)
+        result = run_engine(engine, image)
         lines = list(getattr(result, "txts", None) or ())
     except Exception as exc:
         logger.warning(

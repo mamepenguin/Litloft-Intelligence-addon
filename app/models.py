@@ -90,6 +90,20 @@ class IndexedFile(Base):
     ocr_indexed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )
+    # True when a video's frames have been read (text stored, none found, or
+    # the file was unreachable afterwards). Meaningful for videos only.
+    frame_ocr_read: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    # True when the video's frame text has its ``text_content`` rows and
+    # ``frame_ocr_read`` is true. SPEC-ADDON-066.
+    frame_ocr_indexed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    # True when a PDF's scanned pages have been read. SPEC-ADDON-069.
+    page_ocr_indexed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
     tfidf_keywords_indexed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )
@@ -776,4 +790,42 @@ class VideoVisualScene(Base):
             "run_id", "ordering", name="uq_video_visual_scenes_run_ordering"
         ),
         Index("idx_video_visual_scenes_run_order", "run_id", "ordering"),
+    )
+
+
+class VideoFrameText(Base):
+    """One chunk of text read from a video's frames (SPEC-ADDON-066).
+
+    A segment is chunked at the extractor's defaults; each chunk keeps the
+    segment's start and end so find, search and Ask can seek to it.
+    """
+
+    __tablename__ = "video_frame_texts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    file_id: Mapped[str] = mapped_column(String(12), nullable=False, index=True)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_time: Mapped[float] = mapped_column(Float, nullable=False)
+    end_time: Mapped[float] = mapped_column(Float, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "file_id", "chunk_index", name="uq_video_frame_texts_file_chunk"
+        ),
+    )
+
+
+class PdfPageOcrText(Base):
+    """The OCR text stored for a scanned PDF page (SPEC-ADDON-069)."""
+
+    __tablename__ = "pdf_page_ocr_texts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    file_id: Mapped[str] = mapped_column(String(12), nullable=False, index=True)
+    page: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    __table_args__ = (
+        UniqueConstraint("file_id", "page", name="uq_pdf_page_ocr_texts_file_page"),
     )

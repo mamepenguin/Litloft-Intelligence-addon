@@ -99,6 +99,8 @@ features:
                       # `.loft` remote-media pointers (no locally probeable
                       # video bytes) and audio/image/document files.
   image_ocr: "on_index"
+  video_frame_ocr: "on_index"
+  scanned_pdf_ocr: "on_index"
                       # "false" | "manual" | "on_index" — local OCR reads
                       # the words in pictures (JPEG, PNG, WebP, GIF, BMP,
                       # HEIC, HEIF) and stores them as the picture's text
@@ -457,6 +459,10 @@ search:
   # For CLIP-family models (openai/clip-vit-b-32, llm-jp-clip): use 0.20.
   min_score_clip: 0.05
   min_score_clip_thumbnail: 0.05
+  # Floor for an image query's similar pictures and scene frames.
+  # 0.70 is calibrated for SigLIP2: about 1% of unrelated picture pairs score
+  # above it; the result caps (24 pictures, 20 scenes) bound the rest.
+  min_score_image_query: 0.70
 
 # Transcription provider configuration. Selects the Speech-to-Text engine
 # used for audio/video transcription. See docs/PROVIDERS.md for the full
@@ -640,3 +646,6 @@ memory:
   blip_idle_unload: 300
   # Unload the OCR engine after idle (seconds, 0 = never unload)
   ocr_idle_unload: 300
+  # Unload the SigLIP vision tower used by image search after idle
+  # (seconds, 0 = never unload). Text search keeps its encoder resident.
+  clip_image_idle_unload: 600

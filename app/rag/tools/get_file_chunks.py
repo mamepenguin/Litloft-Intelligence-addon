@@ -333,6 +333,16 @@ async def get_file_chunks(
             warning="invalid file_id",
         )
 
+    if (
+        context.file_id_constraint is not None
+        and file_id not in context.file_id_constraint
+    ):
+        return ToolResultEnvelope(
+            payload={"file_id": file_id, "error": "not_found"},
+            token_estimate=0,
+            warning="file not found",
+        )
+
     # Access gate. Note that for type='text' the host's /content
     # endpoint trusts the shared secret only — without this check, the
     # LLM could exfiltrate any .md / .txt body on the box.

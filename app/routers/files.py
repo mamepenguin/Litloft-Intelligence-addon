@@ -16,6 +16,7 @@ from app.dependencies import get_auto_tags_worker, get_index_manager
 from app.document_sections import EPUB_MIME, load_section_titles
 from app.drive_context import assert_file_in_drive, require_drive
 from app.workers.ocr import OCR_IMAGE_TYPES
+from app.workers.clip import VIDEO_TYPES
 from app.schemas import (
     BatchSuggestedTagsRequest,
     BatchSuggestedTagsResponse,
@@ -81,6 +82,8 @@ def _get_indexed_file_or_404(file_id: str, drive: str) -> dict[str, Any]:
             "whisper_indexed": indexed.whisper_indexed,
             "text_indexed": indexed.text_indexed,
             "ocr_indexed": indexed.ocr_indexed,
+            "frame_ocr_indexed": indexed.frame_ocr_indexed,
+            "page_ocr_indexed": indexed.page_ocr_indexed,
             "indexed_at": indexed.indexed_at.isoformat() if indexed.indexed_at else "",
             "transcript_corrected": indexed.transcript_corrected,
             "picture_text_corrected": indexed.picture_text_corrected,
@@ -849,7 +852,7 @@ async def get_subtitles_vtt(
 # body against this set before touching any DB row so a malformed
 # payload can never reset a flag partially.
 _REINDEX_ALLOWED_TASKS: tuple[str, ...] = (
-    "metadata", "clip", "whisper", "text", "ocr",
+    "metadata", "clip", "whisper", "text", "ocr", "frame_ocr", "page_ocr",
 )
 
 # Spec task name → ``IndexedFile`` column name. The frontend speaks
@@ -862,6 +865,8 @@ _REINDEX_FLAG_COLUMN: dict[str, str] = {
     "whisper": "whisper_indexed",
     "text": "text_indexed",
     "ocr": "ocr_indexed",
+    "frame_ocr": "frame_ocr_indexed",
+    "page_ocr": "page_ocr_indexed",
 }
 
 # (file_id, task) pairs a reindex request has passed the ``is_queued``
@@ -954,6 +959,30 @@ async def reindex_file(
             ),
         )
 
+    if "frame_ocr" in tasks and (
+        settings.features.video_frame_ocr == "false"
+        or indexed["mime_type"] not in VIDEO_TYPES
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Task 'frame_ocr' applies only to videos and is unavailable "
+                "while features.video_frame_ocr is false"
+            ),
+        )
+
+    if "page_ocr" in tasks and (
+        settings.features.scanned_pdf_ocr == "false"
+        or indexed["mime_type"] != "application/pdf"
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Task 'page_ocr' applies only to PDFs and is unavailable "
+                "while features.scanned_pdf_ocr is false"
+            ),
+        )
+
     # ---- Layer 2b: a corrected file needs its explicit confirmation ----
     overwrite = body.get("overwrite_corrections", False)
     if not isinstance(overwrite, bool):
@@ -1025,6 +1054,8 @@ async def reindex_file(
                 raise HTTPException(status_code=404, detail="File not indexed")
             for t in fresh:
                 setattr(row, _REINDEX_FLAG_COLUMN[t], False)
+                if t == "frame_ocr":
+                    row.frame_ocr_read = False
 
     # ``is_queued`` lives on the loop and cannot join the flag flip's
     # transaction, so the claim keeps a concurrent request that checks
@@ -1103,12 +1134,16 @@ async def get_index_details(
         drive=indexed["drive"],
         filename=indexed["filename"],
         image_ocr=settings.features.image_ocr,
+        video_frame_ocr=settings.features.video_frame_ocr,
+        scanned_pdf_ocr=settings.features.scanned_pdf_ocr,
         status={
             "metadata": indexed["metadata_indexed"],
             "clip": indexed["clip_indexed"],
             "whisper": indexed["whisper_indexed"],
             "text": indexed["text_indexed"],
             "ocr": indexed["ocr_indexed"],
+            "frame_ocr": indexed["frame_ocr_indexed"],
+            "page_ocr": indexed["page_ocr_indexed"],
         },
         indexed_at=indexed["indexed_at"],
         embeddings=embeddings_by_type,

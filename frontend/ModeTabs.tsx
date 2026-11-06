@@ -40,12 +40,23 @@ interface ModeTabsProps {
   current: "ask" | "find";
   query: string;
   drive: string;
+  /** Carried on both links so Ask → Find → Ask keeps the chips. */
+  scope?: string;
 }
 
-export default function ModeTabs({ current, query, drive }: ModeTabsProps) {
+export default function ModeTabs({
+  current,
+  query,
+  drive,
+  scope = "",
+}: ModeTabsProps) {
   const t = useTranslations("modeTabs");
   const trimmed = query.trim();
-  const qParam = trimmed ? `?q=${encodeURIComponent(trimmed)}` : "";
+  const trimmedScope = scope.trim();
+  const params = new URLSearchParams();
+  if (trimmed) params.set("q", trimmed);
+  if (trimmedScope) params.set("scope", trimmedScope);
+  const qParam = params.toString() ? `?${params.toString()}` : "";
   const driveSegment = encodeURIComponent(drive);
 
   return (

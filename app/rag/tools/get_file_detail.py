@@ -155,6 +155,17 @@ async def get_file_detail(
             warning="invalid file_id",
         )
 
+    if (
+        context.file_id_constraint is not None
+        and file_id not in context.file_id_constraint
+    ):
+        return ToolResultEnvelope(
+            payload={"file_id": file_id, "error": "not_found"},
+            token_estimate=0,
+            truncated=False,
+            warning="file not found",
+        )
+
     # Access gate: untrusted LLM input cannot reach the host's Internal
     # API for a file the viewer cannot see. Mirrors the 404-not-403
     # existence-hiding rule (design-decisions.md).

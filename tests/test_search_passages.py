@@ -819,13 +819,18 @@ def test_spec_addon_048_i5_a_keyword_match_elsewhere_in_the_file_does_not_mark_a
         search_index, "vid", etype="text_content", score=0.90, axis=2,
         chunk_index=5, preview="unrelated body",
     )
+    search_index.sql(
+        "INSERT INTO video_frame_texts"
+        "(file_id, chunk_index, start_time, end_time, text) "
+        "VALUES('vid', 5, 30.0, 40.0, 'unrelated body')"
+    )
 
     body = _ok(api("/search", {"passages": "true", "q": "warehouse"}))
 
     by_kind = {passage["kind"]: passage for passage in _passages(body, "vid")}
     assert by_kind["utterance"]["keyword"] is True
-    assert by_kind["text"]["keyword"] is False
-    assert by_kind["text"]["highlight_terms"] == []
+    assert by_kind["screen_text"]["keyword"] is False
+    assert by_kind["screen_text"]["highlight_terms"] == []
 
 
 # ---------------------------------------------------------------------------

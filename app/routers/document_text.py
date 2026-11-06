@@ -43,6 +43,19 @@ def _section_titles(file_id: str, numbers: list[int]) -> dict[int, str]:
     return {page: title for (_fid, page), title in titles.items()}
 
 
+def _page_ocr_texts(file_id: str) -> dict[int, str]:
+    """Stored OCR text per 1-based page (SPEC-ADDON-069 B7)."""
+    from app.models import PdfPageOcrText
+
+    with get_search_db_read() as db:
+        rows = (
+            db.query(PdfPageOcrText.page, PdfPageOcrText.text)
+            .filter(PdfPageOcrText.file_id == file_id)
+            .all()
+        )
+    return {page: text for page, text in rows}
+
+
 @router.get("/files/{file_id}/document-text", response_model=DocumentTextResponse)
 async def get_document_text(
     file_id: str,
@@ -66,9 +79,15 @@ async def get_document_text(
             detail=f"count must be at most {kind.max_count} for a {kind.unit}",
         )
     end = start + wanted - 1
+    page_ocr_texts = (
+        await asyncio.to_thread(_page_ocr_texts, file_id)
+        if mime == document_text.PDF
+        else None
+    )
     try:
         extracted = await asyncio.to_thread(
             document_text.extract_units, mime, file_path, start, end,
+            page_ocr_texts,
         )
     except document_text.Busy as exc:
         raise HTTPException(status_code=429, detail="Document reader busy") from exc

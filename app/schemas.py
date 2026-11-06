@@ -3,8 +3,9 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.file_matching import apply_filter_normalisation
 from app.llm_routing import PROFILE_NAME_PATTERN
 
 
@@ -85,6 +86,51 @@ class CompareResponseModel(BaseModel):
     source_counts: SourceCountsModel
 
 
+class ImageHit(BaseModel):
+    file_id: str
+    drive: str
+    filename: str
+    file_type: str
+    score: float
+    match_types: list[str]
+    file: dict[str, Any] | None = None
+
+
+class SceneHit(BaseModel):
+    file_id: str
+    drive: str
+    filename: str
+    start: float
+    end: float
+    peak: float
+    score: float
+    frame_url: str
+    file: dict[str, Any] | None = None
+
+
+class DocumentHit(BaseModel):
+    file_id: str
+    drive: str
+    filename: str
+    file_type: str
+    score: float
+    passages: list[SearchPassage]
+    file: dict[str, Any] | None = None
+
+
+class ImageQueryText(BaseModel):
+    status: Literal["read", "too_short", "off", "failed"]
+    excerpt: str | None = None
+
+
+class ImageQueryResponse(BaseModel):
+    images: list[ImageHit]
+    scenes: list[SceneHit]
+    scenes_partial: bool
+    documents: list[DocumentHit]
+    text: ImageQueryText
+
+
 # --- Status ---
 
 
@@ -98,6 +144,8 @@ class FeaturesStatus(BaseModel):
     chapter_suggestions: str = "false"
     video_visual_index: str = "false"
     image_ocr: str = "on_index"
+    video_frame_ocr: str = "on_index"
+    scanned_pdf_ocr: str = "on_index"
 
 
 class ChapterSuggestionItem(BaseModel):
@@ -305,6 +353,8 @@ class IndexDetailsResponse(BaseModel):
     # The dialog hides the OCR row while this is ``false``, so the mode
     # has to travel with the status it explains.
     image_ocr: Literal["on_index", "manual", "false"] = "on_index"
+    video_frame_ocr: Literal["on_index", "manual", "false"] = "on_index"
+    scanned_pdf_ocr: Literal["on_index", "manual", "false"] = "on_index"
     status: dict[str, bool]
     indexed_at: str
     embeddings: dict[str, IndexDetailType]
@@ -735,19 +785,56 @@ class LLMChoicesResponse(BaseModel):
 # --- RAG (question answering) ---
 
 
+class AskScope(BaseModel):
+    """The files an Ask question is allowed to read (SPEC-ADDON-054).
+
+    The four lists are the search ``filter``'s folder / collection / tag /
+    kind conditions with the same normalisation and caps, so a scope and a
+    search filter holding the same values name the same files. ``favorite``
+    and ``liked`` are not scope kinds and are rejected as unknown keys.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    folders: list[str] = Field(default_factory=list)
+    collections: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    kinds: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _normalise(self) -> "AskScope":
+        apply_filter_normalisation(self)
+        if not (self.folders or self.collections or self.tags or self.kinds):
+            raise ValueError("scope has no condition")
+        return self
+
+    def as_event_payload(self) -> dict[str, list[str]]:
+        """The four normalised keys in the order the client caches them."""
+        return {
+            "folders": list(self.folders),
+            "collections": list(self.collections),
+            "tags": list(self.tags),
+            "kinds": list(self.kinds),
+        }
+
+
 class AskRequest(BaseModel):
     """Request body for POST /ask.
 
     Enforces a 1-1000 character range on the raw query as a basic
     DoS guard. The router applies an additional >=3 character
-    post-strip check so "a  " does not reach the LLM.
+    post-strip check so "a  " does not reach the LLM. Unknown keys fail
+    closed so a later field cannot be silently ignored by an older server.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     query: str = Field(..., min_length=1, max_length=1000)
     top_k: int | None = Field(default=None, ge=1, le=20)
     file_type: str | None = None
     drive: str | None = None
     profile: str | None = Field(default=None, pattern=PROFILE_NAME_PATTERN)
+    scope: AskScope | None = None
 
 
 class FileQuestionRequest(BaseModel):

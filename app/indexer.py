@@ -50,8 +50,15 @@ from app.workers.clip import (
     IMAGE_TYPES,
     THUMBNAIL_FALLBACK_TYPES,
     VIDEO_TYPES,
+    check_idle_unload as check_clip_image_idle_unload,
 )
-from app.workers.metadata import index_metadata_batch, index_text_content
+from app.workers.metadata import (
+    has_nonempty_page_ocr_text,
+    index_metadata_batch,
+    index_text_content,
+)
+from app.workers.frame_ocr import index_frame_ocr
+from app.workers.page_ocr import index_page_ocr
 from app.workers.ocr import (
     check_idle_unload as check_ocr_idle_unload,
     index_ocr,
@@ -95,6 +102,8 @@ class TaskType(str, Enum):
     TEXT_CONTENT = "text_content"
     TFIDF_KEYWORDS = "tfidf_keywords"
     OCR = "ocr"
+    FRAME_OCR = "frame_ocr"
+    PAGE_OCR = "page_ocr"
 
 
 class QueueState(str, Enum):
@@ -132,6 +141,8 @@ class IndexStatus:
     text_indexed: int = 0
     tfidf_keywords_indexed: int = 0
     ocr_indexed: int = 0
+    frame_ocr_indexed: int = 0
+    page_ocr_indexed: int = 0
     pending_metadata: int = 0
     pending_clip: int = 0
     pending_clip_thumbnail: int = 0
@@ -139,6 +150,8 @@ class IndexStatus:
     pending_text: int = 0
     pending_tfidf_keywords: int = 0
     pending_ocr: int = 0
+    pending_frame_ocr: int = 0
+    pending_page_ocr: int = 0
 
 
 def _drifted_file_ids(rows: list[tuple[str, dict, dict]]) -> list[str]:
@@ -275,6 +288,8 @@ class IndexManager:
                 self._tfidf_keywords_worker(), name="tfidf_keywords_worker"
             ),
             asyncio.create_task(self._ocr_worker(), name="ocr_worker"),
+            asyncio.create_task(self._frame_ocr_worker(), name="frame_ocr_worker"),
+            asyncio.create_task(self._page_ocr_worker(), name="page_ocr_worker"),
             asyncio.create_task(
                 self._reconciliation_worker(), name="reconciliation_worker"
             ),
@@ -405,6 +420,32 @@ class IndexManager:
                 IndexedFile.mime_type.in_(ocr_types),
             ).count()
 
+            video_types = list(VIDEO_TYPES)
+            frame_ocr = active_files.filter(
+                IndexedFile.frame_ocr_indexed.is_(True),
+                IndexedFile.mime_type.in_(video_types),
+            ).count()
+            page_ocr = active_files.filter(
+                IndexedFile.page_ocr_indexed.is_(True),
+                IndexedFile.mime_type == "application/pdf",
+            ).count()
+            pending_frame_ocr = (
+                active_files.filter(
+                    IndexedFile.frame_ocr_indexed.is_(False),
+                    IndexedFile.mime_type.in_(video_types),
+                ).count()
+                if settings.features.video_frame_ocr == "on_index"
+                else 0
+            )
+            pending_page_ocr = (
+                active_files.filter(
+                    IndexedFile.page_ocr_indexed.is_(False),
+                    IndexedFile.mime_type == "application/pdf",
+                ).count()
+                if settings.features.scanned_pdf_ocr == "on_index"
+                else 0
+            )
+
             pending_tfidf_kw = active_files.filter(
                 IndexedFile.tfidf_keywords_indexed.is_(False),
                 IndexedFile.whisper_indexed.is_(True),
@@ -420,6 +461,8 @@ class IndexManager:
                 text_indexed=text,
                 tfidf_keywords_indexed=tfidf_kw,
                 ocr_indexed=ocr,
+                frame_ocr_indexed=frame_ocr,
+                page_ocr_indexed=page_ocr,
                 pending_metadata=pending_metadata,
                 pending_clip=pending_clip,
                 pending_clip_thumbnail=pending_clip_thumbnail,
@@ -427,6 +470,8 @@ class IndexManager:
                 pending_text=pending_text,
                 pending_tfidf_keywords=pending_tfidf_kw,
                 pending_ocr=pending_ocr,
+                pending_frame_ocr=pending_frame_ocr,
+                pending_page_ocr=pending_page_ocr,
             )
 
     async def reconcile(self) -> dict[str, int]:
@@ -795,6 +840,8 @@ class IndexManager:
                             IndexedFile.text_indexed.is_(False),
                             IndexedFile.tfidf_keywords_indexed.is_(False),
                             IndexedFile.ocr_indexed.is_(False),
+                            IndexedFile.frame_ocr_indexed.is_(False),
+                            IndexedFile.page_ocr_indexed.is_(False),
                         ),
                     )
                     .all()
@@ -839,6 +886,17 @@ class IndexManager:
                         f.tfidf_keywords_indexed = True
                     if not f.ocr_indexed and f.mime_type not in OCR_IMAGE_TYPES:
                         f.ocr_indexed = True
+                    if (
+                        not f.frame_ocr_indexed
+                        and f.mime_type not in VIDEO_TYPES
+                    ):
+                        f.frame_ocr_read = True
+                        f.frame_ocr_indexed = True
+                    if (
+                        not f.page_ocr_indexed
+                        and f.mime_type != "application/pdf"
+                    ):
+                        f.page_ocr_indexed = True
 
                 # Snapshot what we need for queuing
                 snapshot = [
@@ -855,6 +913,9 @@ class IndexManager:
                         f.transcript_corrected,
                         f.picture_text_corrected,
                         f.file_id in pending_ids,
+                        f.frame_ocr_read,
+                        f.frame_ocr_indexed,
+                        f.page_ocr_indexed,
                     )
                     for f in incomplete
                 ]
@@ -873,6 +934,7 @@ class IndexManager:
             meta_done, clip_done, thumb_done, whisper_done, text_done,
             tfidf_kw_done, ocr_done, transcript_corrected,
             picture_text_corrected, has_followup,
+            frame_read, frame_done, page_done,
         ) in file_tasks:
             queued_any = False
 
@@ -931,6 +993,28 @@ class IndexManager:
                 ))
                 queued_any = True
 
+            # A video's frame text is read under on_index, but a rebuild-only
+            # task (text already stored) runs under every mode.
+            if (
+                mime_type in VIDEO_TYPES
+                and not frame_done
+                and (frame_read or settings.features.video_frame_ocr == "on_index")
+            ):
+                await self._enqueue(IndexTask(
+                    file_id=file_id, task_type=TaskType.FRAME_OCR, priority=-10
+                ))
+                queued_any = True
+
+            if (
+                mime_type == "application/pdf"
+                and not page_done
+                and settings.features.scanned_pdf_ocr == "on_index"
+            ):
+                await self._enqueue(IndexTask(
+                    file_id=file_id, task_type=TaskType.PAGE_OCR, priority=-10
+                ))
+                queued_any = True
+
             if queued_any:
                 resumed += 1
 
@@ -963,6 +1047,23 @@ class IndexManager:
         ):
             await self._enqueue(IndexTask(
                 file_id=file_id, task_type=TaskType.OCR
+            ))
+
+        # Read the words shown in a video, and on a scanned PDF page, on the
+        # same pass. SPEC-ADDON-066 A2 / SPEC-ADDON-069 B2.
+        if (
+            mime_type in VIDEO_TYPES
+            and settings.features.video_frame_ocr == "on_index"
+        ):
+            await self._enqueue(IndexTask(
+                file_id=file_id, task_type=TaskType.FRAME_OCR
+            ))
+        if (
+            mime_type == "application/pdf"
+            and settings.features.scanned_pdf_ocr == "on_index"
+        ):
+            await self._enqueue(IndexTask(
+                file_id=file_id, task_type=TaskType.PAGE_OCR
             ))
 
         # Vision-describe for images runs in parallel with CLIP — they
@@ -1067,6 +1168,24 @@ class IndexManager:
                     pending.append(IndexTask(
                         file_id=file_id, task_type=TaskType.OCR, priority=100
                     ))
+                if (
+                    not file.frame_ocr_indexed
+                    and file.mime_type in VIDEO_TYPES
+                    and settings.features.video_frame_ocr != "false"
+                ):
+                    pending.append(IndexTask(
+                        file_id=file_id, task_type=TaskType.FRAME_OCR,
+                        priority=100,
+                    ))
+                if (
+                    not file.page_ocr_indexed
+                    and file.mime_type == "application/pdf"
+                    and settings.features.scanned_pdf_ocr != "false"
+                ):
+                    pending.append(IndexTask(
+                        file_id=file_id, task_type=TaskType.PAGE_OCR,
+                        priority=100,
+                    ))
             return pending
 
         # Off the loop: the row lookup is O(1), but taking the write lock
@@ -1104,6 +1223,8 @@ class IndexManager:
         "whisper": TaskType.WHISPER,
         "text": TaskType.TEXT_CONTENT,
         "ocr": TaskType.OCR,
+        "frame_ocr": TaskType.FRAME_OCR,
+        "page_ocr": TaskType.PAGE_OCR,
     }
 
     def is_queued(self, file_id: str, task: str) -> bool:
@@ -1545,6 +1666,10 @@ class IndexManager:
 
                 try:
                     await asyncio.to_thread(index_text_content, task.file_id)
+                    if await asyncio.to_thread(
+                        has_nonempty_page_ocr_text, task.file_id
+                    ):
+                        await self.requeue_after_whisper(task.file_id)
                 except Exception as e:
                     logger.error(
                         "Text content indexing failed for %s: %s",
@@ -1595,6 +1720,91 @@ class IndexManager:
                 return
             except Exception as e:
                 logger.error("OCR worker error: %s", e)
+                await asyncio.sleep(5)
+
+    async def _frame_ocr_worker(self) -> None:
+        """Read video frames one video at a time, off the event loop."""
+        while True:
+            try:
+                await self._pause_event.wait()
+                batch = await self._collect_batch(TaskType.FRAME_OCR, 1)
+
+                if not batch:
+                    await asyncio.sleep(2)
+                    continue
+
+                task = batch[0]
+                self._processing_count += 1
+                self._processing_by_type[TaskType.FRAME_OCR].append(task.file_id)
+
+                try:
+                    await asyncio.to_thread(
+                        index_frame_ocr, task.file_id, is_paused=self.is_paused
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Frame OCR indexing failed for %s: %s", task.file_id, e
+                    )
+                finally:
+                    self._processing_count -= 1
+                    try:
+                        self._processing_by_type[TaskType.FRAME_OCR].remove(
+                            task.file_id
+                        )
+                    except ValueError:
+                        pass
+
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.error("Frame OCR worker error: %s", e)
+                await asyncio.sleep(5)
+
+    async def _page_ocr_worker(self) -> None:
+        """Read scanned PDF pages one PDF at a time, off the event loop."""
+        while True:
+            try:
+                await self._pause_event.wait()
+                batch = await self._collect_batch(TaskType.PAGE_OCR, 1)
+
+                if not batch:
+                    await asyncio.sleep(2)
+                    continue
+
+                task = batch[0]
+                self._processing_count += 1
+                self._processing_by_type[TaskType.PAGE_OCR].append(task.file_id)
+
+                try:
+                    needs_text = await asyncio.to_thread(
+                        index_page_ocr, task.file_id, is_paused=self.is_paused
+                    )
+                    if needs_text:
+                        await self._enqueue(
+                            IndexTask(
+                                file_id=task.file_id,
+                                task_type=TaskType.TEXT_CONTENT,
+                                priority=0,
+                            ),
+                            force=True,
+                        )
+                except Exception as e:
+                    logger.error(
+                        "Page OCR indexing failed for %s: %s", task.file_id, e
+                    )
+                finally:
+                    self._processing_count -= 1
+                    try:
+                        self._processing_by_type[TaskType.PAGE_OCR].remove(
+                            task.file_id
+                        )
+                    except ValueError:
+                        pass
+
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.error("Page OCR worker error: %s", e)
                 await asyncio.sleep(5)
 
     async def _enqueue_vision_describe(self, file_id: str) -> None:
@@ -1790,8 +2000,9 @@ class IndexManager:
         """Periodically check if heavy models should be unloaded.
 
         Models used only during indexing (Whisper, BLIP) are unloaded
-        after their configured idle timeout to free RAM. CLIP stays
-        loaded because it is also used in the search query path.
+        after their configured idle timeout to free RAM. The text CLIP
+        encoder stays loaded because the search query path uses it; the
+        full SigLIP model is released after its own idle timeout.
         """
         while True:
             try:
@@ -1801,6 +2012,7 @@ class IndexManager:
                 check_clip_concepts_idle_unload()
                 check_haas_idle_unload()
                 check_ocr_idle_unload()
+                check_clip_image_idle_unload()
             except asyncio.CancelledError:
                 return
             except Exception as e:
@@ -2450,6 +2662,22 @@ def _purge_file(file_id: str) -> None:
                 ),
                 {"fid": file_id},
             )
+
+        # The two OCR text stores (SPEC-ADDON-066/069). Probe the tables so
+        # an old DB keeps purging while it upgrades.
+        for table in ("video_frame_texts", "pdf_page_ocr_texts"):
+            present = session.execute(
+                sql_text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type='table' AND name=:t"
+                ),
+                {"t": table},
+            ).fetchone()
+            if present is not None:
+                session.execute(
+                    sql_text(f"DELETE FROM {table} WHERE file_id = :fid"),
+                    {"fid": file_id},
+                )
 
         # Delete indexed file record
         session.query(IndexedFile).filter_by(file_id=file_id).delete()

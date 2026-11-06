@@ -586,6 +586,8 @@ def status_endpoint() -> StatusResponse:
             "whisper": index_status.whisper_indexed,
             "text": index_status.text_indexed,
             "ocr": index_status.ocr_indexed,
+            "frame_ocr": index_status.frame_ocr_indexed,
+            "page_ocr": index_status.page_ocr_indexed,
         },
         pending={
             "total": (
@@ -598,6 +600,8 @@ def status_endpoint() -> StatusResponse:
                     if settings.features.image_ocr == "on_index"
                     else 0
                 )
+                + index_status.pending_frame_ocr
+                + index_status.pending_page_ocr
             ),
             "metadata": index_status.pending_metadata,
             "clip": index_status.pending_clip,
@@ -608,6 +612,8 @@ def status_endpoint() -> StatusResponse:
                 if settings.features.image_ocr == "on_index"
                 else 0
             ),
+            "frame_ocr": index_status.pending_frame_ocr,
+            "page_ocr": index_status.pending_page_ocr,
         },
         queue={
             "processing": queue_status.processing_count,
@@ -630,6 +636,8 @@ def status_endpoint() -> StatusResponse:
             chapter_suggestions=settings.features.chapter_suggestions,
             video_visual_index=settings.features.video_visual_index,
             image_ocr=settings.features.image_ocr,
+            video_frame_ocr=settings.features.video_frame_ocr,
+            scanned_pdf_ocr=settings.features.scanned_pdf_ocr,
         ),
         llm=_llm_status(),
     )
