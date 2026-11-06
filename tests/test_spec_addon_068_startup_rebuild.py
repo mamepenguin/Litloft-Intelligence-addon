@@ -305,6 +305,7 @@ class TestEmbeddingModelRebuildRestoresExtractedText:
         ).json()["text"] == picture_before
         assert search_db.embeddings(FILE, "whisper")
         assert search_db.fts("fts_text_content", PICTURE)
+        assert search_db.embeddings(PICTURE, "text_content")
 
 
 class TestZeroSegmentSuccessClosesItsJob:

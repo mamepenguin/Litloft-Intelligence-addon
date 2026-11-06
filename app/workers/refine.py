@@ -795,6 +795,10 @@ async def _run_refine_job(
                 "error": str(e),
             },
         )
+        await post_addon_event(
+            "intelligence.transcript.updated",
+            {"file_id": file_id, "drive": drive, "reason": "ended"},
+        )
         _active_refine_files.discard(file_id)
         return
 
@@ -984,8 +988,11 @@ async def _run_refine_job(
                 "error": str(e),
             },
         )
+        await post_addon_event(
+            "intelligence.transcript.updated",
+            {"file_id": file_id, "drive": drive, "reason": "ended"},
+        )
     finally:
-        _active_refine_files.discard(file_id)
         _active_refine_files.discard(file_id)
 
 

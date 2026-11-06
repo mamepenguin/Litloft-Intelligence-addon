@@ -16,7 +16,7 @@ import { formatDuration } from "@/lib/format";
 import { getSubtitleUrl } from "@/lib/api";
 import type { SubtitleInfo } from "@/types";
 import { useAddonStatus } from "@/components/AddonSlotsProvider";
-import { Button } from "@/components/Button";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useImeKeyGuard } from "@/lib/ime";
 import type { MediaController } from "@/lib/mediaController";
@@ -225,7 +225,10 @@ export default function TranscriptSection({
   const [busy, setBusy] = useState(false);
   const [followupsPending, setFollowupsPending] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const editDraftsRef = useRef<Record<number, string>>({});
   const [editText, setEditText] = useState("");
+  const [editExpectedText, setEditExpectedText] = useState("");
+  const [editExpectedStart, setEditExpectedStart] = useState(0);
   const [savingEdit, setSavingEdit] = useState(false);
   const [confirmRestore, setConfirmRestore] = useState(false);
   const [restoring, setRestoring] = useState(false);
@@ -239,6 +242,7 @@ export default function TranscriptSection({
   const [wordsSettled, setWordsSettled] = useState(false);
   const [externalSettled, setExternalSettled] = useState(false);
   const [loading, setLoading] = useState(true);
+  const loadedFileRef = useRef<string | null>(null);
   const [source, setSource] = useState<Source>("chunks");
   // Until the reader picks one, the source follows what is available: a
   // source that answered first is not a choice. The pick is per file.
@@ -279,9 +283,23 @@ export default function TranscriptSection({
   // put one file's cues under another file's player, and — since the
   // availability answer is derived from these — would tell the host the
   // new file has a transcript because the old one did.
+  // The edit state belongs to one file; a host that reuses this mount for
+  // the next file must not carry a draft or an open confirmation over.
+  useEffect(() => {
+    editDraftsRef.current = {};
+    setEditingIndex(null);
+    setEditText("");
+    setEditExpectedText("");
+    setEditExpectedStart(0);
+    setConfirmRestore(false);
+    setConfirmRefine(false);
+    setActionError(null);
+  }, [fileId]);
+
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    const firstLoad = loadedFileRef.current !== fileId;
+    if (firstLoad) setLoading(true);
     getFileTranscript(fileId, drive).then((res) => {
       if (cancelled) return;
       if (res.available && res.chunks && res.chunks.length > 0) {
@@ -293,6 +311,7 @@ export default function TranscriptSection({
       setCorrectedFile(Boolean(res.corrected));
       setBusy(Boolean(res.busy));
       setFollowupsPending(Boolean(res.followups_pending));
+      loadedFileRef.current = fileId;
       setLoading(false);
     });
     return () => {
@@ -720,26 +739,34 @@ export default function TranscriptSection({
     setRefreshTick((tick) => tick + 1);
   }, []);
 
-  const runRefine = useCallback(async () => {
-    if (refining) return;
-    setRefining(true);
-    setActionError(null);
-    try {
-      await refineFileTranscript(fileId, drive, correctedFile);
-      refreshAfterWrite();
-    } catch (err) {
-      setActionError(
-        err instanceof LLMRequestError && err.status === 409
-          ? err.detail && (err.detail as { code?: string }).code === "busy"
-            ? t("transcriptBusy")
-            : t("transcriptBusy")
-          : t("transcriptSaveFailed"),
-      );
-    } finally {
-      setRefining(false);
-      setConfirmRefine(false);
-    }
-  }, [fileId, drive, refining, correctedFile, refreshAfterWrite, t]);
+  const runRefine = useCallback(
+    async (overwrite: boolean) => {
+      if (refining) return;
+      setRefining(true);
+      setActionError(null);
+      try {
+        await refineFileTranscript(fileId, drive, overwrite);
+        refreshAfterWrite();
+      } catch (err) {
+        const code =
+          err instanceof LLMRequestError &&
+          typeof err.detail === "object" &&
+          err.detail !== null
+            ? (err.detail as { code?: string }).code
+            : undefined;
+        if (code === "corrected") {
+          setConfirmRefine(true);
+        } else if (code === "busy") {
+          setActionError(t("transcriptBusy"));
+        } else {
+          setActionError(t("transcriptSaveFailed"));
+        }
+      } finally {
+        setRefining(false);
+      }
+    },
+    [fileId, drive, refining, refreshAfterWrite, t],
+  );
 
   const handleRefine = useCallback(() => {
     if (refining) return;
@@ -747,20 +774,31 @@ export default function TranscriptSection({
       setConfirmRefine(true);
       return;
     }
-    void runRefine();
+    void runRefine(false);
   }, [correctedFile, refining, runRefine]);
 
-  const beginEdit = useCallback((cue: TranscriptChunkItem) => {
-    setEditingIndex(cue.index);
-    setEditText(cue.text);
-    setActionError(null);
-  }, []);
+  const beginEdit = useCallback(
+    (cue: TranscriptChunkItem) => {
+      if (editingIndex !== null) {
+        // Keep the open line's draft when another line is opened, so
+        // switching does not silently throw it away.
+        editDraftsRef.current[editingIndex] = editText;
+      }
+      setEditingIndex(cue.index);
+      setEditText(editDraftsRef.current[cue.index] ?? cue.text);
+      setEditExpectedText(cue.text);
+      setEditExpectedStart(cue.start);
+      setActionError(null);
+    },
+    [editingIndex, editText],
+  );
 
   const cancelEdit = useCallback(() => {
+    if (editingIndex !== null) delete editDraftsRef.current[editingIndex];
     setEditingIndex(null);
     setEditText("");
     setActionError(null);
-  }, []);
+  }, [editingIndex]);
 
   const saveEdit = useCallback(
     async (cue: TranscriptChunkItem) => {
@@ -772,14 +810,29 @@ export default function TranscriptSection({
           fileId,
           cue.index,
           editText,
-          cue.text,
-          cue.start,
+          editExpectedText,
+          editExpectedStart,
           drive,
         );
+        if (editingIndex !== null) delete editDraftsRef.current[editingIndex];
         setEditingIndex(null);
         setEditText("");
         refreshAfterWrite();
       } catch (err) {
+        const code =
+          err instanceof LLMRequestError &&
+          typeof err.detail === "object" &&
+          err.detail !== null
+            ? (err.detail as { code?: string }).code
+            : undefined;
+        if (code === "changed") {
+          // The row changed under the field; the spec says reload and
+          // close it rather than letting the owner save over it.
+          if (editingIndex !== null) delete editDraftsRef.current[editingIndex];
+          setEditingIndex(null);
+          setEditText("");
+          refreshAfterWrite();
+        }
         setActionError(errorText(err, "transcriptSaveFailed"));
       } finally {
         setSavingEdit(false);
@@ -789,6 +842,8 @@ export default function TranscriptSection({
       fileId,
       drive,
       editText,
+      editExpectedText,
+      editExpectedStart,
       savingEdit,
       refreshAfterWrite,
       errorText,
@@ -842,7 +897,7 @@ export default function TranscriptSection({
           the reader pressed says "Transcript", and saying it again
           under the button costs a line of a panel whose whole value is
           length. */}
-      <div className="mb-2 flex items-center gap-2 text-sm text-text-muted empty:hidden">
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-sm text-text-muted empty:hidden">
         {!labelledByHost && (
           <>
             <FileText size={14} />
@@ -859,7 +914,7 @@ export default function TranscriptSection({
                   setChosenSource(opt.id);
                   setSource(opt.id);
                 }}
-                className={`rounded-lg px-1.5 py-0.5 ${source === opt.id ? "bg-accent text-white" : "bg-bg-card"}`}
+                className={`whitespace-nowrap rounded-lg px-1.5 py-0.5 ${source === opt.id ? "bg-accent text-white" : "bg-bg-card"}`}
               >
                 {opt.label}
               </button>
@@ -867,13 +922,13 @@ export default function TranscriptSection({
           </div>
         )}
         {source === "chunks" && (refineEnabled || hasOriginal) && (
-          <div className="ml-auto flex flex-wrap justify-end gap-1 text-xs">
+          <div className="ml-auto flex flex-nowrap justify-end gap-1 text-xs">
             {hasOriginal && (
               <button
                 type="button"
                 onClick={() => setConfirmRestore(true)}
                 disabled={busy || restoring}
-                className="rounded-lg px-2 py-0.5 text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+                className="whitespace-nowrap rounded-lg px-2 py-0.5 text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
               >
                 {t("transcriptRestoreOriginal")}
               </button>
@@ -883,7 +938,7 @@ export default function TranscriptSection({
                 type="button"
                 onClick={handleRefine}
                 disabled={refining || busy || followupsPending}
-                className="flex items-center gap-1 rounded-lg px-2 py-0.5 text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
+                className="flex items-center gap-1 whitespace-nowrap rounded-lg px-2 py-0.5 text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
               >
                 <Sparkles size={11} className={refining ? "animate-pulse" : ""} />
                 {t("transcriptRefine")}
@@ -892,57 +947,27 @@ export default function TranscriptSection({
           </div>
         )}
       </div>
-      {actionError && (
+      {actionError && editingIndex === null && (
         <p className="mb-2 text-xs text-danger" role="status">
           {actionError}
         </p>
       )}
-      {confirmRestore && (
-        <div className="mb-2 rounded-lg border border-bg-border bg-bg-elevated p-3 text-xs">
-          <p className="mb-2 text-text-primary">{t("transcriptRestoreConfirm")}</p>
-          <div className="flex justify-end gap-2">
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => void doRestore()}
-              disabled={restoring}
-            >
-              {t("transcriptRestoreConfirmAction")}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setConfirmRestore(false)}
-            >
-              {t("transcriptCancel")}
-            </Button>
-          </div>
-        </div>
-      )}
-      {confirmRefine && (
-        <div className="mb-2 rounded-lg border border-bg-border bg-bg-elevated p-3 text-xs">
-          <p className="mb-2 text-text-primary">
-            {t("transcriptRefineCorrectedConfirm")}
-          </p>
-          <div className="flex justify-end gap-2">
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => void runRefine()}
-              disabled={refining}
-            >
-              {t("transcriptContinue")}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setConfirmRefine(false)}
-            >
-              {t("transcriptCancel")}
-            </Button>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={confirmRestore}
+        title={t("transcriptRestoreOriginal")}
+        message={t("transcriptRestoreConfirm")}
+        confirmLabel={t("transcriptRestoreConfirmAction")}
+        onConfirm={() => void doRestore()}
+        onCancel={() => setConfirmRestore(false)}
+      />
+      <ConfirmDialog
+        open={confirmRefine}
+        title={t("transcriptRefine")}
+        message={t("transcriptRefineCorrectedConfirm")}
+        confirmLabel={t("transcriptContinue")}
+        onConfirm={() => void runRefine(true)}
+        onCancel={() => setConfirmRefine(false)}
+      />
       <div
         className={`relative ${fillHeight ? "flex min-h-0 flex-1 flex-col" : ""}`}
       >
@@ -976,11 +1001,11 @@ export default function TranscriptSection({
           const isRefined = Boolean(cue.refinedAt);
           const isCorrected = Boolean(cue.correctedAt);
           const isEditing = editingIndex === cue.index;
-          const rowClass = `group/cue flex w-full items-start rounded-lg text-sm transition-colors hover:bg-bg-primary pointer-coarse:min-h-11 ${
+          const rowClass = `group/cue flex w-full flex-wrap items-start rounded-lg text-sm transition-colors hover:bg-bg-primary pointer-coarse:min-h-11 ${
             cue.index === activeIndex
               ? "bg-accent/10 text-accent"
               : "text-text-primary"
-          }`;
+          } ${editingIndex !== null && !isEditing ? "opacity-50" : ""}`;
           if (isEditing) {
             return (
               <div key={cue.index} data-cue-start={cue.start} className={rowClass}>
@@ -1005,24 +1030,32 @@ export default function TranscriptSection({
                         cancelEdit();
                       }
                     }}
-                    className="min-w-0 flex-1 rounded-lg border border-bg-border bg-bg-primary px-2 py-1 text-sm text-text-primary outline-none focus:border-focus-ring"
+                    className="min-w-0 flex-1 rounded-2xl border border-bg-border bg-bg-primary px-2 py-1 text-sm text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring pointer-coarse:basis-full"
                   />
+                </span>
+                <span className="shrink-0 self-center text-[10px] text-text-muted">
+                  Esc / ↵
                 </span>
                 <button
                   type="button"
                   onClick={() => void saveEdit(cue)}
                   disabled={savingEdit}
-                  className="m-0.5 shrink-0 rounded-lg px-2 py-1 text-xs font-medium text-accent hover:bg-bg-elevated disabled:opacity-50"
+                  className="m-0.5 shrink-0 rounded-2xl px-2 py-1 text-xs font-medium text-accent hover:bg-bg-elevated disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:flex-1"
                 >
                   {t("transcriptSave")}
                 </button>
                 <button
                   type="button"
                   onClick={cancelEdit}
-                  className="m-0.5 shrink-0 rounded-lg px-2 py-1 text-xs font-medium text-text-muted hover:bg-bg-elevated"
+                  className="m-0.5 shrink-0 rounded-2xl px-2 py-1 text-xs font-medium text-text-muted hover:bg-bg-elevated pointer-coarse:min-h-11 pointer-coarse:flex-1"
                 >
                   {t("transcriptCancel")}
                 </button>
+                {actionError && (
+                  <p className="basis-full px-2 pb-1 text-xs text-danger" role="status">
+                    {actionError}
+                  </p>
+                )}
               </div>
             );
           }
@@ -1036,23 +1069,32 @@ export default function TranscriptSection({
                 type="button"
                 ref={cue.index === activeIndex ? activeRef : undefined}
                 aria-current={cue.index === activeIndex ? "true" : undefined}
-                onClick={() => seekTo(cue.start)}
+                onClick={() => {
+                  if (editingIndex === null) seekTo(cue.start);
+                }}
+                disabled={editingIndex !== null && !isEditing}
                 className="flex min-w-0 flex-1 cursor-pointer gap-3 px-2 py-1.5 text-left pointer-coarse:min-h-11"
               >
                 <span className="shrink-0 font-mono text-xs text-text-muted">
                   {formatDuration(cue.start)}
                 </span>
-                <span className="min-w-0 flex-1">{cue.text}</span>
-                {isCorrected && (
-                  <span className="shrink-0 rounded-lg bg-accent-amber/15 px-1.5 py-0.5 text-[10px] font-medium text-accent-amber">
-                    {t("transcriptCorrectedBadge")}
-                  </span>
-                )}
-                {isRefined && (
-                  <span className="shrink-0 rounded-lg bg-accent-teal/15 px-1.5 py-0.5 text-[10px] font-medium text-accent-teal">
-                    {t("transcriptRefinedBadge")}
-                  </span>
-                )}
+                <span className="min-w-0 flex-1">
+                  <span className="block">{cue.text}</span>
+                  {(isCorrected || isRefined) && (
+                    <span className="mt-0.5 flex flex-wrap gap-1">
+                      {isCorrected && (
+                        <span className="rounded-lg bg-warm-light px-1.5 py-0.5 text-[10px] font-medium text-text-muted">
+                          {t("transcriptCorrectedBadge")}
+                        </span>
+                      )}
+                      {isRefined && (
+                        <span className="rounded-lg bg-accent-teal/15 px-1.5 py-0.5 text-[10px] font-medium text-accent-teal">
+                          {t("transcriptRefinedBadge")}
+                        </span>
+                      )}
+                    </span>
+                  )}
+                </span>
               </button>
               {source === "chunks" && (
                 <button
@@ -1060,7 +1102,7 @@ export default function TranscriptSection({
                   onClick={() => beginEdit(cue)}
                   disabled={busy}
                   aria-label={t("transcriptEdit")}
-                  className={`m-0.5 inline-flex h-8 flex-shrink-0 items-center justify-center rounded-lg px-2 text-xs font-medium text-text-muted hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50 ${REVEAL}`}
+                  className={`m-0.5 inline-flex h-8 flex-shrink-0 items-center justify-center rounded-lg px-2 text-xs font-medium text-text-muted hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${REVEAL}`}
                 >
                   {t("transcriptEdit")}
                 </button>
@@ -1068,10 +1110,11 @@ export default function TranscriptSection({
               <button
                 type="button"
                 onClick={() => captureCue(cue)}
+                disabled={editingIndex !== null}
                 aria-label={t("transcriptCaptureCue", {
                   time: formatDuration(cue.start),
                 })}
-                className={`relative m-0.5 inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-text-muted hover:bg-bg-elevated hover:text-text-primary pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5 pointer-coarse:before:content-[''] ${REVEAL}`}
+                className={`relative m-0.5 ml-1.5 inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-text-muted hover:bg-bg-elevated hover:text-text-primary pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5 pointer-coarse:before:content-[''] ${REVEAL}`}
               >
                 <Quote size={14} />
               </button>

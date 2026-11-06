@@ -150,6 +150,14 @@ def _drop(item_id: int) -> None:
         session.query(FollowupItem).filter_by(id=item_id).delete()
 
 
+def _park(item_id: int) -> None:
+    """Leave an item for a trashed/missing file without blocking the queue."""
+    with database.get_search_db() as session:
+        item = session.get(FollowupItem, item_id)
+        if item is not None:
+            item.last_attempt_at = datetime.now(UTC)
+
+
 def _stale(item: FollowupItem, file: IndexedFile, session: Any) -> bool:
     if item.generation != extraction.generation(
         session, item.file_id, item.kind
@@ -179,6 +187,7 @@ def process_item(item_id: int) -> None:
             _drop(item_id)
             return
         if not file_row.active:
+            _park(item_id)
             return
         if _stale(item, file_row, session):
             _drop(item_id)
@@ -333,6 +342,7 @@ def _realign_utterance(
         data["file_path"], start, end, text, language
     )
     if outcome in ("load_failed", "unreachable"):
+        retry = False
         with database.get_search_db() as session:
             chunk = (
                 session.query(TranscriptChunk)
@@ -345,9 +355,14 @@ def _realign_utterance(
                 chunk.words_pending_attempts or 0
             ) + 1
             if chunk.words_pending_attempts < MAX_ALIGN_ATTEMPTS:
-                raise RuntimeError(outcome)
-            chunk.words_pending = False
-            chunk.words_pending_attempts = 0
+                # Persist the attempt before the retry: the raise below
+                # must not roll the counter back.
+                retry = True
+            else:
+                chunk.words_pending = False
+                chunk.words_pending_attempts = 0
+        if retry:
+            raise RuntimeError(outcome)
         return
     if outcome != "aligned" or not units:
         _clear_pending(data["file_id"], data["chunk_index"])

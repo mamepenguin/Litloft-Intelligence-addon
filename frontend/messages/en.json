@@ -93,6 +93,8 @@
       "regenerate": "Regenerate",
       "confirmRegenerate": "Regenerate {task}? The current index will be discarded and rebuilt.",
       "correctedWarning": "This file has hand corrections. Regenerating deletes them and the kept original.",
+      "regenerateFailed": "Regeneration failed.",
+      "busy": "Something is still running for this file, so it cannot be changed now.",
       "redoEndedWithoutResult": "Regeneration did not produce a result. Your corrections are still in place.",
       "statusDone": "Indexed",
       "statusPending": "Pending"

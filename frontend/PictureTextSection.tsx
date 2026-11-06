@@ -15,7 +15,10 @@ import { Pencil } from "lucide-react";
 import { getPictureText, restorePictureText, updatePictureText } from "./api";
 import type { PictureTextResponse } from "./api";
 import { LLMRequestError } from "./api";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Button } from "@/components/Button";
+import { useWebSocket } from "@/hooks/useWebSocket";
+import { useImeKeyGuard } from "@/lib/ime";
 
 interface PictureTextSectionProps {
   fileId: string;
@@ -27,13 +30,27 @@ export default function PictureTextSection({
   drive,
 }: PictureTextSectionProps) {
   const t = useTranslations("searchIndex");
+  const ime = useImeKeyGuard();
   const [data, setData] = useState<PictureTextResponse | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [expectedText, setExpectedText] = useState("");
   const [saving, setSaving] = useState(false);
   const [confirmRestore, setConfirmRestore] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  // The draft and the confirmation belong to one picture. The host reuses
+  // this mount for the next file, so they must not carry over.
+  useEffect(() => {
+    setEditing(false);
+    setDraft("");
+    setExpectedText("");
+    setConfirmRestore(false);
+    setError(null);
+    setData(null);
+  }, [fileId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,16 +64,27 @@ export default function PictureTextSection({
     return () => {
       cancelled = true;
     };
-  }, [fileId, drive]);
+  }, [fileId, drive, refreshTick]);
+
+  const updated = useWebSocket("intelligence.picture_text.updated");
+  useEffect(() => {
+    if (!updated) return;
+    const body = updated.data as { file_id?: string } | null;
+    if (!body || !body.file_id || body.file_id === fileId) {
+      setRefreshTick((tick) => tick + 1);
+    }
+  }, [updated, fileId]);
 
   const beginEdit = useCallback(() => {
     setDraft(data?.text ?? "");
+    setExpectedText(data?.text ?? "");
     setEditing(true);
     setError(null);
   }, [data]);
 
   const cancelEdit = useCallback(() => {
     setEditing(false);
+    setDraft("");
     setError(null);
   }, []);
 
@@ -65,7 +93,7 @@ export default function PictureTextSection({
     setSaving(true);
     setError(null);
     try {
-      const res = await updatePictureText(fileId, draft, data.text, drive);
+      const res = await updatePictureText(fileId, draft, expectedText, drive);
       setData(res);
       setEditing(false);
     } catch (err) {
@@ -73,8 +101,11 @@ export default function PictureTextSection({
         const detail = err.detail as { code?: string } | string | undefined;
         const code = typeof detail === "object" ? detail?.code : undefined;
         if (code === "busy") setError(t("transcriptBusy"));
-        else if (code === "changed") setError(t("transcriptChanged"));
-        else if (code === "too_long") setError(t("transcriptTooLong"));
+        else if (code === "changed") {
+          setError(t("transcriptChanged"));
+          setEditing(false);
+          setRefreshTick((tick) => tick + 1);
+        } else if (code === "too_long") setError(t("transcriptTooLong"));
         else if (err.status === 404) setError(t("transcriptUnavailable"));
         else setError(t("transcriptSaveFailed"));
       } else {
@@ -83,18 +114,18 @@ export default function PictureTextSection({
     } finally {
       setSaving(false);
     }
-  }, [data, saving, fileId, draft, drive, t]);
+  }, [data, saving, fileId, draft, expectedText, drive, t]);
 
   const doRestore = useCallback(async () => {
     if (restoring) return;
     setRestoring(true);
     setError(null);
+    setConfirmRestore(false);
     try {
       const res = await restorePictureText(fileId, drive);
       setData(res);
-      setConfirmRestore(false);
+      setEditing(false);
     } catch (err) {
-      setConfirmRestore(false);
       setError(
         err instanceof LLMRequestError && err.status === 404
           ? t("transcriptUnavailable")
@@ -117,63 +148,11 @@ export default function PictureTextSection({
           {t("pictureTextTitle")}
         </h2>
         {data.corrected && (
-          <span className="rounded-lg bg-accent-amber/15 px-1.5 py-0.5 text-[10px] font-medium text-accent-amber">
+          <span className="rounded-lg bg-warm-light px-1.5 py-0.5 text-[10px] font-medium text-text-muted">
             {t("transcriptCorrectedBadge")}
           </span>
         )}
-        <div className="ml-auto flex flex-wrap justify-end gap-1 text-xs">
-          {data.has_original && (
-            <button
-              type="button"
-              onClick={() => setConfirmRestore(true)}
-              disabled={data.busy || restoring}
-              className="rounded-lg px-2 py-0.5 text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
-            >
-              {t("transcriptRestoreOriginal")}
-            </button>
-          )}
-          {!editing && (
-            <button
-              type="button"
-              onClick={beginEdit}
-              disabled={data.busy}
-              className="flex items-center gap-1 rounded-lg px-2 py-0.5 text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
-            >
-              <Pencil size={11} />
-              {t("transcriptEdit")}
-            </button>
-          )}
-        </div>
       </div>
-
-      {error && (
-        <p className="mb-2 text-xs text-danger" role="status">
-          {error}
-        </p>
-      )}
-
-      {confirmRestore && (
-        <div className="mb-2 rounded-lg border border-bg-border bg-bg-elevated p-3 text-xs">
-          <p className="mb-2 text-text-primary">{t("transcriptRestoreConfirm")}</p>
-          <div className="flex justify-end gap-2">
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => void doRestore()}
-              disabled={restoring}
-            >
-              {t("transcriptRestoreConfirmAction")}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setConfirmRestore(false)}
-            >
-              {t("transcriptCancel")}
-            </Button>
-          </div>
-        </div>
-      )}
 
       {editing ? (
         <div>
@@ -181,26 +160,38 @@ export default function PictureTextSection({
             aria-label={t("transcriptEdit")}
             value={draft}
             autoFocus
+            onCompositionEnd={ime.onCompositionEnd}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               event.stopPropagation();
+              if (ime.isImeKeystroke(event)) return;
               if (event.key === "Escape") {
                 event.preventDefault();
                 cancelEdit();
-              } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+              } else if (
+                event.key === "Enter" &&
+                (event.ctrlKey || event.metaKey)
+              ) {
                 event.preventDefault();
                 void save();
               }
             }}
             rows={Math.max(3, lines.length + 1)}
-            className="w-full rounded-lg border border-bg-border bg-bg-primary p-2 text-sm text-text-primary outline-none focus:border-focus-ring"
+            className="w-full rounded-2xl border border-bg-border bg-bg-primary p-2 text-sm text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           />
-          <div className="mt-2 flex justify-end gap-2 text-xs">
+          <p className="mt-1 text-[10px] text-text-muted">Esc / ⌘↵</p>
+          {error && (
+            <p className="mt-1 text-xs text-danger" role="status">
+              {error}
+            </p>
+          )}
+          <div className="mt-2 flex flex-wrap justify-end gap-2 text-xs">
             <Button
               variant="primary"
               size="sm"
               onClick={() => void save()}
               disabled={saving}
+              className="pointer-coarse:min-h-11 pointer-coarse:flex-1"
             >
               {t("transcriptSave")}
             </Button>
@@ -208,18 +199,56 @@ export default function PictureTextSection({
               variant="secondary"
               size="sm"
               onClick={cancelEdit}
+              className="pointer-coarse:min-h-11 pointer-coarse:flex-1"
             >
               {t("transcriptCancel")}
             </Button>
           </div>
         </div>
       ) : (
-        <div className="space-y-0.5 text-sm text-text-primary">
-          {lines.map((line, index) => (
-            <p key={`${index}-${line}`}>{line}</p>
-          ))}
-        </div>
+        <>
+          <div className="space-y-0.5 text-sm text-text-primary">
+            {lines.map((line, index) => (
+              <p key={`${index}-${line}`}>{line}</p>
+            ))}
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+            <button
+              type="button"
+              onClick={beginEdit}
+              disabled={data.busy}
+              className="flex items-center gap-1 rounded-lg px-2 py-0.5 text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50 pointer-coarse:min-h-11"
+            >
+              <Pencil size={11} />
+              {t("transcriptEdit")}
+            </button>
+            {data.has_original && (
+              <button
+                type="button"
+                onClick={() => setConfirmRestore(true)}
+                disabled={data.busy || restoring}
+                className="rounded-lg px-2 py-0.5 text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50 pointer-coarse:min-h-11"
+              >
+                {t("transcriptRestoreOriginal")}
+              </button>
+            )}
+            {error && (
+              <span className="text-danger" role="status">
+                {error}
+              </span>
+            )}
+          </div>
+        </>
       )}
+
+      <ConfirmDialog
+        open={confirmRestore}
+        title={t("transcriptRestoreOriginal")}
+        message={t("transcriptRestoreConfirm")}
+        confirmLabel={t("transcriptRestoreConfirmAction")}
+        onConfirm={() => void doRestore()}
+        onCancel={() => setConfirmRestore(false)}
+      />
     </section>
   );
 }

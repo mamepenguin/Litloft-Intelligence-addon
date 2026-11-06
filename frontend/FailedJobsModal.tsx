@@ -78,6 +78,7 @@ export default function FailedJobsModal({ open, onClose }: FailedJobsModalProps)
   const [retrying, setRetrying] = useState<string | null>(null);
   const [resolving, setResolving] = useState<string | null>(null);
   const [pendingCorrected, setPendingCorrected] = useState<FailedJobItem | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const mountedRef = useRef<boolean>(true);
 
   const load = useCallback(
@@ -133,6 +134,7 @@ export default function FailedJobsModal({ open, onClose }: FailedJobsModalProps)
       const task = jobKindToTask(row.job_kind);
       const key = `${row.file_id}:${task}`;
       setRetrying(key);
+      setActionError(null);
       try {
         await reindexFile(row.file_id, [task], row.drive);
         // Optimistically drop the row from the visible list so the
@@ -149,6 +151,14 @@ export default function FailedJobsModal({ open, onClose }: FailedJobsModalProps)
           (err.detail as { code?: string }).code === "corrected"
         ) {
           setPendingCorrected(row);
+        } else if (
+          err instanceof LLMRequestError &&
+          err.status === 409 &&
+          typeof err.detail === "object" &&
+          err.detail !== null &&
+          (err.detail as { code?: string }).code === "busy"
+        ) {
+          setActionError(tIndex("busy"));
         }
         // Otherwise leave the row in place — next poll will re-fetch.
       } finally {
@@ -163,12 +173,22 @@ export default function FailedJobsModal({ open, onClose }: FailedJobsModalProps)
     if (!row) return;
     const task = jobKindToTask(row.job_kind);
     setPendingCorrected(null);
+    setActionError(null);
     setRetrying(`${row.file_id}:${task}`);
     try {
       await reindexFile(row.file_id, [task], row.drive, true);
       removeVisibleGroup(row);
-    } catch {
-      // Leave the row in place — next poll will re-fetch.
+    } catch (err) {
+      if (
+        err instanceof LLMRequestError &&
+        err.status === 409 &&
+        typeof err.detail === "object" &&
+        err.detail !== null &&
+        (err.detail as { code?: string }).code === "busy"
+      ) {
+        setActionError(tIndex("busy"));
+      }
+      // Otherwise leave the row in place — next poll will re-fetch.
     } finally {
       setRetrying(null);
     }
@@ -264,6 +284,11 @@ export default function FailedJobsModal({ open, onClose }: FailedJobsModalProps)
           </button>
         </div>
 
+        {actionError && (
+          <p className="border-b border-bg-border bg-danger/10 px-4 py-2 text-xs text-danger sm:px-5" role="status">
+            {actionError}
+          </p>
+        )}
         <div className="flex-1 overflow-y-auto overflow-x-hidden bg-bg-primary/60">
           {loading && !hasItems ? (
             <div className="flex min-h-64 items-center justify-center text-text-muted">

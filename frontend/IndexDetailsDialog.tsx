@@ -35,6 +35,7 @@ import type { LucideIcon } from "lucide-react";
 import { getIndexDetails, reindexFile } from "./api";
 import type { IndexDetailsResponse, ReindexTask } from "./api";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { LLMRequestError } from "./api";
 import { useShortcuts } from "@/hooks/useShortcuts";
 import { useDialogPortalTarget } from "@/components/DialogPortal";
 
@@ -169,6 +170,8 @@ export default function IndexDetailsDialog({
   const [loading, setLoading] = useState(true);
   const [pendingTask, setPendingTask] = useState<ReindexTask | null>(null);
   const [regenerating, setRegenerating] = useState<ReindexTask | null>(null);
+  const [forceCorrected, setForceCorrected] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   // Generation counter, not an is-mounted flag. Closing the dialog bumps
   // it, so a response that lands afterwards is discarded rather than
@@ -234,12 +237,15 @@ export default function IndexDetailsDialog({
     if (!pendingTask) return;
     const task = pendingTask;
     const overwrite =
-      task === "whisper"
+      forceCorrected ||
+      (task === "whisper"
         ? Boolean(details?.corrected?.transcript)
         : task === "ocr"
           ? Boolean(details?.corrected?.picture_text)
-          : false;
+          : false);
     setPendingTask(null);
+    setForceCorrected(false);
+    setError(null);
     setRegenerating(task);
     // Closing the dialog mid-flight invalidates the write, the same way
     // it invalidates a fetch.
@@ -256,14 +262,28 @@ export default function IndexDetailsDialog({
           ? { ...prev, status: { ...prev.status, [task]: false } }
           : prev,
       );
-    } catch {
-      // ignore — leave the existing badge in place
+    } catch (err) {
+      const code =
+        err instanceof LLMRequestError &&
+        typeof err.detail === "object" &&
+        err.detail !== null
+          ? (err.detail as { code?: string }).code
+          : undefined;
+      if (code === "corrected") {
+        // The details were stale: ask for the confirmation the server wants.
+        setForceCorrected(true);
+        setPendingTask(task);
+      } else if (code === "busy") {
+        setError(tDetails("busy"));
+      } else {
+        setError(tDetails("regenerateFailed"));
+      }
     } finally {
       if (requestId === requestIdRef.current) {
         setRegenerating(null);
       }
     }
-  }, [pendingTask, fileId, drive, details]);
+  }, [pendingTask, fileId, drive, details, forceCorrected, tDetails]);
 
   if (!open || !dialogHost) return null;
 
@@ -300,6 +320,11 @@ export default function IndexDetailsDialog({
             </button>
           </div>
 
+          {error && (
+            <p className="mb-3 text-xs text-danger" role="status">
+              {error}
+            </p>
+          )}
           {loading && !details ? (
             <div className="h-5 w-32 animate-pulse rounded-lg bg-bg-elevated" />
           ) : (
@@ -371,7 +396,8 @@ export default function IndexDetailsDialog({
         title={tDetails("regenerate")}
         message={
           pendingTask
-            ? (pendingTask === "whisper" && details?.corrected?.transcript) ||
+            ? forceCorrected ||
+              (pendingTask === "whisper" && details?.corrected?.transcript) ||
               (pendingTask === "ocr" && details?.corrected?.picture_text)
               ? tDetails("correctedWarning")
               : tDetails("confirmRegenerate", {
