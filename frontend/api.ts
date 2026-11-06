@@ -1,5 +1,5 @@
 import { fetchJSON } from "@/lib/api";
-import type { FileItem, FileType } from "@/types";
+import type { FileItem, FileKind, FileType } from "@/types";
 
 const API_BASE = "/api";
 
@@ -38,6 +38,17 @@ export function isProfileUnavailable(err: unknown): boolean {
     err instanceof LLMRequestError
     && err.status === 400
     && err.detail === "profile_unavailable"
+  );
+}
+
+/** The 503 ``/ask`` answers when the core cannot resolve the scope. */
+export function isScopeUnavailable(err: unknown): boolean {
+  if (!(err instanceof LLMRequestError) || err.status !== 503) return false;
+  const detail = err.detail;
+  return (
+    typeof detail === "object"
+    && detail !== null
+    && (detail as { code?: unknown }).code === "scope_unavailable"
   );
 }
 
@@ -1256,6 +1267,16 @@ export interface AskOptions {
   signal?: AbortSignal;
   /** Omitted answers with the profile routing assigns. */
   profile?: string;
+  /** The folder / collection / tag / kind conditions to answer within. */
+  scope?: AskScopePayload;
+}
+
+/** The four normalised condition lists an Ask scope carries. */
+export interface AskScopePayload {
+  folders: string[];
+  collections: string[];
+  tags: string[];
+  kinds: FileKind[];
 }
 
 // Intelligence /status shape extended with feature flags + llm enablement.
@@ -1451,6 +1472,14 @@ export interface DecomposedQueryPayload {
 
 export type AskStreamEvent =
   | { kind: "keywords"; keywords: string }
+  // The resolved Ask scope, first on every scoped stream. ``scope`` holds the
+  // normalised four lists; ``matched_file_count`` is the size of the set the
+  // rest of the stream ranks within.
+  | {
+      kind: "scope";
+      scope: AskScopePayload;
+      matched_file_count: number;
+    }
   // Stage A output (personal-history feature only). Surfaces the
   // structured form the LLM extracted from the user's natural-language
   // question — emitted before ``keywords`` so the UI can show "we
@@ -1492,6 +1521,7 @@ export type AskStreamEvent =
       retrieved_count?: number;
       took_ms?: number;
       error?: string;
+      scope_empty?: boolean;
     };
 
 /**
@@ -1534,6 +1564,34 @@ export function parseSseFrame(frame: string): AskStreamEvent | null {
   switch (eventName) {
     case "keywords":
       return { kind: "keywords", keywords: String(data.keywords ?? "") };
+    case "scope": {
+      const rawScope = data.scope;
+      if (
+        !rawScope ||
+        typeof rawScope !== "object" ||
+        Array.isArray(rawScope)
+      ) {
+        return null;
+      }
+      const scope = rawScope as Record<string, unknown>;
+      const list = (value: unknown): string[] =>
+        Array.isArray(value)
+          ? value.filter((item): item is string => typeof item === "string")
+          : [];
+      return {
+        kind: "scope",
+        scope: {
+          folders: list(scope.folders),
+          collections: list(scope.collections),
+          tags: list(scope.tags),
+          kinds: list(scope.kinds) as FileKind[],
+        },
+        matched_file_count:
+          typeof data.matched_file_count === "number"
+            ? data.matched_file_count
+            : 0,
+      };
+    }
     case "query_decomposed": {
       // Stage A payload — defensive coercion because the backend's
       // schema is enforced server-side but a misconfigured proxy /
@@ -1653,6 +1711,7 @@ export function parseSseFrame(frame: string): AskStreamEvent | null {
             : undefined,
         took_ms: typeof data.took_ms === "number" ? data.took_ms : undefined,
         error: typeof data.error === "string" ? data.error : undefined,
+        scope_empty: data.scope_empty === true ? true : undefined,
       };
     default:
       return null;
@@ -1683,6 +1742,7 @@ export async function* askQuestionStream(
   if (options?.topK != null) body.top_k = options.topK;
   if (options?.fileType) body.file_type = options.fileType;
   if (options?.profile !== undefined) body.profile = options.profile;
+  if (options?.scope) body.scope = options.scope;
 
   const res = await fetch(`${API_BASE}/addons/intelligence/ask`, {
     method: "POST",

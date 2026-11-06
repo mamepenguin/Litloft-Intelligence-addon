@@ -11,12 +11,13 @@ returned ``file_ids`` into ``app.search.search()`` as a scope filter.
 """
 
 import asyncio
+import json
 from dataclasses import dataclass
 
 from sqlalchemy import text as sql_text
 
 from app.database import get_search_db_read, get_search_engine
-from app.search import _l2_to_cosine_similarity
+from app.search import _l2_to_cosine_similarity, _scoped_vector_rows
 from app.workers.embedder import embed_query
 
 
@@ -46,6 +47,7 @@ async def coarse_retrieve(
     drive: str,
     *,
     top_k: int,
+    file_id_constraint: "frozenset[str] | list[str] | None" = None,
 ) -> ShortlistResult:
     """Compute a Stage 1 shortlist for ``drive`` from a raw query.
 
@@ -56,6 +58,10 @@ async def coarse_retrieve(
         drive: Target drive name. Coarse retrieval is drive-scoped to
             preserve the drive-as-security-boundary invariant.
         top_k: Maximum shortlist size.
+        file_id_constraint: The corpus to rank within, when the request
+            has one. The KNN runs inside it (``_scoped_vector_rows``)
+            rather than projecting the drive's top rows onto it, so a
+            narrow corpus is never crowded out by nearer files outside.
 
     Returns:
         A ``ShortlistResult`` with file_ids ordered by descending
@@ -71,46 +77,97 @@ async def coarse_retrieve(
     # so other drives' summaries can fill a ``LIMIT :top_k`` before the
     # drive filter runs. Over-fetch so the filter has a generous pool.
     over_fetch = max(top_k * 50, 500)
+    scope = None if file_id_constraint is None else list(file_id_constraint)
 
     def _query() -> tuple[list, int]:
         engine = get_search_engine()
-        with engine.connect() as conn:
-            # sqlite-vec rejects ``ORDER BY ... LIMIT`` on the outer SELECT
-            # when JOINs sit between the MATCH and the LIMIT — the LIMIT
-            # cannot be pushed into the vec0 KNN scan, and vec0 fails with
-            # "A LIMIT or 'k = ?' constraint is required on vec0 knn
-            # queries". Isolate the KNN scan in a CTE so the limit binds
-            # directly to vec_text, then JOIN the post-filter on the
-            # over-fetched id set.
-            rows = conn.execute(
-                sql_text(
-                    "WITH knn AS ("
-                    "  SELECT embedding_id, distance "
-                    "  FROM vec_text "
-                    "  WHERE vector MATCH :vec AND k = :over_fetch "
-                    "  AND embedding_type = 'metadata' "
-                    "  ORDER BY distance"
-                    ") "
-                    "SELECT i.file_id, knn.distance "
-                    "FROM knn "
-                    "JOIN embeddings e ON e.id = knn.embedding_id "
-                    "JOIN indexed_files i ON i.file_id = e.file_id "
-                    "WHERE e.embedding_type = 'metadata' "
-                    "  AND i.drive = :drive "
-                    "  AND i.active = 1 "
-                    "ORDER BY knn.distance"
+        if scope is None:
+            with engine.connect() as conn:
+                # sqlite-vec rejects ``ORDER BY ... LIMIT`` on the outer SELECT
+                # when JOINs sit between the MATCH and the LIMIT — the LIMIT
+                # cannot be pushed into the vec0 KNN scan, and vec0 fails with
+                # "A LIMIT or 'k = ?' constraint is required on vec0 knn
+                # queries". Isolate the KNN scan in a CTE so the limit binds
+                # directly to vec_text, then JOIN the post-filter on the
+                # over-fetched id set.
+                rows = conn.execute(
+                    sql_text(
+                        "WITH knn AS ("
+                        "  SELECT embedding_id, distance "
+                        "  FROM vec_text "
+                        "  WHERE vector MATCH :vec AND k = :over_fetch "
+                        "  AND embedding_type = 'metadata' "
+                        "  ORDER BY distance"
+                        ") "
+                        "SELECT i.file_id, knn.distance "
+                        "FROM knn "
+                        "JOIN embeddings e ON e.id = knn.embedding_id "
+                        "JOIN indexed_files i ON i.file_id = e.file_id "
+                        "WHERE e.embedding_type = 'metadata' "
+                        "  AND i.drive = :drive "
+                        "  AND i.active = 1 "
+                        "ORDER BY knn.distance"
+                    ),
+                    {"vec": vec_bytes, "drive": drive, "over_fetch": over_fetch},
+                ).fetchall()
+        else:
+            scoped = _scoped_vector_rows(
+                engine,
+                table="vec_text",
+                vec_bytes=vec_bytes,
+                limit=top_k,
+                scope=scope,
+                allowed_types=("metadata",),
+                knn_sql=(
+                    "SELECT embedding_id, distance "
+                    "FROM vec_text "
+                    "WHERE vector MATCH :vec "
+                    "AND embedding_type = 'metadata' "
+                    "ORDER BY distance "
+                    "LIMIT :limit"
                 ),
-                {"vec": vec_bytes, "drive": drive, "over_fetch": over_fetch},
-            ).fetchall()
+            )
+            if not scoped:
+                rows = []
+            else:
+                with engine.connect() as conn:
+                    fetched = conn.execute(
+                        sql_text(
+                            "SELECT e.id, e.file_id FROM embeddings e "
+                            "JOIN indexed_files i ON i.file_id = e.file_id "
+                            "WHERE e.id IN (SELECT value FROM json_each(:ids)) "
+                            "AND i.drive = :drive AND i.active = 1"
+                        ),
+                        {
+                            "ids": json.dumps([eid for eid, _ in scoped]),
+                            "drive": drive,
+                        },
+                    ).fetchall()
+                file_by_embedding = {eid: fid for eid, fid in fetched}
+                rows = [
+                    (file_by_embedding[eid], distance)
+                    for eid, distance in scoped
+                    if eid in file_by_embedding
+                ]
 
         with get_search_db_read() as session:
-            count_row = session.execute(
-                sql_text(
-                    "SELECT COUNT(*) FROM indexed_files "
-                    "WHERE drive = :drive AND active = 1"
-                ),
-                {"drive": drive},
-            ).fetchone()
+            if scope is None:
+                count_row = session.execute(
+                    sql_text(
+                        "SELECT COUNT(*) FROM indexed_files "
+                        "WHERE drive = :drive AND active = 1"
+                    ),
+                    {"drive": drive},
+                ).fetchone()
+            else:
+                count_row = session.execute(
+                    sql_text(
+                        "SELECT COUNT(*) FROM indexed_files "
+                        "WHERE file_id IN (SELECT value FROM json_each(:scope)) "
+                        "AND drive = :drive AND active = 1"
+                    ),
+                    {"scope": json.dumps(scope), "drive": drive},
+                ).fetchone()
             drive_file_count = int(count_row[0]) if count_row else 0
         return rows, drive_file_count
 
