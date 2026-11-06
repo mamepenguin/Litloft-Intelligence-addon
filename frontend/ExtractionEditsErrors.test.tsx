@@ -129,6 +129,50 @@ describe("SPEC-ADDON-068 — operator surfaces on a corrected file", () => {
     });
   });
 
+
+  it("does not keep forceCorrected after the confirmation is cancelled", async () => {
+    reindexAnswers = [
+      json({ detail: { code: "corrected" } }, 409),
+      json({ status: "accepted" }),
+      json({ status: "accepted" }),
+    ];
+    render(
+      <ShortcutsProvider>
+        <IndexDetailsMenuItem
+          fileId="abc12345"
+          drive="family"
+          mimeType="image/png"
+          fileType="image"
+        />
+      </ShortcutsProvider>,
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: /インデックス詳細/ }));
+    await waitFor(() =>
+      expect(document.querySelector('[data-task-row="ocr"]')).not.toBeNull(),
+    );
+    const ocrRow = document.querySelector('[data-task-row="ocr"]') as HTMLElement;
+    fireEvent.click(within(ocrRow).getByRole("button", { name: "再生成" }));
+    fireEvent.click(screen.getByRole("button", { name: "dialog-confirm" }));
+    await screen.findByText(
+      "このファイルには手で直した箇所があります。再生成すると、修正と保存してある元の結果は消えます。",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "dialog-cancel" }));
+
+    const clipRow = document.querySelector('[data-task-row="clip"]') as HTMLElement;
+    fireEvent.click(within(clipRow).getByRole("button", { name: "再生成" }));
+    expect(
+      screen.queryByText(
+        "このファイルには手で直した箇所があります。再生成すると、修正と保存してある元の結果は消えます。",
+      ),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "dialog-confirm" }));
+
+    await waitFor(() => {
+      const posts = requests.filter((r) => r.url.includes("/reindex"));
+      expect(posts.at(-1)!.body).toEqual({ tasks: ["clip"] });
+    });
+  });
+
   it("shows the busy text when a failed-job retry answers 409 busy", async () => {
     reindexAnswers = [json({ detail: { code: "busy" } }, 409)];
     render(<FailedJobsModal open onClose={() => {}} />);

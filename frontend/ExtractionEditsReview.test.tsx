@@ -251,6 +251,33 @@ describe("SPEC-ADDON-070 — edit state follows the file", () => {
     });
   });
 
+
+  it("drops drafts when a refetch replaces the list", async () => {
+    const view = transcript("A");
+    await screen.findByText("text-A-0");
+    fireEvent.click(screen.getAllByRole("button", { name: "修正" })[0]);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "draft A0" } });
+    fireEvent.click(screen.getByRole("button", { name: "修正" }));
+    const before = requests.filter(
+      (r) => r.method === "GET" && r.url.endsWith("/transcript"),
+    ).length;
+    ws.event = {
+      event: "intelligence.transcript.updated",
+      data: { file_id: "A", reason: "replaced" },
+    };
+    act(() => {
+      view.rerender(<TranscriptSection fileId="A" drive="d" />);
+    });
+    await waitFor(() => {
+      const after = requests.filter(
+        (r) => r.method === "GET" && r.url.endsWith("/transcript"),
+      ).length;
+      expect(after).toBeGreaterThan(before);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "修正" }));
+    expect(screen.getByRole("textbox")).toHaveValue("text-A-0");
+  });
+
   it("closes the field and refetches on 409 changed", async () => {
     putStatus = { status: 409, body: { detail: { code: "changed" } } };
     const view = transcript("A");

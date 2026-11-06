@@ -226,10 +226,12 @@ export default function IndexDetailsDialog({
   );
 
   const handleRequestRegenerate = useCallback((task: ReindexTask) => {
+    setForceCorrected(false);
     setPendingTask(task);
   }, []);
 
   const handleCancel = useCallback(() => {
+    setForceCorrected(false);
     setPendingTask(null);
   }, []);
 

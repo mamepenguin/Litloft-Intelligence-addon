@@ -250,3 +250,30 @@ class TestInactiveFile:
 
         assert len(set(seen)) > 1
         assert search_db.embeddings(OTHER, "whisper")
+
+    def test_a_retry_still_rebuilds_the_keywords_and_announces(
+        self, search_db, api, monkeypatch
+    ):
+        """SPEC-ADDON-070 A8/A10: a retry does not hold the vector and event back."""
+        from app.workers import followup
+
+        client, _ = api
+        seed_transcript(search_db, FILE, _chunks(), words=_words())
+        assert _correct(client).status_code == 200
+        events: list[dict] = []
+        _stub(monkeypatch, search_db, "load_failed")
+        monkeypatch.setattr(
+            followup,
+            "post_addon_event_sync",
+            lambda event, data: events.append({"event": event, **data}),
+        )
+
+        item = followup.next_due_item_id()
+        followup.process_item(item)
+
+        assert bool(search_db.flag(FILE, "tfidf_keywords_indexed")) is True
+        assert any(e.get("reason") == "corrected" for e in events)
+        with search_db.Session() as session:
+            assert (
+                session.query(FollowupItem).filter_by(file_id=FILE).count() == 1
+            )

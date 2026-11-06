@@ -302,6 +302,9 @@ export default function TranscriptSection({
     if (firstLoad) setLoading(true);
     getFileTranscript(fileId, drive).then((res) => {
       if (cancelled) return;
+      // A refetch replaces the list; a draft keyed by the old rows must
+      // not reappear on a renumbered line.
+      editDraftsRef.current = {};
       if (res.available && res.chunks && res.chunks.length > 0) {
         setWhisperChunks(res.chunks);
       } else {
