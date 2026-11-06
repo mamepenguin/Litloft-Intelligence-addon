@@ -243,6 +243,7 @@ def init_search_db() -> None:
         _migrate_tfidf_keywords_indexed(conn)
         _migrate_idf_terms_columns(conn)
         _migrate_pickup_to_rows(conn)
+        _migrate_extraction_correction_columns(conn)
 
 
 def _migrate_video_visual_scenes_if_needed(conn: object) -> None:
@@ -739,6 +740,8 @@ def _migrate_vec_text_if_needed(conn: object) -> None:
             conn, _TEXT_EMBEDDING_MODEL_KEY, configured
         )
         nested.commit()
+        global text_embedding_model_rebuilt
+        text_embedding_model_rebuilt = True
     except Exception:
         nested.rollback()
         raise
@@ -1158,6 +1161,63 @@ def _migrate_idf_terms_columns(conn: object) -> None:
         "CREATE INDEX IF NOT EXISTS idx_indexed_files_idf_terms_indexed "
         "ON indexed_files(idf_terms_indexed)"
     ))
+
+
+#: Set while the text-embedding model rebuild ran in this process. The
+#: following startup sweep reads it once, to rebuild pictures' search rows
+#: from their stored text instead of reading them again with OCR.
+text_embedding_model_rebuilt = False
+
+
+def _migrate_extraction_correction_columns(conn: object) -> None:
+    """Add the correction state of SPEC-ADDON-070/067/068. Idempotent.
+
+    The new tables (kept originals, picture texts, follow-up items) come
+    from ``create_all``.
+    """
+    chunk_cols = {
+        row[1]
+        for row in conn.execute(
+            text("PRAGMA table_info(transcript_chunks)")
+        ).fetchall()
+    }
+    if chunk_cols:
+        if "corrected_at" not in chunk_cols:
+            conn.execute(text(
+                "ALTER TABLE transcript_chunks ADD COLUMN corrected_at TIMESTAMP"
+            ))
+        if "words_pending" not in chunk_cols:
+            conn.execute(text(
+                "ALTER TABLE transcript_chunks ADD COLUMN "
+                "words_pending BOOLEAN NOT NULL DEFAULT 0"
+            ))
+        if "words_pending_attempts" not in chunk_cols:
+            conn.execute(text(
+                "ALTER TABLE transcript_chunks ADD COLUMN "
+                "words_pending_attempts INTEGER NOT NULL DEFAULT 0"
+            ))
+
+    file_cols = {
+        row[1]
+        for row in conn.execute(
+            text("PRAGMA table_info(indexed_files)")
+        ).fetchall()
+    }
+    additions = (
+        ("transcript_corrected", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("picture_text_corrected", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("transcript_redo", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("picture_text_redo", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("transcript_redo_ended", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("picture_text_redo_ended", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("transcript_generation", "INTEGER NOT NULL DEFAULT 0"),
+        ("picture_text_generation", "INTEGER NOT NULL DEFAULT 0"),
+    )
+    for name, ddl in additions:
+        if name not in file_cols:
+            conn.execute(text(
+                f"ALTER TABLE indexed_files ADD COLUMN {name} {ddl}"
+            ))
 
 
 _IDF_TERM_RULES_KEY = "idf_term_rules"

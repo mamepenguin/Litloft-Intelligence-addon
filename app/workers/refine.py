@@ -33,6 +33,7 @@ from typing import Any
 from sqlalchemy import text as sql_text
 
 import app.config as config
+from app import extraction
 from app.addon_events import post_addon_event
 from app.vec_partition import insert_vector_sql
 from app.database import get_search_db, get_search_db_read, upsert_fts_transcripts
@@ -146,9 +147,8 @@ async def refine_chunks(
 
     On any failure the full window is preserved (no mutations). On
     success each chunk's ``text`` is overwritten and ``text_refined_at``
-    is stamped. Originals are not preserved — refine downstream re-chunks
-    the transcript on new punctuation boundaries, which invalidates any
-    per-chunk snapshot. Revert is "re-run whisper from scratch".
+    is stamped. The file's kept original is taken by the job before the
+    first window is applied, so the correction is recoverable.
     """
     if not chunks:
         return RefineResult(refined_count=0, skipped_count=0)
@@ -330,13 +330,54 @@ def rechunk_from_words(
         .order_by(TranscriptWord.timestamp_start, TranscriptWord.id)
         .all()
     )
-    if not words:
+
+    # A corrected utterance whose alignment produced no words has no word
+    # row to rebuild from; keep its row (and its marks) and build the new
+    # utterances only from the words outside its span.
+    kept: list[dict[str, Any]] = []
+    kept_spans: list[tuple[float, float]] = []
+    all_chunks = (
+        session.query(TranscriptChunk)
+        .filter(TranscriptChunk.file_id == file_id)
+        .order_by(TranscriptChunk.chunk_index)
+        .all()
+    )
+    for chunk in all_chunks:
+        if chunk.corrected_at is None:
+            continue
+        if any(
+            w.timestamp_start >= chunk.timestamp_start
+            and w.timestamp_end <= chunk.timestamp_end
+            for w in words
+        ):
+            continue
+        earlier = [
+            c for c in all_chunks if c.timestamp_start < chunk.timestamp_start
+        ]
+        prev_end = (
+            max(c.timestamp_end for c in earlier) if earlier else None
+        )
+        kept.append({
+            "text": chunk.text,
+            "start": float(chunk.timestamp_start),
+            "end": float(chunk.timestamp_end),
+            "language": chunk.language,
+            "refined_at": chunk.text_refined_at,
+            "refined_model": chunk.refined_model,
+            "speaker_id": chunk.speaker_id,
+            "corrected_at": chunk.corrected_at,
+            "words_pending": bool(chunk.words_pending),
+            "prev_end": prev_end,
+        })
+        kept_spans.append((chunk.timestamp_start, chunk.timestamp_end))
+
+    if not words and not kept:
         return []
 
     # Shape for the whisper helper: it expects {text, start, end, language}
     # dicts ordered by start time. Our TranscriptWord rows already satisfy
     # the ordering invariant by construction.
-    language = (getattr(words[0], "language", "") or "").lower()
+    language = (getattr(words[0], "language", "") or "").lower() if words else ""
     word_dicts = [
         {
             "text": w.text or "",
@@ -346,9 +387,18 @@ def rechunk_from_words(
         }
         for w in words
         if (w.text or "").strip()
+        and not any(
+            start <= w.timestamp_start
+            and w.timestamp_end <= end
+            and not (
+                w.timestamp_start == w.timestamp_end == start
+                and kept_prev_end == start
+            )
+            for (start, end), kept_prev_end in zip(
+                kept_spans, [k["prev_end"] for k in kept]
+            )
+        )
     ]
-    if not word_dicts:
-        return []
 
     import app.config as _cfg
 
@@ -357,12 +407,14 @@ def rechunk_from_words(
     # ``indexing.whisper.*`` keys when present, so existing
     # deployments keep working without YAML changes.
     whisper_cfg = _cfg.settings.transcription.whisper_local
-    new_chunks = _build_chunks_from_words(
-        word_dicts,
-        whisper_cfg.min_segment_duration,
-        whisper_cfg.max_segment_duration,
-    )
-    if not new_chunks:
+    new_chunks = []
+    if word_dicts:
+        new_chunks = _build_chunks_from_words(
+            word_dicts,
+            whisper_cfg.min_segment_duration,
+            whisper_cfg.max_segment_duration,
+        )
+    if not new_chunks and not kept:
         return []
 
     # Delete existing chunk rows AND their embedding rows in the same
@@ -389,8 +441,25 @@ def rechunk_from_words(
     session.flush()
 
     now = datetime.now(UTC)
+    combined: list[dict[str, Any]] = [
+        {
+            "text": chunk["text"],
+            "start": chunk["start"],
+            "end": chunk["end"],
+            "language": chunk.get("language", language),
+            "refined_at": now,
+            "refined_model": refined_model,
+            "speaker_id": None,
+            "corrected_at": None,
+            "words_pending": False,
+        }
+        for chunk in new_chunks
+    ]
+    combined.extend(kept)
+    combined.sort(key=lambda c: (c["start"], c["end"]))
+
     new_ids: list[int] = []
-    for idx, chunk in enumerate(new_chunks):
+    for idx, chunk in enumerate(combined):
         row = TranscriptChunk(
             file_id=file_id,
             chunk_index=idx,
@@ -398,15 +467,17 @@ def rechunk_from_words(
             language=chunk.get("language", language),
             timestamp_start=float(chunk["start"]),
             timestamp_end=float(chunk["end"]),
-            text_refined_at=now,
-            refined_model=refined_model,
+            text_refined_at=chunk.get("refined_at"),
+            refined_model=chunk.get("refined_model"),
             # Phase 1C: refine intentionally drops chunk-level
             # speaker_id (matches the word-level NULL contract above).
             # ``_build_chunks_from_words`` may have produced a value
             # if the word rows still carried speaker_ids from before
             # realignment; ignore it so the chunk is reported as
             # "edited / no speaker" downstream.
-            speaker_id=None,
+            speaker_id=chunk.get("speaker_id"),
+            corrected_at=chunk.get("corrected_at"),
+            words_pending=bool(chunk.get("words_pending")),
         )
         session.add(row)
         session.flush()
@@ -670,19 +741,37 @@ async def _run_refine_job(
                 .order_by(TranscriptChunk.chunk_index)
                 .all()
             )
-            snapshots = [
-                SimpleNamespace(
-                    id=int(r.id),
-                    file_id=r.file_id,
-                    chunk_index=r.chunk_index,
-                    text=r.text,
-                    text_refined_at=None,
-                    refined_model=None,
-                    timestamp_start=r.timestamp_start,
-                    timestamp_end=r.timestamp_end,
+            words = (
+                session.query(
+                    TranscriptWord.timestamp_start,
+                    TranscriptWord.timestamp_end,
                 )
-                for r in rows
-            ]
+                .filter(TranscriptWord.file_id == file_id)
+                .all()
+            )
+            snapshots = []
+            for r in rows:
+                if r.corrected_at is not None:
+                    has_words = any(
+                        start >= r.timestamp_start and end <= r.timestamp_end
+                        for start, end in words
+                    )
+                    if not has_words:
+                        # A corrected utterance whose alignment failed
+                        # has no word rows; Refine must not rewrite it.
+                        continue
+                snapshots.append(
+                    SimpleNamespace(
+                        id=int(r.id),
+                        file_id=r.file_id,
+                        chunk_index=r.chunk_index,
+                        text=r.text,
+                        text_refined_at=None,
+                        refined_model=None,
+                        timestamp_start=r.timestamp_start,
+                        timestamp_end=r.timestamp_end,
+                    )
+                )
             file_row = (
                 session.query(IndexedFile).filter_by(file_id=file_id).first()
             )
@@ -706,6 +795,11 @@ async def _run_refine_job(
                 "error": str(e),
             },
         )
+        await post_addon_event(
+            "intelligence.transcript.updated",
+            {"file_id": file_id, "drive": drive, "reason": "ended"},
+        )
+        _active_refine_files.discard(file_id)
         return
 
     # The snapshot row is the only drive lookup this job makes; emit
@@ -731,6 +825,7 @@ async def _run_refine_job(
                 "skipped_count": 0,
             },
         )
+        _active_refine_files.discard(file_id)
         return
 
     # Load audio waveform once for the whole job so per-chunk alignment
@@ -773,6 +868,12 @@ async def _run_refine_job(
                         nonlocal aligned_total, aligner_skipped_total
                         applied_ids: list[int] = []
                         with get_search_db() as session:
+                            extraction.store_original_if_absent(
+                                session,
+                                file_id,
+                                extraction.KIND_TRANSCRIPT,
+                                "refine",
+                            )
                             fresh = (
                                 session.query(TranscriptChunk)
                                 .filter(
@@ -805,6 +906,9 @@ async def _run_refine_job(
                                 applied_ids.append(int(orm.id))
                             _reindex_keywords(session, file_id)
                             mark_idf_terms_stale(session, file_id)
+                            extraction.bump_generation(
+                                session, file_id, extraction.KIND_TRANSCRIPT
+                            )
                         return applied_ids
 
                     applied_ids = await asyncio.to_thread(_apply)
@@ -839,6 +943,12 @@ async def _run_refine_job(
                         ) or []
                         if new_ids:
                             _reindex_keywords(session, file_id)
+                            extraction.drop_items(
+                                session, file_id, extraction.KIND_TRANSCRIPT
+                            )
+                            extraction.bump_generation(
+                                session, file_id, extraction.KIND_TRANSCRIPT
+                            )
                         return new_ids
 
                 new_ids = await asyncio.to_thread(_rechunk)
@@ -859,6 +969,14 @@ async def _run_refine_job(
                 "rechunked_count": rechunked_count,
             },
         )
+        await post_addon_event(
+            "intelligence.transcript.updated",
+            {
+                "file_id": file_id,
+                "drive": drive,
+                "reason": "replaced",
+            },
+        )
     except Exception as e:
         logger.exception("refine job failed for %s", file_id)
         await _emit_ws_event(
@@ -869,6 +987,10 @@ async def _run_refine_job(
                 "job_id": job_id,
                 "error": str(e),
             },
+        )
+        await post_addon_event(
+            "intelligence.transcript.updated",
+            {"file_id": file_id, "drive": drive, "reason": "ended"},
         )
     finally:
         _active_refine_files.discard(file_id)
@@ -890,6 +1012,8 @@ def refine_chunk_ids(session: Any, file_id: str) -> list[int]:
 def start_refine_job(file_id: str, chunk_ids: list[int], resolved: Resolved) -> str:
     """Kick off an async refine job on the running loop. Returns the job_id."""
     job_id = uuid.uuid4().hex
+    # Claim before answering: a second Refine of this file sees busy.
+    _active_refine_files.add(file_id)
     asyncio.create_task(
         _run_refine_job(file_id, job_id, chunk_ids, resolved),
         name=f"refine_job_{job_id}",

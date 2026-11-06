@@ -51,15 +51,28 @@ def _load_align_model(language: str) -> tuple[Any, Any] | None:
     Returns ``None`` when the language is unsupported by WhisperX or
     the load fails for any other reason (network, OOM, missing model).
     """
+    _, loaded = _load_align_model_detailed(language)
+    return loaded
+
+
+def _load_align_model_detailed(
+    language: str,
+) -> tuple[str, tuple[Any, Any] | None]:
+    """Load a model and name why it did not load.
+
+    ``unsupported`` is WhisperX's own ``ValueError`` for a language with
+    no alignment model; every other failure is ``load_failed`` and may be
+    retried.
+    """
     lang = _normalise_lang(language)
     if not lang:
-        return None
+        return "unsupported", None
 
     with _lock:
         cached = _align_models.get(lang)
         if cached is not None:
             _align_models.move_to_end(lang)
-            return cached
+            return "aligned", cached
         try:
             import whisperx
 
@@ -77,12 +90,17 @@ def _load_align_model(language: str) -> tuple[Any, Any] | None:
                     evicted_lang, _MODEL_CACHE_MAX,
                 )
             _align_models[lang] = (model, metadata)
-            return (model, metadata)
+            return "aligned", (model, metadata)
+        except ValueError as e:
+            logger.warning(
+                "aligner: no alignment model for lang=%s (%s)", lang, e
+            )
+            return "unsupported", None
         except Exception as e:
             logger.warning(
                 "aligner: load_align_model failed lang=%s (%s)", lang, e
             )
-            return None
+            return "load_failed", None
 
 
 def load_waveform(file_path: str) -> Any | None:
@@ -246,6 +264,101 @@ def align_segment(
         })
 
     return units or None
+
+
+@contextmanager
+def decode_span(file_path: str, start: float, end: float) -> Any | None:
+    """Decode only ``[start, end]`` of ``file_path`` at 16 kHz mono.
+
+    Refine loads the whole file once because it aligns many windows; a
+    single utterance's follow-up alignment decodes only its span. The
+    result deliberately does not enter the per-path waveform cache.
+    """
+    import os
+    import subprocess
+    import tempfile
+
+    if end <= start:
+        return None
+    handle = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    handle.close()
+    try:
+        proc = subprocess.run(
+            [
+                "ffmpeg", "-v", "error", "-y",
+                "-ss", f"{start:.3f}", "-t", f"{end - start:.3f}",
+                "-i", file_path, "-ar", "16000", "-ac", "1",
+                "-f", "wav", handle.name,
+            ],
+            capture_output=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            logger.warning(
+                "aligner: span decode failed for %s (%s)",
+                file_path, proc.stderr.decode("utf-8", "replace")[:200],
+            )
+            return None
+        import whisperx
+
+        return whisperx.load_audio(handle.name)
+    except Exception as e:
+        logger.warning(
+            "aligner: span decode failed for %s (%s)", file_path, e
+        )
+        return None
+    finally:
+        try:
+            os.unlink(handle.name)
+        except OSError:
+            pass
+
+
+def align_span(
+    file_path: str,
+    start: float,
+    end: float,
+    text: str,
+    language: str,
+) -> tuple[str, list[dict] | None]:
+    """Align one utterance's text, decoding only its span.
+
+    Returns ``(outcome, units)`` where ``outcome`` is ``aligned``,
+    ``unsupported`` (no model for the language), ``load_failed`` (the
+    model could not be loaded), ``unreachable`` (the audio could not be
+    read) or ``no_result`` (alignment returned nothing). Only
+    ``load_failed`` and ``unreachable`` are worth retrying.
+    """
+    if not (language or "").strip():
+        return "unsupported", None
+    outcome, loaded = _load_align_model_detailed(language)
+    if loaded is None:
+        return outcome, None
+    waveform = decode_span(file_path, start, end)
+    if waveform is None:
+        return "unreachable", None
+    units = align_segment(
+        waveform=waveform,
+        chunk_start=0.0,
+        chunk_end=end - start,
+        text=text,
+        language=language,
+    )
+    if not units:
+        return "no_result", None
+    shifted = [
+        {
+            "text": unit["text"],
+            "timestamp_start": min(
+                max(float(unit["timestamp_start"]) + start, start), end
+            ),
+            "timestamp_end": min(
+                max(float(unit["timestamp_end"]) + start, start), end
+            ),
+        }
+        for unit in units
+    ]
+    return "aligned", shifted
 
 
 @contextmanager

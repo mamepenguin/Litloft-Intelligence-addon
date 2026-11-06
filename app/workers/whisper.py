@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 import numpy as np
 
 from app.addon_events import post_addon_event
+from app import extraction
 from app.vec_partition import insert_vector_sql
 from app.config import settings, validate_file_path
 from app.digit_separator import is_digit_separator
@@ -132,6 +133,13 @@ def _cleanup_loft_stt_temp(file_path: str | None) -> None:
         logger.warning("Failed to remove loft STT temp file: %s", file_path)
 
 
+def _queue_rebuild(file_id: str) -> None:
+    with get_search_db() as session:
+        extraction.queue_item(
+            session, file_id, extraction.KIND_TRANSCRIPT, "rebuild"
+        )
+
+
 def _mark_whisper_indexed(session: object, file_id: str) -> str | None:
     """Set ``whisper_indexed``; return the drive when it moved false to true.
 
@@ -158,6 +166,9 @@ def _mark_loft_stt_temp_consumed(file_id: str) -> None:
     try:
         changed_drive: str | None = None
         with get_search_db() as session:
+            file_row = extraction.get_file(session, file_id)
+            if file_row is not None and file_row.transcript_corrected:
+                return
             changed_drive = _mark_whisper_indexed(session, file_id)
         if changed_drive:
             emit_processing_updated(changed_drive, [file_id])
@@ -841,10 +852,11 @@ async def index_whisper(file_id: str) -> bool:
         future re-index can re-attempt.
     """
     # --- Resolve file_id → (path, drive, mime) ---
-    def _resolve() -> tuple[str, str, str, bool] | None:
-        """None means "no such active file"; else (mime, path, drive, skip)."""
+    def _resolve() -> tuple[str, str, str, bool, bool] | None:
+        """None means "no such active file"; else (mime, path, drive, skip, protected)."""
         unsupported = False
         flagged_drive: str | None = None
+        protected = False
         with get_search_db() as session:
             file = session.query(IndexedFile).filter_by(
                 file_id=file_id, active=True
@@ -854,6 +866,9 @@ async def index_whisper(file_id: str) -> bool:
             mime_type = file.mime_type
             file_path = file.file_path
             drive = file.drive
+            protected = bool(
+                file.transcript_corrected and not file.transcript_redo
+            )
 
             # Unsupported MIME: mark indexed so reconcile won't re-enqueue
             # the file, but record the skip in JobRecord + INFO log so
@@ -870,7 +885,7 @@ async def index_whisper(file_id: str) -> bool:
                 unsupported = True
         if flagged_drive:
             emit_processing_updated(flagged_drive, [file_id])
-        return mime_type, file_path, drive, unsupported
+        return mime_type, file_path, drive, unsupported, protected
 
     # This coroutine is awaited straight from ``_whisper_worker``, so the
     # lookup runs on the indexer's event loop unless it hops off. The
@@ -879,7 +894,16 @@ async def index_whisper(file_id: str) -> bool:
     resolved = await asyncio.to_thread(_resolve)
     if resolved is None:
         return False
-    mime_type, file_path, drive, unsupported_mime = resolved
+    mime_type, file_path, drive, unsupported_mime, protected = resolved
+
+    if protected:
+        # A corrected transcript is never re-read by an automatic path;
+        # the stored text is re-embedded by the follow-up worker instead.
+        await asyncio.to_thread(_queue_rebuild, file_id)
+        logger.info(
+            "Transcription skipped for %s: the transcript is corrected", file_id
+        )
+        return False
 
     # Recorded outside the block above: _record_skipped_job() opens its own
     # write session, so running it on a worker thread while this coroutine
@@ -1110,6 +1134,7 @@ async def _do_transcribe_and_index(
         await asyncio.to_thread(
             _finish_job_failed, job_id, exc,
         )
+        await asyncio.to_thread(_end_confirmed_run_failed, file_id)
         await asyncio.to_thread(
             emit_processing_updated, drive, [file_id],
         )
@@ -1129,6 +1154,7 @@ async def _do_transcribe_and_index(
         # so the operator sees something but the job can be retried.
         logger.exception("Unclassified provider error for %s", file_id)
         await asyncio.to_thread(_finish_job_failed, job_id, exc)
+        await asyncio.to_thread(_end_confirmed_run_failed, file_id)
         await asyncio.to_thread(
             emit_processing_updated, drive, [file_id],
         )
@@ -1153,13 +1179,16 @@ async def _do_transcribe_and_index(
         for w in seg.get("words") or []
     )
 
-    await asyncio.to_thread(
+    stored = await asyncio.to_thread(
         _persist_transcript,
         file_id,
         provider.name,
         raw_segments,
         job_id,
     )
+    if stored is False:
+        # A correction saved while this ran owns the stored text.
+        return False
 
     # Snapshot counts for the completion event after persist.
     words_count = sum(len(seg.get("words") or []) for seg in raw_segments)
@@ -1239,6 +1268,25 @@ def _finish_job_succeeded(job_id: int) -> None:
             return
         record.status = "succeeded"
         record.completed_at = datetime.now(UTC)
+
+
+def _end_confirmed_run_failed(file_id: str) -> None:
+    """A confirmed regenerate failed: the correction stays protected.
+
+    Only a file whose redo mark is set is affected; an ordinary failed
+    transcription leaves the flag false and is retried as today.
+    """
+    with get_search_db() as session:
+        file_row = extraction.get_file(session, file_id)
+        if file_row is None or not file_row.transcript_redo:
+            return
+        extraction.clear_redo(session, file_id, extraction.KIND_TRANSCRIPT)
+        extraction.mark_redo_ended(
+            session, file_id, extraction.KIND_TRANSCRIPT
+        )
+        extraction.queue_item(
+            session, file_id, extraction.KIND_TRANSCRIPT, "rebuild"
+        )
 
 
 def _index_tfidf_keywords(file_id: str, chunk_texts: list[str]) -> None:
@@ -1397,22 +1445,19 @@ def _persist_transcript(
     provider_name: str,
     raw_segments: list[dict],
     job_id: int,
-) -> None:
+) -> bool:
     """DB write phase: chunks + words + embeddings + JobRecord update.
 
     Also handles the "0 segments / 0 chunks" silent-audio case by
     flipping ``whisper_indexed=True`` and marking the JobRecord as
     succeeded — preserving legacy behaviour so silent files don't get
     re-attempted forever.
+
+    Returns False when the result was discarded because a correction
+    saved while the provider ran owns the file's text.
     """
     if not raw_segments:
-        changed_drive: str | None = None
-        with get_search_db() as session:
-            changed_drive = _mark_whisper_indexed(session, file_id)
-        if changed_drive:
-            emit_processing_updated(changed_drive, [file_id])
-        _finish_job_succeeded(job_id)
-        return
+        return _finish_without_segments(file_id, job_id)
 
     whisper_config = settings.transcription.whisper_local
     words = _flatten_words(raw_segments)
@@ -1423,13 +1468,7 @@ def _persist_transcript(
     )
 
     if not chunks:
-        changed_drive = None
-        with get_search_db() as session:
-            changed_drive = _mark_whisper_indexed(session, file_id)
-        if changed_drive:
-            emit_processing_updated(changed_drive, [file_id])
-        _finish_job_succeeded(job_id)
-        return
+        return _finish_without_segments(file_id, job_id)
 
     chunk_texts = [c["text"] for c in chunks if c["text"].strip()]
     vectors = None
@@ -1439,7 +1478,35 @@ def _persist_transcript(
         except Exception as e:
             logger.error("Whisper embedding failed for %s: %s", file_id, e)
 
+    changed_drive: str | None = None
     with get_search_db() as session:
+        file_row = extraction.get_file(session, file_id)
+        if file_row is None:
+            return False
+        if file_row.transcript_corrected:
+            if not file_row.transcript_redo:
+                _mark_job_skipped_corrected(session, job_id)
+                extraction.queue_item(
+                    session, file_id, extraction.KIND_TRANSCRIPT, "rebuild"
+                )
+                return False
+            extraction.clear_corrections(
+                session, file_id, extraction.KIND_TRANSCRIPT
+            )
+            extraction.drop_items(
+                session, file_id, extraction.KIND_TRANSCRIPT
+            )
+            extraction.bump_generation(
+                session, file_id, extraction.KIND_TRANSCRIPT
+            )
+        else:
+            extraction.delete_original(
+                session, file_id, extraction.KIND_TRANSCRIPT
+            )
+            extraction.bump_generation(
+                session, file_id, extraction.KIND_TRANSCRIPT
+            )
+
         _remove_whisper_data(session, file_id)
 
         for idx, chunk in enumerate(chunks):
@@ -1526,7 +1593,57 @@ def _persist_transcript(
         emit_processing_updated(changed_drive, [file_id])
 
     _index_tfidf_keywords(file_id, chunk_texts)
+    return True
 
+
+def _mark_job_skipped_corrected(session: object, job_id: int) -> None:
+    """Close the running job the correction overtook, without new rows."""
+    record = session.query(JobRecord).filter_by(id=job_id).first()
+    if record is not None:
+        record.status = "skipped"
+        record.error_class = "Corrected"
+        record.error_message = "corrected"
+        record.completed_at = datetime.now(UTC)
+
+
+def _finish_without_segments(file_id: str, job_id: int) -> bool:
+    """The zero-segment result: a success unless a correction owns the text.
+
+    A confirmed regenerate that finds nothing is an ending without a
+    result: the correction stays, the confirmation is cleared and a
+    rebuild is queued.
+    """
+    changed_drive: str | None = None
+    with get_search_db() as session:
+        file_row = extraction.get_file(session, file_id)
+        if file_row is None:
+            return False
+        if file_row.transcript_corrected:
+            if file_row.transcript_redo:
+                extraction.clear_redo(
+                    session, file_id, extraction.KIND_TRANSCRIPT
+                )
+                extraction.mark_redo_ended(
+                    session, file_id, extraction.KIND_TRANSCRIPT
+                )
+                extraction.queue_item(
+                    session, file_id, extraction.KIND_TRANSCRIPT, "rebuild"
+                )
+            else:
+                _mark_job_skipped_corrected(session, job_id)
+                extraction.queue_item(
+                    session, file_id, extraction.KIND_TRANSCRIPT, "rebuild"
+                )
+                return False
+        else:
+            changed_drive = _mark_whisper_indexed(session, file_id)
+        record = session.query(JobRecord).filter_by(id=job_id).first()
+        if record is not None:
+            record.status = "succeeded"
+            record.completed_at = datetime.now(UTC)
+    if changed_drive:
+        emit_processing_updated(changed_drive, [file_id])
+    return True
 
 def fail_orphaned_running_jobs() -> None:
     """Flip ``status='running'`` JobRecords to ``failed`` at startup.
@@ -1557,6 +1674,23 @@ def fail_orphaned_running_jobs() -> None:
                 "Container restarted while job was in progress"
             )
             record.completed_at = now
+            file_row = extraction.get_file(session, record.file_id)
+            if file_row is not None and file_row.transcript_corrected:
+                # The corrected rows are the human's work; a dead
+                # transcription must not delete them.
+                extraction.clear_redo(
+                    session, record.file_id, extraction.KIND_TRANSCRIPT
+                )
+                extraction.mark_redo_ended(
+                    session, record.file_id, extraction.KIND_TRANSCRIPT
+                )
+                extraction.queue_item(
+                    session,
+                    record.file_id,
+                    extraction.KIND_TRANSCRIPT,
+                    "rebuild",
+                )
+                continue
             try:
                 _remove_whisper_data(session, record.file_id)
             except Exception:
@@ -1769,7 +1903,21 @@ def _dedup_rolling_cues(cues: list[dict]) -> list[dict]:
 
 def _flag_loft_indexed(file_id: str) -> None:
     """Mark a ``.loft`` transcript leg done and announce the flag move."""
+    changed_drive: str | None = None
     with get_search_db() as session:
+        file_row = extraction.get_file(session, file_id)
+        if file_row is not None and file_row.transcript_corrected:
+            if file_row.transcript_redo:
+                extraction.clear_redo(
+                    session, file_id, extraction.KIND_TRANSCRIPT
+                )
+                extraction.mark_redo_ended(
+                    session, file_id, extraction.KIND_TRANSCRIPT
+                )
+            extraction.queue_item(
+                session, file_id, extraction.KIND_TRANSCRIPT, "rebuild"
+            )
+            return
         changed_drive = _mark_whisper_indexed(session, file_id)
     if changed_drive:
         emit_processing_updated(changed_drive, [file_id])
@@ -1830,6 +1978,28 @@ def _index_loft_vtt(file_id: str, file_path: str) -> bool:
             logger.error("VTT embedding failed for %s: %s", file_id, e)
 
     with get_search_db() as session:
+        file_row = extraction.get_file(session, file_id)
+        if file_row is None:
+            return False
+        if file_row.transcript_corrected:
+            if not file_row.transcript_redo:
+                extraction.queue_item(
+                    session, file_id, extraction.KIND_TRANSCRIPT, "rebuild"
+                )
+                return False
+            extraction.clear_corrections(
+                session, file_id, extraction.KIND_TRANSCRIPT
+            )
+            extraction.drop_items(
+                session, file_id, extraction.KIND_TRANSCRIPT
+            )
+        else:
+            extraction.delete_original(
+                session, file_id, extraction.KIND_TRANSCRIPT
+            )
+        extraction.bump_generation(
+            session, file_id, extraction.KIND_TRANSCRIPT
+        )
         _remove_whisper_data(session, file_id)
 
         for idx, chunk in enumerate(chunks):

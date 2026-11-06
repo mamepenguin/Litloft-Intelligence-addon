@@ -35,6 +35,7 @@ import type { LucideIcon } from "lucide-react";
 import { getIndexDetails, reindexFile } from "./api";
 import type { IndexDetailsResponse, ReindexTask } from "./api";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { LLMRequestError } from "./api";
 import { useShortcuts } from "@/hooks/useShortcuts";
 import { useDialogPortalTarget } from "@/components/DialogPortal";
 
@@ -187,6 +188,8 @@ export default function IndexDetailsDialog({
   const [loading, setLoading] = useState(true);
   const [pendingTask, setPendingTask] = useState<ReindexTask | null>(null);
   const [regenerating, setRegenerating] = useState<ReindexTask | null>(null);
+  const [forceCorrected, setForceCorrected] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   // Generation counter, not an is-mounted flag. Closing the dialog bumps
   // it, so a response that lands afterwards is discarded rather than
@@ -241,23 +244,34 @@ export default function IndexDetailsDialog({
   );
 
   const handleRequestRegenerate = useCallback((task: ReindexTask) => {
+    setForceCorrected(false);
     setPendingTask(task);
   }, []);
 
   const handleCancel = useCallback(() => {
+    setForceCorrected(false);
     setPendingTask(null);
   }, []);
 
   const handleConfirm = useCallback(async () => {
     if (!pendingTask) return;
     const task = pendingTask;
+    const overwrite =
+      forceCorrected ||
+      (task === "whisper"
+        ? Boolean(details?.corrected?.transcript)
+        : task === "ocr"
+          ? Boolean(details?.corrected?.picture_text)
+          : false);
     setPendingTask(null);
+    setForceCorrected(false);
+    setError(null);
     setRegenerating(task);
     // Closing the dialog mid-flight invalidates the write, the same way
     // it invalidates a fetch.
     const requestId = requestIdRef.current;
     try {
-      await reindexFile(fileId, [task], drive);
+      await reindexFile(fileId, [task], drive, overwrite);
       if (requestId !== requestIdRef.current) return;
       // Optimistic flip — the *_indexed flag is False until the worker
       // produces a fresh embedding. The next poll / fetch will catch
@@ -268,14 +282,28 @@ export default function IndexDetailsDialog({
           ? { ...prev, status: { ...prev.status, [task]: false } }
           : prev,
       );
-    } catch {
-      // ignore — leave the existing badge in place
+    } catch (err) {
+      const code =
+        err instanceof LLMRequestError &&
+        typeof err.detail === "object" &&
+        err.detail !== null
+          ? (err.detail as { code?: string }).code
+          : undefined;
+      if (code === "corrected") {
+        // The details were stale: ask for the confirmation the server wants.
+        setForceCorrected(true);
+        setPendingTask(task);
+      } else if (code === "busy") {
+        setError(tDetails("busy"));
+      } else {
+        setError(tDetails("regenerateFailed"));
+      }
     } finally {
       if (requestId === requestIdRef.current) {
         setRegenerating(null);
       }
     }
-  }, [pendingTask, fileId, drive]);
+  }, [pendingTask, fileId, drive, details, forceCorrected, tDetails]);
 
   if (!open || !dialogHost) return null;
 
@@ -319,6 +347,11 @@ export default function IndexDetailsDialog({
             </button>
           </div>
 
+          {error && (
+            <p className="mb-3 text-xs text-danger" role="status">
+              {error}
+            </p>
+          )}
           {loading && !details ? (
             <div className="h-5 w-32 animate-pulse rounded-lg bg-bg-elevated" />
           ) : (
@@ -354,6 +387,14 @@ export default function IndexDetailsDialog({
                           </>
                         )}
                       </span>
+                      {((spec.task === "whisper" &&
+                        details?.redo_ended_without_result?.transcript) ||
+                        (spec.task === "ocr" &&
+                          details?.redo_ended_without_result?.picture_text)) && (
+                        <span className="text-danger">
+                          {tDetails("redoEndedWithoutResult")}
+                        </span>
+                      )}
                     </div>
                     <button
                       type="button"
@@ -382,13 +423,17 @@ export default function IndexDetailsDialog({
         title={tDetails("regenerate")}
         message={
           pendingTask
-            ? tDetails("confirmRegenerate", {
-                task: t(
-                  `tasks.${
-                    pendingTask === "text" ? "text_content" : pendingTask
-                  }.label`,
-                ),
-              })
+            ? forceCorrected ||
+              (pendingTask === "whisper" && details?.corrected?.transcript) ||
+              (pendingTask === "ocr" && details?.corrected?.picture_text)
+              ? tDetails("correctedWarning")
+              : tDetails("confirmRegenerate", {
+                  task: t(
+                    `tasks.${
+                      pendingTask === "text" ? "text_content" : pendingTask
+                    }.label`,
+                  ),
+                })
             : ""
         }
         confirmLabel={tDetails("regenerate")}

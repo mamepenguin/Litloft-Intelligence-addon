@@ -4,11 +4,6 @@
 * ``POST /refine/folders`` — refine every transcript-bearing file
   in the supplied ``file_ids`` list
 
-Revert is deliberately not exposed: the refine pipeline now re-chunks
-the transcript on LLM-inserted punctuation boundaries, which makes
-per-chunk originals meaningless. Users who want to undo a refine
-should re-run whisper indexing from scratch (`whisper_indexed=False`).
-
 Access control (drive-scope) is enforced by the host's Generic Addon
 Proxy. The router adds feature-flag gating, per-drive policy gating,
 and existence checks so an attacker inside an allowed drive can't
@@ -27,6 +22,7 @@ from app.config import settings
 from app.database import get_search_db
 from app.routers.llm_gate import require_llm
 from app.drive_context import require_drive
+from app import extraction
 from app.models import IndexedFile, TranscriptChunk
 from app.workers.refine import (
     WINDOW_SIZE,
@@ -102,18 +98,31 @@ def _fetch_indexed_file(session: Any, file_id: str, drive: str) -> Any | None:
 @router.post("/refine/files/{file_id}")
 async def refine_file(
     file_id: str,
+    body: dict | None = None,
     drive: str = Depends(require_drive),
 ) -> dict:
     """Start a refine job for a single file."""
     _require_feature_on()
     await _require_drive_policy(drive)
     resolved = await require_llm(drive, "transcript_refine")
+    overwrite = bool((body or {}).get("overwrite_corrections", False))
 
     def _read() -> tuple[int, list[int]]:
         with get_search_db() as session:
             indexed = _fetch_indexed_file(session, file_id, drive)
             if indexed is None:
                 raise HTTPException(status_code=404, detail="File not found")
+
+            if extraction.is_corrected(
+                session, file_id, extraction.KIND_TRANSCRIPT
+            ) and not overwrite:
+                raise HTTPException(
+                    status_code=409, detail={"code": "corrected"}
+                )
+            if extraction.busy_in_session(session, file_id) or extraction.has_pending(
+                session, file_id
+            ):
+                raise HTTPException(status_code=409, detail={"code": "busy"})
 
             chunk_count = (
                 session.query(TranscriptChunk)
@@ -162,17 +171,31 @@ async def refine_folder(
     await _require_drive_policy(drive)
     resolved = await require_llm(drive, "transcript_refine")
 
-    def _filter() -> list[str]:
+    def _filter() -> tuple[list[str], list[str], int]:
         with get_search_db() as session:
-            return filter_transcript_file_ids(session, drive, raw_ids)
+            accepted = filter_transcript_file_ids(session, drive, raw_ids)
+            skipped: list[str] = []
+            runnable: list[str] = []
+            for fid in accepted:
+                if extraction.is_corrected(
+                    session, fid, extraction.KIND_TRANSCRIPT
+                ):
+                    skipped.append(fid)
+                elif extraction.busy_in_session(session, fid) or extraction.has_pending(
+                    session, fid
+                ):
+                    continue
+                else:
+                    runnable.append(fid)
+            return runnable, skipped, len(accepted)
 
-    file_ids = await asyncio.to_thread(_filter)
+    file_ids, skipped_corrected, accepted_count = await asyncio.to_thread(_filter)
 
-    if len(file_ids) > MAX_FOLDER_FILES:
+    if accepted_count > MAX_FOLDER_FILES:
         raise HTTPException(
             status_code=413,
             detail=(
-                f"Folder contains {len(file_ids)} files, "
+                f"Folder contains {accepted_count} files, "
                 f"exceeds per-request cap of {MAX_FOLDER_FILES}"
             ),
         )
@@ -196,7 +219,11 @@ async def refine_folder(
     if file_ids:
         await asyncio.gather(*(_enqueue(fid) for fid in file_ids))
 
-    return {"queued": len(queued_ids), "file_ids": queued_ids}
+    return {
+        "queued": len(queued_ids),
+        "file_ids": queued_ids,
+        "skipped_corrected": skipped_corrected,
+    }
 
 
 # Re-export for monkeypatch targets used in tests.

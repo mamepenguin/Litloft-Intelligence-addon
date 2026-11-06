@@ -165,6 +165,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "Failed to fail orphaned running JobRecords; continuing startup"
         )
 
+    # A confirmed regenerate that was queued or running when the
+    # container stopped cannot resume; the correction stays and the file
+    # becomes protected again.
+    try:
+        from app import extraction
+        await asyncio.to_thread(extraction.clear_redo_marks_on_start)
+    except Exception:
+        logger.exception("Failed to clear confirmed redo marks; continuing startup")
+
     # Per-drive policy: drop everything indexed for drives whose
     # intelligence.index has been turned off in drives.json. Runs on
     # every startup so flipping the policy and restarting the addon is
@@ -393,10 +402,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         idf_backfill_loop(), name="idf_backfill"
     )
 
+    from app.workers.followup import FollowupWorker
+
+    followup_worker = FollowupWorker()
+    followup_worker.start()
+
     logger.info("Semantic search service ready on port %d", settings.port)
     yield
 
     # Shutdown
+    await followup_worker.stop()
     idf_backfill_task.cancel()
     try:
         await idf_backfill_task

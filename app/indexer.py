@@ -29,7 +29,15 @@ from app.database import (
     validate_vector_table,
 )
 from app.idf_backfill import mark_idf_terms_stale, request_idf_backfill
-from app.models import Embedding, IndexedFile, TranscriptChunk, TranscriptWord
+from app.models import (
+    Embedding,
+    FollowupItem,
+    IndexedFile,
+    KeptOriginal,
+    PictureText,
+    TranscriptChunk,
+    TranscriptWord,
+)
 from app.processing_events import emit_processing_updated
 from app.sidecar_match import match_siblings
 from app.vec_partition import repair_unkeyed_rows
@@ -731,6 +739,10 @@ class IndexManager:
                 IndexedFile.active.is_(True),
                 IndexedFile.mime_type == LOFT_MIME,
                 IndexedFile.whisper_indexed.is_(True),
+                # A correction wins over a later VTT or temp audio; the
+                # reference leaves this sweep until the owner confirms a
+                # regenerate.
+                IndexedFile.transcript_corrected.is_(False),
             )
             if file_ids is not None:
                 query = query.filter(IndexedFile.file_id.in_(file_ids))
@@ -800,11 +812,17 @@ class IndexManager:
         clip_mimes = IMAGE_TYPES | VIDEO_TYPES | THUMBNAIL_FALLBACK_TYPES
 
         def _collect_incomplete() -> list[
-            tuple[str, str, bool, bool, bool, bool, bool, bool, bool]
+            tuple[str, str, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool]
         ]:
             with get_search_db() as session:
                 from sqlalchemy import or_
 
+                from app.models import FollowupItem
+
+                pending_ids = {
+                    row[0]
+                    for row in session.query(FollowupItem.file_id).all()
+                }
                 incomplete = (
                     session.query(IndexedFile)
                     .filter(
@@ -851,12 +869,19 @@ class IndexManager:
                         f.text_indexed = True
                         newly_done.setdefault(f.drive, []).append(f.file_id)
                     # tfidf_keywords: only video/loft files with whisper done
-                    if not f.tfidf_keywords_indexed and not f.whisper_indexed:
+                    if (
+                        not f.tfidf_keywords_indexed
+                        and not f.whisper_indexed
+                        and not f.transcript_corrected
+                        and f.file_id not in pending_ids
+                    ):
                         f.tfidf_keywords_indexed = True
                     if (
                         not f.tfidf_keywords_indexed
                         and f.mime_type not in TRANSCRIBABLE_TYPES
                         and f.mime_type != LOFT_MIME
+                        and not f.transcript_corrected
+                        and f.file_id not in pending_ids
                     ):
                         f.tfidf_keywords_indexed = True
                     if not f.ocr_indexed and f.mime_type not in OCR_IMAGE_TYPES:
@@ -885,6 +910,9 @@ class IndexManager:
                         f.text_indexed,
                         f.tfidf_keywords_indexed,
                         f.ocr_indexed,
+                        f.transcript_corrected,
+                        f.picture_text_corrected,
+                        f.file_id in pending_ids,
                         f.frame_ocr_read,
                         f.frame_ocr_indexed,
                         f.page_ocr_indexed,
@@ -904,7 +932,9 @@ class IndexManager:
         for (
             file_id, mime_type,
             meta_done, clip_done, thumb_done, whisper_done, text_done,
-            tfidf_kw_done, ocr_done, frame_read, frame_done, page_done,
+            tfidf_kw_done, ocr_done, transcript_corrected,
+            picture_text_corrected, has_followup,
+            frame_read, frame_done, page_done,
         ) in file_tasks:
             queued_any = False
 
@@ -924,7 +954,7 @@ class IndexManager:
                 ))
                 queued_any = True
 
-            if not whisper_done:
+            if not whisper_done and not transcript_corrected:
                 await self._enqueue(IndexTask(
                     file_id=file_id, task_type=TaskType.WHISPER
                 ))
@@ -938,15 +968,24 @@ class IndexManager:
 
             # Backfill: file has transcript but no tfidf_keywords embedding.
             # New files get this automatically from _persist_transcript hook.
-            if not tfidf_kw_done and whisper_done:
+            if (
+                not tfidf_kw_done
+                and whisper_done
+                and not transcript_corrected
+                and not has_followup
+            ):
                 await self._enqueue(IndexTask(
                     file_id=file_id, task_type=TaskType.TFIDF_KEYWORDS
                 ))
                 queued_any = True
 
-            # OCR backlog waits behind fresh on_index work.
+            # OCR backlog waits behind fresh on_index work. A corrected
+            # picture, and one whose search rows a rebuild item already
+            # owns, are not read again.
             if (
                 not ocr_done
+                and not picture_text_corrected
+                and not has_followup
                 and settings.features.image_ocr == "on_index"
             ):
                 await self._enqueue(IndexTask(
@@ -2548,6 +2587,9 @@ def _purge_file(file_id: str) -> None:
         # Delete transcript chunks and word-level rows
         session.query(TranscriptChunk).filter_by(file_id=file_id).delete()
         session.query(TranscriptWord).filter_by(file_id=file_id).delete()
+        session.query(KeptOriginal).filter_by(file_id=file_id).delete()
+        session.query(PictureText).filter_by(file_id=file_id).delete()
+        session.query(FollowupItem).filter_by(file_id=file_id).delete()
 
         # Remove from FTS5 indexes
         delete_fts_file(session, file_id)

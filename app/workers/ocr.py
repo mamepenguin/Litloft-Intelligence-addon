@@ -23,6 +23,7 @@ from app.extractors.base import ContentExtractor
 from app.models import IndexedFile
 from app.workers.clip import IMAGE_TYPES
 from app.workers.metadata import _remove_embeddings, _store_embedding, embed_passages
+from app import extraction
 
 logger = logging.getLogger(__name__)
 
@@ -202,8 +203,14 @@ def _write(
     file_id: str,
     chunks: list[str],
     vectors: list[object],
+    text: str | None = None,
 ) -> bool:
-    """Replace this picture's text rows in one short transaction."""
+    """Replace this picture's text rows in one short transaction.
+
+    ``text`` is the joined string the engine read; direct callers that
+    already chunked it may omit it.
+    """
+    picture_text = text if text is not None else "\n".join(chunks)
     with get_search_db() as session:
         row = session.query(IndexedFile).filter_by(
             file_id=file_id, active=True
@@ -211,6 +218,33 @@ def _write(
         if row is None:
             return False
 
+        if row.picture_text_corrected:
+            if not row.picture_text_redo:
+                extraction.queue_item(
+                    session, file_id, extraction.KIND_PICTURE, "rebuild"
+                )
+                return False
+            if not chunks:
+                # A confirmed read that found nothing leaves the
+                # correction in place and ends without a result.
+                _mark_confirmed_ocr_failed(session, file_id)
+                return False
+            extraction.clear_corrections(
+                session, file_id, extraction.KIND_PICTURE
+            )
+            extraction.drop_items(session, file_id, extraction.KIND_PICTURE)
+            extraction.bump_generation(
+                session, file_id, extraction.KIND_PICTURE
+            )
+        else:
+            extraction.delete_original(
+                session, file_id, extraction.KIND_PICTURE
+            )
+            extraction.bump_generation(
+                session, file_id, extraction.KIND_PICTURE
+            )
+
+        extraction.set_picture_text(session, file_id, picture_text)
         _remove_embeddings(session, file_id, "text_content")
         for index, (chunk, vector) in enumerate(zip(chunks, vectors)):
             _store_embedding(
@@ -236,6 +270,33 @@ def _write(
         return True
 
 
+def _mark_confirmed_ocr_failed(session: Any, file_id: str) -> None:
+    extraction.clear_redo(session, file_id, extraction.KIND_PICTURE)
+    extraction.mark_redo_ended(session, file_id, extraction.KIND_PICTURE)
+    extraction.queue_item(
+        session, file_id, extraction.KIND_PICTURE, "rebuild"
+    )
+
+
+def _has_redo(file_id: str) -> bool:
+    with get_search_db_read() as session:
+        file = session.query(IndexedFile).filter_by(
+            file_id=file_id, active=True
+        ).first()
+        return bool(file is not None and file.picture_text_redo)
+
+
+def _queue_rebuild(file_id: str) -> None:
+    with get_search_db() as session:
+        extraction.queue_item(
+            session, file_id, extraction.KIND_PICTURE, "rebuild"
+        )
+
+
+def _fail_confirmed(file_id: str) -> None:
+    with get_search_db() as session:
+        _mark_confirmed_ocr_failed(session, file_id)
+
 def index_ocr(file_id: str) -> bool:
     """Read one picture and store its text as ``text_content`` chunks.
 
@@ -251,9 +312,21 @@ def index_ocr(file_id: str) -> bool:
         if file is None:
             return False
         path = file.file_path
+        protected = bool(
+            file.picture_text_corrected and not file.picture_text_redo
+        )
+
+    if protected:
+        _queue_rebuild(file_id)
+        logger.info(
+            "OCR skipped for %s: the picture text is corrected", file_id
+        )
+        return False
 
     engine = _get_engine()
     if engine is None:
+        if _has_redo(file_id):
+            _fail_confirmed(file_id)
         return False
 
     try:
@@ -282,14 +355,17 @@ def index_ocr(file_id: str) -> bool:
         )
         return _write(file_id, [], [])
 
-    chunks = ContentExtractor.chunk_text("\n".join(lines))
+    joined = "\n".join(lines)
+    chunks = ContentExtractor.chunk_text(joined)
     if not chunks:
-        return _write(file_id, [], [])
+        return _write(file_id, [], [], text=joined)
 
     try:
         vectors = list(embed_passages(chunks))
     except Exception as exc:
         logger.error("OCR text embedding failed for %s: %s", file_id, exc)
+        if _has_redo(file_id):
+            _fail_confirmed(file_id)
         return False
 
-    return _write(file_id, chunks, vectors)
+    return _write(file_id, chunks, vectors, text=joined)

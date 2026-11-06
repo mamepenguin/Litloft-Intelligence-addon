@@ -264,7 +264,7 @@ class SimilarFilesResponse(BaseModel):
 
 
 class TranscriptChunkResponse(BaseModel):
-    """One transcript chunk, possibly AI-refined.
+    """One transcript chunk, possibly AI-refined or corrected.
 
     ``text_refined_at`` is populated when the chunk has been through
     the refine worker; None for unrefined chunks. Serialized as
@@ -278,6 +278,12 @@ class TranscriptChunkResponse(BaseModel):
     start: float
     end: float
     text_refined_at: datetime | None = Field(default=None, alias="refinedAt", serialization_alias="refinedAt")
+    corrected_at: datetime | None = Field(
+        default=None, alias="correctedAt", serialization_alias="correctedAt"
+    )
+    words_pending: bool = Field(
+        default=False, alias="wordsPending", serialization_alias="wordsPending"
+    )
 
 
 class TranscriptResponse(BaseModel):
@@ -285,6 +291,34 @@ class TranscriptResponse(BaseModel):
     drive: str
     language: str
     chunks: list[TranscriptChunkResponse]
+    has_original: bool = False
+    corrected: bool = False
+    busy: bool = False
+    followups_pending: bool = False
+
+
+class UtteranceCorrectionRequest(BaseModel):
+    text: str
+    expected_text: str
+    expected_start: float
+
+
+class PictureTextResponse(BaseModel):
+    file_id: str
+    text: str
+    corrected: bool = False
+    has_original: bool = False
+    busy: bool = False
+
+
+class PictureTextUpdateRequest(BaseModel):
+    text: str
+    expected_text: str
+
+
+class RedoWithoutResult(BaseModel):
+    transcript: bool = False
+    picture_text: bool = False
 
 
 class IndexDetailEmbeddingItem(BaseModel):
@@ -327,6 +361,8 @@ class IndexDetailsResponse(BaseModel):
     # Phase 1C addition: per-provider transcription job stats.
     # Empty dict when no JobRecord rows exist for the file.
     provider_stats: dict[str, ProviderStats] = {}
+    corrected: dict[str, bool] = {}
+    redo_ended_without_result: dict[str, bool] = {}
 
 
 class ClipTimestampItem(BaseModel):

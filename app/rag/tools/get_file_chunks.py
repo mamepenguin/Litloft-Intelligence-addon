@@ -227,28 +227,29 @@ def _split_text_into_chunks(text: str) -> list[_ChunkRow]:
 def _clip_range(
     chunks: list[_ChunkRow], rng: tuple[int, int]
 ) -> tuple[list[_ChunkRow], bool, str | None]:
-    """Slice ``chunks`` to the inclusive ``[lo, hi]`` range.
+    """Select the chunks whose ``chunk_id`` falls in ``[lo, hi]``.
 
-    Auto-truncates oversize / out-of-bounds asks. Returns the slice
-    plus a (truncated, warning) tuple so the envelope can carry the
-    diagnostic back to the LLM.
+    ``chunk_id`` is the row's ``chunk_index``, which may have gaps after
+    an utterance is emptied; slicing by list position would then return
+    the wrong utterance.
     """
     if not chunks:
         return [], False, None
-    lo_raw, hi_raw = rng
-    lo = max(0, min(int(lo_raw), len(chunks) - 1))
-    hi = max(lo, min(int(hi_raw), len(chunks) - 1))
-    width = hi - lo + 1
+    lo = int(rng[0])
+    hi = int(rng[1])
+    if hi < lo:
+        lo, hi = hi, lo
+    selected = [c for c in chunks if lo <= c.chunk_id <= hi]
     truncated = False
     warning: str | None = None
-    if width > _FULL_MAX_CHUNKS:
-        hi = lo + _FULL_MAX_CHUNKS - 1
+    if len(selected) > _FULL_MAX_CHUNKS:
+        selected = selected[:_FULL_MAX_CHUNKS]
         truncated = True
         warning = (
             f"range capped at {_FULL_MAX_CHUNKS} chunks; "
-            f"requested {width}, returned {_FULL_MAX_CHUNKS}"
+            f"requested {hi - lo + 1}, returned {_FULL_MAX_CHUNKS}"
         )
-    return chunks[lo : hi + 1], truncated, warning
+    return selected, truncated, warning
 
 
 def _summary_rows(chunks: list[_ChunkRow]) -> list[dict[str, Any]]:

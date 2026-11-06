@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 from urllib.parse import unquote
 
@@ -10,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from sqlalchemy import text as sql_text
 
 from app.config import settings
+from app.idf_backfill import mark_idf_terms_stale
 from app.dependencies import get_auto_tags_worker, get_index_manager
 from app.document_sections import EPUB_MIME, load_section_titles
 from app.drive_context import assert_file_in_drive, require_drive
@@ -31,11 +33,15 @@ from app.schemas import (
     ProcessingResponse,
     ProcessingStage,
     ProviderStats,
+    PictureTextResponse,
+    PictureTextUpdateRequest,
     ReindexResponse,
     SuggestedTagsResponse,
     TranscriptChunkResponse,
     TranscriptResponse,
+    UtteranceCorrectionRequest,
 )
+from app import extraction
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +85,12 @@ def _get_indexed_file_or_404(file_id: str, drive: str) -> dict[str, Any]:
             "frame_ocr_indexed": indexed.frame_ocr_indexed,
             "page_ocr_indexed": indexed.page_ocr_indexed,
             "indexed_at": indexed.indexed_at.isoformat() if indexed.indexed_at else "",
+            "transcript_corrected": indexed.transcript_corrected,
+            "picture_text_corrected": indexed.picture_text_corrected,
+            "transcript_redo": indexed.transcript_redo,
+            "picture_text_redo": indexed.picture_text_redo,
+            "transcript_redo_ended": indexed.transcript_redo_ended,
+            "picture_text_redo_ended": indexed.picture_text_redo_ended,
         }
 
 
@@ -206,7 +218,7 @@ def get_transcript(
 ) -> TranscriptResponse:
     """Get Whisper transcript chunks for a file."""
     from app.database import get_search_db_read
-    from app.models import TranscriptChunk
+    from app.models import FollowupItem, KeptOriginal, TranscriptChunk
 
     indexed = _get_indexed_file_or_404(file_id, drive)
 
@@ -216,6 +228,16 @@ def get_transcript(
             .filter(TranscriptChunk.file_id == file_id)
             .order_by(TranscriptChunk.chunk_index)
             .all()
+        )
+        has_original = (
+            db.query(KeptOriginal)
+            .filter_by(file_id=file_id, kind=extraction.KIND_TRANSCRIPT)
+            .first()
+            is not None
+        )
+        followups_pending = (
+            db.query(FollowupItem.id).filter_by(file_id=file_id).first()
+            is not None
         )
 
     if not chunks:
@@ -234,10 +256,477 @@ def get_transcript(
                 start=c.timestamp_start,
                 end=c.timestamp_end,
                 text_refined_at=c.text_refined_at,
+                corrected_at=c.corrected_at,
+                words_pending=bool(c.words_pending),
             )
             for c in chunks
         ],
+        has_original=has_original,
+        corrected=bool(indexed["transcript_corrected"]),
+        busy=extraction.busy(file_id),
+        followups_pending=followups_pending,
     )
+
+
+def _transcript_answer(file_id: str, drive: str) -> TranscriptResponse:
+    """The transcript GET shape, re-read after a write."""
+    from app.database import get_search_db_read
+    from app.models import FollowupItem, KeptOriginal, TranscriptChunk
+
+    indexed = _get_indexed_file_or_404(file_id, drive)
+    with get_search_db_read() as db:
+        chunks = (
+            db.query(TranscriptChunk)
+            .filter(TranscriptChunk.file_id == file_id)
+            .order_by(TranscriptChunk.chunk_index)
+            .all()
+        )
+        has_original = (
+            db.query(KeptOriginal)
+            .filter_by(file_id=file_id, kind=extraction.KIND_TRANSCRIPT)
+            .first()
+            is not None
+        )
+        followups_pending = (
+            db.query(FollowupItem.id).filter_by(file_id=file_id).first()
+            is not None
+        )
+    return TranscriptResponse(
+        file_id=file_id,
+        drive=indexed["drive"],
+        language=chunks[0].language if chunks else "",
+        chunks=[
+            TranscriptChunkResponse(
+                index=c.chunk_index,
+                text=c.text,
+                start=c.timestamp_start,
+                end=c.timestamp_end,
+                text_refined_at=c.text_refined_at,
+                corrected_at=c.corrected_at,
+                words_pending=bool(c.words_pending),
+            )
+            for c in chunks
+        ],
+        has_original=has_original,
+        corrected=bool(indexed["transcript_corrected"]),
+        busy=extraction.busy(file_id),
+        followups_pending=followups_pending,
+    )
+
+
+def _coded(status_code: int, code: str) -> HTTPException:
+    return HTTPException(status_code=status_code, detail={"code": code})
+
+
+@router.put(
+    "/files/{file_id}/transcript/utterances/{index}",
+    response_model=TranscriptChunkResponse,
+)
+def correct_utterance(
+    file_id: str,
+    index: int,
+    body: UtteranceCorrectionRequest,
+    drive: str = Depends(require_drive),
+) -> TranscriptChunkResponse:
+    """Save one corrected utterance. SPEC-ADDON-070 A3-A7."""
+    from app.database import get_search_db
+    from app.models import Embedding, TranscriptChunk, TranscriptWord
+
+    _get_indexed_file_or_404(file_id, drive)
+    text = body.text.strip()
+    expected_text = body.expected_text.strip()
+
+    def _apply() -> tuple[dict[str, Any], bool]:
+        with get_search_db() as session:
+            chunks = (
+                session.query(TranscriptChunk)
+                .filter_by(file_id=file_id)
+                .order_by(TranscriptChunk.chunk_index)
+                .all()
+            )
+            if not chunks:
+                raise HTTPException(status_code=404, detail="No transcript available")
+            target = next(
+                (c for c in chunks if c.chunk_index == index), None
+            )
+            if extraction.busy(file_id):
+                raise _coded(409, "busy")
+            if (
+                target is None
+                or target.text != expected_text
+                or target.timestamp_start != body.expected_start
+            ):
+                raise _coded(409, "changed")
+            if "\n" in text or "\r" in text:
+                raise _coded(422, "line_break")
+            if len(text) > 2000:
+                raise _coded(422, "too_long")
+            if not text and len(chunks) == 1:
+                raise _coded(422, "last_utterance")
+
+            answer = {
+                "index": target.chunk_index,
+                "text": text,
+                "start": target.timestamp_start,
+                "end": target.timestamp_end,
+                "corrected_at": None,
+                "words_pending": False,
+            }
+            if text == target.text:
+                return answer, False
+
+            extraction.store_original_if_absent(
+                session, file_id, extraction.KIND_TRANSCRIPT, "correction"
+            )
+            extraction.mark_corrected(
+                session, file_id, extraction.KIND_TRANSCRIPT
+            )
+
+            # A zero-duration word sits on the boundary two utterances
+            # share; it is not the text of either, so saving one leaves
+            # it for the neighbour. The start one already belongs to the
+            # previous utterance.
+            prev_end: float | None = None
+            for chunk in chunks:
+                if chunk.timestamp_start >= target.timestamp_start:
+                    break
+                if prev_end is None or chunk.timestamp_end > prev_end:
+                    prev_end = chunk.timestamp_end
+            next_start: float | None = None
+            for chunk in chunks:
+                if chunk.timestamp_start <= target.timestamp_start:
+                    continue
+                if next_start is None or chunk.timestamp_start < next_start:
+                    next_start = chunk.timestamp_start
+
+            def _shared_boundary(word: Any) -> bool:
+                if word.timestamp_start != word.timestamp_end:
+                    return False
+                at = word.timestamp_start
+                return (
+                    at == target.timestamp_start and prev_end == at
+                ) or (
+                    at == target.timestamp_end and next_start == at
+                )
+
+            words = (
+                session.query(TranscriptWord)
+                .filter(
+                    TranscriptWord.file_id == file_id,
+                    TranscriptWord.timestamp_start >= target.timestamp_start,
+                    TranscriptWord.timestamp_end <= target.timestamp_end,
+                )
+                .all()
+            )
+            for word in words:
+                if _shared_boundary(word):
+                    continue
+                session.delete(word)
+
+            now = datetime.now(UTC)
+            if text:
+                target.text = text
+                target.corrected_at = now
+                target.words_pending = True
+                target.words_pending_attempts = 0
+                answer["corrected_at"] = now
+                answer["words_pending"] = True
+            else:
+                session.delete(target)
+
+            session.flush()
+            from app.database import upsert_fts_transcripts
+
+            rows = (
+                session.query(TranscriptChunk)
+                .filter_by(file_id=file_id)
+                .order_by(TranscriptChunk.chunk_index)
+                .all()
+            )
+            upsert_fts_transcripts(
+                session,
+                file_id,
+                [
+                    {"chunk_index": c.chunk_index, "text": c.text}
+                    for c in rows
+                    if (c.text or "").strip()
+                ],
+            )
+
+            embeddings = (
+                session.query(Embedding)
+                .filter(
+                    Embedding.file_id == file_id,
+                    Embedding.embedding_type.in_(("whisper", "tfidf_keywords")),
+                )
+                .all()
+            )
+            for emb in embeddings:
+                if (
+                    emb.embedding_type == "whisper"
+                    and (
+                        emb.timestamp_start != target.timestamp_start
+                        or emb.timestamp_end != target.timestamp_end
+                    )
+                ):
+                    continue
+                session.execute(
+                    sql_text("DELETE FROM vec_text WHERE embedding_id = :id"),
+                    {"id": emb.id},
+                )
+                session.delete(emb)
+
+            file_row = extraction.get_file(session, file_id)
+            if file_row is not None:
+                file_row.tfidf_keywords_indexed = False
+            mark_idf_terms_stale(session, file_id)
+            extraction.queue_item(
+                session,
+                file_id,
+                extraction.KIND_TRANSCRIPT,
+                "utterance" if text else "keyword",
+                chunk_index=target.chunk_index if text else None,
+                expected_text=text if text else None,
+            )
+            return answer, True
+
+    answer, _ = _apply()
+    return TranscriptChunkResponse(
+        index=answer["index"],
+        text=answer["text"],
+        start=answer["start"],
+        end=answer["end"],
+        corrected_at=answer["corrected_at"],
+        words_pending=answer["words_pending"],
+    )
+
+
+@router.post(
+    "/files/{file_id}/transcript/restore",
+    response_model=TranscriptResponse,
+)
+async def restore_transcript_route(
+    file_id: str,
+    drive: str = Depends(require_drive),
+) -> TranscriptResponse:
+    """Put the kept original transcript back. SPEC-ADDON-068 C2-C5."""
+    from app.database import get_search_db
+    from app.addon_events import post_addon_event
+
+    indexed = await asyncio.to_thread(_get_indexed_file_or_404, file_id, drive)
+
+    def _apply() -> None:
+        if extraction.busy(file_id):
+            raise _coded(409, "busy")
+        extraction.begin_restore(file_id)
+        try:
+            with get_search_db() as session:
+                if not extraction.restore_transcript(session, file_id):
+                    raise HTTPException(status_code=404, detail="No original available")
+        finally:
+            extraction.end_restore(file_id)
+
+    await asyncio.to_thread(_apply)
+    await post_addon_event(
+        "intelligence.transcript.updated",
+        {
+            "file_id": file_id,
+            "drive": indexed["drive"],
+            "reason": "restored",
+        },
+    )
+    return await asyncio.to_thread(_transcript_answer, file_id, drive)
+
+
+# --- Picture text (SPEC-ADDON-067) -----------------------------------------
+
+
+def _is_picture(indexed: dict[str, Any]) -> bool:
+    return (
+        indexed["file_type"] == "image"
+        or indexed["mime_type"] in OCR_IMAGE_TYPES
+    )
+
+
+def _rebuild_picture_text(file_id: str, indexed: dict[str, Any]) -> str | None:
+    """The text a picture read before the stored-text change has.
+
+    Rebuilt from ``fts_text_content`` with the same merge find-in-file
+    uses. The first correction materialises it as the picture text and
+    keeps it as the original.
+    """
+    from app.database import get_search_db_read
+    from app.file_find import _merge_chunks, _replay_limit
+
+    with get_search_db_read() as session:
+        rows = session.execute(
+            sql_text(
+                "SELECT CAST(chunk_index AS INTEGER) AS ci, text "
+                "FROM fts_text_content WHERE file_id = :fid ORDER BY ci"
+            ),
+            {"fid": file_id},
+        ).fetchall()
+    if not rows:
+        return None
+    limit = _replay_limit(indexed["mime_type"], indexed["file_type"])
+    return _merge_chunks([r[1] for r in rows], limit)
+
+
+def _picture_answer(file_id: str, drive: str) -> PictureTextResponse:
+    from app.database import get_search_db_read
+    from app.models import PictureText
+
+    indexed = _get_indexed_file_or_404(file_id, drive)
+    if not _is_picture(indexed):
+        raise HTTPException(status_code=404, detail="Not a picture")
+    with get_search_db_read() as session:
+        row = session.query(PictureText).filter_by(file_id=file_id).first()
+    text = row.text if row is not None else None
+    if text is None:
+        text = _rebuild_picture_text(file_id, indexed)
+    has_original = False
+    with get_search_db_read() as session:
+        has_original = extraction.has_original(
+            session, file_id, extraction.KIND_PICTURE
+        )
+    if text is None or (not text and not has_original):
+        raise HTTPException(status_code=404, detail="No picture text available")
+    return PictureTextResponse(
+        file_id=file_id,
+        text=text,
+        corrected=bool(indexed["picture_text_corrected"]),
+        has_original=has_original,
+        busy=extraction.busy(file_id),
+    )
+
+
+@router.get("/files/{file_id}/picture-text", response_model=PictureTextResponse)
+def get_picture_text_route(
+    file_id: str,
+    drive: str = Depends(require_drive),
+) -> PictureTextResponse:
+    """The stored text of one picture. SPEC-ADDON-067 B1/B8/D."""
+    return _picture_answer(file_id, drive)
+
+
+@router.put("/files/{file_id}/picture-text", response_model=PictureTextResponse)
+def update_picture_text_route(
+    file_id: str,
+    body: PictureTextUpdateRequest,
+    drive: str = Depends(require_drive),
+) -> PictureTextResponse:
+    """Save a corrected picture text. SPEC-ADDON-067 B3-B7."""
+    from app.database import get_search_db
+
+    indexed = _get_indexed_file_or_404(file_id, drive)
+    if not _is_picture(indexed):
+        raise HTTPException(status_code=404, detail="Not a picture")
+    text = _normalise_picture_text(body.text)
+    expected_text = _normalise_picture_text(body.expected_text)
+
+    def _apply() -> None:
+        if extraction.busy(file_id):
+            raise _coded(409, "busy")
+        from app.database import get_search_db_read
+
+        with get_search_db_read() as read_session:
+            stored = extraction.get_picture_text(read_session, file_id)
+        if stored is None:
+            stored = _rebuild_picture_text(file_id, indexed)
+        with get_search_db() as session:
+            file_row = extraction.get_file(session, file_id)
+            if (
+                file_row is None
+                or (not stored and not file_row.picture_text_corrected)
+            ):
+                raise HTTPException(status_code=404, detail="No picture text available")
+            if stored != expected_text:
+                raise _coded(409, "changed")
+            if len(text) > 100_000:
+                raise _coded(422, "too_long")
+            if text == stored:
+                return
+            if extraction.get_picture_text(session, file_id) is None:
+                extraction.set_picture_text(session, file_id, stored or "")
+            extraction.store_original_if_absent(
+                session, file_id, extraction.KIND_PICTURE, "correction"
+            )
+            extraction.mark_corrected(session, file_id, extraction.KIND_PICTURE)
+            extraction.set_picture_text(session, file_id, text)
+            from app.extractors.base import ContentExtractor
+
+            chunks = ContentExtractor.chunk_text(text)
+            from app.database import upsert_fts_text_content
+            from app.workers.metadata import _remove_embeddings
+
+            _remove_embeddings(session, file_id, "text_content")
+            upsert_fts_text_content(
+                session,
+                file_id,
+                [
+                    {"chunk_index": index, "page": None, "text": chunk}
+                    for index, chunk in enumerate(chunks)
+                ],
+            )
+            mark_idf_terms_stale(session, file_id)
+            extraction.queue_item(
+                session,
+                file_id,
+                extraction.KIND_PICTURE,
+                "picture",
+                expected_text=text,
+            )
+
+    _apply()
+    return _picture_answer(file_id, drive)
+
+
+@router.post(
+    "/files/{file_id}/picture-text/restore",
+    response_model=PictureTextResponse,
+)
+async def restore_picture_text_route(
+    file_id: str,
+    drive: str = Depends(require_drive),
+) -> PictureTextResponse:
+    """Put the kept original picture text back. SPEC-ADDON-068 C2-C5."""
+    from app.database import get_search_db
+    from app.addon_events import post_addon_event
+
+    indexed = await asyncio.to_thread(_get_indexed_file_or_404, file_id, drive)
+
+    def _apply() -> None:
+        if extraction.busy(file_id):
+            raise _coded(409, "busy")
+        extraction.begin_restore(file_id)
+        try:
+            with get_search_db() as session:
+                if not extraction.restore_picture_text(session, file_id):
+                    raise HTTPException(status_code=404, detail="No original available")
+        finally:
+            extraction.end_restore(file_id)
+
+    await asyncio.to_thread(_apply)
+    await post_addon_event(
+        "intelligence.picture_text.updated",
+        {
+            "file_id": file_id,
+            "drive": indexed["drive"],
+            "reason": "restored",
+        },
+    )
+    return await asyncio.to_thread(_picture_answer, file_id, drive)
+
+
+def _normalise_picture_text(text: str) -> str:
+    """Strip trailing space on each line and blank lines at the ends."""
+    lines = [line.rstrip() for line in text.split("\n")]
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines)
+
 
 
 @router.get("/files/{file_id}/subtitles.vtt")
@@ -259,8 +748,8 @@ async def get_subtitles_vtt(
     words and yield 404 until they are re-indexed.
     """
     from app.database import get_search_db_read
-    from app.models import IndexedFile, TranscriptWord
-    from app.subtitle_builder import build_vtt
+    from app.models import IndexedFile, KeptOriginal, TranscriptChunk, TranscriptWord
+    from app.subtitle_builder import build_vtt_with_fallback
 
     def _build_vtt() -> Response:
         drive = unquote(x_hv_drive) if x_hv_drive else None
@@ -286,11 +775,31 @@ async def get_subtitles_vtt(
                 .order_by(TranscriptWord.timestamp_start, TranscriptWord.id)
                 .all()
             )
+            chunks = (
+                db.query(TranscriptChunk)
+                .filter(TranscriptChunk.file_id == file_id)
+                .order_by(TranscriptChunk.chunk_index)
+                .all()
+            )
+            original = (
+                db.query(KeptOriginal)
+                .filter_by(file_id=file_id, kind=extraction.KIND_TRANSCRIPT)
+                .first()
+            )
 
-        if not rows:
+        original_words = 0
+        if original is not None:
+            _, snapshot_words = extraction.transcript_snapshot(original)
+            original_words = len(snapshot_words)
+
+        if not rows and original_words == 0:
             raise HTTPException(status_code=404, detail="No word-level transcript available")
 
-        language = rows[0].language or ""
+        language = (
+            rows[0].language
+            if rows
+            else (chunks[0].language if chunks else "")
+        )
         words = [
             {
                 "text": r.text,
@@ -299,12 +808,39 @@ async def get_subtitles_vtt(
             }
             for r in rows
         ]
+        def _chunk_has_words(chunk: Any) -> bool:
+            for word in rows:
+                if not (
+                    word.timestamp_start >= chunk.timestamp_start
+                    and word.timestamp_end <= chunk.timestamp_end
+                ):
+                    continue
+                if (
+                    word.timestamp_start == word.timestamp_end
+                    and word.timestamp_start
+                    in (chunk.timestamp_start, chunk.timestamp_end)
+                ):
+                    continue
+                return True
+            return False
 
-        vtt = build_vtt(words, language=language)
+        fallback = [
+            {
+                "start": chunk.timestamp_start,
+                "end": chunk.timestamp_end,
+                "text": chunk.text,
+            }
+            for chunk in chunks
+            if chunk.corrected_at is not None
+            and not _chunk_has_words(chunk)
+            and chunk.text.strip()
+        ]
+
+        vtt = build_vtt_with_fallback(words, fallback, language=language)
         return Response(
             content=vtt,
             media_type="text/vtt; charset=utf-8",
-            headers={"Cache-Control": "private, max-age=300"},
+            headers={"Cache-Control": "private, no-cache"},
         )
 
     return await asyncio.to_thread(_build_vtt)
@@ -343,6 +879,7 @@ async def reindex_file(
     file_id: str,
     body: dict[str, Any] = Body(...),
     drive: str = Depends(require_drive),
+    manager: Any = Depends(get_index_manager),
 ):
     """Reset selected ``*_indexed`` flags for one file and re-enqueue.
 
@@ -402,7 +939,7 @@ async def reindex_file(
             tasks.append(t)
 
     # ---- Layer 2: drive boundary + soft-delete check ----
-    # 404 (not 403) on cross-drive / soft-deleted / unknown — keeps the
+    # 404 (not cross-drive / soft-deleted / unknown — keeps the
     # drive boundary opaque to the caller.
     indexed = await asyncio.to_thread(
         _get_indexed_file_or_404, file_id, drive
@@ -446,8 +983,38 @@ async def reindex_file(
             ),
         )
 
+    # ---- Layer 2b: a corrected file needs its explicit confirmation ----
+    overwrite = body.get("overwrite_corrections", False)
+    if not isinstance(overwrite, bool):
+        raise HTTPException(
+            status_code=422,
+            detail="overwrite_corrections must be a boolean",
+        )
+    corrected_kinds: list[str] = []
+    if "whisper" in tasks and indexed["transcript_corrected"]:
+        corrected_kinds.append(extraction.KIND_TRANSCRIPT)
+    if "ocr" in tasks and indexed["picture_text_corrected"]:
+        corrected_kinds.append(extraction.KIND_PICTURE)
+    if corrected_kinds and not overwrite:
+        raise HTTPException(
+            status_code=409, detail={"code": "corrected"}
+        )
+    if corrected_kinds:
+        if await asyncio.to_thread(extraction.busy, file_id):
+            raise HTTPException(status_code=409, detail={"code": "busy"})
+
+        def _set_redo_marks() -> None:
+            from app.database import get_search_db
+
+            with get_search_db() as session:
+                for kind in corrected_kinds:
+                    extraction.set_redo(session, file_id, kind)
+
+        await asyncio.to_thread(_set_redo_marks)
+
     # ---- Layer 3: split tasks into already-queued vs fresh ----
-    manager = get_index_manager()
+    if manager is None or not hasattr(manager, "is_queued"):
+        manager = get_index_manager()
     fresh: list[str] = []
     already_queued: list[str] = []
     for t in tasks:
@@ -581,6 +1148,14 @@ async def get_index_details(
         indexed_at=indexed["indexed_at"],
         embeddings=embeddings_by_type,
         provider_stats=provider_stats,
+        corrected={
+            "transcript": bool(indexed["transcript_corrected"]),
+            "picture_text": bool(indexed["picture_text_corrected"]),
+        },
+        redo_ended_without_result={
+            "transcript": bool(indexed["transcript_redo_ended"]),
+            "picture_text": bool(indexed["picture_text_redo_ended"]),
+        },
     )
 
 
@@ -822,16 +1397,18 @@ async def get_chunk_excerpt(
                     db.query(TranscriptChunk)
                     .filter(
                         TranscriptChunk.file_id == file_id,
-                        TranscriptChunk.chunk_index == chunk_index - 1,
+                        TranscriptChunk.chunk_index < chunk_index,
                     )
+                    .order_by(TranscriptChunk.chunk_index.desc())
                     .first()
                 )
                 next_row = (
                     db.query(TranscriptChunk)
                     .filter(
                         TranscriptChunk.file_id == file_id,
-                        TranscriptChunk.chunk_index == chunk_index + 1,
+                        TranscriptChunk.chunk_index > chunk_index,
                     )
+                    .order_by(TranscriptChunk.chunk_index.asc())
                     .first()
                 )
 
