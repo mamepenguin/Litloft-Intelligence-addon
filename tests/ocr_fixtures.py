@@ -179,18 +179,41 @@ class PictureSeen:
     pixel: tuple[int, ...] | None
 
 
-class FakeOcrResult:
-    """RapidOCR 3.x's answer shape: the kept lines, in the engine's order."""
+ABSENT = object()
 
-    def __init__(self, lines: tuple[str, ...]) -> None:
+
+class FakeOcrResult:
+    """RapidOCR 3.x's answer shape: the kept lines, in the engine's order.
+
+    ``boxes`` and ``scores`` are left off the object when they are not given,
+    so a test can answer a result that carries only ``txts``.
+    """
+
+    def __init__(
+        self,
+        lines: tuple[str, ...],
+        *,
+        boxes: Any = ABSENT,
+        scores: Any = ABSENT,
+    ) -> None:
         self.txts = lines
-        self.scores = tuple(0.99 for _ in lines)
-        self.boxes = ()
+        if boxes is not ABSENT:
+            self.boxes = boxes
+        if scores is not ABSENT:
+            self.scores = scores
 
 
 class FakeEngine:
-    def __init__(self, lines: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        lines: tuple[str, ...] = (),
+        *,
+        boxes: Any = ABSENT,
+        scores: Any = ABSENT,
+    ) -> None:
         self.lines = lines
+        self.boxes = boxes
+        self.scores = scores
         self.error: BaseException | None = None
         self.on_call: Any = None
         self.seen: list[PictureSeen] = []
@@ -214,7 +237,7 @@ class FakeEngine:
                 raise self.error
         finally:
             self.concurrent -= 1
-        return FakeOcrResult(self.lines)
+        return FakeOcrResult(self.lines, boxes=self.boxes, scores=self.scores)
 
 
 class EngineFactory:
@@ -270,6 +293,8 @@ def install(
     monkeypatch,
     *,
     lines: tuple[str, ...] | list[str] = (),
+    boxes: Any = ABSENT,
+    scores: Any = ABSENT,
     engine: FakeEngine | None = None,
     engine_error: BaseException | None = None,
     embed_error: BaseException | None = None,
@@ -279,7 +304,9 @@ def install(
     real_pillow()
     module = importlib.import_module("app.workers.ocr")
     module = importlib.reload(module)
-    fake_engine = engine if engine is not None else FakeEngine(tuple(lines))
+    fake_engine = engine if engine is not None else FakeEngine(
+        tuple(lines), boxes=boxes, scores=scores
+    )
     factory = EngineFactory(fake_engine, error=engine_error)
     monkeypatch.setattr(module, "_create_engine", factory)
     _install_embedding(monkeypatch, error=embed_error, custom=embed)
