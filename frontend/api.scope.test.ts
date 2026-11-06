@@ -52,7 +52,12 @@ describe("SPEC-ADDON-054 the Ask client wire", () => {
   });
 
   it("puts scope in the request body only when it was given", async () => {
-    const fetchMock = vi.fn(async () => ({ ok: true, body: null }));
+    const fetchMock = vi.fn(
+      async (
+        _input: RequestInfo | URL,
+        _init?: RequestInit,
+      ) => ({ ok: true, body: null }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await askQuestionStream("a question", "family", { scope: SCOPE }).next();
