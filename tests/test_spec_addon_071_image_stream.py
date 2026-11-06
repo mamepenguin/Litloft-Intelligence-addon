@@ -88,10 +88,10 @@ class TestThePolicyGate:
         def _trap(*_args, **_kwargs):
             raise AssertionError("no image may be read before the policy answers")
 
-        patch_everywhere(monkeypatch, "_load_image_bytes", _trap)
-        patch_everywhere(monkeypatch, "_preprocess_image", _trap)
-
-        response = await ask(call, PICTURE)
+        with monkeypatch.context() as scoped:
+            patch_everywhere(scoped, "_load_image_bytes", _trap)
+            patch_everywhere(scoped, "_preprocess_image", _trap)
+            response = await ask(call, PICTURE)
 
         assert response.status_code == expected
 

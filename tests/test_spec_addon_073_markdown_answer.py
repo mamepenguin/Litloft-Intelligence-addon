@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 import app.config as config
 from tests.file_question_doubles import chunk
 from tests.file_question_vision_doubles import (  # noqa: F401 - fixtures
@@ -34,15 +36,27 @@ def _picture(db):
 
 
 class TestTheMarkdownAnswer:
-    def test_the_drive_wide_ask_prompt_does_not_gain_the_markdown_rule(self):
-        """SPEC-ADDON-073: the file-question prompt changes, the drive-wide one does not."""
+    @pytest.mark.parametrize("language", ["auto", "en", "ja"])
+    def test_the_drive_wide_ask_prompt_does_not_gain_the_file_question_wording(
+        self, language,
+    ):
+        """SPEC-ADDON-073 / 053 I12: the new wording stays in the file question."""
         from app.rag.prompt import (
             build_file_question_system_prompt,
             build_system_prompt,
         )
 
-        assert "markdown" in build_file_question_system_prompt("auto").lower()
-        assert "markdown" not in build_system_prompt("auto").lower()
+        file_question = build_file_question_system_prompt(
+            language, has_image=True,
+        ).lower()
+        drive_wide = build_system_prompt(language).lower()
+
+        for phrase in (
+            "most useful point first",
+            "an image of the file is attached",
+        ):
+            assert phrase in file_question
+            assert phrase not in drive_wide
 
     async def test_the_file_question_system_prompt_asks_for_markdown(
         self, db, addon, llm, call,

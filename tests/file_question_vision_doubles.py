@@ -639,7 +639,8 @@ def write_large_frame(file_id: str, position: float, data: bytes) -> Path:
 def ffmpeg_writes(data: bytes, calls: list[subprocess.CompletedProcess] | None = None):
     """Stand in for ``subprocess.run`` and let the real cache write its file."""
     def _run(command, **kwargs):
-        calls and calls.append(command)
+        if calls is not None:
+            calls.append(command)
         output = Path(command[-1])
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(data)
