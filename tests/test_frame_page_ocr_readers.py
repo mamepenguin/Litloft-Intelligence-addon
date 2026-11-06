@@ -74,6 +74,18 @@ def _rotate(source: Path, target: Path) -> Path:
     return target
 
 
+def _copy_trim(source: Path, target: Path, start: float) -> Path:
+    """A stream-copied cut at a non-key position (an edit list and a leading KD)."""
+    subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-y", "-ss", str(start),
+            "-i", str(source), "-c", "copy", str(target),
+        ],
+        check=True,
+    )
+    return target
+
+
 def _scanned_pdf(path: Path, pages: int = 2) -> Path:
     import fitz
 
@@ -102,6 +114,9 @@ def media(tmp_path_factory) -> dict[str, Path]:
         portrait = _rotate(portrait_landscape, root / "portrait.mp4")
         large_base = _encode(root / "large-base.mp4", 1600, 1200)
         large = _rotate(large_base, root / "large.mp4")
+        large_trim = _copy_trim(
+            large_base, root / "large-trim.mp4", start=0.5,
+        )
         corrupt = root / "corrupt.mp4"
         corrupt.write_bytes(b"this is not a video")
         scanned = _scanned_pdf(root / "scanned.pdf")
@@ -116,6 +131,7 @@ def media(tmp_path_factory) -> dict[str, Path]:
         "landscape": landscape,
         "portrait": portrait,
         "large": large,
+        "large_trim": large_trim,
         "corrupt": corrupt,
         "scanned": scanned,
         "text_pdf": text_pdf,
@@ -285,6 +301,27 @@ def test_spec_addon_066_i1_above_1080_uses_the_short_side_and_the_key_frame_path
     ]
 
 
+def test_spec_addon_066_a1_a_copy_trimmed_video_uses_the_decoded_key_frames(
+    frame_reader, search_db, tmp_path, media,
+):
+    """A stream-copied cut keeps a leading KD packet at a negative time; the
+    decoder drops it, so the reader must list the decoder's key frames."""
+    module, _engine = frame_reader
+    assert module._probe(str(media["large_trim"])) == (1600, 1200)
+    _video(search_db, tmp_path, media["large_trim"])
+
+    assert module.index_frame_ocr("vid1") is True
+
+    rows = _frame_rows(search_db)
+    starts = [row[1] for row in rows]
+    assert starts == [1.4, 11.4]
+    assert all(start >= 0 for start in starts)
+    assert rows == [
+        (0, 1.4, 11.4, "ALPHA"),
+        (1, 11.4, 12.4, "BETA"),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Failure cases and I4
 # ---------------------------------------------------------------------------
@@ -329,16 +366,53 @@ def test_spec_addon_066_i4_an_inactive_row_writes_nothing(
     assert _frame_rows(search_db) == []
 
 
-def test_spec_addon_066_a4_a_key_frame_time_failure_writes_nothing(
+def test_spec_addon_066_a4_an_unparsable_key_frame_time_writes_nothing(
     frame_reader, search_db, tmp_path, media, monkeypatch,
 ):
     module, _engine = frame_reader
-    _video(search_db, tmp_path, media["large"])
+    _video(search_db, tmp_path, media["large_trim"])
+    real_run = module.subprocess.run
 
-    def fail(_path):
-        raise module._ProbeError("no times")
+    def fake_run(command, *args, **kwargs):
+        if any("pts_time" in str(part) for part in command):
+            return SimpleNamespace(stdout="N/A\n", returncode=0)
+        return real_run(command, *args, **kwargs)
 
-    monkeypatch.setattr(module, "_keyframe_times", fail)
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.index_frame_ocr("vid1") is False
+    assert _frame_rows(search_db) == []
+    assert search_db.flag("vid1", "frame_ocr_read") == 0
+    assert search_db.flag("vid1", "frame_ocr_indexed") == 0
+
+
+def test_spec_addon_066_a4_a_key_frame_count_mismatch_writes_nothing(
+    frame_reader, search_db, tmp_path, media, monkeypatch,
+):
+    module, _engine = frame_reader
+    _video(search_db, tmp_path, media["large_trim"])
+    real_run = module.subprocess.run
+
+    def fake_run(command, *args, **kwargs):
+        text = " ".join(str(part) for part in command)
+        if "packet=pts_time" in text:
+            return SimpleNamespace(
+                stdout=(
+                    "1.4,K__\n3.4,K__\n5.4,K__\n7.4,K__\n"
+                    "9.4,K__\n11.4,K__\n13.4,K__\n"
+                ),
+                returncode=0,
+            )
+        if "frame=pts_time" in text:
+            return SimpleNamespace(
+                stdout=(
+                    "1.4\n3.4\n5.4\n7.4\n9.4\n11.4\n13.4\n"
+                ),
+                returncode=0,
+            )
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
 
     assert module.index_frame_ocr("vid1") is False
     assert _frame_rows(search_db) == []

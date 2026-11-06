@@ -126,36 +126,35 @@ def _probe(path: str) -> tuple[int, int]:
 
 
 def _keyframe_times(path: str) -> list[float]:
-    """Key-frame timestamps from the packet list, without decoding frames.
+    """Key-frame timestamps from the same decoder the reader runs.
 
-    A failed listing, a timeout, or a key packet whose ``pts_time`` does not
-    parse raises ``_ProbeError``: the reader must not fall back to the packet
-    ordinal, which would compress every stored time by the GOP interval.
+    The packet list is not a substitute: a stream-copied MP4/MOV keeps a
+    leading ``KD_`` packet at a negative time that the decoder discards, so
+    the packet list would stamp every frame one GOP early. A failed listing,
+    a timeout, or a line whose ``pts_time`` does not parse raises
+    ``_ProbeError``: the reader must not fall back to the frame ordinal.
     """
     try:
         out = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "packet=pts_time,flags",
+             "-skip_frame", "nokey", "-show_entries", "frame=pts_time",
              "-of", "csv=p=0", path],
             capture_output=True, text=True, timeout=300,
         )
         if out.returncode != 0:
-            raise _ProbeError("ffprobe could not list packets")
+            raise _ProbeError("ffprobe could not list frames")
     except _ProbeError:
         raise
     except Exception as exc:
-        raise _ProbeError("ffprobe packet listing failed") from exc
+        raise _ProbeError("ffprobe frame listing failed") from exc
 
     times: list[float] = []
     for line in out.stdout.splitlines():
-        fields = [field.strip() for field in line.split(",")]
-        if not any("K" in field for field in fields):
+        value = line.strip().rstrip(",")
+        if not value:
             continue
-        value = next(
-            (field for field in fields if _is_float(field)), None,
-        )
-        if value is None:
-            raise _ProbeError("a key packet has no parsable pts_time")
+        if not _is_float(value):
+            raise _ProbeError("a key frame has no parsable pts_time")
         times.append(float(value))
     if not times:
         raise _ProbeError("no key frame was listed")
@@ -308,6 +307,9 @@ def _read_video(
         except Exception:
             process.kill()
         result.exit_status = process.returncode
+    if keyframes and result.frames != len(times):
+        result.times_failed = True
+        return result
     if open_segment is not None:
         open_segment.end = result.last_time + 1.0
         result.segments.append(open_segment)
