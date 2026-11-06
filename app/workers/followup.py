@@ -1,6 +1,6 @@
 """The one background worker that finishes an extraction change.
 
-SPEC-ADDON-065/067/068 queue work here instead of doing it inside the
+SPEC-ADDON-070/067/068 queue work here instead of doing it inside the
 request: an utterance's embedding, keyword vector and realignment, a
 picture's embeddings, a restore's re-embedding, and the rebuild of a
 corrected file's search rows. Items are stored in ``followup_items`` so

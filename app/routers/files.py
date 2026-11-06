@@ -325,7 +325,7 @@ def correct_utterance(
     body: UtteranceCorrectionRequest,
     drive: str = Depends(require_drive),
 ) -> TranscriptChunkResponse:
-    """Save one corrected utterance. SPEC-ADDON-065 A3-A7."""
+    """Save one corrected utterance. SPEC-ADDON-070 A3-A7."""
     from app.database import get_search_db
     from app.models import Embedding, TranscriptChunk, TranscriptWord
 

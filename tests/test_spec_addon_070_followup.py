@@ -1,6 +1,6 @@
 """What the follow-up worker does with a saved correction.
 
-SPEC-ID: SPEC-ADDON-065
+SPEC-ID: SPEC-ADDON-070
 SPEC-ID: SPEC-ADDON-068
 
 The worker is the only thing that embeds a corrected utterance and
@@ -88,7 +88,7 @@ class TestFollowupAppliesTheCorrection:
     def test_it_embeds_and_realigns_the_saved_utterance(
         self, search_db, api, monkeypatch
     ):
-        """SPEC-ADDON-065 A8/A9, SPEC-ADDON-068 C10."""
+        """SPEC-ADDON-070 A8/A9, SPEC-ADDON-068 C10."""
         client, _ = api
         seed_transcript(search_db, FILE, _chunks(), words=_words())
         assert _correct(client, 1, "Bravo, fixed.", "bravo two", 5.0).status_code == 200
@@ -116,7 +116,7 @@ class TestFollowupAppliesTheCorrection:
     def test_the_follow_up_keeps_the_neighbours_boundary_word(
         self, search_db, api, monkeypatch
     ):
-        """SPEC-ADDON-065 I1: the save keeps it, so its follow-up must too."""
+        """SPEC-ADDON-070 I1: the save keeps it, so its follow-up must too."""
         client, _ = api
         seed_transcript(search_db, FILE, _chunks(), words=_words())
         assert _correct(client, 1, "Bravo, fixed.", "bravo two", 5.0).status_code == 200
@@ -131,7 +131,7 @@ class TestFollowupAppliesTheCorrection:
     def test_two_saves_of_one_utterance_leave_only_the_latest(
         self, search_db, api, monkeypatch
     ):
-        """SPEC-ADDON-065 I2: a stale item writes nothing."""
+        """SPEC-ADDON-070 I2: a stale item writes nothing."""
         client, _ = api
         seed_transcript(search_db, FILE, _chunks(), words=_words())
         assert _correct(client, 1, "first text", "bravo two", 5.0).status_code == 200
@@ -146,7 +146,7 @@ class TestFollowupAppliesTheCorrection:
     def test_two_corrected_utterances_both_get_their_embedding(
         self, search_db, api, monkeypatch
     ):
-        """SPEC-ADDON-065 A8: another utterance's save does not make an item stale."""
+        """SPEC-ADDON-070 A8: another utterance's save does not make an item stale."""
         client, _ = api
         seed_transcript(search_db, FILE, _chunks(), words=_words())
         assert _correct(client, 0, "Alpha, fixed.", "alpha one", 0.0).status_code == 200
@@ -165,7 +165,7 @@ class TestFollowupAppliesTheCorrection:
     def test_an_empty_save_rebuilds_the_keyword_vector(
         self, search_db, api, monkeypatch
     ):
-        """SPEC-ADDON-065 A6/A8: an empty save still queues the keyword vector."""
+        """SPEC-ADDON-070 A6/A8: an empty save still queues the keyword vector."""
         client, _ = api
         seed_transcript(search_db, FILE, _chunks(), words=_words())
         assert _correct(client, 1, "", "bravo two", 5.0).status_code == 200

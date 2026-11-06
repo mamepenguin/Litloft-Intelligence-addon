@@ -1,7 +1,7 @@
 """Startup recovery and ordinary failures around a correction.
 
 SPEC-ID: SPEC-ADDON-068
-SPEC-ID: SPEC-ADDON-065
+SPEC-ID: SPEC-ADDON-070
 
 The tests drive the startup helpers and the workers directly, so they
 see the marks and the queued work rather than only the HTTP answer.

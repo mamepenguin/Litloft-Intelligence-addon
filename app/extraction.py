@@ -1,6 +1,6 @@
 """State shared by the extraction-correction routes and workers.
 
-SPEC-ADDON-065/067/068 keep one machine-produced original per file and
+SPEC-ADDON-070/067/068 keep one machine-produced original per file and
 kind, protect a corrected file from automatic re-processing, and queue
 the embedding and alignment a correction still needs. The rules about
 those marks live here so a route, a worker and the follow-up queue read

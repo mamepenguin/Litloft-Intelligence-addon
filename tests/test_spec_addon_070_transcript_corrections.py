@@ -1,6 +1,6 @@
-"""Correct one transcript utterance (SPEC-ADDON-065).
+"""Correct one transcript utterance (SPEC-ADDON-070).
 
-SPEC-ID: SPEC-ADDON-065
+SPEC-ID: SPEC-ADDON-070
 
 The checks are made through ``PUT /files/{id}/transcript/utterances/{index}``
 and the answers the panel reads, so the order of the checks, the coded error
@@ -97,7 +97,7 @@ class TestSaveChecks:
             assert search_db.chunks(FILE) == before
 
     def test_a_busy_file_answers_busy_before_checking_the_text(self, search_db, api):
-        """SPEC-ADDON-065 A4: busy is checked before changed."""
+        """SPEC-ADDON-070 A4: busy is checked before changed."""
         client, _ = api
         seed_transcript(search_db, FILE, _two_chunks())
 
@@ -230,7 +230,7 @@ class TestNormalisation:
     def test_surrounding_whitespace_is_trimmed_before_the_no_op_comparison(
         self, search_db, api
     ):
-        """SPEC-ADDON-065 A3/A5: the normalised text decides the no-op."""
+        """SPEC-ADDON-070 A3/A5: the normalised text decides the no-op."""
         client, _ = api
         seed_transcript(search_db, FILE, _two_chunks())
 
@@ -243,7 +243,7 @@ class TestNormalisation:
         assert search_db.chunks(FILE)[1][1] == "bravo two"
 
     def test_the_cap_is_counted_after_trimming_in_code_points(self, search_db, api):
-        """SPEC-ADDON-065 A4: 2,000 code points fit, surrounding space does not count."""
+        """SPEC-ADDON-070 A4: 2,000 code points fit, surrounding space does not count."""
         client, _ = api
         seed_transcript(search_db, FILE, _two_chunks())
 
@@ -260,7 +260,7 @@ class TestNormalisation:
 
 class TestSaveEffects:
     def test_only_the_utterance_and_its_words_change(self, search_db, api):
-        """SPEC-ADDON-065 A6/A7, I1."""
+        """SPEC-ADDON-070 A6/A7, I1."""
         client, _ = api
         seed_transcript(search_db, FILE, _two_chunks(), words=_words())
         before = search_db.chunks(FILE)
@@ -299,7 +299,7 @@ class TestSaveEffects:
     def test_the_keyword_rows_embeddings_and_term_set_follow_the_save(
         self, search_db, api
     ):
-        """SPEC-ADDON-065 A6, I2."""
+        """SPEC-ADDON-070 A6, I2."""
         client, _ = api
         seed_transcript(search_db, FILE, _two_chunks(), words=_words())
 
@@ -320,7 +320,7 @@ class TestSaveEffects:
         assert bool(search_db.flag(FILE, "idf_terms_indexed")) is False
 
     def test_an_empty_text_removes_the_row_and_leaves_the_gap(self, search_db, api):
-        """SPEC-ADDON-065 A6: indexes keep their values, so the gap is visible."""
+        """SPEC-ADDON-070 A6: indexes keep their values, so the gap is visible."""
         client, _ = api
         seed_transcript(search_db, FILE, _two_chunks(), words=_words())
 
@@ -340,7 +340,7 @@ class TestSaveEffects:
         assert state["followups_pending"] is True
 
     def test_saving_the_same_text_writes_nothing(self, search_db, api):
-        """SPEC-ADDON-065 A5."""
+        """SPEC-ADDON-070 A5."""
         client, _ = api
         seed_transcript(search_db, FILE, _two_chunks(), words=_words())
         before = search_db.chunks(FILE)
@@ -362,7 +362,7 @@ class TestSaveEffects:
 
 class TestTranscriptAnswer:
     def test_the_panel_receives_the_fields_it_branches_on(self, search_db, api):
-        """SPEC-ADDON-065 D."""
+        """SPEC-ADDON-070 D."""
         client, _ = api
         seed_transcript(search_db, FILE, _two_chunks(), words=_words())
 
@@ -386,7 +386,7 @@ class TestSubtitlesForACorrectedUtterance:
     def test_a_corrected_utterance_without_words_is_one_cue(
         self, search_db, api
     ):
-        """SPEC-ADDON-065 A12, I3."""
+        """SPEC-ADDON-070 A12, I3."""
         client, _ = api
         seed_transcript(search_db, FILE, _two_chunks(), words=_words())
         client.put(_url(), json=_body("Bravo, fixed."), headers=HEADERS)
@@ -400,7 +400,7 @@ class TestSubtitlesForACorrectedUtterance:
         assert "bravo" not in response.text
 
     def test_a_file_with_no_word_rows_keeps_answering_404(self, search_db, api):
-        """SPEC-ADDON-065 A12: a VTT-based or pre-word file is unchanged."""
+        """SPEC-ADDON-070 A12: a VTT-based or pre-word file is unchanged."""
         client, _ = api
         seed_transcript(search_db, FILE, _two_chunks(), words=[])
         client.put(_url(), json=_body("Bravo, fixed."), headers=HEADERS)
@@ -412,7 +412,7 @@ class TestSubtitlesForACorrectedUtterance:
     def test_an_uncorrected_utterance_without_words_gets_no_cue(
         self, search_db, api
     ):
-        """SPEC-ADDON-065 A12: only a corrected empty-words utterance falls back."""
+        """SPEC-ADDON-070 A12: only a corrected empty-words utterance falls back."""
         client, _ = api
         seed_transcript(
             search_db,

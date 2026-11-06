@@ -1,6 +1,6 @@
 """A saved correction removes its own words even on the chunk boundary.
 
-SPEC-ID: SPEC-ADDON-065
+SPEC-ID: SPEC-ADDON-070
 
 `_build_chunks_from_words` makes a chunk start at its first word's start
 and end at its last word's end, so these boundary timestamps are the
@@ -36,7 +36,7 @@ def _words() -> list[dict]:
 
 
 def test_the_utterances_boundary_words_are_removed(search_db, api):
-    """SPEC-ADDON-065 A6, I1."""
+    """SPEC-ADDON-070 A6, I1."""
     client, _ = api
     seed_transcript(search_db, FILE, _chunks(), words=_words())
 

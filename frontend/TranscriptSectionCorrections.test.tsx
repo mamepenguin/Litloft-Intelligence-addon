@@ -1,5 +1,5 @@
 /**
- * SPEC-ID: SPEC-ADDON-065
+ * SPEC-ID: SPEC-ADDON-070
  *
  * The transcript panel's edit mode, its marks and the restore control.
  * The API module is left real and `fetch` is intercepted at the URL the
@@ -151,7 +151,7 @@ afterEach(() => {
   cleanup();
 });
 
-describe("SPEC-ADDON-065 — edit controls", () => {
+describe("SPEC-ADDON-070 — edit controls", () => {
   it("offers 修正 on every 分割テキスト row", async () => {
     renderSection();
 
@@ -236,7 +236,7 @@ describe("SPEC-ADDON-065 — edit controls", () => {
   });
 });
 
-describe("SPEC-ADDON-065 — marks and busy", () => {
+describe("SPEC-ADDON-070 — marks and busy", () => {
   it("shows 修正済み next to AI整形済み when both apply", async () => {
     state = freshState({
       corrected: true,
@@ -284,7 +284,7 @@ describe("SPEC-ADDON-065 — marks and busy", () => {
   });
 });
 
-describe("SPEC-ADDON-065 — restore", () => {
+describe("SPEC-ADDON-070 — restore", () => {
   it("offers 元の結果に戻す only in the 分割テキスト view", async () => {
     state = freshState({ has_original: true });
     renderSection();
@@ -347,7 +347,7 @@ describe("SPEC-ADDON-065 — restore", () => {
   });
 });
 
-describe("SPEC-ADDON-065 — an update event refetches", () => {
+describe("SPEC-ADDON-070 — an update event refetches", () => {
   it("fetches the transcript and the subtitles again", async () => {
     const view = renderSection();
     await screen.findByText("これは未修正の文章です。");

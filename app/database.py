@@ -1112,7 +1112,7 @@ text_embedding_model_rebuilt = False
 
 
 def _migrate_extraction_correction_columns(conn: object) -> None:
-    """Add the correction state of SPEC-ADDON-065/067/068. Idempotent.
+    """Add the correction state of SPEC-ADDON-070/067/068. Idempotent.
 
     The new tables (kept originals, picture texts, follow-up items) come
     from ``create_all``.
