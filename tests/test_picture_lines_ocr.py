@@ -310,6 +310,28 @@ def test_spec_addon_075_i2_an_unusable_scores_list_null_every_score(
     assert _picture_text(search_db, "pic1") == "\n".join(lines)
 
 
+@pytest.mark.parametrize(
+    "lines",
+    [["first", "", "second"], ["  ", " "]],
+    ids=["empty-line-between", "whitespace-only-text"],
+)
+def test_spec_addon_075_a1_a_blank_kept_line_is_kept_so_the_lines_join_to_the_text(
+    search_db, tmp_path, monkeypatch, lines
+):
+    """SPEC-ADDON-075 A1: every text of the result is a line, blank or not."""
+    path = picture(tmp_path / "blank.png", size=(40, 20))
+    seed_indexed_file(search_db, "pic1", "image/png", path, **ALL_DONE)
+    harness = install(monkeypatch, lines=lines, boxes=_no_text_boxes(lines))
+
+    run_worker(harness, "pic1")
+
+    stored = _stored_lines(search_db, "pic1")
+    assert [line["text"] for line in stored] == lines
+    assert "\n".join(line["text"] for line in stored) == _picture_text(
+        search_db, "pic1"
+    )
+
+
 # ---------------------------------------------------------------------------
 # I3, I4 - a discarded or failed write changes no line
 # ---------------------------------------------------------------------------
