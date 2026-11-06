@@ -263,6 +263,36 @@
         "response_filter": null
       },
       {
+        "path": "/search/by-image/available",
+        "methods": [
+          "GET"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "search"
+        },
+        "response_filter": null
+      },
+      {
+        "path": "/search/by-image",
+        "methods": [
+          "POST"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "search"
+        },
+        "response_filter": {
+          "type": "current_drive_only_nested",
+          "paths": {
+            "images": "drive",
+            "scenes": "drive",
+            "documents": "drive"
+          }
+        },
+        "timeout": 28
+      },
+      {
         "path": "/search",
         "methods": [
           "GET"
