@@ -203,6 +203,12 @@ class TestAttempts:
         seed_transcript(search_db, FILE, _chunks(), words=_words())
         assert _correct(client).status_code == 200
         _stub(monkeypatch, search_db, "load_failed")
+        events: list[dict] = []
+        monkeypatch.setattr(
+            followup,
+            "post_addon_event_sync",
+            lambda event, data: events.append({"event": event, **data}),
+        )
 
         for _ in range(3):
             search_db.execute(
@@ -221,6 +227,9 @@ class TestAttempts:
             f=FILE,
         )[0]
         assert row == (0, 0)
+        assert [e["reason"] for e in events if e["event"].endswith(".updated")] == [
+            "corrected"
+        ]
 
 
 class TestInactiveFile:
@@ -249,7 +258,11 @@ class TestInactiveFile:
             followup.process_item(item)
 
         assert len(set(seen)) > 1
-        assert search_db.embeddings(OTHER, "whisper")
+        other = [
+            (cid, preview)
+            for _, cid, preview in search_db.embeddings(OTHER, "whisper")
+        ]
+        assert (1, "fixed") in other
 
         # A recovered file's parked item is still finished.
         search_db.execute(
@@ -261,7 +274,16 @@ class TestInactiveFile:
         )
         while (item := followup.next_due_item_id()) is not None:
             followup.process_item(item)
-        assert search_db.embeddings(FILE, "whisper")
+        own = [
+            (cid, preview)
+            for _, cid, preview in search_db.embeddings(FILE, "whisper")
+        ]
+        assert (1, "fixed") in own
+        assert search_db.rows(
+            "SELECT words_pending FROM transcript_chunks "
+            "WHERE file_id = :f AND chunk_index = 1",
+            f=FILE,
+        )[0][0] == 0
         with search_db.Session() as session:
             assert (
                 session.query(FollowupItem).filter_by(file_id=FILE).count() == 0

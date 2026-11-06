@@ -1044,7 +1044,7 @@ export default function TranscriptSection({
                         cancelEdit();
                       }
                     }}
-                    className="min-w-0 flex-1 rounded-2xl border border-bg-border bg-bg-primary px-2 py-1 text-sm text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                    className="min-w-0 flex-1 rounded-2xl border border-bg-border bg-bg-primary px-2 py-1 text-base text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring sm:text-sm"
                   />
                 </span>
                 <span className="shrink-0 self-center text-[10px] text-text-muted pointer-coarse:hidden">
@@ -1119,6 +1119,11 @@ export default function TranscriptSection({
                   style={
                     editingIndex !== null && editingIndex !== cue.index
                       ? { opacity: 0, pointerEvents: "none" }
+                      : undefined
+                  }
+                  tabIndex={
+                    editingIndex !== null && editingIndex !== cue.index
+                      ? -1
                       : undefined
                   }
                   className={`m-0.5 inline-flex h-8 flex-shrink-0 items-center justify-center rounded-lg px-2 text-xs font-medium text-text-muted hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${editingIndex !== null && editingIndex !== cue.index ? "pointer-events-none" : ""} ${REVEAL}`}

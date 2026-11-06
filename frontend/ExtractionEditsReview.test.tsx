@@ -304,8 +304,10 @@ describe("SPEC-ADDON-070 — edit state follows the file", () => {
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "draft A0" } });
     fireEvent.click(screen.getByRole("button", { name: "修正" }));
     expect(screen.getByRole("textbox")).toHaveValue("text-A-1");
-    expect(screen.getByRole("button", { name: "修正" }).style.opacity).toBe("0");
-    fireEvent.click(screen.getByRole("button", { name: "修正" }));
+    const other = screen.getByRole("button", { name: "修正" });
+    expect(other.style.opacity).toBe("0");
+    expect(other.tabIndex).toBe(-1);
+    fireEvent.click(other);
     expect(screen.getByRole("textbox")).toHaveValue("draft A0");
   });
 });
@@ -436,6 +438,7 @@ describe("SPEC-ADDON-070 — design requirements", () => {
     expect(screen.getByText("Esc / ↵").className).toContain(
       "pointer-coarse:hidden",
     );
+    expect(box.className).toContain("text-base");
   });
 
   it("portals the transcript confirmation out of the panel", async () => {

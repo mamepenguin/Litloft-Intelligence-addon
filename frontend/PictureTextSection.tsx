@@ -180,7 +180,7 @@ export default function PictureTextSection({
               }
             }}
             rows={Math.max(3, lines.length + 1)}
-            className="w-full rounded-2xl border border-bg-border bg-bg-primary p-2 text-sm text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            className="w-full rounded-2xl border border-bg-border bg-bg-primary p-2 text-base text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring sm:text-sm"
           />
           <p className="mt-1 text-[10px] text-text-muted">Esc / ⌘↵</p>
           {error && (
