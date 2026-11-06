@@ -97,7 +97,7 @@ def load_material(
     with get_search_db_read() as session:
         indexed = session.execute(
             sql_text(
-                "SELECT mime_type FROM indexed_files "
+                "SELECT mime_type, file_type FROM indexed_files "
                 "WHERE file_id = :fid AND drive = :drive AND active = 1"
             ),
             {"fid": file_id, "drive": drive},
@@ -105,6 +105,7 @@ def load_material(
         if indexed is None:
             return None
         mime = indexed[0] or ""
+        file_type = indexed[1] or ""
         transcripts = session.execute(
             sql_text(
                 "SELECT chunk_index, text, timestamp_start, timestamp_end "
@@ -147,6 +148,20 @@ def load_material(
             ),
             {"fid": file_id},
         ).fetchall()
+        frame_starts = (
+            {
+                int(row[0]): row[1]
+                for row in session.execute(
+                    sql_text(
+                        "SELECT chunk_index, start_time FROM video_frame_texts "
+                        "WHERE file_id = :fid"
+                    ),
+                    {"fid": file_id},
+                ).fetchall()
+            }
+            if file_type == "video"
+            else {}
+        )
 
     by_time = {
         (round(row[1], 3), round(row[2], 3)): row[0]
@@ -179,12 +194,17 @@ def load_material(
     ):
         if not text:
             continue
+        index = _as_int(chunk_index)
+        if file_type == "video" and index is not None and index in frame_starts:
+            position = {"seconds": frame_starts[index]}
+        else:
+            position = _document_position(mime, page, section_titles)
         rows = [
             *rows,
             _Row(
                 text=text,
-                position=_document_position(mime, page, section_titles),
-                embedding_id=by_chunk.get(_as_int(chunk_index)),
+                position=position,
+                embedding_id=by_chunk.get(index),
                 order=len(rows),
             ),
         ]

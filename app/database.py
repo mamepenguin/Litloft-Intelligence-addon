@@ -131,6 +131,7 @@ def init_search_db() -> None:
     with _search_engine.begin() as conn:
         _migrate_video_visual_scenes_if_needed(conn)
         _migrate_ocr_indexed_column(conn)
+        _migrate_frame_page_ocr_columns(conn)
 
     _SearchSession = sessionmaker(bind=_search_engine, expire_on_commit=False)
 
@@ -720,6 +721,16 @@ def _migrate_vec_text_if_needed(conn: object) -> None:
                 ),
                 {f"ocr_mime{i}": mime for i, mime in enumerate(ocr_mimes)},
             )
+
+        # A video's frame text lives in ``video_frame_texts`` and its rows
+        # are rebuilt from it without reading frames again. Pictures are
+        # read again (above); PDFs need no flag because their text task
+        # re-extracts with the stored page texts. SPEC-ADDON-066 I3.
+        if "frame_ocr_indexed" in columns:
+            conn.execute(text(
+                "UPDATE indexed_files SET frame_ocr_indexed = 0 "
+                "WHERE file_type = 'video'"
+            ))
         conn.execute(
             text("DELETE FROM detailed_summary_citations")
         )
@@ -1072,6 +1083,53 @@ def _migrate_ocr_indexed_column(conn: object) -> None:
                 "ON indexed_files(ocr_indexed)"
             )
         )
+
+
+def _migrate_frame_page_ocr_columns(conn: object) -> None:
+    """Add the video-frame and scanned-page OCR state (SPEC-ADDON-066/069).
+
+    Idempotent: existing columns and tables are left untouched.
+    """
+    cols = {
+        row[1]
+        for row in conn.execute(
+            text("PRAGMA table_info(indexed_files)")
+        ).fetchall()
+    }
+    for name in ("frame_ocr_read", "frame_ocr_indexed", "page_ocr_indexed"):
+        if name not in cols:
+            conn.execute(
+                text(
+                    "ALTER TABLE indexed_files ADD COLUMN "
+                    f"{name} BOOLEAN NOT NULL DEFAULT 0"
+                )
+            )
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS video_frame_texts ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  file_id TEXT NOT NULL,"
+        "  chunk_index INTEGER NOT NULL,"
+        "  start_time REAL NOT NULL,"
+        "  end_time REAL NOT NULL,"
+        "  text TEXT NOT NULL DEFAULT '',"
+        "  UNIQUE(file_id, chunk_index))"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_video_frame_texts_file "
+        "ON video_frame_texts(file_id)"
+    ))
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS pdf_page_ocr_texts ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  file_id TEXT NOT NULL,"
+        "  page INTEGER NOT NULL,"
+        "  text TEXT NOT NULL DEFAULT '',"
+        "  UNIQUE(file_id, page))"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_pdf_page_ocr_texts_file "
+        "ON pdf_page_ocr_texts(file_id)"
+    ))
 
 
 def _migrate_idf_terms_columns(conn: object) -> None:

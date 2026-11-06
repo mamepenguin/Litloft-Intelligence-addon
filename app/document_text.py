@@ -77,12 +77,20 @@ class Page:
     next_offset: int
 
 
-def extract_units(mime: str, file_path: str, start: int, end: int) -> Extracted:
+def extract_units(
+    mime: str,
+    file_path: str,
+    start: int,
+    end: int,
+    page_ocr_texts: dict[int, str] | None = None,
+) -> Extracted:
     """Units ``start`` to ``end`` (clamped to the document), holding a reader slot."""
     deadline = time.monotonic() + SLOT_WAIT_SECONDS
     if not _slots.acquire(timeout=SLOT_WAIT_SECONDS):
         raise Busy
     try:
+        if mime == PDF:
+            return _pdf_units(file_path, start, end, deadline, page_ocr_texts)
         return _EXTRACTORS[mime](file_path, start, end, deadline)
     finally:
         _slots.release()
@@ -128,17 +136,28 @@ def _checked_path(file_path: str, max_bytes: int | None) -> Path:
     return path
 
 
-def _pdf_units(file_path: str, start: int, end: int, deadline: float) -> Extracted:
+def _pdf_units(
+    file_path: str,
+    start: int,
+    end: int,
+    deadline: float,
+    page_ocr_texts: dict[int, str] | None = None,
+) -> Extracted:
     path = _checked_path(file_path, pdf.MAX_PDF_SIZE)
     if not pdf.PYMUPDF_LOCK.acquire(timeout=max(deadline - time.monotonic(), 0)):
         raise Busy
     try:
-        return _pdf_range(path, start, end)
+        return _pdf_range(path, start, end, page_ocr_texts)
     finally:
         pdf.PYMUPDF_LOCK.release()
 
 
-def _pdf_range(path: Path, start: int, end: int) -> Extracted:
+def _pdf_range(
+    path: Path,
+    start: int,
+    end: int,
+    page_ocr_texts: dict[int, str] | None = None,
+) -> Extracted:
     import fitz
 
     with fitz.open(str(path)) as doc:
@@ -155,17 +174,29 @@ def _pdf_range(path: Path, start: int, end: int) -> Extracted:
             )
             edges = {}
         units = tuple(
-            _pdf_page(path, doc, number, edges.get(number))
+            _pdf_page(
+                path, doc, number, edges.get(number), page_ocr_texts,
+            )
             for number in range(start, min(end, unit_count) + 1)
         )
     return Extracted(unit_count, units)
 
 
 def _pdf_page(
-    path: Path, doc, number: int, edges: pdf.PageEdges | None
+    path: Path,
+    doc,
+    number: int,
+    edges: pdf.PageEdges | None,
+    page_ocr_texts: dict[int, str] | None = None,
 ) -> Unit:
     import pymupdf4llm
 
+    stored = (page_ocr_texts or {}).get(number)
+    try:
+        layer = doc[number - 1].get_text("text") or ""
+    except Exception:
+        layer = ""
+    scanned = not layer.strip()
     try:
         pages = pymupdf4llm.to_markdown(
             str(path),
@@ -174,12 +205,16 @@ def _pdf_page(
             margins=pdf.PAGE_MARGINS,
         )
         text = pdf._page_text(list(pages)[0]).strip() if pages else ""
+        if scanned and stored and stored.strip():
+            text = stored
     except Exception as e:
         logger.warning(
             "document-text: page %d of %s fell back to plain text (%s)",
             number, path.name, type(e).__name__,
         )
         text = (doc[number - 1].get_text("text") or "").strip()
+        if scanned and stored and stored.strip():
+            text = stored
         return Unit(number, None, text, False, pdf.EXTRACTOR_FALLBACK)
     return Unit(
         number, None, pdf.page_text_with_edges(text, edges), False,

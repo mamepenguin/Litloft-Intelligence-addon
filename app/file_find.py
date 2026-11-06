@@ -47,12 +47,14 @@ _STAGE_FOR_OTHER_KINDS = "text_indexed"
 
 
 def _stage_done(indexed) -> bool:
+    if indexed.file_type == "video":
+        return bool(indexed.whisper_indexed or indexed.frame_ocr_indexed)
     stage = _STAGE_BY_KIND.get(indexed.file_type, _STAGE_FOR_OTHER_KINDS)
     return bool(getattr(indexed, stage))
 
 
 def _replay_limit(mime_type: str, file_type: str) -> int:
-    if file_type == "image" or mime_type in _OFFICE_MIMES:
+    if file_type in ("image", "video") or mime_type in _OFFICE_MIMES:
         return _CHUNK_TEXT_OVERLAP
     return settings.indexing.text_chunking.overlap
 
@@ -117,9 +119,40 @@ def _row(
     }
 
 
+def _frame_occurrences(
+    db, file_id: str, needle: str,
+) -> list[tuple[tuple, dict[str, Any]]]:
+    """One unit per frame-text segment, its chunks merged in index order."""
+    rows = db.execute(
+        sql_text(
+            "SELECT chunk_index, start_time, end_time, text "
+            "FROM video_frame_texts WHERE file_id = :file_id "
+            "ORDER BY chunk_index"
+        ),
+        {"file_id": file_id},
+    ).fetchall()
+    segments: dict[tuple[float, float], list[str]] = {}
+    for row in rows:
+        segments.setdefault((row.start_time, row.end_time), []).append(row.text)
+    out: list[tuple[tuple, dict[str, Any]]] = []
+    for (start, end), chunks in segments.items():
+        text = _merge_chunks(chunks, _CHUNK_TEXT_OVERLAP)
+        for at, ordinal in _positions(text, needle):
+            out.append((
+                (_MEDIA, start, 2, ordinal),
+                _row(
+                    text, at, needle, ordinal,
+                    kind="scene", start=start, end=end,
+                ),
+            ))
+    return out
+
+
 def _text_occurrences(
     db, file_id: str, needle: str, mime_type: str, file_type: str,
 ) -> list[tuple[tuple, dict[str, Any]]]:
+    if file_type == "video":
+        return _frame_occurrences(db, file_id, needle)
     rows = db.execute(
         sql_text(
             "SELECT CAST(chunk_index AS INTEGER) AS ci, page, text "
@@ -233,7 +266,8 @@ def find_in_file(
     with get_search_db_read() as db:
         indexed = db.execute(
             sql_text(
-                "SELECT file_type, mime_type, text_indexed, whisper_indexed, ocr_indexed "
+                "SELECT file_type, mime_type, text_indexed, whisper_indexed, "
+                "ocr_indexed, frame_ocr_indexed "
                 "FROM indexed_files "
                 "WHERE file_id = :file_id AND drive = :drive AND active = 1"
             ),

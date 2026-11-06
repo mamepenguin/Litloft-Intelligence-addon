@@ -785,11 +785,32 @@ def _collect_transcript_snippets(
     return snippets
 
 
+def _frame_location(file_id: str, chunk_idx: int) -> str | None:
+    """``m:ss`` of a video's frame-text chunk, from its stored segment."""
+    try:
+        with get_search_db_read() as session:
+            row = session.execute(
+                sql_text(
+                    "SELECT start_time FROM video_frame_texts "
+                    "WHERE file_id = :f AND chunk_index = :c"
+                ),
+                {"f": file_id, "c": chunk_idx},
+            ).fetchone()
+    except Exception:
+        return None
+    if row is None:
+        return None
+    seconds = int(max(0.0, row[0]))
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
 def _collect_document_snippets(
     candidate: RetrievedFile,
     rag_config: RagConfig,
     query_vector: np.ndarray | None = None,
     keywords: str | None = None,
+    *,
+    video: bool = False,
 ) -> list[ContextSnippet]:
     """Build text_content snippets for a document file.
 
@@ -847,8 +868,14 @@ def _collect_document_snippets(
         # Use the PDF page number of the target chunk when available so
         # the citation location reads "page N" instead of "chunk N".
         page = next((c[2] for c in chunks if c[0] == chunk_idx), None)
-        page_word = "section" if candidate.mime_type == EPUB_MIME else "page"
-        location = f"{page_word} {page}" if page is not None else f"chunk {chunk_idx}"
+        if video:
+            location = (
+                _frame_location(candidate.file_id, chunk_idx)
+                or f"chunk {chunk_idx}"
+            )
+        else:
+            page_word = "section" if candidate.mime_type == EPUB_MIME else "page"
+            location = f"{page_word} {page}" if page is not None else f"chunk {chunk_idx}"
         snippets = [
             *snippets,
             ContextSnippet(
@@ -892,6 +919,8 @@ def _collect_document_snippets(
     # for the LLM to interpret.
     for segment in candidate.segments:
         for match in segment.matches:
+            if video and match.match_type != "text_content":
+                continue
             chunk_idx = match.chunk_index if match.chunk_index is not None else 0
             _emit(chunk_idx, "text_content", expand=True)
 
@@ -983,6 +1012,39 @@ def build_file_context(
             query_vector=query_vector,
             keywords=keywords,
         )
+        if file_type == "video" and not is_loft:
+            has_text_match = any(
+                match.match_type == "text_content"
+                for segment in candidate.segments
+                for match in segment.matches
+            )
+            frame_snippets = (
+                _collect_document_snippets(
+                    candidate,
+                    rag_config,
+                    query_vector=query_vector,
+                    keywords=keywords,
+                    video=True,
+                )
+                if has_text_match
+                else []
+            )
+            if frame_snippets:
+                has_transcript = any(
+                    match.match_type in ("whisper", "transcript")
+                    for segment in candidate.segments
+                    for match in segment.matches
+                )
+                has_text = any(
+                    match.match_type == "text_content"
+                    for segment in candidate.segments
+                    for match in segment.matches
+                )
+                snippets = (
+                    [*frame_snippets, *snippets]
+                    if has_text and not has_transcript
+                    else [*snippets, *frame_snippets]
+                )
     elif file_type in ("document", "text"):
         snippets = _collect_document_snippets(
             candidate,

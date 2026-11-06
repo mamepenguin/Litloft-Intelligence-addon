@@ -150,6 +150,8 @@ export type QueueTaskKind =
   | "whisper"
   | "text_content"
   | "ocr"
+  | "frame_ocr"
+  | "page_ocr"
   | "auto_tags"
   | "summaries"
   | "vision_describe"
@@ -168,6 +170,8 @@ export interface SearchServiceStatus {
     whisper: number;
     text?: number;
     ocr?: number;
+    frame_ocr?: number;
+    page_ocr?: number;
   };
   pending?: {
     total: number;
@@ -176,6 +180,8 @@ export interface SearchServiceStatus {
     whisper: number;
     text?: number;
     ocr?: number;
+    frame_ocr?: number;
+    page_ocr?: number;
   };
   queue?: {
     processing: number;
@@ -1761,6 +1767,8 @@ export interface IndexDetailsStatus {
   whisper: boolean;
   text: boolean;
   ocr: boolean;
+  frame_ocr: boolean;
+  page_ocr: boolean;
 }
 
 export interface IndexDetailsResponse {
@@ -1770,6 +1778,8 @@ export interface IndexDetailsResponse {
   // The OCR mode, so the dialog can omit a row whose reindex the backend
   // would refuse.
   image_ocr?: string;
+  video_frame_ocr?: string;
+  scanned_pdf_ocr?: string;
   status: IndexDetailsStatus;
   indexed_at: string;
   // The embeddings + provider_stats payload is opaque to the
@@ -1780,7 +1790,14 @@ export interface IndexDetailsResponse {
   provider_stats?: Record<string, unknown>;
 }
 
-export type ReindexTask = "metadata" | "clip" | "whisper" | "text" | "ocr";
+export type ReindexTask =
+  | "metadata"
+  | "clip"
+  | "whisper"
+  | "text"
+  | "ocr"
+  | "frame_ocr"
+  | "page_ocr";
 
 export interface ReindexResponse {
   status: "accepted" | "already_queued";

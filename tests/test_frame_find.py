@@ -99,18 +99,10 @@ def test_spec_addon_066_i9_indexed_is_true_on_frame_ocr_indexed_alone(api, seed)
 def test_spec_addon_066_i9_a_chunk_overlap_inside_a_segment_counts_once(api, seed):
     """SPEC-ADDON-066 A7 / SPEC-ADDON-061 I1: one unit, one occurrence."""
     _video(seed)
-    (first, second) = (
-        "a" * 900 + "warehouse" + "b" * 99,
-        "c" * 150 + "warehouse" + "d" * 849,
-    )
-    seed.text_chunk("vid", 0, first)
-    seed.text_chunk("vid", 1, second)
-    seed.index.sql(
-        "INSERT INTO video_frame_texts"
-        "(file_id, chunk_index, start_time, end_time, text) "
-        "VALUES('vid', 0, 10.0, 20.0, :t)",
-        t=first + "\n" + second,
-    )
+    first = "a" * 780 + "warehouse" + "b" * 150
+    second = first[-200:] + "c" * 800
+    _frame_chunk(seed, "vid", 0, first, 10.0, 20.0)
+    _frame_chunk(seed, "vid", 1, second, 10.0, 20.0)
 
     body = _find(api, "warehouse")
 

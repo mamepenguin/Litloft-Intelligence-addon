@@ -99,6 +99,8 @@ features:
                       # `.loft` remote-media pointers (no locally probeable
                       # video bytes) and audio/image/document files.
   image_ocr: "on_index"
+  video_frame_ocr: "on_index"
+  scanned_pdf_ocr: "on_index"
                       # "false" | "manual" | "on_index" — local OCR reads
                       # the words in pictures (JPEG, PNG, WebP, GIF, BMP,
                       # HEIC, HEIF) and stores them as the picture's text

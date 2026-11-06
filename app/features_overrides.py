@@ -58,6 +58,8 @@ ENUM_FIELDS = (
     "chapter_suggestions",
     "video_visual_index",
     "image_ocr",
+    "video_frame_ocr",
+    "scanned_pdf_ocr",
 )
 
 
@@ -80,6 +82,8 @@ class FeaturesOverrides:
     chapter_suggestions: str | None = None
     video_visual_index: str | None = None
     image_ocr: str | None = None
+    video_frame_ocr: str | None = None
+    scanned_pdf_ocr: str | None = None
 
 
 def overrides_path(data_dir: str | os.PathLike[str] | None = None) -> Path:

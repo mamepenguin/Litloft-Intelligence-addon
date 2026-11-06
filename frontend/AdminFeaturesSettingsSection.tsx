@@ -18,6 +18,8 @@ const TRISTATE_FIELDS = [
   "chapter_suggestions",
   "video_visual_index",
   "image_ocr",
+  "video_frame_ocr",
+  "scanned_pdf_ocr",
 ] as const;
 const BOOL_FIELDS = ["indexing", "search", "rag"] as const;
 const FIELDS = [...BOOL_FIELDS, ...TRISTATE_FIELDS] as const;

@@ -76,11 +76,18 @@ class PdfExtractor(ContentExtractor):
 
     supported_extensions: list[str] = [".pdf"]
 
-    def extract(self, file_path: str) -> ExtractionResult:
+    def extract(
+        self,
+        file_path: str,
+        page_ocr_texts: dict[int, str] | None = None,
+    ) -> ExtractionResult:
         """Extract chunks (and optional Markdown) from a PDF file.
 
         Args:
             file_path: Absolute path to the PDF file.
+            page_ocr_texts: Stored OCR text per 1-based page. A page whose
+                text layer is empty takes its entry in place of the
+                library's text (SPEC-ADDON-069 B6).
 
         Returns:
             ExtractionResult. ``markdown`` is non-None only on the
@@ -92,11 +99,11 @@ class PdfExtractor(ContentExtractor):
             return _empty_fallback()
 
         with PYMUPDF_LOCK:
-            primary = _extract_with_pymupdf4llm(path)
+            primary = _extract_with_pymupdf4llm(path, page_ocr_texts)
             if primary is not None:
                 return primary
 
-            return _extract_with_fitz_fallback(path)
+            return _extract_with_fitz_fallback(path, page_ocr_texts)
 
 
 def _validate_pdf_path(file_path: str) -> Path | None:
@@ -120,7 +127,9 @@ def _empty_fallback() -> ExtractionResult:
     )
 
 
-def _extract_with_pymupdf4llm(path: Path) -> ExtractionResult | None:
+def _extract_with_pymupdf4llm(
+    path: Path, page_ocr_texts: dict[int, str] | None = None,
+) -> ExtractionResult | None:
     """Try the PyMuPDF4LLM Markdown path; return None to signal fallback.
 
     First tries with ``pages=range(MAX_PAGES)`` so the page cap is
@@ -182,14 +191,35 @@ def _extract_with_pymupdf4llm(path: Path) -> ExtractionResult | None:
 
     limited = list(page_chunks)[:MAX_PAGES]
     edges = _safe_edge_lines(path)
-    chunks = _build_chunks_from_pages(limited, edges)
-    full_markdown = _join_page_markdown(limited, edges)
+    scanned = _empty_text_pages(path)
+    chunks = _build_chunks_from_pages(limited, edges, page_ocr_texts, scanned)
+    full_markdown = _join_page_markdown(
+        limited, edges, page_ocr_texts, scanned,
+    )
     return ExtractionResult(
         chunks=chunks,
         markdown=full_markdown,
         extractor=EXTRACTOR_PRIMARY,
         page_count=len(limited),
     )
+
+
+def _empty_text_pages(path: Path) -> set[int]:
+    """1-based pages whose text layer is empty after stripping whitespace."""
+    import fitz
+
+    scanned: set[int] = set()
+    try:
+        with fitz.open(str(path)) as document:
+            for index in range(min(document.page_count, MAX_PAGES)):
+                try:
+                    if not document[index].get_text("text").strip():
+                        scanned.add(index + 1)
+                except Exception:
+                    continue
+    except Exception:
+        return scanned
+    return scanned
 
 
 def _safe_edge_lines(path: Path) -> dict[int, PageEdges]:
@@ -358,8 +388,25 @@ def _page_text(page: object) -> str:
     return ""
 
 
+def _page_text_for(
+    page: object,
+    page_num: int,
+    page_ocr_texts: dict[int, str] | None,
+    scanned_pages: set[int] | None,
+) -> str:
+    """The page's Markdown, replaced by stored OCR text on a scanned page."""
+    if page_ocr_texts and scanned_pages and page_num in scanned_pages:
+        stored = page_ocr_texts.get(page_num)
+        if stored and stored.strip():
+            return stored
+    return _page_text(page)
+
+
 def _build_chunks_from_pages(
-    pages: list[object], edges: dict[int, PageEdges] | None = None
+    pages: list[object],
+    edges: dict[int, PageEdges] | None = None,
+    page_ocr_texts: dict[int, str] | None = None,
+    scanned_pages: set[int] | None = None,
 ) -> list[TextChunk]:
     """Split each page's text into TextChunks using the configured size."""
     chunk_config = settings.indexing.text_chunking
@@ -368,7 +415,8 @@ def _build_chunks_from_pages(
     for index, page in enumerate(pages):
         page_num = index + 1
         text = page_text_with_edges(
-            _page_text(page), edges.get(page_num)
+            _page_text_for(page, page_num, page_ocr_texts, scanned_pages),
+            edges.get(page_num),
         ).strip()
         if not text:
             continue
@@ -390,18 +438,26 @@ def _build_chunks_from_pages(
 
 
 def _join_page_markdown(
-    pages: list[object], edges: dict[int, PageEdges] | None = None
+    pages: list[object],
+    edges: dict[int, PageEdges] | None = None,
+    page_ocr_texts: dict[int, str] | None = None,
+    scanned_pages: set[int] | None = None,
 ) -> str:
     """Concatenate per-page Markdown with the page separator."""
     edges = edges or {}
     parts = [
-        page_text_with_edges(_page_text(page), edges.get(index + 1))
+        page_text_with_edges(
+            _page_text_for(page, index + 1, page_ocr_texts, scanned_pages),
+            edges.get(index + 1),
+        )
         for index, page in enumerate(pages)
     ]
     return PAGE_SEPARATOR.join(parts)
 
 
-def _extract_with_fitz_fallback(path: Path) -> ExtractionResult:
+def _extract_with_fitz_fallback(
+    path: Path, page_ocr_texts: dict[int, str] | None = None,
+) -> ExtractionResult:
     """PyMuPDF raw-text extraction. Used when PyMuPDF4LLM is unusable."""
     try:
         import fitz  # PyMuPDF
@@ -414,7 +470,7 @@ def _extract_with_fitz_fallback(path: Path) -> ExtractionResult:
         return _empty_fallback()
 
     try:
-        chunks = _fitz_chunks(doc)
+        chunks = _fitz_chunks(doc, page_ocr_texts)
         page_count = min(getattr(doc, "page_count", 0), MAX_PAGES)
     finally:
         try:
@@ -430,7 +486,9 @@ def _extract_with_fitz_fallback(path: Path) -> ExtractionResult:
     )
 
 
-def _fitz_chunks(doc: object) -> list[TextChunk]:
+def _fitz_chunks(
+    doc: object, page_ocr_texts: dict[int, str] | None = None,
+) -> list[TextChunk]:
     """Walk a fitz document and produce TextChunks page-by-page."""
     chunk_config = settings.indexing.text_chunking
     page_count = min(getattr(doc, "page_count", 0), MAX_PAGES)
@@ -442,6 +500,8 @@ def _fitz_chunks(doc: object) -> list[TextChunk]:
             page_text = page.get_text("text")
         except Exception:
             continue
+        if not page_text or not page_text.strip():
+            page_text = (page_ocr_texts or {}).get(page_num + 1, "")
         if not page_text or not page_text.strip():
             continue
 

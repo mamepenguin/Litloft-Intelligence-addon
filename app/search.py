@@ -137,7 +137,10 @@ class MatchInfo:
 class SearchPassage:
     """One place inside a file that a search matched."""
 
-    kind: Literal["utterance", "scene", "section", "page", "picture_text", "text"]
+    kind: Literal[
+        "utterance", "scene", "section", "page", "picture_text", "text",
+        "screen_text",
+    ]
     start: float | None
     end: float | None
     page: int | None
@@ -1214,6 +1217,7 @@ def _drive_text_neighbours(
                     IndexedFile.drive == drive,
                     IndexedFile.active.is_(True),
                     IndexedFile.file_type != "image",
+                    IndexedFile.file_type != "video",
                 )
                 .all()
             }
@@ -2288,7 +2292,10 @@ def _passage_kind(
     elif match.match_type == "clip" and match.channel == "vector":
         kind = "scene"
     elif match.match_type == "text_content" and match.chunk_index is not None:
-        kind = text_content_kind(mime_type, match.page, file_type)
+        if file_type == "video":
+            kind = "screen_text"
+        else:
+            kind = text_content_kind(mime_type, match.page, file_type)
     else:
         return None
     if kind in ("utterance", "scene") and match.timestamp_start is None:
@@ -2341,7 +2348,7 @@ def _keyword_excerpt(match: MatchInfo, terms: tuple[str, ...]) -> str:
 def _frame_url(
     result: SearchResult, kind: str, start: float | None,
 ) -> str | None:
-    if kind not in ("utterance", "scene") or start is None:
+    if kind not in ("utterance", "scene", "screen_text") or start is None:
         return None
     if result.file_type != "video" or result.mime_type == LOFT_MIME:
         return None
@@ -2350,13 +2357,27 @@ def _frame_url(
     )
 
 
+def _frame_segment(
+    file_id: str, chunk_index: int,
+) -> tuple[float, float] | None:
+    with get_search_db_read() as session:
+        row = session.execute(
+            sql_text(
+                "SELECT start_time, end_time FROM video_frame_texts "
+                "WHERE file_id = :f AND chunk_index = :c"
+            ),
+            {"f": file_id, "c": chunk_index},
+        ).fetchone()
+    return (row.start_time, row.end_time) if row is not None else None
+
+
 def _finish_passage(
     kind: str,
     matches: list[MatchInfo],
     result: SearchResult,
     section_titles: dict[int, str],
     terms: tuple[str, ...],
-) -> SearchPassage:
+) -> SearchPassage | None:
     vector_matches = [m for m in matches if m.channel == "vector"]
     keyword_matches = [m for m in matches if m.channel == "keyword"]
     best_vector = max(vector_matches, key=lambda m: m.score, default=None)
@@ -2373,6 +2394,16 @@ def _finish_passage(
     elif kind == "page":
         page = matches[0].page
         chunk_index = matches[0].chunk_index
+    elif kind == "screen_text":
+        chunk_index = matches[0].chunk_index
+        segment = (
+            _frame_segment(result.file_id, chunk_index)
+            if chunk_index is not None
+            else None
+        )
+        if segment is None:
+            return None
+        start, end = segment
     elif kind in ("picture_text", "text"):
         chunk_index = matches[0].chunk_index
 
@@ -2445,8 +2476,12 @@ def _build_passages(
         grouped.setdefault(key, []).append(match)
 
     passages = [
-        _finish_passage(kind, group, result, section_titles, terms)
-        for (kind, _place), group in grouped.items()
+        passage
+        for passage in (
+            _finish_passage(kind, group, result, section_titles, terms)
+            for (kind, _place), group in grouped.items()
+        )
+        if passage is not None
     ]
     return tuple(sorted(passages, key=_passage_order))
 

@@ -119,7 +119,10 @@ def _build_metadata_text(
     return " ".join(parts)
 
 
-def _extract_file_content(file: IndexedFile) -> ExtractionResult:
+def _extract_file_content(
+    file: IndexedFile,
+    page_ocr_texts: dict[int, str] | None = None,
+) -> ExtractionResult:
     """Extract text content from a file using available extractors.
 
     Returns the full ``ExtractionResult`` so the indexing pipeline can
@@ -129,6 +132,7 @@ def _extract_file_content(file: IndexedFile) -> ExtractionResult:
 
     Args:
         file: The indexed file record.
+        page_ocr_texts: Stored OCR text per 1-based page, for a PDF.
 
     Returns:
         ExtractionResult with chunks plus any Markdown rendering.
@@ -136,6 +140,13 @@ def _extract_file_content(file: IndexedFile) -> ExtractionResult:
     for extractor in _extractors:
         if extractor.can_handle(file.file_path):
             try:
+                if page_ocr_texts is not None:
+                    from app.extractors.pdf import PdfExtractor
+
+                    if isinstance(extractor, PdfExtractor) and page_ocr_texts:
+                        return extractor.extract(
+                            file.file_path, page_ocr_texts=page_ocr_texts,
+                        )
                 return extractor.extract(file.file_path)
             except Exception as e:
                 logger.warning(
@@ -144,6 +155,30 @@ def _extract_file_content(file: IndexedFile) -> ExtractionResult:
                 )
                 return ExtractionResult()
     return ExtractionResult()
+
+
+def _stored_page_ocr_texts(file_id: str) -> dict[int, str]:
+    """The PDF's stored page OCR text, keyed by 1-based page."""
+    try:
+        with get_search_db_read() as session:
+            rows = session.execute(
+                sql_text(
+                    "SELECT page, text FROM pdf_page_ocr_texts "
+                    "WHERE file_id = :f"
+                ),
+                {"f": file_id},
+            ).fetchall()
+    except Exception:
+        return {}
+    return {int(page): text for page, text in rows}
+
+
+def has_nonempty_page_ocr_text(file_id: str) -> bool:
+    """Whether the file has at least one non-empty stored page text."""
+    return any(
+        (text or "").strip()
+        for text in _stored_page_ocr_texts(file_id).values()
+    )
 
 
 def _store_embedding(
@@ -351,7 +386,14 @@ def index_text_content(file_id: str) -> bool:
         return False
 
     is_pdf = file.mime_type == "application/pdf"
-    result = _extract_file_content(file)
+    page_ocr_texts = (
+        _stored_page_ocr_texts(file_id) if is_pdf else None
+    )
+    result = (
+        _extract_file_content(file, page_ocr_texts)
+        if page_ocr_texts
+        else _extract_file_content(file)
+    )
     chunks = list(result.chunks)
     if not chunks:
         # No chunks: still call _upsert_pdf_markdown so an empty

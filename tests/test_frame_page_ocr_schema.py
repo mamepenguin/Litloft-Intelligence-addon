@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from app.models import IndexedFile  # noqa: F401  - registers the tables on Base
+from tests.vec_partition_db import search_index  # noqa: F401  - the real search DB
 
 _GRANITE_97 = "ibm-granite/granite-embedding-97m-multilingual-r2"
 _RURI_310 = "cl-nagoya/ruri-v3-310m"
@@ -156,6 +157,7 @@ def _skeleton(tmp_path, *, vec_text_dim: int, recorded_model: str):
             "CREATE TABLE indexed_files ("
             "  file_id TEXT PRIMARY KEY,"
             "  drive TEXT NOT NULL,"
+            "  file_type TEXT NOT NULL DEFAULT 'document',"
             "  mime_type TEXT NOT NULL,"
             "  text_indexed BOOLEAN NOT NULL DEFAULT 0,"
             "  whisper_indexed BOOLEAN NOT NULL DEFAULT 0,"
@@ -241,10 +243,10 @@ def test_spec_addon_066_i3_a_text_model_change_rebuilds_frames_without_reading(
     with engine.begin() as conn:
         conn.execute(text(
             "INSERT INTO indexed_files"
-            "(file_id, drive, mime_type, frame_ocr_read, frame_ocr_indexed, "
+            "(file_id, drive, file_type, mime_type, frame_ocr_read, frame_ocr_indexed, "
             " page_ocr_indexed) VALUES"
-            "('vid1', 'drive1', 'video/mp4', 1, 1, 0),"
-            "('pdf1', 'drive1', 'application/pdf', 0, 0, 1)"
+            "('vid1', 'drive1', 'video', 'video/mp4', 1, 1, 0),"
+            "('pdf1', 'drive1', 'document', 'application/pdf', 0, 0, 1)"
         ))
         conn.execute(text(
             "INSERT INTO video_frame_texts"
@@ -283,30 +285,45 @@ def test_spec_addon_066_i3_a_text_model_change_rebuilds_frames_without_reading(
 # ---------------------------------------------------------------------------
 
 
-def test_spec_addon_066_i4_purge_deletes_both_new_tables_rows(tmp_path, monkeypatch):
+def test_spec_addon_066_i4_purge_deletes_both_new_tables_rows(search_index):
     """SPEC-ADDON-066 I4: a purged file leaves no frame or page text behind."""
+    import app.database as database
     from app.indexer import _purge_file
-    from tests.ocr_fixtures import build_search_db, seed_indexed_file
+    from app.models import IndexedFile
 
-    db = build_search_db(tmp_path, monkeypatch)
-    video = tmp_path / "v.mp4"
-    video.write_bytes(b"x")
-    pdf = tmp_path / "p.pdf"
-    pdf.write_bytes(b"%PDF-1.4\n")
-    seed_indexed_file(db, "vid1", "video/mp4", video, file_type="video")
-    seed_indexed_file(db, "pdf1", "application/pdf", pdf)
-    db.execute(
-        "INSERT INTO video_frame_texts"
-        "(file_id, chunk_index, start_time, end_time, text) "
-        "VALUES('vid1', 0, 0.0, 10.0, 'frame text')"
-    )
-    db.execute(
-        "INSERT INTO pdf_page_ocr_texts(file_id, page, text) "
-        "VALUES('pdf1', 1, 'page text')"
-    )
+    with database.get_search_db() as session:
+        session.add(IndexedFile(
+            file_id="vid1", drive="drive1", filename="v.mp4",
+            file_path="/drives/drive1/v.mp4", file_type="video",
+            mime_type="video/mp4", file_size=1, active=True,
+        ))
+        session.add(IndexedFile(
+            file_id="pdf1", drive="drive1", filename="p.pdf",
+            file_path="/drives/drive1/p.pdf", file_type="document",
+            mime_type="application/pdf", file_size=1, active=True,
+        ))
+    with database.get_search_db() as session:
+        session.execute(
+            text(
+                "INSERT INTO video_frame_texts"
+                "(file_id, chunk_index, start_time, end_time, text) "
+                "VALUES('vid1', 0, 0.0, 10.0, 'frame text')"
+            )
+        )
+        session.execute(
+            text(
+                "INSERT INTO pdf_page_ocr_texts(file_id, page, text) "
+                "VALUES('pdf1', 1, 'page text')"
+            )
+        )
 
     _purge_file("vid1")
     _purge_file("pdf1")
 
-    assert db.rows("SELECT * FROM video_frame_texts WHERE file_id = 'vid1'") == []
-    assert db.rows("SELECT * FROM pdf_page_ocr_texts WHERE file_id = 'pdf1'") == []
+    with database.get_search_db_read() as session:
+        assert session.execute(text(
+            "SELECT * FROM video_frame_texts WHERE file_id = 'vid1'"
+        )).fetchall() == []
+        assert session.execute(text(
+            "SELECT * FROM pdf_page_ocr_texts WHERE file_id = 'pdf1'"
+        )).fetchall() == []
