@@ -34,6 +34,7 @@ from app.models import (
     FollowupItem,
     IndexedFile,
     KeptOriginal,
+    PictureLines,
     PictureText,
     TranscriptChunk,
     TranscriptWord,
@@ -2589,6 +2590,7 @@ def _purge_file(file_id: str) -> None:
         session.query(TranscriptWord).filter_by(file_id=file_id).delete()
         session.query(KeptOriginal).filter_by(file_id=file_id).delete()
         session.query(PictureText).filter_by(file_id=file_id).delete()
+        session.query(PictureLines).filter_by(file_id=file_id).delete()
         session.query(FollowupItem).filter_by(file_id=file_id).delete()
 
         # Remove from FTS5 indexes

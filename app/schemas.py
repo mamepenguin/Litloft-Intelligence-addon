@@ -516,6 +516,9 @@ class FileFindRow(BaseModel):
     snippet: str
     match_start: int
     match_length: int
+    boxes: list[list[float]] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
 
 
 class FileFindResponse(BaseModel):

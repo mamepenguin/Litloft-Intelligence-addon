@@ -9,6 +9,8 @@ for non-overlapping occurrences. Matching folds ASCII letters only, as
 
 from __future__ import annotations
 
+import json
+import logging
 from typing import Any
 
 from sqlalchemy import text as sql_text
@@ -22,6 +24,8 @@ from app.exact_search import (
     _snippet,
 )
 from app.search import text_content_kind
+
+logger = logging.getLogger(__name__)
 
 ROW_CAP = 2000
 _OVERLAP_MIN = 20
@@ -148,6 +152,51 @@ def _frame_occurrences(
     return out
 
 
+def _usable_picture_lines(
+    db, file_id: str, merged_text: str,
+) -> list[tuple[str, list[float]]] | None:
+    """The picture's lines when they still describe the stored and merged text."""
+    try:
+        stored = db.execute(
+            sql_text(
+                "SELECT text FROM picture_texts WHERE file_id = :file_id"
+            ),
+            {"file_id": file_id},
+        ).fetchone()
+        row = db.execute(
+            sql_text(
+                "SELECT lines_json FROM picture_lines WHERE file_id = :file_id"
+            ),
+            {"file_id": file_id},
+        ).fetchone()
+        if stored is None or row is None:
+            return None
+        lines = json.loads(row[0])
+        joined = "\n".join(line["text"] for line in lines)
+        if stored[0] != joined or merged_text != stored[0]:
+            return None
+        return [(line["text"], line["quad"]) for line in lines]
+    except Exception:
+        logger.warning(
+            "Find boxes unavailable for %s: picture lines could not be read",
+            file_id,
+        )
+        return None
+
+
+def _overlapped_quads(
+    lines: list[tuple[str, list[float]]], at: int, length: int,
+) -> list[list[float]]:
+    quads: list[list[float]] = []
+    start = 0
+    for text, quad in lines:
+        end = start + len(text)
+        if text and start < at + length and at < end:
+            quads.append(quad)
+        start = end + 1
+    return quads
+
+
 def _text_occurrences(
     db, file_id: str, needle: str, mime_type: str, file_type: str,
 ) -> list[tuple[tuple, dict[str, Any]]]:
@@ -193,12 +242,21 @@ def _text_occurrences(
             family = _DOCUMENT
         else:
             family = _TEXT
+        picture_lines = (
+            _usable_picture_lines(db, file_id, text)
+            if kind == "picture_text" else None
+        )
         for at, ordinal in _positions(text, needle):
             if family == _DOCUMENT:
                 sort_key = (family, page, ordinal)
             else:
                 sort_key = (family, ordinal)
-            out.append((sort_key, _row(text, at, needle, ordinal, kind=kind, **location)))
+            row = _row(text, at, needle, ordinal, kind=kind, **location)
+            if picture_lines is not None:
+                boxes = _overlapped_quads(picture_lines, at, len(needle))
+                if boxes:
+                    row["boxes"] = boxes
+            out.append((sort_key, row))
     return out
 
 

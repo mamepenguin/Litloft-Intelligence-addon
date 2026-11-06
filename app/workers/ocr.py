@@ -9,7 +9,9 @@ worker like the other indexing-only models.
 
 from __future__ import annotations
 
+import json
 import logging
+import math
 import os
 import stat
 import threading
@@ -20,7 +22,7 @@ from typing import Any
 from app.config import settings
 from app.database import get_search_db, get_search_db_read, upsert_fts_text_content
 from app.extractors.base import ContentExtractor
-from app.models import IndexedFile
+from app.models import IndexedFile, PictureLines
 from app.workers.clip import IMAGE_TYPES
 from app.workers.metadata import _remove_embeddings, _store_embedding, embed_passages
 from app import extraction
@@ -199,11 +201,80 @@ def _load_picture(path: str) -> Any:
         raise _Unreadable() from exc
 
 
+def _lines_from_result(
+    result: Any, image: Any,
+) -> list[dict[str, Any]] | None:
+    """The kept lines with normalised quads, or ``None`` when boxes are unusable."""
+    txts = list(getattr(result, "txts", None) or ())
+    if not txts:
+        return []
+    boxes = getattr(result, "boxes", None)
+    try:
+        boxes = list(boxes)
+    except TypeError:
+        return None
+    if len(boxes) != len(txts):
+        return None
+
+    width, height = image.size
+    quads: list[list[float]] = []
+    for box in boxes:
+        try:
+            points = list(box)
+        except TypeError:
+            return None
+        if len(points) != 4:
+            return None
+        flat: list[float] = []
+        for point in points:
+            try:
+                values = list(point)
+            except TypeError:
+                return None
+            if len(values) != 2:
+                return None
+            for value in values:
+                try:
+                    number = float(value)
+                except (TypeError, ValueError):
+                    return None
+                if not math.isfinite(number):
+                    return None
+                flat.append(number)
+        quads.append([
+            min(1.0, max(0.0, value / (width if index % 2 == 0 else height)))
+            for index, value in enumerate(flat)
+        ])
+
+    scores: list[Any] = []
+    try:
+        scores = list(getattr(result, "scores", None))
+    except TypeError:
+        pass
+    usable_scores = len(scores) == len(txts)
+    if usable_scores:
+        for score in scores:
+            try:
+                usable_scores = math.isfinite(float(score))
+            except (TypeError, ValueError):
+                usable_scores = False
+            if not usable_scores:
+                break
+    if not usable_scores:
+        scores = [None] * len(txts)
+
+    return [
+        {"text": text, "quad": quad, "score": score}
+        for text, quad, score in zip(txts, quads, scores)
+    ]
+
+
 def _write(
     file_id: str,
     chunks: list[str],
     vectors: list[object],
     text: str | None = None,
+    lines: list[dict[str, Any]] | None = None,
 ) -> bool:
     """Replace this picture's text rows in one short transaction.
 
@@ -245,6 +316,11 @@ def _write(
             )
 
         extraction.set_picture_text(session, file_id, picture_text)
+        session.query(PictureLines).filter_by(file_id=file_id).delete()
+        if lines:
+            session.add(PictureLines(
+                file_id=file_id, lines_json=json.dumps(lines),
+            ))
         _remove_embeddings(session, file_id, "text_content")
         for index, (chunk, vector) in enumerate(zip(chunks, vectors)):
             _store_embedding(
@@ -349,16 +425,22 @@ def index_ocr(file_id: str) -> bool:
     try:
         result = run_engine(engine, image)
         lines = list(getattr(result, "txts", None) or ())
+        picture_lines = _lines_from_result(result, image)
     except Exception as exc:
         logger.warning(
             "OCR failed for %s: %s", file_id, type(exc).__name__,
         )
         return _write(file_id, [], [])
 
+    if picture_lines is None:
+        logger.warning(
+            "OCR lines skipped for %s: boxes do not match the texts", file_id,
+        )
+
     joined = "\n".join(lines)
     chunks = ContentExtractor.chunk_text(joined)
     if not chunks:
-        return _write(file_id, [], [], text=joined)
+        return _write(file_id, [], [], text=joined, lines=picture_lines)
 
     try:
         vectors = list(embed_passages(chunks))
@@ -368,4 +450,4 @@ def index_ocr(file_id: str) -> bool:
             _fail_confirmed(file_id)
         return False
 
-    return _write(file_id, chunks, vectors, text=joined)
+    return _write(file_id, chunks, vectors, text=joined, lines=picture_lines)
