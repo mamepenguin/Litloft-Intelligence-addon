@@ -57,6 +57,9 @@ AUDIO = "aud000000051"
 PDF = "pdf000000051"
 MAX = rag_router._MAX_CONCURRENT_ASK
 
+# tests/test_file_question.py::test_rag_off_answers_as_ask_does pins this status.
+RAG_OFF_STATUS = 400
+
 
 def _picture(db, file_id=PICTURE, *, text=TEXT, data=PICTURE_BYTES) -> Path:
     path = Path(config.settings.intelligence_data_dir).parent / "pictures" / f"{file_id}.png"
@@ -317,7 +320,7 @@ class TestThePictureNeedsVisionGate:
     @pytest.mark.parametrize(
         ("case", "expected"),
         [
-            ("rag off", 404),
+            ("rag off", RAG_OFF_STATUS),
             ("profile unavailable", 400),
             ("file missing", 404),
         ],
@@ -327,10 +330,6 @@ class TestThePictureNeedsVisionGate:
         self, case, expected, db, addon, llm, call,
     ):
         """SPEC-ADDON-071 step 3: rag, profile, file, then ``picture_needs_vision``."""
-        if case == "file missing":
-            pass
-        else:
-            _picture(db, text=None)
         if case == "rag off":
             addon(rag=False)
         if case == "profile unavailable":

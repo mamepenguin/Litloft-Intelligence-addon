@@ -43,6 +43,9 @@ PICTURE_TWO = "pic000000002"
 VIDEO = "vid000000011"
 TEXT = chunk("receipt total is 42", 40)
 
+# tests/test_file_question.py::test_rag_off_answers_as_ask_does pins this status.
+RAG_OFF_STATUS = 400
+
 
 def _decoded_image(wire) -> bytes:
     payload = wire.images[0]
@@ -116,16 +119,22 @@ class TestTheRequestedPicture:
         assert by_kind(control)["meta"]["image"] == "attached"
         assert wire.image_bodies
 
-    async def test_rag_off_is_404_and_reads_no_picture(self, db, addon, llm, call):
-        """SPEC-ADDON-071 I1: rag off closes the route before any material is read."""
+    async def test_rag_off_answers_as_the_route_does_and_reads_no_picture(
+        self, db, addon, llm, call,
+    ):
+        """SPEC-ADDON-071 I1: rag off closes the route before the picture is read."""
         _attach_picture(db)
         addon(rag=False)
         _, wire = vision_client(llm)
 
         response = await ask(call, PICTURE)
 
-        assert response.status_code == 404
+        assert response.status_code == RAG_OFF_STATUS
         assert wire.requests == []
+
+        addon(rag=True)
+        served = await ask(call, PICTURE)
+        assert by_kind(served)["meta"]["image"] == "attached"
 
 
 class TestThePictureImageStep:
