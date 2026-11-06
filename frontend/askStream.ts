@@ -14,10 +14,13 @@ export interface FileCitation {
   position: CitationPosition;
 }
 
+/** `meta.image`: whether the question carried a picture or a frame. */
+export type AskImage = "attached" | "unavailable" | "none";
+
 export type FileAskEvent =
   | { kind: "answer_chunk"; delta: string }
   | { kind: "citations"; citations: FileCitation[] }
-  | { kind: "meta"; partial: boolean }
+  | { kind: "meta"; partial: boolean; image?: AskImage }
   | { kind: "done"; error?: string };
 
 export interface FileQuestionOptions {
@@ -25,6 +28,7 @@ export interface FileQuestionOptions {
   drive: string;
   question: string;
   profile?: string;
+  positionSeconds?: number;
   signal?: AbortSignal;
 }
 
@@ -127,8 +131,19 @@ function parseFrame(frame: string): FileAskEvent | null {
       }
       return { kind: "citations", citations };
     }
-    case "meta":
-      return { kind: "meta", partial: data.partial === true };
+    case "meta": {
+      const image: AskImage | undefined =
+        data.image === "attached" ||
+        data.image === "unavailable" ||
+        data.image === "none"
+          ? data.image
+          : undefined;
+      return {
+        kind: "meta",
+        partial: data.partial === true,
+        ...(image === undefined ? {} : { image }),
+      };
+    }
     case "done":
       return {
         kind: "done",
@@ -157,7 +172,7 @@ function nextSeparator(
 export async function* streamFileQuestion(
   options: FileQuestionOptions,
 ): AsyncGenerator<FileAskEvent> {
-  const { fileId, drive, question, profile, signal } = options;
+  const { fileId, drive, question, profile, positionSeconds, signal } = options;
   const res = await fetch(
     `${API_BASE}/addons/intelligence/files/${fileId}/ask`,
     {
@@ -168,7 +183,13 @@ export async function* streamFileQuestion(
         Accept: "text/event-stream",
         ...driveHeaders(drive),
       },
-      body: JSON.stringify({ question, profile: profile ?? null }),
+      body: JSON.stringify({
+        question,
+        profile: profile ?? null,
+        ...(positionSeconds === undefined
+          ? {}
+          : { position_seconds: positionSeconds }),
+      }),
       signal,
     },
   );

@@ -3,7 +3,7 @@ import {
   type FilePageClosedDetail,
 } from "@/lib/addonEvents";
 
-import type { FileCitation } from "./askStream";
+import type { AskImage, FileCitation } from "./askStream";
 
 export type AskStatus = "idle" | "streaming" | "answered" | "failed";
 
@@ -12,6 +12,8 @@ export type AskFailure =
   | "no_model"
   | "profile_unavailable"
   | "busy"
+  | "picture_needs_vision"
+  | "image_unusable"
   | "generic";
 
 export interface AskEntry {
@@ -22,6 +24,8 @@ export interface AskEntry {
   answer: string;
   citations: FileCitation[] | null;
   partial: boolean;
+  /** `meta.image` of the last question; read only while `answered`. */
+  image: AskImage | null;
   status: AskStatus;
   failure: AskFailure | null;
   controller: AbortController | null;
@@ -33,6 +37,7 @@ const EMPTY: AskEntry = Object.freeze({
   answer: "",
   citations: null,
   partial: false,
+  image: null,
   status: "idle",
   failure: null,
   controller: null,
@@ -76,6 +81,7 @@ export function beginAsk(
     answer: "",
     citations: null,
     partial: false,
+    image: null,
     status: "streaming",
     failure: null,
     controller,
@@ -98,12 +104,21 @@ export function setAskPartial(fileId: string, partial: boolean): void {
   update(fileId, () => ({ partial }));
 }
 
+export function setAskImage(fileId: string, image: AskImage): void {
+  update(fileId, () => ({ image }));
+}
+
 export function settleAsk(
   fileId: string,
   status: "answered" | "failed",
   failure: AskFailure | null,
 ): void {
-  update(fileId, () => ({ status, failure, controller: null }));
+  update(fileId, (entry) => ({
+    status,
+    failure,
+    controller: null,
+    image: status === "failed" ? null : entry.image,
+  }));
 }
 
 /** Abort a stream and forget the file's question and answer. */
