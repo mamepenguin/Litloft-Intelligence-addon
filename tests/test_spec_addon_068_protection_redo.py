@@ -22,6 +22,7 @@ from app.workers.transcription.base import (
     WordToken,
 )
 from app.workers.transcription.errors import FatalError
+from tests.ocr_fixtures import pillow_real  # noqa: F401 - fixture used by name
 from tests.extraction_fixtures import (
     api,
     search_db,
@@ -41,6 +42,10 @@ from tests.llm_helpers import resolved_with
 FILE = "protected001"
 PICTURE = "protected002"
 LOFT = "protected003"
+
+# The confirmed-OCR cases reload the OCR worker against real Pillow; restore
+# the stub afterwards so later modules do not inherit it.
+pytestmark = pytest.mark.usefixtures("pillow_real")
 
 
 def _chunks() -> list[dict]:
