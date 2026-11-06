@@ -36,7 +36,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-from functools import lru_cache
 
 import numpy as np
 from sqlalchemy import text as sql_text
@@ -48,7 +47,6 @@ from app.summary_parser import Segment, parse_segments
 logger = logging.getLogger(__name__)
 
 
-@lru_cache(maxsize=1024)
 def _is_video(file_id: str) -> bool:
     """Whether the file is a video, whose text_content rows are frame text."""
     try:

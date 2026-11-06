@@ -112,7 +112,12 @@ def index_page_ocr(
         logger.warning("Page OCR skipped for %s: file is unreachable", file_id)
         return False
 
-    if os.path.getsize(path) > MAX_PDF_SIZE:
+    try:
+        file_size = os.path.getsize(path)
+    except OSError:
+        logger.warning("Page OCR skipped for %s: file is unreachable", file_id)
+        return False
+    if file_size > MAX_PDF_SIZE:
         logger.warning(
             "Page OCR for %s: file is over %d MB", file_id,
             MAX_PDF_SIZE // (1024 * 1024),
@@ -129,6 +134,11 @@ def index_page_ocr(
             "Page OCR for %s could not open the PDF (%s)",
             file_id, type(exc).__name__,
         )
+        if not _reachable(path):
+            logger.warning(
+                "Page OCR skipped for %s: file became unreachable", file_id,
+            )
+            return False
         return bool(_store_pages(file_id, []))
 
     engine = _get_engine()
@@ -155,6 +165,13 @@ def index_page_ocr(
                     "Page OCR for %s: page %d could not be rendered (%s)",
                     file_id, number, type(exc).__name__,
                 )
+                if not _reachable(path):
+                    logger.warning(
+                        "Page OCR skipped for %s: file became unreachable "
+                        "while rendering page %d; nothing written",
+                        file_id, number,
+                    )
+                    return False
                 stores.append((number, ""))
                 continue
 

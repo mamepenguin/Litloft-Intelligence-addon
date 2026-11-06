@@ -47,6 +47,13 @@ class _Unreadable(Exception):
     """The file was reached but cannot be decoded; close it as read."""
 
 
+class _ProbeError(Exception):
+    """The key-frame timestamps could not be listed; do not invent them."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail)
+
+
 @dataclass
 class _Segment:
     start: float
@@ -63,6 +70,7 @@ class _ReadResult:
     stalled: bool = False
     exit_status: int | None = None
     engine_lost: bool = False
+    times_failed: bool = False
 
 
 def _reachable(path: str) -> bool:
@@ -74,17 +82,42 @@ def _reachable(path: str) -> bool:
 
 
 def _probe(path: str) -> tuple[int, int]:
-    """The first video stream's even width and height."""
+    """The first video stream's upright, even width and height.
+
+    ffmpeg auto-rotates on decode, so a phone video's display matrix turns a
+    coded 3840x2160 into 2160x3840. The reader must cut the raw frames at
+    that post-rotation size, and the same size decides the short-side path.
+    """
     try:
         out = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height", "-of", "json", path],
+             "-show_entries",
+             "stream=width,height:stream_side_data:stream_tags=rotate",
+             "-of", "json", path],
             capture_output=True, text=True, timeout=60,
         ).stdout
-        streams = json.loads(out).get("streams") or []
-        width, height = int(streams[0]["width"]), int(streams[0]["height"])
+        stream = (json.loads(out).get("streams") or [])[0]
+        width, height = int(stream["width"]), int(stream["height"])
     except Exception as exc:
         raise _Unreadable("no readable video stream") from exc
+
+    rotation = 0.0
+    for side in stream.get("side_data_list") or ():
+        value = side.get("rotation")
+        if value is not None:
+            try:
+                rotation = float(value)
+            except (TypeError, ValueError):
+                rotation = 0.0
+            break
+    if rotation == 0.0:
+        try:
+            rotation = float((stream.get("tags") or {}).get("rotate") or 0)
+        except (TypeError, ValueError):
+            rotation = 0.0
+    if abs(rotation) % 180 == 90:
+        width, height = height, width
+
     width -= width % 2
     height -= height % 2
     if width <= 0 or height <= 0:
@@ -93,45 +126,79 @@ def _probe(path: str) -> tuple[int, int]:
 
 
 def _keyframe_times(path: str) -> list[float]:
+    """Key-frame timestamps from the packet list, without decoding frames.
+
+    A failed listing, a timeout, or a key packet whose ``pts_time`` does not
+    parse raises ``_ProbeError``: the reader must not fall back to the packet
+    ordinal, which would compress every stored time by the GOP interval.
+    """
     try:
         out = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-skip_frame", "nokey", "-show_entries", "frame=pts_time",
+             "-show_entries", "packet=pts_time,flags",
              "-of", "csv=p=0", path],
             capture_output=True, text=True, timeout=300,
-        ).stdout
-    except Exception:
-        return []
-    times = []
-    for line in out.splitlines():
-        value = line.strip().rstrip(",")
-        if not value:
+        )
+        if out.returncode != 0:
+            raise _ProbeError("ffprobe could not list packets")
+    except _ProbeError:
+        raise
+    except Exception as exc:
+        raise _ProbeError("ffprobe packet listing failed") from exc
+
+    times: list[float] = []
+    for line in out.stdout.splitlines():
+        fields = [field.strip() for field in line.split(",")]
+        if not any("K" in field for field in fields):
             continue
-        try:
-            times.append(float(value))
-        except ValueError:
-            continue
-    return times
+        value = next(
+            (field for field in fields if _is_float(field)), None,
+        )
+        if value is None:
+            raise _ProbeError("a key packet has no parsable pts_time")
+        times.append(float(value))
+    if not times:
+        raise _ProbeError("no key frame was listed")
+    return sorted(times)
+
+
+def _is_float(value: str) -> bool:
+    try:
+        float(value)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def _dhash(image: Any) -> Any:
     """256-bit difference hash: 17x16 gray, each pixel vs its right neighbour."""
     import numpy as np
+    from PIL import Image
 
+    resample = Image.Resampling.BOX
     gray = image.convert("L").resize(
-        (HASH_WIDTH, max(2, round(HASH_WIDTH * image.height / image.width))),
+        (
+            HASH_WIDTH,
+            max(2, round(HASH_WIDTH * image.height / image.width)),
+        ),
+        resample,
     )
-    small = gray.resize((17, 16))
+    small = gray.resize((17, 16), resample)
     pixels = np.asarray(small, dtype=np.int16)
     return (pixels[:, 1:] > pixels[:, :-1]).ravel()
 
 
 def _ocr_image(image: Any) -> Any:
-    if image.height <= MAX_OCR_LINES:
+    """Scale a selected frame so its short side is at most 1080 lines."""
+    short = min(image.width, image.height)
+    if short <= MAX_OCR_LINES:
         return image
-    width = max(2, round(image.width * MAX_OCR_LINES / image.height))
+    scale = MAX_OCR_LINES / short
+    width = max(2, round(image.width * scale))
+    height = max(2, round(image.height * scale))
     width -= width % 2
-    return image.resize((width, MAX_OCR_LINES))
+    height -= height % 2
+    return image.resize((width, height))
 
 
 def _frame_command(path: str, width: int, height: int, keyframes: bool) -> list[str]:
@@ -140,11 +207,13 @@ def _frame_command(path: str, width: int, height: int, keyframes: bool) -> list[
         # the container's frame rate.
         return [
             "ffmpeg", "-v", "error", "-skip_frame", "nokey", "-i", path,
-            "-vsync", "0", "-pix_fmt", "bgr24", "-f", "rawvideo", "-",
+            "-map", "0:v:0", "-vsync", "0",
+            "-vf", f"scale={width}:{height}",
+            "-pix_fmt", "rgb24", "-f", "rawvideo", "-",
         ]
     return [
-        "ffmpeg", "-v", "error", "-i", path,
-        "-vf", f"fps=1,scale={width}:{height}", "-pix_fmt", "bgr24",
+        "ffmpeg", "-v", "error", "-i", path, "-map", "0:v:0",
+        "-vf", f"fps=1,scale={width}:{height}", "-pix_fmt", "rgb24",
         "-f", "rawvideo", "-",
     ]
 
@@ -156,7 +225,7 @@ def _read_video(
     from PIL import Image
 
     width, height = _probe(path)
-    keyframes = height > MAX_OCR_LINES
+    keyframes = min(width, height) > MAX_OCR_LINES
     times = _keyframe_times(path) if keyframes else []
     result = _ReadResult()
     command = _frame_command(path, width, height, keyframes)
@@ -193,7 +262,14 @@ def _read_video(
             while len(buffer) >= frame_size:
                 raw = bytes(buffer[:frame_size])
                 del buffer[:frame_size]
-                t = times[index] if keyframes and index < len(times) else float(index)
+                if keyframes:
+                    if index >= len(times):
+                        result.times_failed = True
+                        process.kill()
+                        return result
+                    t = times[index]
+                else:
+                    t = float(index)
                 index += 1
                 result.frames += 1
                 result.last_time = t
@@ -236,7 +312,6 @@ def _read_video(
         open_segment.end = result.last_time + 1.0
         result.segments.append(open_segment)
     return result
-
 
 def _chunks_for_segments(segments: list[_Segment]) -> list[dict[str, Any]]:
     """One entry per chunk, chunk_index in time order across the video."""
@@ -385,7 +460,38 @@ def index_frame_ocr(
     if engine is None:
         return False
 
-    result = _read_video(path, paused=is_paused)
+    try:
+        result = _read_video(path, paused=is_paused)
+    except _ProbeError as exc:
+        logger.warning(
+            "Frame OCR for %s: key-frame times unavailable (%s); "
+            "nothing written",
+            file_id, exc,
+        )
+        return False
+    except _Unreadable as exc:
+        if not _reachable(path):
+            logger.warning(
+                "Frame OCR skipped for %s: file is unreachable", file_id,
+            )
+            return False
+        cause = exc.__cause__ or exc
+        logger.warning(
+            "Frame OCR for %s: the file could not be decoded (%s); "
+            "closing it as read",
+            file_id, type(cause).__name__,
+        )
+        if not _store_read(file_id, []):
+            return False
+        return _build_rows(file_id)
+
+    if result.times_failed:
+        logger.warning(
+            "Frame OCR for %s: key-frame times did not match the decoded "
+            "frames; nothing written",
+            file_id,
+        )
+        return False
     if result.engine_lost:
         logger.warning(
             "Frame OCR lost the engine partway for %s; nothing written",
