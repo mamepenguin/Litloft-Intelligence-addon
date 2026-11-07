@@ -850,6 +850,11 @@ class FileQuestionRequest(BaseModel):
 
     question: str = Field(..., min_length=1, max_length=1000)
     profile: str | None = Field(default=None, pattern=PROFILE_NAME_PATTERN)
+    #: A playback snapshot for a video or audio question. The range is
+    #: every kind's; a position for anything else is ignored.
+    position_seconds: float | None = Field(
+        default=None, ge=0, le=1_000_000,
+    )
 
     @field_validator("question")
     @classmethod

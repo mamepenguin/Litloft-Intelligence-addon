@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -19,19 +18,16 @@ import type { DocumentController } from "@/lib/documentController";
 import type { MediaController } from "@/lib/mediaController";
 
 import { isProfileUnavailable, LLMRequestError } from "./api";
+import { AnswerMarkdown } from "./AnswerMarkdown";
 import { choiceLabel, choiceOffered, useLLMChoices } from "./llmChoice";
-import {
-  fetchFileAskAvailability,
-  streamFileQuestion,
-  type CitationPosition,
-  type FileCitation,
-} from "./askStream";
+import { fetchFileAskAvailability, streamFileQuestion } from "./askStream";
 import {
   appendAskAnswer,
   beginAsk,
   dropAskEntry,
   getAskEntry,
   setAskCitations,
+  setAskImage,
   setAskPartial,
   setAskQuestion,
   settleAsk,
@@ -67,111 +63,29 @@ function nonSpaceLength(text: string): number {
   return count;
 }
 
-/** `M:SS` below one hour, `H:MM:SS` from one hour. */
-function formatSeconds(seconds: number): string {
-  const total = Math.max(0, Math.floor(seconds));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const rest = total % 60;
-  const mm = String(minutes).padStart(2, "0");
-  const ss = String(rest).padStart(2, "0");
-  return hours > 0 ? `${hours}:${mm}:${ss}` : `${minutes}:${ss}`;
-}
-
-function citationLabel(position: CitationPosition): string | null {
-  if (!position) return null;
-  if ("seconds" in position) return formatSeconds(position.seconds);
-  if ("page" in position) return `p.${position.page}`;
-  return position.title ?? `§${position.section}`;
-}
-
-function jumpAction(
-  position: CitationPosition,
+/** The position the player shows at the moment the question is submitted. */
+function positionAtSubmit(
   mediaController: MediaController | null,
-  documentController: DocumentController | null,
-): (() => void) | null {
-  if (!position) return null;
-  if ("seconds" in position) {
-    return mediaController ? () => mediaController.seek(position.seconds) : null;
+): number | undefined {
+  if (!mediaController) return undefined;
+  if (mediaController.isInterrupted?.()) return undefined;
+  const seconds = mediaController.getCurrentTime?.();
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) {
+    return undefined;
   }
-  if ("page" in position) {
-    return documentController
-      ? () => documentController.goTo({ page: position.page })
-      : null;
-  }
-  return documentController
-    ? () => documentController.goTo({ section: position.section })
-    : null;
+  return seconds;
 }
 
 function failureFor(err: unknown): AskFailure {
   if (isProfileUnavailable(err)) return "profile_unavailable";
   if (err instanceof LLMRequestError) {
     if (err.status === 400) return "no_model";
+    if (err.status === 409 && err.detail === "picture_needs_vision") {
+      return "picture_needs_vision";
+    }
     if (err.status === 503 && err.detail === BUSY_DETAIL) return "busy";
   }
   return "generic";
-}
-
-const PILL_CLASS =
-  "mx-0.5 inline rounded-full px-1.5 py-0.5 align-baseline text-text-muted transition-colors hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring";
-
-interface AnswerTextProps {
-  text: string;
-  citations: FileCitation[] | null;
-  mediaController: MediaController | null;
-  documentController: DocumentController | null;
-  onJump: () => void;
-}
-
-/**
- * The answer with each `[n]` replaced by its cited position once the
- * citations arrive. Before that the markers are shown exactly as typed.
- */
-function AnswerText({
-  text,
-  citations,
-  mediaController,
-  documentController,
-  onJump,
-}: AnswerTextProps) {
-  if (citations === null) return <>{text}</>;
-
-  const positions = new Map(citations.map((citation) => [citation.n, citation.position]));
-
-  return (
-    <>
-      {text.split(/(\[\d+\])/g).map((part, index) => {
-        const marker = /^\[(\d+)\]$/.exec(part);
-        if (!marker) return <Fragment key={index}>{part}</Fragment>;
-        const position = positions.get(Number(marker[1]));
-        if (position === undefined) return null;
-        const label = citationLabel(position);
-        if (label === null) return null;
-        const action = jumpAction(position, mediaController, documentController);
-        if (!action) {
-          return (
-            <span key={index} className="mx-0.5 inline text-text-muted">
-              {label}
-            </span>
-          );
-        }
-        return (
-          <button
-            key={index}
-            type="button"
-            onClick={() => {
-              action();
-              onJump();
-            }}
-            className={PILL_CLASS}
-          >
-            {label}
-          </button>
-        );
-      })}
-    </>
-  );
 }
 
 export default function AskTab({
@@ -270,6 +184,7 @@ export default function AskTab({
       if (nonSpaceLength(trimmed) < MIN_QUESTION_CHARS) return;
       if (getAskEntry(fileId).status === "streaming") return;
 
+      const positionSeconds = positionAtSubmit(mediaController);
       const controller = new AbortController();
       beginAsk(fileId, trimmed, controller);
       let sawDone = false;
@@ -281,6 +196,7 @@ export default function AskTab({
           drive,
           question: trimmed,
           profile: askProfile,
+          positionSeconds,
           signal: controller.signal,
         })) {
           if (controller.signal.aborted) return;
@@ -293,6 +209,7 @@ export default function AskTab({
               break;
             case "meta":
               setAskPartial(fileId, event.partial);
+              if (event.image !== undefined) setAskImage(fileId, event.image);
               break;
             case "done":
               sawDone = true;
@@ -304,7 +221,11 @@ export default function AskTab({
         if (sawDone && doneError === undefined) {
           settleAsk(fileId, "answered", null);
         } else {
-          settleAsk(fileId, "failed", "generic");
+          settleAsk(
+            fileId,
+            "failed",
+            doneError === "image_unusable" ? "image_unusable" : "generic",
+          );
         }
       } catch (err) {
         if (controller.signal.aborted) return;
@@ -313,7 +234,7 @@ export default function AskTab({
         settleAsk(fileId, "failed", failure);
       }
     },
-    [fileId, drive, askProfile, refetchChoices],
+    [fileId, drive, askProfile, mediaController, refetchChoices],
   );
 
   const submit = useCallback(
@@ -396,15 +317,16 @@ export default function AskTab({
               {entry.asked}
             </p>
             {entry.answer !== "" && (
-              <div className="whitespace-pre-wrap text-sm leading-relaxed text-text-primary">
-                <AnswerText
-                  text={entry.answer}
-                  citations={entry.citations}
-                  mediaController={mediaController}
-                  documentController={documentController}
-                  onJump={() => lowerInspector?.()}
-                />
-              </div>
+              <AnswerMarkdown
+                source={entry.answer}
+                citations={entry.citations}
+                mediaController={mediaController}
+                documentController={documentController}
+                onJump={() => lowerInspector?.()}
+              />
+            )}
+            {entry.status === "answered" && entry.image === "unavailable" && (
+              <p className="text-xs text-text-muted">{t("imageUnavailable")}</p>
             )}
             {entry.partial && (
               <p className="text-xs text-text-muted">{t("partial")}</p>
@@ -417,7 +339,11 @@ export default function AskTab({
                     ? tc("profileUnavailable")
                     : entry.failure === "busy"
                       ? t("busy")
-                      : t("failed")}
+                      : entry.failure === "picture_needs_vision"
+                        ? t("pictureNeedsVision")
+                        : entry.failure === "image_unusable"
+                          ? t("imageUnusable")
+                          : t("failed")}
               </p>
             )}
           </section>

@@ -8,10 +8,14 @@ on application startup.
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import logging
+import math
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 
 from fastapi import FastAPI
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from app import dependencies
 from app.config import settings
@@ -469,6 +473,32 @@ app = FastAPI(
     version=settings.service_version,
     lifespan=lifespan,
 )
+
+
+def _finite_json(value):
+    """Replace non-finite floats so a validation error can be encoded."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return repr(value)
+    if isinstance(value, dict):
+        return {key: _finite_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite_json(item) for item in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def _invalid_body(_request, exc: RequestValidationError) -> JSONResponse:
+    """Answer 422 for a body the default handler cannot encode.
+
+    A NaN or Infinity is a validation error like any other, but the
+    default 422 body keeps the offending value and JSON has no spelling
+    for it, so the response would turn into a 500.
+    """
+    return JSONResponse(
+        status_code=422,
+        content={"detail": _finite_json(jsonable_encoder(exc.errors()))},
+    )
+
 
 # Register routers (no prefixes — paths are fully qualified in each router)
 app.include_router(search.router)

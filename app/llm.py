@@ -192,6 +192,18 @@ class VisionGeneration:
     failure: str | None
 
 
+class ImageRejected(Exception):
+    """The provider refused image content before the first answer token.
+
+    Raised by an image-carrying stream so the caller can retry the same
+    question as text. Any other failure is an ordinary generation failure.
+    """
+
+    def __init__(self, failure: str) -> None:
+        super().__init__(failure)
+        self.failure = failure
+
+
 def _usage_reasoning_tokens(response: object) -> int | None:
     """Reasoning-token count, or None when the provider omits it.
 
@@ -332,6 +344,14 @@ class _VisionCapabilityCache:
         """Drop one verdict because the world changed under it."""
         self._verdicts.pop(key, None)
 
+    def record(self, key: tuple[str, str], verdict: str) -> None:
+        """Keep a verdict established without a probe."""
+        if verdict in _CACHEABLE_PROBE_VERDICTS:
+            self._verdicts[key] = verdict
+
+    def verdict(self, base_url: str | None, model: str | None) -> str | None:
+        return self._verdicts.get((base_url or "", model or ""))
+
     def clear(self) -> None:
         """Drop every verdict. For tests; nothing in the app calls it."""
         self._verdicts.clear()
@@ -344,6 +364,14 @@ _vision_capability_cache = _VisionCapabilityCache()
 def reset_vision_capability_cache() -> None:
     """Forget every probed verdict (test helper)."""
     _vision_capability_cache.clear()
+
+
+def is_vision_unsupported(base_url: str | None, vision_model: str | None) -> bool:
+    """Whether this model is already known, in process, not to read images."""
+    return (
+        _vision_capability_cache.verdict(base_url, vision_model)
+        == FAILURE_VISION_UNSUPPORTED
+    )
 
 
 # Failures that came from a 400 and could therefore have been caused by
@@ -867,6 +895,103 @@ class LLMClient:
                 type(e).__name__,
             )
             return
+
+    async def generate_stream_with_image(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens_override: int | None = None,
+        temperature: float | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream an answer to ``vision_model`` with one image attached.
+
+        A 400/404 is a refusal of the image, reported as
+        :class:`ImageRejected` after recording the verdict; every other
+        failure propagates as an ordinary generation failure. The body
+        carries no opt-in provider extras: a 400 caused by one of them
+        would otherwise be mistaken for a refusal and latch a permanent
+        verdict about the model.
+        """
+        if not self._enabled or not self._config.vision_model:
+            raise ImageRejected(FAILURE_REQUEST_FAILED)
+
+        b64 = base64.b64encode(image_bytes).decode("ascii")
+        data_url = f"data:{mime_type};base64,{b64}"
+        kwargs: dict = {
+            "model": self._config.vision_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user_prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": data_url},
+                        },
+                    ],
+                },
+            ],
+            "temperature": (
+                temperature
+                if temperature is not None
+                else self._config.vision_temperature
+            ),
+            "stream": True,
+        }
+        effective_max_tokens = (
+            max_tokens_override
+            if max_tokens_override is not None
+            else self._config.vision_max_tokens
+        )
+        if _uses_max_completion_tokens(self._config.vision_model):
+            kwargs["max_completion_tokens"] = effective_max_tokens
+        else:
+            kwargs["max_tokens"] = effective_max_tokens
+
+        await self._wait_for_rate_limit()
+        try:
+            stream = await self._client.chat.completions.create(**kwargs)
+        except APIStatusError as e:
+            if e.status_code in _VISION_REJECTION_STATUS_CODES:
+                failure = _classify_probe_status(e.status_code)
+                _vision_capability_cache.record(
+                    (
+                        self._config.base_url or "",
+                        self._config.vision_model or "",
+                    ),
+                    failure,
+                )
+                logger.info(
+                    "Vision stream rejected (status %d); treating the image "
+                    "as unusable (model=%s)",
+                    e.status_code,
+                    self._config.vision_model,
+                )
+                raise ImageRejected(failure) from e
+            logger.warning(
+                "Vision stream open failed with status %d", e.status_code,
+            )
+            raise
+
+        async for chunk in stream:
+            # Same shape as ``generate_stream``: role announcements and
+            # finish markers carry no content.
+            try:
+                choices = chunk.choices
+            except AttributeError:
+                continue
+            if not choices:
+                continue
+            delta = getattr(choices[0], "delta", None)
+            if delta is None:
+                continue
+            content = getattr(delta, "content", None)
+            if content:
+                yield content
 
     async def _vision_chat(
         self,
@@ -1727,6 +1852,91 @@ class OllamaLLMClient:
                 type(e).__name__,
             )
             return
+
+    async def generate_stream_with_image(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens_override: int | None = None,
+        temperature: float | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream a native ``/api/chat`` answer with one image attached.
+
+        Same contract as :meth:`LLMClient.generate_stream_with_image`: a
+        400/404 is a refusal reported as :class:`ImageRejected` after the
+        verdict is recorded, and every other failure propagates.
+        ``mime_type`` is accepted for API parity; ollama sniffs the bytes.
+        """
+        if not self._enabled or not self._config.vision_model:
+            raise ImageRejected(FAILURE_REQUEST_FAILED)
+
+        b64 = base64.b64encode(image_bytes).decode("ascii")
+        body: dict = {
+            "model": self._config.vision_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": user_prompt,
+                    "images": [b64],
+                },
+            ],
+            "stream": True,
+            "think": False,
+            "options": {
+                "temperature": (
+                    temperature
+                    if temperature is not None
+                    else self._config.vision_temperature
+                ),
+                "num_predict": (
+                    max_tokens_override
+                    if max_tokens_override is not None
+                    else self._config.vision_max_tokens
+                ),
+            },
+        }
+
+        await self._wait_for_rate_limit()
+        try:
+            async with self._http.stream(
+                "POST",
+                f"{self._base_url}/api/chat",
+                json=body,
+            ) as resp:
+                if resp.status_code in _VISION_REJECTION_STATUS_CODES:
+                    failure = _classify_probe_status(resp.status_code)
+                    _vision_capability_cache.record(
+                        (self._base_url or "", self._config.vision_model or ""),
+                        failure,
+                    )
+                    raise ImageRejected(failure)
+                if resp.status_code != 200:
+                    raise RuntimeError(
+                        f"vision stream failed with status {resp.status_code}"
+                    )
+
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    content = data.get("message", {}).get("content", "")
+                    if content:
+                        yield content
+
+                    if data.get("done", False):
+                        return
+        except httpx.TimeoutException as e:
+            raise RuntimeError("vision stream timed out") from e
+        except httpx.HTTPError as e:
+            raise RuntimeError("vision stream failed") from e
 
     async def _vision_chat(
         self,

@@ -1,8 +1,15 @@
-{#- vars: question (string), passages (list[str]) — see rag/prompt.py:build_file_question_user_prompt -#}
+{#- vars: question (string), passages (list[str]), image (bool), position (string|none) — see rag/prompt.py:build_file_question_user_prompt -#}
 Question: {{ question }}
-
+{% if position %}
+The viewer is now at {{ position }} in this file. Use it when the question is about the current moment.
+{% endif %}
+{% if image %}
+An image of the file is attached to this message.
+{% endif %}
+{% if passages %}
 Passages from the file:
 {% for passage in passages -%}
 [{{ loop.index }}]
 {{ passage }}
 {% endfor -%}
+{% endif %}

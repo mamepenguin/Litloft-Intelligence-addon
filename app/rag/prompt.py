@@ -120,12 +120,21 @@ def build_user_prompt(
     )
 
 
-def build_file_question_system_prompt(output_language: str) -> str:
+def build_file_question_system_prompt(
+    output_language: str,
+    *,
+    has_image: bool = False,
+    has_passages: bool = True,
+) -> str:
     """Return the system prompt for a question about one file.
 
     The language line follows ``build_system_prompt``: ``"auto"`` lets the
     model mirror the question, ``"ja"`` / ``"en"`` name the language, and
     any other tag is passed through as one.
+
+    ``has_image`` adds the image rules and ``has_passages`` keeps the
+    citation rules; a picture with no indexed text gets neither passages
+    nor a citation instruction.
     """
     lang = output_language
     lang_line = _LANGUAGE_INSTRUCTIONS.get(
@@ -135,20 +144,43 @@ def build_file_question_system_prompt(output_language: str) -> str:
     return render(
         "rag/file_question_system.jinja2",
         language_instruction=lang_line,
+        image=has_image,
+        passages=has_passages,
     )
 
 
 def build_file_question_user_prompt(
     question: str,
     passages: list[str],
+    *,
+    has_image: bool = False,
+    position_seconds: float | None = None,
 ) -> str:
     """Serialize one file's chunks, numbered from 1, and the question.
 
     Numbering runs across everything sent in file order, so the ``[n]`` the
-    answer cites names exactly the passage the prompt gave it.
+    answer cites names exactly the passage the prompt gave it. The position
+    is written in the viewer's clock when the caller read one for a media
+    file.
     """
     return render(
         "rag/file_question_user.jinja2",
         question=question,
         passages=passages,
+        image=has_image,
+        position=(
+            format_position(position_seconds)
+            if position_seconds is not None
+            else None
+        ),
     )
+
+
+def format_position(seconds: float) -> str:
+    """Write a playback position as ``h:mm:ss``, or ``m:ss`` under an hour."""
+    total = int(seconds)
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
