@@ -201,10 +201,11 @@ _slots = threading.BoundedSemaphore(FFMPEG_SLOTS)
 def _lookup_into(file_id: str, url: str, future: Future) -> None:
     try:
         description = run_lookup(url, LOOKUP_LIMIT_SECONDS)
-    except LookupFailed as exc:
+    except Exception as exc:  # noqa: BLE001 - a waiter must always be released
+        failure = exc if isinstance(exc, LookupFailed) else LookupFailed(type(exc).__name__)
         with _lock:
             _lookups.pop(file_id, None)
-        future.set_exception(exc)
+        future.set_exception(failure)
         return
     with _lock:
         _descriptions[file_id] = (
