@@ -291,6 +291,30 @@ def expected_ticks(timestamps, duration, max_frames):
     return kept
 
 
+def storyboard_fps(duration: float, interval: float = 10.0) -> float:
+    """The ``fps`` yt-dlp reports for a storyboard of whole-second ``interval``."""
+    return (math.ceil(duration / interval) + 1) / duration
+
+
+def recovered_interval(duration: float, count: int) -> float:
+    if count <= 1:
+        return 1.0
+    for seconds in range(1, math.ceil(duration) + 1):
+        if math.ceil(duration / seconds) + 1 == count:
+            return float(seconds)
+    return duration / (count - 1)
+
+
+def timed_tiles(duration: float, count: int, cells: int) -> list[float]:
+    """The timestamps of the tiles below ``duration``, at ``k`` times the interval."""
+    if count <= 1:
+        return [0.0]
+    interval = recovered_interval(duration, count)
+    return [
+        k * interval for k in range(min(count, cells)) if k * interval < duration
+    ]
+
+
 def run(file_id):
     return clip_worker._index_clip_sync(file_id)
 
@@ -327,7 +351,9 @@ class TestWhichTilesAreKept:
     ):
         """The first tile is kept, then only one at least ``duration / max_frames`` later."""
         world.configure(min_interval, max_frames)
-        sb0, per_tile = serve_storyboard(youtube, world.pil, tiles=tiles)
+        sb0, per_tile = serve_storyboard(
+            youtube, world.pil, tiles=tiles, fps=storyboard_fps(duration),
+        )
         youtube.set_ytdlp(describe=describe([sb0], duration=duration))
         fid = new_id()
         add_loft(world, fid, duration=None)
@@ -362,6 +388,7 @@ class TestWhichTilesAreKept:
         sb0, _ = serve_storyboard(
             youtube, world.pil, tiles=tiles, rows=rows, columns=columns,
             tile=tile, seconds_per_tile=per_tile,
+            fps=storyboard_fps(tiles * per_tile, per_tile),
         )
         duration = tiles * per_tile
         youtube.set_ytdlp(describe=describe([sb0], duration=duration))
@@ -377,20 +404,39 @@ class TestWhichTilesAreKept:
         assert world.embedder.tiles == [round(ts / per_tile) for ts in expected]
 
 
-class TestAShortLastSheet:
+class TestTheTileInterval:
     @pytest.mark.parametrize(
-        ("fps", "duration"),
-        [(0.1, 240.0), (None, 240.0), (0.1, 205.0)],
-        ids=["declared-fps", "no-fps-longest-sheet", "cells-past-the-video-duration"],
+        ("duration", "count", "sheets", "interval"),
+        [
+            (1120.0, 113, 13, 10.0),
+            (486.0, 99, 11, 5.0),
+            (56.0, 57, 7, 1.0),
+            (6980.0, 699, 78, 10.0),
+            (10.0, 7, 1, 10.0 / 6),
+            (10.0, 1, 1, None),
+        ],
+        ids=[
+            "1120s-113-tiles-10s",
+            "486s-99-tiles-5s",
+            "56s-57-tiles-1s",
+            "6980s-699-tiles-10s",
+            "no-whole-second-falls-back",
+            "a-single-tile",
+        ],
     )
-    def test_the_short_last_sheet_keeps_the_tile_interval(
-        self, fps, duration, world, youtube,
+    def test_each_tile_is_numbered_across_sheets_and_timed_by_the_recovered_interval(
+        self, duration, count, sheets, interval, world, youtube,
     ):
-        """A sheet's own length does not change the interval, and its empty cells go."""
-        world.configure(min_interval=30, max_frames=500)
-        sb0, per_tile = serve_storyboard(
-            youtube, world.pil, tiles=23, fps=fps, last_sheet_seconds=50.0,
-            last_sheet_rows=2, last_sheet_cells=5,
+        """SPEC-ADDON-078 I7: tile ``k`` is at ``k`` times the recovered interval.
+
+        ``count`` is the frame count YouTube declares, so ``1 / fps`` is only an
+        average of it and the padding cell at the end carries no scene.
+        """
+        world.configure(min_interval=30, max_frames=1000)
+        cells = sheets * SHEET_TILES
+        sb0, _ = serve_storyboard(
+            youtube, world.pil, tiles=count, tile=(16, 9),
+            seconds_per_tile=interval or 10.0, fps=count / duration,
         )
         youtube.set_ytdlp(describe=describe([sb0], duration=duration))
         fid = new_id()
@@ -398,24 +444,61 @@ class TestAShortLastSheet:
 
         assert run(fid) is True
 
-        expected = [
-            ts for ts in (
-                [n * per_tile for n in range(18)]
-                + [180.0 + n * per_tile for n in range(5)]
-            )
-            if ts < duration
-        ]
+        expected = timed_tiles(duration, count, cells)
         rows = rows_of(world, fid)
         assert [ts for _, ts in rows] == pytest.approx(expected)
         assert world.embedder.tiles == list(range(len(expected)))
-        assert flags_of(world, fid)[0] is True
+        if interval is not None:
+            assert len(rows) > 1
+            assert (rows[1][1] - rows[0][1]) == pytest.approx(interval)
+
+
+class TestAShortLastSheet:
+    @pytest.mark.parametrize(
+        ("duration", "count", "interval", "kept", "last"),
+        [
+            (1120.0, 113, 10.0, 112, 1110.0),
+            (486.0, 99, 5.0, 98, 485.0),
+            (440.0, 45, 10.0, 44, 430.0),
+        ],
+        ids=[
+            "last-sheet-half-as-long-10s",
+            "last-sheet-half-as-long-5s",
+            "cells-past-the-video-duration",
+        ],
+    )
+    def test_the_short_last_sheet_keeps_the_tile_interval(
+        self, duration, count, interval, kept, last, world, youtube,
+    ):
+        """A sheet's own length does not change the interval, and its cells past the end go."""
+        world.configure(min_interval=30, max_frames=1000)
+        sb0, _ = serve_storyboard(
+            youtube, world.pil, tiles=count, tile=(16, 9),
+            seconds_per_tile=interval, last_sheet_seconds=50.0,
+            fps=count / duration,
+        )
+        youtube.set_ytdlp(describe=describe([sb0], duration=duration))
+        fid = new_id()
+        add_loft(world, fid)
+
+        assert run(fid) is True
+
+        rows = rows_of(world, fid)
+        assert len(rows) == kept
+        assert [ts for _, ts in rows] == pytest.approx(
+            [k * interval for k in range(kept)]
+        )
+        assert rows[-1][1] == pytest.approx(last)
+        assert world.embedder.tiles == list(range(kept))
 
 
 class TestTheVideosDuration:
     def test_the_lookups_duration_wins_over_the_indexed_one(self, world, youtube):
         """SPEC-ADDON-078 step 3: the lookup's ``duration``, else the indexed one."""
         world.configure(min_interval=10)
-        sb0, _ = serve_storyboard(youtube, world.pil, tiles=36)
+        sb0, _ = serve_storyboard(
+            youtube, world.pil, tiles=36, fps=storyboard_fps(90.0),
+        )
         youtube.set_ytdlp(describe=describe([sb0], duration=90.0))
         fid = new_id()
         add_loft(world, fid, duration=600.0)
@@ -428,7 +511,9 @@ class TestTheVideosDuration:
     def test_the_indexed_duration_is_used_when_the_lookup_has_none(self, world, youtube):
         """SPEC-ADDON-078 step 3: media_import copies yt-dlp's duration into the row."""
         world.configure(min_interval=10)
-        sb0, _ = serve_storyboard(youtube, world.pil, tiles=36)
+        sb0, _ = serve_storyboard(
+            youtube, world.pil, tiles=36, fps=storyboard_fps(60.0),
+        )
         youtube.set_ytdlp(describe=describe([sb0]))
         fid = new_id()
         add_loft(world, fid, duration=60.0)
@@ -442,7 +527,9 @@ class TestTheVideosDuration:
         self, indexed, world, youtube,
     ):
         """SPEC-ADDON-078 step 3/6: no rows, ``clip_indexed`` true, no sheet downloaded."""
-        sb0, _ = serve_storyboard(youtube, world.pil, tiles=36)
+        sb0, _ = serve_storyboard(
+            youtube, world.pil, tiles=36, fps=storyboard_fps(90.0),
+        )
         youtube.set_ytdlp(describe=describe([sb0]))
         fid = new_id()
         add_loft(world, fid, duration=indexed)
@@ -468,9 +555,26 @@ class TestDefiniteResultsWithoutRows:
         assert rows_of(world, fid) == []
         assert flags_of(world, fid)[0] is True
 
+    @pytest.mark.parametrize("fps", [None, 0.0])
+    def test_a_storyboard_without_fps_is_a_finished_task(self, fps, world, youtube):
+        """SPEC-ADDON-078 I7: no positive ``fps`` is no storyboard, with no sheet fetched."""
+        sb0, _ = serve_storyboard(youtube, world.pil, tiles=18, fps=fps)
+        youtube.set_ytdlp(describe=describe([sb0], duration=180.0))
+        fid = new_id()
+        add_loft(world, fid)
+
+        assert run(fid) is True
+
+        assert len(youtube.lookups()) == 1
+        assert youtube.fetched("/sb/") == []
+        assert rows_of(world, fid) == []
+        assert flags_of(world, fid)[0] is True
+
     def test_only_a_youtube_loft_is_looked_up(self, world, youtube):
         """SPEC-ADDON-078 step 6: another provider finishes at once, with no network call."""
-        sb0, _ = serve_storyboard(youtube, world.pil, tiles=18)
+        sb0, _ = serve_storyboard(
+            youtube, world.pil, tiles=18, fps=storyboard_fps(120.0),
+        )
         youtube.set_ytdlp(describe=describe([sb0], duration=120.0))
         yt, vimeo = new_id(), new_id()
         add_loft(world, yt)
@@ -490,7 +594,9 @@ class TestTheRowsAreReplacedWhole:
     def test_old_scene_rows_are_replaced_and_nothing_else_is_touched(self, world, youtube):
         """SPEC-ADDON-078 I7: own ``clip`` rows replaced, no ``clip_thumbnail`` or other file row touched."""
         world.configure(min_interval=30)
-        sb0, _ = serve_storyboard(youtube, world.pil, tiles=18)
+        sb0, _ = serve_storyboard(
+            youtube, world.pil, tiles=18, fps=storyboard_fps(180.0),
+        )
         youtube.set_ytdlp(describe=describe([sb0], duration=180.0))
         fid, other = new_id(), new_id()
         add_loft(world, fid, clip_thumbnail_indexed=True)
@@ -514,7 +620,9 @@ class TestTheRowsAreReplacedWhole:
     def test_a_repeat_run_leaves_one_set_of_rows_and_one_thumbnail_row(self, world, youtube):
         """SPEC-ADDON-078 I8: no duplicates after the task is reset and run again."""
         world.configure(min_interval=30)
-        sb0, _ = serve_storyboard(youtube, world.pil, tiles=18)
+        sb0, _ = serve_storyboard(
+            youtube, world.pil, tiles=18, fps=storyboard_fps(180.0),
+        )
         youtube.set_ytdlp(describe=describe([sb0], duration=180.0))
         fid = new_id()
         add_loft(world, fid, thumbnail=True)
@@ -536,7 +644,9 @@ class TestTheThumbnailLeg:
     def test_the_storyboard_leg_runs_after_the_thumbnail_leg(self, world, youtube):
         """SPEC-ADDON-078 I7: a ``.loft`` with a thumbnail gets both its row and its scene rows."""
         world.configure(min_interval=30)
-        sb0, _ = serve_storyboard(youtube, world.pil, tiles=18)
+        sb0, _ = serve_storyboard(
+            youtube, world.pil, tiles=18, fps=storyboard_fps(180.0),
+        )
         youtube.set_ytdlp(describe=describe([sb0], duration=180.0))
         fid = new_id()
         add_loft(world, fid, thumbnail=True)
@@ -550,7 +660,9 @@ class TestTheThumbnailLeg:
     def test_a_finished_thumbnail_leg_is_not_embedded_again(self, world, youtube):
         """SPEC-ADDON-078 item 1 step 1: skipped when ``clip_thumbnail_indexed`` is true."""
         world.configure(min_interval=30)
-        sb0, _ = serve_storyboard(youtube, world.pil, tiles=18)
+        sb0, _ = serve_storyboard(
+            youtube, world.pil, tiles=18, fps=storyboard_fps(180.0),
+        )
         youtube.set_ytdlp(describe=describe([sb0], duration=180.0))
         fid = new_id()
         add_loft(world, fid, thumbnail=True, clip_thumbnail_indexed=True)
@@ -571,7 +683,9 @@ class TestTransientFailures:
     ):
         """SPEC-ADDON-078 I8: False, rows as they were, ``clip_indexed`` false, no second attempt."""
         world.configure(min_interval=30)
-        sb0, _ = serve_storyboard(youtube, world.pil, tiles=18)
+        sb0, _ = serve_storyboard(
+            youtube, world.pil, tiles=18, fps=storyboard_fps(180.0),
+        )
         youtube.set_ytdlp(describe=describe([sb0], duration=180.0))
         fid = new_id()
         path = add_loft(world, fid, clip_thumbnail_indexed=True)
@@ -611,7 +725,9 @@ class TestTransientFailures:
     def test_a_failure_of_one_file_does_not_stop_another(self, world, youtube):
         """SPEC-ADDON-078 I8: only the file that failed is skipped."""
         world.configure(min_interval=30)
-        sb0, _ = serve_storyboard(youtube, world.pil, tiles=18)
+        sb0, _ = serve_storyboard(
+            youtube, world.pil, tiles=18, fps=storyboard_fps(180.0),
+        )
         youtube.set_ytdlp(fail="ERROR: [youtube] x: Video unavailable")
         failing, fine = new_id(), new_id()
         add_loft(world, failing)
@@ -633,7 +749,9 @@ class TestTheSheetFetchIsNotLogged:
     ):
         """SPEC-ADDON-078 I5: no logger prints a sheet URL or any part of its signed query."""
         world.configure(min_interval=30)
-        sb0, _ = serve_storyboard(youtube, world.pil, tiles=18)
+        sb0, _ = serve_storyboard(
+            youtube, world.pil, tiles=18, fps=storyboard_fps(180.0),
+        )
         for fragment in sb0["fragments"]:
             fragment["url"] += SHEET_QUERY
         youtube.set_ytdlp(describe=describe([sb0], duration=180.0))

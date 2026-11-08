@@ -356,7 +356,7 @@ class Storyboard:
     columns: int
     tile_width: int
     tile_height: int
-    fps: float | None = None
+    fps: float
 
 
 @dataclass(frozen=True)
@@ -390,7 +390,11 @@ def storyboard_of(description: dict[str, Any]) -> Storyboard | None:
         width, height = _positive_int(fmt.get("width")), _positive_int(fmt.get("height"))
         fps = _positive_number(fmt.get("fps"))
         fragments = fmt.get("fragments")
-        if not (rows and columns and width and height) or not isinstance(fragments, list):
+        if (
+            not (rows and columns and width and height)
+            or fps is None
+            or not isinstance(fragments, list)
+        ):
             return None
         sheets: list[tuple[str, float]] = []
         for fragment in fragments:
@@ -411,33 +415,39 @@ def known_duration(description: dict[str, Any], indexed: float | None) -> float 
     return _positive_number(description.get("duration")) or _positive_number(indexed)
 
 
+def _tile_interval(duration: float, count: int) -> float:
+    if count <= 1:
+        # No interval is recoverable from a single tile; one second is where
+        # the whole-second search starts.
+        return 1.0
+    for seconds in range(1, math.ceil(duration) + 1):
+        if math.ceil(duration / seconds) + 1 == count:
+            return float(seconds)
+    return duration / (count - 1)
+
+
 def kept_tiles(board: Storyboard, duration: float, max_frames: int) -> list[Tile]:
-    """The tiles below their sheet's end and ``duration``, spread for at most ``max_frames``.
+    """The tiles below ``duration``, numbered across sheets, spread for at most ``max_frames``.
 
     The first tile is always kept; a later one only when it is at least
     ``duration / max_frames`` after the last kept one.
     """
     spacing = duration / max(1, max_frames)
+    count = round(board.fps * duration)
+    interval = _tile_interval(duration, count)
     per_sheet = board.rows * board.columns
-    # A sheet's own duration says how long it lasts, not how its pictures are
-    # spaced: the last sheet is short and holds fewer pictures at the same
-    # interval as the rest.
-    interval = (
-        1.0 / board.fps if board.fps
-        else max(seconds for _, seconds in board.sheets) / per_sheet
-    )
     kept: list[Tile] = []
-    start = 0.0
-    for sheet, (_, seconds) in enumerate(board.sheets):
-        end = start + seconds
+    for sheet in range(len(board.sheets)):
         for cell in range(per_sheet):
-            timestamp = start + cell * interval
-            if timestamp >= end or timestamp >= duration:
+            index = sheet * per_sheet + cell
+            if index >= count:
+                continue
+            timestamp = index * interval
+            if timestamp >= duration:
                 continue
             if kept and timestamp - kept[-1].timestamp < spacing - 1e-9:
                 continue
             kept.append(Tile(sheet, cell, timestamp))
-        start = end
     return kept
 
 
