@@ -43,6 +43,9 @@ function SceneCard({ segment }: { segment: SceneSegment }) {
   // Rounds down, as `?t=` links do everywhere: a link at the rounded-up
   // second would open after the first frame of the scene.
   const href = `/files/${segment.file_id}?t=${Math.floor(segment.start)}`;
+  // Scene rows carry no mime type, so the extension is the only signal that a
+  // candidate is a `.loft` reference.
+  const isLoft = segment.filename.toLowerCase().endsWith(".loft");
 
   const open = (e: MouseEvent<HTMLAnchorElement>) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
@@ -56,7 +59,7 @@ function SceneCard({ segment }: { segment: SceneSegment }) {
       onClick={open}
       className="group min-w-0 overflow-hidden rounded-lg bg-bg-card focus-visible:outline-2 focus-visible:outline-accent hover:outline-2 hover:outline-accent"
     >
-      {frameFailed ? (
+      {frameFailed || isLoft ? (
         <div className="aspect-video w-full bg-bg-elevated" />
       ) : (
         <img
