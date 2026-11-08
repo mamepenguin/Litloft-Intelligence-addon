@@ -127,6 +127,14 @@ describe("AdminFeaturesSettingsSection", () => {
     expect(await screen.findByText("invalid mode")).toBeInTheDocument();
   });
 
+  it("wraps long feature labels and help text inside the table", async () => {
+    await renderWith({});
+    for (const header of screen.getAllByRole("columnheader")) {
+      expect(header).toHaveClass("break-anywhere");
+    }
+    expect(screen.getAllByRole("cell")[0]).toHaveClass("break-anywhere");
+  });
+
   it("hides the overrides banner when no override is active", async () => {
     await renderWith({});
     expect(screen.queryByTestId("features-overrides-banner")).toBeNull();

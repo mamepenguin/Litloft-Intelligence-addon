@@ -8,8 +8,8 @@
  *      is visible but `getClipTimestamps` must not run.
  *   2. Expand toggle fetches once. Re-collapse → re-expand does NOT
  *      re-fetch.
- *   3. Frames are laid out in a horizontally scrollable strip (no
- *      multi-row grid).
+ *   3. A mouse environment gets wrapped rows in a box about two rows
+ *      tall; touch keeps one horizontally scrollable row.
  *   4. When the API reports more timestamps than `PAGE_SIZE`, the
  *      sentinel is rendered for the IntersectionObserver-driven
  *      infinite scroll.
@@ -124,7 +124,7 @@ describe("ClipFramesSection", () => {
     expect(mocked).toHaveBeenCalledTimes(1);
   });
 
-  it("renders all frames inside a single horizontally-scrollable strip", async () => {
+  it("wraps its frames on a mouse and scrolls sideways on touch", async () => {
     mocked.mockResolvedValue({ file_id: "f1", drive: "drive1", timestamps: makeTimestamps(5) });
     renderSection();
 
@@ -139,9 +139,12 @@ describe("ClipFramesSection", () => {
     const frameButton = firstThumb.closest("button");
     expect(frameButton).not.toBeNull();
     const strip = frameButton!.parentElement!;
-    expect(strip.className).toMatch(/overflow-x-auto/);
-    expect(strip.className).toMatch(/flex/);
-    // Filmstrip is one row, never a multi-row grid.
+    expect(strip.className).toMatch(/\bflex-wrap\b/);
+    expect(strip.className).toMatch(/\bmouse:overflow-y-auto\b/);
+    expect(strip.className).toMatch(/\bmouse:max-h-/);
+    expect(strip.className).toMatch(/\bpointer-coarse:flex-nowrap\b/);
+    expect(strip.className).toMatch(/\bpointer-coarse:overflow-x-auto\b/);
+    expect(strip.className).not.toMatch(/(?:^|\s)overflow-x-auto(?:\s|$)/);
     expect(strip.className).not.toMatch(/grid/);
   });
 

@@ -1,13 +1,7 @@
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type PointerEvent as ReactPointerEvent,
-} from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Film } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronUp, Film } from "lucide-react";
 import { useTranslations } from "next-intl";
 
 import { getClipTimestamps, getFrameUrl } from "./api";
@@ -30,7 +24,6 @@ interface ClipFramesSectionProps {
 }
 
 const PAGE_SIZE = 20;
-const ARROW_SCROLL_PX_PER_FRAME = 8;
 const NEAR_END_ROOT_MARGIN_PX = 400;
 
 // .loft files report file_type='video' but are stored as
@@ -58,20 +51,6 @@ export default function ClipFramesSection({
 
   const stripRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
-
-  // Detect a fine pointer (mouse) at runtime. Tailwind's arbitrary
-  // ``[@media(hover:hover)]:`` variant is finicky to combine with
-  // ``hidden`` reliably across the project's Tailwind v4 setup, and the
-  // arrows are decorative anyway — touch users keep native scroll.
-  const [hasFinePointer, setHasFinePointer] = useState(false);
-  useEffect(() => {
-    if (typeof window === "undefined" || !window.matchMedia) return;
-    const mq = window.matchMedia("(pointer: fine)");
-    setHasFinePointer(mq.matches);
-    const onChange = (e: MediaQueryListEvent) => setHasFinePointer(e.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
 
   // Reset visible count when the file changes so a previous file's
   // scroll position doesn't pre-load frames for a new video.
@@ -135,43 +114,6 @@ export default function ClipFramesSection({
     return () => observer.disconnect();
   }, [expanded, timestamps, showCount]);
 
-  // Press-and-hold arrow scroll. requestAnimationFrame increments
-  // scrollLeft until pointerup / pointercancel / pointerleave, with
-  // pointer capture so the gesture survives a small drift off the
-  // button.
-  const scrollDirRef = useRef(0);
-  const rafRef = useRef<number | null>(null);
-  const stopArrowScroll = useCallback(() => {
-    scrollDirRef.current = 0;
-    if (rafRef.current !== null) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
-  }, []);
-  const startArrowScroll = useCallback(
-    (direction: -1 | 1, evt: ReactPointerEvent<HTMLButtonElement>) => {
-      evt.preventDefault();
-      try {
-        evt.currentTarget.setPointerCapture(evt.pointerId);
-      } catch {
-        // ignore — browsers without pointer capture still get tick scroll
-      }
-      scrollDirRef.current = direction;
-      const tick = () => {
-        const strip = stripRef.current;
-        if (!strip || scrollDirRef.current === 0) {
-          rafRef.current = null;
-          return;
-        }
-        strip.scrollLeft += direction * ARROW_SCROLL_PX_PER_FRAME;
-        rafRef.current = requestAnimationFrame(tick);
-      };
-      rafRef.current = requestAnimationFrame(tick);
-    },
-    []
-  );
-  useEffect(() => () => stopArrowScroll(), [stopArrowScroll]);
-
   const totalLabel = timestamps ? ` (${timestamps.length})` : "";
   const visible = timestamps ? timestamps.slice(0, showCount) : [];
 
@@ -208,79 +150,43 @@ export default function ClipFramesSection({
       </button>
 
       {expanded && (
-        <div id={`clip-frames-${fileId}`} className="relative mt-2">
+        <div id={`clip-frames-${fileId}`} className="mt-2">
           {loading && (
             <div className="text-xs text-text-muted">…</div>
           )}
           {timestamps && timestamps.length > 0 && (
-            <>
-              <div
-                ref={stripRef}
-                // ``p-1`` reserves 4px on every side so each card's
-                // ``hover:ring-2`` outline isn't clipped by the
-                // ``overflow-x-auto`` viewport (overflow-x:auto also
-                // clips overflow-y, so an outer ring with no padding
-                // gets cut off on the top / bottom edges).
-                className="scrollbar-hover flex gap-2 overflow-x-auto p-1"
-              >
-                {visible.map((ts) => (
-                  <button
-                    key={ts.start}
-                    onClick={() => seekTo(ts.start)}
-                    className="group w-48 shrink-0 cursor-pointer overflow-hidden rounded-lg bg-bg-card transition-colors hover:ring-2 hover:ring-accent"
-                  >
-                    <img
-                      src={getFrameUrl(fileId, ts.start)}
-                      alt={ts.content_preview}
-                      loading="lazy"
-                      className="aspect-video w-full object-cover"
-                    />
-                    <div className="px-1.5 py-1 text-center text-xs text-text-muted group-hover:text-accent">
-                      {formatDuration(ts.start)}
-                    </div>
-                  </button>
-                ))}
-                {showCount < timestamps.length && (
-                  <div
-                    ref={sentinelRef}
-                    aria-hidden
-                    className="w-1 shrink-0"
+            <div
+              ref={stripRef}
+              // ``p-1`` reserves 4px on every side so each card's
+              // ``hover:ring-2`` outline isn't clipped by the scroll
+              // container, which clips both axes.
+              className="scrollbar-hover flex flex-wrap gap-2 p-1 mouse:max-h-[17.5rem] mouse:overflow-y-auto pointer-coarse:flex-nowrap pointer-coarse:overflow-x-auto"
+            >
+              {visible.map((ts) => (
+                <button
+                  key={ts.start}
+                  onClick={() => seekTo(ts.start)}
+                  className="group w-48 shrink-0 cursor-pointer overflow-hidden rounded-lg bg-bg-card transition-colors hover:ring-2 hover:ring-accent"
+                >
+                  <img
+                    src={getFrameUrl(fileId, ts.start)}
+                    alt={ts.content_preview}
+                    loading="lazy"
+                    className="aspect-video w-full object-cover"
                   />
-                )}
-              </div>
-
-              {/* Press-and-hold arrow overlays for mouse users. Hidden
-                  on touch devices because the native horizontal swipe
-                  is the better gesture there. Pointer-fine detection is
-                  done in JS (matchMedia) for reliability across the
-                  project's Tailwind v4 setup. */}
-              {hasFinePointer && (
-                <>
-                  <button
-                    type="button"
-                    aria-label="Scroll left"
-                    onPointerDown={(e) => startArrowScroll(-1, e)}
-                    onPointerUp={stopArrowScroll}
-                    onPointerCancel={stopArrowScroll}
-                    onPointerLeave={stopArrowScroll}
-                    className="absolute left-2 top-[2.375rem] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-bg-primary/90 text-text-primary shadow-card ring-1 ring-bg-border backdrop-blur-sm transition-colors hover:bg-bg-primary"
-                  >
-                    <ChevronLeft size={22} />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Scroll right"
-                    onPointerDown={(e) => startArrowScroll(1, e)}
-                    onPointerUp={stopArrowScroll}
-                    onPointerCancel={stopArrowScroll}
-                    onPointerLeave={stopArrowScroll}
-                    className="absolute right-2 top-[2.375rem] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-bg-primary/90 text-text-primary shadow-card ring-1 ring-bg-border backdrop-blur-sm transition-colors hover:bg-bg-primary"
-                  >
-                    <ChevronRight size={22} />
-                  </button>
-                </>
+                  <div className="px-1.5 py-1 text-center text-xs text-text-muted group-hover:text-accent">
+                    {formatDuration(ts.start)}
+                  </div>
+                </button>
+              ))}
+              {showCount < timestamps.length && (
+                <div
+                  ref={sentinelRef}
+                  aria-hidden
+                  className="w-1 shrink-0"
+                />
               )}
-            </>
+            </div>
           )}
         </div>
       )}
