@@ -754,7 +754,7 @@ describe("SPEC-ADDON-056 6 and I11 - what belongs to the file", () => {
     await waitFor(() => expect(document.body.textContent).toContain("The author"));
   }
 
-  it("keeps the question and the answer across a tab switch or a closed sheet", async () => {
+  it("SPEC-ADDON-056 I11 as revised - keeps the question and the answer across a tab switch or a closed sheet, with the box emptied by the send", async () => {
     const view = await renderTab();
     await answered();
 
@@ -763,7 +763,8 @@ describe("SPEC-ADDON-056 6 and I11 - what belongs to the file", () => {
       render(<AskTab {...view.props} />);
     });
 
-    expect(await screen.findByDisplayValue("who wrote this")).toBeTruthy();
+    expect((await questionBox()).value).toBe("");
+    expect(document.body.textContent).toContain("who wrote this");
     expect(document.body.textContent).toContain("The author");
   });
 
@@ -820,7 +821,8 @@ describe("SPEC-ADDON-056 6 and I11 - what belongs to the file", () => {
 
     render(<AskTab {...view.props} />);
 
-    expect(await screen.findByDisplayValue("who wrote this")).toBeTruthy();
+    expect((await questionBox()).value).toBe("");
+    expect(document.body.textContent).toContain("who wrote this");
     await waitFor(() =>
       expect(document.body.textContent).toContain("Half an answer. The rest."),
     );
@@ -837,7 +839,8 @@ describe("SPEC-ADDON-056 6 and I11 - what belongs to the file", () => {
     view.unmount();
     render(<AskTab {...view.props} />);
 
-    expect(await screen.findByDisplayValue("who wrote this")).toBeTruthy();
+    expect((await questionBox()).value).toBe("");
+    expect(document.body.textContent).toContain("who wrote this");
     expect(document.body.textContent).toContain("Half an answer.");
 
     await push(stream, frame("answer_chunk", { delta: " The rest." }));
