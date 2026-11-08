@@ -316,8 +316,8 @@ export default function AskTab({
       <div
         className={
           fillHeight
-            ? "min-h-0 flex-1 space-y-3 overflow-y-auto pb-2"
-            : "space-y-3 pb-2"
+            ? "min-h-0 flex-1 space-y-6 overflow-y-auto pb-4"
+            : "space-y-6 pb-4"
         }
       >
         {turns.map((turn, index) => (
@@ -369,7 +369,7 @@ export default function AskTab({
         onSubmit={submit}
         className={
           fillHeight
-            ? "shrink-0 space-y-2 border-t border-bg-border bg-bg-card pt-2"
+            ? "shrink-0 space-y-2 border-t border-bg-border bg-bg-card pt-3"
             : "space-y-2"
         }
       >
@@ -382,64 +382,68 @@ export default function AskTab({
           aria-label={t("placeholder")}
           className="w-full resize-y rounded-2xl border border-bg-border bg-bg-card p-3 text-sm text-text-primary placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
         />
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          {showNewConversation && (
-            <Button
-              type="button"
-              variant="secondary"
-              size="md"
-              onClick={() => clearAskThread(fileId)}
-            >
-              {t("newConversation")}
-            </Button>
-          )}
-          {showSave && (
-            <Button
-              type="button"
-              variant="secondary"
-              size="md"
-              onClick={() => setSaveOpen(true)}
-            >
-              {ta("saveToKnowledge")}
-            </Button>
-          )}
-          {showSavedLink && savedNote && (
-            <div className="flex items-center gap-1.5 text-xs text-accent-teal">
-              <BookmarkPlus size={12} />
-              <a
-                href={`/drive/${encodeURIComponent(drive)}/addons/knowledge?edit=${encodeURIComponent(savedNote.fileId)}`}
-                className="underline underline-offset-2 hover:opacity-80"
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {showNewConversation && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="md"
+                onClick={() => clearAskThread(fileId)}
               >
-                {ta("saveSuccess")} — {ta("openNote")}
-              </a>
-            </div>
-          )}
-          {profileOffered && choices && (
-            <select
-              value={askProfile ?? ""}
-              onChange={(event) => setChosenProfile(event.target.value || null)}
-              disabled={streaming}
-              aria-label={tc("model")}
-              className="max-w-36 truncate rounded-lg border border-bg-border bg-bg-card px-2 py-1.5 text-xs text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring disabled:opacity-50"
+                {t("newConversation")}
+              </Button>
+            )}
+            {showSave && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="md"
+                onClick={() => setSaveOpen(true)}
+              >
+                {ta("saveToKnowledge")}
+              </Button>
+            )}
+            {showSavedLink && savedNote && (
+              <div className="flex items-center gap-1.5 text-xs text-accent-teal">
+                <BookmarkPlus size={12} />
+                <a
+                  href={`/drive/${encodeURIComponent(drive)}/addons/knowledge?edit=${encodeURIComponent(savedNote.fileId)}`}
+                  className="underline underline-offset-2 hover:opacity-80"
+                >
+                  {ta("saveSuccess")} — {ta("openNote")}
+                </a>
+              </div>
+            )}
+          </div>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            {profileOffered && choices && (
+              <select
+                value={askProfile ?? ""}
+                onChange={(event) => setChosenProfile(event.target.value || null)}
+                disabled={streaming}
+                aria-label={tc("model")}
+                className="max-w-36 truncate rounded-lg border border-bg-border bg-bg-card px-2 py-1.5 text-xs text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring disabled:opacity-50"
+              >
+                {choices.auto !== null && (
+                  <option value="">{tc("auto")}</option>
+                )}
+                {choices.choices.map((choice) => (
+                  <option key={choice.name} value={choice.name}>
+                    {choiceLabel(choice, tc("offhost"))}
+                  </option>
+                ))}
+              </select>
+            )}
+            <Button
+              type="submit"
+              variant="primary"
+              size="md"
+              disabled={!canSubmit}
             >
-              {choices.auto !== null && (
-                <option value="">{tc("auto")}</option>
-              )}
-              {choices.choices.map((choice) => (
-                <option key={choice.name} value={choice.name}>
-                  {choiceLabel(choice, tc("offhost"))}
-                </option>
-              ))}
-            </select>
-          )}
-          <Button
-            type="submit"
-            variant="primary"
-            size="md"
-            disabled={!canSubmit}
-          >
-            {t("submit")}
-          </Button>
+              {t("submit")}
+            </Button>
+          </div>
         </div>
       </form>
 
