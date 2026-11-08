@@ -274,15 +274,18 @@ def video_format(
 
 def storyboard_format(
     base: str, sheets: list[tuple[str, float]], *, rows: int = 3, columns: int = 3,
-    tile: tuple[int, int] = (320, 180),
+    tile: tuple[int, int] = (320, 180), fps: float | None = None,
 ) -> dict:
-    return {
+    fmt = {
         "format_id": "sb0", "format_note": "storyboard", "ext": "mhtml",
         "protocol": "mhtml", "vcodec": "none", "acodec": "none",
         "width": tile[0], "height": tile[1], "rows": rows, "columns": columns,
         "url": f"{base}/sb/{sheets[0][0]}" if sheets else "",
         "fragments": [{"url": f"{base}/sb/{n}", "duration": d} for n, d in sheets],
     }
+    if fps is not None:
+        fmt["fps"] = fps
+    return fmt
 
 
 def describe(formats: list[dict], *, duration: float | None = None) -> dict:

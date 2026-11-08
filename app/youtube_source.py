@@ -356,6 +356,7 @@ class Storyboard:
     columns: int
     tile_width: int
     tile_height: int
+    fps: float | None = None
 
 
 @dataclass(frozen=True)
@@ -387,6 +388,7 @@ def storyboard_of(description: dict[str, Any]) -> Storyboard | None:
             continue
         rows, columns = _positive_int(fmt.get("rows")), _positive_int(fmt.get("columns"))
         width, height = _positive_int(fmt.get("width")), _positive_int(fmt.get("height"))
+        fps = _positive_number(fmt.get("fps"))
         fragments = fmt.get("fragments")
         if not (rows and columns and width and height) or not isinstance(fragments, list):
             return None
@@ -400,7 +402,7 @@ def storyboard_of(description: dict[str, Any]) -> Storyboard | None:
             sheets.append((url, seconds))
         if not sheets:
             return None
-        return Storyboard(tuple(sheets), rows, columns, width, height)
+        return Storyboard(tuple(sheets), rows, columns, width, height, fps)
     return None
 
 
@@ -410,24 +412,32 @@ def known_duration(description: dict[str, Any], indexed: float | None) -> float 
 
 
 def kept_tiles(board: Storyboard, duration: float, max_frames: int) -> list[Tile]:
-    """The tiles below ``duration``, in time order, spread for at most ``max_frames``.
+    """The tiles below their sheet's end and ``duration``, spread for at most ``max_frames``.
 
     The first tile is always kept; a later one only when it is at least
     ``duration / max_frames`` after the last kept one.
     """
     spacing = duration / max(1, max_frames)
     per_sheet = board.rows * board.columns
+    # A sheet's own duration says how long it lasts, not how its pictures are
+    # spaced: the last sheet is short and holds fewer pictures at the same
+    # interval as the rest.
+    interval = (
+        1.0 / board.fps if board.fps
+        else max(seconds for _, seconds in board.sheets) / per_sheet
+    )
     kept: list[Tile] = []
     start = 0.0
     for sheet, (_, seconds) in enumerate(board.sheets):
+        end = start + seconds
         for cell in range(per_sheet):
-            timestamp = start + cell * seconds / per_sheet
-            if timestamp >= duration:
+            timestamp = start + cell * interval
+            if timestamp >= end or timestamp >= duration:
                 continue
             if kept and timestamp - kept[-1].timestamp < spacing - 1e-9:
                 continue
             kept.append(Tile(sheet, cell, timestamp))
-        start += seconds
+        start = end
     return kept
 
 

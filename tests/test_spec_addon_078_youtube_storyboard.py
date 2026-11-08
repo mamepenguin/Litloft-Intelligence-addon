@@ -165,15 +165,28 @@ def _png(pil, size, paint) -> bytes:
 def serve_storyboard(
     youtube, pil, *, tiles: int, rows: int = 3, columns: int = 3,
     tile: tuple[int, int] = (320, 180), seconds_per_tile: float = 10.0,
+    fps: float | None = None, last_sheet_seconds: float | None = None,
+    last_sheet_rows: int | None = None, last_sheet_cells: int | None = None,
 ) -> tuple[dict, float]:
-    """Sheets that hold ``tiles`` tiles in all, and the ``sb0`` format naming them."""
+    """Sheets that hold ``tiles`` tiles in all, and the ``sb0`` format naming them.
+
+    The last sheet can be shorter than the declared grid (a smaller image and
+    fewer painted cells), as YouTube's last sheet usually is.
+    """
     per_sheet = rows * columns
+    count = math.ceil(tiles / per_sheet)
     sheets = []
-    for sheet in range(math.ceil(tiles / per_sheet)):
-        def paint(image, sheet=sheet):
-            for cell in range(per_sheet):
+    for sheet in range(count):
+        last = sheet == count - 1
+        image_rows = last_sheet_rows if last and last_sheet_rows else rows
+        painted = last_sheet_cells if last and last_sheet_cells else per_sheet
+
+        def paint(image, sheet=sheet, image_rows=image_rows, painted=painted):
+            for cell in range(painted):
                 index = sheet * per_sheet + cell
                 row, col = divmod(cell, columns)
+                if row >= image_rows:
+                    continue
                 colour = ((index + 1) & 255, (index + 1) >> 8, TILE_MARK)
                 for y in range(row * tile[1], (row + 1) * tile[1]):
                     for x in range(col * tile[0], (col + 1) * tile[0]):
@@ -181,11 +194,16 @@ def serve_storyboard(
 
         name = f"sheet{sheet}.png"
         youtube.serve_sheet(
-            name, _png(pil, (columns * tile[0], rows * tile[1]), paint),
+            name, _png(pil, (columns * tile[0], image_rows * tile[1]), paint),
         )
-        sheets.append((name, seconds_per_tile * per_sheet))
+        seconds = seconds_per_tile * per_sheet
+        if last and last_sheet_seconds is not None:
+            seconds = last_sheet_seconds
+        sheets.append((name, seconds))
     return (
-        storyboard_format(youtube.base, sheets, rows=rows, columns=columns, tile=tile),
+        storyboard_format(
+            youtube.base, sheets, rows=rows, columns=columns, tile=tile, fps=fps,
+        ),
         seconds_per_tile,
     )
 
@@ -339,7 +357,7 @@ class TestWhichTilesAreKept:
     def test_the_declared_grid_and_tile_size_cut_the_sheets(
         self, rows, columns, tile, tiles, per_tile, world, youtube,
     ):
-        """SPEC-ADDON-078 step 3: tile ``k`` of a sheet is at ``s + k * d / (rows * columns)``."""
+        """Tiles are cut at the declared grid and sized by the declared tile size."""
         world.configure(min_interval=30, max_frames=500)
         sb0, _ = serve_storyboard(
             youtube, world.pil, tiles=tiles, rows=rows, columns=columns,
@@ -357,6 +375,40 @@ class TestWhichTilesAreKept:
         )
         assert [ts for _, ts in rows_of(world, fid)] == pytest.approx(expected)
         assert world.embedder.tiles == [round(ts / per_tile) for ts in expected]
+
+
+class TestAShortLastSheet:
+    @pytest.mark.parametrize(
+        ("fps", "duration"),
+        [(0.1, 240.0), (None, 240.0), (0.1, 205.0)],
+        ids=["declared-fps", "no-fps-longest-sheet", "cells-past-the-video-duration"],
+    )
+    def test_the_short_last_sheet_keeps_the_tile_interval(
+        self, fps, duration, world, youtube,
+    ):
+        """A sheet's own length does not change the interval, and its empty cells go."""
+        world.configure(min_interval=30, max_frames=500)
+        sb0, per_tile = serve_storyboard(
+            youtube, world.pil, tiles=23, fps=fps, last_sheet_seconds=50.0,
+            last_sheet_rows=2, last_sheet_cells=5,
+        )
+        youtube.set_ytdlp(describe=describe([sb0], duration=duration))
+        fid = new_id()
+        add_loft(world, fid)
+
+        assert run(fid) is True
+
+        expected = [
+            ts for ts in (
+                [n * per_tile for n in range(18)]
+                + [180.0 + n * per_tile for n in range(5)]
+            )
+            if ts < duration
+        ]
+        rows = rows_of(world, fid)
+        assert [ts for _, ts in rows] == pytest.approx(expected)
+        assert world.embedder.tiles == list(range(len(expected)))
+        assert flags_of(world, fid)[0] is True
 
 
 class TestTheVideosDuration:
