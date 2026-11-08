@@ -273,7 +273,7 @@ export default function VisualIndexSection({
           {data.scenes.length > 0 && (
             <div
               ref={stripRef}
-              className="scrollbar-hover flex gap-3 overflow-x-auto p-1"
+              className="scrollbar-hover flex flex-wrap gap-3 p-1 mouse:max-h-[30.75rem] mouse:overflow-y-auto pointer-coarse:flex-nowrap pointer-coarse:overflow-x-auto"
             >
               {visibleScenes.map((scene) => (
                 <SceneCard

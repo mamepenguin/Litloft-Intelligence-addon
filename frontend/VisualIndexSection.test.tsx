@@ -300,6 +300,21 @@ describe("VisualIndexSection", () => {
     expect(images[0]).toHaveAttribute("src", "/frame/f1/5");
   });
 
+  it("wraps its scene row on a mouse and scrolls sideways on touch", async () => {
+    vi.mocked(getVideoVisualIndex).mockResolvedValue(activeResult);
+    renderSection();
+    fireEvent.click(await screen.findByText("Visual index · 2 scenes"));
+    const images = await screen.findAllByRole("img");
+    const row = images[0]!.closest("button")!.parentElement!.parentElement!;
+
+    expect(row.className).toMatch(/\bflex-wrap\b/);
+    expect(row.className).toMatch(/\bmouse:overflow-y-auto\b/);
+    expect(row.className).toMatch(/\bmouse:max-h-/);
+    expect(row.className).toMatch(/\bpointer-coarse:flex-nowrap\b/);
+    expect(row.className).toMatch(/\bpointer-coarse:overflow-x-auto\b/);
+    expect(row.className).not.toMatch(/(?:^|\s)overflow-x-auto(?:\s|$)/);
+  });
+
   // -- Scene card content ---------------------------------------------------
 
   it("shows visible_text only when present", async () => {
