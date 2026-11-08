@@ -443,6 +443,7 @@ def test_loft_with_traversing_thumbnail_path_skips_cleanly(
     _seed_indexed_file(
         Session, "loft-evil",
         mime_type="application/vnd.litloft.loft+json",
+        file_path=_non_youtube_loft(tmp_path),
         thumbnail_path="../../etc/passwd",
     )
 

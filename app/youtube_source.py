@@ -87,10 +87,9 @@ def read_loft(
 
     validate = validate or validate_file_path
 
-    path = file_path
-    if drive and file_path:
-        path = resolve_file_path(drive, file_path)
-    path = resolve_stored_path(path)
+    path = resolve_stored_path(
+        resolve_file_path(drive, file_path) if drive and file_path else file_path
+    )
     if not path or not validate(path):
         raise LoftNotAccessible("loft path not accessible")
     try:
