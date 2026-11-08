@@ -34,6 +34,7 @@ from tests.youtube_frame_doubles import (  # noqa: F401 - fixtures
     describe,
     everything_logged,
     needs_ffmpeg,
+    webp_size,
     youtube,
 )
 
@@ -84,6 +85,19 @@ class TestTheFrameAtThePosition:
         assert _decoded(wire) == cached.read_bytes()
         assert sorted(p.name for p in cached.parent.iterdir()) == ["12345.large.webp"]
         assert len(youtube.lookups()) == 1
+
+    async def test_the_attached_frame_is_the_large_size_of_the_stream(
+        self, db, addon, llm, call, tmp_path, youtube,
+    ):
+        """SPEC-ADDON-077 I6: the image is the ``large`` frame (1280 px), not a ``small`` one."""
+        _loft(db, tmp_path)
+        _serve(youtube)
+        _, wire = vision_client(llm)
+
+        await ask(call, VIDEO, position=12.0)
+
+        assert webp_size(_decoded(wire), tmp_path) == (1280, 720)
+
 
 class TestWhenTheFrameCannotBeRead:
     @pytest.mark.parametrize("how", ["lookup", "ffmpeg", "no-format"])
