@@ -4,17 +4,15 @@
  * Spec / hako: KMScjkyqGb2vy9zluV4Bp
  *
  * Covers:
- *   1. Closed-by-default: NO API call fires on mount. The section header
- *      is visible but `getClipTimestamps` must not run.
- *   2. Expand toggle fetches once. Re-collapse → re-expand does NOT
- *      re-fetch.
- *   3. A mouse environment gets wrapped rows in a box about two rows
+ *   1. A native video: NO API call on mount, the header is visible, the
+ *      frames come from the frame route, and a zero-row answer hides it.
+ *   2. A mouse environment gets wrapped rows in a box about two rows
  *      tall; touch keeps one horizontally scrollable row.
- *   4. When the API reports more timestamps than `PAGE_SIZE`, the
+ *   3. When the API reports more timestamps than `PAGE_SIZE`, the
  *      sentinel is rendered for the IntersectionObserver-driven
  *      infinite scroll.
- *   5. When the API reports zero timestamps, the section unmounts so the
- *      file detail page doesn't show an empty section.
+ *   4. A `.loft` fetches its scene times on mount and shows the
+ *      storyboard tiles (SPEC-ADDON-080).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -23,34 +21,82 @@ import {
   screen,
   fireEvent,
   waitFor,
+  act,
   cleanup,
 } from "@testing-library/react";
 import { NextIntlClientProvider } from "next-intl";
 
+import type { MediaController } from "@/lib/mediaController";
+
 vi.mock("@/addons/intelligence/api", () => ({
   getClipTimestamps: vi.fn(),
-  getFrameUrl: (fileId: string, t: number) =>
-    `/api/addons/intelligence/files/${fileId}/frame?t=${t}`,
+  getFrameUrl: vi.fn(
+    (fileId: string, t: number) =>
+      `/api/addons/intelligence/files/${fileId}/frame?t=${t}`,
+  ),
+  getSceneTileUrl: vi.fn(
+    (fileId: string, t: number) =>
+      `/api/addons/intelligence/files/${fileId}/scene-tile?t=${t}`,
+  ),
 }));
 
 import ClipFramesSection from "@/addons/intelligence/ClipFramesSection";
-import { getClipTimestamps } from "@/addons/intelligence/api";
+import {
+  getClipTimestamps,
+  getFrameUrl,
+  getSceneTileUrl,
+} from "@/addons/intelligence/api";
 
 const mocked = getClipTimestamps as unknown as ReturnType<typeof vi.fn>;
+const frameUrl = getFrameUrl as unknown as ReturnType<typeof vi.fn>;
+const sceneTileUrl = getSceneTileUrl as unknown as ReturnType<typeof vi.fn>;
 
-function makeTimestamps(n: number) {
+const LOFT_MIME = "application/vnd.litloft.loft+json";
+
+function makeTimestamps(n: number, step = 5) {
   return Array.from({ length: n }, (_, i) => ({
-    start: i * 5,
-    content_preview: `Frame at ${i * 5}s`,
+    start: i * step,
+    content_preview: `Frame at ${i * step}s`,
   }));
 }
 
-function renderSection(props: {
+function controller(): MediaController {
+  return {
+    seek: vi.fn(),
+    play: vi.fn(),
+    pause: vi.fn(),
+    togglePlay: vi.fn(),
+    toggleMute: vi.fn(),
+    toggleFullscreen: vi.fn(),
+    getCurrentTime: () => 0,
+    getDuration: () => 0,
+    isPaused: () => true,
+    isMuted: () => true,
+    getVolume: () => 1,
+    setVolume: () => {},
+    getPlaybackRate: () => 1,
+    setPlaybackRate: () => {},
+    getBufferedFraction: () => 0,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function view(props: {
   fileId?: string;
   fileType?: string;
   mimeType?: string;
+  mediaController?: MediaController;
 } = {}) {
-  return render(
+  return (
     <NextIntlClientProvider
       locale="en"
       messages={{ searchIndex: { clipTitle: "CLIP Frames" } }}
@@ -60,9 +106,29 @@ function renderSection(props: {
         drive="drive1"
         fileType={props.fileType ?? "video"}
         mimeType={props.mimeType ?? "video/mp4"}
+        mediaController={props.mediaController}
       />
-    </NextIntlClientProvider>,
+    </NextIntlClientProvider>
   );
+}
+
+function renderSection(
+  props: {
+    fileId?: string;
+    fileType?: string;
+    mimeType?: string;
+    mediaController?: MediaController;
+  } = {},
+) {
+  return render(view(props));
+}
+
+function loft(props: { fileId?: string; mediaController?: MediaController } = {}) {
+  return {
+    ...props,
+    fileType: "video",
+    mimeType: LOFT_MIME,
+  };
 }
 
 describe("ClipFramesSection", () => {
@@ -172,18 +238,6 @@ describe("ClipFramesSection", () => {
     expect(mocked).not.toHaveBeenCalled();
   });
 
-  it("renders nothing (no header, no fetch) for .loft remote embeds", async () => {
-    mocked.mockResolvedValue({ file_id: "f1", drive: "drive1", timestamps: makeTimestamps(3) });
-    const { container } = renderSection({
-      fileType: "video",
-      mimeType: "application/vnd.litloft.loft+json",
-    });
-
-    expect(container.firstChild).toBeNull();
-    await Promise.resolve();
-    expect(mocked).not.toHaveBeenCalled();
-  });
-
   it("renders the infinite-scroll sentinel when more frames than PAGE_SIZE", async () => {
     mocked.mockResolvedValue({ file_id: "f1", drive: "drive1", timestamps: makeTimestamps(35) });
     renderSection();
@@ -202,5 +256,180 @@ describe("ClipFramesSection", () => {
       (el) => el.getAttribute("aria-hidden") === "true",
     );
     expect(sentinel).toBeDefined();
+  });
+});
+
+describe("the .loft panel (SPEC-ADDON-080)", () => {
+  beforeEach(() => {
+    // ``mockReset`` rather than ``mockClear``: an unconsumed
+    // ``mockReturnValueOnce`` from one of these cases would otherwise
+    // answer the next case's first request with a promise nobody settles.
+    mocked.mockReset();
+    frameUrl.mockClear();
+    sceneTileUrl.mockClear();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("requests the scene times on mount and renders nothing while they are pending (SPEC-ADDON-080)", async () => {
+    const pending = deferred<{ file_id: string; drive: string; timestamps: { start: number; content_preview: string }[] }>();
+    mocked.mockReturnValue(pending.promise);
+
+    const { container } = renderSection(loft());
+
+    await waitFor(() => expect(mocked).toHaveBeenCalledTimes(1));
+    expect(mocked).toHaveBeenCalledWith("f1", "drive1");
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("stays hidden when the scene-times request fails, with no retry of its own (SPEC-ADDON-080)", async () => {
+    mocked.mockResolvedValue(null);
+
+    const { container } = renderSection(loft());
+
+    await waitFor(() => expect(mocked).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(container.firstChild).toBeNull();
+    expect(mocked).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays hidden when the file has no scene rows (SPEC-ADDON-080)", async () => {
+    mocked.mockResolvedValue({ file_id: "f1", drive: "drive1", timestamps: [] });
+
+    const { container } = renderSection(loft());
+
+    await waitFor(() => expect(mocked).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("shows the collapsed header with the count and takes twenty pictures from the scene-tile route (SPEC-ADDON-080)", async () => {
+    const rows = makeTimestamps(25);
+    mocked.mockResolvedValue({ file_id: "f1", drive: "drive1", timestamps: rows });
+
+    renderSection(loft());
+
+    const header = await screen.findByRole("button", { name: /CLIP Frames \(25\)/ });
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("img")).toBeNull();
+
+    fireEvent.click(header);
+
+    await waitFor(() => expect(screen.getAllByRole("img").length).toBe(20));
+    const images = screen.getAllByRole("img");
+    images.forEach((image, index) => {
+      expect(image.getAttribute("src")).toBe(
+        `/api/addons/intelligence/files/f1/scene-tile?t=${rows[index].start}`,
+      );
+      expect(image.getAttribute("src")).not.toContain("/frame?");
+    });
+    expect(sceneTileUrl.mock.calls.slice(0, 20)).toEqual(
+      rows.slice(0, 20).map((row) => ["f1", row.start]),
+    );
+    expect(frameUrl).not.toHaveBeenCalled();
+    expect(header).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("refetches when fileId changes and ignores the earlier file's late answer (SPEC-ADDON-080)", async () => {
+    const first = deferred<{ file_id: string; drive: string; timestamps: { start: number; content_preview: string }[] }>();
+    const second = deferred<{ file_id: string; drive: string; timestamps: { start: number; content_preview: string }[] }>();
+    mocked.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+    const rendered = render(view(loft({ fileId: "f1" })));
+    await waitFor(() => expect(mocked).toHaveBeenCalledTimes(1));
+
+    rendered.rerender(view(loft({ fileId: "f2" })));
+    await waitFor(() => expect(mocked).toHaveBeenCalledTimes(2));
+    expect(mocked.mock.calls[1]).toEqual(["f2", "drive1"]);
+
+    second.resolve({
+      file_id: "f2",
+      drive: "drive1",
+      timestamps: [
+        { start: 40, content_preview: "Frame at 40s" },
+        { start: 45, content_preview: "Frame at 45s" },
+      ],
+    });
+    const header = await screen.findByRole("button", { name: /CLIP Frames \(2\)/ });
+
+    first.resolve({
+      file_id: "f1",
+      drive: "drive1",
+      timestamps: [
+        { start: 10, content_preview: "Frame at 10s" },
+        { start: 15, content_preview: "Frame at 15s" },
+      ],
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.click(header);
+    await waitFor(() => expect(screen.getAllByRole("img").length).toBe(2));
+    const sources = screen.getAllByRole("img").map((img) => img.getAttribute("src"));
+    expect(sources).toEqual([
+      "/api/addons/intelligence/files/f2/scene-tile?t=40",
+      "/api/addons/intelligence/files/f2/scene-tile?t=45",
+    ]);
+    expect(screen.queryByAltText("Frame at 10s")).toBeNull();
+  });
+
+  it("shows a blank block with no alt text for a failed tile and keeps its time and seek (SPEC-ADDON-080)", async () => {
+    const seek = vi.fn();
+    const play = vi.fn();
+    const mediaController = { ...controller(), seek, play };
+    mocked.mockResolvedValue({
+      file_id: "f1",
+      drive: "drive1",
+      timestamps: [
+        { start: 65, content_preview: "Frame at 65s" },
+        { start: 70, content_preview: "Frame at 70s" },
+      ],
+    });
+    renderSection(loft({ mediaController }));
+
+    fireEvent.click(await screen.findByRole("button", { name: /CLIP Frames \(2\)/ }));
+    await waitFor(() => expect(screen.getAllByRole("img").length).toBe(2));
+    const requested = sceneTileUrl.mock.calls.length;
+
+    fireEvent.error(screen.getAllByRole("img")[0]);
+
+    expect(screen.queryByAltText("Frame at 65s")).toBeNull();
+    const label = screen.getByText("1:05");
+    expect(label).toBeInTheDocument();
+    expect(sceneTileUrl.mock.calls.length).toBe(requested);
+
+    fireEvent.click(label.closest("button")!);
+
+    expect(seek).toHaveBeenCalledWith(65);
+    expect(play).toHaveBeenCalled();
+  });
+
+  it("keeps the native panel lazy and on the frame route (SPEC-ADDON-080)", async () => {
+    mocked.mockResolvedValue({
+      file_id: "f1",
+      drive: "drive1",
+      timestamps: makeTimestamps(2),
+    });
+    renderSection();
+
+    expect(screen.getByRole("button", { name: /CLIP Frames/ })).toBeInTheDocument();
+    await Promise.resolve();
+    expect(mocked).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /CLIP Frames/ }));
+    await waitFor(() => expect(screen.getAllByRole("img").length).toBe(2));
+    const sources = screen.getAllByRole("img").map((img) => img.getAttribute("src"));
+    expect(sources).toEqual([
+      "/api/addons/intelligence/files/f1/frame?t=0",
+      "/api/addons/intelligence/files/f1/frame?t=5",
+    ]);
+    expect(sceneTileUrl).not.toHaveBeenCalled();
   });
 });
