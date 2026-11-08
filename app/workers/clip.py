@@ -1009,7 +1009,7 @@ def _index_youtube_storyboard(
         return True
 
     frames = settings.indexing.frame_extraction
-    tiles = kept_tiles(board, video_seconds, frames.min_interval, frames.max_frames)
+    tiles = kept_tiles(board, video_seconds, frames.max_frames)
     try:
         embedded = _embed_tiles(board, tiles)
     except _StoryboardFailure as exc:

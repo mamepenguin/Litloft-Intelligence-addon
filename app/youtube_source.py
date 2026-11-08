@@ -409,15 +409,13 @@ def known_duration(description: dict[str, Any], indexed: float | None) -> float 
     return _positive_number(description.get("duration")) or _positive_number(indexed)
 
 
-def kept_tiles(
-    board: Storyboard, duration: float, min_interval: float, max_frames: int,
-) -> list[Tile]:
-    """The tiles below ``duration``, in time order, spaced for at most ``max_frames``.
+def kept_tiles(board: Storyboard, duration: float, max_frames: int) -> list[Tile]:
+    """The tiles below ``duration``, in time order, spread for at most ``max_frames``.
 
-    The first tile is always kept; a later one only when it is at least the
-    spacing after the last kept one.
+    The first tile is always kept; a later one only when it is at least
+    ``duration / max_frames`` after the last kept one.
     """
-    spacing = max(float(min_interval), duration / max(1, max_frames))
+    spacing = duration / max(1, max_frames)
     per_sheet = board.rows * board.columns
     kept: list[Tile] = []
     start = 0.0

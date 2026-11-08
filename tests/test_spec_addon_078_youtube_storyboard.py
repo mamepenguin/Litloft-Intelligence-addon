@@ -261,8 +261,8 @@ def flags_of(w, file_id):
         return row.clip_indexed, row.clip_thumbnail_indexed
 
 
-def expected_ticks(timestamps, duration, min_interval, max_frames):
-    spacing = max(min_interval, duration / max_frames)
+def expected_ticks(timestamps, duration, max_frames):
+    spacing = duration / max(1, max_frames)
     kept: list[float] = []
     for ts in timestamps:
         if ts >= duration:
@@ -287,21 +287,27 @@ class TestWhichTilesAreKept:
             (300.0, 30, 500, 36),
             (3600.0, 30, 20, 360),
             (3600.0, 30, 500, 360),
+            (3600.0, 30, 7, 360),
             (600.0, 60, 500, 63),
             (95.0, 10, 500, 18),
+            (95.0, 30, 500, 18),
+            (3600.0, 600, 20, 360),
             (90.0, 10, 500, 18),
             (89.5, 10, 500, 18),
         ],
         ids=[
-            "every-30s", "long-video-spread-by-cap", "long-video-uncapped",
-            "wide-min-interval", "last-sheet-empty-cells-dropped",
+            "short-video-keeps-every-tile", "long-video-spread-by-cap",
+            "long-video-keeps-every-tile", "long-video-spread-with-a-tight-cap",
+            "wide-min-interval-does-not-thin", "last-sheet-empty-cells-dropped",
+            "min-interval-above-tile-spacing-does-not-thin",
+            "min-interval-does-not-truncate-a-long-video",
             "tile-at-duration-dropped", "duration-inside-a-tile-interval",
         ],
     )
     def test_kept_tiles_are_scene_rows_in_time_order(
         self, duration, min_interval, max_frames, tiles, world, youtube,
     ):
-        """SPEC-ADDON-078 I7: below the duration, at least the spacing apart, at most max_frames."""
+        """The first tile is kept, then only one at least ``duration / max_frames`` later."""
         world.configure(min_interval, max_frames)
         sb0, per_tile = serve_storyboard(youtube, world.pil, tiles=tiles)
         youtube.set_ytdlp(describe=describe([sb0], duration=duration))
@@ -311,9 +317,10 @@ class TestWhichTilesAreKept:
         assert run(fid) is True
 
         timestamps = [n * per_tile for n in range(tiles)]
-        expected = expected_ticks(timestamps, duration, min_interval, max_frames)
+        expected = expected_ticks(timestamps, duration, max_frames)
         rows = rows_of(world, fid)
         assert [ts for _, ts in rows] == pytest.approx(expected)
+        assert rows[0][1] == pytest.approx(0.0)
         assert len(rows) <= max_frames
         assert world.embedder.tiles == [round(ts / per_tile) for ts in expected]
         assert all(ts < duration for _, ts in rows)
@@ -346,7 +353,7 @@ class TestWhichTilesAreKept:
         assert run(fid) is True
 
         expected = expected_ticks(
-            [n * per_tile for n in range(tiles)], duration, 30, 500,
+            [n * per_tile for n in range(tiles)], duration, 500,
         )
         assert [ts for _, ts in rows_of(world, fid)] == pytest.approx(expected)
         assert world.embedder.tiles == [round(ts / per_tile) for ts in expected]
@@ -444,7 +451,7 @@ class TestTheRowsAreReplacedWhole:
         assert run(fid) is True
 
         rows = rows_of(world, fid)
-        assert [ts for _, ts in rows] == pytest.approx([0, 30, 60, 90, 120, 150])
+        assert [ts for _, ts in rows] == pytest.approx([n * 10.0 for n in range(18)])
         assert not any(i.startswith("old_") for i, _ in rows)
         assert rows_of(world, fid, "clip_thumbnail") == before_thumb
         assert rows_of(world, other) + rows_of(world, other, "clip_thumbnail") == before_other
@@ -467,7 +474,7 @@ class TestTheRowsAreReplacedWhole:
             s.commit()
         assert run(fid) is True
 
-        assert len(first) == 6
+        assert len(first) == 18
         assert [ts for _, ts in rows_of(world, fid)] == [ts for _, ts in first]
         assert len(rows_of(world, fid, "clip_thumbnail")) == 1
         assert world.embedder.thumbnails == 1
@@ -485,7 +492,7 @@ class TestTheThumbnailLeg:
         assert run(fid) is True
 
         assert len(rows_of(world, fid, "clip_thumbnail")) == 1
-        assert len(rows_of(world, fid)) == 6
+        assert len(rows_of(world, fid)) == 18
         assert flags_of(world, fid) == (True, True)
 
     def test_a_finished_thumbnail_leg_is_not_embedded_again(self, world, youtube):
@@ -500,7 +507,7 @@ class TestTheThumbnailLeg:
 
         assert world.embedder.thumbnails == 0
         assert rows_of(world, fid, "clip_thumbnail") == []
-        assert len(rows_of(world, fid)) == 6
+        assert len(rows_of(world, fid)) == 18
 
 
 class TestTransientFailures:
@@ -562,7 +569,7 @@ class TestTransientFailures:
         youtube.set_ytdlp(describe=describe([sb0], duration=180.0))
 
         assert run(fine) is True
-        assert len(rows_of(world, fine)) == 6
+        assert len(rows_of(world, fine)) == 18
 
 
 SHEET_QUERY = "?sqp=SQP-LEAK-3f9a&sigh=SIGH-LEAK-4b2e"
