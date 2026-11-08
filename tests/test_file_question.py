@@ -467,6 +467,26 @@ class TestTheStream:
             data["delta"] for kind, data in events if kind == "answer_chunk"
         ) == "half an answer"
 
+    @pytest.mark.parametrize(
+        "deltas",
+        [(), ("  ", "\n  ")],
+        ids=["nothing", "whitespace"],
+    )
+    async def test_no_answer_text_ends_as_a_failure_without_citations(
+        self, db, addon, llm, call, deltas,
+    ):
+        """SPEC-ADDON-080: a turn with no answer text fails rather than reading as answered."""
+        db.file(MEDIA).transcript(chunk("one", 20), start=0)
+        llm.serve(RecordingLLM(deltas=deltas))
+
+        response = await call("POST", f"/files/{MEDIA}/ask", json={"question": "what is this"})
+
+        events = frames(response.text)
+        kinds = [kind for kind, _ in events]
+        assert "citations" not in kinds
+        assert kinds[-2:] == ["meta", "done"]
+        assert events[-1][1] == {"error": "Answer generation failed"}
+
     async def test_the_warning_names_the_file_and_never_the_question(
         self, db, addon, llm, call, caplog,
     ):

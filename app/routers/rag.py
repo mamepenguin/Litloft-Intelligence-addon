@@ -588,6 +588,19 @@ async def _file_question_stream(
             )
         )
     else:
+        if not "".join(answer).strip():
+            logger.warning(
+                "file question failed: %s (file %s)",
+                "EmptyAnswer",
+                file_id,
+            )
+            yield _format_sse_event(meta_event())
+            yield _format_sse_event(
+                AnswerEvent(
+                    kind="done", data={"error": "Answer generation failed"},
+                )
+            )
+            return
         yield _format_sse_event(
             AnswerEvent(
                 kind="citations",
