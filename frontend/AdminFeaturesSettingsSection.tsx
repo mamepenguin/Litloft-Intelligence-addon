@@ -157,7 +157,7 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
   }
 
   const headClass =
-    "sticky top-0 z-10 border-b border-bg-border bg-bg-card px-4 py-3 text-left align-top font-semibold";
+    "sticky top-0 z-10 border-b border-bg-border bg-bg-card px-4 py-3 text-left align-top font-semibold break-anywhere";
 
   return (
     <section className="rounded-xl border border-bg-border bg-bg-card p-4">
@@ -200,7 +200,7 @@ export default function AdminFeaturesSettingsSection(): React.ReactElement {
               const values = isBool(field) ? ["true", "false"] : data.tristate_values;
               return (
                 <tr key={field}>
-                  <td className="border-b border-bg-border py-3 pr-4 align-top">
+                  <td className="border-b border-bg-border py-3 pr-4 align-top break-anywhere">
                     <span className="block font-medium">{label}</span>
                     <span className="mt-1 block text-xs text-text-muted">
                       {t(`fields.${field}.help`)}
