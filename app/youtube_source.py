@@ -204,14 +204,16 @@ def _lookup_into(file_id: str, url: str, future: Future) -> None:
     except Exception as exc:  # noqa: BLE001 - a waiter must always be released
         failure = exc if isinstance(exc, LookupFailed) else LookupFailed(type(exc).__name__)
         with _lock:
-            _lookups.pop(file_id, None)
+            if _lookups.get(file_id) is future:
+                del _lookups[file_id]
         future.set_exception(failure)
         return
     with _lock:
         _descriptions[file_id] = (
             time.monotonic() + DESCRIPTION_TTL_SECONDS, description,
         )
-        _lookups.pop(file_id, None)
+        if _lookups.get(file_id) is future:
+            del _lookups[file_id]
     future.set_result(description)
 
 

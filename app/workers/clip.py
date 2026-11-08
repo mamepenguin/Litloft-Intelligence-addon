@@ -1002,7 +1002,7 @@ def _index_youtube_storyboard(
     video_seconds = known_duration(description, indexed_duration)
     if board is None or video_seconds is None:
         logger.info(
-            "youtube storyboard absent: file=%s class=%s",
+            "youtube storyboard absent: file=%s class=%s sheets=0 tiles=0",
             file_id, "no_sb0" if board is None else "no_duration",
         )
         _close_scene_leg(file_id)
@@ -1013,7 +1013,9 @@ def _index_youtube_storyboard(
     try:
         embedded = _embed_tiles(board, tiles)
     except _StoryboardFailure as exc:
-        return _storyboard_failure(file_id, exc.failure)
+        return _storyboard_failure(
+            file_id, exc.failure, len(board.sheets), len(tiles),
+        )
 
     with get_search_db() as session:
         _remove_clip_embeddings(session, file_id)
@@ -1031,15 +1033,20 @@ def _index_youtube_storyboard(
         if f is not None:
             f.clip_indexed = True
     logger.info(
-        "youtube storyboard indexed: file=%s sheets=%d tiles=%d",
+        "youtube storyboard indexed: file=%s class=rows sheets=%d tiles=%d",
         file_id, len(board.sheets), len(embedded),
     )
     return True
 
 
-def _storyboard_failure(file_id: str, failure: str) -> bool:
+def _storyboard_failure(
+    file_id: str, failure: str, sheets: int = 0, tiles: int = 0,
+) -> bool:
     _storyboard_failed.add(file_id)
-    logger.warning("youtube storyboard failed: file=%s class=%s", file_id, failure)
+    logger.warning(
+        "youtube storyboard failed: file=%s class=%s sheets=%d tiles=%d",
+        file_id, failure, sheets, tiles,
+    )
     return False
 
 
