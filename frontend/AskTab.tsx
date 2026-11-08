@@ -127,10 +127,6 @@ export default function AskTab({
     savedNote !== null && answeredTurns.length <= savedNote.answeredCount;
   const showSave = firstAnswered !== null && !streaming && !showSavedLink;
   const showNewConversation = turns.length > 0 && !streaming;
-  // An unresolved later turn speaks for the tab, so an earlier turn's image
-  // notice waits until the thread settles rather than competing with it.
-  const threadSettled =
-    turns.length === 0 || turns[turns.length - 1].status === "answered";
 
   const [saveOpen, setSaveOpen] = useState(false);
 
@@ -341,8 +337,7 @@ export default function AskTab({
                 onJump={() => lowerInspector?.()}
               />
             )}
-            {threadSettled &&
-              turn.status === "answered" &&
+            {turn.status === "answered" &&
               turn.image === "unavailable" && (
                 <p className="text-xs text-text-muted">
                   {t("imageUnavailable")}
