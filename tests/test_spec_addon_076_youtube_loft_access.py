@@ -2,7 +2,8 @@
 
 The frame route answers as the native one does when the path is outside the
 drive (404 ``Video file not accessible``) and 400 ``No frame source`` when the
-file cannot be read; the scenes route keeps its own 400 ``Not a video file``.
+file cannot be read; the scenes route answers 400 ``Not a video file`` for both,
+as it did for every ``.loft`` before.
 """
 
 from __future__ import annotations
@@ -50,7 +51,7 @@ async def test_a_loft_outside_the_allowed_directories_is_not_read(
     assert frame_api.cached(fid) == []
 
 
-async def test_scenes_of_a_loft_outside_the_allowed_directories_is_404(
+async def test_scenes_of_a_loft_outside_the_allowed_directories_is_not_a_video_file(
     youtube, frame_api, monkeypatch,
 ):
     fid = new_id()
@@ -59,8 +60,8 @@ async def test_scenes_of_a_loft_outside_the_allowed_directories_is_404(
 
     response = await _scenes(frame_api, fid)
 
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Video file not accessible"
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Not a video file"
 
 
 @pytest.mark.parametrize("how", ["missing", "not-json"])

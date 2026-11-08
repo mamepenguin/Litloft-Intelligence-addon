@@ -18,12 +18,7 @@ from app.schemas import VideoSceneItem, VideoScenesResponse, VideoScenesWindow
 from app.workers.video_visual import _load_candidates, _select_transcript_excerpt
 from app.workers.video_visual_selection import Candidate, select_candidates
 from app.workers.whisper import LOFT_MIME
-from app.youtube_source import (
-    YOUTUBE_PROVIDER,
-    LoftNotAccessible,
-    LoftUnreadable,
-    read_loft,
-)
+from app.youtube_source import YOUTUBE_PROVIDER, LoftUnreadable, read_loft
 
 router = APIRouter(tags=["scenes"])
 
@@ -67,8 +62,6 @@ def _last_end(
 def _require_youtube_loft(indexed: dict) -> None:
     try:
         source = read_loft(indexed["file_path"], indexed["drive"])
-    except LoftNotAccessible:
-        raise HTTPException(status_code=404, detail="Video file not accessible")
     except LoftUnreadable:
         source = None
     if source is None or source.provider != YOUTUBE_PROVIDER:
