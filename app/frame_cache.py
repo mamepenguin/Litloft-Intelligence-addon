@@ -37,6 +37,7 @@ from fastapi import HTTPException
 logger = logging.getLogger(__name__)
 
 _FRAME_CACHE_SUBDIR = "frames"
+_TILE_CACHE_SUBDIR = "tiles"
 _FRAME_FFMPEG_TIMEOUT = 15
 
 FrameSize = Literal["small", "large"]
@@ -66,6 +67,25 @@ def frame_cache_dir(file_id: str) -> Path:
     return Path(settings.intelligence_data_dir) / _FRAME_CACHE_SUBDIR / file_id
 
 
+def round_ms(timestamp_seconds: float) -> int:
+    """The millisecond key a timestamp gets in a cache filename.
+
+    Shared by the frame cache and the storyboard tiles so a row's time and
+    the picture it names always round the same way.
+    """
+    return int(round(timestamp_seconds * 1000))
+
+
+def tile_cache_dir(file_id: str) -> Path:
+    """Return the directory holding a file's storyboard tiles."""
+    return frame_cache_dir(file_id) / _TILE_CACHE_SUBDIR
+
+
+def tile_cache_path(file_id: str, timestamp_seconds: float) -> Path:
+    """Resolve the storyboard tile for ``(file_id, timestamp)``."""
+    return tile_cache_dir(file_id) / f"{round_ms(timestamp_seconds)}.webp"
+
+
 def frame_cache_path(
     file_id: str, timestamp_seconds: float, size: FrameSize = "small"
 ) -> Path:
@@ -77,7 +97,7 @@ def frame_cache_path(
     callers and lets a long Cache-Control / immutable header be
     correct).
     """
-    ms = int(round(timestamp_seconds * 1000))
+    ms = round_ms(timestamp_seconds)
     suffix = ".large.webp" if size == "large" else ".webp"
     return frame_cache_dir(file_id) / f"{ms}{suffix}"
 
@@ -194,4 +214,7 @@ __all__ = [
     "frame_ffmpeg_argv",
     "frame_cache_path",
     "purge_frame_cache",
+    "round_ms",
+    "tile_cache_dir",
+    "tile_cache_path",
 ]

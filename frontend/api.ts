@@ -575,6 +575,11 @@ export function getFrameUrl(fileId: string, timestamp: number): string {
   return `${API_BASE}/addons/intelligence/files/${fileId}/frame?t=${timestamp}`;
 }
 
+/** A stored storyboard tile; the route never contacts YouTube or runs ffmpeg. */
+export function getSceneTileUrl(fileId: string, timestamp: number): string {
+  return `${API_BASE}/addons/intelligence/files/${fileId}/scene-tile?t=${timestamp}`;
+}
+
 export interface SceneSegment {
   file_id: string;
   filename: string;

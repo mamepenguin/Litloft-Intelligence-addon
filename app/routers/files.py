@@ -1563,7 +1563,47 @@ from app.frame_cache import (  # noqa: E402
     extract_frame_to_cache as _extract_frame_to_cache,
     frame_cache_path as _frame_cache_path,
     purge_frame_cache,
+    tile_cache_path as _tile_cache_path,
 )
+
+_IMAGE_CACHE_HEADERS = {"Cache-Control": "public, max-age=86400, immutable"}
+
+
+def _image_route_indexed_file(
+    file_id: str, x_hv_drive: str | None,
+) -> dict[str, Any]:
+    """The file an ``<img>``-loaded route serves, with the drive header optional.
+
+    Without the header the host's ``file_access`` pre_check has already
+    authorised the caller for this file; with it, the strict current-drive
+    match runs as for every other route.
+    """
+    drive = unquote(x_hv_drive) if x_hv_drive else None
+    if drive is not None:
+        return _get_indexed_file_or_404(file_id, drive)
+
+    from app.database import get_search_db_read
+    from app.models import IndexedFile
+
+    with get_search_db_read() as db:
+        row = (
+            db.query(IndexedFile)
+            .filter(
+                IndexedFile.file_id == file_id,
+                IndexedFile.active.is_(True),
+            )
+            .first()
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="File not indexed")
+    return {
+        "file_id": row.file_id,
+        "drive": row.drive,
+        "filename": row.filename,
+        "file_path": row.file_path,
+        "file_type": row.file_type,
+        "mime_type": row.mime_type,
+    }
 
 
 def _extract_loft_frame(
@@ -1611,40 +1651,14 @@ def get_frame(
     from app.config import resolve_file_path, resolve_stored_path, validate_file_path
     from app.workers.whisper import LOFT_MIME
 
-    drive = unquote(x_hv_drive) if x_hv_drive else None
-    if drive is None:
-        # Look up the indexed file without the drive assertion. The
-        # host already authorised the caller for this specific file.
-        from app.database import get_search_db_read
-        from app.models import IndexedFile
-        with get_search_db_read() as db:
-            row = (
-                db.query(IndexedFile)
-                .filter(
-                    IndexedFile.file_id == file_id,
-                    IndexedFile.active.is_(True),
-                )
-                .first()
-            )
-        if not row:
-            raise HTTPException(status_code=404, detail="File not indexed")
-        indexed = {
-            "file_id": row.file_id,
-            "drive": row.drive,
-            "filename": row.filename,
-            "file_path": row.file_path,
-            "file_type": row.file_type,
-            "mime_type": row.mime_type,
-        }
-    else:
-        indexed = _get_indexed_file_or_404(file_id, drive)
+    indexed = _image_route_indexed_file(file_id, x_hv_drive)
 
     if indexed["file_type"] != "video":
         raise HTTPException(status_code=400, detail="Not a video file")
 
     size_args = ("large",) if size == "large" else ()
     cache_path = _frame_cache_path(file_id, t, *size_args)
-    cache_headers = {"Cache-Control": "public, max-age=86400, immutable"}
+    cache_headers = _IMAGE_CACHE_HEADERS
 
     if cache_path.exists() and cache_path.stat().st_size > 0:
         return FileResponse(
@@ -1673,6 +1687,41 @@ def get_frame(
         path=str(cache_path),
         media_type="image/webp",
         headers=cache_headers,
+    )
+
+
+@router.get("/files/{file_id}/scene-tile")
+def get_scene_tile(
+    file_id: str,
+    t: float = Query(..., ge=0, description="Timestamp in seconds"),
+    x_hv_drive: Annotated[str | None, Header(alias="X-Lit-Drive")] = None,
+) -> Response:
+    """Serve the storyboard tile stored for a file's scene at ``t``.
+
+    Reads one file under ``frames/{file_id}/tiles/``: no YouTube lookup, no
+    ffmpeg, and nothing is written. The drive header is optional for the same
+    reason as the frame route.
+    """
+    from app.workers.whisper import LOFT_MIME
+
+    indexed = _image_route_indexed_file(file_id, x_hv_drive)
+
+    if indexed["file_type"] != "video":
+        raise HTTPException(status_code=400, detail="Not a video file")
+
+    # Only a `.loft` reference has storyboard tiles; a native video's pictures
+    # come from the frame route and must not be served here.
+    if indexed["mime_type"] != LOFT_MIME:
+        raise HTTPException(status_code=404, detail="Scene tile not found")
+
+    tile_path = _tile_cache_path(file_id, t)
+    if not tile_path.exists() or tile_path.stat().st_size == 0:
+        raise HTTPException(status_code=404, detail="Scene tile not found")
+
+    return FileResponse(
+        path=str(tile_path),
+        media_type="image/webp",
+        headers=_IMAGE_CACHE_HEADERS,
     )
 
 

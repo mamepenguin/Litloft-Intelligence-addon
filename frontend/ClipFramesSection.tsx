@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Film } from "lucide-react";
 import { useTranslations } from "next-intl";
 
-import { getClipTimestamps, getFrameUrl } from "./api";
+import { getClipTimestamps, getFrameUrl, getSceneTileUrl } from "./api";
 import type { ClipTimestampItem } from "./api";
 import { formatDuration } from "@/lib/format";
 import type { MediaController } from "@/lib/mediaController";
@@ -44,10 +44,13 @@ export default function ClipFramesSection({
   // Tri-state. `null` means "we haven't fetched timestamps yet" — used to
   // hide the section entirely when the file has no CLIP index, without
   // ever firing a network request on mount.
+  const isLoft = mimeType === LOFT_MIME_TYPE;
+
   const [timestamps, setTimestamps] = useState<ClipTimestampItem[] | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showCount, setShowCount] = useState(PAGE_SIZE);
+  const [failedTiles, setFailedTiles] = useState<Set<number>>(() => new Set());
 
   const stripRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -58,9 +61,31 @@ export default function ClipFramesSection({
     setTimestamps(null);
     setExpanded(false);
     setShowCount(PAGE_SIZE);
-  }, [fileId]);
+    setFailedTiles(new Set());
+  }, [fileId, isLoft]);
+
+  // A `.loft` has no frame route worth calling: its rows come from the
+  // storyboard the index cut, so they are read on mount instead of on expand.
+  useEffect(() => {
+    if (!isLoft) return;
+    let current = true;
+    getClipTimestamps(fileId, drive)
+      .then((res) => {
+        if (current) setTimestamps(res?.timestamps ?? []);
+      })
+      .catch(() => {
+        if (current) setTimestamps([]);
+      });
+    return () => {
+      current = false;
+    };
+  }, [isLoft, fileId, drive]);
 
   const handleToggle = useCallback(async () => {
+    if (isLoft) {
+      setExpanded((value) => !value);
+      return;
+    }
     if (expanded) {
       setExpanded(false);
       return;
@@ -74,7 +99,15 @@ export default function ClipFramesSection({
     } finally {
       setLoading(false);
     }
-  }, [expanded, fileId, drive, timestamps, loading]);
+  }, [expanded, fileId, drive, timestamps, loading, isLoft]);
+
+  const markTileFailed = useCallback((start: number) => {
+    setFailedTiles((current) => {
+      const next = new Set(current);
+      next.add(start);
+      return next;
+    });
+  }, []);
 
   const seekTo = useCallback(
     (time: number) => {
@@ -116,20 +149,35 @@ export default function ClipFramesSection({
 
   const totalLabel = timestamps ? ` (${timestamps.length})` : "";
   const visible = timestamps ? timestamps.slice(0, showCount) : [];
+  // Built once per row set, so a failed tile's own re-render asks for
+  // nothing else.
+  const pictureUrls = useMemo(() => {
+    if (!timestamps) return new Map<number, string>();
+    return new Map(
+      timestamps.map((ts) => [
+        ts.start,
+        isLoft
+          ? getSceneTileUrl(fileId, ts.start)
+          : getFrameUrl(fileId, ts.start),
+      ])
+    );
+  }, [isLoft, fileId, timestamps]);
 
-  // Scene CLIP frames only exist for native video files. Bail
-  // synchronously for everything else so the header never flashes for
-  // text / image / audio / .loft files (which the lazy-fetch design
-  // would otherwise reveal only after the first click).
-  if (fileType !== "video" || mimeType === LOFT_MIME_TYPE) {
+  // Scene CLIP frames only exist for video files. Bail synchronously for
+  // text / image / audio so the header never flashes for them.
+  if (fileType !== "video") {
     return null;
   }
 
-  // Hide the whole section once we've confirmed the (video) file has
-  // no CLIP frames yet — e.g. still queued for indexing. Until the
-  // first expand the header stays visible because we don't yet know
-  // whether frames exist; the API call only fires on first expand.
-  if (timestamps !== null && timestamps.length === 0) {
+  if (isLoft) {
+    // Its rows are fetched on mount, so nothing is drawn until they arrive
+    // and there is something to open.
+    if (timestamps === null || timestamps.length === 0) {
+      return null;
+    }
+  } else if (timestamps !== null && timestamps.length === 0) {
+    // A native video hides the whole section once the first expand has
+    // confirmed it has no CLIP frames yet — e.g. still queued for indexing.
     return null;
   }
 
@@ -168,12 +216,22 @@ export default function ClipFramesSection({
                   onClick={() => seekTo(ts.start)}
                   className="group w-48 shrink-0 cursor-pointer overflow-hidden rounded-lg bg-bg-card transition-colors hover:ring-2 hover:ring-accent"
                 >
-                  <img
-                    src={getFrameUrl(fileId, ts.start)}
-                    alt={ts.content_preview}
-                    loading="lazy"
-                    className="aspect-video w-full object-cover"
-                  />
+                  {isLoft && failedTiles.has(ts.start) ? (
+                    <div
+                      aria-hidden
+                      className="aspect-video w-full bg-bg-elevated"
+                    />
+                  ) : (
+                    <img
+                      src={pictureUrls.get(ts.start)}
+                      alt={ts.content_preview}
+                      loading="lazy"
+                      onError={
+                        isLoft ? () => markTileFailed(ts.start) : undefined
+                      }
+                      className="aspect-video w-full object-cover"
+                    />
+                  )}
                   <div className="px-1.5 py-1 text-center text-xs text-text-muted group-hover:text-accent">
                     {formatDuration(ts.start)}
                   </div>

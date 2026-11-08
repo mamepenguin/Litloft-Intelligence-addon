@@ -206,11 +206,11 @@ describe("the loaded state (SPEC-ADDON-042)", () => {
   });
 
   it.each(["ref.loft", "ref.LOFT"])(
-    "requests no frame for a %s candidate and still requests one for a video",
+    "takes a %s candidate's picture from the scene-tile route at its peak (SPEC-ADDON-080)",
     async (loftName) => {
       fetchMock.mockResolvedValue(
         response([
-          seg({ file_id: "f1", filename: loftName, start: 0, end: 10 }),
+          seg({ file_id: "f1", filename: loftName, start: 0, end: 10, peak: 4 }),
           seg({ file_id: "f2", filename: "holiday.mp4", start: 83, end: 96, peak: 84 }),
         ]),
       );
@@ -219,14 +219,32 @@ describe("the loaded state (SPEC-ADDON-042)", () => {
 
       const cards = Array.from(container.querySelectorAll("a[href^='/files/']"));
       expect(cards).toHaveLength(2);
-      expect(cards[0].querySelector("img")).toBeNull();
-      expect(cards[0].textContent).toContain("0:00-0:10");
-      expect(cards[1].querySelector("img")?.getAttribute("src")).toMatch(
-        /\/files\/f2\/frame\?t=84$/,
+      const loftSource = cards[0].querySelector("img")?.getAttribute("src");
+      const nativeSource = cards[1].querySelector("img")?.getAttribute("src");
+      expect(loftSource).toMatch(/\/files\/f1\/scene-tile\?t=4$/);
+      expect(loftSource).not.toContain("/frame?");
+      expect(nativeSource).toMatch(/\/files\/f2\/frame\?t=84$/);
+      expect(nativeSource).not.toContain("/scene-tile?");
+      expect(loftSource!.slice(0, loftSource!.indexOf("/files/"))).toBe(
+        nativeSource!.slice(0, nativeSource!.indexOf("/files/")),
       );
-      expect(container.querySelectorAll("img")).toHaveLength(1);
+      expect(container.querySelectorAll("img")).toHaveLength(2);
     },
   );
+
+  it("shows the blank card when a .loft candidate's scene tile fails (SPEC-ADDON-080)", async () => {
+    fetchMock.mockResolvedValue(
+      response([seg({ file_id: "f9", filename: "ref.loft", start: 83, end: 96, peak: 90 })]),
+    );
+    const { container } = mount();
+    await screen.findByText("ref.loft");
+
+    fireEvent.error(container.querySelector("img")!);
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByText("ref.loft")).toBeInTheDocument();
+    expect(screen.getByText("1:23-1:36")).toBeInTheDocument();
+  });
 
   it("shows no score", async () => {
     fetchMock.mockResolvedValue(response([seg({ score: 0.4321 })]));
