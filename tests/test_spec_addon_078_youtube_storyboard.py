@@ -7,6 +7,7 @@ suite's mock in every other test; here the real package stands in for it.
 
 from __future__ import annotations
 
+import logging
 import math
 import sys
 import uuid
@@ -27,6 +28,7 @@ from tests.youtube_frame_doubles import (  # noqa: F401 - fixtures
     LOFT_MIME,
     YOUTUBE_URL,
     describe,
+    everything_logged,
     needs_ffmpeg,
     real_pil_modules,
     storyboard_format,
@@ -561,3 +563,28 @@ class TestTransientFailures:
 
         assert run(fine) is True
         assert len(rows_of(world, fine)) == 6
+
+
+SHEET_QUERY = "?sqp=SQP-LEAK-3f9a&sigh=SIGH-LEAK-4b2e"
+
+
+class TestTheSheetFetchIsNotLogged:
+    def test_no_record_from_any_logger_carries_a_sheet_address(
+        self, world, youtube, caplog,
+    ):
+        """SPEC-ADDON-078 I5: no logger prints a sheet URL or any part of its signed query."""
+        world.configure(min_interval=30)
+        sb0, _ = serve_storyboard(youtube, world.pil, tiles=18)
+        for fragment in sb0["fragments"]:
+            fragment["url"] += SHEET_QUERY
+        youtube.set_ytdlp(describe=describe([sb0], duration=180.0))
+        fid = new_id()
+        add_loft(world, fid)
+        caplog.set_level(logging.INFO)
+
+        assert run(fid) is True
+
+        assert len(youtube.fetched("/sb/")) == 2
+        logged = everything_logged(caplog)
+        for secret in ("sheet0.png", "sheet1.png", SHEET_QUERY, "sqp=", "sigh="):
+            assert secret not in logged

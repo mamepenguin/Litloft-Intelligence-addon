@@ -32,6 +32,28 @@ from app.frame_cache import FrameSize, frame_ffmpeg_argv
 
 logger = logging.getLogger(__name__)
 
+# ``yt-dlp``'s sheet and stream URLs are signed, and ``httpx`` prints its
+# request line at INFO. Why not raise the ``httpx`` logger's level instead: that
+# is the only request-level trace any other httpx caller in the process
+# produces, and the leak is confined to these fetches.
+_SIGNED_FETCH = re.compile(
+    r"ytimg\.com|googlevideo\.com|youtube\.com|sigh=|sqp="
+)
+
+
+class _SignedFetchFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not _SIGNED_FETCH.search(record.getMessage())
+
+
+def _drop_signed_fetches() -> None:
+    httpx_logger = logging.getLogger("httpx")
+    if not any(isinstance(rule, _SignedFetchFilter) for rule in httpx_logger.filters):
+        httpx_logger.addFilter(_SignedFetchFilter())
+
+
+_drop_signed_fetches()
+
 FRAME_DEADLINE_SECONDS = 15.0
 LOOKUP_LIMIT_SECONDS = 15.0
 STORYBOARD_LOOKUP_LIMIT_SECONDS = 60.0
