@@ -82,6 +82,37 @@ def frame_cache_path(
     return frame_cache_dir(file_id) / f"{ms}{suffix}"
 
 
+def frame_ffmpeg_argv(
+    source: str,
+    tmp_path: Path,
+    timestamp_seconds: float,
+    size: FrameSize,
+    input_options: tuple[str, ...] = (),
+) -> list[str]:
+    """The ffmpeg command that writes one scaled WebP frame to ``tmp_path``.
+
+    ``input_options`` go before ``-i``, where ffmpeg reads per-input options
+    such as ``-headers``.
+    """
+    return [
+        "ffmpeg",
+        "-y",
+        *input_options,
+        "-ss", str(timestamp_seconds),
+        "-i", source,
+        "-frames:v", "1",
+        "-vf", _SCALE_FILTERS[size],
+        "-c:v", "libwebp",
+        "-q:v", _QUALITIES[size],
+        # ``-f webp`` is required because the temp filename ends
+        # in ``.webp.tmp`` — ffmpeg can't infer the muxer from
+        # the dotted extension and otherwise errors out with
+        # "Unable to choose an output format".
+        "-f", "webp",
+        str(tmp_path),
+    ]
+
+
 def extract_frame_to_cache(
     abs_path: str,
     cache_path: Path,
@@ -99,22 +130,7 @@ def extract_frame_to_cache(
     tmp_path = cache_path.with_name(f"{cache_path.name}.{uuid.uuid4().hex}.tmp")
     try:
         result = subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-ss", str(timestamp_seconds),
-                "-i", abs_path,
-                "-frames:v", "1",
-                "-vf", _SCALE_FILTERS[size],
-                "-c:v", "libwebp",
-                "-q:v", _QUALITIES[size],
-                # ``-f webp`` is required because the temp filename ends
-                # in ``.webp.tmp`` — ffmpeg can't infer the muxer from
-                # the dotted extension and otherwise errors out with
-                # "Unable to choose an output format".
-                "-f", "webp",
-                str(tmp_path),
-            ],
+            frame_ffmpeg_argv(abs_path, tmp_path, timestamp_seconds, size),
             capture_output=True,
             timeout=_FRAME_FFMPEG_TIMEOUT,
         )
@@ -175,6 +191,7 @@ __all__ = [
     "ensure_frame_cached",
     "extract_frame_to_cache",
     "frame_cache_dir",
+    "frame_ffmpeg_argv",
     "frame_cache_path",
     "purge_frame_cache",
 ]

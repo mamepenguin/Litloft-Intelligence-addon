@@ -26,6 +26,8 @@ from app.document_sections import EPUB_MIME
 from app.frame_cache import extract_frame_to_cache, frame_cache_path
 from app.workers.embedder import embed_query
 from app.workers.vision import _load_image_bytes, _preprocess_image
+from app.workers.whisper import LOFT_MIME
+from app.youtube_source import YOUTUBE_PROVIDER, ensure_youtube_frame, read_loft
 
 logger = logging.getLogger(__name__)
 
@@ -322,25 +324,53 @@ def _frame_image(material: Material, position_seconds: float) -> ImageMaterial:
     timestamp = ms / 1000.0
     cache_path = frame_cache_path(material.file_id, timestamp, "large")
     if not (cache_path.exists() and cache_path.stat().st_size > 0):
-        if not material.file_path or not config.validate_file_path(
-            material.file_path
-        ):
-            raise ImageUnavailable(IMAGE_FAILURE_FRAME)
-        try:
-            extract_frame_to_cache(
-                material.file_path, cache_path, timestamp, size="large",
-            )
-        except Exception as exc:  # noqa: BLE001 - ffmpeg's result decides
-            logger.warning(
-                "file question frame extraction failed: %s",
-                type(exc).__name__,
-            )
-            raise ImageUnavailable(IMAGE_FAILURE_FRAME) from exc
+        if material.mime_type == LOFT_MIME:
+            _youtube_frame_to_cache(material, cache_path, timestamp)
+        else:
+            _native_frame_to_cache(material, cache_path, timestamp)
     if not (cache_path.exists() and cache_path.stat().st_size > 0):
         raise ImageUnavailable(IMAGE_FAILURE_FRAME)
     try:
         return ImageMaterial(cache_path.read_bytes(), "image/webp")
     except OSError as exc:
+        raise ImageUnavailable(IMAGE_FAILURE_FRAME) from exc
+
+
+def _youtube_frame_to_cache(
+    material: Material, cache_path: Any, timestamp: float,
+) -> None:
+    try:
+        source = read_loft(material.file_path)
+        if source is None or source.provider != YOUTUBE_PROVIDER:
+            raise ImageUnavailable(IMAGE_FAILURE_FRAME)
+        ensure_youtube_frame(
+            material.file_id, source.url, cache_path, timestamp, "large",
+        )
+    except ImageUnavailable:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the frame route's result decides
+        logger.warning(
+            "file question frame extraction failed: %s", type(exc).__name__,
+        )
+        raise ImageUnavailable(IMAGE_FAILURE_FRAME) from exc
+
+
+def _native_frame_to_cache(
+    material: Material, cache_path: Any, timestamp: float,
+) -> None:
+    if not material.file_path or not config.validate_file_path(
+        material.file_path
+    ):
+        raise ImageUnavailable(IMAGE_FAILURE_FRAME)
+    try:
+        extract_frame_to_cache(
+            material.file_path, cache_path, timestamp, size="large",
+        )
+    except Exception as exc:  # noqa: BLE001 - ffmpeg's result decides
+        logger.warning(
+            "file question frame extraction failed: %s",
+            type(exc).__name__,
+        )
         raise ImageUnavailable(IMAGE_FAILURE_FRAME) from exc
 
 

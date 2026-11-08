@@ -1566,6 +1566,28 @@ from app.frame_cache import (  # noqa: E402
 )
 
 
+def _extract_loft_frame(
+    indexed: dict[str, Any], cache_path: Any, t: float, size: str,
+) -> None:
+    """Cache the frame of a YouTube ``.loft``; any other ``.loft`` has no source."""
+    from app.youtube_source import (
+        YOUTUBE_PROVIDER, LoftNotAccessible, LoftUnreadable, ensure_youtube_frame,
+        read_loft,
+    )
+
+    file_id = indexed["file_id"]
+    try:
+        source = read_loft(indexed["file_path"], indexed["drive"])
+    except LoftNotAccessible:
+        raise HTTPException(status_code=404, detail="Video file not accessible")
+    except LoftUnreadable:
+        source = None
+    if source is None or source.provider != YOUTUBE_PROVIDER:
+        logger.warning("youtube frame failed: file=%s class=not_youtube", file_id)
+        raise HTTPException(status_code=400, detail="No frame source")
+    ensure_youtube_frame(file_id, source.url, cache_path, t, size)
+
+
 @router.get("/files/{file_id}/frame")
 def get_frame(
     file_id: str,
@@ -1587,6 +1609,7 @@ def get_frame(
     misses spawn ffmpeg; hits short-circuit to a static FileResponse.
     """
     from app.config import resolve_file_path, resolve_stored_path, validate_file_path
+    from app.workers.whisper import LOFT_MIME
 
     drive = unquote(x_hv_drive) if x_hv_drive else None
     if drive is None:
@@ -1611,6 +1634,7 @@ def get_frame(
             "filename": row.filename,
             "file_path": row.file_path,
             "file_type": row.file_type,
+            "mime_type": row.mime_type,
         }
     else:
         indexed = _get_indexed_file_or_404(file_id, drive)
@@ -1623,6 +1647,14 @@ def get_frame(
     cache_headers = {"Cache-Control": "public, max-age=86400, immutable"}
 
     if cache_path.exists() and cache_path.stat().st_size > 0:
+        return FileResponse(
+            path=str(cache_path),
+            media_type="image/webp",
+            headers=cache_headers,
+        )
+
+    if indexed["mime_type"] == LOFT_MIME:
+        _extract_loft_frame(indexed, cache_path, t, size)
         return FileResponse(
             path=str(cache_path),
             media_type="image/webp",

@@ -1,8 +1,8 @@
 """``GET /files/{file_id}/scenes``: representative scenes without a model.
 
 Runs the Visual Index's deterministic selection over the scene-CLIP
-candidates the indexer already stored, so any indexed native video gets a
-scene list whether or not a Visual Index was generated. Nothing is
+candidates the indexer already stored, so any indexed native video, and a
+YouTube ``.loft``, gets a scene list whether or not a Visual Index was generated. Nothing is
 written and no LLM is called.
 """
 
@@ -18,6 +18,12 @@ from app.schemas import VideoSceneItem, VideoScenesResponse, VideoScenesWindow
 from app.workers.video_visual import _load_candidates, _select_transcript_excerpt
 from app.workers.video_visual_selection import Candidate, select_candidates
 from app.workers.whisper import LOFT_MIME
+from app.youtube_source import (
+    YOUTUBE_PROVIDER,
+    LoftNotAccessible,
+    LoftUnreadable,
+    read_loft,
+)
 
 router = APIRouter(tags=["scenes"])
 
@@ -58,6 +64,17 @@ def _last_end(
     return None
 
 
+def _require_youtube_loft(indexed: dict) -> None:
+    try:
+        source = read_loft(indexed["file_path"], indexed["drive"])
+    except LoftNotAccessible:
+        raise HTTPException(status_code=404, detail="Video file not accessible")
+    except LoftUnreadable:
+        source = None
+    if source is None or source.provider != YOUTUBE_PROVIDER:
+        raise HTTPException(status_code=400, detail="Not a video file")
+
+
 @router.get("/files/{file_id}/scenes", response_model=VideoScenesResponse)
 def get_scenes(
     file_id: str,
@@ -71,8 +88,10 @@ def get_scenes(
         raise HTTPException(status_code=422, detail="end must be greater than start")
 
     indexed = _get_indexed_file_or_404(file_id, drive)
-    if indexed["file_type"] != "video" or indexed["mime_type"] == LOFT_MIME:
+    if indexed["file_type"] != "video":
         raise HTTPException(status_code=400, detail="Not a video file")
+    if indexed["mime_type"] == LOFT_MIME:
+        _require_youtube_loft(indexed)
 
     candidates, duration = _load_candidates(file_id)
     window, upper, budget_duration, empty = _resolve_window(start, end, duration)

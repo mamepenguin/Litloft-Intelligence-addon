@@ -6,6 +6,7 @@ For videos, uses hybrid frame extraction: scene detection + minimum interval.
 """
 
 import asyncio
+import io
 import logging
 import os
 import subprocess
@@ -16,6 +17,7 @@ import uuid
 from functools import lru_cache
 from pathlib import Path
 
+import httpx
 import numpy as np
 from PIL import Image
 
@@ -24,6 +26,17 @@ from app.config import settings, validate_file_path
 from app.database import get_search_db
 from app.models import Embedding, IndexedFile
 from app.workers import blip, ml_imports
+from app.workers.whisper import LOFT_MIME
+from app.youtube_source import (
+    STORYBOARD_LOOKUP_LIMIT_SECONDS,
+    YOUTUBE_PROVIDER,
+    LoftUnreadable,
+    kept_tiles,
+    known_duration,
+    read_loft,
+    run_lookup,
+    storyboard_of,
+)
 from sqlalchemy import text as sql_text
 
 logger = logging.getLogger(__name__)
@@ -634,6 +647,7 @@ def _index_clip_sync(file_id: str) -> bool:
         filename = file.filename
         duration = file.duration
         scene_done = file.clip_indexed
+        thumbnail_done = file.clip_thumbnail_indexed
 
     # Re-read so we can pull thumbnail_path. Done in a fresh session so
     # the session above can be released before any heavy CPU work.
@@ -693,6 +707,12 @@ def _index_clip_sync(file_id: str) -> bool:
                     f.clip_indexed = True
                     f.clip_thumbnail_indexed = True
         return ok
+
+    if mime_type == LOFT_MIME:
+        return _index_clip_loft(
+            file_id, file_path, mime_type, filename, thumbnail_path,
+            thumbnail_done, duration,
+        )
 
     # --- Thumbnail-fallback (.loft, HEIC): rely on core's pre-rendered
     # JPEG thumbnail. Skip without error if it is missing — legacy
@@ -850,6 +870,8 @@ def _handle_thumbnail_fallback(
     mime_type: str,
     filename: str,
     thumbnail_path: str | None,
+    *,
+    close_scene_leg: bool = True,
 ) -> bool:
     """Index a non-image, non-video file via its core-rendered thumbnail.
 
@@ -858,6 +880,9 @@ def _handle_thumbnail_fallback(
     cached JPEG), close out the flags so the queue doesn't spin and
     return ``True`` — search will simply not surface this file via
     visual similarity until the thumbnail materialises.
+
+    ``close_scene_leg`` is false for a ``.loft``, whose scene leg is the
+    storyboard and is closed by :func:`_index_youtube_storyboard`.
     """
     if not thumbnail_path:
         logger.debug(
@@ -867,7 +892,8 @@ def _handle_thumbnail_fallback(
         with get_search_db() as session:
             f = session.query(IndexedFile).filter_by(file_id=file_id).first()
             if f is not None:
-                f.clip_indexed = True
+                if close_scene_leg:
+                    f.clip_indexed = True
                 f.clip_thumbnail_indexed = True
         return True
 
@@ -881,7 +907,8 @@ def _handle_thumbnail_fallback(
         with get_search_db() as session:
             f = session.query(IndexedFile).filter_by(file_id=file_id).first()
             if f is not None:
-                f.clip_indexed = True
+                if close_scene_leg:
+                    f.clip_indexed = True
                 f.clip_thumbnail_indexed = True
         return True
     ok = _index_clip_thumbnail(
@@ -901,10 +928,151 @@ def _handle_thumbnail_fallback(
     with get_search_db() as session:
         f = session.query(IndexedFile).filter_by(file_id=file_id).first()
         if f is not None:
-            f.clip_indexed = True
+            if close_scene_leg:
+                f.clip_indexed = True
             if not ok:
                 f.clip_thumbnail_indexed = True
     return True
+
+
+# Files whose storyboard leg failed in this process. The resume machinery
+# queues a False result again at once; remembering the failure keeps that loop
+# from calling YouTube again until a restart.
+_storyboard_failed: set[str] = set()
+
+_SHEET_DOWNLOAD_SECONDS = 120.0
+_SCENE_SECONDS = 30
+
+
+class _StoryboardFailure(Exception):
+    """A transient failure of the storyboard leg; ``failure`` is the log class."""
+
+    def __init__(self, failure: str) -> None:
+        super().__init__(failure)
+        self.failure = failure
+
+
+def _index_clip_loft(
+    file_id: str,
+    file_path: str,
+    mime_type: str,
+    filename: str,
+    thumbnail_path: str | None,
+    thumbnail_done: bool,
+    duration: float | None,
+) -> bool:
+    """The two legs of a ``.loft``: its thumbnail, then its storyboard."""
+    if not thumbnail_done:
+        _handle_thumbnail_fallback(
+            file_id, mime_type, filename, thumbnail_path, close_scene_leg=False,
+        )
+    return _index_youtube_storyboard(file_id, file_path, duration)
+
+
+def _close_scene_leg(file_id: str) -> None:
+    with get_search_db() as session:
+        f = session.query(IndexedFile).filter_by(file_id=file_id).first()
+        if f is not None:
+            f.clip_indexed = True
+
+
+def _index_youtube_storyboard(
+    file_id: str, file_path: str, indexed_duration: float | None,
+) -> bool:
+    """Embed the storyboard tiles of a YouTube ``.loft`` as its scene rows.
+
+    True on a definite result (rows written, or nothing to write); False on a
+    transient failure, with the earlier rows and ``clip_indexed`` untouched.
+    """
+    if file_id in _storyboard_failed:
+        return False
+    try:
+        source = read_loft(file_path, validate=validate_file_path)
+    except LoftUnreadable:
+        return _storyboard_failure(file_id, "loft_unreadable")
+    if source is None or source.provider != YOUTUBE_PROVIDER:
+        _close_scene_leg(file_id)
+        return True
+
+    try:
+        description = run_lookup(source.url, STORYBOARD_LOOKUP_LIMIT_SECONDS)
+    except Exception:  # noqa: BLE001 - LookupFailed's detail may name a URL
+        return _storyboard_failure(file_id, "lookup_failed")
+    board = storyboard_of(description)
+    video_seconds = known_duration(description, indexed_duration)
+    if board is None or video_seconds is None:
+        logger.info(
+            "youtube storyboard absent: file=%s class=%s",
+            file_id, "no_sb0" if board is None else "no_duration",
+        )
+        _close_scene_leg(file_id)
+        return True
+
+    frames = settings.indexing.frame_extraction
+    tiles = kept_tiles(board, video_seconds, frames.min_interval, frames.max_frames)
+    try:
+        embedded = _embed_tiles(board, tiles)
+    except _StoryboardFailure as exc:
+        return _storyboard_failure(file_id, exc.failure)
+
+    with get_search_db() as session:
+        _remove_clip_embeddings(session, file_id)
+        for timestamp, vector in embedded:
+            _store_clip_embedding(
+                session=session,
+                embedding_id=f"clip_{file_id}_{uuid.uuid4().hex[:8]}",
+                file_id=file_id,
+                vector=vector,
+                content_preview=f"Frame at {timestamp:.1f}s",
+                timestamp_start=timestamp,
+                timestamp_end=timestamp + _SCENE_SECONDS,
+            )
+        f = session.query(IndexedFile).filter_by(file_id=file_id).first()
+        if f is not None:
+            f.clip_indexed = True
+    logger.info(
+        "youtube storyboard indexed: file=%s sheets=%d tiles=%d",
+        file_id, len(board.sheets), len(embedded),
+    )
+    return True
+
+
+def _storyboard_failure(file_id: str, failure: str) -> bool:
+    _storyboard_failed.add(file_id)
+    logger.warning("youtube storyboard failed: file=%s class=%s", file_id, failure)
+    return False
+
+
+def _embed_tiles(board, tiles) -> list[tuple[float, np.ndarray]]:
+    """CLIP vectors of ``tiles``, cut from sheets downloaded in one time budget."""
+    deadline = time.monotonic() + _SHEET_DOWNLOAD_SECONDS
+    sheets: dict[int, object] = {}
+    for index, (url, _) in enumerate(board.sheets):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _StoryboardFailure("sheet_failed")
+        try:
+            response = httpx.get(url, timeout=remaining, follow_redirects=True)
+            response.raise_for_status()
+            image = Image.open(io.BytesIO(response.content))
+            image.load()
+            sheets[index] = image.convert("RGB")
+        except Exception:  # noqa: BLE001 - the error text can carry the signed URL
+            raise _StoryboardFailure("sheet_failed") from None
+
+    out: list[tuple[float, np.ndarray]] = []
+    for tile in tiles:
+        row, column = divmod(tile.cell, board.columns)
+        left, top = column * board.tile_width, row * board.tile_height
+        box = (left, top, left + board.tile_width, top + board.tile_height)
+        sheet = sheets[tile.sheet]
+        if box[2] > sheet.size[0] or box[3] > sheet.size[1]:
+            continue
+        try:
+            out.append((tile.timestamp, embed_image(sheet.crop(box))))
+        except Exception:  # noqa: BLE001
+            raise _StoryboardFailure("clip_failed") from None
+    return out
 
 
 def _index_clip_thumbnail(
