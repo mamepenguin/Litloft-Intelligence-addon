@@ -40,6 +40,7 @@ export function AskSaveDialog({
       filename,
       content,
       source_file_ids: sourceFileIds,
+      origin: "ask_answer",
     });
     onSaved({ noteFileId: res.note_file_id, notePath: res.note_path });
     onClose();

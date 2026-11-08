@@ -745,7 +745,8 @@
     "imageUnusable": "This picture has no text and could not be read as an image.",
     "noModel": "No model is available for this question",
     "busy": "Busy. Try again in a moment",
-    "failed": "Could not answer"
+    "failed": "Could not answer",
+    "newConversation": "New conversation"
   },
   "llmChoice": {
     "regenerateWith": "Regenerate with…",

@@ -11,6 +11,7 @@ import {
   type FormEvent,
 } from "react";
 import { useTranslations } from "next-intl";
+import { BookmarkPlus } from "lucide-react";
 
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { Button } from "@/components/Button";
@@ -19,17 +20,21 @@ import type { MediaController } from "@/lib/mediaController";
 
 import { isProfileUnavailable, LLMRequestError } from "./api";
 import { AnswerMarkdown } from "./AnswerMarkdown";
+import { AskSaveDialog } from "./AskSaveDialog";
+import { buildAskThreadMarkdown, queryToFilename } from "./askNoteFormat";
 import { choiceLabel, choiceOffered, useLLMChoices } from "./llmChoice";
 import { fetchFileAskAvailability, streamFileQuestion } from "./askStream";
 import {
   appendAskAnswer,
   beginAsk,
+  clearAskThread,
   dropAskEntry,
-  getAskEntry,
+  getAskThread,
+  recordAskSave,
   setAskCitations,
   setAskImage,
   setAskPartial,
-  setAskQuestion,
+  setAskText,
   settleAsk,
   subscribeAskStore,
   type AskFailure,
@@ -38,6 +43,7 @@ import {
 interface AskTabProps {
   fileId: string;
   drive: string;
+  filename?: string;
   fileType?: string;
   mediaController?: MediaController | null;
   documentController?: DocumentController | null;
@@ -49,6 +55,10 @@ interface AskTabProps {
 
 const MIN_QUESTION_CHARS = 3;
 const MAX_QUESTION_CHARS = 1000;
+/** The most of one earlier answer the route's `history` accepts. */
+const MAX_HISTORY_ANSWER_CHARS = 20_000;
+/** The most answered turns the route accepts in one `history`. */
+const MAX_HISTORY_TURNS = 10;
 /** `/ask`'s answer for a full semaphore; any other 503 is a generic failure. */
 const BUSY_DETAIL = "Too many concurrent Ask requests, please retry shortly";
 
@@ -91,6 +101,7 @@ function failureFor(err: unknown): AskFailure {
 export default function AskTab({
   fileId,
   drive,
+  filename = "",
   fileType,
   mediaController = null,
   documentController = null,
@@ -100,12 +111,52 @@ export default function AskTab({
 }: AskTabProps) {
   const t = useTranslations("askTab");
   const tc = useTranslations("llmChoice");
+  const ta = useTranslations("askSearch");
 
-  const entry = useSyncExternalStore(
+  const thread = useSyncExternalStore(
     subscribeAskStore,
-    () => getAskEntry(fileId),
-    () => getAskEntry(fileId),
+    () => getAskThread(fileId),
+    () => getAskThread(fileId),
   );
+  const { turns } = thread;
+  const streaming = turns.some((turn) => turn.status === "streaming");
+  const answeredTurns = turns.filter((turn) => turn.status === "answered");
+  const firstAnswered = answeredTurns[0] ?? null;
+  const savedNote = thread.savedNote;
+  const showSavedLink =
+    savedNote !== null && answeredTurns.length <= savedNote.answeredCount;
+  const showSave = firstAnswered !== null && !streaming && !showSavedLink;
+  const showNewConversation = turns.length > 0 && !streaming;
+  // An unresolved later turn speaks for the tab, so an earlier turn's image
+  // notice waits until the thread settles rather than competing with it.
+  const threadSettled =
+    turns.length === 0 || turns[turns.length - 1].status === "answered";
+
+  const [saveOpen, setSaveOpen] = useState(false);
+
+  const saveContent = useMemo(() => {
+    if (!firstAnswered) return "";
+    return buildAskThreadMarkdown({
+      fileId,
+      filename,
+      fileType,
+      turns: answeredTurns.map((turn) => ({
+        question: turn.question,
+        answer: turn.answer,
+        citations: turn.citations ?? [],
+      })),
+    });
+  }, [firstAnswered, answeredTurns, fileId, filename, fileType]);
+
+  const lastQuestionRef = useRef<HTMLParagraphElement | null>(null);
+  const previousTurnCount = useRef<number | null>(null);
+  useEffect(() => {
+    const previous = previousTurnCount.current;
+    if (previous !== null && turns.length > previous) {
+      lastQuestionRef.current?.scrollIntoView({ block: "nearest" });
+    }
+    previousTurnCount.current = turns.length;
+  }, [turns.length]);
 
   const availabilityRef = useRef(onAvailability);
   useIsomorphicLayoutEffect(() => {
@@ -182,7 +233,16 @@ export default function AskTab({
     async (question: string) => {
       const trimmed = question.trim();
       if (nonSpaceLength(trimmed) < MIN_QUESTION_CHARS) return;
-      if (getAskEntry(fileId).status === "streaming") return;
+      const current = getAskThread(fileId);
+      if (current.turns.some((turn) => turn.status === "streaming")) return;
+
+      const history = current.turns
+        .filter((turn) => turn.status === "answered")
+        .slice(-MAX_HISTORY_TURNS)
+        .map((turn) => ({
+          question: turn.question,
+          answer: turn.answer.slice(0, MAX_HISTORY_ANSWER_CHARS),
+        }));
 
       const positionSeconds = positionAtSubmit(mediaController);
       const controller = new AbortController();
@@ -197,6 +257,7 @@ export default function AskTab({
           question: trimmed,
           profile: askProfile,
           positionSeconds,
+          history,
           signal: controller.signal,
         })) {
           if (controller.signal.aborted) return;
@@ -240,16 +301,15 @@ export default function AskTab({
   const submit = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
-      if (entry.status === "streaming") return;
-      if (nonSpaceLength(entry.question) < MIN_QUESTION_CHARS) return;
-      void ask(entry.question);
+      if (streaming) return;
+      if (nonSpaceLength(thread.text) < MIN_QUESTION_CHARS) return;
+      void ask(thread.text);
     },
-    [ask, entry.question, entry.status],
+    [ask, streaming, thread.text],
   );
 
   const canSubmit =
-    entry.status !== "streaming"
-    && nonSpaceLength(entry.question) >= MIN_QUESTION_CHARS;
+    !streaming && nonSpaceLength(thread.text) >= MIN_QUESTION_CHARS;
 
   return (
     <div
@@ -257,17 +317,70 @@ export default function AskTab({
         fillHeight ? "flex h-full min-h-0 flex-col" : "flex flex-col"
       }
     >
+      <div
+        className={
+          fillHeight
+            ? "min-h-0 flex-1 space-y-3 overflow-y-auto pb-2"
+            : "space-y-3 pb-2"
+        }
+      >
+        {turns.map((turn, index) => (
+          <section key={index} aria-live="polite" className="space-y-2">
+            <p
+              ref={index === turns.length - 1 ? lastQuestionRef : undefined}
+              className="whitespace-pre-wrap text-sm font-medium text-text-primary"
+            >
+              {turn.question}
+            </p>
+            {turn.answer !== "" && (
+              <AnswerMarkdown
+                source={turn.answer}
+                citations={turn.citations}
+                mediaController={mediaController}
+                documentController={documentController}
+                onJump={() => lowerInspector?.()}
+              />
+            )}
+            {threadSettled &&
+              turn.status === "answered" &&
+              turn.image === "unavailable" && (
+                <p className="text-xs text-text-muted">
+                  {t("imageUnavailable")}
+                </p>
+              )}
+            {turn.partial && (
+              <p className="text-xs text-text-muted">{t("partial")}</p>
+            )}
+            {turn.failure && (
+              <p role="alert" className="text-sm text-danger">
+                {turn.failure === "no_model"
+                  ? t("noModel")
+                  : turn.failure === "profile_unavailable"
+                    ? tc("profileUnavailable")
+                    : turn.failure === "busy"
+                      ? t("busy")
+                      : turn.failure === "picture_needs_vision"
+                        ? t("pictureNeedsVision")
+                        : turn.failure === "image_unusable"
+                          ? t("imageUnusable")
+                          : t("failed")}
+              </p>
+            )}
+          </section>
+        ))}
+      </div>
+
       <form
         onSubmit={submit}
         className={
           fillHeight
-            ? "shrink-0 space-y-2 bg-bg-card pb-2"
+            ? "shrink-0 space-y-2 border-t border-bg-border bg-bg-card pt-2"
             : "space-y-2"
         }
       >
         <textarea
-          value={entry.question}
-          onChange={(event) => setAskQuestion(fileId, event.target.value)}
+          value={thread.text}
+          onChange={(event) => setAskText(fileId, event.target.value)}
           placeholder={t("placeholder")}
           maxLength={MAX_QUESTION_CHARS}
           rows={3}
@@ -275,11 +388,42 @@ export default function AskTab({
           className="w-full resize-y rounded-2xl border border-bg-border bg-bg-card p-3 text-sm text-text-primary placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
         />
         <div className="flex flex-wrap items-center justify-end gap-2">
+          {showNewConversation && (
+            <Button
+              type="button"
+              variant="secondary"
+              size="md"
+              onClick={() => clearAskThread(fileId)}
+            >
+              {t("newConversation")}
+            </Button>
+          )}
+          {showSave && (
+            <Button
+              type="button"
+              variant="secondary"
+              size="md"
+              onClick={() => setSaveOpen(true)}
+            >
+              {ta("saveToKnowledge")}
+            </Button>
+          )}
+          {showSavedLink && savedNote && (
+            <div className="flex items-center gap-1.5 text-xs text-accent-teal">
+              <BookmarkPlus size={12} />
+              <a
+                href={`/drive/${encodeURIComponent(drive)}/addons/knowledge?edit=${encodeURIComponent(savedNote.fileId)}`}
+                className="underline underline-offset-2 hover:opacity-80"
+              >
+                {ta("saveSuccess")} — {ta("openNote")}
+              </a>
+            </div>
+          )}
           {profileOffered && choices && (
             <select
               value={askProfile ?? ""}
               onChange={(event) => setChosenProfile(event.target.value || null)}
-              disabled={entry.status === "streaming"}
+              disabled={streaming}
               aria-label={tc("model")}
               className="max-w-36 truncate rounded-lg border border-bg-border bg-bg-card px-2 py-1.5 text-xs text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring disabled:opacity-50"
             >
@@ -304,51 +448,22 @@ export default function AskTab({
         </div>
       </form>
 
-      <div
-        className={
-          fillHeight
-            ? "min-h-0 flex-1 space-y-2 overflow-y-auto pt-2"
-            : "space-y-2 pt-2"
-        }
-      >
-        {entry.status !== "idle" && (
-          <section aria-live="polite" className="space-y-2">
-            <p className="whitespace-pre-wrap text-sm font-medium text-text-primary">
-              {entry.asked}
-            </p>
-            {entry.answer !== "" && (
-              <AnswerMarkdown
-                source={entry.answer}
-                citations={entry.citations}
-                mediaController={mediaController}
-                documentController={documentController}
-                onJump={() => lowerInspector?.()}
-              />
-            )}
-            {entry.status === "answered" && entry.image === "unavailable" && (
-              <p className="text-xs text-text-muted">{t("imageUnavailable")}</p>
-            )}
-            {entry.partial && (
-              <p className="text-xs text-text-muted">{t("partial")}</p>
-            )}
-            {entry.failure && (
-              <p role="alert" className="text-sm text-danger">
-                {entry.failure === "no_model"
-                  ? t("noModel")
-                  : entry.failure === "profile_unavailable"
-                    ? tc("profileUnavailable")
-                    : entry.failure === "busy"
-                      ? t("busy")
-                      : entry.failure === "picture_needs_vision"
-                        ? t("pictureNeedsVision")
-                        : entry.failure === "image_unusable"
-                          ? t("imageUnusable")
-                          : t("failed")}
-              </p>
-            )}
-          </section>
-        )}
-      </div>
+      {firstAnswered && (
+        <AskSaveDialog
+          open={saveOpen}
+          drive={drive}
+          defaultFilename={queryToFilename(firstAnswered.question)}
+          content={saveContent}
+          sourceFileIds={[fileId]}
+          onClose={() => setSaveOpen(false)}
+          onSaved={(result) =>
+            recordAskSave(fileId, {
+              fileId: result.noteFileId,
+              path: result.notePath,
+            })
+          }
+        />
+      )}
     </div>
   );
 }

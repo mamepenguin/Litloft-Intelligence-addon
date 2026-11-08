@@ -23,12 +23,19 @@ export type FileAskEvent =
   | { kind: "meta"; partial: boolean; image?: AskImage }
   | { kind: "done"; error?: string };
 
+/** An earlier answered turn, sent so the model can follow the conversation. */
+export interface FileQuestionHistoryTurn {
+  question: string;
+  answer: string;
+}
+
 export interface FileQuestionOptions {
   fileId: string;
   drive: string;
   question: string;
   profile?: string;
   positionSeconds?: number;
+  history?: FileQuestionHistoryTurn[];
   signal?: AbortSignal;
 }
 
@@ -172,7 +179,8 @@ function nextSeparator(
 export async function* streamFileQuestion(
   options: FileQuestionOptions,
 ): AsyncGenerator<FileAskEvent> {
-  const { fileId, drive, question, profile, positionSeconds, signal } = options;
+  const { fileId, drive, question, profile, positionSeconds, history, signal } =
+    options;
   const res = await fetch(
     `${API_BASE}/addons/intelligence/files/${fileId}/ask`,
     {
@@ -186,6 +194,7 @@ export async function* streamFileQuestion(
       body: JSON.stringify({
         question,
         profile: profile ?? null,
+        history: history ?? [],
         ...(positionSeconds === undefined
           ? {}
           : { position_seconds: positionSeconds }),
