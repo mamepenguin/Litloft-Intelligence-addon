@@ -27,6 +27,9 @@ RUN pip install --no-cache-dir \
     google-genai regex \
     beautifulsoup4 html2text lxml
 
+# The suite never contacts YouTube: tests replace the executable on PATH.
+RUN pip install --no-cache-dir "yt-dlp>=2026.8.19"
+
 # Pinned, because `pytest.ini`'s coverage floor is only as reproducible as the
 # tool that evaluates it. See the file.
 COPY requirements-test.txt .

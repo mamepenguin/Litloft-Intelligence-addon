@@ -22,6 +22,8 @@ RUN git clone --depth 1 --branch v0.1.6 https://github.com/asg017/sqlite-vec.git
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+RUN pip install --no-cache-dir "yt-dlp>=2026.8.19"
+
 COPY app/ ./app/
 COPY scripts/ ./scripts/
 

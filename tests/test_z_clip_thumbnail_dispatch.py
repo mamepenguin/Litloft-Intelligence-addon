@@ -134,6 +134,13 @@ def _seed_indexed_file(
         s.close()
 
 
+def _non_youtube_loft(tmp_path) -> str:
+    """A readable ``.loft`` that is not a YouTube reference, so no storyboard leg runs."""
+    path = tmp_path / "ref.loft"
+    path.write_text('{"provider": "vimeo", "url": "https://vimeo.com/1"}')
+    return str(path)
+
+
 def _emb_types(Session, file_id: str) -> list[str]:
     s = Session()
     try:
@@ -194,6 +201,7 @@ def test_loft_with_thumbnail_writes_clip_thumbnail(monkeypatch, patched_db, tmp_
     _seed_indexed_file(
         Session, "loft-1",
         mime_type="application/vnd.litloft.loft+json",
+        file_path=_non_youtube_loft(tmp_path),
         thumbnail_path=thumb_rel,
     )
 
@@ -207,12 +215,13 @@ def test_loft_with_thumbnail_writes_clip_thumbnail(monkeypatch, patched_db, tmp_
     assert thumb_done is True
 
 
-def test_loft_without_thumbnail_closes_flags_without_emb(patched_db):
+def test_loft_without_thumbnail_closes_flags_without_emb(patched_db, tmp_path):
     """Legacy `.loft` rows with no thumbnail_path are skipped cleanly."""
     Session = patched_db
     _seed_indexed_file(
         Session, "loft-2",
         mime_type="application/vnd.litloft.loft+json",
+        file_path=_non_youtube_loft(tmp_path),
         thumbnail_path=None,
     )
 
@@ -434,6 +443,7 @@ def test_loft_with_traversing_thumbnail_path_skips_cleanly(
     _seed_indexed_file(
         Session, "loft-evil",
         mime_type="application/vnd.litloft.loft+json",
+        file_path=_non_youtube_loft(tmp_path),
         thumbnail_path="../../etc/passwd",
     )
 

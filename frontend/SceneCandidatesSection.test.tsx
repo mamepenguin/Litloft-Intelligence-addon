@@ -205,6 +205,29 @@ describe("the loaded state (SPEC-ADDON-042)", () => {
     expect(img!.getAttribute("loading")).toBe("lazy");
   });
 
+  it.each(["ref.loft", "ref.LOFT"])(
+    "requests no frame for a %s candidate and still requests one for a video",
+    async (loftName) => {
+      fetchMock.mockResolvedValue(
+        response([
+          seg({ file_id: "f1", filename: loftName, start: 0, end: 10 }),
+          seg({ file_id: "f2", filename: "holiday.mp4", start: 83, end: 96, peak: 84 }),
+        ]),
+      );
+      const { container } = mount();
+      await screen.findByText(loftName);
+
+      const cards = Array.from(container.querySelectorAll("a[href^='/files/']"));
+      expect(cards).toHaveLength(2);
+      expect(cards[0].querySelector("img")).toBeNull();
+      expect(cards[0].textContent).toContain("0:00-0:10");
+      expect(cards[1].querySelector("img")?.getAttribute("src")).toMatch(
+        /\/files\/f2\/frame\?t=84$/,
+      );
+      expect(container.querySelectorAll("img")).toHaveLength(1);
+    },
+  );
+
   it("shows no score", async () => {
     fetchMock.mockResolvedValue(response([seg({ score: 0.4321 })]));
     const { container } = mount();
