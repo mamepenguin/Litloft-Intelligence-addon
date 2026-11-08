@@ -27,7 +27,7 @@ pytestmark = needs_ffmpeg
 
 
 def test_a_waiter_that_times_out_leaves_the_lookup_to_the_others(youtube):
-    """A gives up after 1 s; B, which joined at once, is served by the same lookup."""
+    """A gives up after 1 s; B, which arrives after that, is served by the same lookup."""
     youtube.set_ytdlp(describe=describe([youtube.format("f720", 720)]), delay=3.0)
     fid = "yt" + uuid.uuid4().hex[:10]
     results: dict[str, object] = {}
@@ -39,14 +39,12 @@ def test_a_waiter_that_times_out_leaves_the_lookup_to_the_others(youtube):
         except HTTPException as exc:
             results[name] = exc.status_code
 
-    threads = [
-        threading.Thread(target=wait, args=("a", 1.0)),
-        threading.Thread(target=wait, args=("b", 10.0)),
-    ]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    first = threading.Thread(target=wait, args=("a", 1.0))
+    second = threading.Thread(target=wait, args=("b", 10.0))
+    first.start()
+    first.join()
+    second.start()
+    second.join()
 
     assert results["a"] == 504
     assert isinstance(results["b"], dict)
