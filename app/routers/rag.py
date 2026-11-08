@@ -384,11 +384,24 @@ async def file_ask_endpoint(
     """
     resolved = await _require_rag_enabled(drive, body.profile)
 
+    max_chars = settings.rag.file_question_max_chars
+    history = file_question.trim_history(body.history, max_chars)
+    budget = max_chars - sum(
+        len(turn.question) + len(turn.answer) for turn in history
+    )
+    ranking_text = (
+        body.history[-1].question + "\n" + body.question
+        if body.history
+        else body.question
+    )
+
     material = await asyncio.to_thread(
         file_question.load_material,
         file_id=file_id,
         drive=drive,
         question=body.question,
+        budget=budget,
+        ranking_text=ranking_text,
     )
     if material is None:
         raise HTTPException(status_code=404, detail="File not found")
@@ -418,6 +431,7 @@ async def file_ask_endpoint(
                 resolved=resolved,
                 semaphore=semaphore,
                 position_seconds=body.position_seconds,
+                history=history,
             ),
             media_type=_SSE_MEDIA_TYPE,
             headers=_SSE_HEADERS,
@@ -434,6 +448,7 @@ async def _file_question_stream(
     resolved: Resolved,
     semaphore: "asyncio.Semaphore",
     position_seconds: float | None = None,
+    history: list[file_question.HistoryTurn] | None = None,
 ) -> AsyncIterator[str]:
     """Adapt the routed model's answer to the file-question SSE wire format.
 
@@ -468,9 +483,11 @@ async def _file_question_stream(
             build_file_question_system_prompt(
                 resolved.profile.config.output_language,
                 has_passages=bool(passages),
+                has_history=bool(history),
             ),
             build_file_question_user_prompt(
                 question, passages, position_seconds=position,
+                history=history,
             ),
             max_tokens_override=settings.rag.max_tokens,
         )
@@ -507,12 +524,14 @@ async def _file_question_stream(
                     resolved.profile.config.output_language,
                     has_image=True,
                     has_passages=bool(passages),
+                    has_history=bool(history),
                 ),
                 build_file_question_user_prompt(
                     question,
                     passages,
                     has_image=True,
                     position_seconds=position,
+                    history=history,
                 ),
                 max_tokens_override=settings.rag.max_tokens,
             )
