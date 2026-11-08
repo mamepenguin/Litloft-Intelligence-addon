@@ -22,6 +22,7 @@ import pytest
 
 from app.frame_cache import frame_cache_dir
 from app.models import IndexedFile
+from app.workers import clip as clip_worker
 from tests.search_endpoint_db import patch_everywhere
 from tests.test_spec_addon_078_youtube_storyboard import (  # noqa: F401 - fixtures and helpers
     add_loft,
@@ -368,6 +369,32 @@ class TestAFailureBeforeTheCommit:
                 and file_id in r.getMessage()
                 for r in warnings
             )
+
+
+class TestAFailureWhileWritingRows:
+    def test_it_leaves_the_old_rows_and_tiles_and_no_temporary_directory(
+        self, world, youtube, monkeypatch,
+    ):
+        file_id, per_tile = successful_leg(world, youtube)
+        before_rows = rows_of(world, file_id)
+        before_tiles = tile_bytes(file_id)
+        reopen_scene_leg(world, file_id)
+        board, per_tile = serve_storyboard(
+            youtube, world.pil, tiles=9, fps=storyboard_fps(90.0),
+        )
+        youtube.set_ytdlp(describe=describe([board], duration=9 * per_tile))
+
+        def refuse(*args, **kwargs):
+            raise RuntimeError("the row write failed")
+
+        monkeypatch.setattr(clip_worker, "_store_clip_embedding", refuse)
+
+        with pytest.raises(RuntimeError):
+            run(file_id)
+
+        assert rows_of(world, file_id) == before_rows
+        assert tile_bytes(file_id) == before_tiles
+        assert leftover_dirs(file_id) == []
 
 
 class TestALegWithNoStoryboard:

@@ -9,6 +9,7 @@ import asyncio
 import io
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -24,6 +25,7 @@ from PIL import Image
 from app.vec_partition import insert_vector_sql
 from app.config import settings, validate_file_path
 from app.database import get_search_db
+from app.frame_cache import frame_cache_dir, round_ms, tile_cache_dir
 from app.models import Embedding, IndexedFile
 from app.workers import blip, ml_imports
 from app.workers.whisper import LOFT_MIME
@@ -1010,33 +1012,78 @@ def _index_youtube_storyboard(
 
     frames = settings.indexing.frame_extraction
     tiles = kept_tiles(board, video_seconds, frames.max_frames)
+    new_tiles = _prepare_tiles_dir(file_id)
     try:
-        embedded = _embed_tiles(board, tiles)
+        embedded = _embed_tiles(board, tiles, new_tiles)
+        with get_search_db() as session:
+            _remove_clip_embeddings(session, file_id)
+            for timestamp, vector in embedded:
+                _store_clip_embedding(
+                    session=session,
+                    embedding_id=f"clip_{file_id}_{uuid.uuid4().hex[:8]}",
+                    file_id=file_id,
+                    vector=vector,
+                    content_preview=f"Frame at {timestamp:.1f}s",
+                    timestamp_start=timestamp,
+                    timestamp_end=timestamp + _SCENE_SECONDS,
+                )
+            f = session.query(IndexedFile).filter_by(file_id=file_id).first()
+            if f is not None:
+                f.clip_indexed = True
     except _StoryboardFailure as exc:
+        shutil.rmtree(new_tiles, ignore_errors=True)
         return _storyboard_failure(
             file_id, exc.failure, len(board.sheets), len(tiles),
         )
-
-    with get_search_db() as session:
-        _remove_clip_embeddings(session, file_id)
-        for timestamp, vector in embedded:
-            _store_clip_embedding(
-                session=session,
-                embedding_id=f"clip_{file_id}_{uuid.uuid4().hex[:8]}",
-                file_id=file_id,
-                vector=vector,
-                content_preview=f"Frame at {timestamp:.1f}s",
-                timestamp_start=timestamp,
-                timestamp_end=timestamp + _SCENE_SECONDS,
-            )
-        f = session.query(IndexedFile).filter_by(file_id=file_id).first()
-        if f is not None:
-            f.clip_indexed = True
+    except Exception:
+        # A failure before the row commit must leave no temporary directory.
+        shutil.rmtree(new_tiles, ignore_errors=True)
+        raise
+    _swap_tiles(file_id, new_tiles)
     logger.info(
         "youtube storyboard indexed: file=%s class=rows sheets=%d tiles=%d",
         file_id, len(board.sheets), len(embedded),
     )
     return True
+
+
+def _prepare_tiles_dir(file_id: str) -> Path:
+    """Remove leftover tile directories and make this leg's temporary one.
+
+    A leftover is a ``tiles.*`` directory from a swap that failed or a process
+    that exited mid-swap. The paths carry random names, so a directory this
+    cleanup cannot remove cannot collide with the one made here.
+    """
+    frames_dir = frame_cache_dir(file_id)
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    for leftover in frames_dir.glob(f"{tile_cache_dir(file_id).name}.*"):
+        if not leftover.is_dir():
+            continue
+        try:
+            shutil.rmtree(leftover)
+        except OSError as exc:
+            logger.warning(
+                "youtube storyboard cleanup failed: file=%s (%s)", file_id, exc,
+            )
+    new_dir = frames_dir / f"{tile_cache_dir(file_id).name}.{uuid.uuid4().hex}"
+    new_dir.mkdir()
+    return new_dir
+
+
+def _swap_tiles(file_id: str, new_dir: Path) -> None:
+    """Make ``new_dir`` the file's ``tiles/`` after its rows have committed."""
+    final = tile_cache_dir(file_id)
+    old = final.parent / f"{final.name}.old.{uuid.uuid4().hex}"
+    try:
+        if final.exists():
+            os.rename(final, old)
+        os.rename(new_dir, final)
+        if old.exists():
+            shutil.rmtree(old)
+    except OSError as exc:
+        logger.warning(
+            "youtube storyboard swap failed: file=%s (%s)", file_id, exc,
+        )
 
 
 def _storyboard_failure(
@@ -1050,8 +1097,12 @@ def _storyboard_failure(
     return False
 
 
-def _embed_tiles(board, tiles) -> list[tuple[float, np.ndarray]]:
-    """CLIP vectors of ``tiles``, cut from sheets downloaded in one time budget."""
+def _embed_tiles(board, tiles, tile_dir: Path) -> list[tuple[float, np.ndarray]]:
+    """CLIP vectors of ``tiles``, cut from sheets downloaded in one time budget.
+
+    Each kept tile is also encoded as WebP q70 at its own size inside
+    ``tile_dir``, named by the same millisecond rounding the frame cache uses.
+    """
     deadline = time.monotonic() + _SHEET_DOWNLOAD_SECONDS
     sheets: dict[int, object] = {}
     for index, (url, _) in enumerate(board.sheets):
@@ -1075,10 +1126,20 @@ def _embed_tiles(board, tiles) -> list[tuple[float, np.ndarray]]:
         sheet = sheets[tile.sheet]
         if box[2] > sheet.size[0] or box[3] > sheet.size[1]:
             continue
+        cropped = sheet.crop(box)
         try:
-            out.append((tile.timestamp, embed_image(sheet.crop(box))))
+            vector = embed_image(cropped)
         except Exception:  # noqa: BLE001
             raise _StoryboardFailure("clip_failed") from None
+        try:
+            cropped.save(
+                tile_dir / f"{round_ms(tile.timestamp)}.webp",
+                format="WEBP",
+                quality=70,
+            )
+        except Exception:  # noqa: BLE001
+            raise _StoryboardFailure("tile_write_failed") from None
+        out.append((tile.timestamp, vector))
     return out
 
 

@@ -6,7 +6,7 @@ import { useTranslations } from "next-intl";
 
 import { cardGridTemplate, useCardColumns } from "@/lib/cardGrid";
 
-import { fetchSceneSegments, getFrameUrl } from "./api";
+import { fetchSceneSegments, getFrameUrl, getSceneTileUrl } from "./api";
 import type { SceneSegment } from "./api";
 
 interface SceneCandidatesSectionProps {
@@ -59,11 +59,15 @@ function SceneCard({ segment }: { segment: SceneSegment }) {
       onClick={open}
       className="group min-w-0 overflow-hidden rounded-lg bg-bg-card focus-visible:outline-2 focus-visible:outline-accent hover:outline-2 hover:outline-accent"
     >
-      {frameFailed || isLoft ? (
+      {frameFailed ? (
         <div className="aspect-video w-full bg-bg-elevated" />
       ) : (
         <img
-          src={getFrameUrl(segment.file_id, segment.peak)}
+          src={
+            isLoft
+              ? getSceneTileUrl(segment.file_id, segment.peak)
+              : getFrameUrl(segment.file_id, segment.peak)
+          }
           alt=""
           loading="lazy"
           onError={() => setFrameFailed(true)}

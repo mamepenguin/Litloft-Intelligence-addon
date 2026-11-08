@@ -539,6 +539,19 @@
         "stream": true
       },
       {
+        "path": "/files/{file_id}/scene-tile",
+        "methods": [
+          "GET"
+        ],
+        "drive_optional": true,
+        "pre_check": {
+          "type": "file_access",
+          "param": "file_id"
+        },
+        "response_filter": null,
+        "stream": true
+      },
+      {
         "path": "/files/{file_id}/visual-index",
         "methods": [
           "GET"
