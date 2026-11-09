@@ -937,10 +937,31 @@ def _handle_thumbnail_fallback(
     return True
 
 
-# Files whose storyboard leg failed in this process. The resume machinery
-# queues a False result again at once; remembering the failure keeps that loop
-# from calling YouTube again until a restart.
+# A storyboard leg that failed gets no second attempt until the process
+# restarts, except for a file the owner explicitly reindexed. Retrying on
+# every resume would call YouTube in a loop for a video that is gone.
 _storyboard_failed: set[str] = set()
+
+_storyboard_retry: set[str] = set()
+
+
+def request_storyboard_retry(file_id: str) -> None:
+    """Let the next storyboard leg of ``file_id`` call YouTube once more."""
+    _storyboard_retry.add(file_id)
+
+
+def _consume_storyboard_retry(file_id: str) -> bool:
+    """Take the file's pending retry, if any, in one atomic removal.
+
+    A membership test before the removal would leave a request that arrives
+    between the two without effect on the leg that is starting.
+    """
+    try:
+        _storyboard_retry.remove(file_id)
+    except KeyError:
+        return False
+    return True
+
 
 _SHEET_DOWNLOAD_SECONDS = 120.0
 _SCENE_SECONDS = 30
@@ -978,6 +999,13 @@ def _close_scene_leg(file_id: str) -> None:
             f.clip_indexed = True
 
 
+def _storyboard_definite(file_id: str) -> bool:
+    """End a storyboard leg that wrote nothing but settled the file."""
+    _storyboard_failed.discard(file_id)
+    _close_scene_leg(file_id)
+    return True
+
+
 def _index_youtube_storyboard(
     file_id: str, file_path: str, indexed_duration: float | None,
 ) -> bool:
@@ -986,15 +1014,14 @@ def _index_youtube_storyboard(
     True on a definite result (rows written, or nothing to write); False on a
     transient failure, with the earlier rows and ``clip_indexed`` untouched.
     """
-    if file_id in _storyboard_failed:
+    if not _consume_storyboard_retry(file_id) and file_id in _storyboard_failed:
         return False
     try:
         source = read_loft(file_path, validate=validate_file_path)
     except LoftUnreadable:
         return _storyboard_failure(file_id, "loft_unreadable")
     if source is None or source.provider != YOUTUBE_PROVIDER:
-        _close_scene_leg(file_id)
-        return True
+        return _storyboard_definite(file_id)
 
     try:
         description = run_lookup(source.url, STORYBOARD_LOOKUP_LIMIT_SECONDS)
@@ -1007,8 +1034,7 @@ def _index_youtube_storyboard(
             "youtube storyboard absent: file=%s class=%s sheets=0 tiles=0",
             file_id, "no_sb0" if board is None else "no_duration",
         )
-        _close_scene_leg(file_id)
-        return True
+        return _storyboard_definite(file_id)
 
     frames = settings.indexing.frame_extraction
     tiles = kept_tiles(board, video_seconds, frames.max_frames)
@@ -1039,6 +1065,7 @@ def _index_youtube_storyboard(
         # A failure before the row commit must leave no temporary directory.
         shutil.rmtree(new_tiles, ignore_errors=True)
         raise
+    _storyboard_failed.discard(file_id)
     _swap_tiles(file_id, new_tiles)
     logger.info(
         "youtube storyboard indexed: file=%s class=rows sheets=%d tiles=%d",
