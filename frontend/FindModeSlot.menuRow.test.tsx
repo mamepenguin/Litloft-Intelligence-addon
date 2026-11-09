@@ -31,7 +31,7 @@ afterEach(() => {
   cleanup();
 });
 
-describe("SPEC-ADDON-081 the Find entry is a row of the … menu", () => {
+describe("SPEC-ADDON-086 the Find entry is a row of the … menu", () => {
   it("is labelled with the page CTA and closes the menu before navigating with the trimmed query", async () => {
     vi.mocked(getIntelligenceStatus).mockResolvedValue(enabledStatus as never);
     const log: string[] = [];
