@@ -67,7 +67,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/cov"
-          docker run --rm -v "$RUNNER_TEMP/cov:/out" \
+          # `tmp_path` on tmpfs: about 2,000 tests create a SQLite schema
+          # there, and on disk each `create_all` waits ~0.19 s on fsync.
+          docker run --rm --tmpfs /tmp:exec -v "$RUNNER_TEMP/cov:/out" \
             -e PYTEST_ADDOPTS="--cov-fail-under=$COV_FLOOR --cov-report=json:/out/cov.json" \
             intelligence-test
 
