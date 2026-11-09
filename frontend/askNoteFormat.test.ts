@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Citation } from "./api";
+import type { FileCitation } from "./askStream";
 import {
   buildAskNoteMarkdown,
+  buildAskThreadMarkdown,
   citationToLoftUrl,
   formatCitationListItem,
   parseSegmentLocation,
@@ -215,6 +217,70 @@ describe("buildAskNoteMarkdown", () => {
   it("omits ## 引用元 when no citations", () => {
     const md = buildAskNoteMarkdown("Q", "A", []);
     expect(md).not.toContain("## 引用元");
+  });
+});
+
+describe("buildAskThreadMarkdown — code is what AnswerMarkdown renders as code", () => {
+  const THREAD_FILE = "vid000000001";
+  const CITED: FileCitation[] = [{ n: 1, position: { seconds: 5 } }];
+  const link = `[0:05](loft://${THREAD_FILE}?t=5)`;
+
+  function threadNote(answer: string): string {
+    return [
+      "---",
+      "origin: ask_answer",
+      'query: "why"',
+      `source_file_ids: ["${THREAD_FILE}"]`,
+      "saved_at: 2026-01-01T00:00:00.000Z",
+      "---",
+      "",
+      "# why",
+      "",
+      `[lecture.mp4](loft://${THREAD_FILE})`,
+      "",
+      "## why",
+      "",
+      answer,
+      "",
+    ].join("\n");
+  }
+
+  it.each([
+    {
+      name: "a fence inside a list item",
+      answer: "1. Run:\n    ```python\n    y = arr[1]\n    ```",
+      expected: "1. Run:\n    ```python\n    y = arr[1]\n    ```",
+    },
+    {
+      name: "a list continuation paragraph",
+      answer: "- item\n\n    see [1]",
+      expected: `- item\n\n    see ${link}`,
+    },
+    {
+      name: "a top-level indented code block",
+      answer: "text\n\n    code [1]",
+      expected: "text\n\n    code [1]",
+    },
+    {
+      name: "a fence inside a blockquote",
+      answer: "> ```\n> a[1]\n> ```",
+      expected: "> ```\n> a[1]\n> ```",
+    },
+    {
+      name: "a fence two list levels deep",
+      answer: "1. outer\n    1. inner\n\n        ```\n        b[1]\n        ```",
+      expected: "1. outer\n    1. inner\n\n        ```\n        b[1]\n        ```",
+    },
+  ])("writes $name as received exactly where it is code", ({ answer, expected }) => {
+    const note = buildAskThreadMarkdown({
+      fileId: THREAD_FILE,
+      filename: "lecture.mp4",
+      fileType: "video",
+      turns: [{ question: "why", answer, citations: CITED }],
+      savedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    expect(note).toBe(threadNote(expected));
   });
 });
 

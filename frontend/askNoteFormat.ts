@@ -9,6 +9,8 @@
  * renames. Non-`.md` citations stay on the `loft://` scheme so query
  * parameters (`?t=<sec>` / `?page=<N>`) keep working.
  */
+// @ts-expect-error -- the addon has no node_modules of its own; this reaches the core's copy
+import MarkdownIt from "@/../node_modules/markdown-it";
 import type { Citation } from "./api";
 import type { CitationPosition, FileCitation } from "./askStream";
 import { citationLabel } from "./citationLabel";
@@ -244,61 +246,50 @@ function rewriteInline(
   return out;
 }
 
+// Block options must match the renderer's, or a line can be code on screen and
+// text here, which decides whether its markers are rewritten.
+const blockParser = new MarkdownIt({
+  html: false,
+  linkify: true,
+  typographer: false,
+  breaks: false,
+});
+
+interface BlockToken {
+  type: string;
+  map: [number, number] | null;
+  children: BlockToken[] | null;
+}
+
+function codeLineIndexes(answer: string): Set<number> {
+  const indexes = new Set<number>();
+  const collect = (tokens: BlockToken[]): void => {
+    for (const token of tokens) {
+      if ((token.type === "fence" || token.type === "code_block") && token.map) {
+        for (let line = token.map[0]; line < token.map[1]; line += 1) {
+          indexes.add(line);
+        }
+      }
+      if (token.children) collect(token.children);
+    }
+  };
+  collect(blockParser.parse(answer, {}));
+  return indexes;
+}
+
 function rewriteAnswer(
   answer: string,
   citations: FileCitation[],
   fileId: string,
 ): string {
   const positions = new Map(citations.map((citation) => [citation.n, citation.position]));
-  const lines = answer.split("\n");
-  const out: string[] = [];
-  let fence: { char: string; length: number } | null = null;
-  let indented = false;
-  let previousBlank = true;
-
-  for (const line of lines) {
-    if (fence !== null) {
-      out.push(line);
-      const closing = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
-      if (
-        closing &&
-        closing[1][0] === fence.char &&
-        closing[1].length >= fence.length
-      ) {
-        fence = null;
-      }
-      previousBlank = line.trim() === "";
-      continue;
-    }
-
-    const opening = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-    if (opening) {
-      fence = { char: opening[1][0], length: opening[1].length };
-      indented = false;
-      out.push(line);
-      previousBlank = false;
-      continue;
-    }
-
-    const lineIsIndented = /^(?: {4}|\t)/.test(line);
-    if (lineIsIndented && (indented || previousBlank)) {
-      indented = true;
-      out.push(line);
-      previousBlank = false;
-      continue;
-    }
-    if (indented && line.trim() === "") {
-      out.push(line);
-      previousBlank = true;
-      continue;
-    }
-
-    indented = false;
-    out.push(rewriteInline(line, positions, fileId));
-    previousBlank = line.trim() === "";
-  }
-
-  return out.join("\n");
+  const code = codeLineIndexes(answer);
+  return answer
+    .split("\n")
+    .map((line, index) =>
+      code.has(index) ? line : rewriteInline(line, positions, fileId),
+    )
+    .join("\n");
 }
 
 /**
