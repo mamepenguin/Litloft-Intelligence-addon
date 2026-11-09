@@ -246,7 +246,12 @@ describe("buildAskThreadMarkdown — code is what AnswerMarkdown renders as code
     ].join("\n");
   }
 
-  it.each([
+  const cases: Array<{
+    name: string;
+    answer: string;
+    expected: string;
+    citations?: FileCitation[];
+  }> = [
     {
       name: "a fence inside a list item",
       answer: "1. Run:\n    ```python\n    y = arr[1]\n    ```",
@@ -312,12 +317,25 @@ describe("buildAskThreadMarkdown — code is what AnswerMarkdown renders as code
       answer: "[see [1]](https://example.com)",
       expected: "[see " + link + "](https://example.com)",
     },
-  ])("writes $name as received exactly where it is code", ({ answer, expected }) => {
+    {
+      name: "a reference definition's indented line",
+      answer: "[1]: https://example.com\n    see arr[2]",
+      expected: ": https://example.com\n    see arr[2]",
+      citations: [{ n: 2, position: { seconds: 5 } }],
+    },
+    {
+      name: "a defined reference used later and in a code span",
+      answer: "[1]: https://example.com\n\nsee [1] and `[1]`",
+      expected: link + ": https://example.com\n\nsee " + link + " and `[1]`",
+    },
+  ];
+
+  it.each(cases)("writes $name as received exactly where it is code", ({ answer, expected, citations = CITED }) => {
     const note = buildAskThreadMarkdown({
       fileId: THREAD_FILE,
       filename: "lecture.mp4",
       fileType: "video",
-      turns: [{ question: "why", answer, citations: CITED }],
+      turns: [{ question: "why", answer, citations }],
       savedAt: "2026-01-01T00:00:00.000Z",
     });
 

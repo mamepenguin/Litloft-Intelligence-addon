@@ -218,9 +218,12 @@ interface MarkdownToken {
 
 // Markers are swapped for unique sentinels before parsing because equal `[n]`
 // markers elsewhere would make the parser's report of which occurrence it drew
-// as code ambiguous. The prefix is lengthened until the answer lacks it and the
-// counters share one width, so neither a literal lookalike nor index 1 matching
-// the start of index 10 can be read as another's sentinel.
+// as code ambiguous. The sentinel keeps the brackets: without them a line such
+// as `[1]: url` stops being a reference definition, so an indented line after
+// it becomes a paragraph continuation instead of the code block the renderer
+// draws. The prefix is lengthened until the answer lacks it and the counters
+// share one width, so neither a literal lookalike nor index 1 matching the
+// start of index 10 can be read as another's sentinel.
 function rewriteAnswer(
   answer: string,
   citations: FileCitation[],
@@ -234,7 +237,7 @@ function rewriteAnswer(
 
   const width = String(Math.max(matches.length - 1, 0)).length;
   const sentinels = matches.map(
-    (_match, index) => `${prefix}${String(index).padStart(width, "0")}`,
+    (_match, index) => `[${prefix}${String(index).padStart(width, "0")}]`,
   );
 
   let sentinelText = "";
