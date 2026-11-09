@@ -69,8 +69,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/cov"
           # `tmp_path` on tmpfs: about 2,000 tests create a SQLite schema
           # there, and on disk each `create_all` waits ~0.19 s on fsync.
+          # tmpfs is capped at half the runner's RAM and pytest keeps every
+          # `tmp_path` until the session ends (6.2 GB at peak), so a passed
+          # test's directory is dropped at its teardown.
           docker run --rm --tmpfs /tmp:exec -v "$RUNNER_TEMP/cov:/out" \
-            -e PYTEST_ADDOPTS="--cov-fail-under=$COV_FLOOR --cov-report=json:/out/cov.json" \
+            -e PYTEST_ADDOPTS="--cov-fail-under=$COV_FLOOR --cov-report=json:/out/cov.json -o tmp_path_retention_policy=failed" \
             intelligence-test
 
       # The floor is a lower bound, and a lower bound cannot see the

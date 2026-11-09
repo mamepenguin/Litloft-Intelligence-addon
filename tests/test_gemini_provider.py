@@ -535,11 +535,12 @@ async def test_pre_check_rejects_oversize_file(
     class _StubResult:
         st_size = GEMINI_FILE_SIZE_LIMIT + 1
 
-    monkeypatch.setattr("os.fstat", lambda fd: _StubResult())
-
     provider = _make_provider(fake_genai)
-    with pytest.raises(FatalError, match="2GB"):
-        await provider.transcribe(str(p))
+    # Scoped: an fstat stub still in place at teardown breaks tmp_path's rmtree.
+    with monkeypatch.context() as m:
+        m.setattr("os.fstat", lambda fd: _StubResult())
+        with pytest.raises(FatalError, match="2GB"):
+            await provider.transcribe(str(p))
 
 
 @pytest.mark.asyncio
