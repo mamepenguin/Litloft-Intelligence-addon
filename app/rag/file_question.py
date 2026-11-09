@@ -4,14 +4,15 @@ A file's text is its indexed chunks, read from ``search.db``; nothing is
 extracted at question time, which is why a file becomes askable only once
 indexing has run. Every chunk is sent when they fit
 ``rag.file_question_max_chars``. Otherwise the chunks are ranked by the
-cosine similarity of their stored embedding to the question, taken in rank
-order while they fit, and sent in file order with ``partial`` set.
+cosine similarity of their stored embedding to the ranking text, taken in
+rank order while they fit, and sent in file order with ``partial`` set.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -66,6 +67,14 @@ class Material:
     mime_type: str
     file_path: str | None
     duration: float | None
+
+
+@dataclass(frozen=True)
+class HistoryTurn:
+    """One earlier turn as the model receives it, markers removed."""
+
+    question: str
+    answer: str
 
 
 @dataclass(frozen=True)
@@ -136,14 +145,65 @@ def available(file_id: str, drive: str) -> bool:
     return llm_routing.any_profile_can_see(settings)
 
 
+def trim_history(
+    turns: Sequence[Any], max_chars: int,
+) -> list[HistoryTurn]:
+    """The earlier turns the model gets, oldest first, within half the limit.
+
+    ``[n]`` markers numbered an earlier request's passages, so they are
+    removed from every answer before it is counted or sent. Turns are taken
+    newest first; the first one that does not fit ends the block, so a kept
+    turn is never older than a dropped one. The newest turn is kept cut to
+    the budget when it does not fit on its own, question first.
+    """
+    budget = max_chars // 2
+    kept: list[HistoryTurn] = []
+    used = 0
+    for turn in reversed(turns):
+        question = turn.question
+        answer = _without_markers(turn.answer)
+        size = len(question) + len(answer)
+        if not kept:
+            if size > budget:
+                question = question[:budget]
+                answer = answer[:budget - len(question)]
+                kept = [HistoryTurn(question, answer)]
+                break
+            kept = [HistoryTurn(question, answer)]
+            used = size
+            continue
+        if used + size > budget:
+            break
+        kept = [*kept, HistoryTurn(question, answer)]
+        used += size
+    kept.reverse()
+    return kept
+
+
+def _without_markers(text: str) -> str:
+    while True:
+        stripped = _CITATION_MARKER.sub("", text)
+        if stripped == text:
+            return text
+        text = stripped
+
+
 def load_material(
-    file_id: str, drive: str, question: str,
+    file_id: str, drive: str, question: str, *,
+    budget: int | None = None,
+    ranking_text: str | None = None,
 ) -> Material | None:
     """The chunks to send, or ``None`` when this file cannot be asked about.
 
     A picture is material even with no chunk; every other kind needs one.
+    ``budget`` is what a history block leaves of
+    ``rag.file_question_max_chars``; ``ranking_text`` is what chunks are
+    ranked against when not all of them fit.
     """
-    budget = settings.rag.file_question_max_chars
+    if budget is None:
+        budget = settings.rag.file_question_max_chars
+    if ranking_text is None:
+        ranking_text = question
     with get_search_db_read() as session:
         indexed = session.execute(
             sql_text(
@@ -286,7 +346,7 @@ def load_material(
         return Material(chunks=_selected(rows), partial=False, **material)
 
     return Material(
-        chunks=_selected(_fit(_rank(rows, question), budget)),
+        chunks=_selected(_fit(_rank(rows, ranking_text), budget)),
         partial=True,
         **material,
     )

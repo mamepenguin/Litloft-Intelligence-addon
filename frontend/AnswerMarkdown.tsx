@@ -7,6 +7,7 @@ import type { DocumentController } from "@/lib/documentController";
 import type { MediaController } from "@/lib/mediaController";
 
 import type { CitationPosition, FileCitation } from "./askStream";
+import { citationLabel } from "./citationLabel";
 
 const PILL_CLASS =
   "mx-0.5 inline rounded-full px-1.5 py-0.5 align-baseline text-text-muted transition-colors hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring";
@@ -15,24 +16,6 @@ const LINK_SCHEMES = new Set(["http:", "https:", "mailto:"]);
 
 const useIsomorphicLayoutEffect =
   typeof window !== "undefined" ? useLayoutEffect : useEffect;
-
-/** `M:SS` below one hour, `H:MM:SS` from one hour. */
-function formatSeconds(seconds: number): string {
-  const total = Math.max(0, Math.floor(seconds));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const rest = total % 60;
-  const mm = String(minutes).padStart(2, "0");
-  const ss = String(rest).padStart(2, "0");
-  return hours > 0 ? `${hours}:${mm}:${ss}` : `${minutes}:${ss}`;
-}
-
-function citationLabel(position: CitationPosition): string | null {
-  if (!position) return null;
-  if ("seconds" in position) return formatSeconds(position.seconds);
-  if ("page" in position) return `p.${position.page}`;
-  return position.title ?? `§${position.section}`;
-}
 
 function jumpAction(
   position: CitationPosition,

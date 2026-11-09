@@ -474,7 +474,7 @@ describe("SPEC-ADDON-071 I3 - the image notice follows meta.image", () => {
     expect(screen.queryByText(IMAGE_NOTICE)).toBeNull();
   });
 
-  it("clears the notice when a new question begins", async () => {
+  it("keeps an earlier turn's notice under that turn when a new question fails", async () => {
     await answerWith("An answer.", {
       props: { fileType: "image" },
       image: "unavailable",
@@ -484,9 +484,13 @@ describe("SPEC-ADDON-071 I3 - the image notice follows meta.image", () => {
     net.answer = () => json({ detail: "picture_needs_vision" }, 409);
     await ask("what is on the receipt");
 
-    expect(screen.queryByText(IMAGE_NOTICE)).toBeNull();
-    expect(await screen.findByText(NEEDS_VISION)).toBeInTheDocument();
-    expect(screen.queryByText(IMAGE_NOTICE)).toBeNull();
+    const failure = await screen.findByText(NEEDS_VISION);
+    const notices = screen.getAllByText(IMAGE_NOTICE);
+    expect(notices).toHaveLength(1);
+    expect(
+      notices[0].compareDocumentPosition(failure)
+        & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 });
 

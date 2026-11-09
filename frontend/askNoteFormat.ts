@@ -9,7 +9,10 @@
  * renames. Non-`.md` citations stay on the `loft://` scheme so query
  * parameters (`?t=<sec>` / `?page=<N>`) keep working.
  */
+import MarkdownIt from "markdown-it";
 import type { Citation } from "./api";
+import type { CitationPosition, FileCitation } from "./askStream";
+import { citationLabel } from "./citationLabel";
 
 export interface ParsedSegmentLocation {
   label: string;
@@ -50,25 +53,60 @@ export function parseSegmentLocation(
   return { label: loc, seconds: null, page: null, section: null, verbatim };
 }
 
+function loftUrl(
+  fileId: string,
+  seconds: number | null,
+  page: number | null,
+  section: number | null,
+): string {
+  const base = `loft://${fileId}`;
+  if (seconds != null) return `${base}?t=${Math.floor(seconds)}`;
+  if (page != null) return `${base}?page=${page}`;
+  if (section != null) return `${base}?section=${section}`;
+  return base;
+}
+
 export function citationToLoftUrl(citation: Citation): string {
   const parsed = parseSegmentLocation(
     (citation as Citation & { segment_location?: string | null }).segment_location ?? null,
   );
-  const base = `loft://${citation.file_id}`;
-  if (parsed?.seconds != null) return `${base}?t=${parsed.seconds}`;
-  if (parsed?.page != null) return `${base}?page=${parsed.page}`;
-  if (parsed?.section != null) return `${base}?section=${parsed.section}`;
-  return base;
+  return loftUrl(
+    citation.file_id,
+    parsed?.seconds ?? null,
+    parsed?.page ?? null,
+    parsed?.section ?? null,
+  );
 }
 
-function isMarkdownCitation(citation: Citation): boolean {
-  if (citation.file_type === "markdown") return true;
-  const lower = (citation.filename ?? "").toLowerCase();
-  return lower.endsWith(".md");
+/** The same URL as `citationToLoftUrl`, for a position the answer stream carries. */
+export function citationPositionToLoftUrl(
+  fileId: string,
+  position: CitationPosition,
+): string {
+  if (!position) return loftUrl(fileId, null, null, null);
+  if ("seconds" in position) return loftUrl(fileId, position.seconds, null, null);
+  if ("page" in position) return loftUrl(fileId, null, position.page, null);
+  return loftUrl(fileId, null, null, position.section);
 }
 
-function basenameWithoutMd(filename: string): string {
-  return filename.replace(/\.md$/i, "");
+function isMarkdownFile(
+  filename: string,
+  fileType: string | null | undefined,
+): boolean {
+  if (fileType === "markdown") return true;
+  return filename.toLowerCase().endsWith(".md");
+}
+
+/** The two link forms a citation and a saved thread's source line share. */
+function citationLink(
+  filename: string,
+  fileType: string | null | undefined,
+  url: string,
+): string {
+  if (isMarkdownFile(filename, fileType)) {
+    return `[[${filename.replace(/\.md$/i, "")}]]`;
+  }
+  return `[${filename}](${url})`;
 }
 
 /**
@@ -87,12 +125,12 @@ export function formatCitationListItem(citation: Citation): string {
   );
   const label = (loc?.section != null && citation.section_title) || loc?.label;
   const locLabel = label ? ` — ${label}` : "";
-  if (isMarkdownCitation(citation)) {
-    const basename = basenameWithoutMd(citation.filename);
-    return `- [[${basename}]]${locLabel}`;
-  }
-  const url = citationToLoftUrl(citation);
-  return `- [${citation.filename}](${url})${locLabel}`;
+  const link = citationLink(
+    citation.filename,
+    citation.file_type,
+    citationToLoftUrl(citation),
+  );
+  return `- ${link}${locLabel}`;
 }
 
 export function buildAskNoteMarkdown(
@@ -129,6 +167,163 @@ export function buildAskNoteMarkdown(
     bodyLines.push("");
   }
   return fmLines.join("\n") + bodyLines.join("\n");
+}
+
+export interface AskThreadNoteTurn {
+  question: string;
+  answer: string;
+  citations: FileCitation[];
+}
+
+function collapseWhitespace(text: string): string {
+  return text.replace(/\s+/g, " ");
+}
+
+function escapeLinkLabel(label: string): string {
+  return label.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+}
+
+const MARKER = /\[(\d{1,3})\]/g;
+
+export const SENTINEL_PREFIX = "LITASKSENTINEL";
+
+function markerReplacement(
+  digits: string,
+  positions: Map<number, CitationPosition>,
+  fileId: string,
+): string {
+  const n = Number(digits);
+  if (!positions.has(n)) return "";
+  const position = positions.get(n) ?? null;
+  const label = citationLabel(position);
+  if (label === null) return "";
+  const url = citationPositionToLoftUrl(fileId, position);
+  return `[${escapeLinkLabel(label)}](${url})`;
+}
+
+// Block options must match the renderer's, or a line can be code on screen and
+// text here, which decides whether its markers are rewritten.
+const blockParser = new MarkdownIt({
+  html: false,
+  linkify: true,
+  typographer: false,
+  breaks: false,
+});
+
+interface MarkdownToken {
+  type: string;
+  content: string;
+  children: MarkdownToken[] | null;
+}
+
+// Markers are swapped for unique sentinels before parsing because equal `[n]`
+// markers elsewhere would make the parser's report of which occurrence it drew
+// as code ambiguous. The sentinel keeps the brackets: without them a line such
+// as `[1]: url` stops being a reference definition, so an indented line after
+// it becomes a paragraph continuation instead of the code block the renderer
+// draws. The prefix is lengthened until the answer lacks it and the counters
+// share one width, so neither a literal lookalike nor index 1 matching the
+// start of index 10 can be read as another's sentinel.
+function rewriteAnswer(
+  answer: string,
+  citations: FileCitation[],
+  fileId: string,
+): string {
+  const positions = new Map(citations.map((citation) => [citation.n, citation.position]));
+  const matches = Array.from(answer.matchAll(MARKER));
+
+  let prefix = SENTINEL_PREFIX;
+  while (answer.includes(prefix)) prefix += "X";
+
+  const width = String(Math.max(matches.length - 1, 0)).length;
+  const sentinels = matches.map(
+    (_match, index) => `[${prefix}${String(index).padStart(width, "0")}]`,
+  );
+
+  let sentinelText = "";
+  let sentinelCursor = 0;
+  matches.forEach((match, index) => {
+    const start = match.index ?? 0;
+    sentinelText += answer.slice(sentinelCursor, start) + sentinels[index];
+    sentinelCursor = start + match[0].length;
+  });
+  sentinelText += answer.slice(sentinelCursor);
+
+  const codeIndexes = new Set<number>();
+  const collect = (tokens: MarkdownToken[]): void => {
+    for (const token of tokens) {
+      if (
+        token.type === "code_inline" ||
+        token.type === "fence" ||
+        token.type === "code_block"
+      ) {
+        sentinels.forEach((sentinel, index) => {
+          if (token.content.includes(sentinel)) codeIndexes.add(index);
+        });
+      }
+      if (token.children) collect(token.children);
+    }
+  };
+  collect(blockParser.parse(sentinelText, {}));
+
+  let result = "";
+  let cursor = 0;
+  matches.forEach((match, index) => {
+    const start = match.index ?? 0;
+    result += answer.slice(cursor, start);
+    result += codeIndexes.has(index)
+      ? match[0]
+      : markerReplacement(match[1], positions, fileId);
+    cursor = start + match[0].length;
+  });
+  result += answer.slice(cursor);
+  return result;
+}
+
+/**
+ * The note a file's Ask thread saves: every answered turn in thread order,
+ * with the markers outside code pointing at this file's cited positions.
+ */
+export function buildAskThreadMarkdown(options: {
+  fileId: string;
+  filename: string;
+  fileType?: string | null;
+  turns: AskThreadNoteTurn[];
+  savedAt?: string;
+}): string {
+  const { fileId, filename, fileType, turns } = options;
+  const savedAt = options.savedAt ?? new Date().toISOString();
+  const firstQuestion = turns[0]?.question ?? "";
+  const sourceLink = citationLink(
+    filename,
+    fileType,
+    citationPositionToLoftUrl(fileId, null),
+  );
+
+  const lines = [
+    "---",
+    "origin: ask_answer",
+    `query: ${JSON.stringify(firstQuestion)}`,
+    `source_file_ids: [${JSON.stringify(fileId)}]`,
+    `saved_at: ${savedAt}`,
+    "---",
+    "",
+    `# ${collapseWhitespace(firstQuestion)}`,
+    "",
+    sourceLink,
+    "",
+  ];
+
+  for (const turn of turns) {
+    lines.push(
+      `## ${collapseWhitespace(turn.question)}`,
+      "",
+      rewriteAnswer(turn.answer, turn.citations, fileId),
+      "",
+    );
+  }
+
+  return lines.join("\n");
 }
 
 export function queryToFilename(query: string): string {

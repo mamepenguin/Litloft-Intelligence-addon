@@ -1,4 +1,11 @@
-{#- vars: question (string), passages (list[str]), image (bool), position (string|none) — see rag/prompt.py:build_file_question_user_prompt -#}
+{#- vars: question (string), passages (list[str]), image (bool), position (string|none), history (list) — see rag/prompt.py:build_file_question_user_prompt -#}
+{% if history -%}
+Earlier in this conversation:
+{% for turn in history -%}
+The viewer asked: {{ turn.question }}
+You answered: {{ turn.answer }}
+{% endfor %}
+{% endif -%}
 Question: {{ question }}
 {% if position %}
 The viewer is now at {{ position }} in this file. Use it when the question is about the current moment.

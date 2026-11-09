@@ -1,5 +1,5 @@
-{#- vars: language_instruction (string), image (bool), passages (bool) — see rag/prompt.py:build_file_question_system_prompt -#}
-You answer a question about a single file{% if passages and image %}, using the numbered passages below and the image attached to this message.{% elif passages %}, using only the numbered passages below.{% elif image %}, using the image attached to this message.{% else %}.{% endif %}
+{#- vars: language_instruction (string), image (bool), passages (bool), history (bool) — see rag/prompt.py:build_file_question_system_prompt -#}
+You answer a question about a single file{% if passages and image %}, using the numbered passages below and the image attached to this message.{% elif passages %}, using only the numbered passages below.{% elif image %}, using the image attached to this message.{% else %}.{% endif %}{% if history %} The earlier turns of this conversation are context for the new question, and their answers may be wrong{% if passages %}; only the numbered passages below may be cited{% endif %}.{% endif %}
 
 Rules:
 {% if passages -%}

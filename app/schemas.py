@@ -840,12 +840,31 @@ class AskRequest(BaseModel):
     scope: AskScope | None = None
 
 
+class FileQuestionTurn(BaseModel):
+    """One earlier turn of a file's conversation.
+
+    ``question`` is bounded so one turn cannot crowd out the rest of the
+    history budget, and ``answer`` may be empty once its citation markers
+    are removed. Unknown keys fail closed, so a later field cannot be
+    silently ignored by an older server.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(..., min_length=1, max_length=1000)
+    answer: str = Field(..., max_length=20_000)
+
+
 class FileQuestionRequest(BaseModel):
     """Request body for ``POST /files/{file_id}/ask`` (SPEC-ADDON-053 2).
 
     The floor is three non-space characters, the same rule the tab uses
     to enable its button; it has to be a validation error rather than a
     4xx from the handler so a malformed question never reaches the gates.
+
+    ``history`` holds the earlier turns, oldest first. It is validated
+    with the rest of the body, so a malformed turn never reaches a gate,
+    an embedding or a semaphore slot.
     """
 
     question: str = Field(..., min_length=1, max_length=1000)
@@ -854,6 +873,9 @@ class FileQuestionRequest(BaseModel):
     #: every kind's; a position for anything else is ignored.
     position_seconds: float | None = Field(
         default=None, ge=0, le=1_000_000,
+    )
+    history: list[FileQuestionTurn] = Field(
+        default_factory=list, max_length=10,
     )
 
     @field_validator("question")

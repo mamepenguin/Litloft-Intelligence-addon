@@ -5,7 +5,7 @@ import {
 
 import type { AskImage, FileCitation } from "./askStream";
 
-export type AskStatus = "idle" | "streaming" | "answered" | "failed";
+export type AskTurnStatus = "streaming" | "answered" | "failed";
 
 /** The line the tab shows under the question when the answer cannot be made. */
 export type AskFailure =
@@ -16,42 +16,49 @@ export type AskFailure =
   | "image_unusable"
   | "generic";
 
-export interface AskEntry {
-  /** The box's current text: the question that was sent, or the next one being typed. */
+export interface AskTurn {
+  /** The question as it was sent. */
   question: string;
-  /** The question shown in the conversation, set when it is sent. */
-  asked: string;
   answer: string;
   citations: FileCitation[] | null;
   partial: boolean;
-  /** `meta.image` of the last question; read only while `answered`. */
+  /** `meta.image` of this turn; read only while `answered`. */
   image: AskImage | null;
-  status: AskStatus;
+  status: AskTurnStatus;
   failure: AskFailure | null;
-  controller: AbortController | null;
 }
 
-const EMPTY: AskEntry = Object.freeze({
-  question: "",
-  asked: "",
-  answer: "",
-  citations: null,
-  partial: false,
-  image: null,
-  status: "idle",
-  failure: null,
+/** A note saved from this thread, and how many turns it held at the save. */
+export interface SavedAskNote {
+  fileId: string;
+  path: string;
+  answeredCount: number;
+}
+
+export interface AskThread {
+  turns: AskTurn[];
+  /** The text box's current contents: empty after a send, the draft otherwise. */
+  text: string;
+  controller: AbortController | null;
+  savedNote: SavedAskNote | null;
+}
+
+const EMPTY: AskThread = Object.freeze({
+  turns: [],
+  text: "",
   controller: null,
+  savedNote: null,
 });
 
-const entries = new Map<string, AskEntry>();
+const threads = new Map<string, AskThread>();
 const listeners = new Set<() => void>();
 
 function emit(): void {
   for (const listener of listeners) listener();
 }
 
-function write(fileId: string, entry: AskEntry): void {
-  entries.set(fileId, entry);
+function write(fileId: string, thread: AskThread): void {
+  threads.set(fileId, thread);
   emit();
 }
 
@@ -62,12 +69,24 @@ export function subscribeAskStore(listener: () => void): () => void {
   };
 }
 
-export function getAskEntry(fileId: string): AskEntry {
-  return entries.get(fileId) ?? EMPTY;
+export function getAskThread(fileId: string): AskThread {
+  return threads.get(fileId) ?? EMPTY;
 }
 
-export function setAskQuestion(fileId: string, question: string): void {
-  write(fileId, { ...getAskEntry(fileId), question });
+export function setAskText(fileId: string, text: string): void {
+  write(fileId, { ...getAskThread(fileId), text });
+}
+
+function updateTurn(
+  fileId: string,
+  patch: (turn: AskTurn) => Partial<AskTurn>,
+): void {
+  const thread = getAskThread(fileId);
+  const index = thread.turns.length - 1;
+  if (index < 0) return;
+  const turns = thread.turns.slice();
+  turns[index] = { ...turns[index], ...patch(turns[index]) };
+  write(fileId, { ...thread, turns });
 }
 
 export function beginAsk(
@@ -75,37 +94,43 @@ export function beginAsk(
   question: string,
   controller: AbortController,
 ): void {
+  const thread = getAskThread(fileId);
   write(fileId, {
-    question,
-    asked: question,
-    answer: "",
-    citations: null,
-    partial: false,
-    image: null,
-    status: "streaming",
-    failure: null,
+    ...thread,
+    turns: [
+      ...thread.turns,
+      {
+        question,
+        answer: "",
+        citations: null,
+        partial: false,
+        image: null,
+        status: "streaming",
+        failure: null,
+      },
+    ],
+    text: "",
     controller,
   });
 }
 
-function update(fileId: string, patch: (entry: AskEntry) => Partial<AskEntry>): void {
-  write(fileId, { ...getAskEntry(fileId), ...patch(getAskEntry(fileId)) });
-}
-
 export function appendAskAnswer(fileId: string, delta: string): void {
-  update(fileId, (entry) => ({ answer: entry.answer + delta }));
+  updateTurn(fileId, (turn) => ({ answer: turn.answer + delta }));
 }
 
-export function setAskCitations(fileId: string, citations: FileCitation[]): void {
-  update(fileId, () => ({ citations }));
+export function setAskCitations(
+  fileId: string,
+  citations: FileCitation[],
+): void {
+  updateTurn(fileId, () => ({ citations }));
 }
 
 export function setAskPartial(fileId: string, partial: boolean): void {
-  update(fileId, () => ({ partial }));
+  updateTurn(fileId, () => ({ partial }));
 }
 
 export function setAskImage(fileId: string, image: AskImage): void {
-  update(fileId, () => ({ image }));
+  updateTurn(fileId, () => ({ image }));
 }
 
 export function settleAsk(
@@ -113,20 +138,60 @@ export function settleAsk(
   status: "answered" | "failed",
   failure: AskFailure | null,
 ): void {
-  update(fileId, (entry) => ({
+  const thread = getAskThread(fileId);
+  const index = thread.turns.length - 1;
+  if (index < 0) return;
+  const turns = thread.turns.slice();
+  const turn = turns[index];
+  turns[index] = {
+    ...turn,
     status,
     failure,
+    image: status === "failed" ? null : turn.image,
+  };
+  write(fileId, {
+    ...thread,
+    turns,
     controller: null,
-    image: status === "failed" ? null : entry.image,
-  }));
+    // A failed question goes back into an empty box so one press resends it;
+    // text typed while it streamed is the viewer's and is left alone.
+    text: status === "failed" && thread.text === "" ? turn.question : thread.text,
+  });
 }
 
-/** Abort a stream and forget the file's question and answer. */
+/** Empty the thread and forget its saved note, keeping the text box. */
+export function clearAskThread(fileId: string): void {
+  const thread = getAskThread(fileId);
+  write(fileId, {
+    ...thread,
+    turns: [],
+    controller: null,
+    savedNote: null,
+  });
+}
+
+export function recordAskSave(
+  fileId: string,
+  note: { fileId: string; path: string },
+): void {
+  const thread = getAskThread(fileId);
+  write(fileId, {
+    ...thread,
+    savedNote: {
+      fileId: note.fileId,
+      path: note.path,
+      answeredCount: thread.turns.filter((turn) => turn.status === "answered")
+        .length,
+    },
+  });
+}
+
+/** Abort a stream and forget the file's whole thread. */
 export function dropAskEntry(fileId: string): void {
-  const entry = entries.get(fileId);
-  if (!entry) return;
-  entry.controller?.abort();
-  entries.delete(fileId);
+  const thread = threads.get(fileId);
+  if (!thread) return;
+  thread.controller?.abort();
+  threads.delete(fileId);
   emit();
 }
 

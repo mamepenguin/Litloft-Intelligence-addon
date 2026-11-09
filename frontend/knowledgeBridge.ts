@@ -59,6 +59,7 @@ export interface NoteCreateRequest {
   filename: string;
   content: string;
   source_file_ids: string[];
+  origin: string;
 }
 
 export async function saveAskToKnowledge(
