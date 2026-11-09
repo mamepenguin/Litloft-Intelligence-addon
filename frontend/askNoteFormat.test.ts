@@ -8,6 +8,7 @@ import {
   formatCitationListItem,
   parseSegmentLocation,
   queryToFilename,
+  SENTINEL_PREFIX,
 } from "./askNoteFormat";
 
 function makeCitation(overrides: Partial<Citation> = {}): Citation {
@@ -296,6 +297,21 @@ describe("buildAskThreadMarkdown — code is what AnswerMarkdown renders as code
       answer: "open `x [1]\n\nafter [1]",
       expected: `open \`x ${link}\n\nafter ${link}`,
     },
+    {
+      name: "an escaped backtick before the opening run",
+      answer: "Use \\`x [1]` here",
+      expected: "Use \\`x " + link + "` here",
+    },
+    {
+      name: "a double-backtick span holding one backtick",
+      answer: "``a ` [1]`` and [1]",
+      expected: "``a ` [1]`` and " + link,
+    },
+    {
+      name: "a marker inside link text",
+      answer: "[see [1]](https://example.com)",
+      expected: "[see " + link + "](https://example.com)",
+    },
   ])("writes $name as received exactly where it is code", ({ answer, expected }) => {
     const note = buildAskThreadMarkdown({
       fileId: THREAD_FILE,
@@ -306,6 +322,19 @@ describe("buildAskThreadMarkdown — code is what AnswerMarkdown renders as code
     });
 
     expect(note).toBe(threadNote(expected));
+  });
+
+  it("keeps the sentinel unique when the answer already contains its prefix", () => {
+    const answer = "`" + SENTINEL_PREFIX + "0` [1]";
+    const note = buildAskThreadMarkdown({
+      fileId: THREAD_FILE,
+      filename: "lecture.mp4",
+      fileType: "video",
+      turns: [{ question: "why", answer, citations: CITED }],
+      savedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    expect(note).toBe(threadNote("`" + SENTINEL_PREFIX + "0` " + link));
   });
 });
 

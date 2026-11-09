@@ -185,64 +185,20 @@ function escapeLinkLabel(label: string): string {
 
 const MARKER = /\[(\d{1,3})\]/g;
 
-function rewriteMarkers(
-  text: string,
+export const SENTINEL_PREFIX = "LITASKSENTINEL";
+
+function markerReplacement(
+  digits: string,
   positions: Map<number, CitationPosition>,
   fileId: string,
 ): string {
-  return text.replace(MARKER, (_match, digits: string) => {
-    const n = Number(digits);
-    if (!positions.has(n)) return "";
-    const position = positions.get(n) ?? null;
-    const label = citationLabel(position);
-    if (label === null) return "";
-    const url = citationPositionToLoftUrl(fileId, position);
-    return `[${escapeLinkLabel(label)}](${url})`;
-  });
-}
-
-function closingBacktickRun(
-  line: string,
-  from: number,
-  length: number,
-): number {
-  let index = line.indexOf("`", from);
-  while (index >= 0) {
-    let run = 1;
-    while (line[index + run] === "`") run += 1;
-    if (run === length) return index;
-    index = line.indexOf("`", index + run);
-  }
-  return -1;
-}
-
-function rewriteInline(
-  line: string,
-  positions: Map<number, CitationPosition>,
-  fileId: string,
-): string {
-  let out = "";
-  let i = 0;
-  while (i < line.length) {
-    if (line[i] === "`") {
-      let run = 1;
-      while (line[i + run] === "`") run += 1;
-      const close = closingBacktickRun(line, i + run, run);
-      if (close >= 0) {
-        out += line.slice(i, close + run);
-        i = close + run;
-      } else {
-        out += line.slice(i, i + run);
-        i += run;
-      }
-      continue;
-    }
-    let next = line.indexOf("`", i);
-    if (next < 0) next = line.length;
-    out += rewriteMarkers(line.slice(i, next), positions, fileId);
-    i = next;
-  }
-  return out;
+  const n = Number(digits);
+  if (!positions.has(n)) return "";
+  const position = positions.get(n) ?? null;
+  const label = citationLabel(position);
+  if (label === null) return "";
+  const url = citationPositionToLoftUrl(fileId, position);
+  return `[${escapeLinkLabel(label)}](${url})`;
 }
 
 // Block options must match the renderer's, or a line can be code on screen and
@@ -254,65 +210,71 @@ const blockParser = new MarkdownIt({
   breaks: false,
 });
 
-interface BlockToken {
+interface MarkdownToken {
   type: string;
-  map: [number, number] | null;
-  children: BlockToken[] | null;
+  content: string;
+  children: MarkdownToken[] | null;
 }
 
-interface AnswerBlocks {
-  codeLines: Set<number>;
-  inlineRanges: Array<[number, number]>;
-}
-
-function answerBlocks(answer: string): AnswerBlocks {
-  const codeLines = new Set<number>();
-  const inlineRanges: Array<[number, number]> = [];
-  const collect = (tokens: BlockToken[]): void => {
-    for (const token of tokens) {
-      if ((token.type === "fence" || token.type === "code_block") && token.map) {
-        for (let line = token.map[0]; line < token.map[1]; line += 1) {
-          codeLines.add(line);
-        }
-      }
-      if (token.type === "inline" && token.map) inlineRanges.push(token.map);
-      if (token.children) collect(token.children);
-    }
-  };
-  collect(blockParser.parse(answer, {}));
-  return { codeLines, inlineRanges };
-}
-
+// Markers are swapped for unique sentinels before parsing because equal `[n]`
+// markers elsewhere would make the parser's report of which occurrence it drew
+// as code ambiguous. The prefix is lengthened until the answer lacks it and the
+// counters share one width, so neither a literal lookalike nor index 1 matching
+// the start of index 10 can be read as another's sentinel.
 function rewriteAnswer(
   answer: string,
   citations: FileCitation[],
   fileId: string,
 ): string {
   const positions = new Map(citations.map((citation) => [citation.n, citation.position]));
-  const { codeLines, inlineRanges } = answerBlocks(answer);
-  const lines = answer.split("\n");
-  const rewritten = [...lines];
-  const handled = new Set<number>();
+  const matches = Array.from(answer.matchAll(MARKER));
 
-  // A code span may cross the line endings of one inline block, so the block is
-  // scanned joined; a line at a time would rewrite markers the renderer draws
-  // as code.
-  for (const [start, end] of inlineRanges) {
-    const block = lines.slice(start, end);
-    if (block.length === 0) continue;
-    const result = rewriteInline(block.join("\n"), positions, fileId).split("\n");
-    for (let offset = 0; offset < result.length; offset += 1) {
-      rewritten[start + offset] = result[offset];
-      handled.add(start + offset);
-    }
-  }
+  let prefix = SENTINEL_PREFIX;
+  while (answer.includes(prefix)) prefix += "X";
 
-  for (let index = 0; index < lines.length; index += 1) {
-    if (!handled.has(index) && !codeLines.has(index)) {
-      rewritten[index] = rewriteInline(lines[index], positions, fileId);
+  const width = String(Math.max(matches.length - 1, 0)).length;
+  const sentinels = matches.map(
+    (_match, index) => `${prefix}${String(index).padStart(width, "0")}`,
+  );
+
+  let sentinelText = "";
+  let sentinelCursor = 0;
+  matches.forEach((match, index) => {
+    const start = match.index ?? 0;
+    sentinelText += answer.slice(sentinelCursor, start) + sentinels[index];
+    sentinelCursor = start + match[0].length;
+  });
+  sentinelText += answer.slice(sentinelCursor);
+
+  const codeIndexes = new Set<number>();
+  const collect = (tokens: MarkdownToken[]): void => {
+    for (const token of tokens) {
+      if (
+        token.type === "code_inline" ||
+        token.type === "fence" ||
+        token.type === "code_block"
+      ) {
+        sentinels.forEach((sentinel, index) => {
+          if (token.content.includes(sentinel)) codeIndexes.add(index);
+        });
+      }
+      if (token.children) collect(token.children);
     }
-  }
-  return rewritten.join("\n");
+  };
+  collect(blockParser.parse(sentinelText, {}));
+
+  let result = "";
+  let cursor = 0;
+  matches.forEach((match, index) => {
+    const start = match.index ?? 0;
+    result += answer.slice(cursor, start);
+    result += codeIndexes.has(index)
+      ? match[0]
+      : markerReplacement(match[1], positions, fileId);
+    cursor = start + match[0].length;
+  });
+  result += answer.slice(cursor);
+  return result;
 }
 
 /**
