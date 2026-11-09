@@ -11,6 +11,7 @@ import zipfile
 import httpx
 import pytest
 
+from app import document_text as document_text_module
 from tests.document_fixtures import EPUB
 from tests.document_text_api import (  # noqa: F401
     DRIVE,
@@ -21,6 +22,18 @@ from tests.document_text_api import (  # noqa: F401
     seed,
 )
 from tests.epub_fixtures import Item, make_epub, xhtml
+
+SPEC_SLOT_WAIT_SECONDS = 10.0
+SLOT_WAIT_SECONDS = 1.0
+SLOT_WAIT_SCALE = SLOT_WAIT_SECONDS / SPEC_SLOT_WAIT_SECONDS
+
+
+@pytest.fixture()
+def short_slot_wait(monkeypatch):
+    assert document_text_module.SLOT_WAIT_SECONDS == SPEC_SLOT_WAIT_SECONDS
+    monkeypatch.setattr(
+        document_text_module, "SLOT_WAIT_SECONDS", SLOT_WAIT_SECONDS,
+    )
 
 
 class _Gate:
@@ -86,7 +99,13 @@ async def _until_two_are_held(gate: _Gate) -> None:
         await asyncio.sleep(0.05)
 
 
-async def test_spec_addon_036_i8_a_third_request_gets_429_after_waiting_10s(gate):
+def test_the_slot_wait_is_the_spec_value():
+    assert document_text_module.SLOT_WAIT_SECONDS == SPEC_SLOT_WAIT_SECONDS
+
+
+async def test_spec_addon_036_i8_a_third_request_gets_429_after_waiting_10s(
+    gate, short_slot_wait,
+):
     async with _client() as client:
         slow = [asyncio.create_task(client.get(path_of(f))) for f in ("slow1", "slow2")]
         try:
@@ -101,7 +120,7 @@ async def test_spec_addon_036_i8_a_third_request_gets_429_after_waiting_10s(gate
 
     assert third.status_code == 429, third.text
     assert third.json()["detail"] == "Document reader busy"
-    assert 9.5 <= waited < 20
+    assert 9.5 * SLOT_WAIT_SCALE <= waited < 20 * SLOT_WAIT_SCALE
     assert (first.status_code, second.status_code) == (200, 200)
 
 

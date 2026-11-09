@@ -25,6 +25,7 @@ import pytest
 from sqlalchemy import text
 
 import app.database as database
+import app.image_query as image_query_module
 from app.config import FeaturesConfig, SearchConfig
 from app.models import Embedding, IndexedFile
 from tests import ocr_fixtures
@@ -48,6 +49,18 @@ SEVEN_TYPES = (
     "image/heic", "image/heif",
 )
 SECRET_LINE = "ZQXJ-SECRET-READ-TEXT-0042"
+SPEC_OCR_TIMEOUT_SECONDS = 10.0
+OCR_TIMEOUT_SECONDS = 2.0
+OCR_TIMEOUT_SCALE = OCR_TIMEOUT_SECONDS / SPEC_OCR_TIMEOUT_SECONDS
+
+
+@pytest.fixture()
+def short_ocr_timeout(monkeypatch):
+    assert image_query_module.OCR_TIMEOUT_SECONDS == SPEC_OCR_TIMEOUT_SECONDS
+    monkeypatch.setattr(
+        image_query_module, "OCR_TIMEOUT_SECONDS", OCR_TIMEOUT_SECONDS,
+    )
+
 
 IMAGE_HIT_KEYS = {"file_id", "drive", "filename", "file_type", "score", "match_types", "file"}
 SCENE_HIT_KEYS = {"file_id", "drive", "filename", "start", "end", "peak", "score", "frame_url", "file"}
@@ -1095,7 +1108,13 @@ def test_spec_addon_049_run_engine_lets_one_caller_at_a_time_use_the_engine(mode
     assert engine.max_concurrent == 1
 
 
-def test_spec_addon_049_i12_the_route_gives_up_on_a_busy_engine_after_10s(client, world, models):
+def test_the_ocr_timeout_is_the_spec_value():
+    assert image_query_module.OCR_TIMEOUT_SECONDS == SPEC_OCR_TIMEOUT_SECONDS
+
+
+def test_spec_addon_049_i12_the_route_gives_up_on_a_busy_engine_after_10s(
+    client, world, models, short_ocr_timeout,
+):
     from PIL import Image
 
     ocr = models.ocr.module
@@ -1109,25 +1128,25 @@ def test_spec_addon_049_i12_the_route_gives_up_on_a_busy_engine_after_10s(client
     def _indexing(_image):
         if not holding.is_set():
             holding.set()
-            release.wait(30)
+            release.wait(30 * OCR_TIMEOUT_SCALE)
 
     engine.on_call = _indexing
     indexer = threading.Thread(
         target=ocr.run_engine, args=(engine, Image.new("RGB", (8, 8)), None),
     )
     indexer.start()
-    assert holding.wait(5)
+    assert holding.wait(5 * OCR_TIMEOUT_SCALE)
     try:
         started = time.monotonic()
         body = _ok(post(client, png_bytes()))
         elapsed = time.monotonic() - started
     finally:
         release.set()
-        indexer.join(5)
+        indexer.join(5 * OCR_TIMEOUT_SCALE)
 
     assert body["text"]["status"] == "failed"
     assert [h["file_id"] for h in body["images"]] == ["pic"]
-    assert 9.5 <= elapsed < 20
+    assert 9.5 * OCR_TIMEOUT_SCALE <= elapsed < 20 * OCR_TIMEOUT_SCALE
 
 
 # ---------------------------------------------------------------------------

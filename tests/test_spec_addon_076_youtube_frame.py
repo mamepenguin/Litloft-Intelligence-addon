@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from app import youtube_source as frame_module
 from app.frame_cache import frame_cache_path
 from tests.youtube_frame_doubles import (  # noqa: F401 - fixtures
     DRIVE,
@@ -35,11 +36,19 @@ from tests.youtube_frame_doubles import (  # noqa: F401 - fixtures
 
 pytestmark = needs_ffmpeg
 
-DEADLINE = 15.0
+SPEC_DEADLINE_SECONDS = 15.0
+DEADLINE = 3.0
+DEADLINE_SCALE = DEADLINE / SPEC_DEADLINE_SECONDS
 COOKIE_OPTIONS = (
     "--cookies", "--cookies-from-browser", "--username", "--password",
     "--netrc", "--video-password", "--ap-username", "--add-header",
 )
+
+
+@pytest.fixture()
+def short_deadline(monkeypatch):
+    assert frame_module.FRAME_DEADLINE_SECONDS == SPEC_DEADLINE_SECONDS
+    monkeypatch.setattr(frame_module, "FRAME_DEADLINE_SECONDS", DEADLINE)
 
 
 def new_id() -> str:
@@ -477,35 +486,43 @@ class TestConcurrency:
         assert youtube.peak_ffmpeg_concurrency() <= 4
         assert len([e for e in youtube.ffmpeg_events() if e["kind"] == "start"]) == 6
 
-    async def test_the_lookup_does_not_wait_for_an_ffmpeg_slot(self, youtube, frame_api):
+    async def test_the_lookup_does_not_wait_for_an_ffmpeg_slot(
+        self, youtube, frame_api, short_deadline,
+    ):
         """SPEC-ADDON-076 I3: a full set of ffmpeg runs does not hold up another file's lookup."""
         standard(youtube)
-        youtube.set_ffmpeg(hold=6.0)
+        youtube.set_ffmpeg(hold=6.0 * DEADLINE_SCALE)
         busy, other = new_id(), new_id()
         frame_api.add_loft(busy)
         frame_api.add_loft(other)
 
         holders = [asyncio.create_task(frame_api.frame(busy, float(t))) for t in range(4)]
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(2.0 * DEADLINE_SCALE)
         started = time.time()
         waiting = asyncio.create_task(frame_api.frame(other, 1.0))
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(1.5 * DEADLINE_SCALE)
 
         lookups = youtube.lookups()
         assert len(lookups) == 2
-        assert lookups[-1]["t"] - started < 1.5
+        assert lookups[-1]["t"] - started < 1.5 * DEADLINE_SCALE
         results = await asyncio.gather(*holders, waiting)
         assert [r.status_code for r in results] == [200] * 5
 
 
 class TestTheDeadline:
+    def test_the_deadline_is_the_spec_value(self):
+        assert frame_module.FRAME_DEADLINE_SECONDS == SPEC_DEADLINE_SECONDS
+
     async def test_lookup_and_ffmpeg_share_one_15_second_deadline(
-        self, youtube, frame_api, caplog,
+        self, youtube, frame_api, caplog, short_deadline,
     ):
         """SPEC-ADDON-076 I3/I2: 504 after 15 s in all, ffmpeg killed, nothing cached or kept."""
         standard(youtube)
-        youtube.set_ytdlp(describe=describe([youtube.format("f720", 720)]), delay=8.0)
-        youtube.set_ffmpeg(hold=8.0)
+        youtube.set_ytdlp(
+            describe=describe([youtube.format("f720", 720)]),
+            delay=8.0 * DEADLINE_SCALE,
+        )
+        youtube.set_ffmpeg(hold=8.0 * DEADLINE_SCALE)
         fid = new_id()
         frame_api.add_loft(fid)
 
@@ -516,10 +533,14 @@ class TestTheDeadline:
 
         assert response.status_code == 504
         assert response.json()["detail"] == "Frame extraction timed out"
-        assert DEADLINE - 1.5 < elapsed < DEADLINE + 3.0
+        assert (
+            DEADLINE - 1.5 * DEADLINE_SCALE
+            < elapsed
+            < DEADLINE + 3.0 * DEADLINE_SCALE
+        )
         assert frame_api.cached(fid) == []
         (start,) = [e for e in youtube.ffmpeg_events() if e["kind"] == "start"]
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.5 * DEADLINE_SCALE)
         with pytest.raises(ProcessLookupError):
             os.kill(start["pid"], 0)
         warnings = [r for r in caplog.records if r.levelname == "WARNING"]
@@ -531,10 +552,12 @@ class TestTheDeadline:
         assert again.status_code == 200
         assert len(youtube.lookups()) == 2
 
-    async def test_a_request_that_cannot_take_a_slot_in_time_is_504(self, youtube, frame_api):
+    async def test_a_request_that_cannot_take_a_slot_in_time_is_504(
+        self, youtube, frame_api, short_deadline,
+    ):
         """SPEC-ADDON-076 I3: four runs hold the slots, the fifth request waits and times out."""
         standard(youtube)
-        youtube.set_ffmpeg(hold=60.0)
+        youtube.set_ffmpeg(hold=60.0 * DEADLINE_SCALE)
         fid = new_id()
         frame_api.add_loft(fid)
 
@@ -545,10 +568,10 @@ class TestTheDeadline:
         elapsed = time.monotonic() - started
 
         assert [r.status_code for r in responses] == [504] * 5
-        assert elapsed < DEADLINE + 3.0
+        assert elapsed < DEADLINE + 3.0 * DEADLINE_SCALE
         starts = [e for e in youtube.ffmpeg_events() if e["kind"] == "start"]
         assert len(starts) == 4
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.5 * DEADLINE_SCALE)
         for event in starts:
             with pytest.raises(ProcessLookupError):
                 os.kill(event["pid"], 0)
