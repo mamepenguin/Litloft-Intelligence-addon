@@ -1,11 +1,10 @@
 /**
- * Tests for FindModeSlot — the entry point in the search-modes slot
- * that hands off to the dedicated Find page.
- *
- * Spec: ``2026-04-30-intelligence-find-mode.md`` §3.1 (UI / モード切替).
+ * Tests for FindModeSlot — the search-modes row that hands off to the Find
+ * page.
  *
  * Contract:
- *  - Emits a button that links to
+ *  - Emits a `…` menu row labelled with `find.pageCta` that closes the menu
+ *    and then navigates to
  *    ``/drive/<drive>/addons/intelligence/find?q=<query>``.
  *  - Renders only when ``intelligence.features.rag === true && llm.enabled``
  *    (same gate as the Ask page — Find depends on Stage A + C LLM calls).
@@ -13,7 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, cleanup, fireEvent } from "@testing-library/react";
 import React from "react";
 
 vi.mock("./api", async () => {
@@ -54,6 +53,8 @@ const disabledStatus = {
   features: { ...enabledStatus.features, rag: false },
 };
 
+const PAGE_CTA = "Open Find page";
+
 beforeEach(() => {
   vi.clearAllMocks();
   // Default: intelligence enabled for the drive. Individual tests
@@ -68,7 +69,7 @@ afterEach(() => {
 });
 
 describe("FindModeSlot", () => {
-  it("renders a Find handoff button when rag is enabled and query is non-empty", async () => {
+  it("draws a menu row labelled with the page CTA", async () => {
     vi.mocked(getIntelligenceStatus).mockResolvedValue(enabledStatus as any);
 
     render(
@@ -76,37 +77,36 @@ describe("FindModeSlot", () => {
         query="SF 映画"
         drive="family"
         filter="all"
+        closeMenu={() => {}}
         onSelect={() => {}}
       />,
     );
 
-    const btn = await screen.findByRole("button", { name: /find/i });
-    expect(btn).toBeInTheDocument();
+    const row = await screen.findByRole("menuitem", { name: PAGE_CTA });
+    expect(row).toBeInTheDocument();
+    expect(screen.queryByRole("heading")).toBeNull();
   });
 
-  it("the Find button calls onSelect with /drive/<drive>/addons/intelligence/find?q=<query>", async () => {
+  it("closes the menu, then navigates to the Find page with the trimmed query", async () => {
     vi.mocked(getIntelligenceStatus).mockResolvedValue(enabledStatus as any);
-    const onSelect = vi.fn();
+    const log: string[] = [];
 
     render(
       <FindModeSlot
-        query="先週観た映画"
+        query="  先週観た映画 "
         drive="家族"
         filter="all"
-        onSelect={onSelect}
+        closeMenu={() => log.push("closeMenu")}
+        onSelect={(href) => log.push(`onSelect ${href}`)}
       />,
     );
 
-    const btn = await screen.findByRole("button", { name: /find/i });
-    btn.click();
+    fireEvent.click(await screen.findByRole("menuitem", { name: PAGE_CTA }));
 
-    expect(onSelect).toHaveBeenCalledTimes(1);
-    const href = onSelect.mock.calls[0][0] as string;
-    expect(href).toContain("/drive/");
-    expect(href).toContain("/addons/intelligence/find");
-    expect(href).toContain(`q=${encodeURIComponent("先週観た映画")}`);
-    // Drive segment is encoded as well.
-    expect(href).toContain(encodeURIComponent("家族"));
+    expect(log).toEqual([
+      "closeMenu",
+      `onSelect /drive/${encodeURIComponent("家族")}/addons/intelligence/find?q=${encodeURIComponent("先週観た映画")}`,
+    ]);
   });
 
   it("renders nothing when intelligence.features.rag is false", async () => {
@@ -117,16 +117,16 @@ describe("FindModeSlot", () => {
         query="anything"
         drive="family"
         filter="all"
+        closeMenu={() => {}}
         onSelect={() => {}}
       />,
     );
 
-    // Wait for the status fetch to settle. The slot must remain empty.
     await waitFor(() => {
       expect(getIntelligenceStatus).toHaveBeenCalled();
     });
     expect(container.textContent).toBe("");
-    expect(screen.queryByRole("button", { name: /find/i })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: PAGE_CTA })).toBeNull();
   });
 
   it("renders nothing when llm is disabled (Find needs Stage A + C LLM)", async () => {
@@ -140,6 +140,7 @@ describe("FindModeSlot", () => {
         query="x"
         drive="family"
         filter="all"
+        closeMenu={() => {}}
         onSelect={() => {}}
       />,
     );
@@ -156,44 +157,41 @@ describe("FindModeSlot", () => {
         query="   "
         drive="family"
         filter="all"
+        closeMenu={() => {}}
         onSelect={() => {}}
       />,
     );
 
-    // No button should ever appear — there's no seed query to hand off.
     await waitFor(() => {
       expect(container.textContent).toBe("");
     });
   });
 
-  it("draws one chip, whatever the caller passes", async () => {
-    // There is one mount of `search-modes` and it is the results page, so
-    // there is one form to draw. The extra prop is what a caller of the
-    // removed second form would still be handing over: it has to make no
-    // difference, or the second form is still reachable by accident.
-    vi.mocked(getIntelligenceStatus).mockResolvedValue(enabledStatus as any);
+  it("leaves no row and nothing pending when the probe is rejected", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      vi.mocked(getIntelligenceStatus).mockRejectedValue(new Error("network down"));
 
-    const props = { query: "SF 映画", drive: "family", filter: "all", onSelect: () => {} };
+      const { container } = render(
+        <FindModeSlot
+          query="x"
+          drive="family"
+          filter="all"
+          closeMenu={() => {}}
+          onSelect={() => {}}
+        />,
+      );
 
-    const { container } = render(<FindModeSlot {...props} />);
-    const chip = await screen.findByRole("button", { name: /find/i });
-    // Which form it is, not just that there is one: the results-page chip
-    // sits in a right-aligned wrapper and discloses the query on hover.
-    // Any other form fails both, so it cannot pass as this one.
-    expect(chip.getAttribute("title")).toContain("SF 映画");
-    expect(chip.parentElement!.className).toContain("justify-end");
-    // A handoff to another page, so it does not take a heading on the
-    // page it is handing off from.
-    expect(screen.queryByRole("heading")).toBeNull();
-    const drawn = container.innerHTML;
-    cleanup();
+      await waitFor(() => expect(getIntelligenceStatus).toHaveBeenCalled());
+      await new Promise((resolve) => setTimeout(resolve, 25));
 
-    // ...and an unknown prop changes nothing. A layout that branches on
-    // one is a second form.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { container: withProp } = render(<FindModeSlot {...(props as any)} context="popup" />);
-    await screen.findByRole("button", { name: /find/i });
-    expect(withProp.innerHTML).toBe(drawn);
+      expect(unhandled).toEqual([]);
+      expect(container.textContent).toBe("");
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 
   it("falls back to the core addon registry when /status is unreachable", async () => {
@@ -212,12 +210,12 @@ describe("FindModeSlot", () => {
         query="SF 映画"
         drive="family"
         filter="all"
+        closeMenu={() => {}}
         onSelect={() => {}}
       />,
     );
 
-    const btn = await screen.findByRole("button", { name: /find/i });
-    expect(btn).toBeInTheDocument();
+    expect(await screen.findByRole("menuitem", { name: PAGE_CTA })).toBeInTheDocument();
   });
 
   it("stays hidden when /status is null and intelligence is not enabled for the drive", async () => {
@@ -229,6 +227,7 @@ describe("FindModeSlot", () => {
         query="SF 映画"
         drive="family"
         filter="all"
+        closeMenu={() => {}}
         onSelect={() => {}}
       />,
     );

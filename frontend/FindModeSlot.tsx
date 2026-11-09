@@ -12,16 +12,15 @@
  *  - the user has typed a non-empty query (no point handing off with
  *    no seed).
  *
- * The layout is a single right-aligned chip — Find is a side door
- * (handoff to a different page), so it stays visually subordinate to
- * the actual results on the search page. Core mounts `search-modes`
- * on the results page and nowhere else, so there is one form to draw.
+ * Find is a side door (handoff to a different page), so it takes the last
+ * row of the results bar's `…` menu and asks the menu to close first.
  */
 
 import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ListFilter } from "lucide-react";
 
+import { ActionMenuItem } from "@/components/ActionMenuItem";
 import { getIntelligenceStatus } from "./api";
 import { getEnabledAddons } from "@/lib/addons";
 
@@ -30,12 +29,14 @@ interface FindModeSlotProps {
   drive: string;
   filter: string;
   onSelect: (url: string) => void;
+  closeMenu: () => void;
 }
 
 export default function FindModeSlot({
   query,
   drive,
   onSelect,
+  closeMenu,
 }: FindModeSlotProps) {
   const t = useTranslations("find");
   // ``ragGate`` is ``null`` when we have not finished probing yet,
@@ -57,20 +58,26 @@ export default function FindModeSlot({
     Promise.all([
       getIntelligenceStatus(drive, controller.signal),
       getEnabledAddons(drive),
-    ]).then(([status, addons]) => {
-      if (cancelled) return;
-      if (status === null) {
-        // /status unreachable (most often the admin gate). Fall back
-        // to "is intelligence enabled for this drive?" — Find then
-        // surfaces and any real LLM-not-configured error appears on
-        // the dedicated find page instead of in this slot.
-        setRagGate(Boolean(addons["intelligence"]));
-        return;
-      }
-      const ragEnabled = status.features?.rag === true;
-      const llmEnabled = status.llm?.enabled === true;
-      setRagGate(ragEnabled && llmEnabled);
-    });
+    ])
+      .then(([status, addons]) => {
+        if (cancelled) return;
+        if (status === null) {
+          // /status unreachable (most often the admin gate). Fall back
+          // to "is intelligence enabled for this drive?" — Find then
+          // surfaces and any real LLM-not-configured error appears on
+          // the dedicated find page instead of in this slot.
+          setRagGate(Boolean(addons["intelligence"]));
+          return;
+        }
+        const ragEnabled = status.features?.rag === true;
+        const llmEnabled = status.llm?.enabled === true;
+        setRagGate(ragEnabled && llmEnabled);
+      })
+      .catch(() => {
+        // A failed probe is an answer too: no row, and no gate that stays
+        // pending for the life of the open menu.
+        if (!cancelled) setRagGate(false);
+      });
     return () => {
       cancelled = true;
       controller.abort();
@@ -85,17 +92,13 @@ export default function FindModeSlot({
   const href = `/drive/${encodeURIComponent(drive)}/addons/intelligence/find?q=${encodeURIComponent(trimmed)}`;
 
   return (
-    <div className="flex justify-end">
-      <button
-        type="button"
-        onClick={() => onSelect(href)}
-        aria-label={`Find: ${trimmed}`}
-        title={t("pageDescription", { query: trimmed })}
-        className="inline-flex items-center gap-1.5 rounded-full bg-sand px-3 py-1.5 text-xs font-medium text-text-primary transition-colors hover:bg-sand-hover"
-      >
-        <ListFilter size={14} className="flex-shrink-0 text-accent-teal" />
-        <span className="truncate">{t("pageCta")}</span>
-      </button>
-    </div>
+    <ActionMenuItem
+      icon={ListFilter}
+      label={t("pageCta")}
+      onClick={() => {
+        closeMenu();
+        onSelect(href);
+      }}
+    />
   );
 }
