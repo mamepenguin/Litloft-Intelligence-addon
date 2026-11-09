@@ -1,4 +1,4 @@
-"""SPEC-ADDON-079: a file question carrying the earlier turns of its conversation.
+"""SPEC-ADDON-081: a file question carrying the earlier turns of its conversation.
 
 The route is called through the addon's own app, as the core proxy calls it.
 What reached the model is read from the prompt the routed LLM records, and the
@@ -186,7 +186,7 @@ async def answered(call, payload: dict) -> dict:
 
 class TestTheHistoryLimits:
     async def test_ten_turns_reach_the_model_and_eleven_are_422(self, db, addon, llm, call):
-        """SPEC-ADDON-079 I3: at most 10 turns."""
+        """SPEC-ADDON-081 I3: at most 10 turns."""
         one_chunk_file(db)
         recording = llm.serve(RecordingLLM(deltas=("answer",)))
         ten = [turn(f"QUESTION-{i:02d}", f"ANSWER-{i:02d}") for i in range(10)]
@@ -207,7 +207,7 @@ class TestTheHistoryLimits:
     async def test_a_turn_question_is_1_to_1000_characters(
         self, question, status, db, addon, llm, call,
     ):
-        """SPEC-ADDON-079 I3: a turn's question is 1 to 1,000 characters."""
+        """SPEC-ADDON-081 I3: a turn's question is 1 to 1,000 characters."""
         one_chunk_file(db)
         recording = llm.serve(RecordingLLM(deltas=("answer",)))
 
@@ -227,7 +227,7 @@ class TestTheHistoryLimits:
     async def test_a_turn_answer_is_0_to_20000_characters(
         self, answer, status, db, addon, llm, call,
     ):
-        """SPEC-ADDON-079 I3: a turn's answer is 0 to 20,000 characters."""
+        """SPEC-ADDON-081 I3: a turn's answer is 0 to 20,000 characters."""
         one_chunk_file(db)
         recording = llm.serve(RecordingLLM(deltas=("answer",)))
 
@@ -240,7 +240,7 @@ class TestTheHistoryLimits:
             assert recording.prompts == []
 
     async def test_an_unknown_key_in_a_turn_is_422(self, db, addon, llm, call):
-        """SPEC-ADDON-079 2 and I3: a turn holds ``question`` and ``answer`` only."""
+        """SPEC-ADDON-081 2 and I3: a turn holds ``question`` and ``answer`` only."""
         one_chunk_file(db)
         recording = llm.serve(RecordingLLM(deltas=("answer",)))
 
@@ -253,7 +253,7 @@ class TestTheHistoryLimits:
         assert len(recording.prompts) == 1
 
     async def test_a_bad_history_is_422_before_the_rag_gate(self, db, addon, llm, call):
-        """SPEC-ADDON-079 I3: the body is rejected before any gate, LLM or slot."""
+        """SPEC-ADDON-081 I3: the body is rejected before any gate, LLM or slot."""
         one_chunk_file(db)
         recording = llm.serve(RecordingLLM(deltas=("answer",)))
         addon(rag=False)
@@ -267,7 +267,7 @@ class TestTheHistoryLimits:
     async def test_a_bad_history_is_422_with_every_slot_taken(
         self, db, addon, llm, call, ask_slots, embedded,
     ):
-        """SPEC-ADDON-079 I3: no semaphore slot, embedding or model is used first."""
+        """SPEC-ADDON-081 I3: no semaphore slot, embedding or model is used first."""
         one_chunk_file(db)
         recording = llm.serve(RecordingLLM(deltas=("answer",)))
         for _ in range(rag_router._MAX_CONCURRENT_ASK):
@@ -292,7 +292,7 @@ class TestTheHistoryBlock:
     async def test_the_turns_come_oldest_first_before_the_question_and_the_passages(
         self, db, addon, llm, call,
     ):
-        """SPEC-ADDON-079 3 and 6: kept turns oldest first, then the new question, then passages."""
+        """SPEC-ADDON-081 3 and 6: kept turns oldest first, then the new question, then passages."""
         passage = one_chunk_file(db, size=40)
         recording = llm.serve(RecordingLLM(deltas=("answer",)))
         history = [
@@ -309,7 +309,7 @@ class TestTheHistoryBlock:
         assert mentioned(recording.user_prompt, ordered) == ordered
 
     async def test_every_marker_is_removed_from_an_earlier_answer(self, db, addon, llm, call):
-        """SPEC-ADDON-079 3 and I2: ``[n]`` of 1 to 3 digits goes, code and nesting included."""
+        """SPEC-ADDON-081 3 and I2: ``[n]`` of 1 to 3 digits goes, code and nesting included."""
         one_chunk_file(db)
         recording = llm.serve(RecordingLLM(deltas=("answer",)))
         answer = "alpha[1]beta[23]gamma `delta[456]` epsilon[1[2]]zeta[1000]eta"
@@ -323,7 +323,7 @@ class TestTheHistoryBlock:
     async def test_a_turn_with_nothing_left_of_its_answer_is_still_sent(
         self, db, addon, llm, call,
     ):
-        """SPEC-ADDON-079 failure cases: an answer empty after removal keeps its question."""
+        """SPEC-ADDON-081 failure cases: an answer empty after removal keeps its question."""
         one_chunk_file(db)
         recording = llm.serve(RecordingLLM(deltas=("answer",)))
 
@@ -332,7 +332,7 @@ class TestTheHistoryBlock:
         assert "EARLIER-QUESTION" in recording.user_prompt
 
     async def test_a_turns_size_is_counted_after_marker_removal(self, db, addon, llm, call):
-        """SPEC-ADDON-079 3: markers do not use up the history budget."""
+        """SPEC-ADDON-081 3: markers do not use up the history budget."""
         addon(budget=200)
         one_chunk_file(db)
         recording = llm.serve(RecordingLLM(deltas=("answer",)))
@@ -349,7 +349,7 @@ class TestTheHistoryBlock:
     async def test_the_first_turn_that_does_not_fit_and_every_older_one_are_left_out(
         self, db, addon, llm, call,
     ):
-        """SPEC-ADDON-079 3 and I2: newest first while they fit; a kept turn is never older."""
+        """SPEC-ADDON-081 3 and I2: newest first while they fit; a kept turn is never older."""
         addon(budget=200)
         one_chunk_file(db)
         recording = llm.serve(RecordingLLM(deltas=("answer",)))
@@ -375,7 +375,7 @@ class TestTheHistoryBlock:
     async def test_the_history_budget_is_half_the_limit_rounded_down(
         self, older_size, older_kept, db, addon, llm, call,
     ):
-        """SPEC-ADDON-079 3 and I2: at 201 the history budget is 100."""
+        """SPEC-ADDON-081 3 and I2: at 201 the history budget is 100."""
         addon(budget=201)
         one_chunk_file(db)
         recording = llm.serve(RecordingLLM(deltas=("answer",)))
@@ -390,7 +390,7 @@ class TestTheHistoryBlock:
     async def test_a_newest_turn_too_big_alone_keeps_its_question_and_the_start_of_its_answer(
         self, db, addon, llm, call,
     ):
-        """SPEC-ADDON-079 3: the answer is cut to what the question leaves."""
+        """SPEC-ADDON-081 3: the answer is cut to what the question leaves."""
         addon(budget=200)
         one_chunk_file(db)
         recording = llm.serve(RecordingLLM(deltas=("answer",)))
@@ -409,7 +409,7 @@ class TestTheHistoryBlock:
     async def test_a_newest_question_over_the_budget_is_cut_and_its_answer_dropped(
         self, db, addon, llm, call,
     ):
-        """SPEC-ADDON-079 3: the question is cut to the history budget first."""
+        """SPEC-ADDON-081 3: the question is cut to the history budget first."""
         addon(budget=200)
         one_chunk_file(db)
         recording = llm.serve(RecordingLLM(deltas=("answer",)))
@@ -439,7 +439,7 @@ class TestThePassageBudget:
         self, question_size, answer_size, chunk_sizes, partial, sent,
         db, addon, llm, call, embedded,
     ):
-        """SPEC-ADDON-079 4 and I2: passages get the limit minus the kept turns, after cutting."""
+        """SPEC-ADDON-081 4 and I2: passages get the limit minus the kept turns, after cutting."""
         addon(budget=200)
         texts = [chunk(f"c{i}", size) for i, size in enumerate(chunk_sizes)]
         db.file(MEDIA)
@@ -457,7 +457,7 @@ class TestThePassageBudget:
     async def test_a_file_answered_whole_can_be_answered_from_part_of_it_as_a_follow_up(
         self, db, addon, llm, call, embedded,
     ):
-        """SPEC-ADDON-079 4: the same file, first question whole, follow-up partial."""
+        """SPEC-ADDON-081 4: the same file, first question whole, follow-up partial."""
         addon(budget=200)
         texts = [chunk(f"c{i}", 60) for i in range(3)]
         db.file(MEDIA)
@@ -480,7 +480,7 @@ class TestTheRankingText:
     async def test_ranking_embeds_the_last_turns_question_as_sent_then_the_new_one(
         self, db, addon, llm, call, embedded,
     ):
-        """SPEC-ADDON-079 5 and I1: the last entry's question, uncut, a newline, the question."""
+        """SPEC-ADDON-081 5 and I1: the last entry's question, uncut, a newline, the question."""
         addon(budget=200)
         db.file(MEDIA)
         for offset in range(4):
@@ -498,7 +498,7 @@ class TestTheRankingText:
     async def test_without_history_the_new_question_alone_is_embedded(
         self, db, addon, llm, call, embedded,
     ):
-        """SPEC-ADDON-079 5 and I1: no history, or an empty one, ranks by the question alone."""
+        """SPEC-ADDON-081 5 and I1: no history, or an empty one, ranks by the question alone."""
         addon(budget=200)
         db.file(MEDIA)
         for offset in range(4):
@@ -517,7 +517,7 @@ class TestNoHistory:
     async def test_an_empty_history_gets_the_prompts_of_no_history_and_a_turn_changes_both(
         self, db, addon, llm, call,
     ):
-        """SPEC-ADDON-079 1 and I1; 6: history adds to the system prompt and the user prompt."""
+        """SPEC-ADDON-081 1 and I1; 6: history adds to the system prompt and the user prompt."""
         one_chunk_file(db)
         recording = llm.serve(RecordingLLM(deltas=("answer",)))
 
@@ -536,7 +536,7 @@ class TestPictures:
     async def test_a_picture_with_no_text_takes_history_without_citation_rules(
         self, db, call, make_settings, monkeypatch, tmp_path,
     ):
-        """SPEC-ADDON-079 6 and 7: the image is attached again; no citation rules appear."""
+        """SPEC-ADDON-081 6 and 7: the image is attached again; no citation rules appear."""
         from tests.file_question_vision_doubles import (
             seed_picture,
             vision_client,
@@ -585,7 +585,7 @@ class TestPictures:
 
 class TestTheStream:
     async def test_citations_name_only_this_requests_passages(self, db, addon, llm, call):
-        """SPEC-ADDON-079 8: an earlier answer's numbers never become citations."""
+        """SPEC-ADDON-081 8: an earlier answer's numbers never become citations."""
         one_chunk_file(db)
         recording = llm.serve(RecordingLLM(deltas=("From [1] and [2].",)))
 
@@ -599,7 +599,7 @@ class TestTheStream:
     async def test_a_failed_follow_up_never_logs_the_history(
         self, db, addon, llm, call, caplog,
     ):
-        """SPEC-ADDON-079; SPEC-ADDON-053 I5 as revised: history text is never logged."""
+        """SPEC-ADDON-081; SPEC-ADDON-053 I5 as revised: history text is never logged."""
         one_chunk_file(db)
         recording = llm.serve(RecordingLLM(deltas=("partial", " and"), fail_after=1))
         caplog.set_level(logging.DEBUG)

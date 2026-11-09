@@ -475,7 +475,7 @@ class TestTheStream:
     async def test_no_answer_text_ends_as_a_failure_without_citations(
         self, db, addon, llm, call, deltas,
     ):
-        """SPEC-ADDON-080: a turn with no answer text fails rather than reading as answered."""
+        """SPEC-ADDON-082: a turn with no answer text fails rather than reading as answered."""
         db.file(MEDIA).transcript(chunk("one", 20), start=0)
         llm.serve(RecordingLLM(deltas=deltas))
 

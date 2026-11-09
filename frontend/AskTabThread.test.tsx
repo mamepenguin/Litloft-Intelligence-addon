@@ -1,5 +1,5 @@
 /**
- * SPEC-ADDON-080 and SPEC-ADDON-081: the Ask tab keeps a thread of turns per
+ * SPEC-ADDON-082 and SPEC-ADDON-083: the Ask tab keeps a thread of turns per
  * file, sends the answered ones as history, and saves the thread as a note.
  *
  * The tab is the addon's `slots.ts` component for its `inspector-tabs` entry,
@@ -319,7 +319,7 @@ afterEach(() => {
 // History
 // ---------------------------------------------------------------------------
 
-describe("SPEC-ADDON-080 2 and I4 - each question sends the answered turns before it", () => {
+describe("SPEC-ADDON-082 2 and I4 - each question sends the answered turns before it", () => {
   it("sends no history first, then the earlier turn as the question sent and the answer received", async () => {
     await renderTab();
 
@@ -385,7 +385,7 @@ describe("SPEC-ADDON-080 2 and I4 - each question sends the answered turns befor
 // Drawing the thread
 // ---------------------------------------------------------------------------
 
-describe("SPEC-ADDON-080 2 and 3 - the thread is drawn oldest first above an emptied box", () => {
+describe("SPEC-ADDON-082 2 and 3 - the thread is drawn oldest first above an emptied box", () => {
   it("empties the box on send and draws each turn above it", async () => {
     await renderTab();
 
@@ -431,7 +431,7 @@ describe("SPEC-ADDON-080 2 and 3 - the thread is drawn oldest first above an emp
   });
 });
 
-describe("SPEC-ADDON-080 4 and I6 - each turn keeps its own pills and notices", () => {
+describe("SPEC-ADDON-082 4 and I6 - each turn keeps its own pills and notices", () => {
   it("moves the player to each turn's own cited position", async () => {
     const seek = vi.fn();
     await renderTab({ mediaController: { seek } });
@@ -481,7 +481,7 @@ describe("SPEC-ADDON-080 4 and I6 - each turn keeps its own pills and notices", 
 // New conversation
 // ---------------------------------------------------------------------------
 
-describe("SPEC-ADDON-080 5 and I5 - New conversation", () => {
+describe("SPEC-ADDON-082 5 and I5 - New conversation", () => {
   it("is offered only with a turn and none streaming", async () => {
     await renderTab();
     expect(screen.queryByRole("button", { name: "New conversation" })).toBeNull();
@@ -533,7 +533,7 @@ describe("SPEC-ADDON-080 5 and I5 - New conversation", () => {
 // Failures
 // ---------------------------------------------------------------------------
 
-describe("SPEC-ADDON-080 failure cases and I5 - a failed question goes back into an empty box", () => {
+describe("SPEC-ADDON-082 failure cases and I5 - a failed question goes back into an empty box", () => {
   it("puts the failed question back when the box is empty", async () => {
     await renderTab();
     await answered("first question", { text: "First answer." });
@@ -561,7 +561,7 @@ describe("SPEC-ADDON-080 failure cases and I5 - a failed question goes back into
 // How long the thread lives
 // ---------------------------------------------------------------------------
 
-describe("SPEC-ADDON-080 6 and SPEC-ADDON-056 I11 as revised - the thread lives with the page", () => {
+describe("SPEC-ADDON-082 6 and SPEC-ADDON-056 I11 as revised - the thread lives with the page", () => {
   it("keeps every turn and the box's contents across a closed sheet, and stores nothing", async () => {
     const view = await renderTab();
     await answered("first question", { text: "First answer." });
@@ -610,7 +610,7 @@ function content(call: Call): string {
 
 const SAVED_AT = /^saved_at: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/m;
 
-describe("SPEC-ADDON-081 1 and I5 - when saving is offered", () => {
+describe("SPEC-ADDON-083 1 and I5 - when saving is offered", () => {
   it("is hidden until a turn is answered and while one streams", async () => {
     await renderTab();
     expect(screen.queryByRole("button", { name: "Save as Markdown" })).toBeNull();
@@ -634,7 +634,7 @@ describe("SPEC-ADDON-081 1 and I5 - when saving is offered", () => {
   });
 });
 
-describe("SPEC-ADDON-081 2 and 3 and I7 - the saved note", () => {
+describe("SPEC-ADDON-083 2 and 3 and I7 - the saved note", () => {
   it("names the file from the first answered question and posts an Ask note for this file", async () => {
     await renderTab();
     await failed("broken question");
@@ -796,7 +796,7 @@ describe("SPEC-ADDON-081 2 and 3 and I7 - the saved note", () => {
   });
 });
 
-describe("SPEC-ADDON-081 4 and I5 - after a save", () => {
+describe("SPEC-ADDON-083 4 and I5 - after a save", () => {
   it("shows the note link until the thread holds more answered turns, then saves them all again", async () => {
     const view = await renderTab();
     await answered("first question", { text: "First answer." });
@@ -841,7 +841,7 @@ describe("SPEC-ADDON-081 4 and I5 - after a save", () => {
   });
 });
 
-describe("SPEC-ADDON-081 failure cases - a failed save", () => {
+describe("SPEC-ADDON-083 failure cases - a failed save", () => {
   it.each([
     { status: 502, detail: "The note was saved, but it could not be marked unverified" },
     { status: 404, detail: "Addon not found" },
@@ -858,7 +858,7 @@ describe("SPEC-ADDON-081 failure cases - a failed save", () => {
   });
 });
 
-describe("SPEC-ADDON-080 and 081 - the strings a viewer reads", () => {
+describe("SPEC-ADDON-082 and 083 - the strings a viewer reads", () => {
   const flatten = (tree: unknown): string[] => {
     if (typeof tree === "string") return [tree];
     if (typeof tree !== "object" || tree === null) return [];
