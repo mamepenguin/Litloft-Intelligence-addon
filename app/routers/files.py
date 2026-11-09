@@ -16,7 +16,7 @@ from app.dependencies import get_auto_tags_worker, get_index_manager
 from app.document_sections import EPUB_MIME, load_section_titles
 from app.drive_context import assert_file_in_drive, require_drive
 from app.workers.ocr import OCR_IMAGE_TYPES
-from app.workers.clip import VIDEO_TYPES
+from app.workers.clip import VIDEO_TYPES, request_storyboard_retry
 from app.schemas import (
     BatchSuggestedTagsRequest,
     BatchSuggestedTagsResponse,
@@ -1011,6 +1011,9 @@ async def reindex_file(
                     extraction.set_redo(session, file_id, kind)
 
         await asyncio.to_thread(_set_redo_marks)
+
+    if "clip" in tasks:
+        request_storyboard_retry(file_id)
 
     # ---- Layer 3: split tasks into already-queued vs fresh ----
     if manager is None or not hasattr(manager, "is_queued"):
