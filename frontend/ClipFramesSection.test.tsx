@@ -15,7 +15,7 @@
  *      storyboard tiles (SPEC-ADDON-080).
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import {
   render,
   screen,
@@ -131,21 +131,26 @@ function loft(props: { fileId?: string; mediaController?: MediaController } = {}
   };
 }
 
+// jsdom doesn't ship IntersectionObserver — install a minimal stub
+// good enough for the component to mount without crashing. File scope,
+// because every describe below mounts the component and the run order is
+// shuffled.
+beforeAll(() => {
+  if (!("IntersectionObserver" in globalThis)) {
+    class IO {
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+      takeRecords() { return []; }
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (globalThis as any).IntersectionObserver = IO as any;
+  }
+});
+
 describe("ClipFramesSection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // jsdom doesn't ship IntersectionObserver — install a minimal stub
-    // good enough for the component to mount without crashing.
-    if (!("IntersectionObserver" in globalThis)) {
-      class IO {
-        observe() {}
-        disconnect() {}
-        unobserve() {}
-        takeRecords() { return []; }
-      }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (globalThis as any).IntersectionObserver = IO as any;
-    }
   });
 
   afterEach(() => {
