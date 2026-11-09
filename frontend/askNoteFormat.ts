@@ -260,20 +260,27 @@ interface BlockToken {
   children: BlockToken[] | null;
 }
 
-function codeLineIndexes(answer: string): Set<number> {
-  const indexes = new Set<number>();
+interface AnswerBlocks {
+  codeLines: Set<number>;
+  inlineRanges: Array<[number, number]>;
+}
+
+function answerBlocks(answer: string): AnswerBlocks {
+  const codeLines = new Set<number>();
+  const inlineRanges: Array<[number, number]> = [];
   const collect = (tokens: BlockToken[]): void => {
     for (const token of tokens) {
       if ((token.type === "fence" || token.type === "code_block") && token.map) {
         for (let line = token.map[0]; line < token.map[1]; line += 1) {
-          indexes.add(line);
+          codeLines.add(line);
         }
       }
+      if (token.type === "inline" && token.map) inlineRanges.push(token.map);
       if (token.children) collect(token.children);
     }
   };
   collect(blockParser.parse(answer, {}));
-  return indexes;
+  return { codeLines, inlineRanges };
 }
 
 function rewriteAnswer(
@@ -282,13 +289,30 @@ function rewriteAnswer(
   fileId: string,
 ): string {
   const positions = new Map(citations.map((citation) => [citation.n, citation.position]));
-  const code = codeLineIndexes(answer);
-  return answer
-    .split("\n")
-    .map((line, index) =>
-      code.has(index) ? line : rewriteInline(line, positions, fileId),
-    )
-    .join("\n");
+  const { codeLines, inlineRanges } = answerBlocks(answer);
+  const lines = answer.split("\n");
+  const rewritten = [...lines];
+  const handled = new Set<number>();
+
+  // A code span may cross the line endings of one inline block, so the block is
+  // scanned joined; a line at a time would rewrite markers the renderer draws
+  // as code.
+  for (const [start, end] of inlineRanges) {
+    const block = lines.slice(start, end);
+    if (block.length === 0) continue;
+    const result = rewriteInline(block.join("\n"), positions, fileId).split("\n");
+    for (let offset = 0; offset < result.length; offset += 1) {
+      rewritten[start + offset] = result[offset];
+      handled.add(start + offset);
+    }
+  }
+
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!handled.has(index) && !codeLines.has(index)) {
+      rewritten[index] = rewriteInline(lines[index], positions, fileId);
+    }
+  }
+  return rewritten.join("\n");
 }
 
 /**

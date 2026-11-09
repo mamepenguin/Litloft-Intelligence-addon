@@ -271,6 +271,31 @@ describe("buildAskThreadMarkdown — code is what AnswerMarkdown renders as code
       answer: "1. outer\n    1. inner\n\n        ```\n        b[1]\n        ```",
       expected: "1. outer\n    1. inner\n\n        ```\n        b[1]\n        ```",
     },
+    {
+      name: "a span crossing a soft line break",
+      answer: "See `x\ny [1]` z",
+      expected: "See `x\ny [1]` z",
+    },
+    {
+      name: "a span whose closing run is two lines after its opening run",
+      answer: "a `x\nb [1]\nc` d",
+      expected: "a `x\nb [1]\nc` d",
+    },
+    {
+      name: "a span crossing a line break inside a blockquote",
+      answer: "> See `x\n> y [1]` z",
+      expected: "> See `x\n> y [1]` z",
+    },
+    {
+      name: "a span crossing a line break in a list item paragraph",
+      answer: "- See `x\n  y [1]` z",
+      expected: "- See `x\n  y [1]` z",
+    },
+    {
+      name: "a backtick never closed before a paragraph break",
+      answer: "open `x [1]\n\nafter [1]",
+      expected: `open \`x ${link}\n\nafter ${link}`,
+    },
   ])("writes $name as received exactly where it is code", ({ answer, expected }) => {
     const note = buildAskThreadMarkdown({
       fileId: THREAD_FILE,
