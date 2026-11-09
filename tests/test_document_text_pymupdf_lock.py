@@ -11,6 +11,7 @@ import time
 import httpx
 import pytest
 
+from app import document_text as document_text_module
 from tests.document_fixtures import PDF, make_pdf
 from tests.document_text_api import (  # noqa: F401
     DRIVE,
@@ -20,6 +21,18 @@ from tests.document_text_api import (  # noqa: F401
     search_index,
     seed,
 )
+
+SPEC_SLOT_WAIT_SECONDS = 10.0
+SLOT_WAIT_SECONDS = 2.0
+SLOT_WAIT_SCALE = SLOT_WAIT_SECONDS / SPEC_SLOT_WAIT_SECONDS
+
+
+@pytest.fixture()
+def short_slot_wait(monkeypatch):
+    assert document_text_module.SLOT_WAIT_SECONDS == SPEC_SLOT_WAIT_SECONDS
+    monkeypatch.setattr(
+        document_text_module, "SLOT_WAIT_SECONDS", SLOT_WAIT_SECONDS,
+    )
 
 
 class _Overlap:
@@ -108,7 +121,13 @@ async def test_a_pdf_read_never_converts_while_indexing_converts(pdfs, monkeypat
     assert overlap.most == 1
 
 
-async def test_a_read_that_cannot_take_pymupdf_within_10s_gets_429(pdfs, monkeypatch):
+def test_the_slot_wait_is_the_spec_value():
+    assert document_text_module.SLOT_WAIT_SECONDS == SPEC_SLOT_WAIT_SECONDS
+
+
+async def test_a_read_that_cannot_take_pymupdf_within_10s_gets_429(
+    pdfs, monkeypatch, short_slot_wait,
+):
     from app.extractors import pdf
 
     taken = threading.Event()
@@ -117,12 +136,12 @@ async def test_a_read_that_cannot_take_pymupdf_within_10s_gets_429(pdfs, monkeyp
     def hold_pymupdf():
         with pdf.PYMUPDF_LOCK:
             taken.set()
-            release.wait(timeout=60)
+            release.wait(timeout=60 * SLOT_WAIT_SCALE)
 
     holder = threading.Thread(target=hold_pymupdf)
     holder.start()
     try:
-        assert taken.wait(timeout=5)
+        assert taken.wait(timeout=5 * SLOT_WAIT_SCALE)
         async with _client() as client:
             started = time.monotonic()
             response = await client.get(path_of("p1"))
@@ -133,4 +152,4 @@ async def test_a_read_that_cannot_take_pymupdf_within_10s_gets_429(pdfs, monkeyp
 
     assert response.status_code == 429, response.text
     assert response.json()["detail"] == "Document reader busy"
-    assert 9.5 <= waited < 20
+    assert 9.5 * SLOT_WAIT_SCALE <= waited < 20 * SLOT_WAIT_SCALE

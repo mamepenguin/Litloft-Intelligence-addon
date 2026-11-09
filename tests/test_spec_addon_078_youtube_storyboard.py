@@ -188,9 +188,10 @@ def serve_storyboard(
                 if row >= image_rows:
                     continue
                 colour = ((index + 1) & 255, (index + 1) >> 8, TILE_MARK)
-                for y in range(row * tile[1], (row + 1) * tile[1]):
-                    for x in range(col * tile[0], (col + 1) * tile[0]):
-                        image.putpixel((x, y), colour)
+                image.paste(colour, (
+                    col * tile[0], row * tile[1],
+                    (col + 1) * tile[0], (row + 1) * tile[1],
+                ))
 
         name = f"sheet{sheet}.png"
         youtube.serve_sheet(

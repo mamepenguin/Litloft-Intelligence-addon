@@ -10,6 +10,7 @@ import pytest
 
 import app.config as config
 import app.database as database
+from app import youtube_source as frame_module
 from app.frame_cache import frame_cache_path
 from app.models import IndexedFile
 from tests.file_question_doubles import chunk
@@ -41,6 +42,15 @@ from tests.youtube_frame_doubles import (  # noqa: F401 - fixtures
 pytestmark = needs_ffmpeg
 
 VIDEO = "yta00000077"
+SPEC_DEADLINE_SECONDS = 15.0
+DEADLINE = 3.0
+DEADLINE_SCALE = DEADLINE / SPEC_DEADLINE_SECONDS
+
+
+@pytest.fixture()
+def short_deadline(monkeypatch):
+    assert frame_module.FRAME_DEADLINE_SECONDS == SPEC_DEADLINE_SECONDS
+    monkeypatch.setattr(frame_module, "FRAME_DEADLINE_SECONDS", DEADLINE)
 
 
 def _loft(db, tmp_path, *, body=None, duration=60.0, file_id=VIDEO):
@@ -142,12 +152,18 @@ class TestWhenTheFrameCannotBeRead:
         assert len(wire.image_bodies) == 1
         assert len(youtube.lookups()) == lookups
 
+    def test_the_deadline_is_the_spec_value(self):
+        assert frame_module.FRAME_DEADLINE_SECONDS == SPEC_DEADLINE_SECONDS
+
     async def test_a_lookup_slower_than_15_seconds_ends_as_unavailable(
-        self, db, addon, llm, call, tmp_path, youtube,
+        self, db, addon, llm, call, tmp_path, youtube, short_deadline,
     ):
         """SPEC-ADDON-077: the frame route's 15 s limit bounds the image step."""
         _loft(db, tmp_path)
-        youtube.set_ytdlp(describe=describe([youtube.format("f720", 720)]), delay=40.0)
+        youtube.set_ytdlp(
+            describe=describe([youtube.format("f720", 720)]),
+            delay=40.0 * DEADLINE_SCALE,
+        )
         _, wire = vision_client(llm)
 
         started = time.monotonic()
@@ -156,7 +172,7 @@ class TestWhenTheFrameCannotBeRead:
 
         assert by_kind(response)["meta"]["image"] == "unavailable"
         assert wire.image_bodies == []
-        assert 13.0 < elapsed < 20.0
+        assert 13.0 * DEADLINE_SCALE < elapsed < 20.0 * DEADLINE_SCALE
 
 
 class TestWhatIsLogged:

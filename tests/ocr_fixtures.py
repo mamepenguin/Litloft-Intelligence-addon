@@ -88,9 +88,7 @@ def rgba_picture(path: Path) -> Path:
     from PIL import Image
 
     image = Image.new("RGBA", (20, 10), (0, 0, 0, 0))
-    for x in range(10, 20):
-        for y in range(10):
-            image.putpixel((x, y), (200, 30, 30, 255))
+    image.paste((200, 30, 30, 255), (10, 0, 20, 10))
     image.save(path)
     return path
 
@@ -112,9 +110,7 @@ def jpeg_with_exif_orientation_6(path: Path) -> Path:
     from PIL import Image
 
     image = Image.new("RGB", (40, 20), (250, 250, 250))
-    for x in range(0, 20):
-        for y in range(20):
-            image.putpixel((x, y), (10, 10, 10))
+    image.paste((10, 10, 10), (0, 0, 20, 20))
     exif = Image.Exif()
     exif[274] = 6
     image.save(path, "JPEG", exif=exif)
