@@ -1,5 +1,7 @@
 import { lazy } from "react";
 
+import { pickupShelfProvider, type ShelfProvider } from "./pickupShelfProvider";
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const slotComponents: Record<string, React.LazyExoticComponent<React.ComponentType<any>>> = {
   "find-mode": lazy(() => import("./FindModeSlot")),
@@ -33,4 +35,8 @@ export const slotComponents: Record<string, React.LazyExoticComponent<React.Comp
   "admin-llm": lazy(() => import("./AdminLLMSettingsSection")),
   "admin-rag": lazy(() => import("./AdminRAGSettingsSection")),
   "admin-embedding": lazy(() => import("./AdminEmbeddingSettingsSection")),
+};
+
+export const slotProviders: Record<string, ShelfProvider> = {
+  pickup: pickupShelfProvider,
 };
