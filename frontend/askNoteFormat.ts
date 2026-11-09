@@ -9,8 +9,7 @@
  * renames. Non-`.md` citations stay on the `loft://` scheme so query
  * parameters (`?t=<sec>` / `?page=<N>`) keep working.
  */
-// @ts-expect-error -- the addon has no node_modules of its own; this reaches the core's copy
-import MarkdownIt from "@/../node_modules/markdown-it";
+import MarkdownIt from "markdown-it";
 import type { Citation } from "./api";
 import type { CitationPosition, FileCitation } from "./askStream";
 import { citationLabel } from "./citationLabel";
