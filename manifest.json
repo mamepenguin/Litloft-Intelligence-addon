@@ -67,14 +67,9 @@
         "priority": 10
       },
       {
-        "id": "visual-index",
-        "label": "Visual Index",
+        "id": "scenes",
+        "label": "Scenes",
         "priority": 20
-      },
-      {
-        "id": "clip-frames",
-        "label": "CLIP Frames",
-        "priority": 21
       }
     ],
     "file-relations": [
