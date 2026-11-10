@@ -107,6 +107,13 @@
         "priority": 5
       }
     ],
+    "video-discover-recommended": [
+      {
+        "id": "pickup",
+        "label": "Pickup",
+        "priority": 10
+      }
+    ],
     "dashboard-widgets": [
       {
         "id": "index-status",
