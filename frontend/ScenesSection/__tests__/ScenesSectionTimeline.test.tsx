@@ -276,9 +276,9 @@ describe("SPEC-ADDON-089 I2 — the no-controller fallback", () => {
       makeRows(15).slice(0, 9).map((row) => formatDuration(row.start)),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Play from 1:00" }));
+    fireEvent.click(screen.getByRole("button", { name: "Play from 0:30" }));
 
-    expect(video.currentTime).toBe(60);
+    expect(video.currentTime).toBe(30);
     expect(play).toHaveBeenCalled();
   });
 });

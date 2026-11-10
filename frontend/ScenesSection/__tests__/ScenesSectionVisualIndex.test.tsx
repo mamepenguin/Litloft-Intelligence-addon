@@ -779,7 +779,7 @@ describe("SPEC-ADDON-090 I10 — action errors", () => {
 
     fireEvent.click(action("Create scenes")!);
 
-    expect(nameVisible(WAITING)).toBe(true);
+    await waitFor(() => expect(nameVisible(WAITING)).toBe(true));
   });
 
   it("shows the generic message for any other failure", async () => {
@@ -789,7 +789,7 @@ describe("SPEC-ADDON-090 I10 — action errors", () => {
 
     fireEvent.click(action("Create scenes")!);
 
-    expect(nameVisible(ACTION_ERROR)).toBe(true);
+    await waitFor(() => expect(nameVisible(ACTION_ERROR)).toBe(true));
   });
 
   it("replaces the note in a retry row", async () => {
@@ -805,7 +805,7 @@ describe("SPEC-ADDON-090 I10 — action errors", () => {
 
     fireEvent.click(action("Retry the 1 failed")!);
 
-    expect(nameVisible(WAITING)).toBe(true);
+    await waitFor(() => expect(nameVisible(WAITING)).toBe(true));
     expect(nameVisible(/^1 failed$/)).toBe(false);
   });
 

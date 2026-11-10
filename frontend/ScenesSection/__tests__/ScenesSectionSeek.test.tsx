@@ -108,9 +108,9 @@ describe("SPEC-ADDON-089 I2 — the four seeks", () => {
     renderSection({ mediaController: controller });
     await openNative();
 
-    fireEvent.click(tile(60));
+    fireEvent.click(tile(30));
 
-    expect(seek).toHaveBeenCalledWith(60);
+    expect(seek).toHaveBeenCalledWith(30);
     expect(play).toHaveBeenCalled();
     expect(seek.mock.invocationCallOrder[0]).toBeLessThan(
       play.mock.invocationCallOrder[0],
