@@ -440,7 +440,7 @@ function Ruler({
         onPointerUp={disabled ? undefined : onPointer}
         onPointerCancel={disabled ? undefined : onPointer}
         onClick={disabled ? undefined : onClick}
-        className="relative h-11 w-full cursor-pointer touch-pan-y overflow-hidden rounded-lg bg-bg-card"
+        className="relative h-11 w-full cursor-pointer touch-pan-y overflow-hidden rounded-lg bg-bg-elevated"
       >
         <div
           aria-hidden="true"
@@ -527,7 +527,7 @@ function SceneCard({
     <button
       type="button"
       onClick={() => onSeek(scene.time)}
-      className="flex w-full cursor-pointer flex-col gap-1 rounded-xl bg-bg-card px-3 py-2.5 text-left transition-colors hover:bg-bg-elevated"
+      className="flex w-full cursor-pointer flex-col gap-1 rounded-xl bg-bg-elevated px-3 py-2.5 text-left transition-colors hover:bg-sand"
     >
       <span className="flex items-center gap-1.5 text-xs tabular-nums text-text-muted">
         <span
@@ -549,10 +549,7 @@ function SceneCard({
 function LoadingSkeleton() {
   return (
     <div className="flex flex-col gap-3.5">
-      <div className="flex flex-col gap-1.5">
-        <div className="h-9 w-full rounded-lg bg-bg-card" />
-        <div className="h-3.5" />
-      </div>
+      <div className="h-3.5" />
       <div className="grid grid-cols-3 gap-x-2 gap-y-3">
         {Array.from({ length: 9 }, (_, index) => (
           <div key={index} className="flex flex-col gap-1">
@@ -560,7 +557,7 @@ function LoadingSkeleton() {
               className="w-full rounded-lg bg-bg-elevated"
               style={{ aspectRatio: 4 / 3 }}
             />
-            <div className="mx-auto h-3.5 w-2/5 rounded bg-bg-card" />
+            <div className="mx-auto h-3.5 w-2/5 rounded bg-bg-elevated" />
           </div>
         ))}
       </div>
