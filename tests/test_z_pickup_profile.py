@@ -78,11 +78,21 @@ class _Library:
         with self.litloft_engine.begin() as conn:
             conn.execute(text(
                 "CREATE TABLE files (id TEXT PRIMARY KEY, drive TEXT NOT NULL, "
+                "file_type TEXT NOT NULL DEFAULT 'video', "
+                "mime_type TEXT NOT NULL DEFAULT 'video/mp4', liked_at TEXT, "
+                "is_favorite INTEGER NOT NULL DEFAULT 0, "
                 "deleted_at TEXT, missing_since TEXT)"
             ))
             conn.execute(text(
                 "CREATE TABLE watch_history (viewer_id TEXT NOT NULL, "
-                "file_id TEXT NOT NULL, last_played_at TEXT NOT NULL)"
+                "file_id TEXT NOT NULL, playback_position REAL NOT NULL DEFAULT 0, "
+                "duration REAL NOT NULL DEFAULT 0, last_played_at TEXT NOT NULL, "
+                "dismissed_at TEXT)"
+            ))
+            conn.execute(text(
+                "CREATE TABLE played_segments (viewer_id TEXT NOT NULL, "
+                "file_id TEXT NOT NULL, segment_index INTEGER NOT NULL, "
+                "played_seconds REAL NOT NULL)"
             ))
 
         self.engine = create_engine(
@@ -100,16 +110,33 @@ class _Library:
         drive: str = "a",
         age_days: float = 0.0,
         deleted: bool = False,
+        file_type: str = "video",
+        position: float = 100.0,
+        duration: float = 100.0,
     ):
         played = _now() - timedelta(days=age_days)
         with self.litloft_engine.begin() as conn:
             conn.execute(
-                text("INSERT OR IGNORE INTO files VALUES (:i, :d, :del, NULL)"),
-                {"i": file_id, "d": drive, "del": "2026-01-01" if deleted else None},
+                text(
+                    "INSERT OR IGNORE INTO files"
+                    " (id, drive, file_type, deleted_at, missing_since)"
+                    " VALUES (:i, :d, :kind, :del, NULL)"
+                ),
+                {
+                    "i": file_id, "d": drive, "kind": file_type,
+                    "del": "2026-01-01" if deleted else None,
+                },
             )
             conn.execute(
-                text("INSERT INTO watch_history VALUES (:v, :f, :t)"),
-                {"v": viewer, "f": file_id, "t": played.isoformat(sep=" ")},
+                text(
+                    "INSERT INTO watch_history"
+                    " (viewer_id, file_id, playback_position, duration,"
+                    "  last_played_at) VALUES (:v, :f, :p, :dur, :t)"
+                ),
+                {
+                    "v": viewer, "f": file_id, "p": position,
+                    "dur": duration, "t": played.isoformat(sep=" "),
+                },
             )
 
     def index(
@@ -487,10 +514,11 @@ def test_unparseable_timestamps_are_skipped_not_treated_as_now(lib):
     lib.watch("good", age_days=1)
     with lib.litloft_engine.begin() as conn:
         conn.execute(text(
-            "INSERT INTO files VALUES ('bad', 'a', NULL, NULL)"
+            "INSERT INTO files (id, drive) VALUES ('bad', 'a')"
         ))
         conn.execute(text(
-            "INSERT INTO watch_history VALUES ('v1', 'bad', 'not-a-date')"
+            "INSERT INTO watch_history (viewer_id, file_id, last_played_at)"
+            " VALUES ('v1', 'bad', 'not-a-date')"
         ))
 
     got = profile.profile_history("a", "v1")
@@ -501,9 +529,11 @@ def test_unparseable_timestamps_are_skipped_not_treated_as_now(lib):
 def test_an_aware_timestamp_is_read_as_utc(lib):
     """Legacy rows can carry a ``+00:00`` suffix; the column is naive."""
     with lib.litloft_engine.begin() as conn:
-        conn.execute(text("INSERT INTO files VALUES ('f', 'a', NULL, NULL)"))
+        conn.execute(text("INSERT INTO files (id, drive) VALUES ('f', 'a')"))
         conn.execute(text(
-            "INSERT INTO watch_history VALUES ('v1', 'f', :t)"
+            "INSERT INTO watch_history"
+            " (viewer_id, file_id, playback_position, duration, last_played_at)"
+            " VALUES ('v1', 'f', 100, 100, :t)"
         ), {"t": datetime.now(UTC).isoformat()})
 
     got = profile.profile_history("a", "v1")

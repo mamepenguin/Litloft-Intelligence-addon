@@ -240,6 +240,29 @@ def load_candidates(*, drive: str, channel: str) -> CandidateSet:
     )
 
 
+def restrict_candidates(
+    candidates: CandidateSet, file_ids: Collection[str],
+) -> CandidateSet:
+    """The subset of ``candidates`` whose files are in ``file_ids``.
+
+    Ids and matrix rows are filtered together: the tuple is parallel to
+    the matrix, so a row left behind would silently shift every later
+    file's score.
+    """
+    keep = np.fromiter(
+        (file_id in file_ids for file_id in candidates.file_ids),
+        dtype=bool,
+        count=len(candidates.file_ids),
+    )
+    rows = np.flatnonzero(keep)
+    return CandidateSet(
+        channel=candidates.channel,
+        drive=candidates.drive,
+        file_ids=tuple(candidates.file_ids[i] for i in rows),
+        matrix=candidates.matrix[rows],
+    )
+
+
 def score_lanes(
     candidates: CandidateSet,
     centroids: Sequence[np.ndarray],
