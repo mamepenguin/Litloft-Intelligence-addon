@@ -161,17 +161,7 @@ export default function ScenesSectionPresenter({
   return (
     <div
       className="flex w-full max-w-96 flex-col gap-3.5"
-      onPointerLeave={(event) => {
-        if (event.target === event.currentTarget) {
-          onSectionPointerLeave();
-        }
-      }}
-      onPointerOut={(event) => {
-        const next = event.relatedTarget as Node | null;
-        if (next && !event.currentTarget.contains(next)) {
-          onSectionPointerLeave();
-        }
-      }}
+      onPointerLeave={onSectionPointerLeave}
       onBlur={onSectionBlur}
     >
       <button

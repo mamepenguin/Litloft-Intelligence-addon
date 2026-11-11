@@ -273,7 +273,7 @@ describe("SPEC-ADDON-089 I2 — a mouse browse point", () => {
     firePointer(el, "pointerMove", { pointerType: "mouse", clientX: pointerX(60, 70) });
     expect(ruler()).toHaveAttribute("aria-valuenow", "60");
 
-    firePointer(el, "pointerLeave", { pointerType: "mouse" });
+    fireEvent.pointerOut(el, { pointerType: "mouse", relatedTarget: allTiles()[6] });
     firePointer(allTiles()[6], "pointerMove", { pointerType: "mouse" });
     expect(ruler()).toHaveAttribute("aria-valuenow", "60");
 
@@ -285,6 +285,25 @@ describe("SPEC-ADDON-089 I2 — a mouse browse point", () => {
     expect(tileLabels()).toEqual(
       makeRows(15).slice(0, 9).map((row) => formatDuration(row.start)),
     );
+  });
+});
+
+describe("SPEC-ADDON-089 I2 — a mouse browse point clears when the pointer leaves the document from inside", () => {
+  it.each([
+    ["the ruler", () => ruler()],
+    ["a tile", () => allTiles()[4]],
+  ])("leaving straight from %s with no related target clears it", async (_name, from) => {
+    renderSection({ mediaController: makeController({ duration: 70 }).controller });
+    await openNative();
+    const el = ruler();
+    stubRect(el);
+
+    firePointer(el, "pointerMove", { pointerType: "mouse", clientX: pointerX(60, 70) });
+    expect(ruler()).toHaveAttribute("aria-valuenow", "60");
+
+    fireEvent.pointerOut(from(), { pointerType: "mouse", relatedTarget: null });
+
+    expect(ruler()).toHaveAttribute("aria-valuenow", "0");
   });
 });
 
