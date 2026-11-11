@@ -16,7 +16,6 @@ import {
   frameIndexAt,
   rulerFraction,
   timeLabels,
-  windowStartFor,
 } from "./scenesModel";
 
 export type ScenesView = "collapsed" | "loading" | "expanded";
@@ -51,6 +50,8 @@ export interface ScenesSectionPresenterProps {
   hasPlayback: boolean;
   browse: number | null;
   requestedTimes: number[];
+  columns: number;
+  windowStart: number;
   failedTimes: ReadonlySet<number>;
   pictureRatio: number | null;
   isLoft: boolean;
@@ -89,6 +90,8 @@ export default function ScenesSectionPresenter({
   hasPlayback,
   browse,
   requestedTimes,
+  columns,
+  windowStart,
   failedTimes,
   pictureRatio,
   isLoft,
@@ -114,9 +117,7 @@ export default function ScenesSectionPresenter({
 }: ScenesSectionPresenterProps) {
   const t = useTranslations("file");
 
-  const index = frameIndexAt(rows, point);
-  const windowStart = windowStartFor(index, rows.length);
-  const windowRows = rows.slice(windowStart, windowStart + 9);
+  const windowRows = rows.slice(windowStart, windowStart + 3 * columns);
   const playingIndex = frameIndexAt(rows, playingTime);
   const browseIndex = browse === null ? null : frameIndexAt(rows, browse);
   const requested = new Set(requestedTimes);
@@ -160,7 +161,7 @@ export default function ScenesSectionPresenter({
 
   return (
     <div
-      className="flex w-full max-w-96 flex-col gap-3.5"
+      className="flex w-full flex-col gap-3.5"
       onPointerLeave={onSectionPointerLeave}
       onBlur={onSectionBlur}
     >
@@ -221,6 +222,8 @@ export default function ScenesSectionPresenter({
             playingTime={playingTime}
             hasPlayback={hasPlayback}
             browse={browse}
+            columns={columns}
+            windowStart={windowStart}
             marks={view === "expanded" ? visual?.marks : undefined}
             disabled={view === "loading"}
             rulerRef={rulerRef}
@@ -230,10 +233,15 @@ export default function ScenesSectionPresenter({
           />
 
           {view === "loading" ? (
-            <LoadingSkeleton />
+            <LoadingSkeleton columns={columns} />
           ) : (
           <>
-          <div className="grid grid-cols-3 gap-x-2 gap-y-3">
+          <div
+            className="grid gap-x-2 gap-y-3"
+            style={{
+              gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+            }}
+          >
             {windowRows.map((row, offset) => {
               const absoluteIndex = windowStart + offset;
               const isPlaying = hasPlayback && absoluteIndex === playingIndex;
@@ -370,6 +378,8 @@ interface RulerProps {
   playingTime: number;
   hasPlayback: boolean;
   browse: number | null;
+  columns: number;
+  windowStart: number;
   marks: VideoVisualSceneItem[] | undefined;
   disabled: boolean;
   rulerRef: RefObject<HTMLDivElement | null>;
@@ -385,6 +395,8 @@ function Ruler({
   playingTime,
   hasPlayback,
   browse,
+  columns,
+  windowStart,
   marks,
   disabled,
   rulerRef,
@@ -393,9 +405,7 @@ function Ruler({
   onClick,
 }: RulerProps) {
   const t = useTranslations("file");
-  const index = frameIndexAt(rows, point);
-  const windowStart = windowStartFor(index, rows.length);
-  const windowRows = rows.slice(windowStart, windowStart + 9);
+  const windowRows = rows.slice(windowStart, windowStart + 3 * columns);
   const nextRow = rows[windowStart + windowRows.length];
   const windowLeft = windowRows.length > 0
     ? rulerFraction(windowRows[0].start, length)
@@ -532,12 +542,17 @@ function SceneCard({
   );
 }
 
-function LoadingSkeleton() {
+function LoadingSkeleton({ columns }: { columns: number }) {
   return (
     <div className="flex flex-col gap-3.5">
       <div className="h-3.5" />
-      <div className="grid grid-cols-3 gap-x-2 gap-y-3">
-        {Array.from({ length: 9 }, (_, index) => (
+      <div
+        className="grid gap-x-2 gap-y-3"
+        style={{
+          gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+        }}
+      >
+        {Array.from({ length: 3 * columns }, (_, index) => (
           <div key={index} className="flex flex-col gap-1">
             <div
               className="w-full rounded-lg bg-bg-elevated"
