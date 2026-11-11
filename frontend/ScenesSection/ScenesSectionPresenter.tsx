@@ -523,7 +523,7 @@ function SceneCard({
     <button
       type="button"
       onClick={() => onSeek(scene.time)}
-      className="flex w-full cursor-pointer flex-col gap-1 rounded-xl bg-bg-elevated px-3 py-2.5 text-left transition-colors hover:bg-sand"
+      className="flex min-h-[7.6rem] w-full cursor-pointer flex-col justify-start gap-1 rounded-xl bg-bg-elevated px-3 py-2.5 text-left transition-colors hover:bg-sand"
     >
       <span className="flex items-center gap-1.5 text-xs tabular-nums text-text-muted">
         <span
@@ -532,10 +532,10 @@ function SceneCard({
         />
         {formatDuration(scene.time)}
       </span>
-      <span className="line-clamp-2 min-h-[2.4rem] text-sm leading-snug text-text-primary">
+      <span className="line-clamp-2 text-sm leading-snug text-text-primary">
         {scene.label}
       </span>
-      <span className="line-clamp-2 min-h-[2.45rem] whitespace-pre-line text-xs leading-relaxed text-text-muted">
+      <span className="line-clamp-2 whitespace-pre-line text-xs leading-relaxed text-text-muted">
         {scene.text ?? ""}
       </span>
     </button>
