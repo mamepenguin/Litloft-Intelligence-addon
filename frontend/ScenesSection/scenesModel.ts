@@ -1,3 +1,4 @@
+import { formatDuration } from "@/lib/format";
 import type { ClipTimestampItem } from "../api";
 
 export const LOFT_MIME_TYPE = "application/vnd.litloft.loft+json";
@@ -11,14 +12,27 @@ const LABEL_STEPS_SECONDS = [
   60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600,
 ] as const;
 
-/** An interior label closer than this to either end is omitted. */
-const LABEL_EDGE_FRACTION = 0.08;
+/** A kept label's drawn box keeps at least this much room to its neighbour. */
+const LABEL_GAP_PX = 4;
 
 const MAX_INTERIOR_LABELS = 4;
 
 export interface TimeLabel {
   time: number;
   fraction: number;
+  /** Left edge of the drawn box, in px from the ruler's left edge. */
+  left: number;
+  /** Width of the drawn box in px. */
+  width: number;
+}
+
+/**
+ * A conservative width for a label at 11px with tabular digits: 7px per
+ * character is wider than the drawn span, so the collision check never keeps
+ * a label that touches its neighbour.
+ */
+export function estimateLabelWidth(text: string): number {
+  return text.length * 7;
 }
 
 /**
@@ -71,20 +85,44 @@ export function windowStartFor(index: number, count: number): number {
 }
 
 /**
- * Left-edge positions for the ruler's interior labels: 0:00 and the length
- * are drawn separately at the ends.
+ * The ruler's interior labels, with the drawn box each one gets: 0:00 and the
+ * length are drawn separately at the ends.
  */
-export function timeLabels(length: number): TimeLabel[] {
-  if (!(length > 0)) return [];
+export function timeLabels(
+  length: number,
+  rulerWidth: number,
+  labelWidth: (text: string) => number,
+): TimeLabel[] {
+  if (!(length > 0) || !(rulerWidth > 0)) return [];
+  const times = interiorLabelTimes(length);
+  const endLeft = rulerWidth - labelWidth(formatDuration(length));
+  let previousRight = labelWidth(formatDuration(0));
+  const kept: TimeLabel[] = [];
+  for (const time of times) {
+    const fraction = time / length;
+    const width = labelWidth(formatDuration(time));
+    const left = fraction * rulerWidth - width / 2;
+    const right = left + width;
+    if (left - previousRight < LABEL_GAP_PX) continue;
+    if (endLeft - right < LABEL_GAP_PX) continue;
+    kept.push({ time, fraction, left, width });
+    previousRight = right;
+  }
+  return kept;
+}
+
+/**
+ * The step is the first one that yields at most four labels, before the boxes
+ * are known. It is deliberately independent of the width so the labels keep
+ * their times when the section is drawn at another size.
+ */
+function interiorLabelTimes(length: number): number[] {
   for (const step of LABEL_STEPS_SECONDS) {
-    const labels: TimeLabel[] = [];
+    const times: number[] = [];
     for (let time = step; time < length; time += step) {
-      const fraction = time / length;
-      if (fraction < LABEL_EDGE_FRACTION) continue;
-      if (fraction > 1 - LABEL_EDGE_FRACTION) continue;
-      labels.push({ time, fraction });
+      times.push(time);
     }
-    if (labels.length <= MAX_INTERIOR_LABELS) return labels;
+    if (times.length <= MAX_INTERIOR_LABELS) return times;
   }
   return [];
 }

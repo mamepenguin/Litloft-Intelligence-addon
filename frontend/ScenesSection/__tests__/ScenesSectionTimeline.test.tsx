@@ -4,6 +4,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 
 import type { MediaController } from "@/lib/mediaController";
 import { formatDuration } from "@/lib/format";
+import { estimateLabelWidth, timeLabels } from "../scenesModel";
 
 vi.mock("@/addons/intelligence/api", () => ({
   getClipTimestamps: vi.fn(),
@@ -173,6 +174,63 @@ describe("SPEC-ADDON-089 I1 — the nine-frame window", () => {
     expect(ruler().querySelectorAll("canvas").length).toBeLessThanOrEqual(1);
     expect(ruler()).toHaveAttribute("aria-valuemax", "70");
     expect(tileLabels()).toHaveLength(9);
+  });
+});
+
+describe("I11 — time labels leave at least 4 px between drawn boxes", () => {
+  it.each([
+    {
+      name: "a 9:46:37 player duration at 351 px",
+      duration: 35197,
+      width: 351,
+      interior: ["2:00:00", "4:00:00", "6:00:00"],
+    },
+    {
+      name: "a 9:46:37 player duration at 384 px",
+      duration: 35197,
+      width: 384,
+      interior: ["2:00:00", "4:00:00", "6:00:00"],
+    },
+    {
+      name: "an 18:44 file at 351 px",
+      duration: 1124,
+      width: 351,
+      interior: ["5:00", "10:00", "15:00"],
+    },
+    {
+      name: "the long board's 4:09:30 file at 351 px",
+      duration: 14970,
+      width: 351,
+      interior: ["1:00:00", "2:00:00", "3:00:00"],
+    },
+    {
+      name: "a 4:09:59 player duration at 351 px",
+      duration: 14999,
+      width: 351,
+      interior: ["1:00:00", "2:00:00", "3:00:00"],
+    },
+  ])("I11 — $name", ({ duration, width, interior }) => {
+    const labels = timeLabels(duration, width, estimateLabelWidth);
+    expect(labels.map((label) => formatDuration(label.time))).toEqual(interior);
+
+    const boxes = [
+      { left: 0, right: estimateLabelWidth("0:00") },
+      ...labels.map((label) => ({
+        left: label.left,
+        right: label.left + label.width,
+      })),
+      {
+        left: width - estimateLabelWidth(formatDuration(duration)),
+        right: width,
+      },
+    ];
+    for (let i = 1; i < boxes.length; i += 1) {
+      expect(boxes[i].left - boxes[i - 1].right).toBeGreaterThanOrEqual(4);
+    }
+    for (const box of boxes) {
+      expect(box.left).toBeGreaterThanOrEqual(0);
+      expect(box.right).toBeLessThanOrEqual(width);
+    }
   });
 });
 

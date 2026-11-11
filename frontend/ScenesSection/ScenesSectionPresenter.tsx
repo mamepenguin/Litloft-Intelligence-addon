@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
   FocusEvent,
   MouseEvent,
@@ -12,6 +12,7 @@ import { useTranslations } from "next-intl";
 import { formatDuration } from "@/lib/format";
 import type { ClipTimestampItem, VideoVisualSceneItem } from "../api";
 import {
+  estimateLabelWidth,
   frameIndexAt,
   rulerFraction,
   timeLabels,
@@ -398,6 +399,7 @@ function Ruler({
 }: RulerProps) {
   const t = useTranslations("file");
   const sliderRef = useRef<HTMLDivElement>(null);
+  const [rulerWidth, setRulerWidth] = useState(0);
   const index = frameIndexAt(rows, point);
   const windowStart = windowStartFor(index, rows.length);
   const windowRows = rows.slice(windowStart, windowStart + 9);
@@ -411,6 +413,17 @@ function Ruler({
     .map((fraction) => `M${(fraction * 100).toFixed(3)} 16V36`)
     .join("");
   const showLabels = length > 0;
+
+  useLayoutEffect(() => {
+    const el = sliderRef.current;
+    if (!el) return;
+    const measure = () => setRulerWidth(el.getBoundingClientRect().width);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const el = sliderRef.current;
@@ -502,7 +515,7 @@ function Ruler({
       {showLabels && (
         <div className="relative h-3.5 text-[11px] tabular-nums text-text-muted">
           <span className="absolute left-0">0:00</span>
-          {timeLabels(length).map((label) => (
+          {timeLabels(length, rulerWidth, estimateLabelWidth).map((label) => (
             <span
               key={label.time}
               className="absolute -translate-x-1/2"
