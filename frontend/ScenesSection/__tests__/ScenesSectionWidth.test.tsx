@@ -199,6 +199,7 @@ describe("SPEC-ADDON-093 I1 — the column count comes from the measured width",
   ])(
     "SPEC-ADDON-093 I1 — $name draws three rows of $columns",
     async ({ width, columns }) => {
+      vi.mocked(getClipTimestamps).mockResolvedValue(timestamps(rows));
       const { controller } = makeController({ duration: 200 });
       const { container } = renderSection(
         { mediaController: controller },
@@ -357,7 +358,9 @@ describe("SPEC-ADDON-093 I6 — the loading skeleton draws 3c blocks in c column
     expect(grid).not.toBeNull();
     expect(grid!.children).toHaveLength(15);
     expect(declaredColumns(grid)).toBe("repeat(5, minmax(0, 1fr))");
-    expect(tileLabels()).toEqual([]);
+    expect(
+      screen.queryAllByRole("button", { name: /^Play from / }),
+    ).toHaveLength(0);
 
     resolve(timestamps(makeRows(40)));
     await flush();
