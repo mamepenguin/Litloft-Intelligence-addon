@@ -29,6 +29,7 @@ import {
 import { usePolicy } from "@/hooks/usePolicy";
 import {
   advance,
+  allTiles,
   firePointer,
   flush,
   header,
@@ -482,4 +483,220 @@ describe("SPEC-ADDON-089 I3 — a clock jump clears the browse point", () => {
       );
     },
   );
+});
+
+type BrowseSource = "mouse" | "touch" | "keyboard";
+
+type ClearEvent =
+  | "pointerleave"
+  | "focusleave"
+  | "jump"
+  | "seek"
+  | "collapse"
+  | "filechange";
+
+const PLAYBACK_SECONDS = 10;
+const JUMPED_SECONDS = 40;
+const MOUSE_AND_FINGER_POINT = 60;
+const KEYBOARD_POINT = 15;
+
+function setBrowse(el: HTMLElement, source: BrowseSource): number {
+  if (source === "mouse") {
+    firePointer(el, "pointerMove", {
+      pointerType: "mouse",
+      clientX: pointerX(MOUSE_AND_FINGER_POINT, 70),
+    });
+    fireEvent.pointerOut(el, {
+      pointerType: "mouse",
+      relatedTarget: allTiles()[0],
+    });
+    return MOUSE_AND_FINGER_POINT;
+  }
+  if (source === "touch") {
+    firePointer(el, "pointerDown", {
+      pointerType: "touch",
+      clientX: pointerX(MOUSE_AND_FINGER_POINT, 70),
+    });
+    firePointer(el, "pointerUp", {
+      pointerType: "touch",
+      clientX: pointerX(MOUSE_AND_FINGER_POINT, 70),
+    });
+    return MOUSE_AND_FINGER_POINT;
+  }
+  act(() => el.focus());
+  fireEvent.keyDown(el, { key: "ArrowRight" });
+  return KEYBOARD_POINT;
+}
+
+const LIFETIME: {
+  name: string;
+  source: BrowseSource;
+  event: ClearEvent;
+  kept: boolean;
+}[] = [
+  {
+    name: "a mouse browse point is cleared when the pointer leaves the section",
+    source: "mouse",
+    event: "pointerleave",
+    kept: false,
+  },
+  {
+    name: "a mouse browse point survives focus leaving the section",
+    source: "mouse",
+    event: "focusleave",
+    kept: true,
+  },
+  {
+    name: "a mouse browse point survives a playback jump while the pointer is inside the section",
+    source: "mouse",
+    event: "jump",
+    kept: true,
+  },
+  {
+    name: "a mouse browse point is cleared by a seek on the ruler",
+    source: "mouse",
+    event: "seek",
+    kept: false,
+  },
+  {
+    name: "a mouse browse point is cleared by a collapse",
+    source: "mouse",
+    event: "collapse",
+    kept: false,
+  },
+  {
+    name: "a mouse browse point is cleared by a file change",
+    source: "mouse",
+    event: "filechange",
+    kept: false,
+  },
+  {
+    name: "a touch browse point survives the pointer leaving the section",
+    source: "touch",
+    event: "pointerleave",
+    kept: true,
+  },
+  {
+    name: "a touch browse point survives focus leaving the section",
+    source: "touch",
+    event: "focusleave",
+    kept: true,
+  },
+  {
+    name: "a touch browse point is cleared by a playback jump",
+    source: "touch",
+    event: "jump",
+    kept: false,
+  },
+  {
+    name: "a touch browse point is cleared by a tap on a tile",
+    source: "touch",
+    event: "seek",
+    kept: false,
+  },
+  {
+    name: "a touch browse point is cleared by a collapse",
+    source: "touch",
+    event: "collapse",
+    kept: false,
+  },
+  {
+    name: "a touch browse point is cleared by a file change",
+    source: "touch",
+    event: "filechange",
+    kept: false,
+  },
+  {
+    name: "a keyboard browse point survives the pointer leaving the section",
+    source: "keyboard",
+    event: "pointerleave",
+    kept: true,
+  },
+  {
+    name: "a keyboard browse point is cleared when focus leaves the section",
+    source: "keyboard",
+    event: "focusleave",
+    kept: false,
+  },
+  {
+    name: "a keyboard browse point is cleared by a playback jump",
+    source: "keyboard",
+    event: "jump",
+    kept: false,
+  },
+  {
+    name: "a keyboard browse point is cleared by Enter on the ruler",
+    source: "keyboard",
+    event: "seek",
+    kept: false,
+  },
+  {
+    name: "a keyboard browse point is cleared by a collapse",
+    source: "keyboard",
+    event: "collapse",
+    kept: false,
+  },
+  {
+    name: "a keyboard browse point is cleared by a file change",
+    source: "keyboard",
+    event: "filechange",
+    kept: false,
+  },
+];
+
+describe("SPEC-ADDON-089 I2, I3 — what a browse point outlives, by the input that set it", () => {
+  it.each(LIFETIME)("SPEC-ADDON-089 I2, I3 — $name", async ({ source, event, kept }) => {
+    const jumping = event === "jump";
+    if (jumping) vi.useFakeTimers();
+    const { controller, state } = makeController({
+      duration: 70,
+      currentTime: PLAYBACK_SECONDS,
+      paused: !jumping,
+    });
+    const view = renderSection({ mediaController: controller });
+    await openNative();
+    const el = ruler();
+    stubRect(el);
+    const root = view.container.firstElementChild as HTMLElement;
+
+    const browse = setBrowse(el, source);
+    expect(ruler()).toHaveAttribute("aria-valuenow", String(browse));
+
+    switch (event) {
+      case "pointerleave":
+        firePointer(root, "pointerLeave", {
+          pointerType: source === "mouse" ? "mouse" : "touch",
+        });
+        break;
+      case "focusleave":
+        fireEvent.focusOut(el, { relatedTarget: document.body });
+        break;
+      case "jump":
+        await advance(250, () => {
+          state.currentTime = JUMPED_SECONDS;
+        });
+        break;
+      case "seek":
+        if (source === "mouse") fireEvent.click(el, { clientX: pointerX(browse, 70) });
+        else if (source === "touch") fireEvent.click(tile(browse));
+        else fireEvent.keyDown(el, { key: "Enter" });
+        break;
+      case "collapse":
+        fireEvent.click(header());
+        fireEvent.click(header());
+        await screen.findByRole("slider");
+        break;
+      case "filechange":
+        view.rerender(section({ fileId: "f2", mediaController: controller }));
+        fireEvent.click(header());
+        await screen.findByRole("slider");
+        break;
+    }
+
+    const cleared = jumping ? JUMPED_SECONDS : PLAYBACK_SECONDS;
+    expect(ruler()).toHaveAttribute(
+      "aria-valuenow",
+      String(kept ? browse : cleared),
+    );
+  });
 });

@@ -67,7 +67,7 @@ export interface ScenesSectionPresenterProps {
   onRulerPointerMove: (time: number, pointerType: string, clientX: number) => void;
   onRulerPointerUp: (time: number, pointerType: string, clientX: number) => void;
   onRulerPointerCancel: () => void;
-  onSectionPointerLeave: (pointerType: string) => void;
+  onSectionPointerLeave: () => void;
   onSectionBlur: (event: FocusEvent<HTMLDivElement>) => void;
   onSeek: (time: number) => void;
   onAction: (kind: ScenesActionKind) => void;
@@ -163,13 +163,13 @@ export default function ScenesSectionPresenter({
       className="flex w-full max-w-96 flex-col gap-3.5"
       onPointerLeave={(event) => {
         if (event.target === event.currentTarget) {
-          onSectionPointerLeave(event.pointerType);
+          onSectionPointerLeave();
         }
       }}
       onPointerOut={(event) => {
         const next = event.relatedTarget as Node | null;
         if (next && !event.currentTarget.contains(next)) {
-          onSectionPointerLeave(event.pointerType);
+          onSectionPointerLeave();
         }
       }}
       onBlur={onSectionBlur}

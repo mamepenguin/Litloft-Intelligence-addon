@@ -22,6 +22,11 @@ import {
   type VideoVisualSceneItem,
 } from "../api";
 import {
+  type BrowseClearEvent,
+  type BrowseSource,
+  browseClearedBy,
+} from "./browseLifetime";
+import {
   LOFT_MIME_TYPE,
   frameIndexAt,
   rulerLength,
@@ -59,8 +64,6 @@ interface ScenesSectionProps {
 type NativeState = "idle" | "loading" | "ready" | "hidden";
 
 type ActionError = "waiting" | "generic" | null;
-
-type BrowseSource = "mouse" | "touch" | "keyboard";
 
 export default function ScenesSectionContainer({
   fileId,
@@ -109,9 +112,17 @@ export default function ScenesSectionContainer({
     [],
   );
 
+  const clearBrowseOn = useCallback(
+    (event: BrowseClearEvent) => {
+      if (!browseClearedBy(browseSource.current, event)) return;
+      setBrowsePoint(null);
+    },
+    [setBrowsePoint],
+  );
+
   const handleJump = useCallback(() => {
-    if (browseRef.current !== null) setBrowsePoint(null);
-  }, [setBrowsePoint]);
+    clearBrowseOn("jump");
+  }, [clearBrowseOn]);
 
   const playback = usePlaybackClock(mediaController ?? null, handleJump);
 
@@ -128,14 +139,12 @@ export default function ScenesSectionContainer({
   // rows on mount instead of on expand.
   useEffect(() => {
     requestGeneration.current += 1;
-    browseRef.current = null;
-    browseSource.current = null;
     expandedRef.current = false;
     dragStart.current = null;
     setExpanded(false);
     setNativeState("idle");
     setRows(null);
-    setBrowse(null);
+    clearBrowseOn("filechange");
     setFailedTimes([]);
     setPictureRatio(null);
     resetVisual();
@@ -146,15 +155,12 @@ export default function ScenesSectionContainer({
       if (requestGeneration.current !== generation) return;
       setRows(result?.timestamps ?? []);
     });
-  }, [fileId, drive, isVideo, isLoft, resetVisual]);
+  }, [fileId, drive, isVideo, isLoft, clearBrowseOn, resetVisual]);
 
   const expand = useCallback(() => {
     const generation = (requestGeneration.current += 1);
-    browseRef.current = null;
-    browseSource.current = null;
     expandedRef.current = true;
     dragStart.current = null;
-    setBrowse(null);
     setExpanded(true);
     resetVisual();
     if (isLoft) return;
@@ -180,17 +186,15 @@ export default function ScenesSectionContainer({
 
   const collapse = useCallback(() => {
     requestGeneration.current += 1;
-    browseRef.current = null;
-    browseSource.current = null;
+    clearBrowseOn("collapse");
     expandedRef.current = false;
     dragStart.current = null;
     setExpanded(false);
-    setBrowse(null);
     resetVisual();
     if (isLoft) return;
     setNativeState("idle");
     setRows(null);
-  }, [isLoft, resetVisual]);
+  }, [isLoft, clearBrowseOn, resetVisual]);
 
   const toggle = useCallback(() => {
     if (expanded) collapse();
@@ -286,7 +290,7 @@ export default function ScenesSectionContainer({
 
   const activate = useCallback(
     (time: number) => {
-      setBrowsePoint(null);
+      clearBrowseOn("seek");
       if (mediaController) {
         mediaController.seek(time);
         mediaController.play();
@@ -300,7 +304,7 @@ export default function ScenesSectionContainer({
         void started.catch(() => {});
       }
     },
-    [mediaController, videoRef, setBrowsePoint],
+    [mediaController, videoRef, clearBrowseOn],
   );
 
   const handleRulerClick = useCallback(
@@ -398,23 +402,17 @@ export default function ScenesSectionContainer({
     dragStart.current = null;
   }, [setBrowsePoint]);
 
-  const handleSectionPointerLeave = useCallback(
-    (pointerType: string) => {
-      if (pointerType === "mouse" && browseSource.current === "mouse") {
-        setBrowsePoint(null);
-      }
-    },
-    [setBrowsePoint],
-  );
+  const handleSectionPointerLeave = useCallback(() => {
+    clearBrowseOn("pointerleave");
+  }, [clearBrowseOn]);
 
   const handleSectionBlur = useCallback(
     (event: FocusEvent<HTMLDivElement>) => {
-      if (browseSource.current !== "keyboard") return;
       const next = event.relatedTarget as Node | null;
       if (next && event.currentTarget.contains(next)) return;
-      setBrowsePoint(null);
+      clearBrowseOn("focusleave");
     },
-    [setBrowsePoint],
+    [clearBrowseOn],
   );
 
   const handlePictureLoad = useCallback((width: number, height: number) => {
