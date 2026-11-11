@@ -333,10 +333,10 @@ export default function ScenesSectionPresenter({
                     type="button"
                     onClick={() => onAction(action.kind)}
                     disabled={working}
-                    className={`cursor-pointer rounded-2xl px-4 py-2 text-xs transition-colors disabled:cursor-not-allowed disabled:bg-transparent disabled:text-warm-silver ${
+                    className={`cursor-pointer rounded-2xl transition-colors disabled:cursor-not-allowed disabled:bg-transparent disabled:text-warm-silver ${
                       action.filled
-                        ? "bg-bg-elevated text-text-primary enabled:hover:bg-sand"
-                        : "text-text-muted enabled:hover:bg-(--bg-elevated) enabled:hover:text-text-primary"
+                        ? "bg-bg-elevated px-3.5 py-2 text-[13px] text-text-primary enabled:hover:bg-sand"
+                        : "px-2.5 py-1.5 text-xs text-text-muted enabled:hover:bg-(--bg-elevated) enabled:hover:text-text-primary"
                     }`}
                   >
                     {action.label}
@@ -442,14 +442,16 @@ function Ruler({
         onClick={disabled ? undefined : onClick}
         className="relative h-11 w-full cursor-pointer touch-pan-y overflow-hidden rounded-lg bg-bg-elevated"
       >
-        <div
-          aria-hidden="true"
-          className="absolute inset-y-0 bg-text-primary/10"
-          style={{
-            left: percent(windowLeft),
-            width: percent(Math.max(0, windowRight - windowLeft)),
-          }}
-        />
+        {!disabled && (
+          <div
+            aria-hidden="true"
+            className="absolute inset-y-0 bg-text-primary/10"
+            style={{
+              left: percent(windowLeft),
+              width: percent(Math.max(0, windowRight - windowLeft)),
+            }}
+          />
+        )}
         <svg
           aria-hidden="true"
           className="pointer-events-none absolute inset-0 h-full w-full text-text-muted/45"
@@ -488,7 +490,7 @@ function Ruler({
             style={{ left: percent(rulerFraction(browse, length)) }}
           />
         )}
-        {hasPlayback && (
+        {hasPlayback && !disabled && (
           <span
             aria-hidden="true"
             className="absolute inset-y-0 -ml-px w-0.5 bg-accent"
