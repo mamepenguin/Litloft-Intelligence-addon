@@ -2268,6 +2268,37 @@ export async function fetchPickup(
   }
 }
 
+/**
+ * Read a page of the Pickup feed, rejecting on any failure.
+ *
+ * `fetchPickup` swallows a failed or malformed read into an empty page,
+ * which is right for the home widget and the list provider but would
+ * make the Recommended page show an empty feed instead of Retry. A body
+ * without a `file_ids` array and a numeric `total` counts as a failure
+ * for the same reason.
+ */
+export async function readPickupPage(
+  drive: string,
+  options: { limit?: number; offset?: number } = {},
+): Promise<PickupPage> {
+  const params = new URLSearchParams();
+  if (options.limit !== undefined) params.set("limit", String(options.limit));
+  if (options.offset !== undefined) params.set("offset", String(options.offset));
+
+  const res = await fetch(
+    `/api/addons/intelligence/pickup?${params.toString()}`,
+    { credentials: "include", headers: driveHeaders(drive) },
+  );
+  if (!res.ok) {
+    throw new Error(`Pickup read failed: ${res.status} ${res.statusText}`);
+  }
+  const data = (await res.json()) as { file_ids?: unknown; total?: unknown };
+  if (!Array.isArray(data.file_ids) || typeof data.total !== "number") {
+    throw new Error("Pickup read returned a malformed body");
+  }
+  return { file_ids: data.file_ids as string[], total: data.total };
+}
+
 /** The viewer's local date as `YYYY-MM-DD`. */
 export function localDateStamp(now: Date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, "0");
