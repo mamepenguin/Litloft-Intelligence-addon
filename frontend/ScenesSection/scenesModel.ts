@@ -78,10 +78,48 @@ export function frameIndexAt(
   return index;
 }
 
-/** First frame of the 3×3 grid for a frame index. */
-export function windowStartFor(index: number, count: number): number {
-  const maxStart = Math.max(0, count - 9);
-  return Math.max(0, Math.min(3 * Math.floor(index / 3) - 3, maxStart));
+const DEFAULT_ROOT_FONT_SIZE_PX = 16;
+
+/** The narrowest tile, its width at three columns in the 384px inspector. */
+const MIN_TILE_REM = 7;
+
+/** The gap between columns. */
+const COLUMN_GAP_REM = 0.5;
+
+const MIN_COLUMNS = 3;
+
+/**
+ * Columns the section draws at a measured width. The root font size is read
+ * here rather than assumed to be 16px so scaled text keeps the same layout.
+ */
+export function sceneColumns(width: number): number {
+  const rem = rootFontSizePx();
+  const fits = Math.floor(
+    (width + COLUMN_GAP_REM * rem) /
+      ((MIN_TILE_REM + COLUMN_GAP_REM) * rem),
+  );
+  return Math.max(MIN_COLUMNS, fits);
+}
+
+function rootFontSizePx(): number {
+  if (typeof document === "undefined") return DEFAULT_ROOT_FONT_SIZE_PX;
+  const size = Number.parseFloat(
+    getComputedStyle(document.documentElement).fontSize,
+  );
+  return Number.isFinite(size) && size > 0 ? size : DEFAULT_ROOT_FONT_SIZE_PX;
+}
+
+/** First frame of the three-row window, which holds `columns` frames a row. */
+export function windowStartFor(
+  index: number,
+  count: number,
+  columns: number,
+): number {
+  const maxStart = Math.max(0, count - 3 * columns);
+  return Math.max(
+    0,
+    Math.min(columns * Math.floor(index / columns) - columns, maxStart),
+  );
 }
 
 /**

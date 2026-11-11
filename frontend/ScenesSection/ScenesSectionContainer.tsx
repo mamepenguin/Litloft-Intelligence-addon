@@ -30,6 +30,7 @@ import {
   LOFT_MIME_TYPE,
   frameIndexAt,
   rulerLength,
+  sceneColumns,
   windowStartFor,
 } from "./scenesModel";
 import { usePlaybackClock } from "./hooks/usePlaybackClock";
@@ -430,21 +431,32 @@ export default function ScenesSectionContainer({
   const list = rows ?? [];
   const length = rulerLength(list, playback.duration);
 
-  const windowTimes = useMemo(() => {
-    if (list.length === 0) return NO_TIMES;
-    const start = windowStartFor(frameIndexAt(list, point), list.length);
-    return list.slice(start, start + 9).map((row) => row.start);
-  }, [list, point]);
-
   const view: ScenesView = !expanded
     ? "collapsed"
     : isLoft || nativeState === "ready"
       ? "expanded"
       : "loading";
 
+  const rulerWidth = useRulerWidth(rulerRef, view !== "collapsed");
+  const columns = useMemo(() => sceneColumns(rulerWidth), [rulerWidth]);
+
+  // The one window of this render: the pictures requested, the drawn grid and
+  // the ruler's band all read it, so they cannot disagree about which frames
+  // are on screen.
+  const windowStart = useMemo(
+    () => windowStartFor(frameIndexAt(list, point), list.length, columns),
+    [list, point, columns],
+  );
+
+  const windowTimes = useMemo(() => {
+    if (list.length === 0) return NO_TIMES;
+    return list
+      .slice(windowStart, windowStart + 3 * columns)
+      .map((row) => row.start);
+  }, [list, windowStart, columns]);
+
   const requestedTimes = useWindowPictures(windowTimes, view === "expanded");
 
-  const rulerWidth = useRulerWidth(rulerRef, view !== "collapsed");
   useRulerKeys(rulerRef, handleRulerKeyDown, view === "expanded");
 
   const visualView = buildVisualView(
@@ -485,6 +497,8 @@ export default function ScenesSectionContainer({
       hasPlayback={mediaController != null}
       browse={browse}
       requestedTimes={requestedTimes}
+      columns={columns}
+      windowStart={windowStart}
       failedTimes={new Set(failedTimes)}
       pictureRatio={pictureRatio}
       isLoft={isLoft}
