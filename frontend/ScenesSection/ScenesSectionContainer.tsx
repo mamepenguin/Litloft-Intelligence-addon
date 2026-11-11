@@ -283,6 +283,14 @@ export default function ScenesSectionContainer({
     [mediaController, videoRef, setBrowsePoint],
   );
 
+  const handleRulerClick = useCallback(
+    (time: number, pointerType: string | null) => {
+      if ((pointerType ?? lastPointerType.current) !== "mouse") return;
+      activate(time);
+    },
+    [activate],
+  );
+
   const handleRulerKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
       const list = rows ?? [];
@@ -349,7 +357,6 @@ export default function ScenesSectionContainer({
 
   const handlePointerUp = useCallback(
     (time: number, pointerType: string) => {
-      lastPointerType.current = pointerType;
       if (pointerType === "mouse") return;
       if (dragStart.current) setBrowsePoint(time);
       dragStart.current = null;
@@ -454,7 +461,7 @@ export default function ScenesSectionContainer({
       working={working !== null}
       pictureUrl={pictureUrl}
       onToggle={toggle}
-      onRulerClick={activate}
+      onRulerClick={handleRulerClick}
       onRulerKeyDown={handleRulerKeyDown}
       onRulerPointerDown={handlePointerDown}
       onRulerPointerMove={handlePointerMove}

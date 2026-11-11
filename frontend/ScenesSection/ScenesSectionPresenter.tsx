@@ -59,7 +59,7 @@ export interface ScenesSectionPresenterProps {
   working: boolean;
   pictureUrl: (time: number) => string;
   onToggle: () => void;
-  onRulerClick: (time: number) => void;
+  onRulerClick: (time: number, pointerType: string | null) => void;
   onRulerKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
   onRulerPointerDown: (time: number, pointerType: string, clientX: number) => void;
   onRulerPointerMove: (time: number, pointerType: string, clientX: number) => void;
@@ -148,7 +148,10 @@ export default function ScenesSectionPresenter({
   };
 
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
-    onRulerClick(timeAt(event.clientX, event.currentTarget));
+    onRulerClick(
+      timeAt(event.clientX, event.currentTarget),
+      (event.nativeEvent as PointerEvent).pointerType || null,
+    );
   };
 
   return (

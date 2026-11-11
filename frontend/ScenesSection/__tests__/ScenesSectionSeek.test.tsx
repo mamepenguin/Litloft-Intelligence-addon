@@ -159,6 +159,15 @@ describe("SPEC-ADDON-089 I3 — touch and pen browsing", () => {
       gesture: (el: Element) => {
         firePointer(el, "pointerDown", { pointerType: "touch", clientX: pointerX(60, 70) });
         firePointer(el, "pointerUp", { pointerType: "touch", clientX: pointerX(60, 70) });
+        fireEvent.click(el, { clientX: pointerX(60, 70) });
+      },
+    },
+    {
+      name: "a pen tap",
+      gesture: (el: Element) => {
+        firePointer(el, "pointerDown", { pointerType: "pen", clientX: pointerX(60, 70) });
+        firePointer(el, "pointerUp", { pointerType: "pen", clientX: pointerX(60, 70) });
+        fireEvent.click(el, { clientX: pointerX(60, 70) });
       },
     },
     {
@@ -191,9 +200,9 @@ describe("SPEC-ADDON-089 I3 — touch and pen browsing", () => {
 
       gesture(el);
 
-      expect(ruler()).toHaveAttribute("aria-valuenow", "60");
       expect(seek).not.toHaveBeenCalled();
       expect(play).not.toHaveBeenCalled();
+      expect(ruler()).toHaveAttribute("aria-valuenow", "60");
     },
   );
 
