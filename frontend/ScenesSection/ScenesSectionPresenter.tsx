@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
   FocusEvent,
   MouseEvent,
   PointerEvent as ReactPointerEvent,
+  RefObject,
 } from "react";
 import { ChevronDown, ChevronUp, Film, Loader2 } from "lucide-react";
 import { useTranslations } from "next-intl";
@@ -59,9 +59,10 @@ export interface ScenesSectionPresenterProps {
   error: string | null;
   working: boolean;
   pictureUrl: (time: number) => string;
+  rulerRef: RefObject<HTMLDivElement | null>;
+  rulerWidth: number;
   onToggle: () => void;
   onRulerClick: (time: number, pointerType: string | null) => void;
-  onRulerKeyDown: (event: KeyboardEvent) => void;
   onRulerPointerDown: (time: number, pointerType: string, clientX: number) => void;
   onRulerPointerMove: (time: number, pointerType: string, clientX: number) => void;
   onRulerPointerUp: (time: number, pointerType: string, clientX: number) => void;
@@ -96,9 +97,10 @@ export default function ScenesSectionPresenter({
   error,
   working,
   pictureUrl,
+  rulerRef,
+  rulerWidth,
   onToggle,
   onRulerClick,
-  onRulerKeyDown,
   onRulerPointerDown,
   onRulerPointerMove,
   onRulerPointerUp,
@@ -231,9 +233,10 @@ export default function ScenesSectionPresenter({
             browse={browse}
             marks={view === "expanded" ? visual?.marks : undefined}
             disabled={view === "loading"}
+            rulerRef={rulerRef}
+            rulerWidth={rulerWidth}
             onPointer={handlePointer}
             onClick={handleClick}
-            onKeyDown={onRulerKeyDown}
           />
 
           {view === "loading" ? (
@@ -379,9 +382,10 @@ interface RulerProps {
   browse: number | null;
   marks: VideoVisualSceneItem[] | undefined;
   disabled: boolean;
+  rulerRef: RefObject<HTMLDivElement | null>;
+  rulerWidth: number;
   onPointer: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onClick: (event: MouseEvent<HTMLDivElement>) => void;
-  onKeyDown: (event: KeyboardEvent) => void;
 }
 
 function Ruler({
@@ -393,13 +397,12 @@ function Ruler({
   browse,
   marks,
   disabled,
+  rulerRef,
+  rulerWidth,
   onPointer,
   onClick,
-  onKeyDown,
 }: RulerProps) {
   const t = useTranslations("file");
-  const sliderRef = useRef<HTMLDivElement>(null);
-  const [rulerWidth, setRulerWidth] = useState(0);
   const index = frameIndexAt(rows, point);
   const windowStart = windowStartFor(index, rows.length);
   const windowRows = rows.slice(windowStart, windowStart + 9);
@@ -414,32 +417,10 @@ function Ruler({
     .join("");
   const showLabels = length > 0;
 
-  useLayoutEffect(() => {
-    const el = sliderRef.current;
-    if (!el) return;
-    const measure = () => setRulerWidth(el.getBoundingClientRect().width);
-    measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    const el = sliderRef.current;
-    if (!el || disabled) return;
-    // A React handler runs in the root container under the App Router, where
-    // stopping propagation cannot keep the key from the document listener
-    // ShortcutsProvider adds for the same event.
-    const listener = (event: KeyboardEvent) => onKeyDown(event);
-    el.addEventListener("keydown", listener);
-    return () => el.removeEventListener("keydown", listener);
-  }, [disabled, onKeyDown]);
-
   return (
     <div className="flex flex-col gap-1.5">
       <div
-        ref={sliderRef}
+        ref={rulerRef}
         role="slider"
         aria-label={t("scenesRuler")}
         aria-valuemin={0}

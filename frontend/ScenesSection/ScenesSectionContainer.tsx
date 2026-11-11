@@ -28,6 +28,8 @@ import {
   windowStartFor,
 } from "./scenesModel";
 import { usePlaybackClock } from "./hooks/usePlaybackClock";
+import { useRulerKeys } from "./hooks/useRulerKeys";
+import { useRulerWidth } from "./hooks/useRulerWidth";
 import { useWindowPictures } from "./hooks/useWindowPictures";
 import ScenesSectionPresenter, {
   type ScenesAction,
@@ -89,6 +91,7 @@ export default function ScenesSectionContainer({
   const expandedRef = useRef(false);
   const lastPointerType = useRef("mouse");
   const dragStart = useRef<{ x: number; previous: number | null } | null>(null);
+  const rulerRef = useRef<HTMLDivElement>(null);
 
   const setBrowsePoint = useCallback((value: number | null) => {
     browseRef.current = value;
@@ -414,6 +417,9 @@ export default function ScenesSectionContainer({
 
   const requestedTimes = useWindowPictures(windowTimes, view === "expanded");
 
+  const rulerWidth = useRulerWidth(rulerRef, view !== "collapsed");
+  useRulerKeys(rulerRef, handleRulerKeyDown, view === "expanded");
+
   const visualView = buildVisualView(
     visual,
     visualLoaded,
@@ -460,9 +466,10 @@ export default function ScenesSectionContainer({
       error={errorMessage}
       working={working !== null}
       pictureUrl={pictureUrl}
+      rulerRef={rulerRef}
+      rulerWidth={rulerWidth}
       onToggle={toggle}
       onRulerClick={handleRulerClick}
-      onRulerKeyDown={handleRulerKeyDown}
       onRulerPointerDown={handlePointerDown}
       onRulerPointerMove={handlePointerMove}
       onRulerPointerUp={handlePointerUp}
