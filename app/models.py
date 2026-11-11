@@ -546,6 +546,29 @@ class PickupItem(Base):
     )
 
 
+class PickupFeedLog(Base):
+    """The top of each Pickup feed as it was stored, for measurement.
+
+    One row per committed feed, appended by the worker, so accuracy can
+    be scored afterwards against what a viewer was actually shown. Kept
+    for 180 days; nothing serves it over an endpoint.
+    """
+
+    __tablename__ = "pickup_feed_log"
+
+    drive_id: Mapped[str] = mapped_column(String, primary_key=True)
+    viewer_id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    computed_at: Mapped[datetime] = mapped_column(DateTime, primary_key=True)
+
+    profile_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: JSON array of the feed's first 40 file ids, in stored rank order.
+    file_ids: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        Index("idx_pickup_feed_log_computed_at", "computed_at"),
+    )
+
+
 class PdfMarkdown(Base):
     """Markdown rendering of a PDF file produced by PyMuPDF4LLM.
 

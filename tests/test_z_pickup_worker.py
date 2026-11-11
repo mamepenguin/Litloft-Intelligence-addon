@@ -88,6 +88,8 @@ def rig(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(worker_mod.profile_mod, "profile_history",
                         lambda drive, v: list(state["history"].get(v, ())))
+    monkeypatch.setattr(worker_mod.profile_mod, "live_video_ids",
+                        lambda drive: {"c1", "c2", "c3"})
     monkeypatch.setattr(worker_mod.profile_mod, "build_lanes",
                         lambda history, key: list(state["lanes"]))
     monkeypatch.setattr(worker_mod.profile_mod, "CHANNELS",

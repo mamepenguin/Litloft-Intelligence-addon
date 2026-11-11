@@ -33,7 +33,7 @@
     },
     "pickup": {
       "heading": "Pickup",
-      "description": "Files you have not opened yet, drawn from what you have been watching.",
+      "description": "Videos you have not opened yet, drawn from what you have been watching.",
       "empty": "Nothing to suggest yet.",
       "loading": "Loading…",
       "retry": "Try again"
