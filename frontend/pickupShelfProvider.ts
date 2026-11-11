@@ -1,10 +1,28 @@
-import { fetchPickup, localDateStamp } from "./api";
+import { fetchPickup, localDateStamp, readPickupPage } from "./api";
 
 export type ShelfProvider = (args: {
   drive: string;
   limit: number;
   restrict: (ids: string[]) => Promise<string[]>;
 }) => Promise<string[]>;
+
+export type ShelfPageItem = {
+  id: string;
+  byline?: string;
+};
+
+export type ShelfPageAnswer = {
+  items: ShelfPageItem[];
+  cursor: string | null;
+};
+
+export type ShelfPageProvider = (args: {
+  drive: string;
+  locale: string;
+  limit: number;
+  cursor: string | null;
+  restrict: (ids: string[]) => Promise<string[]>;
+}) => Promise<ShelfPageAnswer>;
 
 const PAGE_SIZE = 60;
 const POOL_SIZE = 40;
@@ -40,6 +58,17 @@ function seededShuffle<T>(items: T[], seed: string): T[] {
   return out;
 }
 
+// The home carousel samples twelve from the top forty; the shelf and the
+// page keep that window, applied after the target filter rather than
+// before it.
+function sampleTopForty(accepted: string[], drive: string): string[] {
+  return seededShuffle(accepted.slice(0, POOL_SIZE), `${drive}:${localDateStamp()}`);
+}
+
+function dedupe(ids: string[]): string[] {
+  return [...new Set(ids)];
+}
+
 export async function pickupShelfProvider({
   drive,
   limit,
@@ -58,9 +87,33 @@ export async function pickupShelfProvider({
     if (file_ids.length < PAGE_SIZE || offset >= total) break;
   }
 
-  // The home carousel samples twelve from the top forty; the shelf keeps
-  // that window, applied after the target filter rather than before it.
-  const pool = matched.slice(0, POOL_SIZE);
-  const seed = `${drive}:${localDateStamp()}`;
-  return seededShuffle(pool, seed).slice(0, limit);
+  return sampleTopForty(matched, drive).slice(0, limit);
+}
+
+export async function pickupPageProvider({
+  drive,
+  cursor,
+  restrict,
+}: Parameters<ShelfPageProvider>[0]): Promise<ShelfPageAnswer> {
+  if (cursor !== null) return { items: [], cursor: null };
+
+  const read: string[] = [];
+  let offset = 0;
+
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const { file_ids, total } = await readPickupPage(drive, {
+      limit: PAGE_SIZE,
+      offset,
+    });
+    read.push(...file_ids);
+    offset += file_ids.length;
+    if (file_ids.length < PAGE_SIZE || offset >= total) break;
+  }
+
+  const accepted = await restrict(read);
+  const ordered = dedupe([
+    ...sampleTopForty(accepted, drive),
+    ...accepted.slice(POOL_SIZE),
+  ]);
+  return { items: ordered.map((id) => ({ id })), cursor: null };
 }

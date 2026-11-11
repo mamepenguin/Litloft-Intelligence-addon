@@ -1,6 +1,11 @@
 import { lazy } from "react";
 
-import { pickupShelfProvider, type ShelfProvider } from "./pickupShelfProvider";
+import {
+  pickupPageProvider,
+  pickupShelfProvider,
+  type ShelfPageProvider,
+  type ShelfProvider,
+} from "./pickupShelfProvider";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const slotComponents: Record<string, React.LazyExoticComponent<React.ComponentType<any>>> = {
@@ -38,4 +43,8 @@ export const slotComponents: Record<string, React.LazyExoticComponent<React.Comp
 
 export const slotProviders: Record<string, ShelfProvider> = {
   pickup: pickupShelfProvider,
+};
+
+export const slotPageProviders: Record<string, ShelfPageProvider> = {
+  pickup: pickupPageProvider,
 };
