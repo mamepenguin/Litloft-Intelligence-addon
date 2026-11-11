@@ -1,6 +1,6 @@
 "use client";
 
-import type { FocusEvent, KeyboardEvent } from "react";
+import type { FocusEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { useTranslations } from "next-intl";
@@ -292,9 +292,9 @@ export default function ScenesSectionContainer({
   );
 
   const handleRulerKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
+    (event: KeyboardEvent) => {
       const list = rows ?? [];
-      const key = normalizeKey(event.nativeEvent);
+      const key = normalizeKey(event);
       if (
         key !== "arrowleft" &&
         key !== "arrowright" &&

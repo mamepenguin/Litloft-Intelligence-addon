@@ -147,6 +147,32 @@ describe("SPEC-ADDON-089 I4 — the ruler as a slider", () => {
     },
   );
 
+  it("keeps the five keys off the React root and the document", async () => {
+    const pageShortcut = vi.fn();
+    const { controller } = makeController({ duration: 70, currentTime: 10 });
+    const { container } = renderKeyboard(pageShortcut, {
+      mediaController: controller,
+    });
+    await flush();
+    const el = await openWithFocus();
+
+    const onRoot = vi.fn();
+    const onDocument = vi.fn();
+    container.addEventListener("keydown", onRoot);
+    document.addEventListener("keydown", onDocument);
+    try {
+      for (const key of ["ArrowLeft", "ArrowRight", "Home", "End", "Enter"]) {
+        fireEvent.keyDown(el, { key });
+      }
+    } finally {
+      container.removeEventListener("keydown", onRoot);
+      document.removeEventListener("keydown", onDocument);
+    }
+
+    expect(onRoot).not.toHaveBeenCalled();
+    expect(onDocument).not.toHaveBeenCalled();
+  });
+
   it("moves by one frame from the playing frame", async () => {
     const pageShortcut = vi.fn();
     const { controller } = makeController({ duration: 70, currentTime: 10 });
