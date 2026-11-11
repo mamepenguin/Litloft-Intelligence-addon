@@ -41,6 +41,7 @@ import {
   SceneSectionProps,
   tileLabels,
   timestamps,
+  waitForVisualIndex,
 } from "./helpers";
 
 /**
@@ -207,6 +208,7 @@ describe("SPEC-ADDON-093 I1 — the column count comes from the measured width",
         width,
       );
       await openNative();
+      await waitForVisualIndex();
 
       expect(tileLabels()).toEqual(labelsFor(rows, 0, 3 * columns));
       expect(declaredColumns(container.querySelector(".grid"))).toBe(
@@ -223,6 +225,7 @@ describe("SPEC-ADDON-093 I1 — the column count comes from the measured width",
       688,
     );
     await openNative();
+    await waitForVisualIndex();
 
     expect(tileLabels()).toEqual(labelsFor(rows, 0, 12));
     expect(declaredColumns(container.querySelector(".grid"))).toBe(
@@ -240,6 +243,7 @@ describe("SPEC-ADDON-093 I1 — the column count comes from the measured width",
         688,
       );
       await openNative();
+      await waitForVisualIndex();
 
       expect(tileLabels()).toEqual(labelsFor(rows, 0, 15));
       expect(declaredColumns(container.querySelector(".grid"))).toBe(
@@ -264,6 +268,7 @@ describe("SPEC-ADDON-089 I1 — the window starts from the column count", () => 
       const { controller } = makeController({ currentTime: time, duration: 200 });
       renderSection({ mediaController: controller }, "16px", 688);
       await openNative();
+      await waitForVisualIndex();
 
       expect(tileLabels()).toEqual(labelsFor(rows, start, count));
       if (n >= 15) expect(tileLabels()).toHaveLength(15);
@@ -312,6 +317,7 @@ describe("SPEC-ADDON-093 I4 — the ruler's window band spans the drawn frames",
       const { controller } = makeController({ currentTime: time, duration: 200 });
       renderSection({ mediaController: controller }, "16px", 688);
       await openNative();
+      await waitForVisualIndex();
 
       const band = windowBand();
       expect(percentOf(band.style.left)).toBeCloseTo(left, 3);
@@ -331,6 +337,7 @@ describe("SPEC-ADDON-093 I5 — a width change redraws around the same point", (
     });
     renderSection({ mediaController: controller }, "16px", 352);
     await openNative();
+    await waitForVisualIndex();
 
     expect(tileLabels()).toEqual(labelsFor(rows, 6, 9));
 

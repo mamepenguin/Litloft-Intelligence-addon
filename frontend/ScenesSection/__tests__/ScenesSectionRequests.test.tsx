@@ -65,6 +65,7 @@ import {
   tile,
   tileLabels,
   timestamps,
+  waitForVisualIndex,
 } from "./helpers";
 
 function section(props: Partial<SceneSectionProps> = {}) {
@@ -129,11 +130,14 @@ describe("SPEC-ADDON-089 I6 — native request timing", () => {
     renderSection();
 
     await openNative();
+
+    await waitForVisualIndex();
     expect(getClipTimestamps).toHaveBeenCalledTimes(1);
     expect(getVideoVisualIndex).toHaveBeenCalledTimes(1);
 
     fireEvent.click(header());
     await openNative();
+    await waitForVisualIndex();
 
     expect(getClipTimestamps).toHaveBeenCalledTimes(2);
     expect(getVideoVisualIndex).toHaveBeenCalledTimes(2);
@@ -153,6 +157,7 @@ describe("SPEC-ADDON-089 I6 — native request timing", () => {
     const view = renderSection();
 
     await openNative();
+
     expect(getClipTimestamps).toHaveBeenCalledTimes(1);
     expect(getVideoVisualIndex).not.toHaveBeenCalled();
 
@@ -205,7 +210,7 @@ describe("SPEC-ADDON-089 I6 — native request timing", () => {
       await flush();
 
       expect(header()).toHaveTextContent("15");
-      expect(nameVisible(shown)).toBe(true);
+      await waitFor(() => expect(nameVisible(shown)).toBe(true));
     },
   );
 
@@ -218,6 +223,7 @@ describe("SPEC-ADDON-089 I6 — native request timing", () => {
 
     const view = renderSection();
     await openNative();
+    await waitForVisualIndex();
 
     view.rerender(section({ fileId: "f2" }));
     expect(header()).toHaveAttribute("aria-expanded", "false");
@@ -320,6 +326,7 @@ describe("SPEC-ADDON-089 I6 — native request timing", () => {
   it("SPEC-ADDON-089 I6 — a WS event left over from file A does not request visual-index for file B before B expands", async () => {
     const view = renderSection();
     await openNative();
+    await waitForVisualIndex();
     expect(getVideoVisualIndex).toHaveBeenCalledTimes(1);
 
     wsEvent.value = {
@@ -360,6 +367,7 @@ describe("SPEC-ADDON-089 I6 — native request timing", () => {
       const { controller } = makeController({ duration: 70 });
       const view = renderSection({ mediaController: controller });
       await openNative();
+      await waitForVisualIndex();
       expect(getVideoVisualIndex).toHaveBeenCalledTimes(1);
 
       wsEvent.value = { event: eventName, data: { file_id: "other" } };
