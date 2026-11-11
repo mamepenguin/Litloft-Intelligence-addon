@@ -222,7 +222,8 @@ export default function ScenesSectionContainer({
   const failedEvent = useWebSocket(EVENT_FAILED);
 
   useEffect(() => {
-    if (!isVideo || isLoft || !expanded) return;
+    if (!isVideo || isLoft || !expanded || !expandedRef.current) return;
+    if (policy.isLoading || !policy.enabled) return;
     const event = progressEvent ?? succeededEvent ?? partialEvent ?? failedEvent;
     if (!event) return;
     if ((event.data as { file_id?: unknown }).file_id !== fileId) return;
@@ -235,6 +236,8 @@ export default function ScenesSectionContainer({
     isVideo,
     isLoft,
     expanded,
+    policy.isLoading,
+    policy.enabled,
     fileId,
     loadVisual,
   ]);

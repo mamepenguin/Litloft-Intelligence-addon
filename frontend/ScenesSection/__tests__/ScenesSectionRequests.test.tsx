@@ -317,6 +317,38 @@ describe("SPEC-ADDON-089 I6 — native request timing", () => {
     expect(header()).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("SPEC-ADDON-089 I6 — a WS event left over from file A does not request visual-index for file B before B expands", async () => {
+    const view = renderSection();
+    await openNative();
+    expect(getVideoVisualIndex).toHaveBeenCalledTimes(1);
+
+    wsEvent.value = {
+      event: "intelligence.video_visual.progress",
+      data: { file_id: "f2" },
+    };
+    view.rerender(section({ fileId: "f2" }));
+    await flush();
+
+    expect(getVideoVisualIndex).toHaveBeenCalledTimes(1);
+    expect(header()).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("SPEC-ADDON-089 I6 — a WS event for the current file requests nothing while the policy is off", async () => {
+    vi.mocked(usePolicy).mockReturnValue({ enabled: false, isLoading: false });
+    const view = renderSection();
+    await openNative();
+    expect(getVideoVisualIndex).not.toHaveBeenCalled();
+
+    wsEvent.value = {
+      event: "intelligence.video_visual.progress",
+      data: { file_id: "f1" },
+    };
+    view.rerender(section());
+    await flush();
+
+    expect(getVideoVisualIndex).not.toHaveBeenCalled();
+  });
+
   it.each([
     "intelligence.video_visual.progress",
     "intelligence.video_visual.succeeded",
