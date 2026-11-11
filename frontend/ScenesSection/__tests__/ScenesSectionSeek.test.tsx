@@ -1,6 +1,8 @@
 import "./intlMock";
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent } from "@testing-library/react";
+
+import { formatDuration } from "@/lib/format";
 
 vi.mock("@/addons/intelligence/api", () => ({
   getClipTimestamps: vi.fn(),
@@ -41,6 +43,7 @@ import {
   SceneSectionProps,
   stubRect,
   tile,
+  tileLabels,
   timestamps,
 } from "./helpers";
 
@@ -230,6 +233,55 @@ describe("SPEC-ADDON-089 I3 — touch and pen browsing", () => {
     firePointer(el, "pointerCancel", { pointerType: "touch", clientX: pointerX(60, 70) });
 
     expect(ruler()).toHaveAttribute("aria-valuenow", "10");
+  });
+
+  it.each([
+    {
+      expectation: "a touch browse point survives focus leaving the section",
+      set: (el: HTMLElement) => {
+        firePointer(el, "pointerDown", {
+          pointerType: "touch",
+          clientX: pointerX(60, 70),
+        });
+        firePointer(el, "pointerUp", {
+          pointerType: "touch",
+          clientX: pointerX(60, 70),
+        });
+        fireEvent.click(el, { clientX: pointerX(60, 70) });
+        act(() => el.focus());
+      },
+      expected: 60,
+      windowStart: 6,
+    },
+    {
+      expectation: "a keyboard browse point is cleared when focus leaves the section",
+      set: (el: HTMLElement) => {
+        act(() => el.focus());
+        fireEvent.keyDown(el, { key: "ArrowRight" });
+      },
+      expected: 10,
+      windowStart: 0,
+    },
+  ])("SPEC-ADDON-089 I3 — $expectation", async ({ set, expected, windowStart }) => {
+    const { controller } = makeController({
+      duration: 70,
+      currentTime: 10,
+      paused: true,
+    });
+    renderSection({ mediaController: controller });
+    await openNative();
+    const el = ruler();
+    stubRect(el);
+
+    set(el);
+    fireEvent.focusOut(el, { relatedTarget: document.body });
+
+    expect(ruler()).toHaveAttribute("aria-valuenow", String(expected));
+    expect(tileLabels()).toEqual(
+      makeRows(15)
+        .slice(windowStart, windowStart + 9)
+        .map((row) => formatDuration(row.start)),
+    );
   });
 
   it("SPEC-ADDON-089 I3 — the browse point survives the finger lifting", async () => {

@@ -60,6 +60,8 @@ type NativeState = "idle" | "loading" | "ready" | "hidden";
 
 type ActionError = "waiting" | "generic" | null;
 
+type BrowseSource = "mouse" | "touch" | "keyboard";
+
 export default function ScenesSectionContainer({
   fileId,
   drive,
@@ -88,15 +90,24 @@ export default function ScenesSectionContainer({
   const visualGeneration = useRef(0);
   const visualRequestedFor = useRef(-1);
   const browseRef = useRef<number | null>(null);
+  const browseSource = useRef<BrowseSource | null>(null);
   const expandedRef = useRef(false);
   const lastPointerType = useRef("mouse");
-  const dragStart = useRef<{ x: number; previous: number | null } | null>(null);
+  const dragStart = useRef<{
+    x: number;
+    previous: number | null;
+    previousSource: BrowseSource | null;
+  } | null>(null);
   const rulerRef = useRef<HTMLDivElement>(null);
 
-  const setBrowsePoint = useCallback((value: number | null) => {
-    browseRef.current = value;
-    setBrowse(value);
-  }, []);
+  const setBrowsePoint = useCallback(
+    (value: number | null, source: BrowseSource | null = null) => {
+      browseRef.current = value;
+      browseSource.current = source;
+      setBrowse(value);
+    },
+    [],
+  );
 
   const handleJump = useCallback(() => {
     if (browseRef.current !== null) setBrowsePoint(null);
@@ -118,6 +129,7 @@ export default function ScenesSectionContainer({
   useEffect(() => {
     requestGeneration.current += 1;
     browseRef.current = null;
+    browseSource.current = null;
     expandedRef.current = false;
     dragStart.current = null;
     setExpanded(false);
@@ -139,6 +151,7 @@ export default function ScenesSectionContainer({
   const expand = useCallback(() => {
     const generation = (requestGeneration.current += 1);
     browseRef.current = null;
+    browseSource.current = null;
     expandedRef.current = true;
     dragStart.current = null;
     setBrowse(null);
@@ -168,6 +181,7 @@ export default function ScenesSectionContainer({
   const collapse = useCallback(() => {
     requestGeneration.current += 1;
     browseRef.current = null;
+    browseSource.current = null;
     expandedRef.current = false;
     dragStart.current = null;
     setExpanded(false);
@@ -329,7 +343,7 @@ export default function ScenesSectionContainer({
       else if (key === "end") nextIndex = list.length - 1;
       else if (key === "arrowleft") nextIndex = Math.max(0, currentIndex - 1);
       else nextIndex = Math.min(list.length - 1, currentIndex + 1);
-      setBrowsePoint(list[nextIndex].start);
+      setBrowsePoint(list[nextIndex].start, "keyboard");
     },
     [rows, playback.time, activate, setBrowsePoint],
   );
@@ -341,7 +355,11 @@ export default function ScenesSectionContainer({
         dragStart.current = null;
         return;
       }
-      dragStart.current = { x: clientX, previous: browseRef.current };
+      dragStart.current = {
+        x: clientX,
+        previous: browseRef.current,
+        previousSource: browseSource.current,
+      };
     },
     [],
   );
@@ -349,13 +367,13 @@ export default function ScenesSectionContainer({
   const handlePointerMove = useCallback(
     (time: number, pointerType: string, clientX: number) => {
       if (pointerType === "mouse") {
-        setBrowsePoint(time);
+        setBrowsePoint(time, "mouse");
         return;
       }
       const start = dragStart.current;
       if (!start) return;
       if (Math.abs(clientX - start.x) >= DRAG_THRESHOLD_PX) {
-        setBrowsePoint(time);
+        setBrowsePoint(time, "touch");
       }
     },
     [setBrowsePoint],
@@ -364,26 +382,34 @@ export default function ScenesSectionContainer({
   const handlePointerUp = useCallback(
     (time: number, pointerType: string) => {
       if (pointerType === "mouse") return;
-      if (dragStart.current) setBrowsePoint(time);
+      if (dragStart.current) setBrowsePoint(time, "touch");
       dragStart.current = null;
     },
     [setBrowsePoint],
   );
 
   const handlePointerCancel = useCallback(() => {
-    if (dragStart.current) setBrowsePoint(dragStart.current.previous);
+    if (dragStart.current) {
+      setBrowsePoint(
+        dragStart.current.previous,
+        dragStart.current.previousSource,
+      );
+    }
     dragStart.current = null;
   }, [setBrowsePoint]);
 
   const handleSectionPointerLeave = useCallback(
     (pointerType: string) => {
-      if (pointerType === "mouse") setBrowsePoint(null);
+      if (pointerType === "mouse" && browseSource.current === "mouse") {
+        setBrowsePoint(null);
+      }
     },
     [setBrowsePoint],
   );
 
   const handleSectionBlur = useCallback(
     (event: FocusEvent<HTMLDivElement>) => {
+      if (browseSource.current !== "keyboard") return;
       const next = event.relatedTarget as Node | null;
       if (next && event.currentTarget.contains(next)) return;
       setBrowsePoint(null);
