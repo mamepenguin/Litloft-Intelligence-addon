@@ -397,32 +397,89 @@ describe("SPEC-ADDON-089 I3 — a clock jump clears the browse point", () => {
       ms: 1000,
       kept: false,
     },
+    {
+      name: "a 10.6 s resume after a pause keeps it",
+      paused: true,
+      nextPaused: false,
+      start: 10,
+      next: 10.6,
+      ms: 1000,
+      kept: true,
+    },
+    {
+      name: "a 40 s resume after a pause clears it",
+      paused: true,
+      nextPaused: false,
+      start: 10,
+      next: 40,
+      ms: 1000,
+      kept: false,
+    },
+    {
+      name: "a resume backwards past 0.5 s clears it",
+      paused: true,
+      nextPaused: false,
+      start: 10,
+      next: 9,
+      ms: 1000,
+      kept: false,
+    },
+    {
+      name: "a 3 s resume after a pause keeps it",
+      paused: true,
+      nextPaused: false,
+      start: 10,
+      next: 13,
+      ms: 1000,
+      kept: true,
+    },
+    {
+      name: "a 0.5 s step back on resume keeps it",
+      paused: true,
+      nextPaused: false,
+      start: 10,
+      next: 9.5,
+      ms: 1000,
+      kept: true,
+    },
+    {
+      name: "a 3.5 s resume at rate 2 keeps it",
+      paused: true,
+      nextPaused: false,
+      start: 10,
+      next: 13.5,
+      ms: 1000,
+      rate: 2,
+      kept: true,
+    },
   ])(
     "SPEC-ADDON-089 I3 — $name",
-    async ({ paused, start, next, ms, kept }) => {
+    async ({ paused, nextPaused = paused, start, next, ms, rate = 1, kept }) => {
       vi.useFakeTimers();
       const { controller, state } = makeController({
         duration: 70,
         paused,
         currentTime: start,
+        playbackRate: rate,
       });
       renderSection({ mediaController: controller });
       await openNative();
       const el = ruler();
       stubRect(el);
 
-      firePointer(el, "pointerMove", { pointerType: "mouse", clientX: pointerX(60, 70) });
+      firePointer(el, "pointerDown", { pointerType: "touch", clientX: pointerX(60, 70) });
+      firePointer(el, "pointerUp", { pointerType: "touch", clientX: pointerX(60, 70) });
       expect(ruler()).toHaveAttribute("aria-valuenow", "60");
 
       await advance(ms, () => {
         state.currentTime = next;
+        state.paused = nextPaused;
       });
 
-      if (kept) {
-        expect(ruler()).toHaveAttribute("aria-valuenow", "60");
-      } else {
-        expect(Number(ruler().getAttribute("aria-valuenow"))).toBeLessThan(10);
-      }
+      expect(ruler()).toHaveAttribute(
+        "aria-valuenow",
+        String(kept ? 60 : Math.round(next)),
+      );
     },
   );
 });

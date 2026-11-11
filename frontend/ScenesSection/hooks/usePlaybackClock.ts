@@ -16,6 +16,28 @@ const PLAYING_JUMP_SECONDS = 2;
 /** A paused player can still be scrubbed by a shortcut or a seek. */
 const PAUSED_JUMP_SECONDS = 0.5;
 
+function isJump(
+  previous: PlaybackState,
+  next: PlaybackState,
+  elapsedSeconds: number,
+  rate: number,
+): boolean {
+  const step = next.time - previous.time;
+  if (previous.paused) {
+    if (next.paused) {
+      return step !== 0 && Math.abs(step) > PAUSED_JUMP_SECONDS;
+    }
+    // A paused sample does not say when playback started, so forward travel is
+    // bounded by the whole interval; backwards travel cannot be playback.
+    return (
+      -step > PAUSED_JUMP_SECONDS ||
+      step > elapsedSeconds * rate + PLAYING_JUMP_SECONDS
+    );
+  }
+  const expected = previous.time + elapsedSeconds * rate;
+  return step !== 0 && Math.abs(next.time - expected) > PLAYING_JUMP_SECONDS;
+}
+
 function readSnapshot(controller: MediaController): PlaybackState {
   try {
     const snapshot = getMediaClockSnapshot(controller);
@@ -56,13 +78,7 @@ export function usePlaybackClock(
       const next = readSnapshot(controller);
       const now = Date.now();
       const rate = controller.getPlaybackRate() || 1;
-      const expected = previous.paused
-        ? previous.time
-        : previous.time + ((now - previous.at) / 1000) * rate;
-      const limit = previous.paused
-        ? PAUSED_JUMP_SECONDS
-        : PLAYING_JUMP_SECONDS;
-      if (next.time !== previous.time && Math.abs(next.time - expected) > limit) {
+      if (isJump(previous, next, (now - previous.at) / 1000, rate)) {
         onJumpRef.current();
       }
       previous = { ...next, at: now };
