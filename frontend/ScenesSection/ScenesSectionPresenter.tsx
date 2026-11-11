@@ -118,6 +118,7 @@ export default function ScenesSectionPresenter({
   const browseIndex = browse === null ? null : frameIndexAt(rows, browse);
   const requested = new Set(requestedTimes);
   const expanded = view !== "collapsed";
+  const ready = view === "expanded";
   const aspectRatio = pictureRatio ?? 16 / 9;
 
   const timeAt = (clientX: number, target: HTMLElement): number => {
@@ -182,7 +183,7 @@ export default function ScenesSectionPresenter({
         {expanded && rows.length > 0 && (
           <span className="tabular-nums">{rows.length}</span>
         )}
-        {expanded && visual?.count != null && (
+        {ready && visual?.count != null && (
           <span
             aria-label={t("scenesCount", { count: visual.count })}
             className="inline-flex items-center gap-1 tabular-nums"
@@ -194,7 +195,7 @@ export default function ScenesSectionPresenter({
             {visual.count}
           </span>
         )}
-        {expanded && visual?.progress && (
+        {ready && visual?.progress && (
           <span
             aria-label={
               visual.progress.updating
@@ -206,7 +207,7 @@ export default function ScenesSectionPresenter({
             {visual.progress.text}
           </span>
         )}
-        {expanded && visual?.spinner && (
+        {ready && visual?.spinner && (
           <Loader2
             size={12}
             aria-hidden="true"

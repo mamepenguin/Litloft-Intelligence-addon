@@ -162,6 +162,53 @@ describe("SPEC-ADDON-089 I6 — native request timing", () => {
     await waitFor(() => expect(getVideoVisualIndex).toHaveBeenCalledTimes(1));
   });
 
+  it.each([
+    {
+      name: "a scene count",
+      state: indexState({
+        active_run: makeRun({ succeeded_count: 6 }),
+        scenes: [makeScene({ start_time: 10, scene_label: "Alpha" })],
+      }),
+      shown: /^6 scenes$/,
+    },
+    {
+      name: "progress and a spinner",
+      state: indexState({
+        staged_run: makeRun({
+          status: "running",
+          selected_count: 6,
+          completed_count: 2,
+          succeeded_count: 0,
+        }),
+      }),
+      shown: /^2 \/ 6$/,
+    },
+  ])(
+    "SPEC-ADDON-089 §1 step 3 — shows no Visual Index part in the header while the timestamps are pending ($name)",
+    async ({ state, shown }) => {
+      const pending = deferred<ReturnType<typeof timestamps>>();
+      vi.mocked(getClipTimestamps).mockReturnValueOnce(pending.promise);
+      vi.mocked(getVideoVisualIndex).mockResolvedValue(state);
+      renderSection();
+
+      fireEvent.click(header());
+      await screen.findByRole("slider");
+      await flush();
+
+      expect(getVideoVisualIndex).toHaveBeenCalledTimes(1);
+      expect(nameVisible(/^\d+ scenes$/)).toBe(false);
+      expect(nameVisible(/(Processing|Updating)/)).toBe(false);
+      expect(header().querySelector(".animate-spin")).toBeNull();
+      expect(header()).not.toHaveTextContent("15");
+
+      pending.resolve(timestamps(makeRows(15)));
+      await flush();
+
+      expect(header()).toHaveTextContent("15");
+      expect(nameVisible(shown)).toBe(true);
+    },
+  );
+
   it("discards a timestamps answer for an earlier file", async () => {
     const first = deferred<ReturnType<typeof timestamps>>();
     const second = deferred<ReturnType<typeof timestamps>>();
