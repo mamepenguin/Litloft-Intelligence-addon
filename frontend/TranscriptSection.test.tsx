@@ -1172,6 +1172,31 @@ describe("TranscriptSection — telling the host whether there is anything", () 
     await act(async () => {});
   });
 
+  it("says no before the browser paints", async () => {
+    // The first answer has to land in the frame that mounts the entry: a
+    // host reading silence as yes would draw the panel, then take it away
+    // as soon as this said no.
+    const onAvailability = vi.fn();
+    const reportsAtLayout: number[] = [];
+    function Probe() {
+      React.useLayoutEffect(() => {
+        reportsAtLayout.push(onAvailability.mock.calls.length);
+      });
+      return null;
+    }
+    render(
+      <>
+        <TranscriptSection fileId="abc" drive="family" onAvailability={onAvailability} />
+        <Probe />
+      </>,
+    );
+
+    expect(reportsAtLayout[0]).toBeGreaterThan(0);
+    expect(onAvailability.mock.calls[0]).toEqual([false]);
+
+    await act(async () => {});
+  });
+
   it("says yes once the cues arrive", async () => {
     const onAvailability = vi.fn();
     render(

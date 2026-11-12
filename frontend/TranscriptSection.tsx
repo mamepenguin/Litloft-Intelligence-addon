@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import { FileText, Quote, Sparkles } from "lucide-react";
 import { useTranslations } from "next-intl";
@@ -431,6 +438,12 @@ export default function TranscriptSection({
   useEffect(() => {
     onAvailabilityRef.current = onAvailability;
   });
+
+  // Before paint, so a host that already shows this panel on the previous
+  // file's answer takes it away in the frame the new file starts in.
+  useLayoutEffect(() => {
+    onAvailabilityRef.current?.(false);
+  }, [fileId]);
 
   // `false` first, because on mount nothing has arrived yet and the
   // host's default is "assume it has something". Answering only when
