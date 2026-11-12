@@ -43,6 +43,7 @@ import {
 import { usePlaybackClock } from "./hooks/usePlaybackClock";
 import { useRulerKeys } from "./hooks/useRulerKeys";
 import { useRulerWidth } from "./hooks/useRulerWidth";
+import { useSceneRows } from "./hooks/useSceneRows";
 import { useWindowPictures } from "./hooks/useWindowPictures";
 import ScenesSectionPresenter, {
   type ScenesAction,
@@ -147,6 +148,14 @@ export default function ScenesSectionContainer({
     previousSource: BrowseSource | null;
   } | null>(null);
   const rulerRef = useRef<HTMLDivElement>(null);
+  const sectionRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLButtonElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const tileRef = useRef<HTMLButtonElement>(null);
+  const lastPartRef = useRef<HTMLElement>(null);
+  const setLastPart = useCallback((element: HTMLElement | null) => {
+    lastPartRef.current = element;
+  }, []);
 
   const setBrowsePoint = useCallback(
     (value: number | null, source: BrowseSource | null = null) => {
@@ -534,22 +543,53 @@ export default function ScenesSectionContainer({
       : "loading";
 
   const rulerWidth = useRulerWidth(rulerRef, view !== "collapsed");
-  const columns = useMemo(() => sceneColumns(rulerWidth), [rulerWidth]);
+  const {
+    rows: rowCount,
+    fullWidthColumns,
+    scrollbarColumns,
+    hasScrollbar,
+  } = useSceneRows(
+    {
+      root: sectionRef,
+      header: headerRef,
+      ruler: rulerRef,
+      grid: gridRef,
+      tile: tileRef,
+      lastPart: lastPartRef,
+    },
+    view === "expanded",
+  );
+  // Beside a scrollbar at 3 rows the grid keeps the narrower width, as it
+  // always has. Everywhere else it draws the columns the rows were measured
+  // at, so a scrollbar cannot redraw wider, taller tiles under a row count
+  // chosen without one.
+  const columns = useMemo(() => {
+    if (rowCount <= 3 && hasScrollbar && scrollbarColumns > 0) {
+      return scrollbarColumns;
+    }
+    return fullWidthColumns > 0 ? fullWidthColumns : sceneColumns(rulerWidth);
+  }, [rowCount, hasScrollbar, scrollbarColumns, fullWidthColumns, rulerWidth]);
 
   // The one window of this render: the pictures requested, the drawn grid and
   // the ruler's band all read it, so they cannot disagree about which frames
   // are on screen.
   const windowStart = useMemo(
-    () => windowStartFor(frameIndexAt(list, point), list.length, columns),
-    [list, point, columns],
+    () =>
+      windowStartFor(
+        frameIndexAt(list, point),
+        list.length,
+        columns,
+        rowCount,
+      ),
+    [list, point, columns, rowCount],
   );
 
   const windowTimes = useMemo(() => {
     if (list.length === 0) return NO_TIMES;
     return list
-      .slice(windowStart, windowStart + 3 * columns)
+      .slice(windowStart, windowStart + rowCount * columns)
       .map((row) => row.start);
-  }, [list, windowStart, columns]);
+  }, [list, windowStart, columns, rowCount]);
 
   const requestedTimes = useWindowPictures(windowTimes, view === "expanded");
 
@@ -595,6 +635,7 @@ export default function ScenesSectionContainer({
       browse={browse}
       requestedTimes={requestedTimes}
       columns={columns}
+      rowCount={rowCount}
       windowStart={windowStart}
       failedTimes={new Set(failedTimes)}
       pictureRatio={pictureRatio}
@@ -604,6 +645,11 @@ export default function ScenesSectionContainer({
       error={errorMessage}
       working={working !== null}
       pictureUrl={pictureUrl}
+      sectionRef={sectionRef}
+      headerRef={headerRef}
+      gridRef={gridRef}
+      tileRef={tileRef}
+      lastPartRef={setLastPart}
       rulerRef={rulerRef}
       rulerWidth={rulerWidth}
       onToggle={toggle}
