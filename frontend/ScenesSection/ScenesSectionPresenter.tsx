@@ -4,6 +4,7 @@ import type {
   FocusEvent,
   MouseEvent,
   PointerEvent as ReactPointerEvent,
+  Ref,
   RefObject,
 } from "react";
 import { ChevronDown, ChevronUp, Film, Loader2 } from "lucide-react";
@@ -52,6 +53,7 @@ export interface ScenesSectionPresenterProps {
   browse: number | null;
   requestedTimes: number[];
   columns: number;
+  rowCount: number;
   windowStart: number;
   failedTimes: ReadonlySet<number>;
   pictureRatio: number | null;
@@ -61,6 +63,11 @@ export interface ScenesSectionPresenterProps {
   error: string | null;
   working: boolean;
   pictureUrl: (time: number) => string;
+  sectionRef: RefObject<HTMLDivElement | null>;
+  headerRef: RefObject<HTMLButtonElement | null>;
+  gridRef: RefObject<HTMLDivElement | null>;
+  tileRef: RefObject<HTMLButtonElement | null>;
+  lastPartRef: (element: HTMLElement | null) => void;
   rulerRef: RefObject<HTMLDivElement | null>;
   rulerWidth: number;
   onToggle: () => void;
@@ -93,6 +100,7 @@ export default function ScenesSectionPresenter({
   browse,
   requestedTimes,
   columns,
+  rowCount,
   windowStart,
   failedTimes,
   pictureRatio,
@@ -102,6 +110,11 @@ export default function ScenesSectionPresenter({
   error,
   working,
   pictureUrl,
+  sectionRef,
+  headerRef,
+  gridRef,
+  tileRef,
+  lastPartRef,
   rulerRef,
   rulerWidth,
   onToggle,
@@ -119,13 +132,26 @@ export default function ScenesSectionPresenter({
 }: ScenesSectionPresenterProps) {
   const t = useTranslations("file");
 
-  const windowRows = rows.slice(windowStart, windowStart + 3 * columns);
+  const windowRows = rows.slice(windowStart, windowStart + rowCount * columns);
   const playingIndex = frameIndexAt(rows, playingTime);
   const browseIndex = browse === null ? null : frameIndexAt(rows, browse);
   const requested = new Set(requestedTimes);
   const expanded = view !== "collapsed";
   const ready = view === "expanded";
   const aspectRatio = pictureRatio ?? 16 / 9;
+  const actionRowDrawn =
+    visual?.note != null ||
+    error != null ||
+    (visual?.actions.length ?? 0) > 0;
+  const lastPart = actionRowDrawn
+    ? "action"
+    : visual?.stale
+      ? "stale"
+      : visual?.scene
+        ? "card"
+        : awaitingVisual
+          ? "placeholder"
+          : "grid";
 
   const timeAt = (clientX: number, target: HTMLElement): number => {
     const rect = target.getBoundingClientRect();
@@ -163,12 +189,14 @@ export default function ScenesSectionPresenter({
 
   return (
     <div
+      ref={sectionRef}
       className="flex w-full flex-col gap-3.5"
       onPointerLeave={onSectionPointerLeave}
       onBlur={onSectionBlur}
     >
       {!labelledByHost && (
         <button
+          ref={headerRef}
           type="button"
           onClick={onToggle}
           aria-expanded={expanded}
@@ -227,6 +255,7 @@ export default function ScenesSectionPresenter({
             hasPlayback={hasPlayback}
             browse={browse}
             columns={columns}
+            rowCount={rowCount}
             windowStart={windowStart}
             marks={view === "expanded" ? visual?.marks : undefined}
             disabled={view === "loading"}
@@ -241,6 +270,7 @@ export default function ScenesSectionPresenter({
           ) : (
           <>
           <div
+            ref={gridRef}
             className="grid gap-x-2 gap-y-3"
             style={{
               gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
@@ -263,6 +293,7 @@ export default function ScenesSectionPresenter({
               return (
                 <button
                   key={row.start}
+                  ref={offset === 0 ? tileRef : undefined}
                   type="button"
                   aria-label={t("scenesPlayFrom", {
                     time: formatDuration(row.start),
@@ -312,6 +343,7 @@ export default function ScenesSectionPresenter({
 
           {awaitingVisual && (
             <div
+              ref={lastPart === "placeholder" ? lastPartRef : undefined}
               aria-hidden="true"
               data-testid="scenes-visual-placeholder"
               className="flex flex-col gap-3"
@@ -322,17 +354,29 @@ export default function ScenesSectionPresenter({
           )}
 
           {visual?.scene && (
-            <SceneCard scene={visual.scene} onSeek={onSeek} />
+            <SceneCard
+              ref={lastPart === "card" ? lastPartRef : undefined}
+              scene={visual.scene}
+              onSeek={onSeek}
+            />
           )}
 
           {visual?.stale && (
-            <p className="text-xs text-accent-amber">{t("visualIndexStale")}</p>
+            <p
+              ref={lastPart === "stale" ? lastPartRef : undefined}
+              className="text-xs text-accent-amber"
+            >
+              {t("visualIndexStale")}
+            </p>
           )}
 
           {(visual?.note != null ||
             error != null ||
             (visual?.actions.length ?? 0) > 0) && (
-            <div className="flex min-h-9 items-center justify-between gap-2">
+            <div
+              ref={lastPart === "action" ? lastPartRef : undefined}
+              className="flex min-h-9 items-center justify-between gap-2"
+            >
               <span className="text-xs tabular-nums text-text-muted">
                 {error ?? visual?.note ?? ""}
               </span>
@@ -387,6 +431,7 @@ interface RulerProps {
   hasPlayback: boolean;
   browse: number | null;
   columns: number;
+  rowCount: number;
   windowStart: number;
   marks: VideoVisualSceneItem[] | undefined;
   disabled: boolean;
@@ -404,6 +449,7 @@ function Ruler({
   hasPlayback,
   browse,
   columns,
+  rowCount,
   windowStart,
   marks,
   disabled,
@@ -413,7 +459,7 @@ function Ruler({
   onClick,
 }: RulerProps) {
   const t = useTranslations("file");
-  const windowRows = rows.slice(windowStart, windowStart + 3 * columns);
+  const windowRows = rows.slice(windowStart, windowStart + rowCount * columns);
   const nextRow = rows[windowStart + windowRows.length];
   const windowLeft = windowRows.length > 0
     ? rulerFraction(windowRows[0].start, length)
@@ -523,12 +569,15 @@ function Ruler({
 function SceneCard({
   scene,
   onSeek,
+  ref,
 }: {
   scene: { time: number; label: string; text: string | null };
   onSeek: (time: number) => void;
+  ref?: Ref<HTMLButtonElement>;
 }) {
   return (
     <button
+      ref={ref}
       type="button"
       onClick={() => onSeek(scene.time)}
       className="flex min-h-[7.6rem] w-full cursor-pointer flex-col justify-start gap-1 rounded-xl bg-bg-elevated px-3 py-2.5 text-left transition-colors hover:bg-sand"

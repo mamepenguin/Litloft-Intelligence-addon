@@ -88,6 +88,8 @@ const COLUMN_GAP_REM = 0.5;
 
 const MIN_COLUMNS = 3;
 
+const MIN_ROWS = 3;
+
 /**
  * Columns the section draws at a measured width. The root font size is read
  * here rather than assumed to be 16px so scaled text keeps the same layout.
@@ -109,13 +111,30 @@ function rootFontSizePx(): number {
   return Number.isFinite(size) && size > 0 ? size : DEFAULT_ROOT_FONT_SIZE_PX;
 }
 
-/** First frame of the three-row window, which holds `columns` frames a row. */
+/**
+ * Rows the grid can draw: the drawn rows plus the whole steps the slack still
+ * holds, never fewer than three. Without a measurable step or a finite slack,
+ * returns the drawn rows, never fewer than three.
+ */
+export function sceneRows(
+  drawnRows: number,
+  slack: number,
+  step: number,
+): number {
+  if (!(step > 0) || !Number.isFinite(slack)) {
+    return Math.max(MIN_ROWS, drawnRows);
+  }
+  return Math.max(MIN_ROWS, drawnRows + Math.floor(slack / step));
+}
+
+/** First frame of the window of `rows` rows, which holds `columns` frames a row. */
 export function windowStartFor(
   index: number,
   count: number,
   columns: number,
+  rows: number,
 ): number {
-  const maxStart = Math.max(0, count - 3 * columns);
+  const maxStart = Math.max(0, count - rows * columns);
   return Math.max(
     0,
     Math.min(columns * Math.floor(index / columns) - columns, maxStart),
