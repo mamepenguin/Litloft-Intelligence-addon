@@ -5,15 +5,17 @@ sweep over every indexed drive.
 
 Per drive:
 
-  1. Load the candidate rows for each channel, once. They do not depend
-     on the viewer, so every viewer of the drive scores against the same
-     matrices.
+  1. Read the live-video set and load the candidate rows for each
+     channel, once. Neither depends on the viewer, so every viewer of
+     the drive scores against the same matrices; candidates are cut to
+     the drive's videos.
   2. Per viewer, read their history twice — the whole set of file ids
-     they have opened, which bounds nothing, and the vectors for the
-     window, which is capped.
+     they have opened, which bounds nothing, and the engaged videos for
+     the window, which is capped.
   3. Skip if their history has not moved since the last run.
-  4. Cluster the window into weighted lanes, score every lane in one
-     matmul per channel, interleave, and store the result as rows.
+  4. Cluster the window into engagement-weighted lanes, score every lane
+     in one matmul per channel, interleave, and store the result as rows.
+  5. Record the feed's head in ``pickup_feed_log`` and prune old rows.
 
 The shape this replaced seeded a k-nearest-neighbour search from the
 five most recently watched files. Two things were wrong with it: the
@@ -25,21 +27,36 @@ watched. Neither was a tuning problem.
 
 import asyncio
 import hashlib
+import json
 import logging
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import delete
 
 from app.database import get_search_db, get_search_db_read
-from app.models import IndexedFile, PickupItem, PickupProfile
+from app.models import IndexedFile, PickupFeedLog, PickupItem, PickupProfile
 from app.pickup import feed as feed_mod
 from app.pickup import profile as profile_mod
-from app.pickup.retrieval import CandidateSet, load_candidates, score_lanes
+from app.pickup.retrieval import (
+    CandidateSet,
+    load_candidates,
+    restrict_candidates,
+    score_lanes,
+)
 
 logger = logging.getLogger(__name__)
 
 #: Rows held per viewer. Deeper than anyone scrolls, and cheap: the feed
 #: is a few hundred short rows.
 _FEED_DEPTH = 300
+
+#: Feed ids recorded per rebuild.
+_LOG_DEPTH = 40
+
+#: How long a logged feed is kept. Long enough to compare months of
+#: real use, short enough to stay a few megabytes.
+_LOG_TTL_DAYS = 180
 
 #: Candidates asked of each lane before interleaving. A lane can only
 #: contribute what it is handed, so this is the ceiling on how much of
@@ -182,6 +199,26 @@ class PickupWorker:
                 )
                 return
 
+        # Read the drive's live videos only after someone is stale: on a
+        # quiet hour this read and the candidate load are both wasted.
+        try:
+            videos = await loop.run_in_executor(
+                None, lambda: profile_mod.live_video_ids(drive)
+            )
+        except Exception:
+            # Same reasoning as a failed candidate load: a feed built
+            # from a partial or unknown video set would be stored with a
+            # fresh checkpoint, so one transient error would outlive
+            # itself.
+            logger.exception(
+                "Pickup: could not read live videos drive=%s; skipping this sweep",
+                drive,
+            )
+            return
+
+        for channel, candidate_set in candidates.items():
+            candidates[channel] = restrict_candidates(candidate_set, videos)
+
         for viewer_id, watched, checkpoint in pending:
             try:
                 await loop.run_in_executor(
@@ -201,7 +238,7 @@ class PickupWorker:
         signature = profile_mod.watch_signature(drive, viewer_id)
         if not signature:
             return None
-        watched = {file_id for file_id, _, _ in signature}
+        watched = {row[0] for row in signature}
 
         checkpoint = _checkpoint(signature)
         with get_search_db_read() as session:
@@ -224,10 +261,11 @@ class PickupWorker:
     ) -> None:
         history = profile_mod.profile_history(drive, viewer_id)
         if not history:
-            # Nothing inside the profile window. Deterministic until the
-            # history moves or the day rolls, both of which the
-            # checkpoint covers, so record it — otherwise every sweep
-            # reloads every vector in the drive to learn the same thing.
+            # No kept row: no video the viewer engaged with inside the
+            # window. Deterministic until the history moves or the day
+            # rolls, both of which the checkpoint covers, so record it —
+            # otherwise every sweep reloads every vector in the drive to
+            # learn the same thing.
             _store(drive, viewer_id, [], checkpoint)
             return
 
@@ -254,17 +292,22 @@ class PickupWorker:
                 scored[lane.cluster_id] = list(hits)
 
         items = feed_mod.interleave(lanes, scored, depth=_FEED_DEPTH)
-        # An empty feed is never settled. The checkpoint tracks the
-        # viewer's history, not the state of the index, so storing one
-        # against a checkpoint would strand a viewer whose files simply
-        # had not been embedded yet: their history would not move, and
-        # the sweep would keep skipping them. Recomputing an empty feed
-        # each hour is one matmul against an already-loaded matrix.
-        _store(drive, viewer_id, items, checkpoint if items else None)
-        logger.debug(
-            "Pickup: %d items across %d lanes for viewer=%s drive=%s",
-            len(items), len(lanes), viewer_id, drive,
+        # An empty feed with kept rows is never settled. The checkpoint
+        # tracks the viewer's history, not the state of the index, so
+        # storing one against a checkpoint would strand a viewer whose
+        # files simply had not been embedded yet: their history would not
+        # move, and the sweep would keep skipping them. Recomputing an
+        # empty feed each hour is one matmul against an already-loaded
+        # matrix.
+        computed_at = _store(
+            drive, viewer_id, items, checkpoint if items else None,
         )
+        logger.debug(
+            "Pickup: %d kept rows, %d items across %d lanes for viewer=%s drive=%s",
+            len(history), len(items), len(lanes), viewer_id, drive,
+        )
+        if items:
+            _log_feed(drive, viewer_id, computed_at, items)
 
 
 def _by_channel(lanes):
@@ -275,12 +318,17 @@ def _by_channel(lanes):
     return grouped
 
 
-def _store(drive: str, viewer_id: str, items, checkpoint: str) -> None:
+def _store(
+    drive: str, viewer_id: str, items, checkpoint: str | None,
+) -> datetime:
     """Replace this viewer's feed in one transaction.
 
     Delete-then-insert rather than a diff: ranks are positional, so a
     partial update would leave rows from two different rankings
     interleaved under one ordering.
+
+    Returns:
+        The ``computed_at`` written to the profile row, for the log.
     """
     now = datetime.now(UTC)
     with get_search_db() as session:
@@ -311,23 +359,53 @@ def _store(drive: str, viewer_id: str, items, checkpoint: str) -> None:
         header.computed_at = now
         header.watch_history_checkpoint = checkpoint
         session.commit()
+    return now
 
 
-def _checkpoint(signature: Sequence[tuple[str, str]]) -> str:
-    """A hash of what this viewer has opened, and when.
+def _log_feed(
+    drive: str, viewer_id: str, computed_at: datetime, items,
+) -> None:
+    """Record the feed's head, then prune the log. Never raises.
 
-    Three things have to move it, and each was missed by an earlier
-    version of this function.
+    Its own transaction, after the feed has committed: a failed write
+    costs a measurement, not the feed, and the next rebuild logs again.
+    """
+    file_ids = [item.file_id for item in items[:_LOG_DEPTH]]
+    cutoff = computed_at - timedelta(days=_LOG_TTL_DAYS)
+    try:
+        with get_search_db() as session:
+            session.execute(
+                delete(PickupFeedLog).where(PickupFeedLog.computed_at < cutoff)
+            )
+            session.add(PickupFeedLog(
+                drive_id=drive,
+                viewer_id=viewer_id,
+                computed_at=computed_at,
+                profile_version=profile_mod.PROFILE_VERSION,
+                file_ids=json.dumps(file_ids),
+            ))
+            session.commit()
+    except Exception:
+        logger.warning(
+            "Pickup: could not write feed log drive=%s viewer=%s",
+            drive, viewer_id, exc_info=True,
+        )
+
+
+def _checkpoint(signature: Sequence[tuple]) -> str:
+    """A hash of what this viewer has opened, and how it was engaged.
 
     *Anything watched*, not just the newest — a hash of the first twenty
     ids of a drive-wide recency list barely moved for a second viewer.
-    So the whole set, sorted.
+    So the whole set, sorted by file id.
 
-    *Anything re-watched, or trashed, or restored.* Reopening a file
-    already in the set changes no ids, but moves its recency — and
-    recency is what the lane weights are made of. Trashing or restoring
-    one changes which entries the profile is built from, and nothing
-    else. Both are in the hash.
+    *Anything re-watched, liked, favourited, played or dismissed.*
+    Reopening a file already in the set changes no ids, but moves its
+    recency — and recency is what the lane weights are made of. Liking,
+    favouriting, played ranges and dismissal leave the timestamp alone
+    while changing how much the row shapes the profile. Trashing or
+    restoring one changes which entries the profile is built from, and
+    nothing else. All of it is in the hash.
 
     *The ranking itself.* Changing a constant or the clustering does not
     move the viewer's history at all, so without a version in the hash a
@@ -335,16 +413,16 @@ def _checkpoint(signature: Sequence[tuple[str, str]]) -> str:
     the date rolled.
 
     *Time itself.* The profile reads a rolling year and weights it by a
-    half-life, both of which drift while the viewer does
-    nothing at all. Without the date a viewer who stops watching is
-    frozen at whatever their profile said the day they stopped. With
-    it, a quiet viewer is recomputed once a day rather than never — an
-    hourly sweep still skips them the other twenty-three times.
+    half-life, both of which drift while the viewer does nothing at all.
+    Without the date a viewer who stops watching is frozen at whatever
+    their profile said the day they stopped. With it, a quiet viewer is
+    recomputed once a day rather than never — an hourly sweep still
+    skips them the other twenty-three times.
     """
     stamp = datetime.now(UTC).strftime("%Y-%m-%d")
     version = profile_mod.PROFILE_VERSION
     joined = ";".join(
-        f"{file_id}@{played}#{live}"
-        for file_id, played, live in sorted(signature)
+        f"{row[0]}@{row[1]}#{'#'.join(str(value) for value in row[2:])}"
+        for row in sorted(signature, key=lambda row: row[0])
     )
     return hashlib.md5(f"v{version}|{stamp}|{joined}".encode()).hexdigest()[:32]

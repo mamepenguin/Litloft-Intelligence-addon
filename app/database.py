@@ -2196,6 +2196,42 @@ def init_litloft_db() -> None:
     )
 
 
+def init_readonly_databases() -> None:
+    """Point both engines at the live databases over read-only connections.
+
+    The evaluation commands run beside the service and report on the
+    databases as they are, so they must leave them byte for byte as they
+    found them. ``mode=ro`` enforces that at the driver: no table is
+    created, no migration runs and no page is written. Only sqlite-vec is
+    loaded on connect — the WAL pragma of :func:`init_search_db` is a
+    write, and would fail here.
+    """
+    global _search_engine, _SearchSession, _litloft_engine, _HomevaultSession
+
+    litloft_path = settings.litloft_db_path
+    search_path = _resolve_search_db_path()
+    for path in (litloft_path, search_path):
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"Database not found: {path}")
+
+    _search_engine = create_engine(
+        f"sqlite:///file:{search_path}?mode=ro&uri=true",
+        echo=False,
+        connect_args={"check_same_thread": False, "timeout": 120},
+    )
+    event.listen(_search_engine, "connect", _load_sqlite_vec)
+    _SearchSession = sessionmaker(bind=_search_engine, expire_on_commit=False)
+
+    _litloft_engine = create_engine(
+        f"sqlite:///file:{litloft_path}?mode=ro&uri=true",
+        echo=False,
+        connect_args={"check_same_thread": False},
+    )
+    _HomevaultSession = sessionmaker(
+        bind=_litloft_engine, expire_on_commit=False
+    )
+
+
 @contextmanager
 def _write_lock_held() -> Generator[None, None, None]:
     """Hold :data:`_write_lock`, refusing to wait forever for it.

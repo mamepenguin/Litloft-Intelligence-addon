@@ -12,11 +12,18 @@ becomes a weight on an interest rather than a filter on which interests
 exist. A binge can then only make one cluster denser, and the
 interleave bounds what one cluster is worth.
 
+Pickup recommends videos, so the profile reads videos only. Each one
+enters with an engagement between 0 and 1: how much of it was watched,
+lifted to 1 by a like or a favourite, and 0 for a brief open or a
+dismissal. That engagement weights every mean of member vectors and the
+lane's raw weight, so one video watched to the end shapes an interest
+more than five opened for a few seconds.
+
 Two reads of the history, not one. The exclusion set — every file the
-viewer has opened — is never capped, because a cap on it would start
-recommending watched files to anyone past the cap. The profile's vector
-load is capped, because clustering does not get better past a couple of
-thousand points and the cost is real.
+viewer has opened, of any kind — is never capped, because a cap on it
+would start recommending watched files to anyone past the cap. The
+profile's vector load is capped, because clustering does not get better
+past a couple of thousand points and the cost is real.
 """
 
 from __future__ import annotations
@@ -24,7 +31,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -46,7 +53,24 @@ logger = logging.getLogger(__name__)
 #: lands and every viewer whose history is quiet keeps yesterday's
 #: ranking until the date rolls, up to a day later. Cheap to get right,
 #: and invisible when it is wrong.
-PROFILE_VERSION = 2
+PROFILE_VERSION = 3
+
+#: The core's mime type for a ``.loft`` embed. Some embed providers
+#: cannot report position or duration, and an embed that reports
+#: neither was not necessarily abandoned.
+LOFT_MIME = "application/vnd.litloft.loft+json"
+
+#: Watched fractions below this are a brief open, not interest.
+F_MIN = 0.10
+
+#: Reaching this fraction of a video counts as fully watched, so the
+#: difference between a third and eighty percent does not decide the
+#: profile.
+F_FULL = 0.5
+
+#: What an embed that never reported playback counts. Absence of a
+#: position from a provider that cannot send one is unknown, not zero.
+E_UNKNOWN = 0.5
 
 #: Embedding types the profile is built on. ``metadata`` is absent for
 #: the same reason ``find_similar`` refuses it as a second opinion: it
@@ -170,10 +194,15 @@ _KMEANS_ITERATIONS = 25
 
 @dataclass(frozen=True)
 class WatchedFile:
-    """One entry of the viewer's history, with a naive-UTC timestamp."""
+    """One entry of the viewer's history, with a naive-UTC timestamp.
+
+    ``engagement`` is how much this entry shapes the profile, from 0 to
+    1. See :func:`engagement`.
+    """
 
     file_id: str
     last_played_at: datetime
+    engagement: float
 
 
 @dataclass(frozen=True)
@@ -228,10 +257,71 @@ def _parse_naive_utc(value: object) -> datetime | None:
 _FUTURE_TOLERANCE_DAYS = 1.0
 
 
-def age_days(last_played_at: datetime) -> float:
+def age_days(last_played_at: datetime, now: datetime | None = None) -> float:
     """Days since ``last_played_at``. Negative for a future timestamp."""
-    now = datetime.now(UTC).replace(tzinfo=None)
-    return (now - last_played_at).total_seconds() / 86400.0
+    reference = datetime.now(UTC).replace(tzinfo=None) if now is None else now
+    if reference.tzinfo is not None:
+        reference = reference.astimezone(UTC).replace(tzinfo=None)
+    return (reference - last_played_at).total_seconds() / 86400.0
+
+
+def _finite(value: object) -> float | None:
+    """The value as a float, or None when it is absent or not finite."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _is_dismissed(dismissed_at: object, last_played_at: object) -> bool:
+    """The core's reading of a dismissal: set, and not undone by a play.
+
+    A play after the dismissal clears its effect, so a dismissal earlier
+    than ``last_played_at`` is not one. An unparseable dismissal is not
+    a dismissal either.
+    """
+    dismissed = _parse_naive_utc(dismissed_at)
+    played = _parse_naive_utc(last_played_at)
+    if dismissed is None or played is None:
+        return False
+    return dismissed >= played
+
+
+def engagement(
+    *,
+    liked: bool,
+    favourite: bool,
+    dismissed: bool,
+    playback_position: object,
+    duration: object,
+    played_seconds: object,
+    mime_type: str | None,
+) -> float:
+    """How much one video's history row shapes the profile, in [0, 1].
+
+    The watched fraction comes from the reported duration, never the
+    probed length: a row whose reported duration is zero was opened but
+    never reported playback, whatever the file's real length.
+    """
+    if liked or favourite:
+        return 1.0
+    if dismissed:
+        return 0.0
+
+    reported = _finite(duration)
+    if reported is not None and reported > 0.0:
+        position = _finite(playback_position) or 0.0
+        played = _finite(played_seconds) or 0.0
+        fraction = max(position, min(played, reported)) / reported
+        fraction = min(1.0, max(0.0, fraction))
+        if fraction < F_MIN:
+            return 0.0
+        return min(1.0, fraction / F_FULL)
+
+    if mime_type == LOFT_MIME:
+        return E_UNKNOWN
+    return 0.0
 
 
 def viewer_ids(drive: str) -> list[str]:
@@ -249,11 +339,33 @@ def viewer_ids(drive: str) -> list[str]:
     return [row[0] for row in rows if row[0]]
 
 
-def watch_signature(drive: str, viewer_id: str) -> list[tuple[str, str, int]]:
-    """Everything about this viewer's history that the profile depends on.
+#: Every watched row the profile depends on, with the fields that move
+#: it without moving the row's timestamp.
+_WATCH_SIGNATURE_SQL = """
+SELECT wh.file_id,
+       wh.last_played_at,
+       wh.dismissed_at,
+       CASE WHEN f.deleted_at IS NULL AND f.missing_since IS NULL
+            THEN 1 ELSE 0 END AS live,
+       CASE WHEN f.liked_at IS NOT NULL THEN 1 ELSE 0 END AS liked,
+       COALESCE(f.is_favorite, 0) AS favourite,
+       COALESCE(ps.seconds, 0.0) AS played_seconds
+FROM watch_history wh
+JOIN files f ON wh.file_id = f.id
+LEFT JOIN (
+    SELECT file_id, SUM(played_seconds) AS seconds
+    FROM played_segments
+    WHERE viewer_id = :viewer
+    GROUP BY file_id
+) ps ON ps.file_id = wh.file_id
+WHERE f.drive = :drive AND wh.viewer_id = :viewer
+"""
 
-    Three fields, because three things change the profile without
-    changing the fourth.
+
+def watch_signature(
+    drive: str, viewer_id: str,
+) -> list[tuple[str, str, int, int, int, str, int]]:
+    """Everything about this viewer's history that the profile depends on.
 
     The **timestamps** are what make this a signature rather than a set.
     Reopening something already watched changes no ids at all, but moves
@@ -265,23 +377,50 @@ def watch_signature(drive: str, viewer_id: str) -> list[tuple[str, str, int]]:
     the profile is built from while leaving ids and timestamps
     untouched, and the feed would go on describing the old set.
 
-    Rows are *not* filtered by that flag: the exclusion set is derived
-    from this too, and a file in the trash is still a file this viewer
-    has opened.
+    The **liked, favourite and dismissal flags** and the **played
+    seconds** are here because engagement reads them. Liking a video,
+    favouriting it, recording a played range or dismissing a row changes
+    how much it shapes the profile without moving ``last_played_at``.
+
+    Rows are *not* filtered by any of these flags: the exclusion set is
+    derived from this too, and a file in the trash is still a file this
+    viewer has opened. Rows are sorted by file id so the signature is
+    stable, and played seconds are written to one decimal so float
+    noise in the sum does not move the checkpoint.
     """
     with get_litloft_db() as session:
         rows = session.execute(
-            sql_text(
-                "SELECT wh.file_id, wh.last_played_at, "
-                "  CASE WHEN f.deleted_at IS NULL AND f.missing_since IS NULL "
-                "       THEN 1 ELSE 0 END AS live "
-                "FROM watch_history wh "
-                "JOIN files f ON wh.file_id = f.id "
-                "WHERE f.drive = :drive AND wh.viewer_id = :viewer"
-            ),
+            sql_text(_WATCH_SIGNATURE_SQL),
             {"drive": drive, "viewer": viewer_id},
         ).fetchall()
-    return [(row[0], str(row[1]), int(row[2])) for row in rows]
+
+    signature = [
+        (
+            row[0],
+            str(row[1]),
+            int(row[3]),
+            int(row[4]),
+            int(row[5]),
+            f"{_finite(row[6]) or 0.0:.1f}",
+            1 if _is_dismissed(row[2], row[1]) else 0,
+        )
+        for row in sorted(rows, key=lambda row: row[0])
+    ]
+    return signature
+
+
+def live_video_ids(drive: str) -> set[str]:
+    """Ids of the drive's live videos, the only files Pickup recommends."""
+    with get_litloft_db() as session:
+        rows = session.execute(
+            sql_text(
+                "SELECT f.id FROM files f "
+                "WHERE f.drive = :drive AND f.file_type = 'video' "
+                "  AND f.deleted_at IS NULL AND f.missing_since IS NULL"
+            ),
+            {"drive": drive},
+        ).fetchall()
+    return {row[0] for row in rows}
 
 
 def watched_file_ids(drive: str, viewer_id: str) -> set[str]:
@@ -305,34 +444,87 @@ def watched_file_ids(drive: str, viewer_id: str) -> set[str]:
     return {row[0] for row in rows}
 
 
+#: One row per watched file, with everything engagement reads. The
+#: filters run in Python, before the cap: a document, an unparseable
+#: timestamp or a video with no engagement must not push a kept row out
+#: of the profile.
+_PROFILE_HISTORY_SQL = """
+SELECT wh.file_id,
+       wh.last_played_at,
+       wh.playback_position,
+       wh.duration,
+       wh.dismissed_at,
+       f.file_type,
+       f.mime_type,
+       CASE WHEN f.liked_at IS NOT NULL THEN 1 ELSE 0 END AS liked,
+       COALESCE(f.is_favorite, 0) AS favourite,
+       COALESCE(ps.seconds, 0.0) AS played_seconds
+FROM watch_history wh
+JOIN files f ON wh.file_id = f.id
+LEFT JOIN (
+    SELECT file_id, SUM(played_seconds) AS seconds
+    FROM played_segments
+    WHERE viewer_id = :viewer
+    GROUP BY file_id
+) ps ON ps.file_id = wh.file_id
+WHERE f.drive = :drive AND wh.viewer_id = :viewer
+  AND f.deleted_at IS NULL AND f.missing_since IS NULL
+"""
+
+
 def profile_history(
     drive: str,
     viewer_id: str,
     cap: int = PROFILE_VECTOR_CAP,
     window_days: float = PROFILE_WINDOW_DAYS,
+    *,
+    now: datetime | None = None,
+    until: datetime | None = None,
+    videos_only: bool = True,
+    weighted: bool = True,
 ) -> list[WatchedFile]:
-    """This viewer's live entries inside the window, newest first.
+    """This viewer's kept entries inside the window, newest first.
 
-    Both bounds are per viewer. The worker this replaces took the
-    drive's 50 most recent rows and split them by viewer afterwards, so
-    whoever had been active most recently consumed the whole budget.
+    Args:
+        drive: The drive to read, and the only one.
+        viewer_id: Whose history to read.
+        cap: Most entries to return. Applied after every filter.
+        window_days: How far back from ``now`` entries may be.
+        now: Reference time for ages, the window and "newest". None
+            means the current time.
+        until: Exclusive upper bound on ``last_played_at``, for replay.
+        videos_only: Keep live videos only, or live files of every kind.
+        weighted: Give video rows their engagement and drop those with
+            none. Without it every row counts fully.
+
+    Returns:
+        ``WatchedFile`` rows, newest first.
     """
+    if now is None:
+        reference = datetime.now(UTC).replace(tzinfo=None)
+    elif now.tzinfo is not None:
+        reference = now.astimezone(UTC).replace(tzinfo=None)
+    else:
+        reference = now
+    upper = _parse_naive_utc(until) if until is not None else None
+
+    statement = _PROFILE_HISTORY_SQL
+    if videos_only:
+        statement += "  AND f.file_type = 'video'\n"
+
     with get_litloft_db() as session:
         rows = session.execute(
-            sql_text(
-                "SELECT wh.file_id, wh.last_played_at "
-                "FROM watch_history wh "
-                "JOIN files f ON wh.file_id = f.id "
-                "WHERE f.drive = :drive AND wh.viewer_id = :viewer "
-                "  AND f.deleted_at IS NULL AND f.missing_since IS NULL "
-                "ORDER BY wh.last_played_at DESC "
-                "LIMIT :cap"
-            ),
-            {"drive": drive, "viewer": viewer_id, "cap": cap},
+            sql_text(statement),
+            {"drive": drive, "viewer": viewer_id},
         ).fetchall()
 
     history: list[WatchedFile] = []
-    for file_id, played_at in rows:
+    unweighted = 0
+    for row in rows:
+        (
+            file_id, played_at, position, reported, dismissed_at,
+            file_type, mime_type, liked, favourite, played_seconds,
+        ) = row
         parsed = _parse_naive_utc(played_at)
         if parsed is None:
             logger.debug(
@@ -340,7 +532,7 @@ def profile_history(
                 file_id, viewer_id,
             )
             continue
-        age = age_days(parsed)
+        age = (reference - parsed).total_seconds() / 86400.0
         if age < -_FUTURE_TOLERANCE_DAYS:
             logger.debug(
                 "Pickup: last_played_at is in the future for file=%s", file_id,
@@ -348,8 +540,35 @@ def profile_history(
             continue
         if age > window_days:
             continue
-        history.append(WatchedFile(file_id=file_id, last_played_at=parsed))
-    return history
+        if upper is not None and parsed >= upper:
+            continue
+
+        if weighted and file_type == "video":
+            value = engagement(
+                liked=bool(liked),
+                favourite=bool(favourite),
+                dismissed=_is_dismissed(dismissed_at, played_at),
+                playback_position=position,
+                duration=reported,
+                played_seconds=played_seconds,
+                mime_type=mime_type,
+            )
+            if value <= 0.0:
+                unweighted += 1
+                continue
+        else:
+            value = 1.0
+        history.append(
+            WatchedFile(file_id=file_id, last_played_at=parsed, engagement=value)
+        )
+
+    history.sort(key=lambda entry: entry.last_played_at, reverse=True)
+    kept = history[:cap]
+    logger.debug(
+        "Pickup: kept %d rows (dropped %d with no engagement) viewer=%s",
+        len(kept), unweighted, viewer_id,
+    )
+    return kept
 
 
 # ---------------------------------------------------------------------------
@@ -467,14 +686,31 @@ def _seed_from(*parts: str) -> int:
     return int.from_bytes(digest[:8], "big")
 
 
-def _kmeans(matrix: np.ndarray, k: int, seed: int) -> np.ndarray:
+def _weighted_mean(
+    matrix: np.ndarray, weights: Sequence[float] | np.ndarray | None = None,
+) -> np.ndarray:
+    """The mean of ``matrix``'s rows, scaled by ``weights`` when given."""
+    if weights is None:
+        return matrix.mean(axis=0)
+    scaled = np.asarray(weights, dtype=np.float64)
+    return (matrix.astype(np.float64) * scaled[:, None]).sum(axis=0)
+
+
+def _kmeans(
+    matrix: np.ndarray,
+    k: int,
+    seed: int,
+    weights: Sequence[float] | np.ndarray | None = None,
+) -> np.ndarray:
     """Spherical k-means. Returns a label per row.
 
     The vectors are unit length, so cosine similarity is a dot product
-    and a cluster's centre is the normalized mean of its members.
-    Seeded from the caller's key so a run is reproducible — an
-    unreproducible profile would reshuffle the feed on every sweep for
-    no reason the viewer could see.
+    and a cluster's centre is the normalized weighted mean of its
+    members. Seeding ignores the weights: it only picks starting
+    directions, and a k-means++ spread that already covers the data is
+    as good a start for weighted updates. Seeded from the caller's key
+    so a run is reproducible — an unreproducible profile would reshuffle
+    the feed on every sweep for no reason the viewer could see.
     """
     n = matrix.shape[0]
     if k <= 1:
@@ -504,10 +740,12 @@ def _kmeans(matrix: np.ndarray, k: int, seed: int) -> np.ndarray:
             break
         labels = new_labels
         for index in range(k):
-            members = matrix[labels == index]
-            if members.size == 0:
+            mask = labels == index
+            if not mask.any():
                 continue
-            mean = members.mean(axis=0)
+            mean = _weighted_mean(
+                matrix[mask], None if weights is None else np.asarray(weights)[mask],
+            )
             norm = float(np.linalg.norm(mean))
             if norm > 0:
                 centroids[index] = mean / norm
@@ -521,9 +759,11 @@ def _kmeans(matrix: np.ndarray, k: int, seed: int) -> np.ndarray:
 _MIN_CENTROID_NORM = 1e-6
 
 
-def _centroid(matrix: np.ndarray) -> np.ndarray | None:
+def _centroid(
+    matrix: np.ndarray, weights: Sequence[float] | np.ndarray | None = None,
+) -> np.ndarray | None:
     """The cluster's direction, or None if it has none."""
-    mean = matrix.mean(axis=0)
+    mean = _weighted_mean(matrix, weights)
     norm = float(np.linalg.norm(mean))
     if norm < _MIN_CENTROID_NORM:
         return None
@@ -533,6 +773,7 @@ def _centroid(matrix: np.ndarray) -> np.ndarray | None:
 def _merge_singletons(
     groups: list[list[int]],
     matrix: np.ndarray,
+    weights: Sequence[float] | np.ndarray | None = None,
 ) -> list[list[int]]:
     """Fold one-member clusters into their nearest neighbour.
 
@@ -559,7 +800,12 @@ def _merge_singletons(
         # Recomputed each round: absorbing a stray moves the centroid it
         # went into, and the next stray must be judged against where
         # that lane now sits.
-        directions = [_centroid(matrix[g]) for g in survivors]
+        directions = [
+            _centroid(
+                matrix[g], None if weights is None else np.asarray(weights)[g],
+            )
+            for g in survivors
+        ]
         usable = [i for i, d in enumerate(directions) if d is not None]
         if not usable:
             return [[index for group in groups for index in group]]
@@ -578,13 +824,23 @@ def decay(days: float) -> float:
     return 0.5 ** (days / HALF_LIFE_DAYS)
 
 
-def raw_weight(ages: Sequence[float]) -> float:
+def raw_weight(
+    ages: Sequence[float], weights: Sequence[float] | None = None,
+) -> float:
     """Decayed mass of a cluster, log-compressed.
 
     The logarithm is what stops a binge dominating: forty episodes must
     not outweigh a five-file interest by a factor of eight.
+
+    ``weights`` is one engagement per age, and defaults to 1 for every
+    entry: a lane's mass is what the viewer actually watched, not how
+    many rows it holds.
     """
-    return math.log1p(sum(decay(age) for age in ages))
+    if weights is None:
+        weights = [1.0] * len(ages)
+    return math.log1p(
+        sum(weight * decay(age) for age, weight in zip(ages, weights, strict=True))
+    )
 
 
 def _normalise(raws: list[float]) -> list[float]:
@@ -618,13 +874,28 @@ def _normalise(raws: list[float]) -> list[float]:
 # ---------------------------------------------------------------------------
 
 
-def build_lanes(history: Sequence[WatchedFile], *, key: str) -> list[Lane]:
+def build_lanes(
+    history: Sequence[WatchedFile],
+    *,
+    key: str,
+    now: datetime | None = None,
+    vectors: Callable[[Iterable[str], str], dict[str, np.ndarray]] = representative_vectors,
+) -> list[Lane]:
     """Cluster ``history`` into weighted lanes across every channel.
 
+    Every mean of member vectors is weighted by engagement and then
+    normalized, so the lane points where the watched time went rather
+    than where the count is.
+
     Args:
-        history: The viewer's entries, newest first.
+        history: The viewer's kept entries, newest first.
         key: Stable identity for this (drive, viewer), used to seed
             clustering so repeated runs agree.
+        now: Reference time for the ages in the lane weights. None means
+            the current time.
+        vectors: ``(file_ids, channel) -> {file_id: unit vector}``. The
+            worker reads the index through the default; replay passes
+            vectors it loaded once.
 
     Returns:
         Lanes with normalized weights, heaviest first.
@@ -632,27 +903,31 @@ def build_lanes(history: Sequence[WatchedFile], *, key: str) -> list[Lane]:
     if not history:
         return []
 
-    ages = {w.file_id: age_days(w.last_played_at) for w in history}
+    ages = {w.file_id: age_days(w.last_played_at, now=now) for w in history}
+    engagements = {w.file_id: w.engagement for w in history}
     file_ids = [w.file_id for w in history]
 
     pending: list[tuple[str, str, np.ndarray, int, float]] = []
     for channel in CHANNELS:
-        vectors = representative_vectors(file_ids, channel)
-        if not vectors:
+        loaded = vectors(file_ids, channel)
+        if not loaded:
             continue
         # Fixed order, so the seeded clustering below is reproducible.
-        members = [f for f in file_ids if f in vectors]
-        matrix = np.stack([vectors[f] for f in members])
+        members = [f for f in file_ids if f in loaded]
+        matrix = np.stack([loaded[f] for f in members])
+        weights = np.asarray([engagements[f] for f in members], dtype=np.float64)
 
-        labels = _kmeans(matrix, choose_k(len(members)), _seed_from(key, channel))
+        labels = _kmeans(
+            matrix, choose_k(len(members)), _seed_from(key, channel), weights,
+        )
         groups = [
             [i for i in range(len(members)) if labels[i] == index]
             for index in range(int(labels.max()) + 1)
         ]
-        groups = _merge_singletons([g for g in groups if g], matrix)
+        groups = _merge_singletons([g for g in groups if g], matrix, weights)
 
         for index, group in enumerate(groups):
-            centroid = _centroid(matrix[group])
+            centroid = _centroid(matrix[group], weights[group])
             if centroid is None:
                 logger.debug(
                     "Pickup: dropping directionless cluster %s:%d",
@@ -664,7 +939,10 @@ def build_lanes(history: Sequence[WatchedFile], *, key: str) -> list[Lane]:
                 f"{channel}:{index}",
                 centroid,
                 len(group),
-                raw_weight([ages[members[i]] for i in group]),
+                raw_weight(
+                    [ages[members[i]] for i in group],
+                    [weights[i] for i in group],
+                ),
             ))
 
     if not pending:
