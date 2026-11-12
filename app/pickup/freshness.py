@@ -10,11 +10,19 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-#: Provisional: the spec's ship bar decides the setting that ships, from the
-#: replay's grid, which reports these two as the worker's constants. Until
-#: that decision nothing may depend on the numbers themselves.
-HALF_LIFE_DAYS = 30.0
-FLOOR = 0.5
+#: Chosen by ``evaluate replay`` against a production copy (main drive, one
+#: viewer, 55 cut points, 397 targets), recall@40 per setting:
+#:
+#:     half-life   floor 0   floor 0.5        no freshness   0.098
+#:            7d     0.082       0.070        newest first   0.127
+#:           30d     0.054       0.059
+#:           90d     0.078       0.075
+#:          365d     0.101       0.084
+#:
+#: Only 365d / 0 beats no freshness, and narrowly; hit@40 moves further
+#: (0.364 to 0.473) and recall@12 from 0.041 to 0.060.
+HALF_LIFE_DAYS = 365.0
+FLOOR = 0.0
 
 #: A ``created_at`` this far in the future is clock skew rather than a new
 #: file. Further ahead is unreadable, and gets the floor like an old file:
