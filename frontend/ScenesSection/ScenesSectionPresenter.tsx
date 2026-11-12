@@ -307,7 +307,11 @@ export default function ScenesSectionPresenter({
           </div>
 
           {awaitingVisual && (
-            <div aria-hidden="true" className="flex flex-col gap-3">
+            <div
+              aria-hidden="true"
+              data-testid="scenes-visual-placeholder"
+              className="flex flex-col gap-3"
+            >
               <div className="h-[7.75rem] rounded-xl bg-bg-card" />
               <div className="h-9" />
             </div>

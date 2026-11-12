@@ -60,6 +60,7 @@ import {
   sceneCardNamed,
   tile,
   timestamps,
+  waitForVisualIndex,
 } from "./helpers";
 
 const STALE = /changed since this index was built/;
@@ -235,6 +236,7 @@ describe("SPEC-ADDON-090 I10 — the Visual Index state table", () => {
       vi.mocked(getVideoVisualIndex).mockResolvedValue(state);
       renderSection();
       await open();
+      await waitForVisualIndex();
 
       if (count === null) {
         expect(nameVisible(/^\d+ scenes$/)).toBe(false);
@@ -267,6 +269,7 @@ describe("SPEC-ADDON-090 I10 — the Visual Index state table", () => {
     );
     renderSection();
     await open();
+    await waitForVisualIndex();
 
     expect(nameVisible(/Updating\s+2\s*\/\s*5/)).toBe(true);
     expect(actionNames()).toEqual([]);
@@ -314,6 +317,7 @@ describe("SPEC-ADDON-090 I10 — the Visual Index state table", () => {
       vi.mocked(getVideoVisualIndex).mockResolvedValue(state);
       renderSection();
       await open();
+      await waitForVisualIndex();
 
       if (retry === null) {
         expect(action("Retry the 0 failed")).toBeNull();
@@ -338,6 +342,7 @@ describe("SPEC-ADDON-090 I10 — the Visual Index state table", () => {
       vi.mocked(getVideoVisualIndex).mockResolvedValue(state);
       renderSection();
       await open();
+      await waitForVisualIndex();
 
       expect(nameVisible(new RegExp(`${label}\\s+…`))).toBe(true);
     },
@@ -357,6 +362,7 @@ describe("SPEC-ADDON-090 I10 — action emphasis", () => {
     vi.mocked(getVideoVisualIndex).mockResolvedValue(state);
     renderSection();
     await open();
+    await waitForVisualIndex();
 
     expect(isFilledAction(action(label)!)).toBe(true);
   });
@@ -373,6 +379,7 @@ describe("SPEC-ADDON-090 I10 — the stale line", () => {
     );
     renderSection();
     await open();
+    await waitForVisualIndex();
 
     expect(nameVisible(STALE)).toBe(true);
     expect(isFilledAction(action("Regenerate scenes")!)).toBe(true);
@@ -387,6 +394,7 @@ describe("SPEC-ADDON-090 I10 — the stale line", () => {
     );
     renderSection();
     await open();
+    await waitForVisualIndex();
 
     expect(nameVisible(STALE)).toBe(false);
     expect(isFilledAction(action("Regenerate scenes")!)).toBe(false);
@@ -402,6 +410,7 @@ describe("SPEC-ADDON-090 I10 — the stale line", () => {
     );
     renderSection();
     await open();
+    await waitForVisualIndex();
 
     expect(nameVisible(STALE)).toBe(true);
   });
@@ -427,6 +436,7 @@ describe("SPEC-ADDON-090 I10 — the stale line", () => {
     vi.mocked(getVideoVisualIndex).mockResolvedValue(state);
     renderSection();
     await open();
+    await waitForVisualIndex();
 
     expect(nameVisible(STALE)).toBe(false);
   });
@@ -449,6 +459,7 @@ describe("SPEC-ADDON-090 I9 — scene marks and tile dots", () => {
       );
       renderSection();
       await open();
+      await waitForVisualIndex();
 
       const tokens = classTokens(ruler());
       if (status === "succeeded") {
@@ -484,6 +495,7 @@ describe("SPEC-ADDON-090 I9 — scene marks and tile dots", () => {
       );
       renderSection();
       await open();
+      await waitForVisualIndex();
 
       expect(tileDot(tile(0))).toBe(dot);
     },
@@ -498,6 +510,7 @@ describe("SPEC-ADDON-090 I9 — scene marks and tile dots", () => {
     );
     renderSection();
     await open();
+    await waitForVisualIndex();
 
     expect(marksPresent()).toBe(true);
     expect(allTiles().some(tileDot)).toBe(false);
@@ -512,6 +525,7 @@ describe("SPEC-ADDON-090 I9 — scene marks and tile dots", () => {
     );
     renderSection();
     await open();
+    await waitForVisualIndex();
 
     expect(
       screen.queryByRole("button", {
@@ -561,6 +575,7 @@ describe("SPEC-ADDON-090 I9 — the scene card", () => {
       );
       renderSection({ mediaController: controller });
       await open();
+      await waitForVisualIndex();
 
       expect(sceneCardNamed(new RegExp(label))).not.toBeNull();
     },
@@ -575,6 +590,7 @@ describe("SPEC-ADDON-090 I9 — the scene card", () => {
     );
     renderSection();
     await open();
+    await waitForVisualIndex();
 
     expect(screen.getByText("Alpha text")).toBeInTheDocument();
     expect(screen.queryByText("SECRET-A")).toBeNull();
@@ -593,6 +609,7 @@ describe("SPEC-ADDON-090 I9 — the scene card", () => {
     );
     renderSection({ mediaController: controller });
     await open();
+    await waitForVisualIndex();
 
     fireEvent.click(sceneCardNamed(/Beta/)!);
 
@@ -733,6 +750,7 @@ describe("SPEC-ADDON-090 I10 — actions", () => {
       vi.mocked(getVideoVisualIndex).mockResolvedValue(state);
       renderSection();
       await open();
+      await waitForVisualIndex();
 
       fireEvent.click(action(click)!);
       await waitFor(expected);
@@ -750,6 +768,7 @@ describe("SPEC-ADDON-090 I10 — actions", () => {
     vi.mocked(retryVideoVisualIndex).mockReturnValueOnce(pending.promise);
     renderSection();
     await open();
+    await waitForVisualIndex();
 
     fireEvent.click(action("Retry the 1 failed")!);
     await flush();
@@ -776,6 +795,7 @@ describe("SPEC-ADDON-090 I10 — action errors", () => {
     vi.mocked(generateVideoVisualIndex).mockRejectedValueOnce(waitingClip());
     renderSection();
     await open();
+    await waitForVisualIndex();
 
     fireEvent.click(action("Create scenes")!);
 
@@ -786,6 +806,7 @@ describe("SPEC-ADDON-090 I10 — action errors", () => {
     vi.mocked(generateVideoVisualIndex).mockRejectedValueOnce(new Error("down"));
     renderSection();
     await open();
+    await waitForVisualIndex();
 
     fireEvent.click(action("Create scenes")!);
 
@@ -802,6 +823,7 @@ describe("SPEC-ADDON-090 I10 — action errors", () => {
     vi.mocked(retryVideoVisualIndex).mockRejectedValueOnce(waitingClip());
     renderSection();
     await open();
+    await waitForVisualIndex();
 
     fireEvent.click(action("Retry the 1 failed")!);
 
@@ -820,6 +842,7 @@ describe("SPEC-ADDON-090 I10 — action errors", () => {
       vi.mocked(generateVideoVisualIndex).mockRejectedValueOnce(waitingClip());
       const view = renderSection();
       await open();
+      await waitForVisualIndex();
 
       fireEvent.click(action("Create scenes")!);
       await waitFor(() => expect(nameVisible(WAITING)).toBe(true));
@@ -839,6 +862,7 @@ describe("SPEC-ADDON-090 I10 — action errors", () => {
       } else {
         view.rerender(section({ fileId: "f2" }));
         await open();
+        await waitForVisualIndex();
       }
 
       await waitFor(() => expect(nameVisible(WAITING)).toBe(false));
@@ -858,6 +882,7 @@ describe("SPEC-ADDON-090 I10 — a failed reload", () => {
       .mockResolvedValueOnce(null);
     renderSection();
     await open();
+    await waitForVisualIndex();
 
     expect(nameVisible(/^2 scenes$/)).toBe(true);
     expect(sceneCardNamed(/Alpha/)).not.toBeNull();

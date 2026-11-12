@@ -46,6 +46,7 @@ import {
   tile,
   tileLabels,
   timestamps,
+  waitForVisualIndex,
 } from "./helpers";
 
 function section(props: Partial<SceneSectionProps> = {}) {
@@ -90,6 +91,7 @@ describe("SPEC-ADDON-089 I2 — the four seeks", () => {
     });
     renderSection({ mediaController: controller });
     await openNative();
+    await waitForVisualIndex();
     const el = ruler();
     stubRect(el);
 
@@ -111,6 +113,7 @@ describe("SPEC-ADDON-089 I2 — the four seeks", () => {
     });
     renderSection({ mediaController: controller });
     await openNative();
+    await waitForVisualIndex();
 
     fireEvent.click(tile(30));
 
@@ -134,6 +137,7 @@ describe("SPEC-ADDON-089 I2 — the four seeks", () => {
     );
     renderSection({ mediaController: controller });
     await openNative();
+    await waitForVisualIndex();
 
     fireEvent.click(screen.getByRole("button", { name: /Thirty/ }));
 
@@ -150,6 +154,7 @@ describe("SPEC-ADDON-089 I3 — touch and pen browsing", () => {
     const { controller } = makeController({ duration: 70, paused: true });
     renderSection({ mediaController: controller });
     await openNative();
+    await waitForVisualIndex();
     const el = ruler();
 
     expect(`${el.className} ${el.getAttribute("style") ?? ""}`).toMatch(
@@ -199,6 +204,7 @@ describe("SPEC-ADDON-089 I3 — touch and pen browsing", () => {
       });
       renderSection({ mediaController: controller });
       await openNative();
+      await waitForVisualIndex();
       const el = ruler();
       stubRect(el);
 
@@ -214,6 +220,7 @@ describe("SPEC-ADDON-089 I3 — touch and pen browsing", () => {
     const { controller } = makeController({ duration: 70, paused: true });
     renderSection({ mediaController: controller });
     await openNative();
+    await waitForVisualIndex();
     const el = ruler();
     stubRect(el);
 
@@ -271,6 +278,7 @@ describe("SPEC-ADDON-089 I3 — touch and pen browsing", () => {
     });
     renderSection({ mediaController: controller });
     await openNative();
+    await waitForVisualIndex();
     const el = ruler();
     stubRect(el);
 
@@ -289,6 +297,7 @@ describe("SPEC-ADDON-089 I3 — touch and pen browsing", () => {
     const { controller } = makeController({ duration: 70, paused: true });
     renderSection({ mediaController: controller });
     await openNative();
+    await waitForVisualIndex();
     const el = ruler();
     stubRect(el);
 
@@ -306,6 +315,7 @@ describe("SPEC-ADDON-089 I3 — touch and pen browsing", () => {
     });
     renderSection({ mediaController: controller });
     await openNative();
+    await waitForVisualIndex();
     const el = ruler();
     stubRect(el);
 
@@ -324,6 +334,7 @@ describe("SPEC-ADDON-089 I3 — touch and pen browsing", () => {
     const { controller } = makeController({ duration: 70, paused: true });
     renderSection({ mediaController: controller });
     await openNative();
+    await waitForVisualIndex();
     const el = ruler();
     stubRect(el);
 
@@ -342,6 +353,7 @@ describe("SPEC-ADDON-089 I3 — touch and pen browsing", () => {
     const { controller } = makeController({ duration: 70, paused: true });
     const view = renderSection({ mediaController: controller });
     await openNative();
+    await waitForVisualIndex();
     const el = ruler();
     stubRect(el);
 
@@ -465,6 +477,7 @@ describe("SPEC-ADDON-089 I3 — a clock jump clears the browse point", () => {
       });
       renderSection({ mediaController: controller });
       await openNative();
+      await waitForVisualIndex();
       const el = ruler();
       stubRect(el);
 
@@ -655,6 +668,7 @@ describe("SPEC-ADDON-089 I2, I3 — what a browse point outlives, by the input t
     });
     const view = renderSection({ mediaController: controller });
     await openNative();
+    await waitForVisualIndex();
     const el = ruler();
     stubRect(el);
     const root = view.container.firstElementChild as HTMLElement;

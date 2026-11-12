@@ -1,14 +1,15 @@
 import type { RefObject } from "react";
-import { act, fireEvent, screen } from "@testing-library/react";
-import { vi, type Mock } from "vitest";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { expect, vi, type Mock } from "vitest";
 
 import { formatDuration } from "@/lib/format";
 import type { MediaController } from "@/lib/mediaController";
-import type {
-  ClipTimestampItem,
-  VideoVisualIndexResponse,
-  VideoVisualRunSummary,
-  VideoVisualSceneItem,
+import {
+  getVideoVisualIndex,
+  type ClipTimestampItem,
+  type VideoVisualIndexResponse,
+  type VideoVisualRunSummary,
+  type VideoVisualSceneItem,
 } from "@/addons/intelligence/api";
 
 export const LOFT_MIME = "application/vnd.litloft.loft+json";
@@ -153,6 +154,18 @@ export async function flush(rounds = 4): Promise<void> {
   await act(async () => {
     for (let i = 0; i < rounds; i += 1) await Promise.resolve();
   });
+}
+
+/**
+ * The ruler is committed with the timestamps; the Visual Index answer is a
+ * separate request drawn in a later commit, so the slider alone does not mean
+ * the index part is on screen yet.
+ */
+export async function waitForVisualIndex(): Promise<void> {
+  await waitFor(() => expect(getVideoVisualIndex).toHaveBeenCalled());
+  await waitFor(() =>
+    expect(screen.queryByTestId("scenes-visual-placeholder")).toBeNull(),
+  );
 }
 
 export function header(): HTMLElement {

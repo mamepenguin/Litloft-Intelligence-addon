@@ -48,6 +48,7 @@ import {
   tileLabels,
   timestamps,
   advance,
+  waitForVisualIndex,
 } from "./helpers";
 
 function renderSection(props: Partial<SceneSectionProps> = {}) {
@@ -135,6 +136,7 @@ describe("SPEC-ADDON-089 I1 — ruler length L", () => {
 
     renderSection({ mediaController: controller });
     await openNative();
+    await waitForVisualIndex();
 
     expect(ruler()).toHaveAttribute("aria-valuemax", String(expected));
   });
@@ -156,6 +158,7 @@ describe("SPEC-ADDON-089 I1 — the nine-frame window", () => {
 
       renderSection({ mediaController: controller });
       await openNative();
+      await waitForVisualIndex();
 
       const expected = rows
         .slice(windowStart, windowStart + 9)
@@ -170,6 +173,7 @@ describe("SPEC-ADDON-089 I1 — the nine-frame window", () => {
     const { controller } = controllerAt(0, 70);
     renderSection({ mediaController: controller });
     await openNative();
+    await waitForVisualIndex();
 
     expect(ruler().querySelectorAll("canvas").length).toBeLessThanOrEqual(1);
     expect(ruler()).toHaveAttribute("aria-valuemax", "70");
@@ -250,6 +254,7 @@ describe("SPEC-ADDON-089 I2 — a mouse browse point", () => {
 
     renderSection({ mediaController: controller });
     await openNative();
+    await waitForVisualIndex();
     const el = ruler();
     stubRect(el);
 
@@ -267,6 +272,7 @@ describe("SPEC-ADDON-089 I2 — a mouse browse point", () => {
     const { controller } = controllerAt(0, 70);
     const { container } = renderSection({ mediaController: controller });
     await openNative();
+    await waitForVisualIndex();
     const el = ruler();
     stubRect(el);
 
@@ -295,6 +301,7 @@ describe("SPEC-ADDON-089 I2 — a mouse browse point clears when the pointer lea
   ])("leaving straight from %s with no related target clears it", async (_name, from) => {
     renderSection({ mediaController: makeController({ duration: 70 }).controller });
     await openNative();
+    await waitForVisualIndex();
     const el = ruler();
     stubRect(el);
 
@@ -317,6 +324,7 @@ describe("SPEC-ADDON-089 I2 — the playing tile follows the clock", () => {
 
     renderSection({ mediaController: controller });
     await openNative();
+    await waitForVisualIndex();
     const el = ruler();
     stubRect(el);
 
