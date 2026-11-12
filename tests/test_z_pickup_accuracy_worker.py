@@ -351,6 +351,9 @@ async def test_spec_addon_095_i5_the_checkpoint_ignores_row_order_and_float_nois
     """SPEC-ADDON-095 I5: the same history hashes the same, however it was written."""
     checkpoints = []
     played_at = utcnow() - timedelta(days=3)
+    # The arrival stamp carries the newest video's created_at, so two
+    # runs can only agree when the files claim the same creation time.
+    created_at = utcnow() - timedelta(days=100)
     for name, order, seconds in (
         ("one", range(5), [0.1, 0.2, 0.3]),
         ("two", reversed(range(5)), [0.3, 0.2, 0.1]),
@@ -359,10 +362,10 @@ async def test_spec_addon_095_i5_the_checkpoint_ignores_row_order_and_float_nois
         rig = _Rig(CoreDB(tmp_path / name / "litloft.db"), SearchDB(tmp_path / name / "search.db"))
         wire(monkeypatch, rig.core, rig.search)
         for i in order:
-            rig.core.add_file(f"h{i}")
+            rig.core.add_file(f"h{i}", created_at=created_at)
             rig.core.watch(f"h{i}", played_at=played_at)
             rig.search.index(f"h{i}", at_angle(0.0))
-        rig.candidate("c0", 5.0)
+        rig.candidate("c0", 5.0, created_at=created_at)
         await rig.sweep()
         unchanged = rig.header().watch_history_checkpoint
 
@@ -399,7 +402,7 @@ async def test_spec_addon_097_i7_a_long_feed_logs_its_first_40_in_stored_order(r
     assert len(logs) == 1
     computed_at, version, file_ids = logs[0]
     assert json.loads(file_ids) == stored[:40]
-    assert version == profile.PROFILE_VERSION == 3
+    assert version == profile.PROFILE_VERSION == 4
     assert _as_naive(computed_at) == _as_naive(header.computed_at)
 
 

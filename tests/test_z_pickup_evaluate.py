@@ -162,7 +162,14 @@ def test_spec_addon_098_i9_replay_scores_each_configuration(tmp_path):
     assert "candidate videos: 14 .. 14" in [l.strip() for l in v1]
     header, rows = _table(v1)
     assert header == ["config", "cuts", "skipped", "targets", "recall@12", "recall@40", "hit@40"]
-    assert list(rows) == ["before", "depth", "video", "after", "random", "newest"]
+    expected = ["before", "depth", "video", "after"]
+    expected += [
+        f"fresh_h{half_life:g}_f{floor:g}"
+        for half_life in (7, 30, 90, 365)
+        for floor in (0, 0.5)
+    ]
+    expected += ["random", "newest"]
+    assert [name.rstrip("*") for name in rows] == expected
     assert rows["before"] == ["1", "2", "2", "0.000", "0.500", "1.000"]
     assert rows["depth"] == ["1", "2", "2", "0.000", "0.500", "1.000"]
     assert rows["video"] == ["1", "2", "2", "0.500", "0.500", "1.000"]

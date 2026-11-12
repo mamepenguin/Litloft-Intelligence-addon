@@ -5,17 +5,22 @@ sweep over every indexed drive.
 
 Per drive:
 
-  1. Read the live-video set and load the candidate rows for each
-     channel, once. Neither depends on the viewer, so every viewer of
-     the drive scores against the same matrices; candidates are cut to
-     the drive's videos.
+  1. Take the reference time and read the drive's arrival stamp, once.
+     The stamp moves the checkpoint of every viewer of the drive when a
+     video or one of its Pickup embeddings arrives.
   2. Per viewer, read their history twice — the whole set of file ids
      they have opened, which bounds nothing, and the engaged videos for
      the window, which is capped.
-  3. Skip if their history has not moved since the last run.
-  4. Cluster the window into engagement-weighted lanes, score every lane
+  3. Skip if their history and the stamp have not moved since the last
+     run.
+  4. Read the live-video set and load the candidate rows for each
+     channel, once. Neither depends on the viewer, so every viewer of
+     the drive scores against the same matrices; candidates are cut to
+     the drive's videos. Freshness is computed once from the same read,
+     because age is a property of the file.
+  5. Cluster the window into engagement-weighted lanes, score every lane
      in one matmul per channel, interleave, and store the result as rows.
-  5. Record the feed's head in ``pickup_feed_log`` and prune old rows.
+  6. Record the feed's head in ``pickup_feed_log`` and prune old rows.
 
 The shape this replaced seeded a k-nearest-neighbour search from the
 five most recently watched files. Two things were wrong with it: the
@@ -37,9 +42,11 @@ from sqlalchemy import delete
 from app.database import get_search_db, get_search_db_read
 from app.models import IndexedFile, PickupFeedLog, PickupItem, PickupProfile
 from app.pickup import feed as feed_mod
+from app.pickup import freshness as freshness_mod
 from app.pickup import profile as profile_mod
 from app.pickup.retrieval import (
     CandidateSet,
+    arrival_stamp,
     load_candidates,
     restrict_candidates,
     score_lanes,
@@ -143,6 +150,12 @@ class PickupWorker:
     async def _compute_for_drive(self, drive: str) -> None:
         loop = asyncio.get_event_loop()
 
+        # One reference time for the whole computation, taken before any
+        # read so every viewer's feed sits on the same instant instead of
+        # drifting with the loop. Freshness is the only thing that uses
+        # it.
+        now = freshness_mod.reference_now()
+
         try:
             viewers = await loop.run_in_executor(
                 None, lambda: profile_mod.viewer_ids(drive)
@@ -153,6 +166,24 @@ class PickupWorker:
         if not viewers:
             return
 
+        # Read the stamp *before* the candidate load and the live-video
+        # read. A video or embedding written after this read then moves
+        # the next stamp, so the next computation rebuilds these viewers
+        # again instead of skipping them on a checkpoint that vouches
+        # for data the feed never saw. A failure here must abandon the
+        # drive: a fallback stamp without arrivals would delay every
+        # viewer until the date rolls.
+        try:
+            stamp = await loop.run_in_executor(
+                None, lambda: arrival_stamp(drive)
+            )
+        except Exception:
+            logger.exception(
+                "Pickup: could not read arrival stamp drive=%s; skipping this sweep",
+                drive,
+            )
+            return
+
         # Decide who needs rebuilding *before* touching the index. The
         # candidate matrices cost a read of every vector in the drive,
         # and on a quiet hour — the common case — none of it would be
@@ -161,7 +192,7 @@ class PickupWorker:
         for viewer_id in viewers:
             try:
                 stale = await loop.run_in_executor(
-                    None, lambda v=viewer_id: self._stale_work(drive, v)
+                    None, lambda v=viewer_id: self._stale_work(drive, v, stamp)
                 )
             except Exception:
                 logger.exception(
@@ -203,7 +234,7 @@ class PickupWorker:
         # quiet hour this read and the candidate load are both wasted.
         try:
             videos = await loop.run_in_executor(
-                None, lambda: profile_mod.live_video_ids(drive)
+                None, lambda: profile_mod.live_videos(drive)
             )
         except Exception:
             # Same reasoning as a failed candidate load: a feed built
@@ -216,15 +247,25 @@ class PickupWorker:
             )
             return
 
+        # Viewer-independent, so one pass for the whole drive. A file
+        # whose date will not parse gets the floor, which is the same
+        # value an infinitely old file gets: freshness is never invented.
+        freshness = {
+            file_id: freshness_mod.freshness(created_at, now)
+            for file_id, created_at in videos.items()
+        }
+
         for channel, candidate_set in candidates.items():
-            candidates[channel] = restrict_candidates(candidate_set, videos)
+            candidates[channel] = restrict_candidates(candidate_set, set(videos))
 
         for viewer_id, watched, checkpoint in pending:
             try:
                 await loop.run_in_executor(
                     None,
                     lambda v=viewer_id, w=watched, c=checkpoint:
-                        self._compute_for_viewer(drive, v, w, c, candidates),
+                        self._compute_for_viewer(
+                            drive, v, w, c, candidates, freshness,
+                        ),
                 )
             except Exception:
                 logger.exception(
@@ -232,7 +273,7 @@ class PickupWorker:
                 )
 
     def _stale_work(
-        self, drive: str, viewer_id: str,
+        self, drive: str, viewer_id: str, stamp: str,
     ) -> tuple[str, set[str], str] | None:
         """Return this viewer's pending work, or None if it is current."""
         signature = profile_mod.watch_signature(drive, viewer_id)
@@ -240,7 +281,7 @@ class PickupWorker:
             return None
         watched = {row[0] for row in signature}
 
-        checkpoint = _checkpoint(signature)
+        checkpoint = _checkpoint(signature, stamp)
         with get_search_db_read() as session:
             existing = (
                 session.query(PickupProfile)
@@ -258,6 +299,7 @@ class PickupWorker:
         watched: set[str],
         checkpoint: str,
         candidates: dict[str, CandidateSet],
+        freshness: dict[str, float],
     ) -> None:
         history = profile_mod.profile_history(drive, viewer_id)
         if not history:
@@ -287,6 +329,7 @@ class PickupWorker:
                 channel=channel,
                 exclude_file_ids=watched,
                 limit=_CANDIDATES_PER_LANE,
+                freshness=freshness,
             )
             for lane, hits in zip(channel_lanes, results, strict=True):
                 scored[lane.cluster_id] = list(hits)
@@ -392,8 +435,8 @@ def _log_feed(
         )
 
 
-def _checkpoint(signature: Sequence[tuple]) -> str:
-    """A hash of what this viewer has opened, and how it was engaged.
+def _checkpoint(signature: Sequence[tuple], stamp: str) -> str:
+    """A hash of what this viewer has opened, how it was engaged, and what arrived.
 
     *Anything watched*, not just the newest — a hash of the first twenty
     ids of a drive-wide recency list barely moved for a second viewer.
@@ -418,11 +461,19 @@ def _checkpoint(signature: Sequence[tuple]) -> str:
     their profile said the day they stopped. With it, a quiet viewer is
     recomputed once a day rather than never — an hourly sweep still
     skips them the other twenty-three times.
+
+    *What arrived.* A new video, a new embedding of one, or trash and
+    restore changes the feed without touching this viewer's history.
+    The drive's arrival stamp covers it. The stamp is read before the
+    candidate load, so a checkpoint written from it never vouches for
+    arrivals the feed was not built from.
     """
-    stamp = datetime.now(UTC).strftime("%Y-%m-%d")
+    date = datetime.now(UTC).strftime("%Y-%m-%d")
     version = profile_mod.PROFILE_VERSION
     joined = ";".join(
         f"{row[0]}@{row[1]}#{'#'.join(str(value) for value in row[2:])}"
         for row in sorted(signature, key=lambda row: row[0])
     )
-    return hashlib.md5(f"v{version}|{stamp}|{joined}".encode()).hexdigest()[:32]
+    return hashlib.md5(
+        f"v{version}|{date}|{stamp}|{joined}".encode()
+    ).hexdigest()[:32]

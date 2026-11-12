@@ -183,7 +183,7 @@ def _top(drive="a", channel="clip_thumbnail", exclude=(), limit=10,
         exclude_file_ids=set(exclude),
         limit=limit,
     )
-    return [[file_id for file_id, _ in lane] for lane in lanes]
+    return [[file_id for file_id, _, _ in lane] for lane in lanes]
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +260,7 @@ def test_a_document_is_scored_by_its_best_chunk(index):
         exclude_file_ids=set(), limit=10,
     )[0]
 
-    assert [f for f, _ in lane] == ["long", "short"]
+    assert [f for f, _, _ in lane] == ["long", "short"]
     assert lane[0][1] == pytest.approx(0.95, abs=1e-5)
 
 
@@ -429,7 +429,7 @@ def test_results_are_ordered_by_descending_score(index):
         candidates, [_query()], channel="clip_thumbnail",
         exclude_file_ids=set(), limit=10,
     )[0]
-    scores = [s for _, s in lane]
+    scores = [s for _, _, s in lane]
 
     assert scores == sorted(scores, reverse=True)
 
@@ -527,4 +527,4 @@ def test_the_matching_channel_is_accepted(index):
         exclude_file_ids=set(), limit=5,
     )
 
-    assert [f for f, _ in got[0]] == ["chunk"]
+    assert [f for f, _, _ in got[0]] == ["chunk"]
