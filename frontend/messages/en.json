@@ -5,6 +5,8 @@
     },
     "slots": {
       "transcript": "Transcript",
+      "scenes": "Scenes",
+      "detailedSummary": "Detailed summary",
       "ask": "Ask"
     },
     "policyFeatures": {

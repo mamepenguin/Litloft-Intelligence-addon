@@ -61,6 +61,9 @@ export interface SceneSectionProps {
   mimeType?: string;
   videoRef?: RefObject<HTMLVideoElement | null>;
   mediaController?: MediaController | null;
+  active?: boolean;
+  labelledByHost?: boolean;
+  onAvailability?: (available: boolean) => void;
 }
 
 export interface ClockState {

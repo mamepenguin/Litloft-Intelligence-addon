@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import { FileText, Quote, Sparkles } from "lucide-react";
 import { useTranslations } from "next-intl";
@@ -73,6 +80,11 @@ interface TranscriptSectionProps {
    * it is the thing giving the answer — so it can be taken back.
    */
   onAvailability?: (available: boolean) => void;
+  /**
+   * Whether the host is showing this panel. `false` hides it as surely as
+   * an ancestor with `hidden` does, and is read the same way here.
+   */
+  active?: boolean;
 }
 
 type Source = "chunks" | "words" | "external";
@@ -211,6 +223,7 @@ export default function TranscriptSection({
   fillHeight = false,
   labelledByHost = false,
   onAvailability,
+  active,
 }: TranscriptSectionProps) {
   const t = useTranslations("searchIndex");
   const ime = useImeKeyGuard();
@@ -275,6 +288,13 @@ export default function TranscriptSection({
     listRef.current = node;
     setListEl(node);
   }, []);
+
+  // The host says "not shown" either with an ancestor's `hidden` or with
+  // `active: false`; both leave no position to aim at and no reader scrolling.
+  const isHidden = useCallback(
+    (node: Element) => active === false || node.closest("[hidden]") !== null,
+    [active],
+  );
 
   const chunksAvailable = whisperChunks.length > 0;
   const wordsAvailable = whisperWordCues.length > 0;
@@ -394,7 +414,7 @@ export default function TranscriptSection({
       // Rows starting at other times are about to replace these, so the
       // reader's row is read now and put back once they have.
       const list = listRef.current;
-      if (list && !list.closest("[hidden]") && !putBackPendingRef.current) {
+      if (list && !isHidden(list) && !putBackPendingRef.current) {
         placeRef.current = readPlace(list) ?? placeRef.current;
         putBackPendingRef.current = true;
         // This put-back is for rows a render away; a scroll before it runs
@@ -406,7 +426,7 @@ export default function TranscriptSection({
       setActiveIndex(-1);
       setSource(wanted);
     }
-  }, [chunksAvailable, wordsAvailable, externalAvailable, source, chosenSource]);
+  }, [chunksAvailable, wordsAvailable, externalAvailable, source, chosenSource, isHidden]);
 
   const hasAnything = chunksAvailable || wordsAvailable || externalAvailable;
 
@@ -418,6 +438,12 @@ export default function TranscriptSection({
   useEffect(() => {
     onAvailabilityRef.current = onAvailability;
   });
+
+  // Before paint, so a host that already shows this panel on the previous
+  // file's answer takes it away in the frame the new file starts in.
+  useLayoutEffect(() => {
+    onAvailabilityRef.current?.(false);
+  }, [fileId]);
 
   // `false` first, because on mount nothing has arrived yet and the
   // host's default is "assume it has something". Answering only when
@@ -464,7 +490,7 @@ export default function TranscriptSection({
     // A panel the host is not showing has no position to aim at, and
     // scrolling an enclosing box for it would move what the reader is
     // looking at instead.
-    if (target.closest("[hidden]")) return;
+    if (isHidden(target)) return;
     // Scroll one box — avoid scrollIntoView, which bubbles up and moves
     // the page away from the video.
     const scroller = scrollingBoxOf(list);
@@ -479,7 +505,7 @@ export default function TranscriptSection({
     const nextTop =
       targetOffset - (scroller.clientHeight - covered - target.clientHeight) / 2;
     scroller.scrollTo({ top: nextTop, behavior: "smooth" });
-  }, []);
+  }, [isHidden]);
 
   useEffect(() => {
     if (!following) return;
@@ -507,7 +533,7 @@ export default function TranscriptSection({
     // scroller is shared with the other tabs, so it only counts while the
     // transcript is the one shown.
     const scroller = scrollingBoxOf(list);
-    const shown = () => !list.closest("[hidden]");
+    const shown = () => !isHidden(list);
     const suspend = () => {
       if (shown()) setFollowing(false);
     };
@@ -528,7 +554,7 @@ export default function TranscriptSection({
       scroller.removeEventListener("touchmove", suspend);
       scroller.removeEventListener("pointerdown", suspendOnScrollbar);
     };
-  }, [listEl]);
+  }, [listEl, isHidden]);
 
   // Current `following` for the save below, which runs from a DOM
   // listener and on unmount — neither of which sees a re-rendered
@@ -575,7 +601,7 @@ export default function TranscriptSection({
   const putBack = useCallback(
     (list: HTMLElement): boolean => {
       if (!putBackPendingRef.current) return false;
-      if (list.closest("[hidden]") || awaitingChosenRef.current) return false;
+      if (isHidden(list) || awaitingChosenRef.current) return false;
       putBackPendingRef.current = false;
       if (followingRef.current && activeRef.current) {
         scrollActiveIntoView();
@@ -584,7 +610,7 @@ export default function TranscriptSection({
       }
       return true;
     },
-    [scrollActiveIntoView],
+    [scrollActiveIntoView, isHidden],
   );
 
   /**
@@ -665,7 +691,7 @@ export default function TranscriptSection({
         ...(chosenSourceRef.current ? { source: chosenSourceRef.current } : {}),
       });
     const onScroll = () => {
-      if (list.closest("[hidden]")) return;
+      if (isHidden(list)) return;
       if (putBackPendingRef.current) {
         // Waiting on the source the reader chose, the rows shown meanwhile
         // are theirs to read, and moving them is a place of their own that
@@ -682,7 +708,7 @@ export default function TranscriptSection({
       scroller.removeEventListener("scroll", onScroll);
       save();
     };
-  }, [fileId, listEl]);
+  }, [fileId, listEl, isHidden]);
 
   const resumeFollowing = useCallback(() => {
     setFollowing(true);

@@ -65,11 +65,6 @@
         "id": "picture-text",
         "label": "Text in image",
         "priority": 10
-      },
-      {
-        "id": "scenes",
-        "label": "Scenes",
-        "priority": 20
       }
     ],
     "file-relations": [
@@ -85,6 +80,18 @@
         "label": "Transcript",
         "i18n_key": "intelligence.slots.transcript",
         "priority": 10
+      },
+      {
+        "id": "scenes",
+        "label": "Scenes",
+        "i18n_key": "intelligence.slots.scenes",
+        "priority": 20
+      },
+      {
+        "id": "detailed-summary",
+        "label": "Detailed summary",
+        "i18n_key": "intelligence.slots.detailedSummary",
+        "priority": 30
       }
     ],
     "inspector-tabs": [
