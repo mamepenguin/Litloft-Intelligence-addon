@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 
-import { sceneRows } from "@/addons/intelligence/ScenesSection/scenesModel";
+import {
+  scaledTileHeight,
+  sceneRows,
+} from "@/addons/intelligence/ScenesSection/scenesModel";
 
 describe("SPEC-ADDON-104 I1 — R is the largest whole number of at least 3 for which the slack is at least 0", () => {
   it.each([
@@ -32,5 +35,40 @@ describe("SPEC-ADDON-104 I1 — R is the largest whole number of at least 3 for 
         expect(sceneRows(rows, atRows, step)).toBe(rows);
       }
     }
+  });
+});
+
+describe("SPEC-ADDON-104 I1 — at the full width only the picture's height scales", () => {
+  it.each([
+    {
+      name: "a narrower full width shortens the picture and keeps the label",
+      tile: 120,
+      picture: 100,
+      scale: 0.88,
+      height: 20 + 88,
+    },
+    {
+      name: "a wider full width grows the picture and keeps the label",
+      tile: 120,
+      picture: 100,
+      scale: 1.1,
+      height: 20 + 110,
+    },
+    {
+      name: "a scale of one keeps the tile",
+      tile: 120,
+      picture: 100,
+      scale: 1,
+      height: 120,
+    },
+    {
+      name: "a 4:3 picture's own height scales",
+      tile: 132,
+      picture: 112,
+      scale: 0.9,
+      height: 20 + 100.8,
+    },
+  ])("SPEC-ADDON-104 I1 — $name", ({ tile, picture, scale, height }) => {
+    expect(scaledTileHeight(tile, picture, scale)).toBeCloseTo(height, 6);
   });
 });

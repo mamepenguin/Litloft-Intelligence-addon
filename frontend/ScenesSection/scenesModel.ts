@@ -127,6 +127,18 @@ export function sceneRows(
   return Math.max(MIN_ROWS, drawnRows + Math.floor(slack / step));
 }
 
+/**
+ * The tile's height at a scaled width: the picture grows with the width, the
+ * time label under it keeps its height.
+ */
+export function scaledTileHeight(
+  tileHeight: number,
+  pictureHeight: number,
+  scale: number,
+): number {
+  return tileHeight - pictureHeight + pictureHeight * scale;
+}
+
 /** First frame of the window of `rows` rows, which holds `columns` frames a row. */
 export function windowStartFor(
   index: number,

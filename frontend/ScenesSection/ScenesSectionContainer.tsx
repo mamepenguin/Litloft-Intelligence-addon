@@ -543,8 +543,12 @@ export default function ScenesSectionContainer({
       : "loading";
 
   const rulerWidth = useRulerWidth(rulerRef, view !== "collapsed");
-  const columns = useMemo(() => sceneColumns(rulerWidth), [rulerWidth]);
-  const rowCount = useSceneRows(
+  const {
+    rows: rowCount,
+    fullWidthColumns,
+    scrollbarColumns,
+    hasScrollbar,
+  } = useSceneRows(
     {
       root: sectionRef,
       header: headerRef,
@@ -555,6 +559,16 @@ export default function ScenesSectionContainer({
     },
     view === "expanded",
   );
+  // Beside a scrollbar at 3 rows the grid keeps the narrower width, as it
+  // always has. Everywhere else it draws the columns the rows were measured
+  // at, so a scrollbar cannot redraw wider, taller tiles under a row count
+  // chosen without one.
+  const columns = useMemo(() => {
+    if (rowCount <= 3 && hasScrollbar && scrollbarColumns > 0) {
+      return scrollbarColumns;
+    }
+    return fullWidthColumns > 0 ? fullWidthColumns : sceneColumns(rulerWidth);
+  }, [rowCount, hasScrollbar, scrollbarColumns, fullWidthColumns, rulerWidth]);
 
   // The one window of this render: the pictures requested, the drawn grid and
   // the ruler's band all read it, so they cannot disagree about which frames

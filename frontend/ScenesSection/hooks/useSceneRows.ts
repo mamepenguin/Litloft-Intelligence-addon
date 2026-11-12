@@ -1,6 +1,6 @@
 import { useLayoutEffect, useState, type RefObject } from "react";
 
-import { sceneColumns, sceneRows } from "../scenesModel";
+import { sceneColumns, sceneRows, scaledTileHeight } from "../scenesModel";
 
 const DEFAULT_ROWS = 3;
 
@@ -13,13 +13,35 @@ export interface SceneRowsRefs {
   lastPart: RefObject<HTMLElement | null>;
 }
 
+export interface SceneRowsResult {
+  /** Grid rows the section's scroller can hold. */
+  rows: number;
+  /** Columns at the width the scroller has without a classic scrollbar. */
+  fullWidthColumns: number;
+  /** Columns at the width left beside a classic scrollbar. */
+  scrollbarColumns: number;
+  /** A classic scrollbar is taking width from the scroller. */
+  hasScrollbar: boolean;
+}
+
+const INITIAL: SceneRowsResult = {
+  rows: DEFAULT_ROWS,
+  fullWidthColumns: 0,
+  scrollbarColumns: 0,
+  hasScrollbar: false,
+};
+
 /**
- * Grid rows the section's scroller can hold. Measured before paint so a shown
- * body never paints a row count the parts in the same frame would replace, and
- * measured again whenever the scroller or a part around the grid changes size.
+ * Grid rows the section's scroller can hold, with the column count of the
+ * width the rows are measured at. Measured before paint so a shown body never
+ * paints a row count the parts in the same frame would replace, and measured
+ * again whenever the scroller or a part around the grid changes size.
  */
-export function useSceneRows(refs: SceneRowsRefs, active: boolean): number {
-  const [rows, setRows] = useState(DEFAULT_ROWS);
+export function useSceneRows(
+  refs: SceneRowsRefs,
+  active: boolean,
+): SceneRowsResult {
+  const [result, setResult] = useState(INITIAL);
 
   useLayoutEffect(() => {
     if (!active) return;
@@ -27,7 +49,14 @@ export function useSceneRows(refs: SceneRowsRefs, active: boolean): number {
     const measure = () => {
       const next = measureRows(refs);
       if (!next) return;
-      setRows((current) => next(current));
+      setResult((current) =>
+        current.rows === next.rows &&
+        current.fullWidthColumns === next.fullWidthColumns &&
+        current.scrollbarColumns === next.scrollbarColumns &&
+        current.hasScrollbar === next.hasScrollbar
+          ? current
+          : next,
+      );
     };
 
     measure();
@@ -50,7 +79,7 @@ export function useSceneRows(refs: SceneRowsRefs, active: boolean): number {
     return () => observer.disconnect();
   });
 
-  return rows;
+  return result;
 }
 
 /**
@@ -68,12 +97,10 @@ function findScroller(from: HTMLElement): HTMLElement | null {
 }
 
 /**
- * A function of the rows already held, or null when the section is not laid
- * out: hidden, jsdom, or no tile and scroller to measure.
+ * The rows and full-width columns the section is laid out at, or null when it
+ * is not: hidden, jsdom, or no tile and scroller to measure.
  */
-function measureRows(
-  refs: SceneRowsRefs,
-): ((current: number) => number) | null {
+function measureRows(refs: SceneRowsRefs): SceneRowsResult | null {
   const root = refs.root.current;
   const grid = refs.grid.current;
   const tile = refs.tile.current;
@@ -116,13 +143,23 @@ function measureRows(
       ? fullTileWidth / tileRect.width
       : 1;
 
+  const picture = tile.firstElementChild;
+  const pictureHeight = picture
+    ? picture.getBoundingClientRect().height
+    : tileRect.height;
+  const fullTileHeight = scaledTileHeight(
+    tileRect.height,
+    pictureHeight,
+    scale,
+  );
+
   const tops = new Set<number>();
   for (const child of Array.from(grid.children)) {
     const rect = child.getBoundingClientRect();
     if (rect.height > 0) tops.add(Math.round(rect.top));
   }
   const drawnRows = Math.max(1, tops.size);
-  const step = tileRect.height * scale + rowGap;
+  const step = fullTileHeight + rowGap;
 
   const last = refs.lastPart.current ?? grid;
   const paddingEdge = scroller.getBoundingClientRect().top + scroller.clientTop;
@@ -145,12 +182,16 @@ function measureRows(
     below +
     px(scrollerStyle.paddingBottom);
   const slack = scroller.clientHeight - used;
-  const fullWidthSlack = slack - drawnRows * (tileRect.height * scale - tileRect.height);
+  const fullWidthSlack = slack - drawnRows * (fullTileHeight - tileRect.height);
 
-  return (current) =>
-    step > 0 && Number.isFinite(fullWidthSlack)
-      ? sceneRows(drawnRows, fullWidthSlack, step)
-      : current;
+  if (!(step > 0) || !Number.isFinite(fullWidthSlack)) return null;
+
+  return {
+    rows: sceneRows(drawnRows, fullWidthSlack, step),
+    fullWidthColumns: fullColumns,
+    scrollbarColumns: sceneColumns(gridRect.width),
+    hasScrollbar: scrollbar > 0,
+  };
 }
 
 function px(value: string): number {
