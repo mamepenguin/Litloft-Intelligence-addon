@@ -349,6 +349,23 @@ describe("SPEC-ADDON-089 I3 — touch and pen browsing", () => {
     expect(ruler()).toHaveAttribute("aria-valuenow", "0");
   });
 
+  it("SPEC-ADDON-099 — the section stopping being active clears the browse point", async () => {
+    const { controller } = makeController({ duration: 70, paused: true });
+    const view = renderSection({ active: true, mediaController: controller });
+    await waitForVisualIndex();
+    const el = ruler();
+    stubRect(el);
+
+    firePointer(el, "pointerMove", { pointerType: "mouse", clientX: pointerX(60, 70) });
+    expect(ruler()).toHaveAttribute("aria-valuenow", "60");
+
+    view.rerender(section({ active: false, mediaController: controller }));
+    view.rerender(section({ active: true, mediaController: controller }));
+    await screen.findByRole("slider");
+
+    expect(ruler()).toHaveAttribute("aria-valuenow", "0");
+  });
+
   it("SPEC-ADDON-089 I3 — a file change clears the browse point", async () => {
     const { controller } = makeController({ duration: 70, paused: true });
     const view = renderSection({ mediaController: controller });

@@ -26,6 +26,7 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -89,6 +90,12 @@ interface DetailedSummarySectionProps {
   // on video / audio content. May be absent for non-media file types.
   videoRef?: React.RefObject<HTMLVideoElement | null>;
   mediaController?: MediaController | null;
+  /** Whether the host is showing this panel. Absent where the file page draws it by itself. */
+  active?: boolean;
+  /** The host already writes this panel's name above it. */
+  labelledByHost?: boolean;
+  /** Whether there is anything for this file to draw. Silence means available. */
+  onAvailability?: (available: boolean) => void;
 }
 
 // Detailed summary generation is expensive: tens of seconds to a few
@@ -108,6 +115,9 @@ export default function DetailedSummarySection({
   drive,
   videoRef,
   mediaController,
+  active,
+  labelledByHost = false,
+  onAvailability,
 }: DetailedSummarySectionProps) {
   const t = useTranslations("file");
   const td = useTranslations("detailedSummary");
@@ -152,6 +162,23 @@ export default function DetailedSummarySection({
   // AI draft that no longer represents the file.
   const { data: activeSummary } = useActiveSummary(fileId, drive);
   const hasActiveSummary = activeSummary?.has_active_summary === true;
+
+  const onAvailabilityRef = useRef(onAvailability);
+  useEffect(() => {
+    onAvailabilityRef.current = onAvailability;
+  });
+
+  useLayoutEffect(() => {
+    onAvailabilityRef.current?.(false);
+  }, [fileId]);
+
+  // A toggle only means something when pressing it would reveal something.
+  const canShow =
+    loaded &&
+    (hasActiveSummary ||
+      data?.status === "generating" ||
+      data?.status === "failed" ||
+      data?.available === true);
 
   // Knowledge availability gate for the "save" button. The addon
   // catalogue is per-drive, so this flips when the user switches
@@ -198,6 +225,11 @@ export default function DetailedSummarySection({
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileId, drive]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    onAvailabilityRef.current?.(canShow);
+  }, [loaded, canShow]);
 
   // React to WS events for this file. `useWebSocket` returns the last
   // event globally; we filter on file_id so other files don't perturb
@@ -523,7 +555,9 @@ export default function DetailedSummarySection({
     <CitationRailProvider fileId={fileId} drive={drive}>
       <DetailedSummaryBody
         data={data}
-        collapsed={collapsed}
+        collapsed={labelledByHost ? false : collapsed}
+        labelledByHost={labelledByHost}
+        active={active}
         onToggleCollapsed={handleToggleCollapsed}
         sections={sections}
         citations={citations}
@@ -576,6 +610,8 @@ export default function DetailedSummarySection({
 interface DetailedSummaryBodyProps {
   data: DetailedSummaryResponse;
   collapsed: boolean;
+  labelledByHost: boolean;
+  active?: boolean;
   onToggleCollapsed: () => void;
   sections: ParsedSection[];
   citations: DetailedSummaryCitation[];
@@ -619,6 +655,8 @@ interface DetailedSummaryBodyProps {
 function DetailedSummaryBody({
   data,
   collapsed,
+  labelledByHost,
+  active,
   onToggleCollapsed,
   sections,
   citations,
@@ -696,6 +734,9 @@ function DetailedSummaryBody({
   }, [expandWeakOnly, weakCitations]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // A panel the host is not showing must not take a window-level key away
+  // from whatever the reader is looking at instead.
+  const keysEnabled = active !== false;
 
   // Keyboard shortcuts on the whole section. Registered on window so
   // any focused citable segment inside it handles ↑/↓/Enter/j even
@@ -724,11 +765,11 @@ function DetailedSummaryBody({
         handler: collapseAll,
       },
     ],
-    !collapsed && expanded.size > 0,
+    !collapsed && expanded.size > 0 && keysEnabled,
   );
 
   useEffect(() => {
-    if (collapsed) return;
+    if (collapsed || !keysEnabled) return;
     const host = containerRef.current;
     if (!host) return;
 
@@ -792,6 +833,7 @@ function DetailedSummaryBody({
     return () => window.removeEventListener("keydown", handler);
   }, [
     collapsed,
+    keysEnabled,
     verify,
     setVerify,
     expanded,
@@ -869,28 +911,30 @@ function DetailedSummaryBody({
   return (
     <div ref={containerRef} data-citation-host={verify ? "on" : "off"}>
       <div className={`flex flex-wrap items-center gap-2 ${collapsed ? "" : "mb-2"}`}>
-        <button
-          onClick={onToggleCollapsed}
-          aria-expanded={!collapsed}
-          aria-label={
-            collapsed
-              ? t("detailedSummaryShow", { defaultMessage: "Expand" })
-              : t("detailedSummaryHide", { defaultMessage: "Collapse" })
-          }
-          className="flex items-center gap-2 rounded-lg text-text-muted transition-colors hover:text-text-primary"
-        >
-          {collapsed ? (
-            <ChevronRight size={14} className="text-text-muted" />
-          ) : (
-            <ChevronDown size={14} className="text-text-muted" />
-          )}
-          <FileText size={14} className="text-accent-teal" />
-          <h2 className="text-sm font-semibold">
-            {t("detailedSummaryTitle", {
-              defaultMessage: "AI Detailed Summary",
-            })}
-          </h2>
-        </button>
+        {!labelledByHost && (
+          <button
+            onClick={onToggleCollapsed}
+            aria-expanded={!collapsed}
+            aria-label={
+              collapsed
+                ? t("detailedSummaryShow", { defaultMessage: "Expand" })
+                : t("detailedSummaryHide", { defaultMessage: "Collapse" })
+            }
+            className="flex items-center gap-2 rounded-lg text-text-muted transition-colors hover:text-text-primary"
+          >
+            {collapsed ? (
+              <ChevronRight size={14} className="text-text-muted" />
+            ) : (
+              <ChevronDown size={14} className="text-text-muted" />
+            )}
+            <FileText size={14} className="text-accent-teal" />
+            <h2 className="text-sm font-semibold">
+              {t("detailedSummaryTitle", {
+                defaultMessage: "AI Detailed Summary",
+              })}
+            </h2>
+          </button>
+        )}
         {!collapsed && data.model && !edited && (
           <span className="text-[10px] text-text-muted/50">{data.model}</span>
         )}

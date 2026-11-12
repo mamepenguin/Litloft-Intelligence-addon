@@ -42,6 +42,7 @@ export interface ScenesVisualView {
 
 export interface ScenesSectionPresenterProps {
   view: ScenesView;
+  labelledByHost?: boolean;
   panelId: string;
   rows: ClipTimestampItem[];
   length: number;
@@ -82,6 +83,7 @@ function percent(fraction: number): string {
 
 export default function ScenesSectionPresenter({
   view,
+  labelledByHost = false,
   panelId,
   rows,
   length,
@@ -165,53 +167,55 @@ export default function ScenesSectionPresenter({
       onPointerLeave={onSectionPointerLeave}
       onBlur={onSectionBlur}
     >
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        aria-controls={panelId}
-        className="flex w-full cursor-pointer items-center gap-2 text-sm text-text-muted transition-colors hover:text-text-primary"
-      >
-        <Film size={14} aria-hidden="true" />
-        <span>{t("scenesTitle")}</span>
-        {expanded && rows.length > 0 && (
-          <span className="tabular-nums">{rows.length}</span>
-        )}
-        {ready && visual?.count != null && (
-          <span
-            aria-label={t("scenesCount", { count: visual.count })}
-            className="inline-flex items-center gap-1 tabular-nums"
-          >
+      {!labelledByHost && (
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={expanded}
+          aria-controls={panelId}
+          className="flex w-full cursor-pointer items-center gap-2 text-sm text-text-muted transition-colors hover:text-text-primary"
+        >
+          <Film size={14} aria-hidden="true" />
+          <span>{t("scenesTitle")}</span>
+          {expanded && rows.length > 0 && (
+            <span className="tabular-nums">{rows.length}</span>
+          )}
+          {ready && visual?.count != null && (
             <span
+              aria-label={t("scenesCount", { count: visual.count })}
+              className="inline-flex items-center gap-1 tabular-nums"
+            >
+              <span
+                aria-hidden="true"
+                className="h-1.5 w-1.5 rounded-full bg-accent-teal"
+              />
+              {visual.count}
+            </span>
+          )}
+          {ready && visual?.progress && (
+            <span
+              aria-label={
+                visual.progress.updating
+                  ? t("scenesUpdating", { progress: visual.progress.text })
+                  : t("scenesProcessing", { progress: visual.progress.text })
+              }
+              className="tabular-nums"
+            >
+              {visual.progress.text}
+            </span>
+          )}
+          {ready && visual?.spinner && (
+            <Loader2
+              size={12}
               aria-hidden="true"
-              className="h-1.5 w-1.5 rounded-full bg-accent-teal"
+              className="animate-spin motion-reduce:animate-none"
             />
-            {visual.count}
+          )}
+          <span className="ml-auto" aria-hidden="true">
+            {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
           </span>
-        )}
-        {ready && visual?.progress && (
-          <span
-            aria-label={
-              visual.progress.updating
-                ? t("scenesUpdating", { progress: visual.progress.text })
-                : t("scenesProcessing", { progress: visual.progress.text })
-            }
-            className="tabular-nums"
-          >
-            {visual.progress.text}
-          </span>
-        )}
-        {ready && visual?.spinner && (
-          <Loader2
-            size={12}
-            aria-hidden="true"
-            className="animate-spin motion-reduce:animate-none"
-          />
-        )}
-        <span className="ml-auto" aria-hidden="true">
-          {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-        </span>
-      </button>
+        </button>
+      )}
 
       {expanded && (
         <div id={panelId} className="flex flex-col gap-3.5">

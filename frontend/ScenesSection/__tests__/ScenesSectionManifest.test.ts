@@ -6,6 +6,7 @@ interface SectionEntry {
   id: string;
   label: string;
   priority: number;
+  i18n_key?: string;
 }
 
 interface Manifest {
@@ -19,18 +20,24 @@ const manifest = JSON.parse(
   ),
 ) as Manifest;
 
-const sections = manifest.slots["file-detail-sections"];
+const sections = manifest.slots["file-detail-sections"] ?? [];
+const panels = manifest.slots["player-side"] ?? [];
 
 describe("SPEC-ADDON-089 I5 — the intelligence manifest", () => {
-  it("has exactly one scenes entry, labelled Scenes at priority 20", () => {
-    const scenes = sections.filter((entry) => entry.id === "scenes");
+  it("has exactly one scenes entry, in player-side, labelled Scenes at priority 20", () => {
+    const inPlayer = panels.filter((entry) => entry.id === "scenes");
 
-    expect(scenes).toHaveLength(1);
-    expect(scenes[0]).toMatchObject({ label: "Scenes", priority: 20 });
+    expect(inPlayer).toHaveLength(1);
+    expect(inPlayer[0]).toMatchObject({ label: "Scenes", priority: 20 });
+    expect(typeof inPlayer[0].i18n_key).toBe("string");
+    expect(sections.map((entry) => entry.id)).not.toContain("scenes");
   });
 
   it("has no visual-index or clip-frames entry left", () => {
-    expect(sections.map((entry) => entry.id)).not.toContain("visual-index");
-    expect(sections.map((entry) => entry.id)).not.toContain("clip-frames");
+    const ids = Object.values(manifest.slots).flatMap((entries) =>
+      entries.map((entry) => entry.id),
+    );
+    expect(ids).not.toContain("visual-index");
+    expect(ids).not.toContain("clip-frames");
   });
 });
