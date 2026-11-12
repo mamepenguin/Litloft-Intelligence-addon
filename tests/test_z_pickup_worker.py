@@ -88,8 +88,9 @@ def rig(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(worker_mod.profile_mod, "profile_history",
                         lambda drive, v: list(state["history"].get(v, ())))
-    monkeypatch.setattr(worker_mod.profile_mod, "live_video_ids",
-                        lambda drive: {"c1", "c2", "c3"})
+    monkeypatch.setattr(worker_mod.profile_mod, "live_videos",
+                        lambda drive: {"c1": None, "c2": None, "c3": None})
+    monkeypatch.setattr(worker_mod, "arrival_stamp", lambda drive: "stamp")
     monkeypatch.setattr(worker_mod.profile_mod, "build_lanes",
                         lambda history, key: list(state["lanes"]))
     monkeypatch.setattr(worker_mod.profile_mod, "CHANNELS",
@@ -108,12 +109,13 @@ def rig(monkeypatch, tmp_path):
             matrix=np.eye(3, 4, dtype=np.float32),
         )
 
-    def fake_score(candidates, centroids, *, channel, exclude_file_ids, limit):
+    def fake_score(candidates, centroids, *, channel, exclude_file_ids, limit,
+                   freshness=None):
         assert channel == candidates.channel, (
             f"{channel} lanes scored against {candidates.channel} rows"
         )
         state["scores"].append(set(exclude_file_ids))
-        hits = [(f, 0.9 - i * 0.01)
+        hits = [(f, 0.9 - i * 0.01, 0.9 - i * 0.01)
                 for i, f in enumerate(candidates.file_ids)
                 if f not in exclude_file_ids]
         return [list(hits[:limit]) for _ in centroids]
@@ -420,7 +422,8 @@ async def test_a_lane_is_scored_against_its_own_channels_candidates(rig):
     """
     seen = []
 
-    def recording_score(candidates, centroids, *, channel, exclude_file_ids, limit):
+    def recording_score(candidates, centroids, *, channel, exclude_file_ids, limit,
+                        freshness=None):
         seen.append((channel, candidates.channel, len(centroids)))
         return [[] for _ in centroids]
 
@@ -515,25 +518,25 @@ def test_the_checkpoint_moves_with_the_day():
 
     with patch.object(worker_mod, "datetime") as clock:
         clock.now.return_value = datetime(2026, 3, 2, tzinfo=UTC)
-        monday = worker_mod._checkpoint(sig)
+        monday = worker_mod._checkpoint(sig, "")
         clock.now.return_value = datetime(2026, 3, 3, tzinfo=UTC)
-        tuesday = worker_mod._checkpoint(sig)
+        tuesday = worker_mod._checkpoint(sig, "")
         clock.now.return_value = datetime(2026, 3, 3, 23, tzinfo=UTC)
-        same_day = worker_mod._checkpoint(sig)
+        same_day = worker_mod._checkpoint(sig, "")
 
     assert monday != tuesday
     assert tuesday == same_day
 
 
 def test_the_checkpoint_still_moves_with_membership():
-    a = worker_mod._checkpoint([("f1", "t", 1), ("f2", "t", 1)])
-    b = worker_mod._checkpoint([("f1", "t", 1)])
+    a = worker_mod._checkpoint([("f1", "t", 1), ("f2", "t", 1)], "")
+    b = worker_mod._checkpoint([("f1", "t", 1)], "")
     assert a != b
 
 
 def test_the_checkpoint_is_order_independent_over_pairs():
-    a = worker_mod._checkpoint([("f1", "t1", 1), ("f2", "t2", 1)])
-    b = worker_mod._checkpoint([("f2", "t2", 1), ("f1", "t1", 1)])
+    a = worker_mod._checkpoint([("f1", "t1", 1), ("f2", "t2", 1)], "")
+    b = worker_mod._checkpoint([("f2", "t2", 1), ("f1", "t1", 1)], "")
     assert a == b
 
 
@@ -543,8 +546,8 @@ def test_trashing_a_watched_file_rebuilds_the_feed():
     A trashed file leaves the id and the timestamp untouched while
     changing which entries the profile is built from.
     """
-    live = worker_mod._checkpoint([("f1", "t", 1)])
-    trashed = worker_mod._checkpoint([("f1", "t", 0)])
+    live = worker_mod._checkpoint([("f1", "t", 1)], "")
+    trashed = worker_mod._checkpoint([("f1", "t", 0)], "")
 
     assert live != trashed
 
@@ -583,11 +586,11 @@ def test_changing_the_ranking_invalidates_stored_feeds(monkeypatch):
     checkpoint would otherwise have no way to notice.
     """
     sig = [("f1", "2026-01-01 00:00:00", 1)]
-    before = worker_mod._checkpoint(sig)
+    before = worker_mod._checkpoint(sig, "")
 
     monkeypatch.setattr(
         worker_mod.profile_mod, "PROFILE_VERSION",
         worker_mod.profile_mod.PROFILE_VERSION + 1,
     )
 
-    assert worker_mod._checkpoint(sig) != before
+    assert worker_mod._checkpoint(sig, "") != before

@@ -8,10 +8,11 @@ went on to watch":
   what happened, and cannot be flattered by a simulation.
 - ``replay`` rebuilds the feed at a past cut point and scores it against
   the plays that followed. It can compare configurations — documents in
-  or out, engagement or not — because it computes all of them from one
-  history. History keeps one row per file and engagement is today's,
-  which makes it optimistic about content-based rankings; ``online`` is
-  the check that the optimism did not decide the answer.
+  or out, engagement or not, and a grid of freshness settings on the
+  worker's own lanes — because it computes all of them from one history.
+  History keeps one row per file and engagement is today's, which makes
+  it optimistic about content-based rankings; ``online`` is the check
+  that the optimism did not decide the answer.
 
 The replay must rank as the worker ranks, or the numbers describe a
 program nobody runs. So it calls the worker's own profile, clustering,
@@ -40,6 +41,7 @@ from app.database import (
     init_readonly_databases,
 )
 from app.pickup import feed as feed_mod
+from app.pickup import freshness as freshness_mod
 from app.pickup import profile as profile_mod
 from app.pickup.retrieval import (
     CandidateSet,
@@ -50,7 +52,7 @@ from app.pickup.retrieval import (
 from app.workers.pickup import _CANDIDATES_PER_LANE, _FEED_DEPTH
 
 #: The feeds compared by ``replay``, in report order. ``after`` is the
-#: worker's path: videos only, weighted by engagement.
+#: worker's path with freshness off: videos only, weighted by engagement.
 _CONFIGS = (
     ("before", False, False),
     ("depth", False, True),
@@ -58,8 +60,14 @@ _CONFIGS = (
     ("after", True, True),
 )
 
-#: Report order: the four configurations, then the two references.
-_REPORTED = tuple(name for name, *_ in _CONFIGS) + ("random", "newest")
+#: The freshness settings ``replay`` reports on top of the configurations:
+#: ``(HALF_LIFE_DAYS, FLOOR)``. Each row re-scores ``after``'s lanes at the
+#: cut point, so the grid costs no profile or clustering.
+_GRID = tuple(
+    (half_life, floor)
+    for half_life in (7, 30, 90, 365)
+    for floor in (0, 0.5)
+)
 
 _RECALL_DEPTHS = (12, 40)
 
@@ -301,19 +309,14 @@ def _vector_lookup(cache: dict[str, dict[str, np.ndarray]]):
     return lookup
 
 
-def _rank(
-    history,
+def _rank_lanes(
+    lanes,
     candidates: dict[str, CandidateSet],
     *,
-    key: str,
-    now: datetime,
     opened: set[str],
-    vectors,
+    freshness: dict[str, float] | None = None,
 ) -> list[str]:
-    """The feed the worker would store from ``history`` at ``now``."""
-    lanes = profile_mod.build_lanes(
-        history, key=key, now=now, vectors=vectors,
-    )
+    """The feed the worker would store from ``lanes`` at this cut point."""
     if not lanes:
         return []
 
@@ -321,7 +324,7 @@ def _rank(
     for lane in lanes:
         grouped.setdefault(lane.channel, []).append(lane)
 
-    scored: dict[str, list[tuple[str, float]]] = {}
+    scored: dict[str, list[tuple[str, float, float]]] = {}
     for channel, channel_lanes in grouped.items():
         candidate_set = candidates.get(channel)
         if candidate_set is None or len(candidate_set) == 0:
@@ -332,6 +335,7 @@ def _rank(
             channel=channel,
             exclude_file_ids=opened,
             limit=_CANDIDATES_PER_LANE,
+            freshness=freshness,
         )
         for lane, hits in zip(channel_lanes, results, strict=True):
             scored[lane.cluster_id] = list(hits)
@@ -340,6 +344,32 @@ def _rank(
         item.file_id
         for item in feed_mod.interleave(lanes, scored, depth=_FEED_DEPTH)
     ]
+
+
+def _grid_names() -> list[str]:
+    return [f"fresh_h{half_life:g}_f{floor:g}" for half_life, floor in _GRID]
+
+
+def _marked_name() -> str:
+    """The report row whose constants the worker ships with."""
+    if freshness_mod.FLOOR == 1:
+        return "after"
+    return (
+        f"fresh_h{freshness_mod.HALF_LIFE_DAYS:g}"
+        f"_f{freshness_mod.FLOOR:g}"
+    )
+
+
+def _reported_names() -> tuple[str, ...]:
+    """Every row the report prints, with the shipped one marked."""
+    names = (
+        *(name for name, *_ in _CONFIGS),
+        *_grid_names(),
+        "random",
+        "newest",
+    )
+    marked = _marked_name()
+    return tuple(name + "*" if name == marked else name for name in names)
 
 
 def _random_order(
@@ -382,18 +412,20 @@ def _rank_configs(
     )
 
     rankings: dict[str, list[str]] = {}
+    lanes_by_config: dict[str, list] = {}
     for name, videos_only, weighted in _CONFIGS:
         history = profile_mod.profile_history(
             drive, viewer_id, now=t, until=t,
             videos_only=videos_only, weighted=weighted,
         )
-        rankings[name] = _rank(
-            history,
+        lanes = profile_mod.build_lanes(
+            history, key=f"{drive}\x1f{viewer_id}", now=t, vectors=vectors,
+        )
+        lanes_by_config[name] = lanes
+        rankings[name] = _rank_lanes(
+            lanes,
             universe_video if videos_only else universe_all,
-            key=f"{drive}\x1f{viewer_id}",
-            now=t,
             opened=opened,
-            vectors=vectors,
         )
 
     voted = {
@@ -401,6 +433,29 @@ def _rank_configs(
         for candidate_set in universe_video.values()
         for file_id in candidate_set.file_ids
     }
+
+    # Freshness does not touch the profile, so every grid row re-scoring
+    # ``after``'s lanes is the same ranking the worker would build with
+    # those constants at this cut point.
+    for half_life, floor in _GRID:
+        mapping = {
+            file_id: freshness_mod.freshness(
+                files[file_id].created_at, t,
+                half_life_days=half_life, floor=floor,
+            )
+            for file_id in voted
+        }
+        rankings[f"fresh_h{half_life:g}_f{floor:g}"] = _rank_lanes(
+            lanes_by_config["after"],
+            universe_video,
+            opened=opened,
+            freshness=mapping,
+        )
+
+    marked = _marked_name()
+    if marked in rankings:
+        rankings[f"{marked}*"] = rankings.pop(marked)
+
     rankings["random"] = _random_order(
         voted, drive=drive, viewer_id=viewer_id, t=t,
     )
@@ -461,7 +516,8 @@ def _replay_viewer(
         t0 - horizon - timedelta(days=offset)
         for offset in range(days)
     ]
-    stats = {name: _Accumulator() for name in _REPORTED}
+    names = _reported_names()
+    stats = {name: _Accumulator() for name in names}
     skipped = 0
     universe_sizes: dict[datetime, int] = {}
 
@@ -475,7 +531,7 @@ def _replay_viewer(
             continue
         rankings, targets, universe_size = result
         universe_sizes[t] = universe_size
-        for name in _REPORTED:
+        for name in names:
             count, recall12, recall40, hit40 = _metrics(
                 targets, rankings[name],
             )
@@ -500,7 +556,7 @@ def _replay_viewer(
         "| config | cuts | skipped | targets | recall@12 | recall@40 | hit@40 |",
         "| --- | --- | --- | --- | --- | --- | --- |",
     ]
-    for name in _REPORTED:
+    for name in names:
         accumulator = stats[name]
         lines.append(
             f"| {name} | {accumulator.cuts} | {skipped} | "

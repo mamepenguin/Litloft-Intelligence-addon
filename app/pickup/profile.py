@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 #: lands and every viewer whose history is quiet keeps yesterday's
 #: ranking until the date rolls, up to a day later. Cheap to get right,
 #: and invisible when it is wrong.
-PROFILE_VERSION = 3
+PROFILE_VERSION = 4
 
 #: The core's mime type for a ``.loft`` embed. Some embed providers
 #: cannot report position or duration, and an embed that reports
@@ -409,18 +409,24 @@ def watch_signature(
     return signature
 
 
-def live_video_ids(drive: str) -> set[str]:
-    """Ids of the drive's live videos, the only files Pickup recommends."""
+def live_videos(drive: str) -> dict[str, datetime | None]:
+    """The drive's live videos, each with its parsed ``created_at``.
+
+    The values are naive UTC, or ``None`` when the stored text will not
+    parse. Videos are the only files Pickup recommends, so this doubles
+    as the candidate restriction and as the one read freshness is built
+    from: age is a property of the file, not of the viewer.
+    """
     with get_litloft_db() as session:
         rows = session.execute(
             sql_text(
-                "SELECT f.id FROM files f "
+                "SELECT f.id, f.created_at FROM files f "
                 "WHERE f.drive = :drive AND f.file_type = 'video' "
                 "  AND f.deleted_at IS NULL AND f.missing_since IS NULL"
             ),
             {"drive": drive},
         ).fetchall()
-    return {row[0] for row in rows}
+    return {row[0]: _parse_naive_utc(row[1]) for row in rows}
 
 
 def watched_file_ids(drive: str, viewer_id: str) -> set[str]:

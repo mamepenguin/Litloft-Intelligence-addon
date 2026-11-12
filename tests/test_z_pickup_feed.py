@@ -43,6 +43,14 @@ def _lane(cluster_id: str, weight: float, channel: str = "clip_thumbnail") -> La
     )
 
 
+def _scored(mapping):
+    """Pairs as triples at freshness 1, where ranking score equals similarity."""
+    return {
+        cluster_id: [(file_id, score, score) for file_id, score in hits]
+        for cluster_id, hits in mapping.items()
+    }
+
+
 def _share(items, cluster_id: str) -> float:
     if not items:
         return 0.0
@@ -61,7 +69,7 @@ def test_a_lanes_share_holds_once_the_interleave_has_converged():
         "quiet": [(f"Q{i}", 0.9 - i * 0.001) for i in range(400)],
     }
 
-    items = feed.interleave(lanes, scored, depth=300)
+    items = feed.interleave(lanes, _scored(scored), depth=300)
 
     expected = 1.0 / 1.25
     for depth in (10, 50, 150, 300):
@@ -86,7 +94,7 @@ def test_the_head_of_a_many_laned_feed_is_granular():
     }
     expected = (21 * 0.25) / (3 + 21 * 0.25)
 
-    items = feed.interleave(lanes, scored, depth=300)
+    items = feed.interleave(lanes, _scored(scored), depth=300)
 
     def floor_share(window):
         return sum(1 for i in window if i.cluster_id.startswith("floor")) / len(window)
@@ -106,7 +114,7 @@ def test_the_quietest_lane_is_never_starved():
         for lane in lanes
     }
 
-    items = feed.interleave(lanes, scored, depth=300)
+    items = feed.interleave(lanes, _scored(scored), depth=300)
 
     assert _share(items, "quiet") > 0.03
     # 0.25 / (5 + 0.25)
@@ -120,7 +128,7 @@ def test_a_heavier_lane_leads():
         "heavy": [("h0", 0.50)],
     }
 
-    items = feed.interleave(lanes, scored, depth=10)
+    items = feed.interleave(lanes, _scored(scored), depth=10)
 
     assert items[0].file_id == "h0"
 
@@ -137,7 +145,7 @@ def test_a_file_reachable_from_two_lanes_appears_once():
         "b": [("shared", 0.7), ("b1", 0.6)],
     }
 
-    items = feed.interleave(lanes, scored, depth=10)
+    items = feed.interleave(lanes, _scored(scored), depth=10)
 
     assert [i.file_id for i in items].count("shared") == 1
     assert next(i for i in items if i.file_id == "shared").cluster_id == "a"
@@ -160,7 +168,7 @@ def test_the_losing_lane_forfeits_no_turn():
         "b": [("b1", 0.95), ("shared", 0.90), ("b2", 0.85), ("b3", 0.75)],
     }
 
-    items = feed.interleave(lanes, scored, depth=8)
+    items = feed.interleave(lanes, _scored(scored), depth=8)
     b_items = [i for i in items if i.cluster_id == "b"]
 
     assert [i.file_id for i in b_items] == ["b1", "b2", "b3"]
@@ -171,7 +179,7 @@ def test_a_file_is_credited_to_the_lane_that_scores_it_highest():
     lanes = [_lane("weak", 1.0), _lane("strong", 1.0)]
     scored = {"weak": [("f", 0.5)], "strong": [("f", 0.95)]}
 
-    items = feed.interleave(lanes, scored, depth=5)
+    items = feed.interleave(lanes, _scored(scored), depth=5)
 
     assert [(i.file_id, i.cluster_id) for i in items] == [("f", "strong")]
 
@@ -186,7 +194,7 @@ def test_channels_share_one_sequence():
         "textual": [(f"t{i}", 0.9) for i in range(50)],
     }
 
-    items = feed.interleave(lanes, scored, depth=40)
+    items = feed.interleave(lanes, _scored(scored), depth=40)
     kinds = Counter(i.channel for i in items)
 
     assert kinds["clip_thumbnail"] == pytest.approx(20, abs=3)
@@ -202,7 +210,7 @@ def test_ranks_are_dense_and_start_at_one():
     lanes = [_lane("a", 1.0)]
     scored = {"a": [(f"a{i}", 0.9 - i * 0.01) for i in range(5)]}
 
-    items = feed.interleave(lanes, scored, depth=10)
+    items = feed.interleave(lanes, _scored(scored), depth=10)
 
     assert [i.rank for i in items] == [1, 2, 3, 4, 5]
 
@@ -211,7 +219,7 @@ def test_within_a_lane_the_better_score_comes_first():
     lanes = [_lane("a", 1.0)]
     scored = {"a": [("mid", 0.7), ("best", 0.95), ("worst", 0.5)]}
 
-    items = feed.interleave(lanes, scored, depth=10)
+    items = feed.interleave(lanes, _scored(scored), depth=10)
 
     assert [i.file_id for i in items] == ["best", "mid", "worst"]
 
@@ -220,7 +228,7 @@ def test_depth_truncates():
     lanes = [_lane("a", 1.0)]
     scored = {"a": [(f"a{i}", 0.9) for i in range(500)]}
 
-    assert len(feed.interleave(lanes, scored, depth=300)) == 300
+    assert len(feed.interleave(lanes, _scored(scored), depth=300)) == 300
 
 
 def test_the_result_is_deterministic():
@@ -231,8 +239,8 @@ def test_the_result_is_deterministic():
         "c": [(f"c{i}", 0.9) for i in range(20)],
     }
 
-    first = feed.interleave(lanes, scored, depth=40)
-    second = feed.interleave(lanes, scored, depth=40)
+    first = feed.interleave(lanes, _scored(scored), depth=40)
+    second = feed.interleave(lanes, _scored(scored), depth=40)
 
     assert [(i.file_id, i.rank) for i in first] == \
            [(i.file_id, i.rank) for i in second]
@@ -251,7 +259,7 @@ def test_a_lane_with_no_candidates_is_skipped():
     lanes = [_lane("empty", 1.0), _lane("full", 0.5)]
     scored = {"empty": [], "full": [("f0", 0.9)]}
 
-    items = feed.interleave(lanes, scored, depth=10)
+    items = feed.interleave(lanes, _scored(scored), depth=10)
 
     assert [i.file_id for i in items] == ["f0"]
 
@@ -260,11 +268,11 @@ def test_a_zero_weight_lane_does_not_divide_by_zero():
     lanes = [_lane("dead", 0.0), _lane("live", 1.0)]
     scored = {"dead": [("d0", 0.9)], "live": [("l0", 0.9)]}
 
-    items = feed.interleave(lanes, scored, depth=10)
+    items = feed.interleave(lanes, _scored(scored), depth=10)
 
     assert "l0" in [i.file_id for i in items]
 
 
 def test_depth_of_zero_yields_nothing():
     lanes = [_lane("a", 1.0)]
-    assert feed.interleave(lanes, {"a": [("x", 0.9)]}, depth=0) == []
+    assert feed.interleave(lanes, _scored({"a": [("x", 0.9)]}), depth=0) == []

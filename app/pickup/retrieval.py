@@ -52,18 +52,21 @@ Two consequences worth naming:
 from __future__ import annotations
 
 import logging
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
+from sqlalchemy import func
 from sqlalchemy import text as sql_text
 
 from app.database import (
+    get_litloft_db,
     get_search_db_read,
     get_search_engine,
     validate_vector_table,
 )
 from app.models import Embedding, IndexedFile
+from app.pickup import freshness as freshness_mod
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +266,51 @@ def restrict_candidates(
     )
 
 
+def arrival_stamp(drive: str) -> str:
+    """A string that moves when the drive's video index or video set moves.
+
+    One drive's worth of data on purpose: a checkpoint must never vouch
+    for arrivals the drive's feed was not built from. Read before the
+    candidate load, so an embedding written in between shows up in the
+    *next* stamp and the viewer is rebuilt again on the next computation.
+
+    Raises on a read failure rather than returning a partial stamp: a
+    checkpoint that skips the arrivals would delay the rebuild until the
+    date rolls, which is the wait this exists to remove.
+    """
+    with get_search_db_read() as session:
+        counts = [
+            int(
+                session.query(func.count(Embedding.id))
+                .join(IndexedFile, IndexedFile.file_id == Embedding.file_id)
+                .filter(
+                    Embedding.embedding_type == channel,
+                    IndexedFile.drive == drive,
+                    IndexedFile.active.is_(True),
+                    IndexedFile.file_type == "video",
+                )
+                .scalar()
+            )
+            for channel in _CHANNEL_TABLES
+        ]
+
+    with get_litloft_db() as session:
+        row = session.execute(
+            sql_text(
+                "SELECT COUNT(*), MAX(created_at) FROM files "
+                "WHERE drive = :drive AND file_type = 'video' "
+                "  AND deleted_at IS NULL AND missing_since IS NULL"
+            ),
+            {"drive": drive},
+        ).fetchone()
+
+    by_channel = ",".join(
+        f"{channel}={count}"
+        for channel, count in zip(_CHANNEL_TABLES, counts, strict=True)
+    )
+    return f"{by_channel};videos={int(row[0])};newest={row[1]}"
+
+
 def score_lanes(
     candidates: CandidateSet,
     centroids: Sequence[np.ndarray],
@@ -270,7 +318,8 @@ def score_lanes(
     channel: str,
     exclude_file_ids: Collection[str],
     limit: int,
-) -> list[list[tuple[str, float]]]:
+    freshness: Mapping[str, float] | None = None,
+) -> list[list[tuple[str, float, float]]]:
     """Score every lane against ``candidates`` in one pass.
 
     Args:
@@ -286,9 +335,16 @@ def score_lanes(
             history, never truncated — a cap here would start
             recommending watched files to anyone past it.
         limit: Maximum candidates to return per lane.
+        freshness: One multiplier per file id. ``None`` is 1.0
+            everywhere; a file absent from a given mapping is at
+            ``app.pickup.freshness.FLOOR``.
 
     Returns:
-        Per lane, ``(file_id, score)`` best first.
+        Per lane, ``(file_id, similarity, ranking_score)`` in ranking
+        order: ranking score descending, then similarity descending,
+        then file id ascending. Qualification stays on similarity alone,
+        so freshness only reorders and re-cuts the candidates that
+        already passed the floor.
     """
     if candidates.channel != channel:
         raise ValueError(
@@ -329,7 +385,7 @@ def score_lanes(
     )
     keep = ~excluded
 
-    results: list[list[tuple[str, float]]] = []
+    results: list[list[tuple[str, float, float]]] = []
     for lane in range(query.shape[0]):
         scores = best[:, lane]
         usable = (
@@ -341,6 +397,18 @@ def score_lanes(
         if positions.size == 0:
             results.append([])
             continue
-        order = positions[np.argsort(-scores[positions], kind="stable")][:limit]
-        results.append([(unique_files[i], float(scores[i])) for i in order])
+        rows: list[tuple[str, float, float]] = []
+        for position in positions:
+            file_id = unique_files[int(position)]
+            similarity = float(scores[position])
+            # float64: ``similarity`` is already the exact float64 value of
+            # the stored float32 score, and multiplying in Python keeps
+            # freshness 1 byte-identical to similarity.
+            weight = (
+                1.0 if freshness is None
+                else freshness.get(file_id, freshness_mod.FLOOR)
+            )
+            rows.append((file_id, similarity, similarity * weight))
+        rows.sort(key=lambda row: (-row[2], -row[1], row[0]))
+        results.append(rows[:limit])
     return results
