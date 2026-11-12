@@ -162,6 +162,40 @@ describe("SPEC-ADDON-099 Detailed summary as a player-side panel", () => {
     expect(answers(report).at(-1)).toBe(false);
   });
 
+  it("SPEC-ADDON-099 I10 drops an earlier file's answer and its availability", async () => {
+    let resolveFirst!: (value: unknown) => void;
+    let resolveSecond!: (value: unknown) => void;
+    vi.mocked(getDetailedSummary)
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        }) as never,
+      )
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveSecond = resolve;
+        }) as never,
+      );
+    const report = vi.fn();
+    const { rerender } = render(panel({ active: false, onAvailability: report }));
+    rerender(panel({ fileId: "f2", active: false, onAvailability: report }));
+
+    resolveFirst(generated);
+    await act(async () => {
+      for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    });
+
+    expect(screen.queryByText(/本作の概要を述べる段落/)).toBeNull();
+    expect(answers(report)).not.toContain(true);
+
+    resolveSecond({ available: false, reason: "not_generated", file_id: "f2" });
+    await act(async () => {
+      for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    });
+
+    expect(answers(report).at(-1)).toBe(false);
+  });
+
   it("SPEC-ADDON-099 I10 draws no collapsible header when the host labels it, and shows the body", async () => {
     vi.mocked(getDetailedSummary).mockResolvedValue(generated as never);
 

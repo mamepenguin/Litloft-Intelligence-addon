@@ -187,9 +187,12 @@ export default function DetailedSummarySection({
   const knowledgeAvailable = Boolean(addons["knowledge"]);
 
   const pollTokenRef = useRef(0);
+  const dataGeneration = useRef(0);
 
   const fetchData = useCallback(async () => {
+    const generation = dataGeneration.current;
     const result = await getDetailedSummary(fileId, drive);
+    if (dataGeneration.current !== generation) return null;
     setData(result);
     setLoaded(true);
     return result;
@@ -201,6 +204,7 @@ export default function DetailedSummarySection({
   }, [fileId, drive]);
 
   useEffect(() => {
+    dataGeneration.current += 1;
     setData(null);
     setLoaded(false);
     setWorking(false);
@@ -217,6 +221,7 @@ export default function DetailedSummarySection({
     setProfileRejected(false);
     pollTokenRef.current += 1;
     void fetchData().then((result) => {
+      if (!result) return;
       if (result.status === "generating") {
         void pollUntilDone();
       } else if (result.available) {

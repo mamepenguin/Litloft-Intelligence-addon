@@ -121,13 +121,17 @@ export default function ScenesSectionContainer({
   useEffect(() => {
     onAvailabilityRef.current = onAvailability;
   });
-  const hostShowsRef = useRef(hostShows);
-  useEffect(() => {
-    hostShowsRef.current = hostShows;
-  });
+
+  // A `false` hides the panel in the host, which turns `active` false, so an
+  // availability request must not be tied to the lifetime of one showing.
+  const availabilityGeneration = useRef(0);
 
   useLayoutEffect(() => {
+    availabilityGeneration.current += 1;
     onAvailabilityRef.current?.(false);
+    return () => {
+      availabilityGeneration.current += 1;
+    };
   }, [fileId]);
 
   const requestGeneration = useRef(0);
@@ -179,6 +183,7 @@ export default function ScenesSectionContainer({
   // A new file starts collapsed with nothing loaded, and a `.loft` reads its
   // rows on mount instead of on expand.
   useEffect(() => {
+    const availability = availabilityGeneration.current;
     requestGeneration.current += 1;
     expandedRef.current = false;
     dragStart.current = null;
@@ -190,12 +195,11 @@ export default function ScenesSectionContainer({
     setPictureRatio(null);
     resetVisual();
     if (!isVideo) return;
-    if (!isLoft && (!panel || hostShowsRef.current)) return;
+    if (!isLoft && !panel) return;
 
-    const generation = requestGeneration.current;
     void getClipTimestamps(fileId, drive)
       .then((result) => {
-        if (requestGeneration.current !== generation) return;
+        if (availabilityGeneration.current !== availability) return;
         const next = result?.timestamps ?? [];
         if (isLoft) {
           setRows(next);
@@ -206,7 +210,7 @@ export default function ScenesSectionContainer({
         onAvailabilityRef.current?.(next.length > 0);
       })
       .catch(() => {
-        if (requestGeneration.current !== generation) return;
+        if (availabilityGeneration.current !== availability) return;
         onAvailabilityRef.current?.(false);
       });
   }, [fileId, drive, isVideo, isLoft, panel, clearBrowseOn, resetVisual]);
