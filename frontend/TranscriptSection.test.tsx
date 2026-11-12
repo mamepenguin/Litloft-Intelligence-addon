@@ -693,6 +693,7 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
     hidden = false,
     published = true,
     hostOverflows = true,
+    active = undefined as boolean | undefined,
   } = {}) {
     const state = { currentTime: 1 };
     const mc = {
@@ -785,7 +786,7 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
     // Between the list and the host: a box that scrolls but has nothing
     // to scroll, and a box that overflows but does not scroll. Neither is
     // the scroller.
-    const utils = render(
+    const tree = (isActive: boolean | undefined) => (
       <div
         data-testid="host"
         data-inspector-scroller={published ? "" : undefined}
@@ -794,11 +795,19 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
         {/* Where the host puts `hidden`: on a panel inside its scroller. */}
         <div data-testid="tall" hidden={hidden} style={{ overflowY: "visible" }}>
           <div data-testid="fits" style={{ overflowY: "auto" }}>
-            <TranscriptSection fileId="abc" drive="family" mediaController={mc} fillHeight />
+            <TranscriptSection
+              fileId="abc"
+              drive="family"
+              mediaController={mc}
+              fillHeight
+              {...(isActive === undefined ? {} : { active: isActive })}
+            />
           </div>
         </div>
-      </div>,
+      </div>
     );
+    const utils = render(tree(active));
+    const setActive = (next: boolean) => utils.rerender(tree(next));
     const host = screen.getByTestId("host");
     const hostScrollTo = vi.fn();
     host.scrollTo = hostScrollTo;
@@ -813,7 +822,7 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
     ) as HTMLElement;
     const listScrollTo = vi.fn();
     list.scrollTo = listScrollTo;
-    return { host, hostScrollTo, list, listScrollTo, state };
+    return { host, hostScrollTo, list, listScrollTo, state, setActive };
   }
 
   it("scrolls that scroller back to the cue, centred below the strip", async () => {
@@ -851,6 +860,18 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
     Object.defineProperty(press, "pointerType", { value: "mouse" });
     fireEvent(host, press);
     screen.getByTestId("tall").hidden = false;
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(screen.queryByRole("button", { name: CHIP })).toBeNull();
+  });
+
+  it("SPEC-ADDON-099 I10 keeps following when that scroller is scrolled while the host says it is not active", async () => {
+    const { host, setActive } = await setup({ active: false });
+    fireEvent.touchMove(host);
+    fireEvent.wheel(host);
+    const press = createEvent.pointerDown(host);
+    Object.defineProperty(press, "pointerType", { value: "mouse" });
+    fireEvent(host, press);
+    setActive(true);
     await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
     expect(screen.queryByRole("button", { name: CHIP })).toBeNull();
   });
