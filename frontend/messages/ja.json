@@ -5,6 +5,8 @@
     },
     "slots": {
       "transcript": "文字起こし",
+      "scenes": "シーン",
+      "detailedSummary": "詳細要約",
       "ask": "質問"
     },
     "policyFeatures": {

@@ -388,6 +388,29 @@ describe("SPEC-ADDON-089 I6 — native request timing", () => {
   );
 });
 
+describe("SPEC-ADDON-099 — a native video as a player-side panel", () => {
+  it("asks for its rows again, and for the Visual Index, each time it becomes active", async () => {
+    vi.mocked(getClipTimestamps).mockResolvedValue(timestamps(makeRows(3)));
+    const report = vi.fn();
+    const view = renderSection({ active: false, onAvailability: report });
+    await waitFor(() =>
+      expect(report.mock.calls.map(([available]) => available).at(-1)).toBe(true),
+    );
+    expect(getClipTimestamps).toHaveBeenCalledTimes(1);
+    expect(getVideoVisualIndex).not.toHaveBeenCalled();
+
+    view.rerender(section({ active: true, onAvailability: report }));
+    await waitFor(() => expect(getVideoVisualIndex).toHaveBeenCalledTimes(1));
+    expect(getClipTimestamps).toHaveBeenCalledTimes(2);
+    await screen.findByRole("slider");
+
+    view.rerender(section({ active: false, onAvailability: report }));
+    view.rerender(section({ active: true, onAvailability: report }));
+    await waitFor(() => expect(getClipTimestamps).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(getVideoVisualIndex).toHaveBeenCalledTimes(2));
+  });
+});
+
 describe("SPEC-ADDON-089 I7 — the .loft", () => {
   it("requests clip-timestamps on mount and on every file change", async () => {
     vi.mocked(getClipTimestamps).mockResolvedValue(timestamps(makeRows(3)));

@@ -1,7 +1,14 @@
 "use client";
 
 import type { FocusEvent } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { flushSync } from "react-dom";
 import { useTranslations } from "next-intl";
 
@@ -60,6 +67,18 @@ interface ScenesSectionProps {
   mimeType?: string;
   videoRef?: React.RefObject<HTMLVideoElement | null>;
   mediaController?: MediaController | null;
+  /**
+   * Whether the host is showing this panel. Absent where the file page
+   * draws the section itself and the reader opens it with the header.
+   */
+  active?: boolean;
+  /** The host already writes this panel's name above it. */
+  labelledByHost?: boolean;
+  /**
+   * Whether this file has any frames to show. Silence means available,
+   * so a native video has to answer before it knows.
+   */
+  onAvailability?: (available: boolean) => void;
 }
 
 type NativeState = "idle" | "loading" | "ready" | "hidden";
@@ -73,11 +92,17 @@ export default function ScenesSectionContainer({
   mimeType,
   videoRef,
   mediaController,
+  active,
+  labelledByHost = false,
+  onAvailability,
 }: ScenesSectionProps) {
   const t = useTranslations("file");
   const isVideo = fileType === "video";
   const isLoft = mimeType === LOFT_MIME_TYPE;
   const policy = usePolicy(drive, "intelligence", "video_visual_index");
+  const hostDriven = active !== undefined;
+  const panel = hostDriven || onAvailability !== undefined;
+  const hostShows = active === true;
 
   const [expanded, setExpanded] = useState(false);
   const [nativeState, setNativeState] = useState<NativeState>("idle");
@@ -89,6 +114,25 @@ export default function ScenesSectionContainer({
   const [actionError, setActionError] = useState<ActionError>(null);
   const [failedTimes, setFailedTimes] = useState<number[]>([]);
   const [pictureRatio, setPictureRatio] = useState<number | null>(null);
+
+  const shown = hostDriven ? hostShows : expanded;
+
+  const onAvailabilityRef = useRef(onAvailability);
+  useEffect(() => {
+    onAvailabilityRef.current = onAvailability;
+  });
+
+  // A `false` hides the panel in the host, which turns `active` false, so an
+  // availability request must not be tied to the lifetime of one showing.
+  const availabilityGeneration = useRef(0);
+
+  useLayoutEffect(() => {
+    availabilityGeneration.current += 1;
+    onAvailabilityRef.current?.(false);
+    return () => {
+      availabilityGeneration.current += 1;
+    };
+  }, [fileId]);
 
   const requestGeneration = useRef(0);
   const visualGeneration = useRef(0);
@@ -139,6 +183,7 @@ export default function ScenesSectionContainer({
   // A new file starts collapsed with nothing loaded, and a `.loft` reads its
   // rows on mount instead of on expand.
   useEffect(() => {
+    const availability = availabilityGeneration.current;
     requestGeneration.current += 1;
     expandedRef.current = false;
     dragStart.current = null;
@@ -149,14 +194,77 @@ export default function ScenesSectionContainer({
     setFailedTimes([]);
     setPictureRatio(null);
     resetVisual();
-    if (!isVideo || !isLoft) return;
+    if (!isVideo) return;
+    if (!isLoft && !panel) return;
 
-    const generation = requestGeneration.current;
-    void getClipTimestamps(fileId, drive).then((result) => {
-      if (requestGeneration.current !== generation) return;
-      setRows(result?.timestamps ?? []);
-    });
-  }, [fileId, drive, isVideo, isLoft, clearBrowseOn, resetVisual]);
+    void getClipTimestamps(fileId, drive)
+      .then((result) => {
+        if (availabilityGeneration.current !== availability) return;
+        const next = result?.timestamps ?? [];
+        if (isLoft) {
+          setRows(next);
+        } else {
+          setRows(next);
+          setNativeState(next.length > 0 ? "ready" : "hidden");
+        }
+        onAvailabilityRef.current?.(next.length > 0);
+      })
+      .catch(() => {
+        if (availabilityGeneration.current !== availability) return;
+        onAvailabilityRef.current?.(false);
+      });
+  }, [fileId, drive, isVideo, isLoft, panel, clearBrowseOn, resetVisual]);
+
+  const loadNative = useCallback(
+    (generation: number) => {
+      setNativeState("loading");
+      setRows(null);
+      void getClipTimestamps(fileId, drive)
+        .then((result) => {
+          if (requestGeneration.current !== generation) return;
+          const next = result?.timestamps ?? [];
+          // The rows land outside a React event; flush so the placeholder ruler
+          // and the nine tiles swap in one commit instead of a scheduled later one.
+          flushSync(() => {
+            if (next.length === 0) {
+              setNativeState("hidden");
+              setExpanded(false);
+              return;
+            }
+            setRows(next);
+            setNativeState("ready");
+          });
+          onAvailabilityRef.current?.(next.length > 0);
+        })
+        .catch(() => {
+          if (requestGeneration.current !== generation) return;
+          onAvailabilityRef.current?.(false);
+        });
+    },
+    [fileId, drive],
+  );
+
+  // A panel turned on long after the page loaded must not draw the ruler from
+  // rows that went stale while it was hidden.
+  useEffect(() => {
+    if (!hostDriven || !hostShows || isLoft || !isVideo) return;
+    const generation = (requestGeneration.current += 1);
+    loadNative(generation);
+  }, [hostDriven, hostShows, isLoft, isVideo, fileId, loadNative]);
+
+  const wasShown = useRef(false);
+  useEffect(() => {
+    if (!hostDriven) return;
+    if (hostShows) {
+      wasShown.current = true;
+      return;
+    }
+    if (!wasShown.current) return;
+    wasShown.current = false;
+    requestGeneration.current += 1;
+    clearBrowseOn("collapse");
+    resetVisual();
+  }, [hostDriven, hostShows, clearBrowseOn, resetVisual]);
 
   const expand = useCallback(() => {
     const generation = (requestGeneration.current += 1);
@@ -166,24 +274,8 @@ export default function ScenesSectionContainer({
     resetVisual();
     if (isLoft) return;
 
-    setNativeState("loading");
-    setRows(null);
-    void getClipTimestamps(fileId, drive).then((result) => {
-      if (requestGeneration.current !== generation) return;
-      const next = result?.timestamps ?? [];
-      // The rows land outside a React event; flush so the placeholder ruler
-      // and the nine tiles swap in one commit instead of a scheduled later one.
-      flushSync(() => {
-        if (next.length === 0) {
-          setNativeState("hidden");
-          setExpanded(false);
-          return;
-        }
-        setRows(next);
-        setNativeState("ready");
-      });
-    });
-  }, [fileId, drive, isLoft, resetVisual]);
+    loadNative(generation);
+  }, [isLoft, loadNative, resetVisual]);
 
   const collapse = useCallback(() => {
     requestGeneration.current += 1;
@@ -218,10 +310,11 @@ export default function ScenesSectionContainer({
     [fileId, drive],
   );
 
-  // The first answer for this expand, once the policy has resolved. Policy-off
+  // The first answer for this showing, once the policy has resolved. Policy-off
   // drives never ask for it at all.
   useEffect(() => {
-    if (!isVideo || isLoft || !expanded || !expandedRef.current) return;
+    if (!isVideo || isLoft || !shown) return;
+    if (!hostDriven && !expandedRef.current) return;
     if (policy.isLoading || !policy.enabled) return;
     if (visualRequestedFor.current === requestGeneration.current) return;
     visualRequestedFor.current = requestGeneration.current;
@@ -229,7 +322,8 @@ export default function ScenesSectionContainer({
   }, [
     isVideo,
     isLoft,
-    expanded,
+    shown,
+    hostDriven,
     policy.isLoading,
     policy.enabled,
     loadVisual,
@@ -241,7 +335,8 @@ export default function ScenesSectionContainer({
   const failedEvent = useWebSocket(EVENT_FAILED);
 
   useEffect(() => {
-    if (!isVideo || isLoft || !expanded || !expandedRef.current) return;
+    if (!isVideo || isLoft || !shown) return;
+    if (!hostDriven && !expandedRef.current) return;
     if (policy.isLoading || !policy.enabled) return;
     const event = progressEvent ?? succeededEvent ?? partialEvent ?? failedEvent;
     if (!event) return;
@@ -254,7 +349,8 @@ export default function ScenesSectionContainer({
     failedEvent,
     isVideo,
     isLoft,
-    expanded,
+    shown,
+    hostDriven,
     policy.isLoading,
     policy.enabled,
     fileId,
@@ -431,7 +527,7 @@ export default function ScenesSectionContainer({
   const list = rows ?? [];
   const length = rulerLength(list, playback.duration);
 
-  const view: ScenesView = !expanded
+  const view: ScenesView = !shown
     ? "collapsed"
     : isLoft || nativeState === "ready"
       ? "expanded"
@@ -468,7 +564,7 @@ export default function ScenesSectionContainer({
   );
 
   const awaitingVisual =
-    expanded && !isLoft && !visualLoaded && policy.enabled;
+    shown && !isLoft && !visualLoaded && policy.enabled;
   const errorMessage =
     actionError === "waiting"
       ? t("visualIndexWaitingPrerequisite")
@@ -489,6 +585,7 @@ export default function ScenesSectionContainer({
   return (
     <ScenesSectionPresenter
       view={view}
+      labelledByHost={labelledByHost}
       panelId={`scenes-${fileId}`}
       rows={list}
       length={length}
