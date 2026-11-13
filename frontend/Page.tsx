@@ -1127,7 +1127,7 @@ function IntelligenceAskPageInner() {
             placeholder={t("placeholder")}
             rows={3}
             disabled={ragAvailable === false}
-            className="w-full resize-y rounded-lg border border-bg-border bg-bg-card p-3 text-sm text-text-primary placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
+            className="w-full resize-y rounded-lg border border-bg-border bg-bg-card p-3 text-base text-text-primary placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
             aria-label="Question input"
           />
           <div className="flex flex-wrap items-center justify-end gap-2 sm:flex-nowrap sm:justify-between">

@@ -281,7 +281,7 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
             onChange={(e) => setDraftShort(e.target.value)}
             maxLength={SHORT_MAX}
             rows={1}
-            className="mb-2 block w-full resize-none border-0 bg-transparent p-0 text-sm font-medium text-text-primary outline-none ring-0 focus:ring-0 [field-sizing:content]"
+            className="mb-2 block w-full resize-none border-0 bg-transparent p-0 text-base font-medium !leading-relaxed text-text-primary outline-none ring-0 focus:ring-0 [field-sizing:content]"
           />
           <textarea
             id="summary-edit-long"
@@ -290,7 +290,7 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
             onChange={(e) => setDraftLong(e.target.value)}
             maxLength={LONG_MAX}
             rows={1}
-            className="block w-full resize-none whitespace-pre-wrap border-0 bg-transparent p-0 text-sm leading-relaxed text-text-muted outline-none ring-0 focus:ring-0 [field-sizing:content]"
+            className="block w-full resize-none whitespace-pre-wrap border-0 bg-transparent p-0 text-base !leading-relaxed text-text-primary outline-none ring-0 focus:ring-0 [field-sizing:content]"
           />
           <div className="mt-3 flex items-center gap-2">
             <button
@@ -318,20 +318,20 @@ export default function SummarySection({ fileId, drive }: SummarySectionProps) {
       ) : (
         <>
           {data.short_summary && (
-            <p className="mb-2 text-sm font-medium text-text-primary">
+            <p className="mb-2 text-base font-medium leading-relaxed text-text-primary">
               {data.short_summary}
             </p>
           )}
 
           {data.long_summary &&
             (longItems ? (
-              <ul className="list-disc space-y-1 pl-5 text-sm leading-relaxed text-text-muted">
+              <ul className="list-disc space-y-1 pl-5 text-base leading-relaxed text-text-primary">
                 {longItems.map((item, i) => (
                   <li key={i}>{item}</li>
                 ))}
               </ul>
             ) : (
-              <p className="whitespace-pre-wrap text-sm leading-relaxed text-text-muted">
+              <p className="whitespace-pre-wrap text-base leading-relaxed text-text-primary">
                 {data.long_summary}
               </p>
             ))}

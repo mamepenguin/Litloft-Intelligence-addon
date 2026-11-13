@@ -362,7 +362,7 @@ export default function VisualDescriptionSection({
 
       {status === "success" && data?.visual_description && (
         <>
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-text-muted">
+          <p className="whitespace-pre-wrap text-base leading-relaxed text-text-primary">
             {data.visual_description}
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">

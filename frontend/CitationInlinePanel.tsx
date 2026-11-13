@@ -354,7 +354,7 @@ function InlineExcerptBody({
             </span>
           )}
         </div>
-        <p className="whitespace-pre-wrap text-[14px] leading-[1.7] text-text-primary">
+        <p className="whitespace-pre-wrap text-base leading-relaxed text-text-primary">
           {excerpt.prefix && (
             <span className="text-text-muted">{excerpt.prefix}</span>
           )}
