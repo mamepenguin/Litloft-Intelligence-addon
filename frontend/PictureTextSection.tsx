@@ -180,7 +180,7 @@ export default function PictureTextSection({
               }
             }}
             rows={Math.max(3, lines.length + 1)}
-            className="w-full rounded-2xl border border-bg-border bg-bg-primary p-2 text-base text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring sm:text-sm"
+            className="w-full rounded-2xl border border-bg-border bg-bg-primary p-2 text-base text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           />
           <p className="mt-1 text-[10px] text-text-muted">Esc / ⌘↵</p>
           {error && (
@@ -210,7 +210,7 @@ export default function PictureTextSection({
         </div>
       ) : (
         <>
-          <div className="space-y-0.5 text-sm text-text-primary">
+          <div className="space-y-0.5 text-base leading-relaxed text-text-primary">
             {lines.map((line, index) => (
               <p key={`${index}-${line}`}>{line}</p>
             ))}

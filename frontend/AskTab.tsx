@@ -324,7 +324,7 @@ export default function AskTab({
           <section key={index} aria-live="polite" className="space-y-2">
             <p
               ref={index === turns.length - 1 ? lastQuestionRef : undefined}
-              className="whitespace-pre-wrap text-sm font-medium text-text-primary"
+              className="whitespace-pre-wrap text-base font-medium leading-relaxed text-text-primary"
             >
               {turn.question}
             </p>
@@ -380,7 +380,7 @@ export default function AskTab({
           maxLength={MAX_QUESTION_CHARS}
           rows={3}
           aria-label={t("placeholder")}
-          className="w-full resize-y rounded-2xl border border-bg-border bg-bg-card p-3 text-sm text-text-primary placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
+          className="w-full resize-y rounded-2xl border border-bg-border bg-bg-card p-3 text-base text-text-primary placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
         />
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex flex-wrap items-center gap-2">
