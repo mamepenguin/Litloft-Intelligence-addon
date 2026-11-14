@@ -14,6 +14,9 @@ export type AskFailure =
   | "busy"
   | "picture_needs_vision"
   | "image_unusable"
+  | "video_needs_vision"
+  | "frames_unusable"
+  | "frames_rejected"
   | "generic";
 
 export interface AskTurn {

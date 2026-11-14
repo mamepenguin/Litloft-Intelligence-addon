@@ -217,7 +217,7 @@ class TestAvailability:
         elif case == "inactive":
             db.file(MEDIA, active=False).transcript(chunk("one", 20), start=0)
         elif case == "no chunk":
-            db.file(MEDIA)
+            db.file(MEDIA, mime="audio/mpeg")
 
         response = await call("GET", f"/files/{MEDIA}/ask")
 
@@ -251,7 +251,7 @@ class TestTheRequestedFile:
         elif case == "inactive":
             db.file(MEDIA, active=False).transcript(chunk("one", 20), start=0)
         elif case == "no chunk":
-            db.file(MEDIA)
+            db.file(MEDIA, mime="audio/mpeg")
         db.file(ASKABLE).transcript(chunk("good", 20), start=0)
         recording = llm.serve(RecordingLLM(deltas=("answer",)))
 

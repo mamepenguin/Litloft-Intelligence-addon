@@ -10,8 +10,11 @@ rank order while they fit, and sent in file order with ``partial`` set.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import math
 import re
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any
@@ -24,15 +27,37 @@ from app import llm_routing
 from app.config import settings
 from app.database import get_search_db_read, get_search_engine
 from app.document_sections import EPUB_MIME
-from app.frame_cache import extract_frame_to_cache, frame_cache_path
+from app.frame_cache import extract_frame_to_cache, frame_cache_path, round_ms
 from app.workers.embedder import embed_query
+from app.workers.video_visual import _load_candidates
+from app.workers.video_visual_selection import Candidate, select_candidates
 from app.workers.vision import _load_image_bytes, _preprocess_image
 from app.workers.whisper import LOFT_MIME
-from app.youtube_source import YOUTUBE_PROVIDER, ensure_youtube_frame, read_loft
+from app.youtube_source import (
+    YOUTUBE_PROVIDER,
+    LoftSource,
+    LoftUnreadable,
+    ensure_youtube_frame,
+    read_loft,
+)
 
 logger = logging.getLogger(__name__)
 
 PDF_MIME = "application/pdf"
+
+#: How many frames a text-less video's question may carry.
+FRAME_BUDGET = 8
+#: The budget once the position frame has taken one of the places.
+FRAME_BUDGET_WITH_POSITION = 7
+
+#: A scene this close to the position or to a kept time is not added.
+FRAME_MIN_GAP_SECONDS = 1.0
+
+#: How many of one question's frames may be prepared at once.
+FRAME_PREPARATIONS = 4
+
+#: How long a question waits for its frames once the slot is taken.
+FRAME_WAIT_SECONDS = 45.0
 
 #: Why an image could not be attached; the route logs the class, never
 #: the question or the bytes.
@@ -67,6 +92,7 @@ class Material:
     mime_type: str
     file_path: str | None
     duration: float | None
+    drive: str = ""
 
 
 @dataclass(frozen=True)
@@ -83,6 +109,15 @@ class ImageMaterial:
 
     data: bytes
     mime_type: str
+
+
+@dataclass(frozen=True)
+class Frame:
+    """One prepared frame, at the millisecond time its cache entry is keyed on."""
+
+    time: float
+    data: bytes
+    mime_type: str = "image/webp"
 
 
 class ImageUnavailable(Exception):
@@ -110,19 +145,60 @@ def is_picture(material: Material) -> bool:
     return _is_picture(material.file_type, material.mime_type)
 
 
+def _loft_source(file_path: str | None, drive: str) -> LoftSource | None:
+    """The reference a ``.loft`` stores; ``None`` when it holds no usable one.
+
+    The request drive resolves a drive-relative stored path. A stored absolute
+    path has no relative spelling to join, and ``read_loft`` would lose it when
+    the drive has no mount recorded, so that shape is read as stored.
+    """
+    try:
+        return read_loft(file_path, drive)
+    except LoftUnreadable:
+        try:
+            return read_loft(file_path)
+        except LoftUnreadable:
+            return None
+
+
+def _is_text_less_video(
+    file_type: str, mime_type: str, file_path: str | None, drive: str,
+) -> bool:
+    """A video with no text chunk, when a frame can be taken for it.
+
+    A ``.loft`` needs a readable YouTube reference: no frame exists for another
+    provider, and an unreadable one is not a source at all.
+    """
+    if file_type != "video":
+        return False
+    if mime_type != LOFT_MIME:
+        return True
+    source = _loft_source(file_path, drive)
+    return source is not None and source.provider == YOUTUBE_PROVIDER
+
+
+def is_text_less_video(material: Material) -> bool:
+    """Whether a question about this material goes through its frames."""
+    return (
+        material.file_type == "video"
+        and not material.chunks
+        and not is_picture(material)
+    )
+
+
 def available(file_id: str, drive: str) -> bool:
     """Whether this drive may ask about this file (SPEC-ADDON-053 I6).
 
     An active ``indexed_files`` row of the request drive with at least one
-    text chunk. A picture with no text is askable when some profile can
-    see (SPEC-ADDON-074); every other kind still needs a chunk. Anything
-    else is ``False`` rather than an error, so the tab simply has no
+    text chunk. A picture or a video with no text is askable when some profile
+    can see (SPEC-ADDON-074, -108); every other kind still needs a chunk.
+    Anything else is ``False`` rather than an error, so the tab simply has no
     button.
     """
     with get_search_db_read() as session:
         indexed = session.execute(
             sql_text(
-                "SELECT file_type, mime_type FROM indexed_files "
+                "SELECT file_type, mime_type, file_path FROM indexed_files "
                 "WHERE file_id = :fid AND drive = :drive AND active = 1"
             ),
             {"fid": file_id, "drive": drive},
@@ -140,9 +216,14 @@ def available(file_id: str, drive: str) -> bool:
         ).scalar()
     if chunks:
         return True
-    if not _is_picture(indexed[0] or "", indexed[1] or ""):
-        return False
-    return llm_routing.any_profile_can_see(settings)
+    file_type = indexed[0] or ""
+    mime_type = indexed[1] or ""
+    file_path = indexed[2]
+    if _is_picture(file_type, mime_type):
+        return llm_routing.any_profile_can_see(settings)
+    if _is_text_less_video(file_type, mime_type, file_path, drive):
+        return llm_routing.any_profile_can_see(settings)
+    return False
 
 
 def trim_history(
@@ -195,8 +276,8 @@ def load_material(
 ) -> Material | None:
     """The chunks to send, or ``None`` when this file cannot be asked about.
 
-    A picture is material even with no chunk; every other kind needs one.
-    ``budget`` is what a history block leaves of
+    A picture, or a video with no text chunk, is material even with no chunk;
+    every other kind needs one. ``budget`` is what a history block leaves of
     ``rag.file_question_max_chars``; ``ranking_text`` is what chunks are
     ranked against when not all of them fit.
     """
@@ -234,7 +315,9 @@ def load_material(
             {"fid": file_id},
         ).fetchall()
         if not transcripts and not documents:
-            if not _is_picture(file_type, mime):
+            if not _is_picture(file_type, mime) and not _is_text_less_video(
+                file_type, mime, file_path, drive
+            ):
                 return None
             return Material(
                 chunks=(),
@@ -244,6 +327,7 @@ def load_material(
                 mime_type=mime,
                 file_path=file_path,
                 duration=duration,
+                drive=drive,
             )
         section_titles = {
             int(page): title
@@ -341,6 +425,7 @@ def load_material(
         mime_type=mime,
         file_path=file_path,
         duration=duration,
+        drive=drive,
     )
     if sum(len(row.text) for row in rows) <= budget:
         return Material(chunks=_selected(rows), partial=False, **material)
@@ -376,18 +461,31 @@ def load_image(
     raise ImageUnavailable(IMAGE_FAILURE_FRAME)
 
 
-def _frame_image(material: Material, position_seconds: float) -> ImageMaterial:
+def _frame_image(
+    material: Material, position_seconds: float,
+    cancelled: threading.Event | None = None,
+) -> ImageMaterial:
+    """One ``large`` frame at ``position_seconds``, from the cache or ffmpeg.
+
+    ``cancelled`` is the question's own stop signal: a preparation that has
+    not reached the extraction yet returns no frame instead of starting one,
+    so a tab that closed starts no further work.
+    """
     if material.duration is not None and position_seconds > material.duration:
+        raise ImageUnavailable(IMAGE_FAILURE_FRAME)
+    if cancelled is not None and cancelled.is_set():
         raise ImageUnavailable(IMAGE_FAILURE_FRAME)
 
     ms = int(round(position_seconds * 1000))
     timestamp = ms / 1000.0
     cache_path = frame_cache_path(material.file_id, timestamp, "large")
     if not (cache_path.exists() and cache_path.stat().st_size > 0):
+        if cancelled is not None and cancelled.is_set():
+            raise ImageUnavailable(IMAGE_FAILURE_FRAME)
         if material.mime_type == LOFT_MIME:
-            _youtube_frame_to_cache(material, cache_path, timestamp)
+            _youtube_frame_to_cache(material, cache_path, timestamp, cancelled)
         else:
-            _native_frame_to_cache(material, cache_path, timestamp)
+            _native_frame_to_cache(material, cache_path, timestamp, cancelled)
     if not (cache_path.exists() and cache_path.stat().st_size > 0):
         raise ImageUnavailable(IMAGE_FAILURE_FRAME)
     try:
@@ -398,10 +496,13 @@ def _frame_image(material: Material, position_seconds: float) -> ImageMaterial:
 
 def _youtube_frame_to_cache(
     material: Material, cache_path: Any, timestamp: float,
+    cancelled: threading.Event | None = None,
 ) -> None:
     try:
-        source = read_loft(material.file_path)
+        source = _loft_source(material.file_path, material.drive)
         if source is None or source.provider != YOUTUBE_PROVIDER:
+            raise ImageUnavailable(IMAGE_FAILURE_FRAME)
+        if cancelled is not None and cancelled.is_set():
             raise ImageUnavailable(IMAGE_FAILURE_FRAME)
         ensure_youtube_frame(
             material.file_id, source.url, cache_path, timestamp, "large",
@@ -417,6 +518,7 @@ def _youtube_frame_to_cache(
 
 def _native_frame_to_cache(
     material: Material, cache_path: Any, timestamp: float,
+    cancelled: threading.Event | None = None,
 ) -> None:
     if not material.file_path or not config.validate_file_path(
         material.file_path
@@ -425,6 +527,7 @@ def _native_frame_to_cache(
     try:
         extract_frame_to_cache(
             material.file_path, cache_path, timestamp, size="large",
+            cancelled=cancelled.is_set if cancelled is not None else None,
         )
     except Exception as exc:  # noqa: BLE001 - ffmpeg's result decides
         logger.warning(
@@ -432,6 +535,145 @@ def _native_frame_to_cache(
             type(exc).__name__,
         )
         raise ImageUnavailable(IMAGE_FAILURE_FRAME) from exc
+
+
+def frame_time(timestamp: float) -> float:
+    """A frame's time: the millisecond its cache entry is keyed on."""
+    return round_ms(timestamp) / 1000.0
+
+
+def choose_frame_times(
+    material: Material, position_seconds: float | None,
+) -> tuple[float | None, list[float]]:
+    """The position frame's time and the scene frame times, in time order.
+
+    The scene frames are the Visual Index's own selection over the file's
+    scene-CLIP candidates, with no window, then thinned to the budget or
+    filled with evenly spaced times. A failed read leaves them empty and the
+    fill still runs.
+    """
+    budget = (
+        FRAME_BUDGET_WITH_POSITION
+        if position_seconds is not None
+        else FRAME_BUDGET
+    )
+    try:
+        candidates, _duration = _load_candidates(material.file_id)
+        selected: list[Candidate] = select_candidates(
+            candidates, duration_seconds=material.duration,
+        )
+        times = [candidate.timestamp for candidate in selected]
+    except Exception:  # noqa: BLE001 - an empty selection is still answerable
+        logger.warning("scene_candidates_failed (file %s)", material.file_id)
+        times = []
+    if position_seconds is not None:
+        times = [
+            time for time in times
+            if abs(time - position_seconds) >= FRAME_MIN_GAP_SECONDS
+        ]
+    times.sort()
+    count = len(times)
+    if count > budget:
+        times = [
+            times[math.floor(index * (count - 1) / (budget - 1) + 0.5)]
+            for index in range(budget)
+        ]
+    duration = material.duration
+    if (
+        len(times) < budget
+        and duration is not None
+        and math.isfinite(duration)
+        and duration > 0
+    ):
+        for index in range(budget):
+            if len(times) >= budget:
+                break
+            candidate = (index + 0.5) * duration / budget
+            if any(
+                abs(candidate - time) < FRAME_MIN_GAP_SECONDS for time in times
+            ):
+                continue
+            if (
+                position_seconds is not None
+                and abs(candidate - position_seconds) < FRAME_MIN_GAP_SECONDS
+            ):
+                continue
+            times = [*times, candidate]
+    position = (
+        frame_time(position_seconds) if position_seconds is not None else None
+    )
+    return position, sorted(frame_time(time) for time in times)
+
+
+async def prepare_frames(
+    material: Material, position_seconds: float | None, *, deadline: float,
+    cancelled: threading.Event | None = None,
+) -> tuple[list[Frame], int]:
+    """Prepare one question's frames and report the ones that were dropped.
+
+    The position frame is started first, then the scene frames in time
+    order, and at most :data:`FRAME_PREPARATIONS` of them run at once. No
+    preparation is started at or after ``deadline``; one that failed or is
+    still running then is dropped, and none is replaced by another time.
+    ``cancelled`` is the tab's own stop signal, so a preparation that is
+    still waiting for a worker does not begin its extraction.
+    """
+    loop = asyncio.get_running_loop()
+    remaining = deadline - loop.time()
+    if remaining <= 0 or (cancelled is not None and cancelled.is_set()):
+        return [], 0
+    try:
+        position, scene_times = await asyncio.wait_for(
+            asyncio.to_thread(choose_frame_times, material, position_seconds),
+            timeout=remaining,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("scene_candidates_failed (file %s)", material.file_id)
+        position, scene_times = None, []
+    except asyncio.CancelledError:
+        raise
+    timestamps = ([position] if position is not None else []) + scene_times
+    if not timestamps:
+        return [], 0
+
+    slots = asyncio.Semaphore(FRAME_PREPARATIONS)
+
+    async def prepare(timestamp: float) -> Frame | None:
+        async with slots:
+            if loop.time() >= deadline:
+                return None
+            try:
+                image = await asyncio.to_thread(
+                    _frame_image, material, timestamp, cancelled,
+                )
+            except Exception:  # noqa: BLE001 - a frame's own failure is a drop
+                return None
+            return Frame(time=timestamp, data=image.data)
+
+    tasks = [
+        asyncio.create_task(prepare(timestamp)) for timestamp in timestamps
+    ]
+    try:
+        done, pending = await asyncio.wait(
+            tasks, timeout=max(0.0, deadline - loop.time()),
+        )
+    except asyncio.CancelledError:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    frames = [task.result() for task in done if task.result() is not None]
+    frames.sort(key=lambda frame: frame.time)
+    dropped = len(timestamps) - len(frames)
+    logger.info(
+        "frames_dropped: chosen=%d dropped=%d (file %s)",
+        len(frames), dropped, material.file_id,
+    )
+    return frames, dropped
 
 
 def citations(

@@ -1,4 +1,4 @@
-{#- vars: question (string), passages (list[str]), image (bool), position (string|none), history (list) — see rag/prompt.py:build_file_question_user_prompt -#}
+{#- vars: question (string), passages (list[str]), image (bool), frames (list[str]), position (string|none), history (list) — see rag/prompt.py:build_file_question_user_prompt -#}
 {% if history -%}
 Earlier in this conversation:
 {% for turn in history -%}
@@ -10,7 +10,7 @@ Question: {{ question }}
 {% if position %}
 The viewer is now at {{ position }} in this file. Use it when the question is about the current moment.
 {% endif %}
-{% if image %}
+{% if image and not frames %}
 An image of the file is attached to this message.
 {% endif %}
 {% if passages %}
@@ -18,5 +18,10 @@ Passages from the file:
 {% for passage in passages -%}
 [{{ loop.index }}]
 {{ passage }}
+{% endfor -%}
+{% elif frames %}
+Frames from the video:
+{% for frame in frames -%}
+[{{ loop.index }}] {{ frame }}
 {% endfor -%}
 {% endif %}

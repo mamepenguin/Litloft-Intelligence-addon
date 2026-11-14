@@ -95,9 +95,22 @@ function failureFor(err: unknown): AskFailure {
     if (err.status === 409 && err.detail === "picture_needs_vision") {
       return "picture_needs_vision";
     }
+    if (err.status === 409 && err.detail === "video_needs_vision") {
+      return "video_needs_vision";
+    }
     if (err.status === 503 && err.detail === BUSY_DETAIL) return "busy";
   }
   return "generic";
+}
+
+const DONE_FAILURES: Record<string, AskFailure> = {
+  image_unusable: "image_unusable",
+  frames_unusable: "frames_unusable",
+  frames_rejected: "frames_rejected",
+};
+
+function doneFailure(error: string | undefined): AskFailure {
+  return error === undefined ? "generic" : DONE_FAILURES[error] ?? "generic";
 }
 
 export default function AskTab({
@@ -280,11 +293,7 @@ export default function AskTab({
         if (sawDone && doneError === undefined) {
           settleAsk(fileId, "answered", null);
         } else {
-          settleAsk(
-            fileId,
-            "failed",
-            doneError === "image_unusable" ? "image_unusable" : "generic",
-          );
+          settleAsk(fileId, "failed", doneFailure(doneError));
         }
       } catch (err) {
         if (controller.signal.aborted) return;
@@ -397,7 +406,13 @@ export default function AskTab({
                         ? t("pictureNeedsVision")
                         : turn.failure === "image_unusable"
                           ? t("imageUnusable")
-                          : t("failed")}
+                          : turn.failure === "video_needs_vision"
+                            ? t("videoNeedsVision")
+                            : turn.failure === "frames_unusable"
+                              ? t("framesUnusable")
+                              : turn.failure === "frames_rejected"
+                                ? t("framesRejected")
+                                : t("failed")}
               </p>
             )}
           </section>
