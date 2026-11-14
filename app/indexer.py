@@ -1279,24 +1279,16 @@ class IndexManager:
     }
 
     def is_queued(self, file_id: str, task: str) -> bool:
-        """Return ``True`` if ``(file_id, task)`` is already waiting to run.
+        """Return ``True`` if ``(file_id, task)`` is already in the queue.
 
         Used by ``POST /files/{id}/reindex`` to short-circuit with HTTP
         202 ``already_queued`` so connect-clicks from the failed-jobs
         modal don't pile up duplicate flag flips + enqueue entries.
-
-        A frame scan has no queue entry to find once the sweep has picked the
-        file up: every active native video whose flag is false is queued for
-        one, so the flag is what says the file still waits for it.
         """
         task_type = self._TASK_NAME_TO_TYPE.get(task)
         if task_type is None:
             return False
-        if file_id in self._queued_by_type[task_type]:
-            return True
-        if task_type is not TaskType.FRAME_SCAN:
-            return False
-        return _frame_scan_pending(file_id)
+        return file_id in self._queued_by_type[task_type]
 
     def is_processing(self, file_id: str, task: str) -> bool:
         """Return ``True`` if a worker is running ``(file_id, task)`` now."""
@@ -2224,21 +2216,6 @@ def reset_falsely_completed_clip() -> int:
             reset += 1
 
     return reset
-
-
-def _frame_scan_pending(file_id: str) -> bool:
-    """Whether the file is an active native video that still wants its scan."""
-    with get_search_db_read() as session:
-        row = session.execute(
-            sql_text(
-                "SELECT mime_type, frame_scan_indexed FROM indexed_files "
-                "WHERE file_id = :fid AND active = 1"
-            ),
-            {"fid": file_id},
-        ).fetchone()
-    return bool(
-        row is not None and row[0] in VIDEO_TYPES and not row[1]
-    )
 
 
 def _thumbnail_source_reachable(

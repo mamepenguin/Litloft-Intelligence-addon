@@ -5,6 +5,7 @@ sections.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
@@ -278,7 +279,11 @@ class TestClipRegenerate:
         result = await files_router.reindex_file(
             "vid", body={"tasks": ["clip"]}, drive="drive1",
         )
-        return result if isinstance(result, dict) else result.model_dump()
+        if isinstance(result, dict):
+            return result
+        if hasattr(result, "model_dump"):
+            return result.model_dump()
+        return json.loads(result.body)
 
     async def test_spec_addon_111_regenerating_clip_rescans_a_native_video(
         self, ocr_db, tmp_path, monkeypatch,
@@ -289,8 +294,8 @@ class TestClipRegenerate:
         payload = await self._reindex(manager, monkeypatch)
 
         assert bool(ocr_db.flag("vid", "frame_scan_indexed")) is False
-        assert await _scans(manager) == [("vid", 100)]
         assert manager.is_queued("vid", SCAN)
+        assert await _scans(manager) == [("vid", 100)]
         assert SCAN not in repr(payload)
 
     async def test_spec_addon_111_a_second_regenerate_queues_no_second_scan(

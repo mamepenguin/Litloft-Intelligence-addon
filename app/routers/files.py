@@ -1037,9 +1037,8 @@ async def reindex_file(
         else:
             fresh.append(t)
 
-    # A CLIP regenerate also rescans a native video.
-    # A scan that is running keeps its flag and its result; one that is queued
-    # is not queued twice.
+    # A CLIP regenerate also rescans a native video: no scan running means its
+    # flag goes false, and one that is queued is not queued twice.
     rescan = (
         "clip" in tasks
         and indexed["mime_type"] in VIDEO_TYPES
@@ -1098,6 +1097,18 @@ async def reindex_file(
             await manager.enqueue_task_for_file(file_id, _SCAN_TASK)
     finally:
         _reindex_in_flight.difference_update(claimed)
+
+    # The CLIP task was already queued: the scan may have been queued by this
+    # request, but the body still reports the CLIP task alone.
+    if fresh == []:
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "already_queued",
+                "file_id": file_id,
+                "tasks_reset": [],
+            },
+        )
 
     return ReindexResponse(
         status="accepted",
