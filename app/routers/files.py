@@ -873,6 +873,17 @@ _REINDEX_FLAG_COLUMN: dict[str, str] = {
 # gate for but not yet enqueued. Touched only on the event loop.
 _reindex_in_flight: set[tuple[str, str]] = set()
 
+#: The task a CLIP regenerate of a native video also queues.
+_SCAN_TASK = "frame_scan"
+
+
+def _scan_is_running(manager: Any, file_id: str) -> bool:
+    """Whether a scan of ``file_id`` is running or claimed right now."""
+    if (file_id, _SCAN_TASK) in _reindex_in_flight:
+        return True
+    checker = getattr(manager, "is_processing", None)
+    return bool(checker is not None and checker(file_id, _SCAN_TASK))
+
 
 @router.post("/files/{file_id}/reindex")
 async def reindex_file(
@@ -1026,8 +1037,18 @@ async def reindex_file(
         else:
             fresh.append(t)
 
+    # A CLIP regenerate also rescans a native video.
+    # A scan that is running keeps its flag and its result; one that is queued
+    # is not queued twice.
+    rescan = (
+        "clip" in tasks
+        and indexed["mime_type"] in VIDEO_TYPES
+        and not _scan_is_running(manager, file_id)
+    )
+    enqueue_scan = rescan and not manager.is_queued(file_id, _SCAN_TASK)
+
     # All tasks were already queued — short-circuit per spec §2.1.
-    if fresh == []:
+    if fresh == [] and not rescan:
         return JSONResponse(
             status_code=202,
             content={
@@ -1059,16 +1080,22 @@ async def reindex_file(
                 setattr(row, _REINDEX_FLAG_COLUMN[t], False)
                 if t == "frame_ocr":
                     row.frame_ocr_read = False
+            if rescan:
+                row.frame_scan_indexed = False
 
     # ``is_queued`` lives on the loop and cannot join the flag flip's
     # transaction, so the claim keeps a concurrent request that checks
     # during the offloaded write from passing the gate too.
     claimed = [(file_id, t) for t in fresh]
+    if enqueue_scan:
+        claimed.append((file_id, _SCAN_TASK))
     _reindex_in_flight.update(claimed)
     try:
         await asyncio.to_thread(_reset_flags)
         for t in fresh:
             await manager.enqueue_task_for_file(file_id, t)
+        if enqueue_scan:
+            await manager.enqueue_task_for_file(file_id, _SCAN_TASK)
     finally:
         _reindex_in_flight.difference_update(claimed)
 
