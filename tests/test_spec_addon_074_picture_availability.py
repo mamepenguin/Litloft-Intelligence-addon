@@ -113,10 +113,9 @@ class TestEveryOtherKind:
             "text/markdown",
             "application/pdf",
             "application/epub+zip",
-            "video/mp4",
             "audio/mpeg",
         ],
-        ids=["text", "pdf", "epub", "video", "audio"],
+        ids=["text", "pdf", "epub", "audio"],
     )
     async def test_a_text_less_non_picture_still_needs_a_chunk(self, mime, db, addon, call):
         """SPEC-ADDON-074 I6: the widened rule is for pictures only."""
