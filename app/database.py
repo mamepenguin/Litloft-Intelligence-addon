@@ -132,6 +132,7 @@ def init_search_db() -> None:
         _migrate_video_visual_scenes_if_needed(conn)
         _migrate_ocr_indexed_column(conn)
         _migrate_frame_page_ocr_columns(conn)
+        _migrate_frame_scan_column(conn)
 
     _SearchSession = sessionmaker(bind=_search_engine, expire_on_commit=False)
 
@@ -142,6 +143,7 @@ def init_search_db() -> None:
     # dropped table is recreated at the new float[dim].
     with _search_engine.connect() as conn:
         _migrate_vec_clip_if_needed(conn)
+        _migrate_vec_clip_change_if_needed(conn)
         _migrate_vec_text_if_needed(conn)
         _create_vec_tables(conn)
         conn.commit()
@@ -476,6 +478,62 @@ def _migrate_vec_clip_if_needed(conn: object) -> None:
     # Reset clip_indexed so the indexer re-processes all files
     conn.execute(text("UPDATE indexed_files SET clip_indexed = 0"))
 
+    conn.commit()
+
+
+def _migrate_vec_clip_change_if_needed(conn: object) -> None:
+    """Drop and recreate vec_clip_change if its dimension differs from config.
+
+    Compared on its own, independently of ``vec_clip``: the change table is
+    written by the frame scan, which can run under a different CLIP model than
+    the one the scene rows were made with, and sqlite-vec cannot hold two
+    dimensions in one virtual table.
+
+    The scan rows stay; the change frames do not survive the rebuild, so every
+    native video's flag goes back to false and it is scanned again.
+    """
+    import logging
+    import re
+
+    from app.workers.clip import VIDEO_TYPES
+
+    logger = logging.getLogger(__name__)
+
+    expected_dim = _get_clip_embedding_dim()
+    schema_row = conn.execute(
+        text(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type='table' AND name='vec_clip_change'"
+        )
+    ).fetchone()
+    if schema_row is None:
+        return
+    match = re.search(r"float\[(\d+)\]", schema_row[0] or "")
+    if match is None:
+        return
+    current_dim = int(match.group(1))
+    if current_dim == expected_dim:
+        return
+
+    logger.warning(
+        "CLIP dimension changed (%d → %d). Dropping vec_clip_change, "
+        "deleting its change frames and rescanning every video.",
+        current_dim, expected_dim,
+    )
+    conn.execute(
+        text("DELETE FROM embeddings WHERE embedding_type = 'clip_change'")
+    )
+    conn.execute(text("DROP TABLE vec_clip_change"))
+
+    mimes = sorted(VIDEO_TYPES)
+    placeholders = ", ".join(f":mime{i}" for i in range(len(mimes)))
+    conn.execute(
+        text(
+            "UPDATE indexed_files SET frame_scan_indexed = 0 "
+            f"WHERE mime_type IN ({placeholders})"
+        ),
+        {f"mime{i}": mime for i, mime in enumerate(mimes)},
+    )
     conn.commit()
 
 
@@ -1088,6 +1146,39 @@ def _migrate_ocr_indexed_column(conn: object) -> None:
         )
 
 
+def _migrate_frame_scan_column(conn: object) -> None:
+    """Add the frame-scan flag, and close the files it can never apply to.
+
+    A file that is not a native video has no frame scan to wait for, so it is
+    marked done in the same transaction as the column that makes the flag
+    readable. Later rows of that kind are closed by the indexer's resume
+    sweep.
+    """
+    from app.workers.clip import VIDEO_TYPES
+
+    cols = {
+        row[1]
+        for row in conn.execute(
+            text("PRAGMA table_info(indexed_files)")
+        ).fetchall()
+    }
+    if "frame_scan_indexed" in cols:
+        return
+    conn.execute(text(
+        "ALTER TABLE indexed_files ADD COLUMN "
+        "frame_scan_indexed BOOLEAN NOT NULL DEFAULT 0"
+    ))
+    mimes = sorted(VIDEO_TYPES)
+    placeholders = ", ".join(f":mime{i}" for i in range(len(mimes)))
+    conn.execute(
+        text(
+            "UPDATE indexed_files SET frame_scan_indexed = 1 "
+            f"WHERE mime_type NOT IN ({placeholders})"
+        ),
+        {f"mime{i}": mime for i, mime in enumerate(mimes)},
+    )
+
+
 def _migrate_frame_page_ocr_columns(conn: object) -> None:
     """Add the video-frame and scanned-page OCR state (SPEC-ADDON-066/069).
 
@@ -1463,6 +1554,13 @@ def _create_vec_tables(conn: object) -> None:
     ))
     conn.execute(text(
         vec_table_ddl("vec_clip", _get_clip_embedding_dim(), if_not_exists=True)
+    ))
+    # The frame scan's change frames live apart from the scene rows: nothing
+    # but the selection reads them, and scene search must never see one.
+    conn.execute(text(
+        vec_table_ddl(
+            "vec_clip_change", _get_clip_embedding_dim(), if_not_exists=True,
+        )
     ))
 
     # Generic index-level metadata key/value store. Created alongside
@@ -2318,7 +2416,7 @@ def get_search_engine() -> Engine:
     return _search_engine
 
 
-ALLOWED_VECTOR_TABLES = frozenset({"vec_text", "vec_clip"})
+ALLOWED_VECTOR_TABLES = frozenset({"vec_text", "vec_clip", "vec_clip_change"})
 ALLOWED_FTS_TABLES = frozenset({
     "fts_files",
     "fts_transcripts",

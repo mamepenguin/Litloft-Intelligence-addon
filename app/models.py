@@ -15,6 +15,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -100,6 +101,11 @@ class IndexedFile(Base):
     frame_ocr_indexed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )
+    # True when the video's per-second change hashes and change frames are
+    # stored, or the file is not a native video.
+    frame_scan_indexed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
     # True when a PDF's scanned pages have been read. SPEC-ADDON-069.
     page_ocr_indexed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
@@ -175,6 +181,7 @@ class IndexedFile(Base):
         Index("idx_indexed_files_text_indexed", "text_indexed"),
         Index("idx_indexed_files_tfidf_keywords_indexed", "tfidf_keywords_indexed"),
         Index("idx_indexed_files_idf_terms_indexed", "idf_terms_indexed"),
+        Index("idx_indexed_files_frame_scan_indexed", "frame_scan_indexed"),
     )
 
 
@@ -222,7 +229,7 @@ class Embedding(Base):
     content_preview: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     # "text" or "clip" — determines which vec table to query
-    vector_table: Mapped[str] = mapped_column(String(10), nullable=False)
+    vector_table: Mapped[str] = mapped_column(String(20), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(UTC)
@@ -851,6 +858,28 @@ class VideoFrameText(Base):
         UniqueConstraint(
             "file_id", "chunk_index", name="uq_video_frame_texts_file_chunk"
         ),
+    )
+
+
+class VideoFrameScan(Base):
+    """A video's per-second difference hashes and picture sizes.
+
+    Each row holds ``seconds`` entries: the 256 comparison bits of that
+    second's picture, packed most significant bit first as ``numpy.packbits``
+    does, and the byte size of that picture as a quality-75 JPEG.
+    """
+
+    __tablename__ = "video_frame_scans"
+
+    file_id: Mapped[str] = mapped_column(String(12), primary_key=True)
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    hashes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    sizes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC)
     )
 
 

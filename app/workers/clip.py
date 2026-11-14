@@ -27,6 +27,7 @@ from app.config import settings, validate_file_path
 from app.database import get_search_db
 from app.frame_cache import frame_cache_dir, round_ms, tile_cache_dir
 from app.models import Embedding, IndexedFile
+from app.video_frames import extract_frame
 from app.workers import blip, ml_imports
 from app.workers.whisper import LOFT_MIME
 from app.youtube_source import (
@@ -359,6 +360,22 @@ def check_idle_unload() -> None:
         logger.info("Releasing SigLIP full model (idle timeout)")
 
 
+def load_image_model() -> None:
+    """Load the image encoder :func:`embed_image` encodes with.
+
+    A caller that must know whether the model *can* be loaded — rather than
+    learning it from the first embedding, which it would then have to undo —
+    does that decision here.
+
+    Raises:
+        Whatever the backend raises when the model cannot be loaded.
+    """
+    if _is_siglip_model(settings.models.clip):
+        _ensure_siglip_full_loaded()
+        return
+    _ensure_loaded()
+
+
 def embed_image(image: Image.Image) -> np.ndarray:
     """Generate CLIP embedding for a single image.
 
@@ -576,23 +593,8 @@ def _fill_interval_gaps(
             break
 
         frame_path = output_dir / f"interval_{idx:04d}.jpg"
-        try:
-            subprocess.run(
-                [
-                    "ffmpeg", "-ss", str(timestamp),
-                    "-i", video_path,
-                    "-vf", "scale=224:224,format=yuvj420p",
-                    "-frames:v", "1",
-                    "-q:v", "5",
-                    str(frame_path),
-                ],
-                capture_output=True,
-                timeout=30,
-            )
-            if frame_path.exists():
-                interval_frames = [*interval_frames, (timestamp, frame_path)]
-        except (subprocess.TimeoutExpired, OSError) as e:
-            logger.warning("Interval frame extraction failed at %ss: %s", timestamp, e)
+        if extract_frame(video_path, timestamp, frame_path):
+            interval_frames = [*interval_frames, (timestamp, frame_path)]
 
     combined = [*existing_frames, *interval_frames]
     return sorted(combined, key=lambda x: x[0])
