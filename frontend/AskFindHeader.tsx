@@ -18,11 +18,17 @@ import ModeTabs from "./ModeTabs";
  * A scoped Ask shows the scope's count instead, read from the listing the
  * scope names (`meta.total`). The `scope` event's `matched_file_count`
  * replaces it once an answer lands, so the header and the answer agree.
+ *
+ * A scope naming a Smart Collection has no listing to read: its members are
+ * the union of those Smart Collections' files, which the page evaluates, or —
+ * beside another chip — a size only the answer's `scope` event knows.
  */
 function useScopeFileCount(
   drive: string | null,
   scope: string,
   matchedCount: number | null,
+  smartCollectionScope: boolean,
+  smartMemberCount: number | null,
 ): number | null {
   const [count, setCount] = useState<number | null>(null);
 
@@ -33,6 +39,10 @@ function useScopeFileCount(
     }
     if (matchedCount !== null) {
       setCount(matchedCount);
+      return;
+    }
+    if (smartCollectionScope) {
+      setCount(smartMemberCount);
       return;
     }
     let cancelled = false;
@@ -62,7 +72,7 @@ function useScopeFileCount(
     return () => {
       cancelled = true;
     };
-  }, [drive, scope, matchedCount]);
+  }, [drive, scope, matchedCount, smartCollectionScope, smartMemberCount]);
 
   return count;
 }
@@ -78,12 +88,18 @@ export function AskFindHeader({
   drive,
   scope = "",
   matchedCount = null,
+  smartCollectionScope = false,
+  smartMemberCount = null,
 }: {
   current: "ask" | "find";
   query: string;
   drive: string | null;
   scope?: string;
   matchedCount?: number | null;
+  /** The Ask scope names a Smart Collection, so no listing can count it. */
+  smartCollectionScope?: boolean;
+  /** The union size of a scope of Smart Collection chips only. */
+  smartMemberCount?: number | null;
 }) {
   const tNav = useTranslations("intelligence.nav");
   const tCommon = useTranslations("common");
@@ -91,6 +107,8 @@ export function AskFindHeader({
     drive,
     current === "ask" ? scope : "",
     matchedCount,
+    current === "ask" && smartCollectionScope,
+    current === "ask" ? smartMemberCount : null,
   );
 
   const scopeLine = drive ? (

@@ -190,6 +190,13 @@
         "label": "Ask here",
         "priority": 10
       }
+    ],
+    "smart-collection-actions": [
+      {
+        "id": "smart-collection-ask",
+        "label": "Ask here",
+        "priority": 10
+      }
     ]
   },
   "policy_features": [

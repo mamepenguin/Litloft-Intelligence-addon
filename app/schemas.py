@@ -795,6 +795,10 @@ class AskScope(BaseModel):
     kind conditions with the same normalisation and caps, so a scope and a
     search filter holding the same values name the same files. ``favorite``
     and ``liked`` are not scope kinds and are rejected as unknown keys.
+
+    ``file_ids`` names files directly (a Smart Collection's members) and is
+    intersected with the lists. An empty list is a condition that names no
+    file; absent means the scope carries none.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -803,11 +807,15 @@ class AskScope(BaseModel):
     collections: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     kinds: list[str] = Field(default_factory=list)
+    file_ids: list[str] | None = Field(default=None, max_length=10_000)
 
     @model_validator(mode="after")
     def _normalise(self) -> "AskScope":
         apply_filter_normalisation(self)
-        if not (self.folders or self.collections or self.tags or self.kinds):
+        if (
+            not (self.folders or self.collections or self.tags or self.kinds)
+            and self.file_ids is None
+        ):
             raise ValueError("scope has no condition")
         return self
 

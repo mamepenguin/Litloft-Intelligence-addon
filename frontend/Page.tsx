@@ -53,6 +53,9 @@ import {
   formatOperatorToken,
   parseSearchQuery,
 } from "@/lib/searchQuery";
+import { getCollections, getSmartFolders } from "@/lib/api";
+import type { CollectionSummary } from "@/types";
+import type { SmartFolder } from "@/types/smartFolder";
 import { AskFindHeader } from "./AskFindHeader";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
 import { addSourceCapture } from "@/lib/sourceCapture";
@@ -75,6 +78,11 @@ import {
   queryToFilename,
 } from "./askNoteFormat";
 import { choiceLabel, choiceOffered, useLLMChoices } from "./llmChoice";
+import {
+  SCOPE_FILE_ID_LIMIT,
+  evaluateSmartMembers,
+  resolveSmartScope,
+} from "./smartScope";
 
 // Minimum allowed query length after trimming. Matches the backend
 // gate so we never send a request the server will reject.
@@ -140,6 +148,11 @@ function askCacheKey(
     : `${ASK_CACHE_PREFIX}:${drive}:${question}`;
 }
 
+interface ListState<T> {
+  status: "loading" | "ready" | "failed";
+  items: T[];
+}
+
 interface CachedAnswered {
   keywords: string | null;
   clues: string[] | null;
@@ -195,6 +208,57 @@ function writeAskCache(
     // cache write degrades to "back-navigation re-runs the query",
     // which is the pre-existing behaviour, so we never want this to
     // surface as an error to the user.
+  }
+}
+
+/**
+ * Answers to a scope holding a Smart Collection chip live under their own key.
+ * The members of a Smart Collection change, so an answer kept in the answer
+ * cache (which outlives its scope's meaning) would serve files the scope no
+ * longer names. This store is read only by a URL read, for Back and returning
+ * from a citation; the Ask button, Enter and the retry ask again.
+ */
+const SMART_SCOPE_ANSWER_PREFIX = "intelligence-ask-smart-scope:v1";
+
+function smartAnswerKey(drive: string, question: string, scope: string): string {
+  return `${SMART_SCOPE_ANSWER_PREFIX}:${drive}:${scope}:${question}`;
+}
+
+function readSmartAnswer(
+  drive: string,
+  question: string,
+  scope: string,
+): CachedAnswered | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(
+      smartAnswerKey(drive, question, scope),
+    );
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CachedAnswered;
+    if (typeof parsed?.answer !== "string") return null;
+    if (!Array.isArray(parsed?.citations)) return null;
+    if (!Array.isArray(parsed?.sources)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeSmartAnswer(
+  drive: string,
+  question: string,
+  scope: string,
+  payload: CachedAnswered,
+): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(
+      smartAnswerKey(drive, question, scope),
+      JSON.stringify(payload),
+    );
+  } catch {
+    // As with the answer cache: a failed write only re-runs the question.
   }
 }
 
@@ -466,9 +530,26 @@ function IntelligenceAskPageInner() {
   const [pendingRead, setPendingRead] = useState<{
     q: string;
     scope: AskScopePayload | null;
+    scopeText: string;
   } | null>(null);
+  // True until the mount read is consumed, so the scope line's union count
+  // never starts under a read that is owed and will paint its own count.
+  const mountReadPending = useRef(
+    (initialParams.current?.get("q") ?? "").trim() !== "",
+  );
   const [state, setState] = useState<AskState>({ kind: "idle" });
   const [ragAvailable, setRagAvailable] = useState<boolean | null>(null);
+  const [scopeLists, setScopeLists] = useState<{
+    collections: ListState<CollectionSummary>;
+    smartFolders: ListState<SmartFolder>;
+  }>({
+    collections: { status: "loading", items: [] },
+    smartFolders: { status: "loading", items: [] },
+  });
+  const [evaluatingScope, setEvaluatingScope] = useState(false);
+  const [smartPreviewCount, setSmartPreviewCount] = useState<number | null>(
+    null,
+  );
   const ime = useImeKeyGuard();
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [savedNote, setSavedNote] = useState<{ fileId: string; path: string } | null>(null);
@@ -478,12 +559,127 @@ function IntelligenceAskPageInner() {
     () => askScopeFromString(scopeString),
     [scopeString],
   );
+  const parsedScope = useMemo(
+    () => parseSearchQuery(scopeString),
+    [scopeString],
+  );
+  const inChips = parsedScope.collections;
+  const needsScopeLists = inChips.length > 0;
+  const scopeListsReady =
+    scopeLists.collections.status === "ready" &&
+    scopeLists.smartFolders.status === "ready";
+  const scopeListsFailed =
+    scopeLists.collections.status === "failed" ||
+    scopeLists.smartFolders.status === "failed";
+  const resolution = useMemo(
+    () =>
+      resolveSmartScope(
+        inChips,
+        scopeLists.collections.items,
+        scopeLists.smartFolders.items,
+      ),
+    [inChips, scopeLists],
+  );
+  const smartOnly =
+    resolution.smartCollections.length > 0 &&
+    resolution.collections.length === 0 &&
+    parsedScope.folders.length === 0 &&
+    parsedScope.tags.length === 0 &&
+    parsedScope.types.length === 0;
 
   // Opened from a folder or collection entry point, the question is what the
   // reader came to type; the chip above says what it will read.
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  // Both lists answer what an `in:` chip names, so they are read only for a
+  // scope that has one: a scope without one names no collection to resolve.
+  useEffect(() => {
+    if (!drive || !needsScopeLists) return;
+    let cancelled = false;
+    setScopeLists({
+      collections: { status: "loading", items: [] },
+      smartFolders: { status: "loading", items: [] },
+    });
+    getCollections(drive)
+      .then((items) => {
+        if (!cancelled) {
+          setScopeLists((prev) => ({
+            ...prev,
+            collections: { status: "ready", items },
+          }));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setScopeLists((prev) => ({
+            ...prev,
+            collections: { status: "failed", items: [] },
+          }));
+        }
+      });
+    getSmartFolders(drive)
+      .then((items) => {
+        if (!cancelled) {
+          setScopeLists((prev) => ({
+            ...prev,
+            smartFolders: { status: "ready", items },
+          }));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setScopeLists((prev) => ({
+            ...prev,
+            smartFolders: { status: "failed", items: [] },
+          }));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [drive, needsScopeLists]);
+
+  // Without both lists an `in:` chip cannot be resolved, so nothing can be
+  // sent for it; the page says so instead of leaving the button silent.
+  useEffect(() => {
+    if (!needsScopeLists || !scopeListsFailed) return;
+    setState((prev) =>
+      prev.kind === "error" && prev.message === t("scopeUnavailable")
+        ? prev
+        : { kind: "error", message: t("scopeUnavailable"), retryable: false },
+    );
+  }, [needsScopeLists, scopeListsFailed, t]);
+
+  // The scope line's count before an answer: a scope of Smart Collection chips
+  // only names the union of their members, which no listing can count. A URL
+  // read that will restore an answer gets its count from the answer instead,
+  // so this waits for that read to settle.
+  useEffect(() => {
+    const allowed =
+      drive !== null &&
+      smartOnly &&
+      !mountReadPending.current &&
+      pendingRead === null &&
+      scopeMatchedCount === null &&
+      state.kind !== "streaming" &&
+      state.kind !== "answered";
+    if (!allowed) {
+      setSmartPreviewCount(null);
+      return;
+    }
+    let cancelled = false;
+    setSmartPreviewCount(null);
+    void evaluateSmartMembers(drive, resolution.smartCollections).then(
+      (ids) => {
+        if (!cancelled && ids !== null) setSmartPreviewCount(ids.length);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [drive, smartOnly, resolution, pendingRead, scopeMatchedCount, state.kind]);
 
   // `null` is Auto. Component state only: a costly model kept across
   // visits would stay selected without anyone noticing.
@@ -551,7 +747,11 @@ function IntelligenceAskPageInner() {
   }, []);
 
   const runAsk = useCallback(
-    async (rawQuery: string, scopeOverride?: AskScopePayload | null) => {
+    async (
+      rawQuery: string,
+      scopeOverride?: AskScopePayload | null,
+      scopeTextOverride?: string,
+    ) => {
       const activeScope =
         scopeOverride === undefined ? scopePayload : scopeOverride;
       const trimmed = rawQuery.trim();
@@ -563,12 +763,63 @@ function IntelligenceAskPageInner() {
         });
         return;
       }
+      if (evaluatingScope) return;
+      if (
+        activeScope &&
+        activeScope.collections.length > 0 &&
+        !scopeListsReady
+      ) {
+        // Name resolution is what decides whether a chip is a collection or a
+        // Smart Collection, so nothing can be sent before the lists answer.
+        return;
+      }
 
       // Cancel any previous stream first so we never have two open
       // fetches racing into the same state setter.
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
+
+      let sentScope = activeScope;
+      let sentSmart = false;
+      if (activeScope) {
+        const resolved = resolveSmartScope(
+          activeScope.collections,
+          scopeLists.collections.items,
+          scopeLists.smartFolders.items,
+        );
+        sentScope = { ...activeScope, collections: resolved.collections };
+        if (resolved.smartCollections.length > 0) {
+          setEvaluatingScope(true);
+          try {
+            const ids = await evaluateSmartMembers(
+              drive ?? "",
+              resolved.smartCollections,
+            );
+            if (controller.signal.aborted) return;
+            if (ids === null) {
+              setState({
+                kind: "error",
+                message: t("scopeUnavailable"),
+                retryable: true,
+              });
+              return;
+            }
+            if (ids.length > SCOPE_FILE_ID_LIMIT) {
+              setState({
+                kind: "error",
+                message: t("scopeTooLarge"),
+                retryable: true,
+              });
+              return;
+            }
+            sentScope = { ...sentScope, file_ids: ids };
+            sentSmart = true;
+          } finally {
+            setEvaluatingScope(false);
+          }
+        }
+      }
 
       // Reflect the question in the URL via replaceState (not
       // pushState — we don't want each ask to add a back-stack
@@ -615,7 +866,7 @@ function IntelligenceAskPageInner() {
         const stream = askQuestionStream(trimmed, drive, {
           signal: controller.signal,
           profile: askProfile,
-          scope: activeScope ?? undefined,
+          scope: sentScope ?? undefined,
         });
 
         // Running state accumulators. We keep them in locals so
@@ -894,9 +1145,16 @@ function IntelligenceAskPageInner() {
         // Cache the answered snapshot so a citation click → back-nav
         // restores the page without re-running the SSE pipeline. We
         // intentionally do not cache `streaming` / `error` states —
-        // only fully resolved answers belong in the back-stack.
+        // only fully resolved answers belong in the back-stack. A Smart
+        // Collection scope's answer goes to the tab's own store instead, so
+        // the answer cache never serves it under a scope that has moved on.
         if (drive) {
-          writeAskCache(drive, trimmed, activeScope, answered);
+          const scopeText = scopeTextOverride ?? scopeString;
+          if (sentSmart) {
+            writeSmartAnswer(drive, trimmed, scopeText, answered);
+          } else {
+            writeAskCache(drive, trimmed, sentScope, answered);
+          }
         }
         if (activeScope && liveMatchedCount !== null) {
           setScopeMatchedCount(liveMatchedCount);
@@ -936,7 +1194,18 @@ function IntelligenceAskPageInner() {
         }
       }
     },
-    [t, tc, drive, askProfile, refetchChoices, scopePayload],
+    [
+      t,
+      tc,
+      drive,
+      askProfile,
+      refetchChoices,
+      scopePayload,
+      scopeString,
+      evaluatingScope,
+      scopeListsReady,
+      scopeLists,
+    ],
   );
 
   // --- Read the URL on mount and on `popstate`, nowhere else.
@@ -962,10 +1231,10 @@ function IntelligenceAskPageInner() {
   useEffect(() => {
     const q = (initialParams.current?.get("q") ?? "").trim();
     if (!q) return;
-    setPendingRead({
-      q,
-      scope: askScopeFromString(initialParams.current?.get("scope") ?? ""),
-    });
+    const scopeText = scopeStringFromRaw(
+      initialParams.current?.get("scope") ?? "",
+    );
+    setPendingRead({ q, scope: askScopeFromString(scopeText), scopeText });
   }, []);
 
   useEffect(() => {
@@ -980,7 +1249,9 @@ function IntelligenceAskPageInner() {
       setScopeMatchedCount(null);
       setInput(q);
       setPendingRead(
-        q ? { q, scope: askScopeFromString(canonical) } : null,
+        q
+          ? { q, scope: askScopeFromString(canonical), scopeText: canonical }
+          : null,
       );
     };
     window.addEventListener("popstate", onPopState);
@@ -989,21 +1260,53 @@ function IntelligenceAskPageInner() {
 
   useEffect(() => {
     if (!pendingRead || !drive) return;
+    mountReadPending.current = false;
 
-    const cached = readAskCache(drive, pendingRead.q, pendingRead.scope);
-    if (cached) {
-      setState({ kind: "answered", ...cached });
-      setScopeMatchedCount(cached.matchedFileCount ?? null);
+    // An `in:` chip is a collection or a Smart Collection, which only the two
+    // lists can say; until both answer, neither a restore nor a send can know
+    // what the scope names.
+    const needsLists = (pendingRead.scope?.collections.length ?? 0) > 0;
+    if (needsLists && !scopeListsReady) {
+      if (!scopeListsFailed) return;
+      setPendingRead(null);
+      setState({
+        kind: "error",
+        message: t("scopeUnavailable"),
+        retryable: false,
+      });
+      return;
+    }
+
+    const resolved = resolveSmartScope(
+      pendingRead.scope?.collections ?? [],
+      scopeLists.collections.items,
+      scopeLists.smartFolders.items,
+    );
+    const stored =
+      resolved.smartCollections.length > 0
+        ? readSmartAnswer(drive, pendingRead.q, pendingRead.scopeText)
+        : readAskCache(drive, pendingRead.q, pendingRead.scope);
+    if (stored) {
+      setState({ kind: "answered", ...stored });
+      setScopeMatchedCount(stored.matchedFileCount ?? null);
       setPendingRead(null);
       return;
     }
 
     if (ragAvailable !== true) return;
-    const question = pendingRead.q;
-    const scope = pendingRead.scope;
+    const { q: question, scope, scopeText } = pendingRead;
     setPendingRead(null);
-    void runAsk(question, scope);
-  }, [pendingRead, ragAvailable, drive, runAsk]);
+    void runAsk(question, scope, scopeText);
+  }, [
+    pendingRead,
+    ragAvailable,
+    drive,
+    runAsk,
+    scopeListsReady,
+    scopeListsFailed,
+    scopeLists,
+    t,
+  ]);
 
   const applyScope = useCallback((next: string) => {
     // A scope change invalidates any answer asked under the old one: it
@@ -1029,9 +1332,18 @@ function IntelligenceAskPageInner() {
     return (
       ragAvailable === true &&
       input.trim().length >= MIN_QUERY_LENGTH &&
-      state.kind !== "streaming"
+      state.kind !== "streaming" &&
+      !evaluatingScope &&
+      !(needsScopeLists && !scopeListsReady)
     );
-  }, [input, ragAvailable, state.kind]);
+  }, [
+    input,
+    ragAvailable,
+    state.kind,
+    evaluatingScope,
+    needsScopeLists,
+    scopeListsReady,
+  ]);
 
   const handleSubmit = useCallback(
     (e: FormEvent<HTMLFormElement>) => {
@@ -1096,6 +1408,13 @@ function IntelligenceAskPageInner() {
           drive={drive}
           scope={scopeString}
           matchedCount={scopeMatchedCount}
+          // Until both lists answer, a chip could name a Smart Collection, and
+          // only the union (or the drive alone) may be shown for one.
+          smartCollectionScope={
+            needsScopeLists &&
+            (resolution.smartCollections.length > 0 || !scopeListsReady)
+          }
+          smartMemberCount={smartOnly ? smartPreviewCount : null}
         />
       }
     >
@@ -1111,7 +1430,7 @@ function IntelligenceAskPageInner() {
             drive={drive ?? ""}
             query={scopeString}
             typeFilter={null}
-            entries={["folder", "collection", "tag", "kind"]}
+            entries={["folder", "collectionWithSmart", "tag", "kind"]}
             label={t("scopeAdd")}
             onChoose={(next) => applyScope(scopeStringFromRaw(next))}
           />

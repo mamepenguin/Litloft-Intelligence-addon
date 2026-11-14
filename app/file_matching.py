@@ -272,3 +272,30 @@ async def fetch_matching_file_ids(drive: str, search_filter: SearchFilter) -> li
         )
         raise FilterUnavailable("file_ids missing")
     return file_ids
+
+
+def scope_member_ids(
+    without_collections: list[str],
+    with_collections: list[str] | None,
+    file_ids: list[str] | None,
+) -> list[str]:
+    """An Ask scope's file set: ``B ∪ (A ∩ file_ids)``.
+
+    ``without_collections`` is A, the matching call carrying the folder / tag /
+    kind conditions, so the ids it holds are the request drive's active files.
+    ``with_collections`` is B, the same call with the collections condition, or
+    None when the scope names no collection. ``file_ids`` None means the scope
+    carries none; an empty list names no file and is not an absent one.
+    """
+    if file_ids is None:
+        return list(
+            without_collections if with_collections is None else with_collections
+        )
+    keep = set(file_ids)
+    narrowed = [file_id for file_id in without_collections if file_id in keep]
+    if with_collections is None:
+        return narrowed
+    seen = set(with_collections)
+    return list(with_collections) + [
+        file_id for file_id in narrowed if file_id not in seen
+    ]

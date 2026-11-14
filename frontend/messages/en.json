@@ -212,6 +212,7 @@
     "scopeAdd": "+ Scope",
     "scopeEmpty": "No files in this scope",
     "scopeUnavailable": "Could not load the scope",
+    "scopeTooLarge": "The scope is too large (up to 10,000 files). Narrow it down.",
     "askHere": "Ask here",
     "takenMs": "Created in {ms}ms",
     "personalHistoryViewed": "Searching {count} files you viewed",
