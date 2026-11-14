@@ -29,6 +29,7 @@ import os
 import shutil
 import subprocess
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -138,6 +139,8 @@ def extract_frame_to_cache(
     cache_path: Path,
     timestamp_seconds: float,
     size: FrameSize = "small",
+    *,
+    cancelled: Callable[[], bool] | None = None,
 ) -> None:
     """Run ffmpeg to extract one frame and atomically write it to ``cache_path``.
 
@@ -145,9 +148,15 @@ def extract_frame_to_cache(
     concurrent reader never sees a half-written WebP. Raises
     ``HTTPException`` on timeout / non-zero ffmpeg exit so the caller
     can surface a sensible status code.
+
+    ``cancelled`` is checked once, immediately before ffmpeg starts: a caller
+    that has given up (a closed tab, a question past its wait) keeps a
+    preparation that is still queued from running at all.
     """
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = cache_path.with_name(f"{cache_path.name}.{uuid.uuid4().hex}.tmp")
+    if cancelled is not None and cancelled():
+        return
     try:
         result = subprocess.run(
             frame_ffmpeg_argv(abs_path, tmp_path, timestamp_seconds, size),

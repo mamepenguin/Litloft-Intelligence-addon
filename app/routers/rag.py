@@ -24,6 +24,7 @@ lives here so it runs after whitespace normalization.
 import asyncio
 import json
 import logging
+import threading
 from collections.abc import AsyncIterator
 from typing import Annotated
 
@@ -50,6 +51,7 @@ from app.rag.service import (
 from app.rag.prompt import (
     build_file_question_system_prompt,
     build_file_question_user_prompt,
+    format_position,
 )
 from app.schemas import AskRequest, FileQuestionRequest, FindRequest
 
@@ -379,8 +381,9 @@ async def file_ask_endpoint(
     Streams ``answer_chunk``, then ``citations``, then ``meta``, then
     ``done``; a failure after the stream started ends with ``done``
     carrying ``error``. A picture or a playing video may attach one image
-    (SPEC-ADDON-071/-072); a text-less picture whose profile cannot see
-    is refused with 409 before the slot.
+    (SPEC-ADDON-071/-072); a picture, or a video with no text chunk, whose
+    profile cannot see is refused with 409 before the slot. A video with no
+    text chunk is answered from its frames (SPEC-ADDON-108).
     """
     resolved = await _require_rag_enabled(drive, body.profile)
 
@@ -413,6 +416,12 @@ async def file_ask_endpoint(
     ):
         raise HTTPException(status_code=409, detail="picture_needs_vision")
 
+    if (
+        file_question.is_text_less_video(material)
+        and not profile_can_see(resolved)
+    ):
+        raise HTTPException(status_code=409, detail="video_needs_vision")
+
     semaphore = _get_ask_semaphore()
     try:
         await asyncio.wait_for(semaphore.acquire(), timeout=0.001)
@@ -421,6 +430,10 @@ async def file_ask_endpoint(
             status_code=503,
             detail="Too many concurrent Ask requests, please retry shortly",
         )
+
+    frames_deadline = (
+        asyncio.get_running_loop().time() + file_question.FRAME_WAIT_SECONDS
+    )
 
     try:
         return StreamingResponse(
@@ -432,6 +445,7 @@ async def file_ask_endpoint(
                 semaphore=semaphore,
                 position_seconds=body.position_seconds,
                 history=history,
+                frames_deadline=frames_deadline,
             ),
             media_type=_SSE_MEDIA_TYPE,
             headers=_SSE_HEADERS,
@@ -449,14 +463,55 @@ async def _file_question_stream(
     semaphore: "asyncio.Semaphore",
     position_seconds: float | None = None,
     history: list[file_question.HistoryTurn] | None = None,
+    frames_deadline: float | None = None,
 ) -> AsyncIterator[str]:
     """Adapt the routed model's answer to the file-question SSE wire format.
 
     Owns the semaphore slot: it is released on the end of the stream, on a
-    mid-stream failure and on a client disconnect. Image preparation and
-    the text-only retry run under that same slot. The upstream stream is
-    closed explicitly rather than left to garbage collection, so a
-    disconnected tab tears the provider request down at once.
+    mid-stream failure and on a client disconnect. A video with no text chunk
+    is answered from its frames; every other file keeps the text path.
+    """
+    try:
+        stream = (
+            _frames_question_stream(
+                file_id=file_id,
+                question=question,
+                material=material,
+                resolved=resolved,
+                position_seconds=position_seconds,
+                history=history,
+                deadline=frames_deadline,
+            )
+            if file_question.is_text_less_video(material)
+            else _text_question_stream(
+                file_id=file_id,
+                question=question,
+                material=material,
+                resolved=resolved,
+                position_seconds=position_seconds,
+                history=history,
+            )
+        )
+        async for event in stream:
+            yield event
+    finally:
+        semaphore.release()
+
+
+async def _text_question_stream(
+    file_id: str,
+    question: str,
+    material: file_question.Material,
+    resolved: Resolved,
+    position_seconds: float | None = None,
+    history: list[file_question.HistoryTurn] | None = None,
+) -> AsyncIterator[str]:
+    """Answer from the file's text, with the picture or position image of 071.
+
+    Image preparation and the text-only retry run under the slot the caller
+    holds. The upstream stream is closed explicitly rather than left to
+    garbage collection, so a disconnected tab tears the provider request down
+    at once.
     """
     passages = [chunk.text for chunk in material.chunks]
     position = (
@@ -613,12 +668,218 @@ async def _file_question_stream(
         yield _format_sse_event(AnswerEvent(kind="done", data={}))
     finally:
         if stream is not None:
+            await stream.aclose()
+
+
+#: One SSE comment frame, written while the frames path has nothing to send.
+_FRAMES_KEEPALIVE = ": keepalive\n\n"
+#: How often the frames path writes one before the first answer token.
+_KEEPALIVE_SECONDS = 5.0
+
+
+async def _frames_question_stream(
+    file_id: str,
+    question: str,
+    material: file_question.Material,
+    resolved: Resolved,
+    position_seconds: float | None = None,
+    history: list[file_question.HistoryTurn] | None = None,
+    deadline: float | None = None,
+) -> AsyncIterator[str]:
+    """Answer a video with no text chunk from a set of its frames.
+
+    The frames are chosen and prepared under the caller's slot, from the
+    moment it was taken. Until the first token the stream writes an SSE
+    comment, so no proxy hop waits on frame preparation in silence. A frame
+    that was dropped is simply not listed or sent; the answer is from the
+    frames that were.
+    """
+    position = (
+        position_seconds
+        if position_seconds is not None and position_seconds > 0
+        else None
+    )
+    if deadline is None:
+        deadline = (
+            asyncio.get_running_loop().time()
+            + file_question.FRAME_WAIT_SECONDS
+        )
+
+    def meta_event(image_status: str) -> AnswerEvent:
+        return AnswerEvent(
+            kind="meta", data={"partial": False, "image": image_status}
+        )
+
+    cancelled = threading.Event()
+    prepare = asyncio.create_task(
+        file_question.prepare_frames(
+            material, position, deadline=deadline, cancelled=cancelled,
+        )
+    )
+    try:
+        while not prepare.done():
+            done, _ = await asyncio.wait(
+                {prepare}, timeout=_KEEPALIVE_SECONDS,
+            )
+            if not done:
+                yield _FRAMES_KEEPALIVE
+        frames, _dropped = prepare.result()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the stream must end, not die
+        logger.warning(
+            "file question frames failed: %s (file %s)",
+            type(exc).__name__,
+            file_id,
+        )
+        frames = []
+    finally:
+        if not prepare.done():
+            cancelled.set()
+            prepare.cancel()
             try:
-                await stream.aclose()
-            finally:
-                semaphore.release()
-        else:
-            semaphore.release()
+                await prepare
+            except asyncio.CancelledError:
+                pass
+
+    if not frames:
+        logger.warning("frames_unusable (file %s)", file_id)
+        yield _format_sse_event(meta_event("unavailable"))
+        yield _format_sse_event(
+            AnswerEvent(kind="done", data={"error": "frames_unusable"})
+        )
+        return
+
+    stamps = [format_position(frame.time) for frame in frames]
+    stream = None
+    answer: list[str] = []
+    try:
+        stream = resolved.client.generate_stream_with_images(
+            [(frame.data, frame.mime_type) for frame in frames],
+            build_file_question_system_prompt(
+                resolved.profile.config.output_language,
+                has_image=True,
+                has_passages=False,
+                has_history=bool(history),
+                frames=True,
+            ),
+            build_file_question_user_prompt(
+                question,
+                [],
+                has_image=True,
+                frames=stamps,
+                position_seconds=position,
+                history=history,
+            ),
+            max_tokens_override=settings.rag.max_tokens,
+        )
+        async for item in _answer_with_keepalive(stream):
+            if item is None:
+                yield _FRAMES_KEEPALIVE
+                continue
+            answer = [*answer, item]
+            yield _format_sse_event(
+                AnswerEvent(kind="answer_chunk", data={"delta": item})
+            )
+    except ImageRejected:
+        logger.warning(
+            "file question frames failed: %s (file %s)",
+            "frames_rejected",
+            file_id,
+        )
+        yield _format_sse_event(meta_event("unavailable"))
+        yield _format_sse_event(
+            AnswerEvent(kind="done", data={"error": "frames_rejected"})
+        )
+        return
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the stream must end, not die
+        logger.warning(
+            "file question failed: %s (file %s)",
+            type(exc).__name__,
+            file_id,
+        )
+        yield _format_sse_event(meta_event("attached"))
+        yield _format_sse_event(
+            AnswerEvent(
+                kind="done", data={"error": "Answer generation failed"},
+            )
+        )
+    else:
+        if not "".join(answer).strip():
+            logger.warning(
+                "file question failed: %s (file %s)",
+                "EmptyAnswer",
+                file_id,
+            )
+            yield _format_sse_event(meta_event("attached"))
+            yield _format_sse_event(
+                AnswerEvent(
+                    kind="done", data={"error": "Answer generation failed"},
+                )
+            )
+            return
+        yield _format_sse_event(
+            AnswerEvent(
+                kind="citations",
+                data=file_question.citations(
+                    "".join(answer),
+                    tuple(
+                        file_question.SelectedChunk(
+                            text="", position={"seconds": frame.time},
+                        )
+                        for frame in frames
+                    ),
+                ),
+            )
+        )
+        yield _format_sse_event(meta_event("attached"))
+        yield _format_sse_event(AnswerEvent(kind="done", data={}))
+    finally:
+        if stream is not None:
+            await stream.aclose()
+
+
+async def _answer_with_keepalive(stream) -> AsyncIterator[str | None]:
+    """Yield the stream's deltas, and ``None`` on each silent interval.
+
+    The model's own stream is consumed by a task so that waiting for its
+    first token does not block the keep-alive the frames path owes the proxy.
+    """
+    queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+
+    async def pump() -> None:
+        try:
+            async for delta in stream:
+                queue.put_nowait(("delta", delta))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - reported to the reader
+            queue.put_nowait(("error", exc))
+            return
+        queue.put_nowait(("end", None))
+
+    task = asyncio.create_task(pump())
+    try:
+        first = True
+        while True:
+            try:
+                kind, value = await asyncio.wait_for(
+                    queue.get(), timeout=_KEEPALIVE_SECONDS if first else None,
+                )
+            except asyncio.TimeoutError:
+                yield None
+                continue
+            if kind == "delta":
+                first = False
+                yield value
+            elif kind == "error":
+                raise value
+            else:
+                return
+    finally:
+        task.cancel()
 
 
 @router.post("/find")

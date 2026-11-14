@@ -128,6 +128,7 @@ def build_file_question_system_prompt(
     has_image: bool = False,
     has_passages: bool = True,
     has_history: bool = False,
+    frames: bool = False,
 ) -> str:
     """Return the system prompt for a question about one file.
 
@@ -137,8 +138,9 @@ def build_file_question_system_prompt(
 
     ``has_image`` adds the image rules and ``has_passages`` keeps the
     citation rules; a picture with no indexed text gets neither passages
-    nor a citation instruction. ``has_history`` adds the earlier-turns
-    sentence, and with it the citation limit when passages exist.
+    nor a citation instruction. ``frames`` replaces both with the rules for
+    a video answered from its frames. ``has_history`` adds the earlier-turns
+    sentence, and with it the citation limit when there is something to cite.
     """
     lang = output_language
     lang_line = _LANGUAGE_INSTRUCTIONS.get(
@@ -151,6 +153,7 @@ def build_file_question_system_prompt(
         image=has_image,
         passages=has_passages,
         history=has_history,
+        frames=frames,
     )
 
 
@@ -159,22 +162,25 @@ def build_file_question_user_prompt(
     passages: list[str],
     *,
     has_image: bool = False,
+    frames: list[str] | None = None,
     position_seconds: float | None = None,
     history: list[Any] | None = None,
 ) -> str:
     """Serialize one file's chunks, numbered from 1, and the question.
 
     Numbering runs across everything sent in file order, so the ``[n]`` the
-    answer cites names exactly the passage the prompt gave it. The position
-    is written in the viewer's clock when the caller read one for a media
-    file. ``history`` is the kept earlier turns, oldest first, written
-    before the question.
+    answer cites names exactly the passage the prompt gave it. ``frames``
+    replaces the passages with one numbered time per attached frame, in the
+    order the frames are sent. The position is written in the viewer's clock
+    when the caller read one for a media file. ``history`` is the kept
+    earlier turns, oldest first, written before the question.
     """
     return render(
         "rag/file_question_user.jinja2",
         question=question,
         passages=passages,
         image=has_image,
+        frames=frames or [],
         position=(
             format_position(position_seconds)
             if position_seconds is not None

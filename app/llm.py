@@ -21,7 +21,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 
 import httpx
@@ -993,6 +993,89 @@ class LLMClient:
             if content:
                 yield content
 
+    async def generate_stream_with_images(
+        self,
+        images: Sequence[tuple[bytes, str]],
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens_override: int | None = None,
+        temperature: float | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream an answer to ``vision_model`` with several images attached.
+
+        Each image follows the text block as its own ``image_url`` part, in
+        the order given. A 400/404 is a refusal reported as
+        :class:`ImageRejected`; unlike the single-image call it records no
+        verdict, because a context or image-count limit refuses a set of
+        frames that a model reading one image well would accept.
+        """
+        if not self._enabled or not self._config.vision_model:
+            raise ImageRejected(FAILURE_REQUEST_FAILED)
+
+        content: list[dict] = [{"type": "text", "text": user_prompt}]
+        for image_bytes, mime_type in images:
+            b64 = base64.b64encode(image_bytes).decode("ascii")
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{b64}"},
+                }
+            )
+        kwargs: dict = {
+            "model": self._config.vision_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": content},
+            ],
+            "temperature": (
+                temperature
+                if temperature is not None
+                else self._config.vision_temperature
+            ),
+            "stream": True,
+        }
+        effective_max_tokens = (
+            max_tokens_override
+            if max_tokens_override is not None
+            else self._config.vision_max_tokens
+        )
+        if _uses_max_completion_tokens(self._config.vision_model):
+            kwargs["max_completion_tokens"] = effective_max_tokens
+        else:
+            kwargs["max_tokens"] = effective_max_tokens
+
+        await self._wait_for_rate_limit()
+        try:
+            stream = await self._client.chat.completions.create(**kwargs)
+        except APIStatusError as e:
+            if e.status_code in _VISION_REJECTION_STATUS_CODES:
+                logger.info(
+                    "Vision stream rejected (status %d); treating the frames "
+                    "as unusable (model=%s)",
+                    e.status_code,
+                    self._config.vision_model,
+                )
+                raise ImageRejected(FAILURE_IMAGE_REJECTED) from e
+            logger.warning(
+                "Vision stream open failed with status %d", e.status_code,
+            )
+            raise
+
+        async for chunk in stream:
+            try:
+                choices = chunk.choices
+            except AttributeError:
+                continue
+            if not choices:
+                continue
+            delta = getattr(choices[0], "delta", None)
+            if delta is None:
+                continue
+            content = getattr(delta, "content", None)
+            if content:
+                yield content
+
     async def _vision_chat(
         self,
         image_bytes: bytes,
@@ -1914,6 +1997,88 @@ class OllamaLLMClient:
                         failure,
                     )
                     raise ImageRejected(failure)
+                if resp.status_code != 200:
+                    raise RuntimeError(
+                        f"vision stream failed with status {resp.status_code}"
+                    )
+
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    content = data.get("message", {}).get("content", "")
+                    if content:
+                        yield content
+
+                    if data.get("done", False):
+                        return
+        except httpx.TimeoutException as e:
+            raise RuntimeError("vision stream timed out") from e
+        except httpx.HTTPError as e:
+            raise RuntimeError("vision stream failed") from e
+
+    async def generate_stream_with_images(
+        self,
+        images: Sequence[tuple[bytes, str]],
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens_override: int | None = None,
+        temperature: float | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream a native ``/api/chat`` answer with several images attached.
+
+        Same contract as :meth:`LLMClient.generate_stream_with_images`: the
+        images go in the ``images`` list of the one user message, in order,
+        and a 400/404 is a refusal reported as :class:`ImageRejected` with no
+        verdict recorded. ``mime_type`` is accepted for API parity; ollama
+        sniffs the bytes.
+        """
+        if not self._enabled or not self._config.vision_model:
+            raise ImageRejected(FAILURE_REQUEST_FAILED)
+
+        body: dict = {
+            "model": self._config.vision_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": user_prompt,
+                    "images": [
+                        base64.b64encode(image_bytes).decode("ascii")
+                        for image_bytes, _mime_type in images
+                    ],
+                },
+            ],
+            "stream": True,
+            "think": False,
+            "options": {
+                "temperature": (
+                    temperature
+                    if temperature is not None
+                    else self._config.vision_temperature
+                ),
+                "num_predict": (
+                    max_tokens_override
+                    if max_tokens_override is not None
+                    else self._config.vision_max_tokens
+                ),
+            },
+        }
+
+        await self._wait_for_rate_limit()
+        try:
+            async with self._http.stream(
+                "POST",
+                f"{self._base_url}/api/chat",
+                json=body,
+            ) as resp:
+                if resp.status_code in _VISION_REJECTION_STATUS_CODES:
+                    raise ImageRejected(FAILURE_IMAGE_REJECTED)
                 if resp.status_code != 200:
                     raise RuntimeError(
                         f"vision stream failed with status {resp.status_code}"
