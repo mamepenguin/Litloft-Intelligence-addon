@@ -1043,17 +1043,34 @@ function IntelligenceAskPageInner() {
     [canSubmit, input, runAsk],
   );
 
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const pendingCaretRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const caret = pendingCaretRef.current;
+    if (caret === null) return;
+    pendingCaretRef.current = null;
+    inputRef.current?.setSelectionRange(caret, caret);
+  }, [input]);
+
   const handleInputKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
       if (ime.isImeKeystroke(e)) return;
-      // Enter submits; Shift+Enter inserts a newline. Matches the
-      // convention used by the main search input.
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (e.key !== "Enter") return;
+      if (!e.shiftKey && !e.altKey) {
         e.preventDefault();
-        if (canSubmit) void runAsk(input);
+        formRef.current?.requestSubmit();
+        return;
       }
+      if (e.shiftKey === e.altKey || e.ctrlKey || e.metaKey) return;
+      // Browsers differ on Alt+Enter in a textarea, so the newline is inserted
+      // here for both keys to keep the result identical.
+      e.preventDefault();
+      const { selectionStart: start, selectionEnd: end, value } = e.currentTarget;
+      pendingCaretRef.current = start + 1;
+      setInput(`${value.slice(0, start)}\n${value.slice(end)}`);
     },
-    [canSubmit, ime, input, runAsk],
+    [ime],
   );
 
   const handleAbort = useCallback(() => {
@@ -1113,7 +1130,11 @@ function IntelligenceAskPageInner() {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-2">
+        <form
+          ref={formRef}
+          onSubmit={handleSubmit}
+          className="flex flex-col gap-2"
+        >
           <textarea
             ref={inputRef}
             value={input}

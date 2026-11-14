@@ -9,12 +9,14 @@ import {
   useState,
   useSyncExternalStore,
   type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useTranslations } from "next-intl";
 import { BookmarkPlus } from "lucide-react";
 
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { Button } from "@/components/Button";
+import { useImeKeyGuard } from "@/lib/ime";
 import type { DocumentController } from "@/lib/documentController";
 import type { MediaController } from "@/lib/mediaController";
 
@@ -307,6 +309,43 @@ export default function AskTab({
   const canSubmit =
     !streaming && nonSpaceLength(thread.text) >= MIN_QUESTION_CHARS;
 
+  const ime = useImeKeyGuard();
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const questionRef = useRef<HTMLTextAreaElement | null>(null);
+  const pendingCaretRef = useRef<number | null>(null);
+
+  useIsomorphicLayoutEffect(() => {
+    const caret = pendingCaretRef.current;
+    if (caret === null) return;
+    pendingCaretRef.current = null;
+    questionRef.current?.setSelectionRange(caret, caret);
+  }, [thread.text]);
+
+  const handleQuestionKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+      if (ime.isImeKeystroke(event)) return;
+      if (event.key !== "Enter") return;
+      if (!event.shiftKey && !event.altKey) {
+        event.preventDefault();
+        formRef.current?.requestSubmit();
+        return;
+      }
+      if (event.shiftKey === event.altKey || event.ctrlKey || event.metaKey) {
+        return;
+      }
+      // Browsers differ on Alt+Enter in a textarea, so the newline is inserted
+      // here for both keys to keep the result identical.
+      event.preventDefault();
+      const field = event.currentTarget;
+      const { selectionStart: start, selectionEnd: end, value } = field;
+      const next = `${value.slice(0, start)}\n${value.slice(end)}`;
+      if (next.length > MAX_QUESTION_CHARS) return;
+      pendingCaretRef.current = start + 1;
+      setAskText(fileId, next);
+    },
+    [fileId, ime],
+  );
+
   return (
     <div
       className={
@@ -366,6 +405,7 @@ export default function AskTab({
       </div>
 
       <form
+        ref={formRef}
         onSubmit={submit}
         className={
           fillHeight
@@ -374,8 +414,11 @@ export default function AskTab({
         }
       >
         <textarea
+          ref={questionRef}
           value={thread.text}
           onChange={(event) => setAskText(fileId, event.target.value)}
+          onKeyDown={handleQuestionKeyDown}
+          onCompositionEnd={ime.onCompositionEnd}
           placeholder={t("placeholder")}
           maxLength={MAX_QUESTION_CHARS}
           rows={3}
