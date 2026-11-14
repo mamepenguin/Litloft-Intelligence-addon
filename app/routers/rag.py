@@ -880,6 +880,13 @@ async def _answer_with_keepalive(stream) -> AsyncIterator[str | None]:
                 return
     finally:
         task.cancel()
+        # The caller closes the provider stream once this returns, so the pump
+        # must finish unwinding first; a cancel aimed at this task still wins.
+        try:
+            await task
+        except asyncio.CancelledError:
+            if asyncio.current_task().cancelling():
+                raise
 
 
 @router.post("/find")
