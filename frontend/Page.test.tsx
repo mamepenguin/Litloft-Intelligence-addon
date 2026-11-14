@@ -891,16 +891,16 @@ describe("IntelligenceAskPage — page header, mode tabs and accent budget", () 
 
       expect(textarea.value).toBe("what did they decide");
 
-      // SPEC-ADDON-054 I6: a `?q=` read asks the seed on mount, so by the time
-      // the answer starts the button this used to press is the Close one. What
-      // has to hold is that the seed is the question asked. The question is
-      // the first positional argument, and the assertion reads the last call:
-      // earlier tests in this file share the module mock, and `mock.calls[0]`
-      // would be whichever of them ran first under `--sequence.shuffle`.
-      await waitFor(() => {
-        const calls = vi.mocked(askQuestionStream).mock.calls;
-        expect(calls[calls.length - 1]?.[0]).toBe("what did they decide");
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("ask-submit"));
       });
+      // The question is the first positional argument, and the assertion
+      // reads the last call: earlier tests in this file share the module
+      // mock, and `mock.calls[0]` would be whichever of them ran first
+      // under `--sequence.shuffle`.
+      const { askQuestionStream } = await import("@/addons/intelligence/api");
+      const calls = vi.mocked(askQuestionStream).mock.calls;
+      expect(calls[calls.length - 1][0]).toBe("what did they decide");
     } finally {
       searchQuery.current = "";
     }
