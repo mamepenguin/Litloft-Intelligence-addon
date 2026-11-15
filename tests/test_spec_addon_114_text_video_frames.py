@@ -24,6 +24,7 @@ from app.workers.video_visual_selection import (
     SelectionInputs,
 )
 from tests.file_question_doubles import chunk, mentioned, numbered_in_order
+from tests.frame_label_layout import assert_labelled
 from tests.file_question_vision_doubles import (  # noqa: F401 - fixtures
     DRIVE,
     VISION_MODEL,
@@ -51,7 +52,6 @@ from tests.video_frames_doubles import (
     scenes,
     seed_text_less_video,
     sent_keys,
-    user_prompt,
 )
 from tests.youtube_frame_doubles import (  # noqa: F401 - fixtures
     LOFT_MIME,
@@ -119,21 +119,6 @@ def _refusing_images(wire: Wire, status: int):
     return script
 
 
-def _listed_from(prompt: str, first: int, stamps: list[str]) -> bool:
-    """True when ``[first]`` .. ``[first+m-1]`` each appear followed by their own stamp."""
-    cursor = 0
-    for number, stamp in enumerate(stamps, start=first):
-        marker = prompt.find(f"[{number}]", cursor)
-        if marker == -1:
-            return False
-        at = prompt.find(stamp, marker)
-        following = prompt.find(f"[{number + 1}]", marker)
-        if at == -1 or (following != -1 and at > following):
-            return False
-        cursor = at
-    return True
-
-
 def _scenes_per_file(monkeypatch, plan: dict[str, tuple[list[float], float | None]]):
     """Each file's Ask-list frame times and selection duration, keyed by file id."""
     current: list[str] = []
@@ -181,7 +166,7 @@ class TestPassagesAndFramesGoTogether:
     async def test_one_request_carries_the_passages_and_the_frame_set(
         self, provider, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-114 I1/I9 §1.3-1.6: eight frames, in order, to the resolved vision model."""
+        """SPEC-ADDON-114 I1/I9/I11 §1.3-1.6: eight labelled frames, in order, to the resolved vision model."""
         _text_video(db, tmp_path)
         scenes(monkeypatch, [], duration=80.0)
         FFmpeg().install(monkeypatch)
@@ -200,15 +185,13 @@ class TestPassagesAndFramesGoTogether:
         assert meta["partial"] is False
         assert _answer(response) == Wire.vision_answer
         assert "error" not in by_kind(response)["done"]
-        if provider == "openai_compatible":
-            user = [m for m in body["messages"] if m.get("role") == "user"][-1]
-            kinds = [part["type"] for part in user["content"]]
-            assert kinds == ["text"] + ["image_url"] * 8
+        layout = assert_labelled(wire, body, first=2, times=EVEN_80)
+        assert PASSAGE in layout.prompt
 
     async def test_the_passages_are_numbered_first_and_the_frames_follow_with_their_times(
         self, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-114 I3 §1.5: ``[1]..[P]`` passages, then ``[P+1]..[P+F]`` frames in time order."""
+        """SPEC-ADDON-114 I3/I11 §1.5: ``[1]..[P]`` passages, then ``[P+1]..[P+F]`` frames in time order."""
         _text_video(
             db, tmp_path, duration=None,
             passages=((PASSAGE, 0.0), (PASSAGE_TWO, 2.0)),
@@ -220,13 +203,11 @@ class TestPassagesAndFramesGoTogether:
         await ask(call, VIDEO, question=QUESTION)
 
         assert len(wire.image_bodies) == 1
-        prompt = user_prompt(wire)
-        assert QUESTION in prompt
-        assert numbered_in_order(prompt, [PASSAGE, PASSAGE_TWO])
-        assert prompt.index(PASSAGE_TWO) < prompt.index("[3]")
-        assert _listed_from(prompt, 3, ["0:05", "1:15", "1:02:05"])
-        assert "[6]" not in prompt
-        assert sent_keys(wire) == [ms(5.9), ms(75.9), ms(3725.9)]
+        body = wire.image_bodies[0]
+        layout = assert_labelled(wire, body, first=3, times=[5.9, 75.9, 3725.9])
+        assert QUESTION in layout.prompt
+        assert numbered_in_order(layout.prompt, [PASSAGE, PASSAGE_TWO])
+        assert "[6]" not in wire.text_of(body)
 
     async def test_the_system_prompt_lets_both_passages_and_frames_be_cited(
         self, db, addon, llm, call, tmp_path, monkeypatch,
@@ -266,9 +247,8 @@ class TestPassagesAndFramesGoTogether:
         assert by_kind(response)["meta"]["image"] == "attached"
         assert sent_keys(wire) == [ms(10.0), ms(20.0)]
         assert "EARLIER-QUESTION" in "\n".join(wire.prompts)
-        prompt = user_prompt(wire)
-        assert numbered_in_order(prompt, [PASSAGE])
-        assert _listed_from(prompt, 2, ["0:10", "0:20"])
+        layout = assert_labelled(wire, wire.image_bodies[0], first=2, times=[10.0, 20.0])
+        assert numbered_in_order(layout.prompt, [PASSAGE])
         assert _cited(response) == [(1, {"seconds": 0.0}), (3, {"seconds": 20.0})]
 
     async def test_a_cut_passage_list_reports_partial_with_the_frames_attached(
@@ -352,7 +332,7 @@ class TestTheFrameSet:
     async def test_the_position_frame_is_numbered_in_time_order_and_the_position_stated(
         self, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-114 I5 §7: the position frame is part of the set, listed at its time."""
+        """SPEC-ADDON-114 I5/I11 §7: the position frame is part of the set, labelled at its time."""
         _text_video(db, tmp_path, duration=70.0)
         scenes(monkeypatch, [], duration=70.0)
         FFmpeg().install(monkeypatch)
@@ -361,11 +341,8 @@ class TestTheFrameSet:
         await ask(call, VIDEO, position=33.0)
 
         expected = sorted([33.0, *EVEN_70_AROUND_33])
-        assert sent_keys(wire) == [ms(t) for t in expected]
-        assert _listed_from(
-            user_prompt(wire), 2,
-            ["0:05", "0:15", "0:25", "0:33", "0:35", "0:45", "0:55", "1:05"],
-        )
+        layout = assert_labelled(wire, wire.image_bodies[0], first=2, times=expected)
+        assert "0:33" in layout.prompt
 
     async def test_a_failed_position_frame_is_left_out_stated_and_never_replaced(
         self, db, addon, llm, call, tmp_path, monkeypatch,
@@ -380,12 +357,10 @@ class TestTheFrameSet:
 
         assert by_kind(response)["meta"]["image"] == "attached"
         assert sent_keys(wire) == [ms(t) for t in EVEN_70_AROUND_33]
-        prompt = user_prompt(wire)
-        assert "0:33" in prompt
-        assert _listed_from(
-            prompt, 2, ["0:05", "0:15", "0:25", "0:35", "0:45", "0:55", "1:05"],
-        )
-        assert "[9]" not in prompt
+        body = wire.image_bodies[0]
+        layout = assert_labelled(wire, body, first=2, times=EVEN_70_AROUND_33)
+        assert "0:33" in layout.prompt
+        assert "[9]" not in wire.text_of(body)
 
     async def test_failed_frames_are_dropped_and_the_rest_keep_numbering_after_the_passages(
         self, db, addon, llm, call, tmp_path, monkeypatch,
@@ -402,9 +377,7 @@ class TestTheFrameSet:
         assert sent_keys(wire) == [ms(t) for t in kept]
         assert by_kind(response)["meta"]["image"] == "attached"
         assert "error" not in by_kind(response)["done"]
-        assert _listed_from(
-            user_prompt(wire), 2, ["0:05", "0:25", "0:35", "0:45", "1:05", "1:15"],
-        )
+        assert_labelled(wire, wire.image_bodies[0], first=2, times=kept)
 
     @pytest.mark.parametrize("raises", ["load_selection_inputs", "select_scenes"])
     async def test_unreadable_selection_inputs_fall_back_to_evenly_spaced_frames(
@@ -753,7 +726,7 @@ class TestWhenTextArrives:
     async def test_the_question_after_a_transcript_lands_sends_passages_and_frames(
         self, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-114 §7 (108 I1 revised): frames from ``[1]`` before, after the passage once text lands."""
+        """SPEC-ADDON-114 §7 I11 (108 I1 revised): frames from ``[1]`` before, after the passage once text lands."""
         seed_text_less_video(db, VIDEO, path=tmp_path / f"{VIDEO}.mp4", duration=80.0)
         scenes(monkeypatch, [12.0, 47.0], duration=80.0)
         FFmpeg().install(monkeypatch)
@@ -763,6 +736,7 @@ class TestWhenTextArrives:
         assert by_kind(before)["meta"]["image"] == "attached"
         assert len(wire.image_bodies) == 1
         expected = [5.0, 12.0, 15.0, 25.0, 35.0, 45.0, 47.0, 55.0]
+        assert_labelled(wire, wire.image_bodies[0], first=1, times=expected)
 
         db.on(VIDEO).transcript(PASSAGE, start=0.0)
         after = await ask(call, VIDEO)
@@ -770,11 +744,8 @@ class TestWhenTextArrives:
         assert by_kind(after)["meta"]["image"] == "attached"
         assert len(wire.image_bodies) == 2
         assert sent_keys(wire)[8:] == [ms(t) for t in expected]
-        prompt = user_prompt(wire)
-        assert numbered_in_order(prompt, [PASSAGE])
-        assert _listed_from(
-            prompt, 2, ["0:05", "0:12", "0:15", "0:25", "0:35", "0:45", "0:47", "0:55"],
-        )
+        layout = assert_labelled(wire, wire.image_bodies[1], first=2, times=expected)
+        assert numbered_in_order(layout.prompt, [PASSAGE])
 
 
 # ---------------------------------------------------------------------------
