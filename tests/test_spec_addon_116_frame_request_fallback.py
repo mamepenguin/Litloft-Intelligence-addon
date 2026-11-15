@@ -289,7 +289,7 @@ class TestTheRequestBody:
     async def test_openai_tool_and_final_requests_differ_from_today_only_by_the_exchange(
         self, kind, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-116 I5 (revised): ``stream``, temperature and model are today's; no max tokens."""
+        """SPEC-ADDON-116 I5 (revised): ``stream``, temperature and model are today's; max tokens 16384."""
         seed_video(db, tmp_path, kind)
         scenes(monkeypatch, [], duration=80.0)
         FFmpeg().install(monkeypatch)
@@ -304,8 +304,8 @@ class TestTheRequestBody:
         assert any(k in todays for k in limits)
         today = {k: v for k, v in todays.items() if k not in exchange + limits}
         for body in wire.requests:
-            assert not any(k in body for k in limits)
-            assert {k: v for k, v in body.items() if k not in exchange} == today
+            assert [body.get(k) for k in limits if k in body] == [16384]
+            assert {k: v for k, v in body.items() if k not in exchange + limits} == today
         assert [b["tool_choice"] for b in wire.requests] == ["auto"] * 3 + ["none"]
 
     @pytest.mark.parametrize("kind", KINDS)

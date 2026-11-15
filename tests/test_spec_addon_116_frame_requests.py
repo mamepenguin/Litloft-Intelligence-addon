@@ -110,10 +110,10 @@ class TestTheFirstRequest:
         assert dict(pairs)["meta"]["image"] == "attached"
         assert cited(pairs) == [(first, {"seconds": 5.0})]
 
-    async def test_an_ollama_profile_thinks_with_no_token_limit(
+    async def test_an_ollama_profile_thinks_with_its_own_token_limit(
         self, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-116 §1.2 I5 (revised): ``think`` on and no ``num_predict``."""
+        """SPEC-ADDON-116 §1.2 I5 (revised): ``think`` on and ``num_predict`` 8192."""
         seed_video(db, tmp_path, "text-video")
         scenes(monkeypatch, [], duration=80.0)
         FFmpeg().install(monkeypatch)
@@ -124,7 +124,7 @@ class TestTheFirstRequest:
         assert len(wire.requests) == 2
         for body in wire.requests:
             assert body.get("think") is True
-            assert "num_predict" not in body.get("options", {})
+            assert body["options"]["num_predict"] == 8192
 
     async def test_thinking_text_is_never_written_or_sent_back(
         self, db, addon, llm, call, tmp_path, monkeypatch,
@@ -487,7 +487,7 @@ class TestTheLimitOfThree:
             assert final["tools"] == wire.requests[0]["tools"]
         else:
             assert final.get("think") is True
-            assert "num_predict" not in final.get("options", {})
+            assert final["options"]["num_predict"] == 8192
         assert len(assistant_messages(final)) == 3
         assert len(tool_messages(final)) == 3
         times = [12.0, 13.5, 22.0, 23.5, 32.0, 33.5]

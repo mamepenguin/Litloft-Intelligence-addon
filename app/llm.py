@@ -41,6 +41,16 @@ from app.prompt_loader import render
 logger = logging.getLogger(__name__)
 
 
+#: A video's tool and final requests reason before they answer or call
+#: ``get_frames``. The limit is far above what a successful reply used (about
+#: 35,000 characters of reasoning) and stops a reasoning loop, which otherwise
+#: ran until the question's deadline (about 290,000 characters).
+FRAME_TOOL_MAX_TOKENS = 16384
+#: Smaller for ollama: the largest question is about 23,000 tokens and the
+#: recommended context is 32,768, which this must fit beside.
+OLLAMA_FRAME_TOOL_NUM_PREDICT = 8192
+
+
 @dataclass(frozen=True)
 class ChatToolCall:
     """One tool call surfaced by the LLM during an agentic turn."""
@@ -1258,11 +1268,10 @@ class LLMClient:
         """The streamed body of a video's tool or final request.
 
         The body differs from today's request only by the exchange's messages,
-        by ``tools`` and ``tool_choice`` when ``tools`` is given, and by having
-        no max-tokens field: the question's own deadline bounds the reply, and
-        a reasoning model spent a token limit before calling the tool. The
-        opt-in provider extras stay out so that a 400 is read as a refusal of
-        the images rather than of a body field.
+        by ``tools`` and ``tool_choice`` when ``tools`` is given, and by its
+        own token limit, :data:`FRAME_TOOL_MAX_TOKENS`. The opt-in provider
+        extras stay out so that a 400 is read as a refusal of the images
+        rather than of a body field.
         """
         kwargs: dict = {
             "model": self._config.vision_model,
@@ -1276,6 +1285,10 @@ class LLMClient:
             ),
             "stream": True,
         }
+        if _uses_max_completion_tokens(self._config.vision_model):
+            kwargs["max_completion_tokens"] = FRAME_TOOL_MAX_TOKENS
+        else:
+            kwargs["max_tokens"] = FRAME_TOOL_MAX_TOKENS
         if tools is not None:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
@@ -2471,6 +2484,7 @@ class OllamaLLMClient:
                     if temperature is not None
                     else self._config.vision_temperature
                 ),
+                "num_predict": OLLAMA_FRAME_TOOL_NUM_PREDICT,
             },
         }
         if tools is not None and tool_choice != "none":
