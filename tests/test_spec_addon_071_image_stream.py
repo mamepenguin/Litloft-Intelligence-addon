@@ -610,7 +610,7 @@ class TestWhatIsNotStoredOrLogged:
         ("failure", "slug"),
         [
             ("picture unreadable", "picture_unreadable"),
-            ("frame failed", "frame_failed"),
+            ("frames unusable", "frames_unusable"),
             ("image rejected", "image_rejected"),
         ],
         ids=["picture-unreadable", "frame-failed", "image-rejected"],
@@ -618,14 +618,14 @@ class TestWhatIsNotStoredOrLogged:
     async def test_the_failure_class_and_file_id_are_logged(
         self, failure, slug, db, addon, llm, call, caplog, monkeypatch, tmp_path,
     ):
-        """SPEC-ADDON-071 I8: the class with the file id, and nothing else."""
+        """SPEC-ADDON-071 I8 / -114 I4 §8: the class with the file id, and nothing else."""
         if failure == "picture unreadable":
             file_id = PICTURE
             missing = Path(settings_dir()) / "missing.png"
             db.file(PICTURE, mime="image/png", file_path=str(missing), file_size=10)
             db.document(TEXT, chunk_index=0)
             vision_client(llm)
-        elif failure == "frame failed":
+        elif failure == "frames unusable":
             file_id = VIDEO
             seed_video(
                 db, VIDEO, text=chunk("video", 30),
@@ -641,7 +641,7 @@ class TestWhatIsNotStoredOrLogged:
             vision_client(llm, wire=wire)
         caplog.set_level(logging.DEBUG)
 
-        await ask(call, file_id, position=5.0 if failure == "frame failed" else None)
+        await ask(call, file_id, position=5.0 if failure == "frames unusable" else None)
 
         messages = [record.getMessage() for record in caplog.records]
         assert any(slug in message and file_id in message for message in messages)

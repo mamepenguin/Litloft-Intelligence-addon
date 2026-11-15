@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import app.frame_cache as frame_cache
 from tests.file_question_doubles import chunk
 from tests.file_question_vision_doubles import (  # noqa: F401 - fixtures
     addon,
@@ -17,7 +18,9 @@ from tests.file_question_vision_doubles import (  # noqa: F401 - fixtures
     by_kind,
     call,
     db,
+    ffmpeg_fails,
     llm,
+    openai_config,
     seed_audio,
     seed_document,
     seed_picture,
@@ -80,9 +83,9 @@ class TestThePositionInThePrompt:
     async def test_a_position_is_written_in_the_viewers_clock(
         self, kind, position, stamp, db, addon, llm, call, tmp_path,
     ):
-        """SPEC-ADDON-072 I5: h:mm:ss for a long media file, m:ss under an hour."""
+        """SPEC-ADDON-072 I5, on the text path SPEC-ADDON-114 §1.7 keeps: h:mm:ss for a long media file, m:ss under an hour."""
         file_id = _file(kind, db, tmp_path)
-        _, wire = vision_client(llm)
+        _, wire = vision_client(llm, config=openai_config(vision_model=""))
 
         response = await ask(call, file_id, position=position)
 
@@ -104,6 +107,25 @@ class TestThePositionInThePrompt:
         assert by_kind(response)["meta"]["image"] == (
             "attached" if kind == "picture" else "none"
         )
+
+    async def test_a_text_video_states_the_position_without_frames_too(
+        self, db, addon, llm, call, tmp_path, monkeypatch,
+    ):
+        """SPEC-ADDON-114 I5 (revision): a position greater than 0 is written in the text-only answer too."""
+        seed_video(
+            db, VIDEO, text=chunk("video", 30),
+            path=tmp_path / "video.mp4", duration=60.0,
+        )
+        monkeypatch.setattr(frame_cache.subprocess, "run", ffmpeg_fails())
+        _, wire = vision_client(llm)
+
+        at_33 = await ask(call, VIDEO, position=33.0)
+        at_0 = await ask(call, VIDEO, position=0.0)
+
+        assert by_kind(at_33)["meta"]["image"] == "unavailable"
+        assert by_kind(at_0)["meta"]["image"] == "unavailable"
+        assert "0:33" in wire.prompts[0]
+        assert "0:00" not in wire.prompts[1]
 
 
 class TestThePositionRange:
@@ -148,12 +170,12 @@ class TestThePositionRange:
     async def test_a_position_inside_the_range_reaches_the_prompt(
         self, position, stamp, db, addon, llm, call, tmp_path,
     ):
-        """SPEC-ADDON-072 I5/I7: the bounds themselves are valid and written."""
+        """SPEC-ADDON-072 I5/I7, on the text path SPEC-ADDON-114 §1.7 keeps: the bounds are valid and written."""
         seed_video(
             db, VIDEO, text=chunk("video", 30),
             path=tmp_path / "video.mp4", duration=1_000_001.0,
         )
-        _, wire = vision_client(llm)
+        _, wire = vision_client(llm, config=openai_config(vision_model=""))
 
         response = await ask(call, VIDEO, position=position)
 

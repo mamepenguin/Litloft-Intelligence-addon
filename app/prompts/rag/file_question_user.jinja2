@@ -1,4 +1,4 @@
-{#- vars: question (string), passages (list[str]), image (bool), frames (list[str]), position (string|none), history (list) — see rag/prompt.py:build_file_question_user_prompt -#}
+{#- vars: question (string), passages (list[str]), image (bool), frames (bool), position (string|none), history (list) — see rag/prompt.py:build_file_question_user_prompt -#}
 {% if history -%}
 Earlier in this conversation:
 {% for turn in history -%}
@@ -19,9 +19,7 @@ Passages from the file:
 [{{ loop.index }}]
 {{ passage }}
 {% endfor -%}
-{% elif frames %}
-Frames from the video:
-{% for frame in frames -%}
-[{{ loop.index }}] {{ frame }}
-{% endfor -%}
+{% endif %}
+{% if frames %}
+The frames follow the question, each introduced by its number and time.
 {% endif %}

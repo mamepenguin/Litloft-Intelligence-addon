@@ -160,10 +160,10 @@ def _loft_source(file_path: str | None, drive: str) -> LoftSource | None:
             return None
 
 
-def _is_text_less_video(
+def _has_frame_source(
     file_type: str, mime_type: str, file_path: str | None, drive: str,
 ) -> bool:
-    """A video with no text chunk, when a frame can be taken for it.
+    """Whether a frame of this file can be read at all.
 
     A ``.loft`` needs a readable YouTube reference: no frame exists for another
     provider, and an unreadable one is not a source at all.
@@ -177,11 +177,29 @@ def _is_text_less_video(
 
 
 def is_text_less_video(material: Material) -> bool:
-    """Whether a question about this material goes through its frames."""
+    """Whether a question about this material goes through its frames alone."""
     return (
         material.file_type == "video"
         and not material.chunks
         and not is_picture(material)
+    )
+
+
+def is_text_video(material: Material) -> bool:
+    """Whether a video with text also has frames a question could carry.
+
+    A picture is not a video, and a ``.loft`` of another provider or an
+    unreadable one has no frame to send, so its text path keeps the one image
+    attempt it has.
+    """
+    return (
+        material.file_type == "video"
+        and bool(material.chunks)
+        and not is_picture(material)
+        and _has_frame_source(
+            material.file_type, material.mime_type, material.file_path,
+            material.drive,
+        )
     )
 
 
@@ -220,7 +238,7 @@ def available(file_id: str, drive: str) -> bool:
     file_path = indexed[2]
     if _is_picture(file_type, mime_type):
         return llm_routing.any_profile_can_see(settings)
-    if _is_text_less_video(file_type, mime_type, file_path, drive):
+    if _has_frame_source(file_type, mime_type, file_path, drive):
         return llm_routing.any_profile_can_see(settings)
     return False
 
@@ -314,7 +332,7 @@ def load_material(
             {"fid": file_id},
         ).fetchall()
         if not transcripts and not documents:
-            if not _is_picture(file_type, mime) and not _is_text_less_video(
+            if not _is_picture(file_type, mime) and not _has_frame_source(
                 file_type, mime, file_path, drive
             ):
                 return None

@@ -1,4 +1,4 @@
-"""SPEC-ADDON-077: Ask attaches the frame at the player position for a YouTube ``.loft``."""
+"""SPEC-ADDON-077: Ask reads a YouTube ``.loft``'s frames through the large frame route."""
 
 from __future__ import annotations
 
@@ -24,9 +24,9 @@ from tests.file_question_vision_doubles import (  # noqa: F401 - fixtures
     events,
     llm,
     vision_client,
-    write_large_frame,
 )
 from tests.vec_partition_db import search_index  # noqa: F401 - the fixture
+from tests.video_frames_doubles import scenes
 from tests.youtube_frame_doubles import (  # noqa: F401 - fixtures
     HEADER_TOKEN,
     LOFT_MIME,
@@ -70,52 +70,67 @@ def _serve(youtube):
     return fmt
 
 
-def _decoded(wire) -> bytes:
-    payload = wire.images[0]
+def _decoded(wire, index: int = 0) -> bytes:
+    payload = wire.images[index]
     if payload.startswith("data:"):
         payload = payload.split(",", 1)[1]
     return base64.b64decode(payload)
 
 
-class TestTheFrameAtThePosition:
-    async def test_the_large_frame_of_the_stream_is_attached_once(
-        self, db, addon, llm, call, tmp_path, youtube,
+class TestTheFrameSet:
+    """SPEC-ADDON-114 §7 (077 I6 revised): a ``.loft`` with a text chunk gets the frame set."""
+
+    async def test_the_frame_set_is_read_through_the_large_route_in_time_order(
+        self, db, addon, llm, call, tmp_path, youtube, monkeypatch,
     ):
-        """SPEC-ADDON-077 I6: exactly one ``large`` frame at the position, cached as ``large``."""
-        _loft(db, tmp_path)
+        """SPEC-ADDON-114 I1/I5: every frame of the set, each cached as a ``large`` entry."""
+        _loft(db, tmp_path, duration=None)
+        scenes(monkeypatch, [10.0, 20.0], duration=None)
         _serve(youtube)
         _, wire = vision_client(llm)
 
         response = await ask(call, VIDEO, position=12.345)
 
         assert by_kind(response)["meta"]["image"] == "attached"
-        assert len(wire.images) == 1
-        assert wire.images[0].startswith("data:image/webp;base64,")
+        assert len(wire.images) == 3
+        assert all(
+            payload.startswith("data:image/webp;base64,") for payload in wire.images
+        )
         cached = frame_cache_path(VIDEO, 12.345, "large")
-        assert _decoded(wire) == cached.read_bytes()
-        assert sorted(p.name for p in cached.parent.iterdir()) == ["12345.large.webp"]
+        sent = [_decoded(wire, index) for index in range(len(wire.images))]
+        assert sent == [
+            frame_cache_path(VIDEO, t, "large").read_bytes()
+            for t in (10.0, 12.345, 20.0)
+        ]
+        assert sorted(p.name for p in cached.parent.iterdir()) == [
+            "10000.large.webp", "12345.large.webp", "20000.large.webp",
+        ]
         assert len(youtube.lookups()) == 1
 
-    async def test_the_attached_frame_is_the_large_size_of_the_stream(
-        self, db, addon, llm, call, tmp_path, youtube,
+    async def test_every_attached_frame_is_the_large_size_of_the_stream(
+        self, db, addon, llm, call, tmp_path, youtube, monkeypatch,
     ):
-        """SPEC-ADDON-077 I6: the image is the ``large`` frame (1280 px), not a ``small`` one."""
-        _loft(db, tmp_path)
+        """SPEC-ADDON-077 I6: the images are the ``large`` frames (1280 px), not ``small`` ones."""
+        _loft(db, tmp_path, duration=None)
+        scenes(monkeypatch, [10.0, 20.0], duration=None)
         _serve(youtube)
         _, wire = vision_client(llm)
 
         await ask(call, VIDEO, position=12.0)
 
-        assert webp_size(_decoded(wire), tmp_path) == (1280, 720)
+        assert len(wire.images) == 3
+        for index in range(len(wire.images)):
+            assert webp_size(_decoded(wire, index), tmp_path) == (1280, 720)
 
 
-class TestWhenTheFrameCannotBeRead:
+class TestWhenNoFrameCanBeRead:
     @pytest.mark.parametrize("how", ["lookup", "ffmpeg", "no-format"])
     async def test_any_frame_failure_is_unavailable_with_the_text_only_retry(
-        self, how, db, addon, llm, call, tmp_path, youtube,
+        self, how, db, addon, llm, call, tmp_path, youtube, monkeypatch,
     ):
-        """SPEC-ADDON-077 I6: ``unavailable`` and a text-only answer, never another frame."""
-        _loft(db, tmp_path)
+        """SPEC-ADDON-114 I4 §2 (077 I6 revised): ``unavailable`` and a text answer, never another frame."""
+        _loft(db, tmp_path, duration=None)
+        scenes(monkeypatch, [10.0], duration=None)
         if how == "lookup":
             youtube.set_ytdlp(fail="ERROR: [youtube] x: Video unavailable")
         elif how == "no-format":
@@ -123,7 +138,6 @@ class TestWhenTheFrameCannotBeRead:
         else:
             _serve(youtube)
             youtube.override("/v/f720", status=403)
-        write_large_frame(VIDEO, 0.0, b"ANOTHER-TIME")
         _, wire = vision_client(llm)
 
         response = await ask(call, VIDEO, position=5.0)
@@ -131,15 +145,17 @@ class TestWhenTheFrameCannotBeRead:
         assert by_kind(response)["meta"]["image"] == "unavailable"
         assert wire.image_bodies == []
         assert len(wire.text_bodies) == 1
+        assert by_kind(response)["done"].get("error") is None
         assert not frame_cache_path(VIDEO, 5.0, "large").exists()
         assert len(youtube.lookups()) == 1
         assert bool(youtube.fetched("/v/f720")) == (how == "ffmpeg")
 
-    async def test_a_position_past_the_known_duration_reads_nothing(
-        self, db, addon, llm, call, tmp_path, youtube,
+    async def test_a_position_past_the_known_duration_reads_no_frame_at_that_time(
+        self, db, addon, llm, call, tmp_path, youtube, monkeypatch,
     ):
-        """SPEC-ADDON-077 I6: past the indexed duration is unavailable, with no lookup."""
+        """SPEC-ADDON-114 I5 (077 I6 revised): past the duration the position frame is left out, stated."""
         _loft(db, tmp_path, duration=60.0)
+        scenes(monkeypatch, [10.0, 20.0], duration=60.0)
         _serve(youtube)
         _, wire = vision_client(llm)
         inside = await ask(call, VIDEO, position=59.0)
@@ -148,9 +164,11 @@ class TestWhenTheFrameCannotBeRead:
 
         response = await ask(call, VIDEO, position=61.0)
 
-        assert by_kind(response)["meta"]["image"] == "unavailable"
-        assert len(wire.image_bodies) == 1
+        assert by_kind(response)["meta"]["image"] == "attached"
+        assert len(wire.image_bodies) == 2
+        assert not frame_cache_path(VIDEO, 61.0, "large").exists()
         assert len(youtube.lookups()) == lookups
+        assert "1:01" in wire.prompts[-1]
 
     def test_the_deadline_is_the_spec_value(self):
         assert frame_module.FRAME_DEADLINE_SECONDS == SPEC_DEADLINE_SECONDS
@@ -159,7 +177,7 @@ class TestWhenTheFrameCannotBeRead:
         self, db, addon, llm, call, tmp_path, youtube, short_deadline,
     ):
         """SPEC-ADDON-077: the frame route's 15 s limit bounds the image step."""
-        _loft(db, tmp_path)
+        _loft(db, tmp_path, duration=None)
         youtube.set_ytdlp(
             describe=describe([youtube.format("f720", 720)]),
             delay=40.0 * DEADLINE_SCALE,
@@ -172,6 +190,7 @@ class TestWhenTheFrameCannotBeRead:
 
         assert by_kind(response)["meta"]["image"] == "unavailable"
         assert wire.image_bodies == []
+        assert len(wire.text_bodies) == 1
         assert 13.0 * DEADLINE_SCALE < elapsed < 20.0 * DEADLINE_SCALE
 
 

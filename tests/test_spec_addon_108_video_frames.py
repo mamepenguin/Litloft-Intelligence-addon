@@ -38,13 +38,13 @@ from tests.file_question_vision_doubles import (  # noqa: F401 - fixtures
     vision_client,
     write_large_frame,
 )
+from tests.frame_label_layout import assert_labelled
 from tests.search_endpoint_db import patch_everywhere
 from tests.vec_partition_db import search_index  # noqa: F401 - the fixture
 from tests.video_frames_doubles import (
     MARKER,
     FFmpeg,
     frame_bytes,
-    listed_in_order,
     ms,
     scenes,
     seed_text_less_video,
@@ -373,7 +373,7 @@ class TestTheModelRequest:
     async def test_all_frames_go_in_one_request_to_the_vision_model(
         self, provider, db, addon, llm, call, tmp_path, monkeypatch, statements,
     ):
-        """SPEC-ADDON-108 §5 / I2: one request, the frames in order, the profile's vision model."""
+        """SPEC-ADDON-108 §5 / I2, SPEC-ADDON-114 I11: one request, labelled frames in order."""
         _video(db, tmp_path)
         FFmpeg().install(monkeypatch)
         _, wire = vision_client(llm, provider=provider)
@@ -391,19 +391,20 @@ class TestTheModelRequest:
         assert meta["image"] == "attached"
         assert meta["partial"] is False
         assert _answer(response) == Wire.vision_answer
+        layout = assert_labelled(wire, body, first=1, times=EVEN_80)
+        assert QUESTION in layout.prompt
         if provider == "openai_compatible":
             user = [m for m in body["messages"] if m.get("role") == "user"][-1]
-            kinds = [part["type"] for part in user["content"]]
-            assert kinds == ["text"] + ["image_url"] * 8
             assert all(
                 part["image_url"]["url"].startswith("data:image/webp;base64,")
-                for part in user["content"][1:]
+                for part in user["content"]
+                if part["type"] == "image_url"
             )
 
     async def test_the_prompt_numbers_each_frame_with_its_time_and_has_no_passages(
         self, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-108 step 5 / I5: ``[n]`` with ``m:ss`` truncated; no passages block."""
+        """SPEC-ADDON-108 I5, SPEC-ADDON-114 I11: ``[n]`` with ``m:ss`` truncated; no passages block."""
         _video(db, tmp_path, duration=None)
         scenes(monkeypatch, [5.9, 75.9, 3725.9], duration=None)
         FFmpeg().install(monkeypatch)
@@ -411,16 +412,17 @@ class TestTheModelRequest:
 
         await ask(call, VIDEO, question=QUESTION)
 
-        prompt = user_prompt(wire)
-        assert QUESTION in prompt
+        layout = assert_labelled(
+            wire, wire.image_bodies[0], first=1, times=[5.9, 75.9, 3725.9],
+        )
+        assert QUESTION in layout.prompt
         assert "Passages from the file:" not in "\n".join(wire.prompts)
-        assert listed_in_order(prompt, ["0:05", "1:15", "1:02:05"])
-        assert "[4]" not in prompt
+        assert "[4]" not in layout.prompt
 
     async def test_a_failed_position_frame_is_stated_and_never_replaced(
         self, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-108 I3/I5: the position is stated; no frame carries its time."""
+        """SPEC-ADDON-108 I3/I5, SPEC-ADDON-114 I11: the position is stated; no frame carries its time."""
         _video(db, tmp_path, duration=70.0)
         FFmpeg(fail={ms(33.0)}).install(monkeypatch)
         _, wire = vision_client(llm)
@@ -431,17 +433,16 @@ class TestTheModelRequest:
         assert sent_keys(wire) == [
             ms(t) for t in [5.0, 15.0, 25.0, 35.0, 45.0, 55.0, 65.0]
         ]
-        prompt = user_prompt(wire)
-        assert "0:33" in prompt
-        assert listed_in_order(
-            prompt, ["0:05", "0:15", "0:25", "0:35", "0:45", "0:55", "1:05"],
+        layout = assert_labelled(
+            wire, wire.image_bodies[0], first=1,
+            times=[5.0, 15.0, 25.0, 35.0, 45.0, 55.0, 65.0],
         )
-        assert "[8]" not in prompt
+        assert "0:33" in layout.prompt
 
-    async def test_a_kept_position_frame_is_listed_at_its_time(
+    async def test_a_kept_position_frame_is_labelled_at_its_time(
         self, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-108 I3: the position frame takes its place in time order."""
+        """SPEC-ADDON-108 I3, SPEC-ADDON-114 I11: the position frame takes its place in time order."""
         _video(db, tmp_path, duration=70.0)
         FFmpeg().install(monkeypatch)
         _, wire = vision_client(llm)
@@ -451,9 +452,9 @@ class TestTheModelRequest:
         assert sent_keys(wire) == [
             ms(t) for t in [5.0, 15.0, 25.0, 33.0, 35.0, 45.0, 55.0, 65.0]
         ]
-        assert listed_in_order(
-            user_prompt(wire),
-            ["0:05", "0:15", "0:25", "0:33", "0:35", "0:45", "0:55", "1:05"],
+        assert_labelled(
+            wire, wire.image_bodies[0], first=1,
+            times=[5.0, 15.0, 25.0, 33.0, 35.0, 45.0, 55.0, 65.0],
         )
 
     async def test_every_turn_prepares_and_sends_the_frames_again(
@@ -486,7 +487,7 @@ class TestFramesThatFail:
     async def test_failed_frames_are_dropped_and_the_rest_are_numbered_from_one(
         self, db, addon, llm, call, tmp_path, monkeypatch, caplog,
     ):
-        """SPEC-ADDON-108 failure table step 4: dropped, never replaced, ``partial`` false."""
+        """SPEC-ADDON-108 failure table step 4, SPEC-ADDON-114 I11: dropped, never replaced, renumbered."""
         _video(db, tmp_path)
         FFmpeg(fail={ms(15.0)}, timeout={ms(55.0)}).install(monkeypatch)
         _, wire = vision_client(llm)
@@ -499,10 +500,7 @@ class TestFramesThatFail:
         meta = by_kind(response)["meta"]
         assert meta["image"] == "attached"
         assert meta["partial"] is False
-        assert listed_in_order(
-            user_prompt(wire), ["0:05", "0:25", "0:35", "0:45", "1:05", "1:15"],
-        )
-        assert "[7]" not in user_prompt(wire)
+        assert_labelled(wire, wire.image_bodies[0], first=1, times=kept)
         assert "frames_dropped" in caplog.text
         assert VIDEO in caplog.text
 
@@ -710,10 +708,10 @@ class TestAFailureAfterTheFirstToken:
 
 
 class TestWhenTextArrives:
-    async def test_the_next_question_after_a_transcript_lands_takes_the_text_path(
+    async def test_the_next_question_after_a_transcript_lands_sends_passages_and_frames(
         self, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-108 §3 / I1: frames while text-less; passages and no frame after."""
+        """SPEC-ADDON-114 §7 / I1 (108 I1 revised): the frames alone before, the passages with them after."""
         _video(db, tmp_path)
         scenes(monkeypatch, [12.0, 47.0], duration=80.0)
         FFmpeg().install(monkeypatch)
@@ -722,14 +720,18 @@ class TestWhenTextArrives:
         before = await ask(call, VIDEO)
         assert by_kind(before)["meta"]["image"] == "attached"
         assert len(wire.image_bodies) == 1
+        expected = [5.0, 12.0, 15.0, 25.0, 35.0, 45.0, 47.0, 55.0]
 
         passage = chunk("TRANSCRIPT-PASSAGE", 40)
         db.on(VIDEO).transcript(passage, start=0.0)
         after = await ask(call, VIDEO)
 
-        assert by_kind(after)["meta"]["image"] == "none"
-        assert len(wire.image_bodies) == 1
-        assert passage in wire.prompts[-1]
+        assert by_kind(after)["meta"]["image"] == "attached"
+        assert len(wire.image_bodies) == 2
+        assert sent_keys(wire)[8:] == [ms(t) for t in expected]
+        layout = assert_labelled(wire, wire.image_bodies[1], first=2, times=expected)
+        assert "Passages from the file:" in layout.prompt
+        assert passage in layout.prompt
 
     async def test_a_video_with_an_empty_chunk_is_not_text_less(
         self, db, addon, llm, call, tmp_path, monkeypatch,
