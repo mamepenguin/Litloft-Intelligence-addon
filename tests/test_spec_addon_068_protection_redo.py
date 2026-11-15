@@ -408,7 +408,7 @@ class TestExplicitRedoChecks:
 
         assert response.status_code == 200, response.text
         assert bool(search_db.flag(FILE, "clip_indexed")) is False
-        assert manager.enqueued == [(FILE, "clip")]
+        assert manager.enqueued == [(FILE, "clip"), (FILE, "frame_scan")]
 
     def test_a_confirmed_reindex_marks_the_file_before_the_queued_split(
         self, search_db, api
