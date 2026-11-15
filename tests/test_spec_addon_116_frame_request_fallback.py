@@ -289,7 +289,7 @@ class TestTheRequestBody:
     async def test_openai_tool_and_final_requests_differ_from_today_only_by_the_exchange(
         self, kind, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-116 I5: ``stream``, temperature, max tokens and model are today's."""
+        """SPEC-ADDON-116 I5 (revised): ``stream``, temperature and model are today's; no max tokens."""
         seed_video(db, tmp_path, kind)
         scenes(monkeypatch, [], duration=80.0)
         FFmpeg().install(monkeypatch)
@@ -299,9 +299,12 @@ class TestTheRequestBody:
 
         assert len(wire.requests) == 4
         exchange = ("messages", "tools", "tool_choice")
-        today = {k: v for k, v in todays_request("openai_compatible", kind).items()
-                 if k not in exchange}
+        limits = ("max_tokens", "max_completion_tokens")
+        todays = todays_request("openai_compatible", kind)
+        assert any(k in todays for k in limits)
+        today = {k: v for k, v in todays.items() if k not in exchange + limits}
         for body in wire.requests:
+            assert not any(k in body for k in limits)
             assert {k: v for k, v in body.items() if k not in exchange} == today
         assert [b["tool_choice"] for b in wire.requests] == ["auto"] * 3 + ["none"]
 

@@ -12,7 +12,6 @@ import json
 import re
 from pathlib import Path
 
-from app.config import RagConfig
 from app.routers import rag as rag_router
 from app.workers.video_visual_selection import SelectedFrame, Selection, SelectionInputs
 from tests.file_question_doubles import chunk
@@ -28,8 +27,6 @@ PROVIDERS = ["openai_compatible", "ollama"]
 KINDS = ["text-video", "text-less-video"]
 ANSWER = "FINAL-ANSWER-MARKER"
 FAILED = {"error": "Answer generation failed"}
-#: ``rag.max_tokens``: an ollama tool or final request predicts twice this.
-ANSWER_TOKENS = RagConfig().max_tokens
 
 #: The seams the 120 s tool window and the 300 s total deadline are read
 #: through. A test shrinks them instead of waiting minutes.

@@ -1253,13 +1253,14 @@ class LLMClient:
         *,
         tools: list[dict] | None,
         tool_choice: str,
-        max_tokens_override: int | None,
         temperature: float | None,
     ) -> dict:
         """The streamed body of a video's tool or final request.
 
-        The body differs from today's request only by the exchange's messages
-        and, when ``tools`` is given, by ``tools`` and ``tool_choice``; the
+        The body differs from today's request only by the exchange's messages,
+        by ``tools`` and ``tool_choice`` when ``tools`` is given, and by having
+        no max-tokens field: the question's own deadline bounds the reply, and
+        a reasoning model spent a token limit before calling the tool. The
         opt-in provider extras stay out so that a 400 is read as a refusal of
         the images rather than of a body field.
         """
@@ -1275,15 +1276,6 @@ class LLMClient:
             ),
             "stream": True,
         }
-        tokens = (
-            max_tokens_override
-            if max_tokens_override is not None
-            else self._config.vision_max_tokens
-        )
-        if _uses_max_completion_tokens(self._config.vision_model):
-            kwargs["max_completion_tokens"] = tokens
-        else:
-            kwargs["max_tokens"] = tokens
         if tools is not None:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
@@ -1298,7 +1290,6 @@ class LLMClient:
         *,
         tools: list[dict] | None = None,
         tool_choice: str = "auto",
-        max_tokens_override: int | None = None,
         temperature: float | None = None,
     ) -> FrameReply:
         """One buffered reply about a video: its text and the calls it asked for.
@@ -1321,7 +1312,6 @@ class LLMClient:
                     rounds,
                     tools=tools,
                     tool_choice=tool_choice,
-                    max_tokens_override=max_tokens_override,
                     temperature=temperature,
                 )
             )
@@ -1379,7 +1369,6 @@ class LLMClient:
         *,
         tools: list[dict] | None = None,
         tool_choice: str = "none",
-        max_tokens_override: int | None = None,
         temperature: float | None = None,
     ) -> AsyncIterator[str]:
         """Stream a video's final answer token by token.
@@ -1400,7 +1389,6 @@ class LLMClient:
                     rounds,
                     tools=tools,
                     tool_choice=tool_choice,
-                    max_tokens_override=max_tokens_override,
                     temperature=temperature,
                 )
             )
@@ -2461,7 +2449,6 @@ class OllamaLLMClient:
         *,
         tools: list[dict] | None,
         tool_choice: str,
-        max_tokens_override: int | None,
         temperature: float | None,
     ) -> dict:
         """The streamed body of a video's tool or final request.
@@ -2484,13 +2471,6 @@ class OllamaLLMClient:
                     if temperature is not None
                     else self._config.vision_temperature
                 ),
-                # The thinking shares the budget, so the answer gets twice the
-                # one it would have without it.
-                "num_predict": 2 * (
-                    max_tokens_override
-                    if max_tokens_override is not None
-                    else self._config.vision_max_tokens
-                ),
             },
         }
         if tools is not None and tool_choice != "none":
@@ -2506,7 +2486,6 @@ class OllamaLLMClient:
         *,
         tools: list[dict] | None = None,
         tool_choice: str = "auto",
-        max_tokens_override: int | None = None,
         temperature: float | None = None,
     ) -> FrameReply:
         """One buffered native reply about a video: its text and the calls it asked for.
@@ -2525,7 +2504,6 @@ class OllamaLLMClient:
             rounds,
             tools=tools,
             tool_choice=tool_choice,
-            max_tokens_override=max_tokens_override,
             temperature=temperature,
         )
         text: list[str] = []
@@ -2579,7 +2557,6 @@ class OllamaLLMClient:
         *,
         tools: list[dict] | None = None,
         tool_choice: str = "none",
-        max_tokens_override: int | None = None,
         temperature: float | None = None,
     ) -> AsyncIterator[str]:
         """Stream a video's final answer token by token, thinking text dropped.
@@ -2597,7 +2574,6 @@ class OllamaLLMClient:
             rounds,
             tools=tools,
             tool_choice=tool_choice,
-            max_tokens_override=max_tokens_override,
             temperature=temperature,
         )
         await self._wait_for_rate_limit()

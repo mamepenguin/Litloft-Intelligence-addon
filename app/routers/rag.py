@@ -1223,7 +1223,6 @@ async def _frame_tool_answer(
                         rounds,
                         tools=[GET_FRAMES_TOOL],
                         tool_choice="none",
-                        max_tokens_override=settings.rag.max_tokens,
                     )
                     async with asyncio.timeout(remaining):
                         async for delta in _answer_with_keepalive(stream):
@@ -1276,7 +1275,6 @@ async def _frame_tool_answer(
                     rounds,
                     tools=[GET_FRAMES_TOOL],
                     tool_choice="auto",
-                    max_tokens_override=settings.rag.max_tokens,
                 )
             )
             reply: llm.FrameReply | None = None
