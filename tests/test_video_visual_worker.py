@@ -89,6 +89,7 @@ def search_db(monkeypatch, tmp_path):
                 file_size=200_000,
                 duration=600.0,
                 active=True,
+                frame_scan_indexed=True,
             ),
             IndexedFile(
                 file_id="vid-no-clip",
@@ -100,6 +101,7 @@ def search_db(monkeypatch, tmp_path):
                 file_size=200_000,
                 duration=600.0,
                 active=True,
+                frame_scan_indexed=True,
             ),
             IndexedFile(
                 file_id="img-not-video",
@@ -519,7 +521,7 @@ class TestEnqueue:
             assert run.status == "queued"
             assert run.priority == 100  # manual
             assert run.requested_by == "manual"
-            assert run.pipeline_version == 2
+            assert run.pipeline_version == 3
         policy_allow_all.assert_awaited_once_with(
             "vid-ok", "video_visual_index", default_on_failure=False,
         )
@@ -792,7 +794,9 @@ class TestEnqueue:
 
         worker = VideoVisualWorker()  # configured model is llava:13b
         result = await worker.enqueue("vid-ok", requested_by="on_index")
-        assert result["accepted"] is True
+        # A different model clears the verdict, so stickiness does not answer;
+        # the failed run the file still has is left for the user (I9).
+        assert result == {"accepted": False, "reason": "run_exists"}
 
     @pytest.mark.asyncio
     async def test_a_fresh_run_the_drive_can_no_longer_serve_is_removed(
@@ -927,7 +931,11 @@ class TestEnqueue:
 
         result = await VideoVisualWorker().enqueue("vid-ok", requested_by="on_index")
 
-        assert result["accepted"] is True
+        # The verdict was latched against the model the drive routed to before,
+        # so it does not stop this request; the file's failed run does
+        # (SPEC-ADDON-113 I9). A request refused for stickiness would have
+        # answered ``unsupported_sticky``.
+        assert result == {"accepted": False, "reason": "run_exists"}
 
     @pytest.mark.asyncio
     async def test_on_index_skips_when_fingerprint_unchanged(
@@ -953,12 +961,8 @@ class TestEnqueue:
             s.commit()
 
         monkeypatch.setattr(
-            "app.workers.video_visual._load_candidates",
-            lambda file_id: ([], None),
-        )
-        monkeypatch.setattr(
-            "app.workers.video_visual.compute_candidate_fingerprint",
-            lambda candidates: "same-fp",
+            "app.workers.video_visual._candidate_fingerprint",
+            lambda file_id: "same-fp",
         )
 
         worker = VideoVisualWorker()
@@ -967,7 +971,43 @@ class TestEnqueue:
         assert result["reason"] == "up_to_date"
 
     @pytest.mark.asyncio
-    async def test_on_index_regenerates_an_old_pipeline_contract(
+    async def test_a_scan_keeps_a_current_run_that_clip_replaces(
+        self, search_db, feature_manual, policy_allow_all, monkeypatch,
+    ):
+        """A scan starts a run only for a file with none (I9)."""
+        from app.workers.video_visual import PIPELINE_VERSION
+
+        _, Session = search_db
+        with Session() as s:
+            s.add(
+                VideoVisualRun(
+                    id="vvr_active",
+                    file_id="vid-ok",
+                    status="succeeded",
+                    is_active=True,
+                    requested_by="manual",
+                    priority=100,
+                    vision_model="llava:13b",
+                    pipeline_version=PIPELINE_VERSION,
+                    candidate_fingerprint="old-fp",
+                )
+            )
+            s.commit()
+
+        monkeypatch.setattr(
+            "app.workers.video_visual._candidate_fingerprint",
+            lambda file_id: "new-fp",
+        )
+        worker = VideoVisualWorker()
+
+        scan = await worker.enqueue("vid-ok", requested_by="on_index", after_scan=True)
+        clip = await worker.enqueue("vid-ok", requested_by="on_index")
+
+        assert scan == {"accepted": False, "reason": "run_exists"}
+        assert clip["accepted"] is True
+
+    @pytest.mark.asyncio
+    async def test_on_index_keeps_an_old_pipeline_run(
         self, search_db, feature_manual, policy_allow_all, monkeypatch,
     ):
         _, Session = search_db
@@ -983,23 +1023,19 @@ class TestEnqueue:
             s.commit()
 
         monkeypatch.setattr(
-            "app.workers.video_visual._load_candidates",
-            lambda file_id: ([], None),
-        )
-        monkeypatch.setattr(
-            "app.workers.video_visual.compute_candidate_fingerprint",
-            lambda candidates: "same-fp",
+            "app.workers.video_visual._candidate_fingerprint",
+            lambda file_id: "same-fp",
         )
 
         result = await VideoVisualWorker().enqueue(
             "vid-ok", requested_by="on_index"
         )
 
-        assert result["accepted"] is True
+        assert result == {"accepted": False, "reason": "run_exists"}
 
     @pytest.mark.asyncio
     async def test_manual_generate_again_ignores_fingerprint_match(
-        self, search_db, feature_manual, policy_allow_all, monkeypatch,
+        self, search_db, feature_manual, policy_allow_all,
     ):
         _, Session = search_db
         with Session() as s:
@@ -1017,11 +1053,6 @@ class TestEnqueue:
                 )
             )
             s.commit()
-
-        monkeypatch.setattr(
-            "app.workers.video_visual.compute_candidate_fingerprint",
-            lambda candidates: "same-fp",
-        )
 
         worker = VideoVisualWorker()
         result = await worker.enqueue("vid-ok", requested_by="manual")

@@ -16,6 +16,7 @@ import {
   estimateLabelWidth,
   frameIndexAt,
   rulerFraction,
+  seekTime,
   timeLabels,
 } from "./scenesModel";
 
@@ -282,8 +283,7 @@ export default function ScenesSectionPresenter({
               const isBrowsed =
                 !isPlaying && browseIndex !== null && absoluteIndex === browseIndex;
               const hasDot =
-                visual != null &&
-                visual.dots.some((time) => Math.abs(time - row.start) <= 0.05);
+                visual != null && visual.dots.includes(row.start);
               const failed = failedTimes.has(row.start);
               const outline = isPlaying
                 ? "outline-2 outline-offset-2 outline-solid outline-accent"
@@ -515,7 +515,7 @@ function Ruler({
         </svg>
 
         {marks?.map((scene) => {
-          const left = percent(rulerFraction(scene.start_time, length));
+          const left = percent(rulerFraction(seekTime(scene), length));
           const tone = markTone(scene);
           return (
             <span key={`mark-${scene.ordering}`} aria-hidden="true">

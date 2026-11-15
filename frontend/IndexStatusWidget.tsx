@@ -16,6 +16,7 @@ import {
   Mic,
   Pause,
   Play,
+  ScanLine,
   ScanText,
   ScrollText,
   SearchX,
@@ -40,8 +41,8 @@ import type {
 const POLL_INTERVAL = 10_000;
 
 // Display order on the dashboard. Indexing pipeline first (metadata →
-// clip → whisper → text → ocr), then LLM-driven tasks. Items without backend
-// state are filtered out at render time.
+// clip → whisper → text → ocr → frame scan), then LLM-driven tasks. Items
+// without backend state are filtered out at render time.
 const TASK_ORDER: QueueTaskKind[] = [
   "metadata",
   "clip",
@@ -50,6 +51,7 @@ const TASK_ORDER: QueueTaskKind[] = [
   "ocr",
   "frame_ocr",
   "page_ocr",
+  "frame_scan",
   "auto_tags",
   "summaries",
   "vision_describe",
@@ -67,6 +69,7 @@ const TASK_ICON: Record<QueueTaskKind, LucideIcon> = {
   ocr: ScanText,
   frame_ocr: ScanText,
   page_ocr: ScanText,
+  frame_scan: ScanLine,
   auto_tags: Tags,
   summaries: MessageSquareText,
   vision_describe: Sparkles,
@@ -216,6 +219,9 @@ function StatusContent({
   const pageOcrTotal = indexed
     ? (indexed.page_ocr ?? 0) + (pending?.page_ocr ?? 0)
     : 0;
+  const frameScanTotal = indexed
+    ? (indexed.frame_scan ?? 0) + (pending?.frame_scan ?? 0)
+    : 0;
 
   const taskMap = queue?.tasks ?? {};
   const taskRows = TASK_ORDER.map((kind) => ({ kind, breakdown: taskMap[kind] }))
@@ -324,6 +330,17 @@ function StatusContent({
             label={t("pageOcrFiles", {
               done: (indexed.page_ocr ?? 0).toLocaleString(),
               total: pageOcrTotal.toLocaleString(),
+            })}
+          />
+        )}
+
+        {indexed && frameScanTotal > 0 && (
+          <ProgressBar
+            done={indexed.frame_scan ?? 0}
+            total={frameScanTotal}
+            label={t("frameScanFiles", {
+              done: (indexed.frame_scan ?? 0).toLocaleString(),
+              total: frameScanTotal.toLocaleString(),
             })}
           />
         )}

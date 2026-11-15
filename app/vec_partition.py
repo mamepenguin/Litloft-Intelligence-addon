@@ -1,10 +1,10 @@
 """Vector tables partitioned by ``embedding_type``.
 
-``vec_text`` and ``vec_clip`` carry the embedding type as a sqlite-vec partition
-key, so a ``MATCH`` constrained to one type scans only that type's rows. These
-helpers are the one place that knows the schema: the DDL, how a row is written
-with its partition value, the one-time migration of an unpartitioned table, and
-the repair of rows stored without a partition value.
+``vec_text``, ``vec_clip`` and ``vec_clip_change`` carry the embedding type as a
+sqlite-vec partition key, so a ``MATCH`` constrained to one type scans only that
+type's rows. These helpers are the one place that knows the schema: the DDL, how
+a row is written with its partition value, the one-time migration of an
+unpartitioned table, and the repair of rows stored without a partition value.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from sqlalchemy.engine import Connection, Engine
 
 logger = logging.getLogger(__name__)
 
-VEC_TABLES = ("vec_clip", "vec_text")
+VEC_TABLES = ("vec_clip", "vec_clip_change", "vec_text")
 
 _PARTITION_RE = re.compile(r"embedding_type\s+TEXT\s+PARTITION\s+KEY", re.IGNORECASE)
 _DIM_RE = re.compile(r"float\[(\d+)\]")

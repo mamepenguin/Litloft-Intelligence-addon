@@ -35,7 +35,7 @@ from app import llm_routing
 from app.addon_events import post_addon_event
 from app.vec_partition import insert_vector_sql
 from app.config import is_video_visual_index_available, settings
-from app.database import get_search_db, get_search_db_read, get_search_engine
+from app.database import get_search_db, get_search_db_read
 from app.frame_cache import ensure_frame_cached
 from app.llm import (
     FAILURE_IMAGE_REJECTED,
@@ -52,17 +52,18 @@ from app.policy_client import is_file_feature_enabled
 from app.prompt_loader import render
 from app.workers.clip import VIDEO_TYPES
 from app.workers.video_visual_selection import (
-    Candidate,
     compute_candidate_fingerprint,
-    select_candidates,
+    load_selection_inputs,
+    select_scenes,
+    selection_pool,
 )
 
 logger = logging.getLogger(__name__)
 
-# Bumped when the selection algorithm or scene contract changes in a way
-# that should be visible on run rows (audit trail only; no code branches
-# on this value today).
-PIPELINE_VERSION = 2
+# Bumped when the selection or the scene contract changes the run's output.
+# An automatic request replaces a run of this version whose candidate pool
+# changed, and leaves an older run for the user's Regenerate.
+PIPELINE_VERSION = 3
 
 # Size caps applied at validation/write time (design doc §5.2, §7.1).
 # External model output never reaches the DB unbounded.
@@ -126,51 +127,14 @@ def _build_scene_system_prompt(output_language: str | None) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _load_candidates(file_id: str) -> tuple[list[Candidate], float | None]:
-    """Load the file's scene-CLIP candidate pool, ordered by timestamp.
+def _candidate_fingerprint(file_id: str) -> str:
+    """Fingerprint the file's current pool: scene candidates and change frames.
 
-    Reads ``Embedding`` metadata (id, timestamp) from the ORM and the
-    matching vectors from ``vec_clip`` in one follow-up query, mirroring
-    ``app.workers.clip_concepts.load_file_clip_vectors``.
+    The pool is what the selection chooses from, so a change frame added or
+    replaced by a scan makes an existing run stale too.
     """
-    with get_search_db_read() as session:
-        rows = (
-            session.query(Embedding.id, Embedding.timestamp_start)
-            .filter(Embedding.file_id == file_id, Embedding.embedding_type == "clip")
-            .order_by(Embedding.timestamp_start.asc())
-            .all()
-        )
-        file_row = (
-            session.query(IndexedFile.duration)
-            .filter(IndexedFile.file_id == file_id)
-            .first()
-        )
-    duration = file_row.duration if file_row is not None else None
-    if not rows:
-        return [], duration
-
-    ids = [r[0] for r in rows]
-    ts_by_id = {r[0]: r[1] for r in rows}
-    placeholders = ",".join(f":id{i}" for i in range(len(ids)))
-    params = {f"id{i}": eid for i, eid in enumerate(ids)}
-    with get_search_engine().connect() as conn:
-        vec_rows = conn.execute(
-            sql_text(f"SELECT embedding_id, vector FROM vec_clip WHERE embedding_id IN ({placeholders})"),
-            params,
-        ).fetchall()
-    import numpy as np
-
-    vec_by_id = {r[0]: np.frombuffer(r[1], dtype=np.float32) for r in vec_rows if r[1]}
-
-    candidates: list[Candidate] = []
-    for eid in ids:
-        vec = vec_by_id.get(eid)
-        if vec is None:
-            continue
-        candidates.append(
-            Candidate(embedding_id=eid, timestamp=float(ts_by_id[eid] or 0.0), vector=vec)
-        )
-    return candidates, duration
+    inputs = load_selection_inputs(file_id)
+    return compute_candidate_fingerprint(list(selection_pool(inputs)))
 
 
 def _clip_candidates_exist(file_id: str) -> bool:
@@ -453,15 +417,19 @@ class VideoVisualWorker:
     async def _should_accept(
         self, file_id: str, *, manual: bool = False
     ) -> tuple[bool, str, Resolved | None]:
-        """Shared gate: feature flag + vision_model + drive policy + mime + CLIP + stickiness.
+        """Shared gate: feature flag + vision_model + drive policy + mime + CLIP + scan + stickiness.
 
         ``manual`` skips the stickiness check and nothing else, matching
         ``VisionDescribeWorker._should_accept``. Stickiness stops
         automatic sweeps from re-spending on a settled verdict; a person
         asking for this file has decided otherwise, usually because they
         just changed the thing that produced it. Everything else — the
-        feature, the policy, the mime, the CLIP prerequisite, and a run
-        already in flight — applies to everyone.
+        feature, the policy, the mime, the CLIP and frame-scan
+        prerequisites, and a run already in flight — applies to everyone.
+
+        A native video waits for both scene CLIP and its frame scan
+        (SPEC-ADDON-113 item 1). Whisper and frame OCR are not waited for:
+        either can stay unfinished for good.
         """
         if not is_video_visual_index_available(settings):
             return False, "disabled", None
@@ -481,7 +449,7 @@ class VideoVisualWorker:
         if not enabled:
             return False, "disabled", None
 
-        def _load_file_state() -> tuple[str | None, str | None, str | None]:
+        def _load_file_state() -> tuple[str | None, str | None, str | None, bool]:
             with get_search_db_read() as session:
                 file_row = (
                     session.query(IndexedFile)
@@ -489,9 +457,9 @@ class VideoVisualWorker:
                     .first()
                 )
                 if file_row is None:
-                    return "not_found", None, None
+                    return "not_found", None, None, False
                 if file_row.mime_type not in VIDEO_TYPES:
-                    return "not_eligible", None, None
+                    return "not_eligible", None, None, False
 
                 last_run = (
                     session.query(VideoVisualRun)
@@ -509,13 +477,20 @@ class VideoVisualWorker:
                     and last_run.error_class == "Unsupported"
                     else None
                 )
-                return None, unsupported_model, file_row.drive
+                return (
+                    None,
+                    unsupported_model,
+                    file_row.drive,
+                    bool(file_row.frame_scan_indexed),
+                )
 
-        rejection, unsupported_model, drive = await asyncio.to_thread(_load_file_state)
+        rejection, unsupported_model, drive, scanned = await asyncio.to_thread(
+            _load_file_state
+        )
         if rejection is not None:
             return False, rejection, None
 
-        if not await asyncio.to_thread(_clip_candidates_exist, file_id):
+        if not scanned or not await asyncio.to_thread(_clip_candidates_exist, file_id):
             return False, "waiting_clip", None
 
         resolved = await llm_routing.resolve(drive, "video_visual_index")
@@ -546,14 +521,22 @@ class VideoVisualWorker:
             return False, "already_queued", None
         return True, "ok", resolved
 
-    async def enqueue(self, file_id: str, *, requested_by: str = "manual") -> dict:
+    async def enqueue(
+        self, file_id: str, *, requested_by: str = "manual", after_scan: bool = False
+    ) -> dict:
         """Stage a new run for ``file_id``.
 
         ``requested_by`` is ``"manual"`` (priority 100) or ``"on_index"``
         (priority 0) — execution provenance, not user identity (§5.1).
-        When scene CLIP isn't ready yet, a manual request prioritizes the
-        file's CLIP task (§6.1); an automatic request is simply skipped
-        (the periodic on_index sweep / CLIP-completion hook retries it).
+        When scene CLIP or the frame scan isn't ready yet, a manual request
+        prioritizes the file's CLIP task (§6.1); an automatic request is
+        simply skipped (the hook retries it).
+
+        ``after_scan`` marks the automatic request the indexer's hook makes
+        after a frame scan; the hook also runs after a CLIP pass, which keeps
+        today's replacement rule. Neither replaces a run of an older pipeline
+        version nor retries a failed one: those stay for the user
+        (SPEC-ADDON-113 item 1).
         """
         accepted, reason, resolved = await self._should_accept(
             file_id, manual=(requested_by == "manual")
@@ -569,28 +552,30 @@ class VideoVisualWorker:
             return {"accepted": False, "reason": reason}
 
         if requested_by == "on_index":
-            # Skip a pointless replacement when the active run's
-            # candidate set hasn't actually changed (§12 "Source CLIP
-            # fingerprint changes"). Manual "Generate again" always
-            # creates a new run regardless (§3.4).
-            def _is_up_to_date() -> bool:
+            def _automatic_request_reason() -> str | None:
+                """Why this automatic request stages no run, or ``None``."""
                 with get_search_db_read() as session:
-                    active = (
-                        session.query(VideoVisualRun)
-                        .filter(VideoVisualRun.file_id == file_id, VideoVisualRun.is_active.is_(True))
-                        .first()
+                    runs = session.query(VideoVisualRun).filter(
+                        VideoVisualRun.file_id == file_id
                     )
-                if active is None:
-                    return False
-                candidates, _ = _load_candidates(file_id)
-                return (
-                    active.pipeline_version == PIPELINE_VERSION
-                    and compute_candidate_fingerprint(candidates)
-                    == active.candidate_fingerprint
-                )
+                    if runs.first() is None:
+                        return None
+                    if after_scan:
+                        return "run_exists"
+                    active = runs.filter(
+                        VideoVisualRun.is_active.is_(True)
+                    ).first()
+                if active is None or active.pipeline_version != PIPELINE_VERSION:
+                    return "run_exists"
+                # Skip a pointless replacement when the pool hasn't actually
+                # changed (§12 "Source CLIP fingerprint changes").
+                if _candidate_fingerprint(file_id) == active.candidate_fingerprint:
+                    return "up_to_date"
+                return None
 
-            if await asyncio.to_thread(_is_up_to_date):
-                return {"accepted": False, "reason": "up_to_date"}
+            refusal = await asyncio.to_thread(_automatic_request_reason)
+            if refusal is not None:
+                return {"accepted": False, "reason": refusal}
 
         priority = 100 if requested_by == "manual" else 0
 
@@ -903,24 +888,30 @@ class VideoVisualWorker:
             )
 
     def _build_scenes(self, run_id: str, file_id: str) -> bool:
-        candidates, duration = _load_candidates(file_id)
-        fingerprint = compute_candidate_fingerprint(candidates)
-        selected = select_candidates(candidates, duration_seconds=duration)
+        """Stage the run's scenes from the whole file's navigation list."""
+        inputs = load_selection_inputs(file_id)
+        fingerprint = compute_candidate_fingerprint(list(selection_pool(inputs)))
+        selected = select_scenes(inputs, 0.0, inputs.duration).navigation
         with get_search_db() as session:
             run = session.query(VideoVisualRun).filter_by(id=run_id).first()
             if run is None:
                 return False
             run.candidate_fingerprint = fingerprint
+            # Stamped where the scenes are built, so a run queued before a
+            # version change is still built and recorded as this version.
+            run.pipeline_version = PIPELINE_VERSION
             if not selected:
                 return False
             run.selected_count = len(selected)
-            for i, c in enumerate(selected):
+            for i, item in enumerate(selected):
                 session.add(
                     VideoVisualScene(
                         run_id=run_id,
                         ordering=i,
-                        clip_embedding_id=c.embedding_id,
-                        start_time=c.timestamp,
+                        clip_embedding_id=item.embedding_id,
+                        start_time=item.frame_time,
+                        section_start=item.section_start,
+                        section_end=item.section_end,
                         status="pending",
                     )
                 )

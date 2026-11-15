@@ -318,7 +318,7 @@ class TestTheChosenFrames:
         assert wire.system_prompts[0] == wire.system_prompts[1]
         assert sent_keys(wire) == [ms(t) for t in EVEN_80] * 2
 
-    @pytest.mark.parametrize("raises", ["_load_candidates", "select_candidates"])
+    @pytest.mark.parametrize("raises", ["load_selection_inputs", "select_scenes"])
     async def test_a_failed_candidate_read_falls_back_to_the_evenly_spaced_times(
         self, raises, db, addon, llm, call, tmp_path, monkeypatch, caplog,
     ):

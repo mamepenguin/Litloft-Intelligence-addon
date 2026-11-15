@@ -8,13 +8,11 @@ scaled down to 1080 lines (the human's post-approval revision).
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import queue
 import re
 import select
-import stat
 import subprocess
 import threading
 import time
@@ -30,24 +28,26 @@ from app.database import (
 )
 from app.extractors.base import ContentExtractor
 from app.models import IndexedFile, VideoFrameText
+from app.video_frames import (
+    GAP_SECONDS,
+    HASH_BITS_THRESHOLD,
+    Unreadable as _Unreadable,
+    dhash as _dhash,
+    probe as _probe,
+    probe_geometry as _probe_geometry,
+    reachable as _reachable,
+)
 from app.workers.metadata import _remove_embeddings, _store_embedding, embed_passages
 from app.workers.ocr import _get_engine, run_engine
 
 logger = logging.getLogger(__name__)
 
-HASH_WIDTH = 160
-HASH_BITS_THRESHOLD = 16
-GAP_SECONDS = 10.0
 STALL_SECONDS = 120.0
 MAX_OCR_LINES = 1080
 
 
 class _Unreachable(Exception):
     """The file cannot be read at all; leave it pending."""
-
-
-class _Unreadable(Exception):
-    """The file was reached but cannot be decoded; close it as read."""
 
 
 # Sentinels for the showinfo reader thread.
@@ -77,65 +77,6 @@ class _ReadResult:
     times_failed: bool = False
 
 
-def _reachable(path: str) -> bool:
-    try:
-        info = os.stat(path)
-    except (OSError, ValueError):
-        return False
-    return stat.S_ISREG(info.st_mode)
-
-
-def _probe(path: str) -> tuple[int, int]:
-    """The first video stream's upright, even width and height."""
-    return _probe_geometry(path)[:2]
-
-
-def _probe_geometry(path: str) -> tuple[int, int, bool]:
-    """The upright even size, and whether a scale is needed to reach it.
-
-    ffmpeg auto-rotates on decode, so a phone video's display matrix turns a
-    coded 3840x2160 into 2160x3840. The reader must cut the raw frames at
-    that post-rotation size, and the same size decides the short-side path.
-    An odd coded side needs the scale filter; an even one does not.
-    """
-    try:
-        out = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries",
-             "stream=width,height:stream_side_data:stream_tags=rotate",
-             "-of", "json", path],
-            capture_output=True, text=True, timeout=60,
-        ).stdout
-        stream = (json.loads(out).get("streams") or [])[0]
-        width, height = int(stream["width"]), int(stream["height"])
-    except Exception as exc:
-        raise _Unreadable("no readable video stream") from exc
-
-    rotation = 0.0
-    for side in stream.get("side_data_list") or ():
-        value = side.get("rotation")
-        if value is not None:
-            try:
-                rotation = float(value)
-            except (TypeError, ValueError):
-                rotation = 0.0
-            break
-    if rotation == 0.0:
-        try:
-            rotation = float((stream.get("tags") or {}).get("rotate") or 0)
-        except (TypeError, ValueError):
-            rotation = 0.0
-    if abs(rotation) % 180 == 90:
-        width, height = height, width
-
-    needs_scale = bool(width % 2 or height % 2)
-    width -= width % 2
-    height -= height % 2
-    if width <= 0 or height <= 0:
-        raise _Unreadable("no readable video stream")
-    return width, height, needs_scale
-
-
 def _showinfo_time(line: str) -> float | None:
     """The ``pts_time`` of one ``showinfo`` line, or ``None`` when absent."""
     match = _SHOWINFO_PTS.search(line)
@@ -158,24 +99,6 @@ def _drain_showinfo(stream: Any, times: "queue.Queue[object]") -> None:
             times.put(value if value is not None else _BAD)
     finally:
         times.put(_END)
-
-
-def _dhash(image: Any) -> Any:
-    """256-bit difference hash: 17x16 gray, each pixel vs its right neighbour."""
-    import numpy as np
-    from PIL import Image
-
-    resample = Image.Resampling.BOX
-    gray = image.convert("L").resize(
-        (
-            HASH_WIDTH,
-            max(2, round(HASH_WIDTH * image.height / image.width)),
-        ),
-        resample,
-    )
-    small = gray.resize((17, 16), resample)
-    pixels = np.asarray(small, dtype=np.int16)
-    return (pixels[:, 1:] > pixels[:, :-1]).ravel()
 
 
 def _ocr_image(image: Any) -> Any:

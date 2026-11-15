@@ -59,6 +59,7 @@ from app.workers.metadata import (
     index_text_content,
 )
 from app.workers.frame_ocr import index_frame_ocr
+from app.workers.frame_scan import index_frame_scan
 from app.workers.page_ocr import index_page_ocr
 from app.workers.ocr import (
     check_idle_unload as check_ocr_idle_unload,
@@ -105,6 +106,7 @@ class TaskType(str, Enum):
     OCR = "ocr"
     FRAME_OCR = "frame_ocr"
     PAGE_OCR = "page_ocr"
+    FRAME_SCAN = "frame_scan"
 
 
 class QueueState(str, Enum):
@@ -144,6 +146,7 @@ class IndexStatus:
     ocr_indexed: int = 0
     frame_ocr_indexed: int = 0
     page_ocr_indexed: int = 0
+    frame_scan_indexed: int = 0
     pending_metadata: int = 0
     pending_clip: int = 0
     pending_clip_thumbnail: int = 0
@@ -153,6 +156,7 @@ class IndexStatus:
     pending_ocr: int = 0
     pending_frame_ocr: int = 0
     pending_page_ocr: int = 0
+    pending_frame_scan: int = 0
 
 
 def _drifted_file_ids(rows: list[tuple[str, dict, dict]]) -> list[str]:
@@ -290,6 +294,7 @@ class IndexManager:
             ),
             asyncio.create_task(self._ocr_worker(), name="ocr_worker"),
             asyncio.create_task(self._frame_ocr_worker(), name="frame_ocr_worker"),
+            asyncio.create_task(self._frame_scan_worker(), name="frame_scan_worker"),
             asyncio.create_task(self._page_ocr_worker(), name="page_ocr_worker"),
             asyncio.create_task(
                 self._reconciliation_worker(), name="reconciliation_worker"
@@ -453,6 +458,15 @@ class IndexManager:
                 IndexedFile.mime_type.in_(tfidf_kw_types),
             ).count()
 
+            frame_scan = active_files.filter(
+                IndexedFile.frame_scan_indexed.is_(True),
+                IndexedFile.mime_type.in_(video_types),
+            ).count()
+            pending_frame_scan = active_files.filter(
+                IndexedFile.frame_scan_indexed.is_(False),
+                IndexedFile.mime_type.in_(video_types),
+            ).count()
+
             return IndexStatus(
                 total_indexed=total,
                 metadata_indexed=metadata,
@@ -464,6 +478,7 @@ class IndexManager:
                 ocr_indexed=ocr,
                 frame_ocr_indexed=frame_ocr,
                 page_ocr_indexed=page_ocr,
+                frame_scan_indexed=frame_scan,
                 pending_metadata=pending_metadata,
                 pending_clip=pending_clip,
                 pending_clip_thumbnail=pending_clip_thumbnail,
@@ -473,6 +488,7 @@ class IndexManager:
                 pending_ocr=pending_ocr,
                 pending_frame_ocr=pending_frame_ocr,
                 pending_page_ocr=pending_page_ocr,
+                pending_frame_scan=pending_frame_scan,
             )
 
     async def reconcile(self) -> dict[str, int]:
@@ -813,7 +829,10 @@ class IndexManager:
         clip_mimes = IMAGE_TYPES | VIDEO_TYPES | THUMBNAIL_FALLBACK_TYPES
 
         def _collect_incomplete() -> list[
-            tuple[str, str, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool]
+            tuple[
+                str, str, bool, bool, bool, bool, bool, bool, bool, bool, bool,
+                bool, bool, bool, bool, bool,
+            ]
         ]:
             with get_search_db() as session:
                 from sqlalchemy import or_
@@ -843,6 +862,7 @@ class IndexManager:
                             IndexedFile.ocr_indexed.is_(False),
                             IndexedFile.frame_ocr_indexed.is_(False),
                             IndexedFile.page_ocr_indexed.is_(False),
+                            IndexedFile.frame_scan_indexed.is_(False),
                         ),
                     )
                     .all()
@@ -898,6 +918,11 @@ class IndexManager:
                         and f.mime_type != "application/pdf"
                     ):
                         f.page_ocr_indexed = True
+                    if (
+                        not f.frame_scan_indexed
+                        and f.mime_type not in VIDEO_TYPES
+                    ):
+                        f.frame_scan_indexed = True
 
                 # Snapshot what we need for queuing
                 snapshot = [
@@ -917,6 +942,7 @@ class IndexManager:
                         f.frame_ocr_read,
                         f.frame_ocr_indexed,
                         f.page_ocr_indexed,
+                        f.frame_scan_indexed,
                     )
                     for f in incomplete
                 ]
@@ -935,7 +961,7 @@ class IndexManager:
             meta_done, clip_done, thumb_done, whisper_done, text_done,
             tfidf_kw_done, ocr_done, transcript_corrected,
             picture_text_corrected, has_followup,
-            frame_read, frame_done, page_done,
+            frame_read, frame_done, page_done, frame_scan_done,
         ) in file_tasks:
             queued_any = False
 
@@ -1016,6 +1042,14 @@ class IndexManager:
                 ))
                 queued_any = True
 
+            # The backfill of already indexed videos waits behind fresh work,
+            # as frame OCR's does.
+            if mime_type in VIDEO_TYPES and not frame_scan_done:
+                await self._enqueue(IndexTask(
+                    file_id=file_id, task_type=TaskType.FRAME_SCAN, priority=-10
+                ))
+                queued_any = True
+
             if queued_any:
                 resumed += 1
 
@@ -1039,6 +1073,13 @@ class IndexManager:
         if mime_type in IMAGE_TYPES or mime_type in VIDEO_TYPES:
             await self._enqueue(IndexTask(
                 file_id=file_id, task_type=TaskType.CLIP
+            ))
+
+        # A new native video is scanned for its change frames at priority 0,
+        # ahead of the backfill.
+        if mime_type in VIDEO_TYPES:
+            await self._enqueue(IndexTask(
+                file_id=file_id, task_type=TaskType.FRAME_SCAN
             ))
 
         # Read the words in a picture on the same pass, like CLIP.
@@ -1187,6 +1228,14 @@ class IndexManager:
                         file_id=file_id, task_type=TaskType.PAGE_OCR,
                         priority=100,
                     ))
+                if (
+                    not file.frame_scan_indexed
+                    and file.mime_type in VIDEO_TYPES
+                ):
+                    pending.append(IndexTask(
+                        file_id=file_id, task_type=TaskType.FRAME_SCAN,
+                        priority=100,
+                    ))
             return pending
 
         # Off the loop: the row lookup is O(1), but taking the write lock
@@ -1226,6 +1275,7 @@ class IndexManager:
         "ocr": TaskType.OCR,
         "frame_ocr": TaskType.FRAME_OCR,
         "page_ocr": TaskType.PAGE_OCR,
+        "frame_scan": TaskType.FRAME_SCAN,
     }
 
     def is_queued(self, file_id: str, task: str) -> bool:
@@ -1239,6 +1289,13 @@ class IndexManager:
         if task_type is None:
             return False
         return file_id in self._queued_by_type[task_type]
+
+    def is_processing(self, file_id: str, task: str) -> bool:
+        """Return ``True`` if a worker is running ``(file_id, task)`` now."""
+        task_type = self._TASK_NAME_TO_TYPE.get(task)
+        if task_type is None:
+            return False
+        return file_id in self._processing_by_type[task_type]
 
     async def enqueue_task_for_file(self, file_id: str, task: str) -> None:
         """Enqueue a single ``(file_id, task)`` pair at high priority.
@@ -1761,6 +1818,46 @@ class IndexManager:
                 logger.error("Frame OCR worker error: %s", e)
                 await asyncio.sleep(5)
 
+    async def _frame_scan_worker(self) -> None:
+        """Scan one video's change frames at a time, off the event loop."""
+        while True:
+            try:
+                await self._pause_event.wait()
+                batch = await self._collect_batch(TaskType.FRAME_SCAN, 1)
+
+                if not batch:
+                    await asyncio.sleep(2)
+                    continue
+
+                task = batch[0]
+                self._processing_count += 1
+                self._processing_by_type[TaskType.FRAME_SCAN].append(task.file_id)
+
+                try:
+                    scanned = await asyncio.to_thread(
+                        index_frame_scan, task.file_id, is_paused=self.is_paused
+                    )
+                    if scanned:
+                        await self._enqueue_video_visual_on_clip(task.file_id, after_scan=True)
+                except Exception as e:
+                    logger.error(
+                        "Frame scan failed for %s: %s", task.file_id, e
+                    )
+                finally:
+                    self._processing_count -= 1
+                    try:
+                        self._processing_by_type[TaskType.FRAME_SCAN].remove(
+                            task.file_id
+                        )
+                    except ValueError:
+                        pass
+
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.error("Frame scan worker error: %s", e)
+                await asyncio.sleep(5)
+
     async def _page_ocr_worker(self) -> None:
         """Read scanned PDF pages one PDF at a time, off the event loop."""
         while True:
@@ -1830,16 +1927,18 @@ class IndexManager:
                 file_id, type(e).__name__,
             )
 
-    async def _enqueue_video_visual_on_clip(self, file_id: str) -> None:
-        """Hand the file to the VideoVisualWorker after scene CLIP completes.
+    async def _enqueue_video_visual_on_clip(
+        self, file_id: str, *, after_scan: bool = False
+    ) -> None:
+        """Hand the file to the VideoVisualWorker after scene CLIP or a frame scan.
 
         Mirrors ``_enqueue_vision_describe``. Only meaningful for
         ``on_index`` mode — manual requests go through the router
         directly. The worker's own ``enqueue`` re-checks eligibility
-        (mime, policy, CLIP readiness) and skips a pointless replacement
-        when the candidate fingerprint hasn't actually changed, so this
-        hook is safe to call unconditionally on every successful CLIP
-        pass (first-time indexing and later scene-CLIP rebuilds alike).
+        (mime, policy, CLIP and scan readiness) and decides what an
+        automatic request may replace, so this hook is safe to call
+        unconditionally on every successful pass. ``after_scan`` is the
+        scan's caller: it starts a run only for a file that has none.
         """
         if settings.features.video_visual_index != "on_index":
             return
@@ -1850,7 +1949,7 @@ class IndexManager:
         except Exception:
             return
         try:
-            await worker.enqueue(file_id, requested_by="on_index")
+            await worker.enqueue(file_id, requested_by="on_index", after_scan=after_scan)
         except Exception as e:
             logger.warning(
                 "video_visual on_index enqueue failed for %s (%s)",
@@ -2245,16 +2344,18 @@ def cleanup_orphaned_embeddings() -> int:
 
     This handles the case where a crash occurred between writing the
     embedding record and inserting/committing the vector, or vice versa.
+    Scan rows whose file is gone or inactive are removed here too: nothing
+    else revisits a `video_frame_scans` row once its file has left.
     Called once at startup before the index manager starts.
 
     Returns:
-        Number of orphaned embedding records removed.
+        Number of orphaned records removed.
     """
     cleaned = 0
 
     with get_search_db() as session:
         # Find embedding records with no matching vector
-        for vec_table_name in ("vec_text", "vec_clip"):
+        for vec_table_name in ("vec_text", "vec_clip", "vec_clip_change"):
             table = validate_vector_table(vec_table_name)
             orphaned = session.execute(
                 sql_text(
@@ -2273,7 +2374,7 @@ def cleanup_orphaned_embeddings() -> int:
                 cleaned += 1
 
         # Find orphaned vectors with no embedding record
-        for vec_table_name in ("vec_text", "vec_clip"):
+        for vec_table_name in ("vec_text", "vec_clip", "vec_clip_change"):
             table = validate_vector_table(vec_table_name)
             orphaned_vecs = session.execute(
                 sql_text(
@@ -2290,6 +2391,14 @@ def cleanup_orphaned_embeddings() -> int:
                     {"id": vec_id},
                 )
                 cleaned += 1
+
+        # A scan row belongs to an active file and to nothing else.
+        cleaned += session.execute(
+            sql_text(
+                "DELETE FROM video_frame_scans WHERE file_id NOT IN "
+                "(SELECT file_id FROM indexed_files WHERE active = 1)"
+            )
+        ).rowcount
 
     return cleaned
 
@@ -2573,7 +2682,7 @@ def _purge_file(file_id: str) -> None:
                 # short "text"/"clip" form used by vision_description
                 # embeddings in some test fixtures). validate_vector_table
                 # would otherwise raise and abort the whole purge.
-                if table_raw in ("vec_text", "vec_clip"):
+                if table_raw in ("vec_text", "vec_clip", "vec_clip_change"):
                     table = validate_vector_table(table_raw)
                     session.execute(
                         sql_text(
@@ -2665,9 +2774,9 @@ def _purge_file(file_id: str) -> None:
                 {"fid": file_id},
             )
 
-        # The two OCR text stores (SPEC-ADDON-066/069). Probe the tables so
-        # an old DB keeps purging while it upgrades.
-        for table in ("video_frame_texts", "pdf_page_ocr_texts"):
+        # The two OCR text stores and the frame scan's per-second row. Probe
+        # the tables so an old DB keeps purging while it upgrades.
+        for table in ("video_frame_texts", "pdf_page_ocr_texts", "video_frame_scans"):
             present = session.execute(
                 sql_text(
                     "SELECT 1 FROM sqlite_master "

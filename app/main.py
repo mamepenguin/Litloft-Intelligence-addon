@@ -617,6 +617,7 @@ def status_endpoint() -> StatusResponse:
             "text": index_status.text_indexed,
             "ocr": index_status.ocr_indexed,
             "frame_ocr": index_status.frame_ocr_indexed,
+            "frame_scan": index_status.frame_scan_indexed,
             "page_ocr": index_status.page_ocr_indexed,
         },
         pending={
@@ -632,6 +633,7 @@ def status_endpoint() -> StatusResponse:
                 )
                 + index_status.pending_frame_ocr
                 + index_status.pending_page_ocr
+                + index_status.pending_frame_scan
             ),
             "metadata": index_status.pending_metadata,
             "clip": index_status.pending_clip,
@@ -644,6 +646,7 @@ def status_endpoint() -> StatusResponse:
             ),
             "frame_ocr": index_status.pending_frame_ocr,
             "page_ocr": index_status.pending_page_ocr,
+            "frame_scan": index_status.pending_frame_scan,
         },
         queue={
             "processing": queue_status.processing_count,

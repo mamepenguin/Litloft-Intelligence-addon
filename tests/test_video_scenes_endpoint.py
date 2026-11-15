@@ -1,4 +1,9 @@
-"""SPEC-ADDON-031: ``GET /files/{file_id}/scenes`` over HTTP."""
+"""SPEC-ADDON-031 I4/I5 as revised by SPEC-ADDON-112, and SPEC-ADDON-113 item 4:
+``GET /files/{file_id}/scenes`` over HTTP.
+
+The sections themselves are pinned in ``test_spec_addon_112_scene_sections.py``;
+here the route is checked against the selection it is handed.
+"""
 
 from __future__ import annotations
 
@@ -16,7 +21,11 @@ from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 from app.models import IndexedFile, VideoVisualRun, VideoVisualScene
-from app.workers.video_visual_selection import Candidate, select_candidates
+from app.workers.video_visual_selection import (
+    Frame,
+    SelectionInputs,
+    select_scenes,
+)
 
 LOFT_MIME = "application/vnd.litloft.loft+json"
 DRIVE = "family"
@@ -42,17 +51,21 @@ DURATIONS: dict[str, float | None] = {
     "vid-empty": 600.0,
 }
 
-CANDIDATES: dict[str, list[Candidate]] = {
-    "vid-long": [Candidate(f"L{i}", i * 36.0, _unit_vec(i)) for i in range(200)],
-    "vid-nodur": [Candidate(f"N{i}", i * 15.0, _unit_vec(1000 + i)) for i in range(40)],
+CANDIDATES: dict[str, tuple[Frame, ...]] = {
+    "vid-long": tuple(
+        Frame(f"L{i}", i * 36.0, _unit_vec(i)) for i in range(200)
+    ),
+    "vid-nodur": tuple(
+        Frame(f"N{i}", i * 15.0, _unit_vec(1000 + i)) for i in range(40)
+    ),
     # The last one lies past the probed duration, as a CLIP candidate stamped
     # beyond the container's duration can.
-    "vid-short": [
-        Candidate("S0", 100.0, _basis(0)),
-        Candidate("S1", 300.0, _basis(1)),
-        Candidate("S2", 600.5, _basis(2)),
-    ],
-    "vid-empty": [],
+    "vid-short": (
+        Frame("S0", 100.0, _basis(0)),
+        Frame("S1", 300.0, _basis(1)),
+        Frame("S2", 600.5, _basis(2)),
+    ),
+    "vid-empty": (),
 }
 
 
@@ -62,6 +75,20 @@ def _patch_everywhere(monkeypatch, name: str, value) -> None:
             continue
         if name in getattr(module, "__dict__", {}):
             monkeypatch.setattr(module, name, value)
+
+
+def _inputs(file_id: str) -> SelectionInputs:
+    return SelectionInputs(
+        scene_candidates=CANDIDATES.get(file_id, ()),
+        duration=DURATIONS.get(file_id),
+    )
+
+
+def _span(params: dict, duration: float | None) -> tuple[float, float | None]:
+    lo = float(params.get("start", 0.0))
+    if "end" in params:
+        return lo, float(params["end"])
+    return lo, duration
 
 
 @pytest.fixture()
@@ -113,13 +140,10 @@ def env(monkeypatch, tmp_path):
     _patch_everywhere(monkeypatch, "get_search_db_read", _read)
     _patch_everywhere(monkeypatch, "get_search_db", _write)
 
-    loaded: list[str] = []
+    def _load(file_id):
+        return _inputs(file_id)
 
-    def _load_candidates(file_id):
-        loaded.append(file_id)
-        return list(CANDIDATES.get(file_id, [])), DURATIONS.get(file_id)
-
-    _patch_everywhere(monkeypatch, "_load_candidates", _load_candidates)
+    _patch_everywhere(monkeypatch, "load_selection_inputs", _load)
 
     excerpt_calls: list[tuple] = []
 
@@ -143,13 +167,12 @@ def env(monkeypatch, tmp_path):
         "get": get,
         "Session": Session,
         "excerpt_calls": excerpt_calls,
-        "loaded": loaded,
     }
 
 
-def _expected_starts(candidates, duration):
-    picked = select_candidates(candidates, duration_seconds=duration)
-    return sorted(c.timestamp for c in picked)
+def _expected(file_id: str, params: dict):
+    lo, hi = _span(params, DURATIONS[file_id])
+    return select_scenes(_inputs(file_id), lo, hi)
 
 
 def _all(_ts):
@@ -157,58 +180,59 @@ def _all(_ts):
 
 
 WINDOW_ROWS = [
-    pytest.param("vid-long", {}, None, _all, 7200.0, id="neither-dur-known"),
-    pytest.param("vid-nodur", {}, None, _all, None, id="neither-dur-null"),
+    pytest.param("vid-long", {}, None, _all, id="neither-dur-known"),
+    pytest.param("vid-nodur", {}, None, _all, id="neither-dur-null"),
     pytest.param(
         "vid-long", {"start": 3600}, {"start": 3600, "end": 7200},
-        lambda ts: 3600 <= ts < 7200, 3600.0, id="start-only-dur-known",
+        lambda ts: 3600 <= ts < 7200, id="start-only-dur-known",
     ),
     pytest.param(
         "vid-nodur", {"start": 150}, {"start": 150, "end": None},
-        lambda ts: 150 <= ts, None, id="start-only-dur-null",
+        lambda ts: 150 <= ts, id="start-only-dur-null",
     ),
     pytest.param(
         "vid-long", {"end": 1800}, {"start": 0, "end": 1800},
-        lambda ts: ts < 1800, 1800.0, id="end-only",
+        lambda ts: ts < 1800, id="end-only",
     ),
     pytest.param(
         "vid-nodur", {"end": 300}, {"start": 0, "end": 300},
-        lambda ts: ts < 300, 300.0, id="end-only-dur-null",
+        lambda ts: ts < 300, id="end-only-dur-null",
     ),
     pytest.param(
         "vid-long", {"start": 1000, "end": 4600}, {"start": 1000, "end": 4600},
-        lambda ts: 1000 <= ts < 4600, 3600.0, id="both",
+        lambda ts: 1000 <= ts < 4600, id="both",
     ),
 ]
 
 
 class TestWindowTable:
-    @pytest.mark.parametrize("file_id,params,window,keep,duration", WINDOW_ROWS)
-    def test_spec_addon_031_window_candidates_and_budget(
-        self, env, file_id, params, window, keep, duration,
+    @pytest.mark.parametrize("file_id,params,window,keep", WINDOW_ROWS)
+    def test_spec_addon_031_i5_a_window_selects_from_its_own_span(
+        self, env, file_id, params, window, keep,
     ):
         response = env["get"](file_id, params)
         assert response.status_code == 200, response.text
         body = response.json()
 
+        expected = _expected(file_id, params)
         kept = [c for c in CANDIDATES[file_id] if keep(c.timestamp)]
         starts = [s["start"] for s in body["scenes"]]
 
         assert body["file_id"] == file_id
         assert body["duration"] == DURATIONS[file_id]
         assert body["window"] == window
-        assert body["candidate_count"] == len(kept)
-        assert starts == _expected_starts(kept, duration)
-        assert len(starts) <= min(24, len(kept))
+        assert body["candidate_count"] == len(kept) == expected.candidate_count
+        assert starts == [item.section_start for item in expected.navigation]
+        assert len(starts) <= min(40, len(kept))
         if window is not None:
             for ts in starts:
                 assert ts >= window["start"]
                 if window["end"] is not None:
                     assert ts < window["end"]
 
-    @pytest.mark.parametrize("file_id,params,window,keep,duration", WINDOW_ROWS)
-    def test_spec_addon_031_scene_end_is_next_start_then_window_or_duration(
-        self, env, file_id, params, window, keep, duration,
+    @pytest.mark.parametrize("file_id,params,window,keep", WINDOW_ROWS)
+    def test_spec_addon_112_i3_scene_end_is_the_next_start_then_the_span_end(
+        self, env, file_id, params, window, keep,
     ):
         response = env["get"](file_id, params)
         assert response.status_code == 200, response.text
@@ -216,24 +240,24 @@ class TestWindowTable:
         assert scenes, "the row must select at least one scene"
         for current, following in zip(scenes, scenes[1:]):
             assert current["end"] == following["start"]
-        last = scenes[-1]
-        if window is not None:
-            assert last["end"] == window["end"]
-        else:
-            dur = DURATIONS[file_id]
-            assert last["end"] == (dur if dur is not None and dur > last["start"] else None)
+        expected = _expected(file_id, params)
+        assert scenes[-1]["end"] == expected.navigation[-1].section_end
 
-    def test_spec_addon_031_a_budget_of_24_is_reached_on_a_long_video(self, env):
+    def test_spec_addon_112_i4_no_more_than_forty_sections_on_a_long_video(self, env):
         response = env["get"]("vid-long")
         assert response.status_code == 200, response.text
-        assert len(response.json()["scenes"]) == 24
+        body = response.json()
+        assert body["candidate_count"] == 200
+        assert 8 <= len(body["scenes"]) <= 40
 
-    def test_spec_addon_031_last_scene_past_the_duration_has_no_end(self, env):
+    def test_spec_addon_112_terms_a_frame_past_the_duration_is_outside_the_span(self, env):
         response = env["get"]("vid-short")
         assert response.status_code == 200, response.text
         body = response.json()
-        assert [s["start"] for s in body["scenes"]] == [100.0, 300.0, 600.5]
-        assert [s["end"] for s in body["scenes"]] == [300.0, 600.5, None]
+        assert body["candidate_count"] == 2
+        assert [(s["start"], s["end"], s["frame_time"]) for s in body["scenes"]] == [
+            (0.0, 300.0, 100.0), (300.0, 600.0, 300.0),
+        ]
 
     @pytest.mark.parametrize(
         "params,window",
@@ -272,24 +296,23 @@ class TestWindowTable:
 
 
 class TestExcerpt:
-    def test_spec_addon_031_excerpt_is_taken_at_each_scene_start_and_empty_is_null(self, env):
+    def test_spec_addon_113_the_excerpt_is_taken_around_the_frame_time(self, env):
         response = env["get"]("vid-short")
         assert response.status_code == 200, response.text
         body = response.json()
         assert [s["transcript_excerpt"] for s in body["scenes"]] == [
-            "near 100.0", None, "near 600.5",
+            "near 100.0", None,
         ]
         assert sorted(env["excerpt_calls"]) == [
             ("vid-short", 100.0, None),
             ("vid-short", 300.0, None),
-            ("vid-short", 600.5, None),
         ]
 
-    def test_spec_addon_031_response_has_exactly_the_specified_keys(self, env):
+    def test_spec_addon_113_response_carries_the_frame_time_beside_the_section(self, env):
         body = env["get"]("vid-short").json()
         assert set(body) == {"file_id", "duration", "window", "candidate_count", "scenes"}
         for scene in body["scenes"]:
-            assert set(scene) == {"start", "end", "transcript_excerpt"}
+            assert set(scene) == {"start", "end", "frame_time", "transcript_excerpt"}
 
 
 class TestRejections:
@@ -388,4 +411,3 @@ class TestRouteDeclaration:
         assert "drive_optional" not in entry
         assert "addon_feature" not in entry
         assert entry["timeout"] == 30
-

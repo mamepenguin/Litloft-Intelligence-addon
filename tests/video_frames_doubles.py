@@ -14,10 +14,12 @@ import threading
 import time
 from pathlib import Path
 
-import numpy as np
-
 import app.frame_cache as frame_cache
-from app.workers.video_visual_selection import Candidate
+from app.workers.video_visual_selection import (
+    SelectedFrame,
+    Selection,
+    SelectionInputs,
+)
 from tests.file_question_vision_doubles import DRIVE
 from tests.search_endpoint_db import patch_everywhere
 
@@ -45,22 +47,36 @@ def seed_text_less_video(
 
 
 def scenes(monkeypatch, times: list[float], *, duration: float | None) -> list[str]:
-    """Make ``times`` the selected scene timestamps; return the files read."""
-    candidates = [
-        Candidate(f"clip{i:03d}", t, np.ones(4, dtype=np.float32))
-        for i, t in enumerate(times)
-    ]
+    """Make ``times`` the Ask list's frame times; return the files read.
+
+    SPEC-ADDON-108 I3 takes the Ask list's frame times; the selection itself is
+    covered by SPEC-ADDON-112, so this double pins only what the question does
+    with them.
+    """
+    items = tuple(
+        SelectedFrame(
+            section_start=0.0,
+            section_end=duration if duration is not None else 0.0,
+            frame_time=float(time),
+            embedding_id=f"clip{i:03d}",
+            embedding_type="clip",
+            kind="visual",
+            textual=False,
+        )
+        for i, time in enumerate(times)
+    )
+    inputs = SelectionInputs(duration=duration)
     loaded: list[str] = []
 
     def _load(file_id):
         loaded.append(file_id)
-        return list(candidates), duration
+        return inputs
 
-    def _select(given, *_args, **_kwargs):
-        return sorted(given, key=lambda c: c.timestamp)
+    def _select(*_args, **_kwargs):
+        return Selection(navigation=items, ask=items, candidate_count=len(items))
 
-    patch_everywhere(monkeypatch, "_load_candidates", _load)
-    patch_everywhere(monkeypatch, "select_candidates", _select)
+    patch_everywhere(monkeypatch, "load_selection_inputs", _load)
+    patch_everywhere(monkeypatch, "select_scenes", _select)
     return loaded
 
 
