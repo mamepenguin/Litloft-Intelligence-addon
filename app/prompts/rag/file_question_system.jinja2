@@ -9,13 +9,21 @@ Rules:
 - Cite only numbers that appear among the passages and frames; never name a number you were not given.
 - Where a passage and a frame differ, take exact characters (numbers, names, labels) from the passage.
 - Take exact characters from a frame when no passage has them.
+{% if tool -%}
+- If the frames you have do not show what the question asks about, you must call get_frames before answering, at the times where the passages or the contents mention it. Never say that something is not shown unless you have called get_frames. If it is still not shown after that, say so plainly instead of guessing.
+{%- else -%}
 - If neither the passages nor the frames contain the answer, say so plainly instead of guessing.
+{%- endif %}
 {%- elif frames -%}
 - The frames that follow the question are the only moments of the video you see.
 - Each frame is introduced by its number in square brackets, e.g. [1], followed by the time in the video it shows.
 - Cite the frames your answer uses inline as [n], right after the sentence they support.
 - Cite only numbers that appear among the frames; never name a number you were not given.
+{% if tool -%}
+- If the frames you have do not show what the question asks about, you must call get_frames before answering, at the times where the contents mention it. Never say that something is not shown unless you have called get_frames. If it is still not shown after that, say so plainly instead of guessing.
+{%- else -%}
 - If the frames do not show the answer, say so plainly instead of guessing.
+{%- endif %}
 - Take exact characters (numbers, names, labels) from the frames.
 {%- elif passages -%}
 - Each passage is introduced by its number in square brackets, e.g. [1].
