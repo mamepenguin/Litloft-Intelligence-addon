@@ -531,7 +531,8 @@ class TestWhenFramesCannotBeUsed:
     async def test_a_refusal_retries_once_from_the_passages_and_writes_no_verdict(
         self, status, provider, db, addon, llm, call, tmp_path, monkeypatch, caplog,
     ):
-        """SPEC-ADDON-114 I4 §2/§8: text-only retry, ``unavailable``, ``frames_rejected`` logged, no verdict."""
+        """SPEC-ADDON-116 §2 I4 (114 I4): the refused tool request is followed by
+        today's request once, whose refusal gets the one text-only retry."""
         from app.llm import reset_vision_capability_cache
         from app.llm_routing import profile_can_see
 
@@ -546,8 +547,8 @@ class TestWhenFramesCannotBeUsed:
         with caplog.at_level("DEBUG"):
             response = await ask(call, VIDEO)
 
-        assert len(wire.image_bodies) == 1
-        assert sent_keys(wire) == [ms(t) for t in EVEN_80]
+        assert len(wire.image_bodies) == 2
+        assert sent_keys(wire) == [ms(t) for t in EVEN_80] * 2
         assert len(wire.text_bodies) == 1
         assert PASSAGE in wire.text_of(wire.text_bodies[0])
         assert by_kind(response)["meta"]["image"] == "unavailable"
@@ -563,7 +564,7 @@ class TestWhenFramesCannotBeUsed:
         assert profile_can_see(llm.result) is True
         again = await ask(call, VIDEO)
         assert by_kind(again)["meta"]["image"] == "unavailable"
-        assert len(wire.image_bodies) == 2
+        assert len(wire.image_bodies) == 4
 
     async def test_the_passages_are_the_same_with_frames_without_and_after_a_refusal(
         self, db, addon, llm, call, tmp_path, monkeypatch,
@@ -592,8 +593,11 @@ class TestWhenFramesCannotBeUsed:
         vision_client(llm, wire=refused)
         retried = await ask(call, VIDEO)
         assert by_kind(retried)["meta"]["image"] == "unavailable"
-        assert len(refused.image_bodies) == 1
+        # SPEC-ADDON-116 §2 I4: the refused tool request, then today's request,
+        # both carrying the same passages and frames.
+        assert len(refused.image_bodies) == 2
         assert mentioned(refused.text_of(refused.image_bodies[0]), [first, second]) == [second]
+        assert mentioned(refused.text_of(refused.image_bodies[1]), [first, second]) == [second]
         assert mentioned(refused.text_of(refused.text_bodies[0]), [first, second]) == [second]
 
         monkeypatch.setattr(frame_cache.subprocess, "run", ffmpeg_fails())
@@ -618,7 +622,8 @@ class TestGenerationFailures:
     async def test_a_failure_while_answering_with_frames_is_generic_and_attached(
         self, how, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-114 §2 I9: the generic failure line, ``attached``, no text retry."""
+        """SPEC-ADDON-116 §2 (114 §2 I9): the failed tool request and today's
+        request after it both fail; the generic line, ``attached``, no text retry."""
         _text_video(db, tmp_path)
         scenes(monkeypatch, [], duration=80.0)
         FFmpeg().install(monkeypatch)
@@ -642,13 +647,14 @@ class TestGenerationFailures:
         assert error
         assert error not in FRAME_ERRORS
         assert by_kind(response)["meta"]["image"] == "attached"
-        assert len(wire.image_bodies) == 1
+        assert len(wire.image_bodies) == 2
         assert wire.text_bodies == []
 
     async def test_a_failure_during_the_text_only_retry_is_generic_and_unavailable(
         self, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-114 §2/§3: one retry only; its failure is the generic line, ``unavailable``."""
+        """SPEC-ADDON-116 §2 (114 §2/§3): one text-only retry only; its failure is
+        the generic line, ``unavailable``."""
         _text_video(db, tmp_path)
         scenes(monkeypatch, [], duration=80.0)
         FFmpeg().install(monkeypatch)
@@ -662,7 +668,7 @@ class TestGenerationFailures:
         assert error
         assert error not in FRAME_ERRORS
         assert by_kind(response)["meta"]["image"] == "unavailable"
-        assert len(wire.image_bodies) == 1
+        assert len(wire.image_bodies) == 2
         assert len(wire.text_bodies) == 1
 
 

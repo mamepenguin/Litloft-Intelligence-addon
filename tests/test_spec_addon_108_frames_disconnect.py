@@ -57,8 +57,12 @@ def _delta(text: str) -> bytes:
     return f"data: {json.dumps(chunk)}\n\n".encode()
 
 
-def _serve(llm, stream, requests: list[dict]) -> None:
-    """Hand the routed client ``stream`` as every vision response."""
+def _serve(llm, stream, requests: list[dict], *, call_times=()) -> None:
+    """Hand the routed client ``stream`` as every request that does not offer the tool.
+
+    ``call_times`` answers each tool request before the final one with one
+    ``get_frames`` call, so a test reaches the phase where the answer streams.
+    """
     from openai import AsyncOpenAI
 
     from app.llm import LLMClient
@@ -67,7 +71,13 @@ def _serve(llm, stream, requests: list[dict]) -> None:
     client = LLMClient(settings)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(json.loads(request.content))
+        body = json.loads(request.content)
+        requests.append(body)
+        if call_times and body.get("tools") and body.get("tool_choice") != "none":
+            return httpx.Response(
+                200, headers={"content-type": "text/event-stream"},
+                content=_call_reply(list(call_times)),
+            )
         return httpx.Response(
             200, headers={"content-type": "text/event-stream"}, stream=stream,
         )
@@ -79,6 +89,38 @@ def _serve(llm, stream, requests: list[dict]) -> None:
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
     llm.serve(resolved(client, settings))
+
+
+def _call_reply(times: list[float]) -> bytes:
+    """A complete streamed reply that asks for the frames at ``times``."""
+    call = {
+        "id": "1", "object": "chat.completion.chunk", "created": 0,
+        "model": VISION_MODEL,
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "role": "assistant",
+                "tool_calls": [{
+                    "index": 0, "id": "call_1", "type": "function",
+                    "function": {
+                        "name": "get_frames",
+                        "arguments": json.dumps({"times": times}),
+                    },
+                }],
+            },
+            "finish_reason": None,
+        }],
+    }
+    done = {
+        "id": "1", "object": "chat.completion.chunk", "created": 0,
+        "model": VISION_MODEL,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+    }
+    return (
+        f"data: {json.dumps(call)}\n\n"
+        f"data: {json.dumps(done)}\n\n"
+        "data: [DONE]\n\n"
+    ).encode()
 
 
 class _HeldOpen(httpx.AsyncByteStream):
@@ -183,14 +225,15 @@ class TestADisconnectWhileTheModelAnswers:
     async def test_hanging_up_after_the_first_chunk_ends_the_response_cleanly(
         self, db, addon, llm, ask_slots, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-108 I7: stopped, torn down, released, no error."""
+        """SPEC-ADDON-116 §1.6 I6 (108 I7): only the final request streams, so the
+        hang-up comes after its first chunk: stopped, torn down, released, no error."""
         from app.main import app
 
         _video(db, tmp_path)
         FFmpeg().install(monkeypatch)
         stream = _HeldOpen(tokens=1)
         requests: list[dict] = []
-        _serve(llm, stream, requests)
+        _serve(llm, stream, requests, call_times=(12.0,))
 
         sent = await _hang_up_after(
             app,
