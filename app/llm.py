@@ -695,20 +695,6 @@ class LLMClient:
         )
         return {k: v for k, v in request_kwargs.items() if k != "extra_body"}
 
-    def _refused_frame_request(self) -> None:
-        """Stop offering the opt-in extras once this provider refuses these requests.
-
-        A tool or final request carries the images and the tool, never the
-        reasoning extension, so its 400/404 is the provider refusing the
-        request itself. The extension is the one optional body field the same
-        client adds to the requests that follow, and a provider that answers
-        400 to a body it cannot take is likely to answer 400 to that field too
-        — which then costs a duplicate round trip. (why not keep offering it:
-        the duplicate is a whole request of a question's budget, and the
-        extension only suppresses thinking.)
-        """
-        self._extras_rejected = True
-
     @property
     def enabled(self) -> bool:
         """True if LLM is properly configured and not disabled."""
@@ -1341,7 +1327,6 @@ class LLMClient:
             )
         except APIStatusError as e:
             if e.status_code in _VISION_REJECTION_STATUS_CODES:
-                self._refused_frame_request()
                 raise ImageRejected(FAILURE_IMAGE_REJECTED) from e
             raise
 
@@ -1421,7 +1406,6 @@ class LLMClient:
             )
         except APIStatusError as e:
             if e.status_code in _VISION_REJECTION_STATUS_CODES:
-                self._refused_frame_request()
                 raise ImageRejected(FAILURE_IMAGE_REJECTED) from e
             raise
 
