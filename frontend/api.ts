@@ -163,6 +163,7 @@ export type QueueTaskKind =
   | "ocr"
   | "frame_ocr"
   | "page_ocr"
+  | "frame_scan"
   | "auto_tags"
   | "summaries"
   | "vision_describe"
@@ -183,6 +184,7 @@ export interface SearchServiceStatus {
     ocr?: number;
     frame_ocr?: number;
     page_ocr?: number;
+    frame_scan?: number;
   };
   pending?: {
     total: number;
@@ -193,6 +195,7 @@ export interface SearchServiceStatus {
     ocr?: number;
     frame_ocr?: number;
     page_ocr?: number;
+    frame_scan?: number;
   };
   queue?: {
     processing: number;
@@ -2095,8 +2098,12 @@ export async function resolveFailedJob(
 
 export interface VideoVisualSceneItem {
   ordering: number;
+  /** The frame time: the moment the vision model described. */
   start_time: number;
   end_time: number | null;
+  /** The section this scene represents; null on a run from before sections. */
+  section_start: number | null;
+  section_end: number | null;
   status: "pending" | "running" | "succeeded" | "failed";
   scene_type: string | null;
   scene_label: string | null;

@@ -1,5 +1,5 @@
 import { formatDuration } from "@/lib/format";
-import type { ClipTimestampItem } from "../api";
+import type { ClipTimestampItem, VideoVisualSceneItem } from "../api";
 
 export const LOFT_MIME_TYPE = "application/vnd.litloft.loft+json";
 
@@ -76,6 +76,42 @@ export function frameIndexAt(
     else break;
   }
   return index;
+}
+
+/**
+ * Where a scene is marked, shown and played from. A scene's frame time sits
+ * inside the section it represents, so playing from it starts mid-scene.
+ */
+export function seekTime(scene: VideoVisualSceneItem): number {
+  return scene.section_start ?? scene.start_time;
+}
+
+const DOT_TOLERANCE_SECONDS = 0.05;
+
+/**
+ * The start time of the tile each scene dots. A tile start, not the scene's
+ * time: a tile's range can hold several scene times and only its start names
+ * it.
+ */
+export function dotTileStarts(
+  scenes: VideoVisualSceneItem[],
+  rows: ClipTimestampItem[],
+): number[] {
+  if (rows.length === 0) return [];
+  const starts = new Set<number>();
+  for (const scene of scenes) {
+    if (scene.status !== "succeeded") continue;
+    if (scene.section_start != null) {
+      starts.add(rows[frameIndexAt(rows, scene.section_start)].start);
+      continue;
+    }
+    for (const row of rows) {
+      if (Math.abs(row.start - scene.start_time) <= DOT_TOLERANCE_SECONDS) {
+        starts.add(row.start);
+      }
+    }
+  }
+  return [...starts];
 }
 
 const DEFAULT_ROOT_FONT_SIZE_PX = 16;

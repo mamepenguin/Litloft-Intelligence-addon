@@ -149,10 +149,14 @@
       },
       "page_ocr": {
         "label": "スキャンしたページの文字"
+      },
+      "frame_scan": {
+        "label": "場面の切り替わり"
       }
     },
     "frameOcrFiles": "動画内の文字 {done} / {total} 件",
-    "pageOcrFiles": "スキャンしたページの文字 {done} / {total} 件"
+    "pageOcrFiles": "スキャンしたページの文字 {done} / {total} 件",
+    "frameScanFiles": "場面の切り替わり {done} / {total} 件"
   },
   "searchIndex": {
     "transcriptTitle": "文字起こし",

@@ -35,9 +35,11 @@ import {
 } from "./browseLifetime";
 import {
   LOFT_MIME_TYPE,
+  dotTileStarts,
   frameIndexAt,
   rulerLength,
   sceneColumns,
+  seekTime,
   windowStartFor,
 } from "./scenesModel";
 import { usePlaybackClock } from "./hooks/usePlaybackClock";
@@ -599,6 +601,7 @@ export default function ScenesSectionContainer({
     visual,
     visualLoaded,
     point,
+    list,
     working,
     t,
   );
@@ -677,6 +680,7 @@ function buildVisualView(
   visual: VideoVisualIndexResponse | null,
   loaded: boolean,
   point: number,
+  rows: ClipTimestampItem[],
   working: ScenesActionKind | null,
   t: Translate,
 ): ScenesVisualView | null {
@@ -704,17 +708,15 @@ function buildVisualView(
 
   const labelled = visual.scenes
     .filter((scene) => scene.status === "succeeded" && scene.scene_label)
-    .sort((a, b) => a.start_time - b.start_time);
+    .sort((a, b) => seekTime(a) - seekTime(b));
   let chosen: VideoVisualSceneItem | null = labelled[0] ?? null;
   for (const scene of labelled) {
-    if (scene.start_time <= point) chosen = scene;
+    if (seekTime(scene) <= point) chosen = scene;
   }
 
   const marks = row >= 2 ? visual.scenes : [];
   const dots = row >= 2
-    ? visual.scenes
-        .filter((scene) => scene.status === "succeeded")
-        .map((scene) => scene.start_time)
+    ? dotTileStarts(visual.scenes, rows)
     : [];
 
   const progressText = staged
@@ -767,7 +769,7 @@ function buildVisualView(
     scene:
       row >= 2 && chosen
         ? {
-            time: chosen.start_time,
+            time: seekTime(chosen),
             label: chosen.scene_label ?? "",
             text: chosen.visible_text,
           }

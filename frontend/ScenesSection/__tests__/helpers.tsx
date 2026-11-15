@@ -304,6 +304,8 @@ export function makeScene(
     ordering: 0,
     start_time: 10,
     end_time: null,
+    section_start: null,
+    section_end: null,
     status: "succeeded",
     scene_type: "slide",
     scene_label: "Scene label",

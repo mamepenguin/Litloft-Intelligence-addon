@@ -149,10 +149,14 @@
       },
       "page_ocr": {
         "label": "Text in scanned pages"
+      },
+      "frame_scan": {
+        "label": "Scene change scan"
       }
     },
     "frameOcrFiles": "Text in video {done} / {total}",
-    "pageOcrFiles": "Text in scanned pages {done} / {total}"
+    "pageOcrFiles": "Text in scanned pages {done} / {total}",
+    "frameScanFiles": "Scene change scan {done} / {total}"
   },
   "searchIndex": {
     "transcriptTitle": "Transcript",
