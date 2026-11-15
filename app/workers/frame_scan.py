@@ -251,6 +251,9 @@ def _store(
             file_id=file_id, active=True
         ).first()
         if row is None:
+            logger.warning(
+                "Frame scan skipped for %s: file is no longer active", file_id,
+            )
             return False
         _remove_embeddings(session, file_id, CHANGE_TYPE)
         session.query(VideoFrameScan).filter_by(file_id=file_id).delete()
