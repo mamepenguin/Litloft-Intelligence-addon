@@ -2,10 +2,11 @@
 
 import asyncio
 import logging
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel, Field
 
 from app import image_query, scene_segments
 from app.document_sections import EPUB_MIME
@@ -16,6 +17,7 @@ from app.file_matching import (
     InvalidFilter,
     fetch_matching_file_ids,
     parse_search_filter,
+    scope_member_ids,
 )
 from app.schemas import (
     CompareResponseModel,
@@ -133,8 +135,91 @@ async def _hydrate_batches(file_ids: list[str]) -> dict[str, Any]:
     return hydrated
 
 
-async def _filter_scope(drive: str, raw: str | None) -> list[str] | None:
-    """The file ids a ``filter`` names, or ``None`` when the request has none."""
+class SearchFileIdsBody(BaseModel):
+    """The body a ``POST`` search carries: the ids its filter scope is narrowed by."""
+
+    file_ids: list[Annotated[str, Field(min_length=1)]] = Field(
+        ..., max_length=10000
+    )
+
+
+class _SearchParams:
+    """Every query parameter ``GET /search`` takes, shared with ``POST /search``."""
+
+    def __init__(
+        self,
+        q: str = Query(..., min_length=1, description="Search query"),
+        limit: int = Query(default=20, ge=1, le=1000, description="Max results"),
+        type: str | None = Query(default=None, description="File type filter"),
+        mode: Literal["precision", "recall"] = Query(
+            default="precision",
+            description=(
+                "Ranking mode. 'precision' (default) is for the human search UI; "
+                "'recall' is for admin comparison with the RAG / Ask pipeline."
+            ),
+        ),
+        include_scene_clip: bool = Query(
+            default=False,
+            description=(
+                "When true, scene-frame CLIP embeddings (``embedding_type=\"clip\"``) "
+                "are included alongside the default representative-frame "
+                "(``embedding_type=\"clip_thumbnail\"``). The frontend's "
+                "'シーン検索' / 'Scene search' toggle drives this flag. "
+                "Spec 2026-05-02-thumbnail-clip-default-shallow-search.md."
+            ),
+        ),
+        filter: str | None = Query(
+            default=None,
+            description=(
+                "JSON object of tag / kind / favourite / liked conditions, "
+                "resolved to a file-id scope through the core's Internal API."
+            ),
+        ),
+        passages: bool = Query(
+            default=False,
+            description=(
+                "When true, each result also lists the places inside the file that "
+                "its matches point at (speech, scene, page, section, picture text)."
+            ),
+        ),
+    ) -> None:
+        self.q = q
+        self.limit = limit
+        self.type = type
+        self.mode = mode
+        self.include_scene_clip = include_scene_clip
+        self.filter = filter
+        self.passages = passages
+
+
+class _ImagesParams:
+    """Every query parameter ``GET /search/images`` takes, shared with its ``POST``."""
+
+    def __init__(
+        self,
+        q: str = Query(..., min_length=1, description="Search query"),
+        type: str | None = Query(default=None, description="File type filter"),
+        filter: str | None = Query(
+            default=None,
+            description=(
+                "JSON object of tag / kind / favourite / liked conditions, "
+                "resolved to a file-id scope through the core's Internal API."
+            ),
+        ),
+    ) -> None:
+        self.q = q
+        self.type = type
+        self.filter = filter
+
+
+async def _filter_scope(
+    drive: str, raw: str | None, file_ids: list[str] | None
+) -> list[str] | None:
+    """The file ids a ``filter`` names, or ``None`` when the request has none.
+
+    ``file_ids`` narrows the ids the filter itself names: ``B ∪ (A ∩
+    file_ids)`` when it names collections, ``A ∩ file_ids`` when it does not.
+    """
     if raw is None:
         return None
     try:
@@ -142,9 +227,19 @@ async def _filter_scope(drive: str, raw: str | None) -> list[str] | None:
     except InvalidFilter as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
-        return await fetch_matching_file_ids(drive, search_filter)
+        if file_ids is None:
+            return await fetch_matching_file_ids(drive, search_filter)
+        without_collections = await fetch_matching_file_ids(
+            drive, search_filter.model_copy(update={"collections": []})
+        )
+        with_collections = (
+            await fetch_matching_file_ids(drive, search_filter)
+            if search_filter.collections
+            else None
+        )
     except FilterUnavailable as exc:
         raise HTTPException(status_code=503, detail="Filter unavailable") from exc
+    return scope_member_ids(without_collections, with_collections, file_ids)
 
 
 def _segment_match(
@@ -166,63 +261,30 @@ def _segment_match(
     )
 
 
-@router.get("/search", response_model=SearchResponseModel)
-async def search_endpoint(
-    q: str = Query(..., min_length=1, description="Search query"),
-    limit: int = Query(default=20, ge=1, le=1000, description="Max results"),
-    type: str | None = Query(default=None, description="File type filter"),
-    mode: Literal["precision", "recall"] = Query(
-        default="precision",
-        description=(
-            "Ranking mode. 'precision' (default) is for the human search UI; "
-            "'recall' is for admin comparison with the RAG / Ask pipeline."
-        ),
-    ),
-    include_scene_clip: bool = Query(
-        default=False,
-        description=(
-            "When true, scene-frame CLIP embeddings (``embedding_type=\"clip\"``) "
-            "are included alongside the default representative-frame "
-            "(``embedding_type=\"clip_thumbnail\"``). The frontend's "
-            "'シーン検索' / 'Scene search' toggle drives this flag. "
-            "Spec 2026-05-02-thumbnail-clip-default-shallow-search.md."
-        ),
-    ),
-    filter: str | None = Query(
-        default=None,
-        description=(
-            "JSON object of tag / kind / favourite / liked conditions, "
-            "resolved to a file-id scope through the core's Internal API."
-        ),
-    ),
-    passages: bool = Query(
-        default=False,
-        description=(
-            "When true, each result also lists the places inside the file that "
-            "its matches point at (speech, scene, page, section, picture text)."
-        ),
-    ),
-    drive: str = Depends(require_drive),
+async def _search(
+    params: _SearchParams, drive: str, *, file_ids: list[str] | None
 ) -> SearchResponseModel:
-    """Execute a semantic search query within the request's drive.
+    """Run ``/search``'s query, narrowed to ``S`` when ``file_ids`` is given.
 
     Drive scope is set by the ``X-Lit-Drive`` header (forwarded by the
     Litloft Generic Addon Proxy from ``/drive/{drive}/...``). Results
     are constrained to that drive — cross-drive search is not exposed
     at all to keep drive-as-privacy-boundary intact.
     """
-    if filter is not None:
-        if include_scene_clip:
+    if file_ids is not None and params.filter is None:
+        raise HTTPException(status_code=422, detail="filter is required")
+    if params.filter is not None:
+        if params.include_scene_clip:
             raise HTTPException(
                 status_code=422, detail="filter cannot include scene clips"
             )
-        if type is not None:
+        if params.type is not None:
             raise HTTPException(status_code=422, detail="filter carries the kinds")
-        if mode != "precision":
+        if params.mode != "precision":
             raise HTTPException(
                 status_code=422, detail="filter is not available in recall mode"
             )
-    scope = await _filter_scope(drive, filter)
+    scope = await _filter_scope(drive, params.filter, file_ids)
     if scope is not None and not scope:
         return await _to_response_model(
             await run_in_threadpool(empty_search_response)
@@ -230,15 +292,34 @@ async def search_endpoint(
     try:
         result = await run_in_threadpool(
             execute_search,
-            query=q, limit=limit, file_type=type, drive=drive, mode=mode,
-            include_scene_clip=include_scene_clip, file_id_constraint=scope,
-            passages=passages,
+            query=params.q, limit=params.limit, file_type=params.type, drive=drive,
+            mode=params.mode, include_scene_clip=params.include_scene_clip,
+            file_id_constraint=scope, passages=params.passages,
         )
     except Exception as e:
         logger.error("Search failed: %s", e)
         raise HTTPException(status_code=500, detail="Search failed") from e
 
     return await _to_response_model(result)
+
+
+@router.get("/search", response_model=SearchResponseModel)
+async def search_endpoint(
+    params: _SearchParams = Depends(),
+    drive: str = Depends(require_drive),
+) -> SearchResponseModel:
+    """Execute a semantic search query within the request's drive."""
+    return await _search(params, drive, file_ids=None)
+
+
+@router.post("/search", response_model=SearchResponseModel)
+async def search_post_endpoint(
+    body: SearchFileIdsBody,
+    params: _SearchParams = Depends(),
+    drive: str = Depends(require_drive),
+) -> SearchResponseModel:
+    """Execute ``/search``'s query, its filter scope reduced to ``body.file_ids``."""
+    return await _search(params, drive, file_ids=body.file_ids)
 
 
 @router.get("/search/by-image/available")
@@ -263,35 +344,27 @@ async def search_by_image_endpoint(
     return await image_query.handle(request, drive)
 
 
-@router.get("/search/images", response_model=SearchResponseModel)
-async def search_images_endpoint(
-    q: str = Query(..., min_length=1, description="Search query"),
-    type: str | None = Query(default=None, description="File type filter"),
-    filter: str | None = Query(
-        default=None,
-        description=(
-            "JSON object of tag / kind / favourite / liked conditions, "
-            "resolved to a file-id scope through the core's Internal API."
-        ),
-    ),
-    drive: str = Depends(require_drive),
+async def _search_images(
+    params: _ImagesParams, drive: str, *, file_ids: list[str] | None
 ) -> SearchResponseModel:
     """Rank the request drive's representative frames by similarity to ``q``."""
-    if filter is not None and type is not None:
+    if file_ids is not None and params.filter is None:
+        raise HTTPException(status_code=422, detail="filter is required")
+    if params.filter is not None and params.type is not None:
         raise HTTPException(status_code=422, detail="filter carries the kinds")
-    scope = await _filter_scope(drive, filter)
+    scope = await _filter_scope(drive, params.filter, file_ids)
     if scope is not None and not scope:
         return await _to_response_model(
             await run_in_threadpool(empty_search_response)
         )
     try:
-        vector = await asyncio.to_thread(embed_text_clip, q)
+        vector = await asyncio.to_thread(embed_text_clip, params.q)
     except Exception as e:
         logger.warning("Image search embedding failed (%s)", e.__class__.__name__)
         raise HTTPException(status_code=503, detail="Embedding unavailable") from e
     try:
         result = await run_in_threadpool(
-            execute_search_images, vector, file_type=type, drive=drive,
+            execute_search_images, vector, file_type=params.type, drive=drive,
             file_id_constraint=scope,
         )
     except Exception as e:
@@ -300,6 +373,25 @@ async def search_images_endpoint(
 
     hydrate_map = await _hydrate_batches([r.file_id for r in result.results])
     return await _to_response_model(result, hydrate_map=hydrate_map)
+
+
+@router.get("/search/images", response_model=SearchResponseModel)
+async def search_images_endpoint(
+    params: _ImagesParams = Depends(),
+    drive: str = Depends(require_drive),
+) -> SearchResponseModel:
+    """Rank the request drive's representative frames by similarity to ``q``."""
+    return await _search_images(params, drive, file_ids=None)
+
+
+@router.post("/search/images", response_model=SearchResponseModel)
+async def search_images_post_endpoint(
+    body: SearchFileIdsBody,
+    params: _ImagesParams = Depends(),
+    drive: str = Depends(require_drive),
+) -> SearchResponseModel:
+    """Rank ``/search/images``'s frames, its filter scope reduced to ``body.file_ids``."""
+    return await _search_images(params, drive, file_ids=body.file_ids)
 
 
 @router.get("/search/compare", response_model=CompareResponseModel)
