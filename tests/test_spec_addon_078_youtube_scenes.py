@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.models import Embedding, IndexedFile
-from app.workers.video_visual_selection import Candidate
+from app.workers.video_visual_selection import Frame, SelectionInputs
 from tests.search_endpoint_db import patch_everywhere
 from tests.youtube_frame_doubles import (  # noqa: F401 - fixtures
     DRIVE,
@@ -26,8 +26,8 @@ def _unit_vec(seed: int, dim: int = 16) -> np.ndarray:
     return v / np.linalg.norm(v)
 
 
-def _candidates(file_id: str) -> list[Candidate]:
-    return [Candidate(f"{file_id}-{i}", i * 15.0, _unit_vec(i)) for i in range(40)]
+def _candidates(file_id: str) -> tuple[Frame, ...]:
+    return tuple(Frame(f"{file_id}-{i}", i * 15.0, _unit_vec(i)) for i in range(40))
 
 
 def new_id() -> str:
@@ -36,12 +36,14 @@ def new_id() -> str:
 
 @pytest.fixture()
 def rows(monkeypatch):
-    served: dict[str, list[Candidate]] = {}
+    served: dict[str, tuple[Frame, ...]] = {}
 
-    def _load_candidates(file_id):
-        return list(served.get(file_id, [])), DURATION
+    def _load_inputs(file_id):
+        return SelectionInputs(
+            scene_candidates=served.get(file_id, ()), duration=DURATION,
+        )
 
-    patch_everywhere(monkeypatch, "_load_candidates", _load_candidates)
+    patch_everywhere(monkeypatch, "load_selection_inputs", _load_inputs)
     patch_everywhere(monkeypatch, "_select_transcript_excerpt", lambda *a: "")
     return served
 
