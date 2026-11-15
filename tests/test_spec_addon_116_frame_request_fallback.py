@@ -96,7 +96,9 @@ def _serves_three(failure_on_final, *, today=None):
             return queue.pop(0) if queue else asks(42.0)
         if is_final(wire, body):
             return failure_on_final
-        return today if today is not None else Reply(text=TODAY_ANSWER)
+        if today is not None and wire.has_image(body):
+            return today
+        return Reply(text=TODAY_ANSWER)
 
     return script
 

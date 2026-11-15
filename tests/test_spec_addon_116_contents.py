@@ -88,7 +88,8 @@ class TestTheContents:
         assert prompt.index(lines[0]) > prompt.index("DELTA")
         assert record["loaded"] == [VIDEO]
         assert record["selected"] == 1
-        assert sent_keys(wire)[:3] == [ms(t) for t in [10.0, 40.0, 70.0]]
+        # The frame set's even fill (SPEC-ADDON-108) adds times around these.
+        assert {ms(t) for t in [10.0, 40.0, 70.0]} <= set(sent_keys(wire))
 
     async def test_at_most_forty_sections_are_listed_in_time_order(
         self, db, addon, llm, call, tmp_path, monkeypatch,
