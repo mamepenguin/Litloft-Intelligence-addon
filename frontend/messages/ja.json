@@ -212,6 +212,7 @@
     "scopeAdd": "＋ 範囲",
     "scopeEmpty": "この範囲にはファイルがありません",
     "scopeUnavailable": "範囲を読み込めませんでした",
+    "scopeTooLarge": "範囲が大きすぎます（1万件まで）。範囲を絞ってください。",
     "askHere": "ここに質問",
     "takenMs": "{ms}msで作成",
     "personalHistoryViewed": "視聴履歴 {count} 件を対象に検索",

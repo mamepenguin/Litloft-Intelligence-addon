@@ -37,6 +37,7 @@ from app.file_matching import (
     FilterUnavailable,
     SearchFilter,
     fetch_matching_file_ids,
+    scope_member_ids,
 )
 from app.llm import ImageRejected
 from app.llm_routing import Resolved, profile_can_see
@@ -285,14 +286,23 @@ async def ask_endpoint(
     scope_file_ids: list[str] | None = None
     if body.scope is not None:
         scope_payload = body.scope.as_event_payload()
-        search_filter = SearchFilter(
-            folders=body.scope.folders,
-            collections=body.scope.collections,
-            tags=body.scope.tags,
-            kinds=body.scope.kinds,
-        )
+        conditions = {
+            "folders": body.scope.folders,
+            "tags": body.scope.tags,
+            "kinds": body.scope.kinds,
+        }
         try:
-            scope_file_ids = await fetch_matching_file_ids(drive, search_filter)
+            without_collections = await fetch_matching_file_ids(
+                drive, SearchFilter(**conditions)
+            )
+            with_collections = None
+            if body.scope.collections:
+                with_collections = await fetch_matching_file_ids(
+                    drive,
+                    SearchFilter(
+                        collections=body.scope.collections, **conditions
+                    ),
+                )
         except FilterUnavailable:
             logger.warning("ask scope resolution failed for drive %s", drive)
             raise HTTPException(
@@ -302,6 +312,9 @@ async def ask_endpoint(
                     "message": "Scope unavailable",
                 },
             )
+        scope_file_ids = scope_member_ids(
+            without_collections, with_collections, body.scope.file_ids
+        )
 
     # Acquire a concurrency slot BEFORE opening the SSE stream. If the
     # semaphore is full, fail fast with 503 so the caller sees a real

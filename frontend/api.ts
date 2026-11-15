@@ -1372,6 +1372,12 @@ export interface AskScopePayload {
   collections: string[];
   tags: string[];
   kinds: FileKind[];
+  /**
+   * The union of the scope's Smart Collection members, in the order first
+   * seen. Absent when the scope holds no Smart Collection chip; an empty list
+   * is a scope that names no file.
+   */
+  file_ids?: string[];
 }
 
 // Intelligence /status shape extended with feature flags + llm enablement.
