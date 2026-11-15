@@ -19,9 +19,10 @@ Passages from the file:
 [{{ loop.index }}]
 {{ passage }}
 {% endfor -%}
-{% elif frames %}
+{% endif %}
+{% if frames %}
 Frames from the video:
 {% for frame in frames -%}
-[{{ loop.index }}] {{ frame }}
+[{{ loop.index + (passages|length) }}] {{ frame }}
 {% endfor -%}
 {% endif %}

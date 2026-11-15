@@ -138,9 +138,10 @@ def build_file_question_system_prompt(
 
     ``has_image`` adds the image rules and ``has_passages`` keeps the
     citation rules; a picture with no indexed text gets neither passages
-    nor a citation instruction. ``frames`` replaces both with the rules for
-    a video answered from its frames. ``has_history`` adds the earlier-turns
-    sentence, and with it the citation limit when there is something to cite.
+    nor a citation instruction. ``frames`` adds one numbered time per
+    attached frame, and with passages it makes both citable from the one
+    numbering. ``has_history`` adds the earlier-turns sentence, and with it
+    the citation limit when there is something to cite.
     """
     lang = output_language
     lang_line = _LANGUAGE_INSTRUCTIONS.get(
@@ -170,10 +171,10 @@ def build_file_question_user_prompt(
 
     Numbering runs across everything sent in file order, so the ``[n]`` the
     answer cites names exactly the passage the prompt gave it. ``frames``
-    replaces the passages with one numbered time per attached frame, in the
-    order the frames are sent. The position is written in the viewer's clock
-    when the caller read one for a media file. ``history`` is the kept
-    earlier turns, oldest first, written before the question.
+    adds one numbered time per attached frame, in the order the frames are
+    sent, numbered on after the passages. The position is written in the
+    viewer's clock when the caller read one for a media file. ``history`` is
+    the kept earlier turns, oldest first, written before the question.
     """
     return render(
         "rag/file_question_user.jinja2",

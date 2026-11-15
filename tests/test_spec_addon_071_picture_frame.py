@@ -29,6 +29,7 @@ from tests.file_question_vision_doubles import (  # noqa: F401 - fixtures
     ffmpeg_times_out,
     ffmpeg_writes,
     llm,
+    openai_config,
     seed_picture,
     seed_video,
     vision_client,
@@ -36,6 +37,7 @@ from tests.file_question_vision_doubles import (  # noqa: F401 - fixtures
 )
 from tests.search_endpoint_db import patch_everywhere
 from tests.vec_partition_db import search_index  # noqa: F401 - the fixture
+from tests.video_frames_doubles import FFmpeg, decoded, ms, sent_keys
 
 
 PICTURE = "pic000000001"
@@ -210,48 +212,68 @@ class TestThePictureImageStep:
         assert wire.image_bodies == []
 
 class TestTheVideoFrame:
-    async def test_the_large_frame_at_the_millisecond_key_is_sent(
+    """SPEC-ADDON-114: a video with a text chunk gets a set of frames, its position frame among them."""
+
+    async def test_the_position_frame_is_read_from_its_millisecond_cache_key(
         self, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-071 I1: the frame at the position, keyed in milliseconds."""
+        """SPEC-ADDON-114 I1/I5 (071 I1 revised): the frame at the position is the cached one, no other time stands in."""
         seed_video(
             db, VIDEO, text=chunk("at that moment", 30),
             path=tmp_path / "video.mp4", duration=60.0,
         )
         write_large_frame(VIDEO, 12.345, b"FRAME-AT-12345")
         write_large_frame(VIDEO, 12.000, b"OTHER-FRAME")
-
-        def _no_ffmpeg(*_args, **_kwargs):
-            raise AssertionError("a cache hit must not run ffmpeg")
-
-        monkeypatch.setattr(frame_cache.subprocess, "run", _no_ffmpeg)
+        ffmpeg = FFmpeg().install(monkeypatch)
         _, wire = vision_client(llm)
 
         response = await ask(call, VIDEO, position=12.345)
 
         assert by_kind(response)["meta"]["image"] == "attached"
-        assert _decoded_image(wire) == b"FRAME-AT-12345"
+        images = [decoded(payload) for payload in wire.images]
+        assert b"FRAME-AT-12345" in images
+        assert b"OTHER-FRAME" not in images
         assert wire.images[0].startswith("data:image/webp;base64,")
-        assert len(wire.images) == 1
+        assert ms(12.345) not in ffmpeg.starts
 
-    async def test_a_video_without_a_position_sends_no_image(self, db, addon, llm, call, tmp_path):
-        """SPEC-ADDON-071 I3: an image applies to a video only with a position."""
+    async def test_a_video_without_a_position_sends_the_scene_frames(
+        self, db, addon, llm, call, tmp_path, monkeypatch,
+    ):
+        """SPEC-ADDON-114 I5 §1.3/§7 (071 I3 revised): no position frame, only the scene set."""
         seed_video(
             db, VIDEO, text=chunk("plain video", 30),
             path=tmp_path / "video.mp4", duration=60.0,
         )
+        ffmpeg = FFmpeg().install(monkeypatch)
         _, wire = vision_client(llm)
 
         response = await ask(call, VIDEO)
 
-        assert by_kind(response)["meta"]["image"] == "none"
+        assert by_kind(response)["meta"]["image"] == "attached"
+        assert len(wire.images) == 8
+        assert ms(0.0) not in sent_keys(wire)
+        assert len(ffmpeg.starts) == 8
+
+    async def test_a_blind_profile_sends_no_image_for_a_video_without_a_position(
+        self, db, addon, llm, call, tmp_path,
+    ):
+        """SPEC-ADDON-114 I8 §1.7 (071 I3 kept): a profile that cannot see keeps today's text path."""
+        seed_video(
+            db, VIDEO, text=chunk("plain video", 30),
+            path=tmp_path / "video.mp4", duration=60.0,
+        )
+        _, wire = vision_client(llm, config=openai_config(vision_model=""))
+
+        response = await ask(call, VIDEO)
+
+        assert by_kind(response)["meta"] == {"partial": False}
         assert wire.image_bodies == []
         assert answer_of(response) == "TEXT ONLY ANSWER"
 
-    async def test_a_frame_extraction_failure_is_unavailable(
+    async def test_a_frame_extraction_failure_is_unavailable_with_the_text_answer(
         self, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-071 I3/I7: ffmpeg producing nothing is unavailable."""
+        """SPEC-ADDON-114 I4 (071 I3/I7 revised): no frame is prepared, so the passages answer."""
         seed_video(
             db, VIDEO, text=chunk("video", 30),
             path=tmp_path / "video.mp4", duration=None,
@@ -262,13 +284,14 @@ class TestTheVideoFrame:
         response = await ask(call, VIDEO, position=5.0)
 
         assert by_kind(response)["meta"]["image"] == "unavailable"
+        assert by_kind(response)["done"].get("error") is None
         assert wire.image_bodies == []
         assert answer_of(response) == "TEXT ONLY ANSWER"
 
     async def test_a_frame_extraction_timeout_is_unavailable(
         self, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-071 I3/I7: the 15 s bound ends as unavailable, not a substitute frame."""
+        """SPEC-ADDON-114 I4 (071 I3/I7 revised): the 15 s bound leaves the frame out, no substitute."""
         seed_video(
             db, VIDEO, text=chunk("video", 30),
             path=tmp_path / "video.mp4", duration=None,
@@ -280,32 +303,31 @@ class TestTheVideoFrame:
 
         assert by_kind(response)["meta"]["image"] == "unavailable"
         assert wire.image_bodies == []
+        assert answer_of(response) == "TEXT ONLY ANSWER"
 
-    async def test_a_position_past_the_indexed_duration_never_reuses_the_last_frame(
+    async def test_a_position_past_the_indexed_duration_reads_no_frame_at_that_time(
         self, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-071 I3/I7: past the known duration, no frame is substituted."""
+        """SPEC-ADDON-114 I5 (071 I7 revised): no frame past the duration, and none substituted for it."""
         seed_video(
             db, VIDEO, text=chunk("video", 30),
             path=tmp_path / "video.mp4", duration=60.0,
         )
-        write_large_frame(VIDEO, 0.0, b"FIRST-FRAME")
-
-        def _no_ffmpeg(*_args, **_kwargs):
-            raise AssertionError("no extraction is attempted past the duration")
-
-        monkeypatch.setattr(frame_cache.subprocess, "run", _no_ffmpeg)
+        ffmpeg = FFmpeg().install(monkeypatch)
         _, wire = vision_client(llm)
 
         response = await ask(call, VIDEO, position=61.0)
 
-        assert by_kind(response)["meta"]["image"] == "unavailable"
-        assert wire.image_bodies == []
+        assert by_kind(response)["meta"]["image"] == "attached"
+        assert sent_keys(wire)
+        assert ms(61.0) not in sent_keys(wire)
+        assert ms(61.0) not in ffmpeg.starts
+        assert "1:01" in wire.prompts[-1]
 
     async def test_without_a_stored_duration_the_extraction_decides(
         self, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-071 I3: no duration means try, and ffmpeg's result decides."""
+        """SPEC-ADDON-114 I5 (071 I3): no duration means try, and ffmpeg's result decides."""
         seed_video(
             db, VIDEO, text=chunk("video", 30),
             path=tmp_path / "video.mp4", duration=None,
@@ -322,7 +344,6 @@ class TestTheVideoFrame:
         assert _decoded_image(wire) == b"FRESH-FRAME"
         assert len(calls) == 1
         assert frame_cache.frame_cache_path(VIDEO, 5.0, "large").exists()
-
 
 
 class TestTheImageOnlyPicture:

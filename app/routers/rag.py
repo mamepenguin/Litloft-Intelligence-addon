@@ -393,10 +393,11 @@ async def file_ask_endpoint(
 
     Streams ``answer_chunk``, then ``citations``, then ``meta``, then
     ``done``; a failure after the stream started ends with ``done``
-    carrying ``error``. A picture or a playing video may attach one image
-    (SPEC-ADDON-071/-072); a picture, or a video with no text chunk, whose
-    profile cannot see is refused with 409 before the slot. A video with no
-    text chunk is answered from its frames (SPEC-ADDON-108).
+    carrying ``error``. A picture may attach one image (SPEC-ADDON-071), and
+    a video whose profile can see up to eight of its frames, with the video's
+    passages when it has any and from the frames alone when it has none
+    (SPEC-ADDON-108, -114). A picture or a video with no text chunk whose
+    profile cannot see is refused with 409 before the slot.
     """
     resolved = await _require_rag_enabled(drive, body.profile)
 
@@ -481,10 +482,17 @@ async def _file_question_stream(
     """Adapt the routed model's answer to the file-question SSE wire format.
 
     Owns the semaphore slot: it is released on the end of the stream, on a
-    mid-stream failure and on a client disconnect. A video with no text chunk
-    is answered from its frames; every other file keeps the text path.
+    mid-stream failure and on a client disconnect. A video whose profile can
+    see is answered from a set of its frames, with its passages when it has
+    any; every other file keeps the text path.
     """
     try:
+        passages = (
+            material.chunks
+            if profile_can_see(resolved)
+            and file_question.is_text_video(material)
+            else ()
+        )
         stream = (
             _frames_question_stream(
                 file_id=file_id,
@@ -494,8 +502,9 @@ async def _file_question_stream(
                 position_seconds=position_seconds,
                 history=history,
                 deadline=frames_deadline,
+                passages=passages,
             )
-            if file_question.is_text_less_video(material)
+            if passages or file_question.is_text_less_video(material)
             else _text_question_stream(
                 file_id=file_id,
                 question=question,
@@ -690,6 +699,105 @@ _FRAMES_KEEPALIVE = ": keepalive\n\n"
 _KEEPALIVE_SECONDS = 5.0
 
 
+def _file_meta(material: file_question.Material, image_status: str) -> AnswerEvent:
+    """The ``meta`` event of a video's answer."""
+    return AnswerEvent(
+        kind="meta",
+        data={"partial": material.partial, "image": image_status},
+    )
+
+
+async def _keepalive_answer(
+    stream, answer: list[str],
+) -> AsyncIterator[str]:
+    """One model stream as answer frames, with a comment on each silent interval."""
+    async for delta in _answer_with_keepalive(stream):
+        if delta is None:
+            yield _FRAMES_KEEPALIVE
+            continue
+        answer.append(delta)
+        yield _format_sse_event(
+            AnswerEvent(kind="answer_chunk", data={"delta": delta})
+        )
+
+
+async def _text_only_answer(
+    file_id: str,
+    question: str,
+    material: file_question.Material,
+    resolved: Resolved,
+    passages: tuple[file_question.SelectedChunk, ...],
+    history: list[file_question.HistoryTurn] | None,
+    position_seconds: float | None,
+    image_status: str,
+) -> AsyncIterator[str]:
+    """Answer a text video from its passages alone, then its meta and close.
+
+    ``passages`` are the ones the request with frames carried, and the stream
+    is kept alive until its first token as the frames path is. ``image_status``
+    says why no frame came with it: ``"none"`` when none was tried and
+    ``"unavailable"`` when one was.
+    """
+    stream = None
+    answer: list[str] = []
+    try:
+        stream = resolved.client.generate_stream(
+            build_file_question_system_prompt(
+                resolved.profile.config.output_language,
+                has_passages=True,
+                has_history=bool(history),
+            ),
+            build_file_question_user_prompt(
+                question,
+                [chunk.text for chunk in passages],
+                position_seconds=position_seconds,
+                history=history,
+            ),
+            max_tokens_override=settings.rag.max_tokens,
+        )
+        async for event in _keepalive_answer(stream, answer):
+            yield event
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the stream must end, not die
+        logger.warning(
+            "file question failed: %s (file %s)",
+            type(exc).__name__,
+            file_id,
+        )
+        yield _format_sse_event(_file_meta(material, image_status))
+        yield _format_sse_event(
+            AnswerEvent(
+                kind="done", data={"error": "Answer generation failed"},
+            )
+        )
+        return
+    finally:
+        if stream is not None:
+            await stream.aclose()
+    if not "".join(answer).strip():
+        logger.warning(
+            "file question failed: %s (file %s)",
+            "EmptyAnswer",
+            file_id,
+        )
+        yield _format_sse_event(_file_meta(material, image_status))
+        yield _format_sse_event(
+            AnswerEvent(
+                kind="done", data={"error": "Answer generation failed"},
+            )
+        )
+        return
+    yield _format_sse_event(
+        AnswerEvent(
+            kind="citations",
+            data=file_question.citations("".join(answer), passages),
+        )
+    )
+    yield _format_sse_event(_file_meta(material, image_status))
+    yield _format_sse_event(AnswerEvent(kind="done", data={}))
+
+
 async def _frames_question_stream(
     file_id: str,
     question: str,
@@ -698,14 +806,16 @@ async def _frames_question_stream(
     position_seconds: float | None = None,
     history: list[file_question.HistoryTurn] | None = None,
     deadline: float | None = None,
+    passages: tuple[file_question.SelectedChunk, ...] = (),
 ) -> AsyncIterator[str]:
-    """Answer a video with no text chunk from a set of its frames.
+    """Answer a video from a set of its frames, and from its passages when it has any.
 
     The frames are chosen and prepared under the caller's slot, from the
     moment it was taken. Until the first token the stream writes an SSE
     comment, so no proxy hop waits on frame preparation in silence. A frame
     that was dropped is simply not listed or sent; the answer is from the
-    frames that were.
+    frames that were. With no frame to send, a video with passages is answered
+    from them alone, in one request that is kept alive the same way.
     """
     position = (
         position_seconds
@@ -716,11 +826,6 @@ async def _frames_question_stream(
         deadline = (
             asyncio.get_running_loop().time()
             + file_question.FRAME_WAIT_SECONDS
-        )
-
-    def meta_event(image_status: str) -> AnswerEvent:
-        return AnswerEvent(
-            kind="meta", data={"partial": False, "image": image_status}
         )
 
     cancelled = threading.Event()
@@ -736,7 +841,7 @@ async def _frames_question_stream(
             )
             if not done:
                 yield _FRAMES_KEEPALIVE
-        frames, _dropped = prepare.result()
+        frames, dropped = prepare.result()
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - the stream must end, not die
@@ -745,7 +850,7 @@ async def _frames_question_stream(
             type(exc).__name__,
             file_id,
         )
-        frames = []
+        frames, dropped = [], 0
     finally:
         if not prepare.done():
             cancelled.set()
@@ -756,29 +861,47 @@ async def _frames_question_stream(
                 pass
 
     if not frames:
-        logger.warning("frames_unusable (file %s)", file_id)
-        yield _format_sse_event(meta_event("unavailable"))
-        yield _format_sse_event(
-            AnswerEvent(kind="done", data={"error": "frames_unusable"})
-        )
+        if not passages:
+            logger.warning("frames_unusable (file %s)", file_id)
+            yield _format_sse_event(_file_meta(material, "unavailable"))
+            yield _format_sse_event(
+                AnswerEvent(kind="done", data={"error": "frames_unusable"})
+            )
+            return
+        image_status = "none"
+        if dropped:
+            logger.warning("frames_unusable (file %s)", file_id)
+            image_status = "unavailable"
+        async for event in _text_only_answer(
+            file_id=file_id,
+            question=question,
+            material=material,
+            resolved=resolved,
+            passages=passages,
+            history=history,
+            position_seconds=position,
+            image_status=image_status,
+        ):
+            yield event
         return
 
     stamps = [format_position(frame.time) for frame in frames]
     stream = None
     answer: list[str] = []
+    image_status = "attached"
     try:
         stream = resolved.client.generate_stream_with_images(
             [(frame.data, frame.mime_type) for frame in frames],
             build_file_question_system_prompt(
                 resolved.profile.config.output_language,
                 has_image=True,
-                has_passages=False,
+                has_passages=bool(passages),
                 has_history=bool(history),
                 frames=True,
             ),
             build_file_question_user_prompt(
                 question,
-                [],
+                [chunk.text for chunk in passages],
                 has_image=True,
                 frames=stamps,
                 position_seconds=position,
@@ -786,25 +909,21 @@ async def _frames_question_stream(
             ),
             max_tokens_override=settings.rag.max_tokens,
         )
-        async for item in _answer_with_keepalive(stream):
-            if item is None:
-                yield _FRAMES_KEEPALIVE
-                continue
-            answer = [*answer, item]
-            yield _format_sse_event(
-                AnswerEvent(kind="answer_chunk", data={"delta": item})
-            )
+        async for event in _keepalive_answer(stream, answer):
+            yield event
     except ImageRejected:
         logger.warning(
             "file question frames failed: %s (file %s)",
             "frames_rejected",
             file_id,
         )
-        yield _format_sse_event(meta_event("unavailable"))
-        yield _format_sse_event(
-            AnswerEvent(kind="done", data={"error": "frames_rejected"})
-        )
-        return
+        if not passages:
+            yield _format_sse_event(_file_meta(material, "unavailable"))
+            yield _format_sse_event(
+                AnswerEvent(kind="done", data={"error": "frames_rejected"})
+            )
+            return
+        image_status = "unavailable"
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - the stream must end, not die
@@ -813,45 +932,61 @@ async def _frames_question_stream(
             type(exc).__name__,
             file_id,
         )
-        yield _format_sse_event(meta_event("attached"))
+        yield _format_sse_event(_file_meta(material, image_status))
         yield _format_sse_event(
             AnswerEvent(
                 kind="done", data={"error": "Answer generation failed"},
             )
         )
-    else:
-        if not "".join(answer).strip():
-            logger.warning(
-                "file question failed: %s (file %s)",
-                "EmptyAnswer",
-                file_id,
-            )
-            yield _format_sse_event(meta_event("attached"))
-            yield _format_sse_event(
-                AnswerEvent(
-                    kind="done", data={"error": "Answer generation failed"},
-                )
-            )
-            return
-        yield _format_sse_event(
-            AnswerEvent(
-                kind="citations",
-                data=file_question.citations(
-                    "".join(answer),
-                    tuple(
-                        file_question.SelectedChunk(
-                            text="", position={"seconds": frame.time},
-                        )
-                        for frame in frames
-                    ),
-                ),
-            )
-        )
-        yield _format_sse_event(meta_event("attached"))
-        yield _format_sse_event(AnswerEvent(kind="done", data={}))
+        return
     finally:
         if stream is not None:
             await stream.aclose()
+
+    if image_status == "unavailable":
+        async for event in _text_only_answer(
+            file_id=file_id,
+            question=question,
+            material=material,
+            resolved=resolved,
+            passages=passages,
+            history=history,
+            position_seconds=position,
+            image_status="unavailable",
+        ):
+            yield event
+        return
+
+    if not "".join(answer).strip():
+        logger.warning(
+            "file question failed: %s (file %s)",
+            "EmptyAnswer",
+            file_id,
+        )
+        yield _format_sse_event(_file_meta(material, "attached"))
+        yield _format_sse_event(
+            AnswerEvent(
+                kind="done", data={"error": "Answer generation failed"},
+            )
+        )
+        return
+    yield _format_sse_event(
+        AnswerEvent(
+            kind="citations",
+            data=file_question.citations(
+                "".join(answer),
+                passages
+                + tuple(
+                    file_question.SelectedChunk(
+                        text="", position={"seconds": frame.time},
+                    )
+                    for frame in frames
+                ),
+            ),
+        )
+    )
+    yield _format_sse_event(_file_meta(material, "attached"))
+    yield _format_sse_event(AnswerEvent(kind="done", data={}))
 
 
 async def _answer_with_keepalive(stream) -> AsyncIterator[str | None]:

@@ -710,10 +710,10 @@ class TestAFailureAfterTheFirstToken:
 
 
 class TestWhenTextArrives:
-    async def test_the_next_question_after_a_transcript_lands_takes_the_text_path(
+    async def test_the_next_question_after_a_transcript_lands_sends_passages_and_frames(
         self, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-108 §3 / I1: frames while text-less; passages and no frame after."""
+        """SPEC-ADDON-114 §7 / I1 (108 I1 revised): the frames alone before, the passages with them after."""
         _video(db, tmp_path)
         scenes(monkeypatch, [12.0, 47.0], duration=80.0)
         FFmpeg().install(monkeypatch)
@@ -722,14 +722,20 @@ class TestWhenTextArrives:
         before = await ask(call, VIDEO)
         assert by_kind(before)["meta"]["image"] == "attached"
         assert len(wire.image_bodies) == 1
+        expected = [5.0, 12.0, 15.0, 25.0, 35.0, 45.0, 47.0, 55.0]
 
         passage = chunk("TRANSCRIPT-PASSAGE", 40)
         db.on(VIDEO).transcript(passage, start=0.0)
         after = await ask(call, VIDEO)
 
-        assert by_kind(after)["meta"]["image"] == "none"
-        assert len(wire.image_bodies) == 1
-        assert passage in wire.prompts[-1]
+        assert by_kind(after)["meta"]["image"] == "attached"
+        assert len(wire.image_bodies) == 2
+        assert sent_keys(wire)[8:] == [ms(t) for t in expected]
+        prompt = user_prompt(wire)
+        assert "Passages from the file:" in prompt
+        assert passage in prompt
+        assert prompt.index(passage) < prompt.index("[2] 0:05")
+        assert "[9] 0:55" in prompt
 
     async def test_a_video_with_an_empty_chunk_is_not_text_less(
         self, db, addon, llm, call, tmp_path, monkeypatch,
