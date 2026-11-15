@@ -813,8 +813,8 @@ async def _frames_question_stream(
     The frames are chosen and prepared under the caller's slot, from the
     moment it was taken. Until the first token the stream writes an SSE
     comment, so no proxy hop waits on frame preparation in silence. A frame
-    that was dropped is simply not listed or sent; the answer is from the
-    frames that were. With no frame to send, a video with passages is answered
+    that was dropped is simply not sent; the answer is from the frames that
+    were. With no frame to send, a video with passages is answered
     from them alone, in one request that is kept alive the same way.
     """
     position = (
@@ -885,13 +885,21 @@ async def _frames_question_stream(
             yield event
         return
 
-    stamps = [format_position(frame.time) for frame in frames]
+    first_number = len(passages) + 1
+    frames_to_send = [
+        (
+            f"[{first_number + index}] {format_position(frame.time)}",
+            frame.data,
+            frame.mime_type,
+        )
+        for index, frame in enumerate(frames)
+    ]
     stream = None
     answer: list[str] = []
     image_status = "attached"
     try:
         stream = resolved.client.generate_stream_with_images(
-            [(frame.data, frame.mime_type) for frame in frames],
+            frames_to_send,
             build_file_question_system_prompt(
                 resolved.profile.config.output_language,
                 has_image=True,
@@ -903,7 +911,7 @@ async def _frames_question_stream(
                 question,
                 [chunk.text for chunk in passages],
                 has_image=True,
-                frames=stamps,
+                frames=True,
                 position_seconds=position,
                 history=history,
             ),

@@ -13,15 +13,14 @@ from tests.file_question_vision_doubles import (  # noqa: F401 - fixtures
     llm,
     vision_client,
 )
+from tests.frame_label_layout import assert_labelled
 from tests.vec_partition_db import search_index  # noqa: F401 - the fixture
 from tests.video_frames_doubles import (
     FFmpeg,
-    listed_in_order,
     ms,
     scenes,
     seed_text_less_video,
     sent_keys,
-    user_prompt,
 )
 
 VIDEO = "vid000000109"
@@ -80,7 +79,7 @@ class TestFrameCitations:
     async def test_a_frame_time_is_rounded_to_the_millisecond_everywhere(
         self, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-109 / 108 I2: cache key, prompt stamp and ``position.seconds`` agree."""
+        """SPEC-ADDON-109 / 108 I2, SPEC-ADDON-114 I11: cache key, frame label and ``position.seconds`` agree."""
         seed_text_less_video(db, VIDEO, path=tmp_path / "v.mp4", duration=None)
         scenes(monkeypatch, [12.3456, 3725.9], duration=None)
         FFmpeg().install(monkeypatch)
@@ -89,7 +88,7 @@ class TestFrameCitations:
         response = await ask(call, VIDEO)
 
         assert sent_keys(wire) == [12346, 3725900]
-        assert listed_in_order(user_prompt(wire), ["0:12", "1:02:05"])
+        assert_labelled(wire, wire.image_bodies[0], first=1, times=[12.3456, 3725.9])
         assert _cited(response) == [
             (2, {"seconds": 3725.9}),
             (1, {"seconds": 12.346}),

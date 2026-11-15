@@ -995,27 +995,30 @@ class LLMClient:
 
     async def generate_stream_with_images(
         self,
-        images: Sequence[tuple[bytes, str]],
+        frames: Sequence[tuple[str, bytes, str]],
         system_prompt: str,
         user_prompt: str,
         *,
         max_tokens_override: int | None = None,
         temperature: float | None = None,
     ) -> AsyncIterator[str]:
-        """Stream an answer to ``vision_model`` with several images attached.
+        """Stream an answer to ``vision_model`` with several labelled frames.
 
-        Each image follows the text block as its own ``image_url`` part, in
-        the order given. A 400/404 is a refusal reported as
-        :class:`ImageRejected`; unlike the single-image call it records no
-        verdict, because a context or image-count limit refuses a set of
-        frames that a model reading one image well would accept.
+        ``frames`` holds ``(label, image, mime_type)`` in the order they are
+        sent. After the prompt text each frame's label is a text part of its
+        own, followed by that frame's ``image_url`` part. A 400/404 is a
+        refusal reported as :class:`ImageRejected`; unlike the single-image
+        call it records no verdict, because a context or image-count limit
+        refuses a set of frames that a model reading one image well would
+        accept.
         """
         if not self._enabled or not self._config.vision_model:
             raise ImageRejected(FAILURE_REQUEST_FAILED)
 
         content: list[dict] = [{"type": "text", "text": user_prompt}]
-        for image_bytes, mime_type in images:
+        for label, image_bytes, mime_type in frames:
             b64 = base64.b64encode(image_bytes).decode("ascii")
+            content.append({"type": "text", "text": label})
             content.append(
                 {
                     "type": "image_url",
@@ -2023,37 +2026,39 @@ class OllamaLLMClient:
 
     async def generate_stream_with_images(
         self,
-        images: Sequence[tuple[bytes, str]],
+        frames: Sequence[tuple[str, bytes, str]],
         system_prompt: str,
         user_prompt: str,
         *,
         max_tokens_override: int | None = None,
         temperature: float | None = None,
     ) -> AsyncIterator[str]:
-        """Stream a native ``/api/chat`` answer with several images attached.
+        """Stream a native ``/api/chat`` answer with several labelled frames.
 
         Same contract as :meth:`LLMClient.generate_stream_with_images`: the
-        images go in the ``images`` list of the one user message, in order,
-        and a 400/404 is a refusal reported as :class:`ImageRejected` with no
-        verdict recorded. ``mime_type`` is accepted for API parity; ollama
-        sniffs the bytes.
+        prompt text is one user message, then each frame is a user message of
+        its own whose ``content`` is the label and whose ``images`` holds that
+        one image. A 400/404 is a refusal reported as :class:`ImageRejected`
+        with no verdict recorded. ``mime_type`` is accepted for API parity;
+        ollama sniffs the bytes.
         """
         if not self._enabled or not self._config.vision_model:
             raise ImageRejected(FAILURE_REQUEST_FAILED)
 
+        messages: list[dict] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        for label, image_bytes, _mime_type in frames:
+            messages.append({
+                "role": "user",
+                "content": label,
+                "images": [base64.b64encode(image_bytes).decode("ascii")],
+            })
+
         body: dict = {
             "model": self._config.vision_model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": user_prompt,
-                    "images": [
-                        base64.b64encode(image_bytes).decode("ascii")
-                        for image_bytes, _mime_type in images
-                    ],
-                },
-            ],
+            "messages": messages,
             "stream": True,
             "think": False,
             "options": {
