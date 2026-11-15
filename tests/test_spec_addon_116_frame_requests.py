@@ -661,6 +661,51 @@ class TestStreaming:
         keepalives = [at for at, data in received if data == b": keepalive\n\n"]
         assert any(sent_at[0] < at < sent_at[1] for at in keepalives)
 
+    async def test_no_silence_spans_a_tool_reply_a_cut_and_the_next_request(
+        self, db, addon, llm, tmp_path, monkeypatch,
+    ):
+        """SPEC-ADDON-116 §9 (114 I6 revised): each phase just under the interval adds no gap."""
+        import threading
+
+        from app.main import app
+        from app.routers import rag as rag_router
+        from tests.video_frames_doubles import timed_post
+
+        interval = 0.2
+        phase = 0.17
+        seed_video(db, tmp_path, "text-video")
+        scenes(monkeypatch, [], duration=80.0)
+        ffmpeg = FFmpeg(hang={ms(12.0)}).install(monkeypatch)
+        monkeypatch.setattr(rag_router, "_KEEPALIVE_SECONDS", interval)
+        requests: list[int] = []
+        plays = _plays(
+            Reply(calls=asks(12.0).calls, delay=phase),
+            then=Reply(text=ANSWER, delay=phase),
+        )
+
+        def script(wire, body):
+            requests.append(1)
+            if len(requests) == 1:
+                threading.Timer(
+                    2 * phase, ffmpeg.release, args=(ms(12.0),),
+                ).start()
+            return plays(wire, body)
+
+        _wire(llm, "openai_compatible", script)
+
+        try:
+            started, received, status = await timed_post(
+                app, path=f"/files/{VIDEO}/ask", body={"question": QUESTION},
+            )
+        finally:
+            ffmpeg.release_all.set()
+
+        assert status == 200
+        assert len(requests) == 2
+        times = [started, *(at for at, _data in received)]
+        gaps = [later - earlier for earlier, later in zip(times, times[1:])]
+        assert max(gaps) < 1.5 * interval
+
 
 class TestBetweenQuestions:
     async def test_a_follow_up_starts_again_from_the_initial_frames(

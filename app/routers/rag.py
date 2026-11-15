@@ -1179,6 +1179,7 @@ async def _frame_tool_answer(
         ]
 
     async def fallback() -> AsyncIterator[str]:
+        yield _FRAMES_KEEPALIVE
         async for event in _fallback_answer(
             file_id=file_id,
             question=question,
@@ -1194,6 +1195,9 @@ async def _frame_tool_answer(
 
     try:
         while True:
+            # Each phase's own keep-alive timer starts afresh, so phases that
+            # each end just under the interval would add up to a silence.
+            yield _FRAMES_KEEPALIVE
             if loop.time() >= total_deadline:
                 logger.warning("frame_tool_deadline (file %s)", file_id)
                 for event in failed():
@@ -1329,6 +1333,7 @@ async def _frame_tool_answer(
                 served=served,
             )
             wanted = sorted({time for plan in plans for time in plan.used})
+            yield _FRAMES_KEEPALIVE
             cut_task = asyncio.create_task(
                 file_question.cut_frames(
                     material, wanted, deadline=total_deadline,
