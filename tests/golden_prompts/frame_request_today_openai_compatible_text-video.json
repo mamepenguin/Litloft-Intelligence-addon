@@ -1,0 +1,101 @@
+{
+ "max_tokens": 2048,
+ "messages": [
+  {
+   "content": "You answer a question about a single file, using the numbered passages below and the numbered frames that follow the question.\n\nRules:\n- The passages below are the file's text; the frames that follow the question are moments of the video, in time order after the passages.\n- Each passage and each frame is introduced by its number in square brackets, e.g. [1].\n- Cite the passages and the frames your answer uses inline as [n], right after the sentence they support.\n- Cite only numbers that appear among the passages and frames; never name a number you were not given.\n- Where a passage and a frame differ, take exact characters (numbers, names, labels) from the passage.\n- Take exact characters from a frame when no passage has them.\n- If neither the passages nor the frames contain the answer, say so plainly instead of guessing.\n\n- Answer in short Markdown, with the most useful point first. Use headings, lists, tables and **bold** when they make it clearer.\n- Do not use raw HTML. Do not use code fences unless the question is about code.\n",
+   "role": "system"
+  },
+  {
+   "content": [
+    {
+     "text": "Question: QUESTION-MARKER what does it show\n\n\n\nPassages from the file:\n[1]\nSPOKEN-PASSAGE-ALPHA....................\n\n\nThe frames follow the question, each introduced by its number and time.\n",
+     "type": "text"
+    },
+    {
+     "text": "[2] 0:05",
+     "type": "text"
+    },
+    {
+     "image_url": {
+      "url": "data:image/webp;base64,RlJBTUVANTAwMA=="
+     },
+     "type": "image_url"
+    },
+    {
+     "text": "[3] 0:15",
+     "type": "text"
+    },
+    {
+     "image_url": {
+      "url": "data:image/webp;base64,RlJBTUVAMTUwMDA="
+     },
+     "type": "image_url"
+    },
+    {
+     "text": "[4] 0:25",
+     "type": "text"
+    },
+    {
+     "image_url": {
+      "url": "data:image/webp;base64,RlJBTUVAMjUwMDA="
+     },
+     "type": "image_url"
+    },
+    {
+     "text": "[5] 0:35",
+     "type": "text"
+    },
+    {
+     "image_url": {
+      "url": "data:image/webp;base64,RlJBTUVAMzUwMDA="
+     },
+     "type": "image_url"
+    },
+    {
+     "text": "[6] 0:45",
+     "type": "text"
+    },
+    {
+     "image_url": {
+      "url": "data:image/webp;base64,RlJBTUVANDUwMDA="
+     },
+     "type": "image_url"
+    },
+    {
+     "text": "[7] 0:55",
+     "type": "text"
+    },
+    {
+     "image_url": {
+      "url": "data:image/webp;base64,RlJBTUVANTUwMDA="
+     },
+     "type": "image_url"
+    },
+    {
+     "text": "[8] 1:05",
+     "type": "text"
+    },
+    {
+     "image_url": {
+      "url": "data:image/webp;base64,RlJBTUVANjUwMDA="
+     },
+     "type": "image_url"
+    },
+    {
+     "text": "[9] 1:15",
+     "type": "text"
+    },
+    {
+     "image_url": {
+      "url": "data:image/webp;base64,RlJBTUVANzUwMDA="
+     },
+     "type": "image_url"
+    }
+   ],
+   "role": "user"
+  }
+ ],
+ "model": "vision-model",
+ "stream": true,
+ "temperature": 0.0
+}
