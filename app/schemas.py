@@ -435,6 +435,8 @@ class VideoVisualSceneItem(BaseModel):
     ordering: int
     start_time: float
     end_time: float | None = None
+    section_start: float | None = None
+    section_end: float | None = None
     status: Literal["pending", "running", "succeeded", "failed"]
     scene_type: str | None = None
     scene_label: str | None = None

@@ -249,7 +249,11 @@ def init_search_db() -> None:
 
 
 def _migrate_video_visual_scenes_if_needed(conn: object) -> None:
-    """Add the pipeline-v2 scene label without rewriting legacy results."""
+    """Add the scene columns that came after the first pipeline, additively.
+
+    ``scene_label`` is pipeline 2; ``section_start`` / ``section_end`` are
+    pipeline 3. A legacy row keeps nulls there and reads as before.
+    """
     cols = {
         row[1]
         for row in conn.execute(
@@ -262,6 +266,11 @@ def _migrate_video_visual_scenes_if_needed(conn: object) -> None:
         conn.execute(
             text("ALTER TABLE video_visual_scenes ADD COLUMN scene_label VARCHAR(80)")
         )
+    for column in ("section_start", "section_end"):
+        if column not in cols:
+            conn.execute(
+                text(f"ALTER TABLE video_visual_scenes ADD COLUMN {column} FLOAT")
+            )
 
 
 def _migrate_fts_retrieval_keywords_to_trigram() -> None:

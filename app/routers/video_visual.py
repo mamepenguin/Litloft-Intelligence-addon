@@ -34,7 +34,6 @@ from app.schemas import (
     VideoVisualSceneItem,
 )
 from app.workers.clip import VIDEO_TYPES
-from app.workers.video_visual_selection import compute_candidate_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +103,8 @@ def _scene_to_item(scene: VideoVisualScene) -> VideoVisualSceneItem:
         ordering=scene.ordering,
         start_time=scene.start_time,
         end_time=scene.end_time,
+        section_start=scene.section_start,
+        section_end=scene.section_end,
         status=scene.status,
         scene_type=scene.scene_type,
         scene_label=scene.scene_label,
@@ -168,12 +169,12 @@ async def get_visual_index(
 
     stale = False
     if active is not None:
-        from app.workers.video_visual import PIPELINE_VERSION, _load_candidates
+        from app.workers.video_visual import PIPELINE_VERSION, _candidate_fingerprint
 
-        candidates, _duration = await asyncio.to_thread(_load_candidates, file_id)
+        fingerprint = await asyncio.to_thread(_candidate_fingerprint, file_id)
         stale = (
             active.pipeline_version != PIPELINE_VERSION
-            or compute_candidate_fingerprint(candidates) != active.candidate_fingerprint
+            or fingerprint != active.candidate_fingerprint
         )
 
     return VideoVisualIndexResponse(

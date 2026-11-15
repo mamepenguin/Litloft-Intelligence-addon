@@ -96,8 +96,8 @@ def search_db(monkeypatch, tmp_path):
         "app.routers.video_visual.get_search_db_read", _get_search_db_read
     )
     monkeypatch.setattr(
-        "app.workers.video_visual._load_candidates",
-        lambda file_id: ([], None),
+        "app.workers.video_visual._candidate_fingerprint",
+        lambda file_id: "fp",
     )
     return engine, Session
 

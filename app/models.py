@@ -807,6 +807,9 @@ class VideoVisualScene(Base):
     clip_embedding_id: Mapped[str] = mapped_column(String(32), nullable=False)
     start_time: Mapped[float] = mapped_column(Float, nullable=False)
     end_time: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # The section this scene represents; null when only the frame time is known.
+    section_start: Mapped[float | None] = mapped_column(Float, nullable=True)
+    section_end: Mapped[float | None] = mapped_column(Float, nullable=True)
     # "pending" | "running" | "succeeded" | "failed"
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="pending", server_default="pending"

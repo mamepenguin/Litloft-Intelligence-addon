@@ -454,6 +454,23 @@ def _pool(inputs: SelectionInputs, lo: float, hi: float) -> list[Frame]:
     return pool
 
 
+def selection_pool(inputs: SelectionInputs) -> tuple[Frame, ...]:
+    """The whole file's pool, in pool order (SPEC-ADDON-112 step 1).
+
+    The span ends at the file's duration, or one second past its last frame
+    when the duration is unknown, as :func:`select_scenes` ends it.
+    """
+    hi = inputs.duration
+    if hi is None:
+        times = [
+            frame.timestamp
+            for frame in (*inputs.scene_candidates, *inputs.change_frames)
+            if frame.vector is not None and math.isfinite(frame.timestamp)
+        ]
+        hi = max(times, default=0.0) + 1.0
+    return tuple(_pool(inputs, 0.0, hi))
+
+
 def _visual_boundaries(pool: list[Frame]) -> list[_Boundary]:
     entries: list[tuple[float, float, str]] = []
     for index in range(len(pool) - 1):
@@ -812,4 +829,5 @@ __all__ = [
     "compute_candidate_fingerprint",
     "load_selection_inputs",
     "select_scenes",
+    "selection_pool",
 ]

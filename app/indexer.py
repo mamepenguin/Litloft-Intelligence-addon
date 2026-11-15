@@ -1838,7 +1838,7 @@ class IndexManager:
                         index_frame_scan, task.file_id, is_paused=self.is_paused
                     )
                     if scanned:
-                        await self._enqueue_video_visual_on_clip(task.file_id)
+                        await self._enqueue_video_visual_on_clip(task.file_id, after_scan=True)
                 except Exception as e:
                     logger.error(
                         "Frame scan failed for %s: %s", task.file_id, e
@@ -1927,16 +1927,18 @@ class IndexManager:
                 file_id, type(e).__name__,
             )
 
-    async def _enqueue_video_visual_on_clip(self, file_id: str) -> None:
-        """Hand the file to the VideoVisualWorker after scene CLIP completes.
+    async def _enqueue_video_visual_on_clip(
+        self, file_id: str, *, after_scan: bool = False
+    ) -> None:
+        """Hand the file to the VideoVisualWorker after scene CLIP or a frame scan.
 
         Mirrors ``_enqueue_vision_describe``. Only meaningful for
         ``on_index`` mode — manual requests go through the router
         directly. The worker's own ``enqueue`` re-checks eligibility
-        (mime, policy, CLIP readiness) and skips a pointless replacement
-        when the candidate fingerprint hasn't actually changed, so this
-        hook is safe to call unconditionally on every successful CLIP
-        pass (first-time indexing and later scene-CLIP rebuilds alike).
+        (mime, policy, CLIP and scan readiness) and decides what an
+        automatic request may replace, so this hook is safe to call
+        unconditionally on every successful pass. ``after_scan`` is the
+        scan's caller: it starts a run only for a file that has none.
         """
         if settings.features.video_visual_index != "on_index":
             return
@@ -1947,7 +1949,7 @@ class IndexManager:
         except Exception:
             return
         try:
-            await worker.enqueue(file_id, requested_by="on_index")
+            await worker.enqueue(file_id, requested_by="on_index", after_scan=after_scan)
         except Exception as e:
             logger.warning(
                 "video_visual on_index enqueue failed for %s (%s)",

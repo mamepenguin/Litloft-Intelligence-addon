@@ -47,13 +47,16 @@ def test_migration_adds_nullable_scene_label_and_preserves_legacy_data(tmp_path)
     with engine.begin() as conn:
         _migrate_video_visual_scenes_if_needed(conn)
 
-    assert "scene_label" in _columns(engine)
+    assert {"scene_label", "section_start", "section_end"} <= _columns(engine)
     with engine.connect() as conn:
         row = conn.execute(text(
-            "SELECT scene_label, visual_description FROM video_visual_scenes"
+            "SELECT scene_label, section_start, section_end, visual_description "
+            "FROM video_visual_scenes"
         )).one()
     assert row[0] is None
-    assert row[1] == "Legacy verbose description"
+    assert row[1] is None
+    assert row[2] is None
+    assert row[3] == "Legacy verbose description"
 
 
 def test_migration_is_idempotent(tmp_path):
