@@ -222,7 +222,13 @@ class TestTheSlot:
         ffmpeg = FFmpeg()
         during_frames: list[int] = []
 
+        real_run = frame_cache.subprocess.run
+
         def _run(command, **kwargs):
+            # The module is the shared ``subprocess``: the HTTP client's own
+            # platform probe goes through it too and is not frame work.
+            if not command or command[0] != "ffmpeg":
+                return real_run(command, **kwargs)
             during_frames.append(ask_slots._value)
             return ffmpeg.run(command, **kwargs)
 
