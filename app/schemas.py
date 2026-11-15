@@ -471,6 +471,7 @@ class VideoScenesWindow(BaseModel):
 class VideoSceneItem(BaseModel):
     start: float
     end: float | None
+    frame_time: float
     transcript_excerpt: str | None
 
 

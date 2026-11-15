@@ -1,9 +1,9 @@
 """``GET /files/{file_id}/scenes``: representative scenes without a model.
 
-Runs the Visual Index's deterministic selection over the scene-CLIP
-candidates the indexer already stored, so any indexed native video, and a
-YouTube ``.loft``, gets a scene list whether or not a Visual Index was generated. Nothing is
-written and no LLM is called.
+Runs the selection of SPEC-ADDON-112 over the rows the indexer already stored,
+so any indexed native video, and a YouTube ``.loft``, gets its sections and
+frame times whether or not a Visual Index was generated. Nothing is written and
+no LLM is called.
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.drive_context import require_drive
 from app.routers.files import _get_indexed_file_or_404
 from app.schemas import VideoSceneItem, VideoScenesResponse, VideoScenesWindow
-from app.workers.video_visual import _load_candidates, _select_transcript_excerpt
-from app.workers.video_visual_selection import Candidate, select_candidates
+from app.workers.video_visual import _select_transcript_excerpt
+from app.workers.video_visual_selection import load_selection_inputs, select_scenes
 from app.workers.whisper import LOFT_MIME
 from app.youtube_source import YOUTUBE_PROVIDER, LoftUnreadable, read_loft
 
@@ -30,33 +30,29 @@ def _check_bound(name: str, value: float | None) -> None:
         )
 
 
+def _known(value: float | None) -> float | None:
+    return value if value is not None and math.isfinite(value) else None
+
+
 def _resolve_window(
     start: float | None, end: float | None, duration: float | None,
-) -> tuple[VideoScenesWindow | None, float | None, float | None, bool]:
-    """Return ``(window, upper bound, budget duration, empty)``.
+) -> tuple[VideoScenesWindow | None, float, float | None]:
+    """Return ``(window, span start, span end)`` for the selection.
 
-    ``upper bound`` of ``None`` means no upper bound. ``empty`` is true
-    when the window lies wholly at or past the known duration.
+    ``span end`` of ``None`` is unknown to the caller; the selection then ends
+    the span one second after the last frame, as SPEC-ADDON-112 Terms says. A
+    window whose end is still the duration gives the duration, even when the
+    start is at or past it (the selection returns no sections then).
     """
+    known = _known(duration)
     if start is None and end is None:
-        return None, None, duration, False
+        return None, 0.0, known
     lo = start if start is not None else 0.0
     if end is not None:
-        return VideoScenesWindow(start=lo, end=end), end, end - lo, False
-    if duration is not None:
-        window = VideoScenesWindow(start=lo, end=duration)
-        return window, duration, duration - lo, lo >= duration
-    return VideoScenesWindow(start=lo, end=None), None, None, False
-
-
-def _last_end(
-    last_start: float, window: VideoScenesWindow | None, duration: float | None,
-) -> float | None:
-    if window is not None:
-        return window.end
-    if duration is not None and duration > last_start:
-        return duration
-    return None
+        return VideoScenesWindow(start=lo, end=end), lo, end
+    if known is not None:
+        return VideoScenesWindow(start=lo, end=known), lo, known
+    return VideoScenesWindow(start=lo, end=None), lo, None
 
 
 def _require_youtube_loft(indexed: dict) -> None:
@@ -86,30 +82,25 @@ def get_scenes(
     if indexed["mime_type"] == LOFT_MIME:
         _require_youtube_loft(indexed)
 
-    candidates, duration = _load_candidates(file_id)
-    window, upper, budget_duration, empty = _resolve_window(start, end, duration)
-    lower = window.start if window is not None else None
+    inputs = load_selection_inputs(file_id)
+    window, lo, hi = _resolve_window(start, end, inputs.duration)
+    selection = select_scenes(inputs, lo, hi)
 
-    kept: list[Candidate] = [
-        c for c in candidates
-        if (lower is None or c.timestamp >= lower)
-        and (upper is None or c.timestamp < upper)
-    ]
-    selected = [] if empty else select_candidates(kept, duration_seconds=budget_duration)
-
-    starts = [c.timestamp for c in selected]
     scenes = [
         VideoSceneItem(
-            start=s,
-            end=starts[i + 1] if i + 1 < len(starts) else _last_end(s, window, duration),
-            transcript_excerpt=_select_transcript_excerpt(file_id, s, None) or None,
+            start=item.section_start,
+            end=item.section_end,
+            frame_time=item.frame_time,
+            transcript_excerpt=(
+                _select_transcript_excerpt(file_id, item.frame_time, None) or None
+            ),
         )
-        for i, s in enumerate(starts)
+        for item in selection.navigation
     ]
     return VideoScenesResponse(
         file_id=file_id,
-        duration=duration,
+        duration=inputs.duration,
         window=window,
-        candidate_count=len(kept),
+        candidate_count=selection.candidate_count,
         scenes=scenes,
     )

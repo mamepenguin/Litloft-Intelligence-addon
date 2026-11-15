@@ -29,8 +29,7 @@ from app.database import get_search_db_read, get_search_engine
 from app.document_sections import EPUB_MIME
 from app.frame_cache import extract_frame_to_cache, frame_cache_path, round_ms
 from app.workers.embedder import embed_query
-from app.workers.video_visual import _load_candidates
-from app.workers.video_visual_selection import Candidate, select_candidates
+from app.workers.video_visual_selection import load_selection_inputs, select_scenes
 from app.workers.vision import _load_image_bytes, _preprocess_image
 from app.workers.whisper import LOFT_MIME
 from app.youtube_source import (
@@ -547,10 +546,9 @@ def choose_frame_times(
 ) -> tuple[float | None, list[float]]:
     """The position frame's time and the scene frame times, in time order.
 
-    The scene frames are the Visual Index's own selection over the file's
-    scene-CLIP candidates, with no window, then thinned to the budget or
-    filled with evenly spaced times. A failed read leaves them empty and the
-    fill still runs.
+    The scene frames are the frame times of the Ask list of SPEC-ADDON-112 over
+    the whole file, then thinned to the budget or filled with evenly spaced
+    times. A failed read leaves them empty and the fill still runs.
     """
     budget = (
         FRAME_BUDGET_WITH_POSITION
@@ -558,11 +556,9 @@ def choose_frame_times(
         else FRAME_BUDGET
     )
     try:
-        candidates, _duration = _load_candidates(material.file_id)
-        selected: list[Candidate] = select_candidates(
-            candidates, duration_seconds=material.duration,
-        )
-        times = [candidate.timestamp for candidate in selected]
+        inputs = load_selection_inputs(material.file_id)
+        selection = select_scenes(inputs, 0.0, material.duration)
+        times = [item.frame_time for item in selection.ask]
     except Exception:  # noqa: BLE001 - an empty selection is still answerable
         logger.warning("scene_candidates_failed (file %s)", material.file_id)
         times = []

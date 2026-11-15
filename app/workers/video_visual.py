@@ -54,7 +54,8 @@ from app.workers.clip import VIDEO_TYPES
 from app.workers.video_visual_selection import (
     Candidate,
     compute_candidate_fingerprint,
-    select_candidates,
+    load_selection_inputs,
+    select_scenes,
 )
 
 logger = logging.getLogger(__name__)
@@ -903,9 +904,10 @@ class VideoVisualWorker:
             )
 
     def _build_scenes(self, run_id: str, file_id: str) -> bool:
-        candidates, duration = _load_candidates(file_id)
+        candidates, _duration = _load_candidates(file_id)
         fingerprint = compute_candidate_fingerprint(candidates)
-        selected = select_candidates(candidates, duration_seconds=duration)
+        inputs = load_selection_inputs(file_id)
+        selected = select_scenes(inputs, 0.0, inputs.duration).navigation
         with get_search_db() as session:
             run = session.query(VideoVisualRun).filter_by(id=run_id).first()
             if run is None:
@@ -914,13 +916,13 @@ class VideoVisualWorker:
             if not selected:
                 return False
             run.selected_count = len(selected)
-            for i, c in enumerate(selected):
+            for i, item in enumerate(selected):
                 session.add(
                     VideoVisualScene(
                         run_id=run_id,
                         ordering=i,
-                        clip_embedding_id=c.embedding_id,
-                        start_time=c.timestamp,
+                        clip_embedding_id=item.embedding_id,
+                        start_time=item.frame_time,
                         status="pending",
                     )
                 )
