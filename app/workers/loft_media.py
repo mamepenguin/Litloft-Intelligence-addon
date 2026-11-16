@@ -414,7 +414,10 @@ def _fetch(
     fmt = youtube_source.pick_format(description)
     if fmt is None:
         logger.warning("loft_media no rendition (file %s)", file_id)
+        # YouTube answered, so the run of refusals ends; the video itself has
+        # nothing to fetch, which counts against it as before.
         _note_result("success")
+        _count_failure(state, {}, close_scan=scan_wanted, close_ocr=ocr_wanted)
         return FetchResult()
 
     if not _space_allows(file_id, fmt):

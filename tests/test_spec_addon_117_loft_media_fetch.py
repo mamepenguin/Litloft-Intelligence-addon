@@ -371,17 +371,17 @@ def test_spec_addon_117_i5_the_duration_is_written_only_from_null_with_a_positiv
 # ---------------------------------------------------------------------------
 
 
-def test_spec_addon_117_i6_no_rendition_is_a_success_result_and_is_logged(
+def test_spec_addon_117_i6_no_rendition_is_a_counted_failure_and_is_logged(
     world, caplog,
 ):
-    """SPEC-ADDON-119 Terms: no rendition is a success, so it is not counted."""
+    """SPEC-ADDON-119 Terms: a success result for the failure run, still counted against the video."""
     world.youtube.set_ytdlp(describe=describe([], duration=VIDEO_SECONDS))
     world.add_loft("ytloft000001")
 
     with caplog.at_level("INFO"):
         fetch("ytloft000001")
 
-    assert world.failures("ytloft000001") == 0
+    assert world.failures("ytloft000001") == 1
     assert world.flags("ytloft000001")[0] is False
     assert world.downloads() == []
     assert "loft_media no rendition (file ytloft000001)" in everything_logged(caplog)
