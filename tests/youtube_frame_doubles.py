@@ -2,10 +2,12 @@
 
 ``yt-dlp`` and ``ffmpeg`` are replaced by executables placed first (and only) on
 ``PATH``, so the tests hold whatever way the addon starts them. The fake
-``yt-dlp`` prints a recorded ``-J`` description; the fake ``ffmpeg`` waits as
-told and then becomes the real ffmpeg. The "stream" and the storyboard sheets
-are served by a local HTTP server, so a frame is a real decode of a real file
-and every address the addon uses can be seen in the server's request log.
+``yt-dlp`` prints a recorded ``-J`` description and, when asked to download,
+copies the rendition the description names into the template's path; the fake
+``ffmpeg`` waits as told and then becomes the real ffmpeg. The "stream" and the
+storyboard sheets are served by a local HTTP server, so a frame is a real
+decode of a real file and every address the addon uses can be seen in the
+server's request log.
 """
 
 from __future__ import annotations
@@ -68,16 +70,47 @@ def real_pil_modules() -> dict:
 
 
 _YTDLP_SCRIPT = """#!{python}
-import json, os, sys, time
+import json, os, sys, time, urllib.error, urllib.request
 d = os.environ["FAKE_YT_DIR"]
+argv = sys.argv[1:]
 cfg = json.load(open(d + "/ytdlp.json"))
-with open(d + "/ytdlp.log", "a") as f:
-    f.write(json.dumps({{"argv": sys.argv[1:], "t": time.time()}}) + "\\n")
-time.sleep(cfg.get("delay", 0))
-if cfg.get("fail"):
-    sys.stderr.write(cfg["fail"] + "\\n")
+if "-J" in argv:
+    with open(d + "/ytdlp.log", "a") as f:
+        f.write(json.dumps({{"argv": argv, "t": time.time()}}) + "\\n")
+    time.sleep(cfg.get("delay", 0))
+    if cfg.get("fail"):
+        sys.stderr.write(cfg["fail"] + "\\n")
+        sys.exit(1)
+    json.dump(cfg["describe"], sys.stdout)
+    sys.exit(0)
+config = json.load(open(d + "/download.json"))
+with open(d + "/download.log", "a") as f:
+    f.write(json.dumps({{"argv": argv, "t": time.time()}}) + "\\n")
+time.sleep(config.get("hold", 0))
+formats = [
+    fmt for fmt in (cfg["describe"].get("formats") or [])
+    if fmt.get("protocol") == "https"
+    and fmt.get("vcodec") not in (None, "none")
+    and fmt.get("acodec") == "none"
+    and isinstance(fmt.get("height"), int) and 0 < fmt["height"] <= 720
+]
+if not formats:
+    sys.stderr.write("No video formats found\\n")
     sys.exit(1)
-json.dump(cfg["describe"], sys.stdout)
+fmt = max(formats, key=lambda item: item["height"])
+request = urllib.request.Request(
+    fmt["url"], headers=fmt.get("http_headers") or {{}},
+)
+try:
+    with urllib.request.urlopen(request, timeout=60) as response:
+        body = response.read()
+except Exception:
+    sys.stderr.write("download failed\\n")
+    sys.exit(1)
+template = argv[argv.index("-o") + 1]
+out = template.replace("%(ext)s", fmt.get("ext") or "mp4")
+with open(out, "wb") as f:
+    f.write(body)
 """
 
 _FFMPEG_SCRIPT = """#!{python}
@@ -141,6 +174,10 @@ class _Handler(BaseHTTPRequestHandler):
         if status == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{len(body)}")
         self.end_headers()
+        if override.get("truncate"):
+            # The length above is the whole body; the reader must see the cut.
+            chunk = chunk[: int(len(chunk) * override["truncate"])]
+            self.close_connection = True
         try:
             self.wfile.write(chunk)
         except (BrokenPipeError, ConnectionResetError):
@@ -175,6 +212,7 @@ class FakeYouTube:
             (self.bin / name).chmod(0o755)
         self.set_ytdlp(describe=describe([]))
         self.set_ffmpeg(hold=0)
+        self.set_download(hold=0)
 
     # -- configuration -------------------------------------------------
 
@@ -185,6 +223,9 @@ class FakeYouTube:
 
     def set_ffmpeg(self, *, hold: float) -> None:
         (self.state / "ffmpeg.json").write_text(json.dumps({"hold": hold}))
+
+    def set_download(self, *, hold: float) -> None:
+        (self.state / "download.json").write_text(json.dumps({"hold": hold}))
 
     def remove_ytdlp(self) -> None:
         (self.bin / "yt-dlp").unlink()
@@ -228,6 +269,9 @@ class FakeYouTube:
 
     def lookups(self) -> list[dict]:
         return self._log("ytdlp.log")
+
+    def download_commands(self) -> list[dict]:
+        return self._log("download.log")
 
     def ffmpeg_events(self) -> list[dict]:
         return self._log("ffmpeg.log")

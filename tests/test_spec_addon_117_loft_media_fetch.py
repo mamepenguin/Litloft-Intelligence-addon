@@ -23,7 +23,7 @@ from tests.loft_media_world import (
     index_off,
 )
 from tests.ocr_fixtures import pillow_real  # noqa: F401 - the usefixtures marker resolves it
-from tests.test_spec_addon_111_frame_scan_task import CHANGE_SECONDS, _encode, _tail_cut
+from tests.test_spec_addon_111_frame_scan_task import CHANGE_SECONDS, _encode
 from tests.vec_partition_db import search_index  # noqa: F401 - fixture
 from tests.youtube_frame_doubles import (  # noqa: F401 - fixtures
     HEADER_TOKEN,
@@ -413,9 +413,9 @@ def test_spec_addon_117_i6_a_download_shorter_than_95_percent_of_the_lookup_is_c
     assert world.fetch_dir_files() == []
 
 
-def test_spec_addon_117_a_truncated_download_is_counted(world, gradient, tmp_path):
-    cut = _tail_cut(gradient, tmp_path / "cut.mp4", keep=0.5)
-    world.serve(cut, duration=VIDEO_SECONDS)
+def test_spec_addon_117_a_truncated_download_is_counted(world, gradient):
+    world.serve(gradient, duration=VIDEO_SECONDS)
+    world.youtube.override("/v/rendition", truncate=0.5)
     world.add_loft("ytloft000001")
 
     fetch("ytloft000001")
@@ -497,9 +497,9 @@ def test_spec_addon_117_the_disk_guard_is_an_uncounted_end_before_the_download(
 def test_spec_addon_117_a_download_with_no_growth_for_120_seconds_is_stopped_and_counted(
     world, gradient, clock,
 ):
-    """The clock jumps 121 s while ffmpeg has written nothing."""
+    """The clock jumps 121 s while yt-dlp has written nothing."""
     world.serve(gradient, duration=VIDEO_SECONDS)
-    world.youtube.set_ffmpeg(hold=30)
+    world.youtube.set_download(hold=30)
     world.add_loft("ytloft000001")
 
     def jump():
@@ -521,9 +521,10 @@ def test_spec_addon_117_a_download_with_no_growth_for_120_seconds_is_stopped_and
 # ---------------------------------------------------------------------------
 
 
-def test_spec_addon_117_i2_the_download_copies_the_video_only_rendition_with_its_headers(
+def test_spec_addon_117_i2_the_download_takes_one_video_only_rendition_from_the_stored_url(
     world, gradient,
 ):
+    """SPEC-ADDON-117 I2 (revised): yt-dlp, not ffmpeg, reads the stored URL."""
     world.serve(gradient, duration=VIDEO_SECONDS)
     world.add_loft("ytloft000001")
 
@@ -533,17 +534,22 @@ def test_spec_addon_117_i2_the_download_copies_the_video_only_rendition_with_its
     for option in ("-J", "--no-playlist", "--ignore-config"):
         assert option in lookup["argv"]
     assert not any(a.split("=")[0] in COOKIE_OPTIONS for a in lookup["argv"])
-    downloads = [
-        e["argv"] for e in world.youtube.ffmpeg_events()
-        if e["kind"] == "start" and any("/v/rendition" in a for a in e["argv"])
-    ]
-    assert len(downloads) == 1
-    argv = downloads[0]
-    assert "-an" in argv
-    assert argv[argv.index("-c") + 1] == "copy"
-    assert argv[argv.index("-f") + 1] == "matroska"
-    assert any(HEADER_TOKEN in a for a in argv)
-    assert any(a.endswith("ytloft000001.part") and str(world.fetch_dir) in a for a in argv)
+
+    (download,) = world.youtube.download_commands()
+    argv = download["argv"]
+    assert argv[argv.index("-f") + 1] == "bv*[height<=720][protocol=https]"
+    assert argv[argv.index("--http-chunk-size") + 1] == "10M"
+    for option in ("--no-playlist", "--ignore-config"):
+        assert option in argv
+    assert argv[argv.index("-o") + 1] == str(
+        world.fetch_dir / "ytloft000001.part.%(ext)s"
+    )
+    assert argv[-1] == YOUTUBE_URL
+    assert not any(a.split("=")[0] in COOKIE_OPTIONS for a in argv)
+    assert not any(
+        any("/v/rendition" in a for a in event["argv"])
+        for event in world.youtube.ffmpeg_events()
+    )
     assert all(
         r["headers"].get("x-fake-auth") == HEADER_TOKEN for r in world.downloads()
     )

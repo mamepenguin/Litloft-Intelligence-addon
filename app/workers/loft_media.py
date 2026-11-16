@@ -1,9 +1,9 @@
 """One fetch of a `.loft` reference's video.
 
-The reference is read and classified, its video is looked up and copied down
+The reference is read and classified, its video is looked up and downloaded
 once at up to 720p without audio, the frame scan and frame OCR run on that
-copy exactly as on a native video, and the copy is deleted again. Nothing is
-fetched for a reference that turns out not to point at a YouTube video.
+file exactly as on a native video, and the download is deleted again. Nothing
+is fetched for a reference that turns out not to point at a YouTube video.
 
 Neither the stored URL, a signed stream URL nor a request header reaches a log
 line: only the file id and the failure class below do.
@@ -354,20 +354,19 @@ def _fetch(
 
     directory = fetch_dir()
     directory.mkdir(parents=True, exist_ok=True)
-    destination = directory / f"{file_id}.mkv"
 
     def _free() -> int:
         return shutil.disk_usage(str(directory)).free
 
     try:
-        downloaded = youtube_source.download_rendition(
-            fmt, destination,
+        destination = youtube_source.download_rendition(
+            source.url, directory, file_id,
             time_limit=_time_limit(lookup_duration),
             free_bytes=_free,
         )
     except Exception:
-        downloaded = False
-    if not downloaded:
+        destination = None
+    if destination is None:
         logger.warning("loft_media download failed (file %s)", file_id)
         _count_failure(state, {}, close_scan=scan_wanted, close_ocr=ocr_wanted)
         return FetchResult()
