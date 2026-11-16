@@ -140,6 +140,10 @@ export default function ScenesSectionContainer({
   const requestGeneration = useRef(0);
   const visualGeneration = useRef(0);
   const visualRequestedFor = useRef(-1);
+  // A `.loft`'s Visual Index is requested once per file at mount, not once per
+  // showing, so this records the file asked for rather than a request
+  // generation.
+  const visualRequestedFile = useRef<string | null>(null);
   const browseRef = useRef<number | null>(null);
   const browseSource = useRef<BrowseSource | null>(null);
   const expandedRef = useRef(false);
@@ -274,16 +278,19 @@ export default function ScenesSectionContainer({
     wasShown.current = false;
     requestGeneration.current += 1;
     clearBrowseOn("collapse");
+    // A hidden `.loft` keeps its Visual Index: showing it again asks nothing,
+    // so clearing it here would leave the section blank.
+    if (isLoft) return;
     resetVisual();
-  }, [hostDriven, hostShows, clearBrowseOn, resetVisual]);
+  }, [hostDriven, hostShows, isLoft, clearBrowseOn, resetVisual]);
 
   const expand = useCallback(() => {
     const generation = (requestGeneration.current += 1);
     expandedRef.current = true;
     dragStart.current = null;
     setExpanded(true);
-    resetVisual();
     if (isLoft) return;
+    resetVisual();
 
     loadNative(generation);
   }, [isLoft, loadNative, resetVisual]);
@@ -294,8 +301,8 @@ export default function ScenesSectionContainer({
     expandedRef.current = false;
     dragStart.current = null;
     setExpanded(false);
-    resetVisual();
     if (isLoft) return;
+    resetVisual();
     setNativeState("idle");
     setRows(null);
   }, [isLoft, clearBrowseOn, resetVisual]);
@@ -321,18 +328,37 @@ export default function ScenesSectionContainer({
     [fileId, drive],
   );
 
-  // The first answer for this showing, once the policy has resolved. Policy-off
-  // drives never ask for it at all.
+  // A `.loft` with no storyboard rows is still a section when its Visual Index
+  // has something to draw, and the host hides the panel on `false`.
   useEffect(() => {
-    if (!isVideo || isLoft || !shown) return;
-    if (!hostDriven && !expandedRef.current) return;
+    if (!isLoft || rows === null) return;
+    onAvailabilityRef.current?.(
+      rows.length > 0 ||
+        (visual != null && visual.eligible && visual.available),
+    );
+  }, [isLoft, rows, visual]);
+
+  // The first answer for this showing, once the policy has resolved. Policy-off
+  // drives never ask for it at all. A `.loft` asks at mount so its Visual Index
+  // is there before the section is opened, and asks once per file.
+  useEffect(() => {
+    if (!isVideo) return;
     if (policy.isLoading || !policy.enabled) return;
+    if (isLoft) {
+      if (visualRequestedFile.current === fileId) return;
+      visualRequestedFile.current = fileId;
+      void loadVisual(false);
+      return;
+    }
+    if (!shown) return;
+    if (!hostDriven && !expandedRef.current) return;
     if (visualRequestedFor.current === requestGeneration.current) return;
     visualRequestedFor.current = requestGeneration.current;
     void loadVisual(false);
   }, [
     isVideo,
     isLoft,
+    fileId,
     shown,
     hostDriven,
     policy.isLoading,
@@ -344,13 +370,17 @@ export default function ScenesSectionContainer({
   const succeededEvent = useWebSocket(EVENT_SUCCEEDED);
   const partialEvent = useWebSocket(EVENT_PARTIAL);
   const failedEvent = useWebSocket(EVENT_FAILED);
+  // The hook keeps returning its last event on every render, so the request is
+  // keyed on the event object: a policy reload must not replay it.
+  const appliedEvent = useRef<unknown>(null);
 
   useEffect(() => {
-    if (!isVideo || isLoft || !shown) return;
+    const event = progressEvent ?? succeededEvent ?? partialEvent ?? failedEvent;
+    if (!event || appliedEvent.current === event) return;
+    appliedEvent.current = event;
+    if (!isVideo || !shown) return;
     if (!hostDriven && !expandedRef.current) return;
     if (policy.isLoading || !policy.enabled) return;
-    const event = progressEvent ?? succeededEvent ?? partialEvent ?? failedEvent;
-    if (!event) return;
     if ((event.data as { file_id?: unknown }).file_id !== fileId) return;
     void loadVisual(true);
   }, [
@@ -359,7 +389,6 @@ export default function ScenesSectionContainer({
     partialEvent,
     failedEvent,
     isVideo,
-    isLoft,
     shown,
     hostDriven,
     policy.isLoading,
@@ -622,7 +651,7 @@ export default function ScenesSectionContainer({
   );
 
   if (!isVideo) return null;
-  if (isLoft && list.length === 0) return null;
+  if (isLoft && list.length === 0 && visualView === null) return null;
   if (!isLoft && nativeState === "hidden") return null;
 
   return (

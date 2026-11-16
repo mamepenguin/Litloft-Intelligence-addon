@@ -363,6 +363,9 @@ class IndexDetailsResponse(BaseModel):
     provider_stats: dict[str, ProviderStats] = {}
     corrected: dict[str, bool] = {}
     redo_ended_without_result: dict[str, bool] = {}
+    # The provider a `.loft` was classified as, or ``None`` when it is not a
+    # `.loft` or its fetch has not read it yet.
+    loft_source: Literal["youtube", "other"] | None = None
 
 
 class ClipTimestampItem(BaseModel):

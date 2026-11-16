@@ -133,6 +133,7 @@ def init_search_db() -> None:
         _migrate_ocr_indexed_column(conn)
         _migrate_frame_page_ocr_columns(conn)
         _migrate_frame_scan_column(conn)
+        _migrate_loft_columns(conn)
 
     _SearchSession = sessionmaker(bind=_search_engine, expire_on_commit=False)
 
@@ -536,12 +537,30 @@ def _migrate_vec_clip_change_if_needed(conn: object) -> None:
 
     mimes = sorted(VIDEO_TYPES)
     placeholders = ", ".join(f":mime{i}" for i in range(len(mimes)))
+    parameters = {f"mime{i}": mime for i, mime in enumerate(mimes)}
+    # A YouTube `.loft` is scanned like a native video; a `.loft` of another
+    # source has no scan to reopen.
+    columns = {
+        row[1]
+        for row in conn.execute(
+            text("PRAGMA table_info(indexed_files)")
+        ).fetchall()
+    }
+    loft_clause = (
+        f" OR (mime_type = :loft_mime AND loft_source = 'youtube')"
+        if "loft_source" in columns
+        else ""
+    )
+    if loft_clause:
+        from app.workers.whisper import LOFT_MIME
+
+        parameters["loft_mime"] = LOFT_MIME
     conn.execute(
         text(
             "UPDATE indexed_files SET frame_scan_indexed = 0 "
-            f"WHERE mime_type IN ({placeholders})"
+            f"WHERE mime_type IN ({placeholders}){loft_clause}"
         ),
-        {f"mime{i}": mime for i, mime in enumerate(mimes)},
+        parameters,
     )
     conn.commit()
 
@@ -794,11 +813,26 @@ def _migrate_vec_text_if_needed(conn: object) -> None:
         # are rebuilt from it without reading frames again. Pictures are
         # read again (above); PDFs need no flag because their text task
         # re-extracts with the stored page texts. SPEC-ADDON-066 I3.
+        #
+        # A YouTube `.loft`'s frame text is rebuilt the same way; a `.loft`
+        # of another source, or one not yet classified, has none to rebuild.
         if "frame_ocr_indexed" in columns:
-            conn.execute(text(
-                "UPDATE indexed_files SET frame_ocr_indexed = 0 "
-                "WHERE file_type = 'video'"
-            ))
+            from app.workers.whisper import LOFT_MIME
+
+            params = {"loft_mime": LOFT_MIME}
+            loft_clause = ""
+            if "loft_source" in columns:
+                loft_clause = (
+                    " OR (mime_type = :loft_mime AND loft_source = 'youtube')"
+                )
+            conn.execute(
+                text(
+                    "UPDATE indexed_files SET frame_ocr_indexed = 0 "
+                    "WHERE (file_type = 'video' AND mime_type != :loft_mime)"
+                    f"{loft_clause}"
+                ),
+                params,
+            )
         conn.execute(
             text("DELETE FROM detailed_summary_citations")
         )
@@ -1186,6 +1220,31 @@ def _migrate_frame_scan_column(conn: object) -> None:
         ),
         {f"mime{i}": mime for i, mime in enumerate(mimes)},
     )
+
+
+def _migrate_loft_columns(conn: object) -> None:
+    """Add the ``.loft`` source and fetch-failure state.
+
+    Additive and idempotent: an existing column keeps its rows. It runs before
+    the vector-table migrations that read ``loft_source``.
+    """
+    cols = {
+        row[1]
+        for row in conn.execute(
+            text("PRAGMA table_info(indexed_files)")
+        ).fetchall()
+    }
+    if "loft_source" not in cols:
+        conn.execute(
+            text("ALTER TABLE indexed_files ADD COLUMN loft_source TEXT")
+        )
+    if "loft_fetch_failures" not in cols:
+        conn.execute(
+            text(
+                "ALTER TABLE indexed_files ADD COLUMN "
+                "loft_fetch_failures INTEGER NOT NULL DEFAULT 0"
+            )
+        )
 
 
 def _migrate_frame_page_ocr_columns(conn: object) -> None:

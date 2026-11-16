@@ -17,6 +17,7 @@ from app.document_sections import EPUB_MIME, load_section_titles
 from app.drive_context import assert_file_in_drive, require_drive
 from app.workers.ocr import OCR_IMAGE_TYPES
 from app.workers.clip import VIDEO_TYPES, request_storyboard_retry
+from app.workers import loft_media
 from app.schemas import (
     BatchSuggestedTagsRequest,
     BatchSuggestedTagsResponse,
@@ -84,6 +85,8 @@ def _get_indexed_file_or_404(file_id: str, drive: str) -> dict[str, Any]:
             "ocr_indexed": indexed.ocr_indexed,
             "frame_ocr_indexed": indexed.frame_ocr_indexed,
             "page_ocr_indexed": indexed.page_ocr_indexed,
+            "loft_source": indexed.loft_source,
+            "loft_fetch_failures": indexed.loft_fetch_failures,
             "indexed_at": indexed.indexed_at.isoformat() if indexed.indexed_at else "",
             "transcript_corrected": indexed.transcript_corrected,
             "picture_text_corrected": indexed.picture_text_corrected,
@@ -952,6 +955,8 @@ async def reindex_file(
     # ---- Layer 2: drive boundary + soft-delete check ----
     # 404 (not cross-drive / soft-deleted / unknown — keeps the
     # drive boundary opaque to the caller.
+    from app.workers.whisper import LOFT_MIME
+
     indexed = await asyncio.to_thread(
         _get_indexed_file_or_404, file_id, drive
     )
@@ -971,8 +976,15 @@ async def reindex_file(
         )
 
     if "frame_ocr" in tasks and (
-        settings.features.video_frame_ocr == "false"
-        or indexed["mime_type"] not in VIDEO_TYPES
+        (
+            indexed["mime_type"] not in VIDEO_TYPES
+            and indexed["mime_type"] != LOFT_MIME
+        )
+        or (
+            indexed["mime_type"] == LOFT_MIME
+            and indexed["loft_source"] == "other"
+        )
+        or settings.features.video_frame_ocr == "false"
     ):
         raise HTTPException(
             status_code=422,
@@ -1029,6 +1041,16 @@ async def reindex_file(
     # ---- Layer 3: split tasks into already-queued vs fresh ----
     if manager is None or not hasattr(manager, "is_queued"):
         manager = get_index_manager()
+
+    # A `.loft`'s frame scan and frame OCR are stages of its fetch, so an OCR
+    # request turns into one `loft_media` task instead of its own queue entry.
+    # A CLIP regenerate keeps its own task and also asks for a fetch, whether
+    # or not that CLIP task was already queued.
+    loft_ocr_requested = False
+    if indexed["mime_type"] == LOFT_MIME and "frame_ocr" in tasks:
+        tasks = [t for t in tasks if t != "frame_ocr"]
+        loft_ocr_requested = True
+
     fresh: list[str] = []
     already_queued: list[str] = []
     for t in tasks:
@@ -1036,6 +1058,17 @@ async def reindex_file(
             already_queued.append(t)
         else:
             fresh.append(t)
+
+    loft_requests: list[str] = []
+    if loft_ocr_requested:
+        loft_requests.append("frame_ocr")
+    if indexed["mime_type"] == LOFT_MIME and "clip" in tasks:
+        loft_requests.append("clip")
+    loft_running = bool(loft_requests) and loft_media.is_fetch_running(file_id)
+    loft_updates = bool(loft_requests) and not loft_running
+    fetch_queued = bool(loft_requests) and manager.is_queued(file_id, "loft_media")
+    if loft_running:
+        loft_media.record_request_during_run(file_id, set(loft_requests))
 
     # A CLIP regenerate also rescans a native video: no scan running means its
     # flag goes false, and one that is queued is not queued twice.
@@ -1047,7 +1080,7 @@ async def reindex_file(
     enqueue_scan = rescan and not manager.is_queued(file_id, _SCAN_TASK)
 
     # All tasks were already queued — short-circuit per spec §2.1.
-    if fresh == [] and not rescan:
+    if fresh == [] and not rescan and not loft_updates and not loft_running:
         return JSONResponse(
             status_code=202,
             content={
@@ -1081,6 +1114,14 @@ async def reindex_file(
                     row.frame_ocr_read = False
             if rescan:
                 row.frame_scan_indexed = False
+            if loft_updates:
+                if "frame_ocr" in loft_requests:
+                    row.frame_ocr_read = False
+                    row.frame_ocr_indexed = False
+                if "clip" in loft_requests:
+                    row.loft_source = None
+                    row.frame_scan_indexed = False
+                row.loft_fetch_failures = 0
 
     # ``is_queued`` lives on the loop and cannot join the flag flip's
     # transaction, so the claim keeps a concurrent request that checks
@@ -1091,16 +1132,35 @@ async def reindex_file(
     _reindex_in_flight.update(claimed)
     try:
         await asyncio.to_thread(_reset_flags)
+        if loft_updates and "frame_ocr" in loft_requests:
+            loft_media.mark_ocr_requested(file_id)
         for t in fresh:
             await manager.enqueue_task_for_file(file_id, t)
         if enqueue_scan:
             await manager.enqueue_task_for_file(file_id, _SCAN_TASK)
+        if loft_updates:
+            if fetch_queued:
+                await manager.raise_task_priority(file_id, "loft_media")
+            else:
+                await manager.enqueue_task_for_file(file_id, "loft_media")
     finally:
         _reindex_in_flight.difference_update(claimed)
 
-    # The CLIP task was already queued: the scan may have been queued by this
-    # request, but the body still reports the CLIP task alone.
-    if fresh == []:
+    # A fetch that was already queued is raised rather than duplicated, and the
+    # raise is what the answer reports even when a fresh task came with it.
+    if loft_running:
+        return ReindexResponse(
+            status="accepted", file_id=file_id, tasks_reset=loft_requests,
+        )
+    if loft_updates and fetch_queued:
+        return ReindexResponse(
+            status="already_queued", file_id=file_id, tasks_reset=[],
+        )
+    if fresh == [] and not rescan:
+        if loft_updates:
+            return ReindexResponse(
+                status="accepted", file_id=file_id, tasks_reset=loft_requests,
+            )
         return JSONResponse(
             status_code=202,
             content={
@@ -1110,10 +1170,11 @@ async def reindex_file(
             },
         )
 
+    reset_names = fresh + [t for t in loft_requests if t not in fresh]
     return ReindexResponse(
         status="accepted",
         file_id=file_id,
-        tasks_reset=fresh,
+        tasks_reset=reset_names,
     )
 
 
@@ -1197,6 +1258,7 @@ async def get_index_details(
             "transcript": bool(indexed["transcript_redo_ended"]),
             "picture_text": bool(indexed["picture_text_redo_ended"]),
         },
+        loft_source=indexed["loft_source"],
     )
 
 
@@ -1756,14 +1818,24 @@ def get_scene_tile(
         raise HTTPException(status_code=404, detail="Scene tile not found")
 
     tile_path = _tile_cache_path(file_id, t)
-    if not tile_path.exists() or tile_path.stat().st_size == 0:
-        raise HTTPException(status_code=404, detail="Scene tile not found")
+    if tile_path.exists() and tile_path.stat().st_size > 0:
+        return FileResponse(
+            path=str(tile_path),
+            media_type="image/webp",
+            headers=_IMAGE_CACHE_HEADERS,
+        )
 
-    return FileResponse(
-        path=str(tile_path),
-        media_type="image/webp",
-        headers=_IMAGE_CACHE_HEADERS,
-    )
+    # A `.loft` whose fetch kept a change frame at this time has that picture
+    # instead of a storyboard tile. It is still a plain file read.
+    small_path = _frame_cache_path(file_id, t)
+    if small_path.exists() and small_path.stat().st_size > 0:
+        return FileResponse(
+            path=str(small_path),
+            media_type="image/webp",
+            headers=_IMAGE_CACHE_HEADERS,
+        )
+
+    raise HTTPException(status_code=404, detail="Scene tile not found")
 
 
 # --- Suggested tags endpoints ---

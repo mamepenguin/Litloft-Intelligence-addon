@@ -56,6 +56,14 @@ def _resolve_window(
 
 
 def _require_youtube_loft(indexed: dict) -> None:
+    # The fetch's classification is authoritative: re-reading the reference
+    # here would fail for a drive this process cannot mount, and a `.loft`
+    # of another source has no video to select from.
+    classified = indexed.get("loft_source")
+    if classified is not None:
+        if classified == "youtube":
+            return
+        raise HTTPException(status_code=400, detail="Not a video file")
     try:
         source = read_loft(indexed["file_path"], indexed["drive"])
     except LoftUnreadable:

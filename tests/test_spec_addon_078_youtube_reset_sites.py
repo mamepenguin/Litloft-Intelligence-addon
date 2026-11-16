@@ -115,7 +115,7 @@ async def test_a_reindex_of_the_clip_task_reopens_it_for_a_loft(search_index):
 
     assert response.status_code == 200, response.text
     assert response.json()["tasks_reset"] == ["clip"]
-    assert manager.queued == [(FILE, "clip")]
+    assert manager.queued == [(FILE, "clip"), (FILE, "loft_media")]
     assert _flags() == (False, True)
 
 

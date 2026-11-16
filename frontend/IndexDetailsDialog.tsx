@@ -117,6 +117,7 @@ function isTaskApplicable(
   task: ReindexTask,
   mimeType: string | undefined,
   fileType: string | undefined,
+  loftSource: string | null | undefined,
   imageOcr: string | undefined,
   videoFrameOcr: string | undefined,
   scannedPdfOcr: string | undefined,
@@ -160,7 +161,9 @@ function isTaskApplicable(
       return OCR_MIME_TYPES.has(mt);
     case "frame_ocr":
       if (videoFrameOcr === undefined || videoFrameOcr === "false") return false;
-      if (mt === LOFT_MIME) return false;
+      // Only a YouTube `.loft` reaches the frame OCR pipeline; any other
+      // `.loft` has no frames to read, so the row would only fail.
+      if (mt === LOFT_MIME) return loftSource === "youtube";
       return mt.startsWith("video/") || ft === "video";
     case "page_ocr":
       if (scannedPdfOcr === undefined || scannedPdfOcr === "false") return false;
@@ -313,6 +316,7 @@ export default function IndexDetailsDialog({
       spec.task,
       mimeType,
       fileType,
+      details?.loft_source,
       details?.image_ocr,
       details?.video_frame_ocr,
       details?.scanned_pdf_ocr,

@@ -977,6 +977,22 @@ def _collect_image_snippets(
     return snippets
 
 
+def _is_youtube_loft(file_id: str) -> bool:
+    """Whether ``file_id`` is a `.loft` whose fetch classified it as YouTube."""
+    try:
+        with get_search_db_read() as session:
+            row = session.execute(
+                sql_text(
+                    "SELECT loft_source FROM indexed_files WHERE file_id = :f"
+                ),
+                {"f": file_id},
+            ).fetchone()
+    except Exception:
+        # A narrow harness may predate the column; no source is known.
+        return False
+    return row is not None and row[0] == "youtube"
+
+
 def build_file_context(
     candidate: RetrievedFile,
     rag_config: RagConfig,
@@ -1012,7 +1028,9 @@ def build_file_context(
             query_vector=query_vector,
             keywords=keywords,
         )
-        if file_type == "video" and not is_loft:
+        if (file_type == "video" and not is_loft) or (
+            is_loft and _is_youtube_loft(candidate.file_id)
+        ):
             has_text_match = any(
                 match.match_type == "text_content"
                 for segment in candidate.segments

@@ -33,7 +33,7 @@ from app.schemas import (
     VideoVisualRunSummary,
     VideoVisualSceneItem,
 )
-from app.workers.clip import VIDEO_TYPES
+from app.workers.video_visual import is_visual_index_file
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +133,11 @@ async def get_visual_index(
     if file_row is None or getattr(file_row, "drive", None) != drive:
         raise HTTPException(status_code=404, detail="File not found")
 
-    if getattr(file_row, "mime_type", None) not in VIDEO_TYPES:
+    if not is_visual_index_file(
+        getattr(file_row, "mime_type", None),
+        getattr(file_row, "loft_source", None),
+        getattr(file_row, "loft_fetch_failures", None),
+    ):
         return VideoVisualIndexResponse(eligible=False, file_id=file_id)
 
     def _load_runs() -> tuple[Any, Any, list[VideoVisualSceneItem]]:
@@ -213,8 +217,12 @@ async def generate_visual_index(
     file_row = await asyncio.to_thread(_fetch_indexed_file, file_id)
     if file_row is None or getattr(file_row, "drive", None) != drive:
         raise HTTPException(status_code=404, detail="File not found")
-    if getattr(file_row, "mime_type", None) not in VIDEO_TYPES:
-        raise HTTPException(status_code=404, detail="Not a native video file")
+    if not is_visual_index_file(
+        getattr(file_row, "mime_type", None),
+        getattr(file_row, "loft_source", None),
+        getattr(file_row, "loft_fetch_failures", None),
+    ):
+        raise HTTPException(status_code=404, detail="Not a video file")
 
     worker = await get_video_visual_worker()
     result = await worker.enqueue(file_id, requested_by="manual")

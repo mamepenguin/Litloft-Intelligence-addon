@@ -247,10 +247,15 @@ class TestQueue:
     async def test_spec_addon_111_a_file_that_is_not_a_native_video_is_marked_done(
         self, ocr_db, tmp_path, mime, file_type,
     ):
+        """SPEC-ADDON-117 item 1.1: a ``.loft`` is closed here only once it is of source ``other``."""
         _seed_video(ocr_db, tmp_path, "other", mime=mime, frame_scan_indexed=False)
         with ocr_db.Session() as s:
             s.query(IndexedFile).filter_by(file_id="other").update({"file_type": file_type})
             s.commit()
+        if mime == LOFT_MIME:
+            ocr_db.execute(
+                "UPDATE indexed_files SET loft_source = 'other' WHERE file_id = 'other'"
+            )
         manager = _manager()
 
         await manager._resume_incomplete()
@@ -379,6 +384,8 @@ class TestStatus:
         _seed_video(ocr_db, tmp_path, "todo", frame_scan_indexed=False)
         _seed_video(ocr_db, tmp_path, "gone", active=False, frame_scan_indexed=False)
         _seed_video(ocr_db, tmp_path, "loft", mime=LOFT_MIME, frame_scan_indexed=False)
+        # SPEC-ADDON-117 I10: only a ``.loft`` of source ``other`` is never counted.
+        ocr_db.execute("UPDATE indexed_files SET loft_source = 'other' WHERE file_id = 'loft'")
         seed_indexed_file(
             ocr_db, "pic", "image/png", tmp_path / "pic.png", **ALL_DONE,
             frame_scan_indexed=False,
