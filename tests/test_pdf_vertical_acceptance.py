@@ -202,3 +202,29 @@ def test_spec_addon_115_i5_empty_vertical_extraction_keeps_index_and_read_fails(
     assert _rows(
         search_index, "SELECT text_indexed FROM indexed_files WHERE file_id = 'vertical'"
     ) == [(0,)]
+
+
+def test_spec_addon_115_i7_late_page_does_not_read_unneeded_earlier_edges(
+    tmp_path, reader, monkeypatch,
+):
+    from app.extractors import pdf
+
+    path = tmp_path / "late.pdf"
+    doc = fitz.open()
+    for _ in range(500):
+        doc.new_page()
+    doc.new_page().insert_text((100, 100), "LATEVERTICAL", rotate=270)
+    doc.save(path)
+    doc.close()
+    reader.register("late", path, "application/pdf")
+    calls = []
+    read_edges = pdf.read_edge_lines
+
+    def record_edges(*args):
+        calls.append(True)
+        return read_edges(*args)
+
+    monkeypatch.setattr(pdf, "read_edge_lines", record_edges)
+    unit = reader.ok("late", start=501, count=1)["units"][0]
+    assert "LATEVERTICAL" in unit["text"]
+    assert calls == []

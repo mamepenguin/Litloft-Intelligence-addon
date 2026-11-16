@@ -164,15 +164,16 @@ def _pdf_range(
         if doc.needs_pass:
             raise Unreadable("password-protected")
         unit_count = doc.page_count
-        try:
-            edges = pdf.read_edge_lines(doc, path.name)
-        except Exception as exc:
-            logger.warning(
-                "document-text: edge lines unavailable for %s (%s)",
-                path.name,
-                type(exc).__name__,
-            )
-            edges = {}
+        edges = {}
+        if start <= pdf.MAX_PAGES:
+            try:
+                edges = pdf.read_edge_lines(doc, path.name)
+            except Exception as exc:
+                logger.warning(
+                    "document-text: edge lines unavailable for %s (%s)",
+                    path.name,
+                    type(exc).__name__,
+                )
         units = tuple(
             _pdf_page(
                 path, doc, number, edges.get(number), page_ocr_texts,
