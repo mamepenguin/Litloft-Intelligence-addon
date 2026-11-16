@@ -1,0 +1,75 @@
+{
+ "messages": [
+  {
+   "content": "You answer a question about a single file, using the numbered frames that follow the question.\n\nRules:\n- The frames that follow the question are the only moments of the video you see.\n- Each frame is introduced by its number in square brackets, e.g. [1], followed by the time in the video it shows.\n- Cite the frames your answer uses inline as [n], right after the sentence they support.\n- Cite only numbers that appear among the frames; never name a number you were not given.\n- If the frames do not show the answer, say so plainly instead of guessing.\n- Take exact characters (numbers, names, labels) from the frames.\n\n- Answer in short Markdown, with the most useful point first. Use headings, lists, tables and **bold** when they make it clearer.\n- Do not use raw HTML. Do not use code fences unless the question is about code.\n",
+   "role": "system"
+  },
+  {
+   "content": "Question: QUESTION-MARKER what does it show\n\n\n\n\nThe frames follow the question, each introduced by its number and time.\n",
+   "role": "user"
+  },
+  {
+   "content": "[1] 0:05",
+   "images": [
+    "RlJBTUVANTAwMA=="
+   ],
+   "role": "user"
+  },
+  {
+   "content": "[2] 0:15",
+   "images": [
+    "RlJBTUVAMTUwMDA="
+   ],
+   "role": "user"
+  },
+  {
+   "content": "[3] 0:25",
+   "images": [
+    "RlJBTUVAMjUwMDA="
+   ],
+   "role": "user"
+  },
+  {
+   "content": "[4] 0:35",
+   "images": [
+    "RlJBTUVAMzUwMDA="
+   ],
+   "role": "user"
+  },
+  {
+   "content": "[5] 0:45",
+   "images": [
+    "RlJBTUVANDUwMDA="
+   ],
+   "role": "user"
+  },
+  {
+   "content": "[6] 0:55",
+   "images": [
+    "RlJBTUVANTUwMDA="
+   ],
+   "role": "user"
+  },
+  {
+   "content": "[7] 1:05",
+   "images": [
+    "RlJBTUVANjUwMDA="
+   ],
+   "role": "user"
+  },
+  {
+   "content": "[8] 1:15",
+   "images": [
+    "RlJBTUVANzUwMDA="
+   ],
+   "role": "user"
+  }
+ ],
+ "model": "vision-model",
+ "options": {
+  "num_predict": 2048,
+  "temperature": 0.0
+ },
+ "stream": true,
+ "think": false
+}

@@ -140,3 +140,98 @@ def assert_labelled(wire, body: dict, *, first: int, times: list[float]) -> Layo
     assert layout.frames == expected
     assert pairing_lines(layout.prompt, first) == []
     return layout
+
+
+def _image_key_openai(part: dict) -> int | None:
+    return _key(part["image_url"]["url"])
+
+
+def all_frames(wire, body: dict) -> Layout:
+    """Every image of the request in the order sent, with the text right before it.
+
+    An image whose preceding text is not its own part or message is reported as
+    ``problem``.
+    """
+    frames: list[tuple[str, int]] = []
+    for message in body.get("messages", []):
+        if wire.provider == "ollama":
+            images = message.get("images") or []
+            if not images:
+                continue
+            if len(images) != 1 or message.get("role") != "user":
+                return Layout(frames=frames, problem=f"a message with {len(images)} images")
+            key = _key(images[0])
+            if key is None:
+                return Layout(frames=frames, problem="an image is not a frame")
+            content = message.get("content")
+            frames.append((content if isinstance(content, str) else repr(content), key))
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for index, part in enumerate(content):
+            if part.get("type") != "image_url":
+                continue
+            before = content[index - 1] if index else {}
+            if before.get("type") != "text":
+                return Layout(frames=frames, problem="an image without a text part before it")
+            key = _image_key_openai(part)
+            if key is None:
+                return Layout(frames=frames, problem="an image is not a frame")
+            frames.append((before.get("text", ""), key))
+    return Layout(frames=frames)
+
+
+def tool_messages(body: dict) -> list[dict]:
+    return [m for m in body.get("messages", []) if m.get("role") == "tool"]
+
+
+def requested_frames(wire, body: dict) -> Layout:
+    """The frames after the last tool message, in the layout SPEC-ADDON-116 §1.5 states.
+
+    OpenAI-compatible: one user message of alternating label and image parts.
+    Ollama: one user message per label and image.
+    """
+    messages = body.get("messages", [])
+    last = max((i for i, m in enumerate(messages) if m.get("role") == "tool"), default=None)
+    if last is None:
+        return Layout(problem="no tool message")
+    after = messages[last + 1:]
+    if wire.provider == "ollama":
+        frames: list[tuple[str, int]] = []
+        for message in after:
+            images = message.get("images") or []
+            if message.get("role") != "user" or len(images) != 1:
+                return Layout(
+                    frames=frames,
+                    problem=f"a message after the tool results is {message!r:.200}",
+                )
+            key = _key(images[0])
+            if key is None:
+                return Layout(frames=frames, problem="an image is not a frame")
+            content = message.get("content")
+            frames.append((content if isinstance(content, str) else repr(content), key))
+        return Layout(frames=frames)
+    if not after:
+        return Layout()
+    if len(after) != 1 or after[0].get("role") != "user":
+        return Layout(problem=f"{len(after)} messages after the tool results")
+    content = after[0].get("content")
+    if not isinstance(content, list):
+        return Layout(problem=f"user content is not a list of parts: {content!r:.200}")
+    kinds = [part.get("type") for part in content]
+    if len(content) % 2 or any(
+        kinds[i] != "text" or kinds[i + 1] != "image_url" for i in range(0, len(content), 2)
+    ):
+        return Layout(problem=f"parts after the tool results are not label/image pairs: {kinds}")
+    frames = []
+    for i in range(0, len(content), 2):
+        key = _image_key_openai(content[i + 1])
+        if key is None:
+            return Layout(problem="an image is not a frame")
+        frames.append((content[i].get("text", ""), key))
+    return Layout(frames=frames)
+
+
+def labels_for(times: list[float], *, first: int) -> list[tuple[str, int]]:
+    return [(f"[{n}] {stamp(t)}", round(t * 1000)) for n, t in enumerate(times, start=first)]

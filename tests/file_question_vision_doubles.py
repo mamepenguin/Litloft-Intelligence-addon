@@ -9,10 +9,12 @@ client's own transport.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
-from dataclasses import replace
+import time
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import httpx
@@ -289,6 +291,9 @@ class Wire:
         # Values of the shared Ask semaphore seen from inside the stream, one
         # per text-only request. ``None`` means the script did not record it.
         self.text_request_slots: list[int] = []
+        # Each byte chunk a streamed reply gave, with the time it was given.
+        self.yielded: list[tuple[float, bytes]] = []
+        self.call_ids = 0
 
     def default_answer(self, body: dict) -> str:
         return self.vision_answer if self.has_image(body) else self.text_answer
@@ -395,12 +400,187 @@ class Wire:
 
 
 
+@dataclass(frozen=True)
+class ToolCall:
+    """One tool call in a reply. ``arguments`` that is a ``str`` is sent as is."""
+
+    arguments: object
+    name: str = "get_frames"
+
+
+@dataclass(frozen=True)
+class Reply:
+    """A provider reply a script may return instead of ``(status, text)``.
+
+    ``delay`` holds the first byte back; ``gap`` sends the text in two halves
+    that far apart; ``cut`` ends the stream with a transport error right after
+    the text.
+    """
+
+    text: str = ""
+    calls: tuple[ToolCall, ...] = ()
+    thinking: str = ""
+    status: int = 200
+    delay: float = 0.0
+    gap: float = 0.0
+    cut: bool = False
+
+
+class _Body(httpx.AsyncByteStream):
+    def __init__(self, wire: Wire, pieces: list[bytes], reply: Reply):
+        self.wire = wire
+        self.pieces = pieces
+        self.reply = reply
+
+    async def __aiter__(self):
+        if self.reply.delay:
+            await asyncio.sleep(self.reply.delay)
+        for index, piece in enumerate(self.pieces):
+            if index and self.reply.gap and index == 1:
+                await asyncio.sleep(self.reply.gap)
+            self.wire.yielded.append((time.monotonic(), piece))
+            yield piece
+            if self.reply.cut and index == 0:
+                raise httpx.RemoteProtocolError("connection dropped")
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _halves(text: str, gap: float) -> list[str]:
+    if not gap or len(text) < 2:
+        return [text]
+    middle = len(text) // 2
+    return [text[:middle], text[middle:]]
+
+
+def _openai_arguments(call: ToolCall) -> str:
+    if isinstance(call.arguments, str):
+        return call.arguments
+    return json.dumps(call.arguments)
+
+
+def _openai_stream(wire: Wire, body: dict, reply: Reply) -> list[bytes]:
+    model = body.get("model")
+
+    def piece(delta: dict, finish=None) -> bytes:
+        payload = {
+            "id": "1", "object": "chat.completion.chunk", "created": 0,
+            "model": model,
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+        }
+        return f"data: {json.dumps(payload)}\n\n".encode()
+
+    pieces: list[bytes] = []
+    texts = _halves(reply.text, reply.gap) if reply.text else []
+    for n, text in enumerate(texts):
+        delta = {"content": text}
+        if n == 0:
+            delta["role"] = "assistant"
+        pieces.append(piece(delta))
+    for index, call in enumerate(reply.calls):
+        wire.call_ids += 1
+        arguments = _openai_arguments(call)
+        middle = len(arguments) // 2
+        head = {
+            "index": index, "id": f"call_{wire.call_ids}", "type": "function",
+            "function": {"name": call.name, "arguments": arguments[:middle]},
+        }
+        delta = {"tool_calls": [head]}
+        if not pieces:
+            delta["role"] = "assistant"
+        pieces.append(piece(delta))
+        pieces.append(piece({
+            "tool_calls": [{"index": index, "function": {"arguments": arguments[middle:]}}],
+        }))
+    if not pieces:
+        pieces.append(piece({"role": "assistant", "content": ""}))
+    finish = "tool_calls" if reply.calls else "stop"
+    pieces.append(piece({}, finish) + b"data: [DONE]\n\n")
+    return pieces
+
+
+def _ollama_stream(reply: Reply) -> list[bytes]:
+    lines: list[dict] = []
+    if reply.thinking:
+        lines.append({
+            "message": {"role": "assistant", "content": "", "thinking": reply.thinking},
+            "done": False,
+        })
+    for text in _halves(reply.text, reply.gap) if reply.text else []:
+        lines.append({"message": {"role": "assistant", "content": text}, "done": False})
+    if reply.calls:
+        lines.append({
+            "message": {
+                "role": "assistant", "content": "",
+                "tool_calls": [
+                    {"function": {"name": call.name, "arguments": call.arguments}}
+                    for call in reply.calls
+                ],
+            },
+            "done": False,
+        })
+    lines.append({
+        "message": {"role": "assistant", "content": ""}, "done": True,
+        "done_reason": "stop",
+    })
+    return [(json.dumps(line) + "\n").encode() for line in lines]
+
+
+def _openai_reply(wire: Wire, body: dict, reply: Reply) -> httpx.Response:
+    if body.get("stream"):
+        return httpx.Response(
+            reply.status, headers={"content-type": "text/event-stream"},
+            stream=_Body(wire, _openai_stream(wire, body, reply), reply),
+        )
+    message: dict = {"role": "assistant", "content": reply.text or None}
+    if reply.calls:
+        message["tool_calls"] = []
+        for call in reply.calls:
+            wire.call_ids += 1
+            message["tool_calls"].append({
+                "id": f"call_{wire.call_ids}", "type": "function",
+                "function": {"name": call.name, "arguments": _openai_arguments(call)},
+            })
+    return httpx.Response(
+        reply.status,
+        json={
+            "id": "1", "object": "chat.completion", "created": 0,
+            "model": body.get("model"),
+            "choices": [{
+                "index": 0, "message": message,
+                "finish_reason": "tool_calls" if reply.calls else "stop",
+            }],
+        },
+    )
+
+
+def _ollama_reply(wire: Wire, body: dict, reply: Reply) -> httpx.Response:
+    if body.get("stream"):
+        return httpx.Response(reply.status, stream=_Body(wire, _ollama_stream(reply), reply))
+    message: dict = {"role": "assistant", "content": reply.text}
+    if reply.thinking:
+        message["thinking"] = reply.thinking
+    if reply.calls:
+        message["tool_calls"] = [
+            {"function": {"name": call.name, "arguments": call.arguments}}
+            for call in reply.calls
+        ]
+    return httpx.Response(
+        reply.status,
+        json={"message": message, "done": True, "done_reason": "stop"},
+    )
+
+
 def _openai_handler(wire: Wire):
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         wire.requests.append(body)
         wire.paths.append(request.url.path)
-        status, text = _script_result(wire, body)
+        result = _script_result(wire, body)
+        if isinstance(result, Reply):
+            return _openai_reply(wire, body, result)
+        status, text = result
         if body.get("stream"):
             chunk = {
                 "id": "1", "object": "chat.completion.chunk", "created": 0,
@@ -446,7 +626,10 @@ def _ollama_handler(wire: Wire):
         body = json.loads(request.content)
         wire.requests.append(body)
         wire.paths.append(request.url.path)
-        status, text = _script_result(wire, body)
+        result = _script_result(wire, body)
+        if isinstance(result, Reply):
+            return _ollama_reply(wire, body, result)
+        status, text = result
         if body.get("stream"):
             lines = [
                 {"message": {"role": "assistant", "content": text}, "done": False},

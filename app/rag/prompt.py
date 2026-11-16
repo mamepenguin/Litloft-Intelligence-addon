@@ -129,6 +129,7 @@ def build_file_question_system_prompt(
     has_passages: bool = True,
     has_history: bool = False,
     frames: bool = False,
+    tool: bool = False,
 ) -> str:
     """Return the system prompt for a question about one file.
 
@@ -141,7 +142,8 @@ def build_file_question_system_prompt(
     nor a citation instruction. ``frames`` makes the frames in the request
     citable from the same numbering, each carried by its own label.
     ``has_history`` adds the earlier-turns sentence, and with it
-    the citation limit when there is something to cite.
+    the citation limit when there is something to cite. ``tool`` says the
+    model may ask for more frames of the video.
     """
     lang = output_language
     lang_line = _LANGUAGE_INSTRUCTIONS.get(
@@ -155,6 +157,7 @@ def build_file_question_system_prompt(
         passages=has_passages,
         history=has_history,
         frames=frames,
+        tool=tool,
     )
 
 
@@ -166,6 +169,8 @@ def build_file_question_user_prompt(
     frames: bool = False,
     position_seconds: float | None = None,
     history: list[Any] | None = None,
+    duration: float | None = None,
+    contents: tuple[str, ...] = (),
 ) -> str:
     """Serialize one file's chunks, numbered from 1, and the question.
 
@@ -175,7 +180,8 @@ def build_file_question_user_prompt(
     travels beside its image, so the text here pairs no number with a time.
     The position is written in the viewer's clock when the caller read one for
     a media file. ``history`` is the kept earlier turns, oldest first, written
-    before the question.
+    before the question. ``duration`` and ``contents`` state how long the video
+    is and what the sections of it hold, after the passages.
     """
     return render(
         "rag/file_question_user.jinja2",
@@ -189,7 +195,36 @@ def build_file_question_user_prompt(
             else None
         ),
         history=history or [],
+        duration=format_position(duration) if duration is not None else None,
+        contents=contents,
     )
+
+
+#: The tool with which a video's question asks for the frames at times it picks.
+GET_FRAMES_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_frames",
+        "description": (
+            "Return frames of this video at the times you choose, to see what "
+            "is on screen there."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "times": {
+                    "type": "array",
+                    "description": (
+                        "Times in the video, as seconds (83.5) or m:ss "
+                        "(\"1:23\"); at most 4."
+                    ),
+                    "items": {"type": "string"},
+                },
+            },
+            "required": ["times"],
+        },
+    },
+}
 
 
 def format_position(seconds: float) -> str:

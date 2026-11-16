@@ -591,7 +591,9 @@ class TestTheProvidersAnswer:
     async def test_a_refusal_is_frames_rejected_and_writes_no_verdict(
         self, status, provider, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-108 failure table step 5 / I6: no retry, no text answer, no verdict."""
+        """SPEC-ADDON-116 §2 I4 (108 failure table step 5 / I6): the tool request is
+        refused, so today's request is sent once and is refused the same way; no
+        retry beyond it, no text answer, no verdict."""
         from app.llm import reset_vision_capability_cache
         from app.llm_routing import any_profile_can_see, profile_can_see
 
@@ -607,7 +609,7 @@ class TestTheProvidersAnswer:
         assert by_kind(response)["meta"]["image"] == "unavailable"
         assert by_kind(response)["done"]["error"] == "frames_rejected"
         assert _answer(response) == ""
-        assert len(wire.requests) == 1
+        assert len(wire.requests) == 2
         assert wire.text_bodies == []
 
         assert profile_can_see(llm.result) is True
@@ -615,7 +617,7 @@ class TestTheProvidersAnswer:
         assert await _available(call, VIDEO) is True
         again = await ask(call, VIDEO)
         assert again.status_code == 200
-        assert len(wire.image_bodies) == 2
+        assert len(wire.image_bodies) == 4
 
     @pytest.mark.parametrize(
         "how", [413, 422, 500, "timeout", "empty"],
@@ -624,7 +626,9 @@ class TestTheProvidersAnswer:
     async def test_any_other_failure_is_the_generic_generation_failure(
         self, how, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-108 failure table step 5: not ``frames_rejected``, not retried."""
+        """SPEC-ADDON-116 §2 (108 failure table step 5): the failed tool request
+        falls back to today's request once, which fails the same way; not
+        ``frames_rejected``, not retried."""
         _video(db, tmp_path)
         FFmpeg().install(monkeypatch)
 
@@ -642,7 +646,7 @@ class TestTheProvidersAnswer:
         error = by_kind(response)["done"].get("error")
         assert error
         assert error not in ("frames_rejected", "frames_unusable")
-        assert len(wire.requests) == 1
+        assert len(wire.requests) == 2
         assert wire.text_bodies == []
 
 
@@ -667,7 +671,8 @@ class TestAFailureAfterTheFirstToken:
     async def test_the_text_received_is_kept_and_done_carries_an_error(
         self, db, addon, llm, call, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-108 failure table step 5: as today, the partial text stays."""
+        """SPEC-ADDON-116 §2 I4 (108 failure table step 5): the tool request's reply
+        breaks mid-stream, so today's request is sent once and its partial text stays."""
         from openai import AsyncOpenAI
 
         from app.llm import LLMClient
@@ -698,7 +703,7 @@ class TestAFailureAfterTheFirstToken:
         error = by_kind(response)["done"].get("error")
         assert error
         assert error not in ("frames_rejected", "frames_unusable")
-        assert len(requests) == 1
+        assert len(requests) == 2
         assert by_kind(response)["meta"]["image"] == "attached"
 
 

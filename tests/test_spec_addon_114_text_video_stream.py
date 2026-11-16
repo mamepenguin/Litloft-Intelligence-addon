@@ -216,7 +216,8 @@ class TestTheSlot:
     async def test_one_slot_is_held_through_preparation_the_request_and_the_retry(
         self, db, addon, llm, call, ask_slots, tmp_path, monkeypatch,
     ):
-        """SPEC-ADDON-114 I6: one slot from after the material until the end, retry included."""
+        """SPEC-ADDON-116 §2 (114 I6): one slot from after the material until the
+        end, through the refused tool request, today's request and the retry."""
         _text_video(db, tmp_path)
         scenes(monkeypatch, [], duration=80.0)
         ffmpeg = FFmpeg()
@@ -250,7 +251,7 @@ class TestTheSlot:
         assert by_kind(response)["meta"]["image"] == "unavailable"
         assert len(during_frames) == 8
         assert set(during_frames) == {MAX - 1}
-        assert during_requests == [MAX - 1, MAX - 1]
+        assert during_requests == [MAX - 1] * 3
         assert ask_slots._value == MAX
 
     async def test_a_full_semaphore_is_503_before_any_frame_work(
