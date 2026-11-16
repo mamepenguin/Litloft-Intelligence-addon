@@ -288,6 +288,90 @@ def _header_option(headers: Any) -> tuple[str, ...]:
     return ("-headers", "".join(lines)) if lines else ()
 
 
+#: Seconds without the output growing before a download is killed.
+DOWNLOAD_STALL_SECONDS = 120.0
+#: Free space below which a running download is stopped.
+DOWNLOAD_MIN_FREE_BYTES = 1024 ** 3
+
+
+def download_rendition(
+    fmt: dict[str, Any],
+    dest: Path,
+    *,
+    time_limit: float,
+    free_bytes: Callable[[], int] | None = None,
+) -> bool:
+    """Copy one rendition's stream into ``dest``, video only, as Matroska.
+
+    ffmpeg reads the lookup's signed URL with the rendition's headers and
+    copies it without re-encoding. ``dest.part`` is written first and renamed
+    only when ffmpeg exits 0, so an interrupted copy never looks complete.
+
+    Returns ``False`` when ffmpeg fails, writes nothing, stops growing for
+    :data:`DOWNLOAD_STALL_SECONDS`, runs past ``time_limit``, or leaves less
+    than :data:`DOWNLOAD_MIN_FREE_BYTES` free; the partial file is then gone.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(f"{dest.stem}.part")
+    part.unlink(missing_ok=True)
+    argv = [
+        "ffmpeg", "-y", "-v", "error",
+        *_header_option(fmt.get("http_headers")),
+        "-i", fmt["url"],
+        "-map", "0:v:0",
+        "-an",
+        "-c", "copy",
+        "-f", "matroska",
+        str(part),
+    ]
+    try:
+        process = subprocess.Popen(
+            argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+        )
+    except OSError:
+        return False
+
+    deadline = time.monotonic() + time_limit
+    last_size = -1
+    last_growth = time.monotonic()
+    written = False
+    try:
+        while True:
+            size = part.stat().st_size if part.exists() else 0
+            now = time.monotonic()
+            if size > last_size:
+                last_size = size
+                last_growth = now
+            if process.poll() is not None:
+                written = process.returncode == 0 and size > 0
+                break
+            if now - last_growth > DOWNLOAD_STALL_SECONDS:
+                break
+            if now > deadline:
+                break
+            if free_bytes is not None and free_bytes() < DOWNLOAD_MIN_FREE_BYTES:
+                break
+            time.sleep(0.2)
+    finally:
+        if process.poll() is None:
+            process.kill()
+        try:
+            process.wait(timeout=10)
+        except Exception:  # noqa: BLE001 - a stuck child must not outlive the fetch
+            process.kill()
+
+    if not written:
+        part.unlink(missing_ok=True)
+        return False
+    try:
+        os.replace(part, dest)
+    except OSError:
+        part.unlink(missing_ok=True)
+        return False
+    return True
+
+
 def ensure_youtube_frame(
     file_id: str, url: str, cache_path: Path, timestamp_seconds: float,
     size: FrameSize = "small",
@@ -460,6 +544,7 @@ __all__ = [
     "Storyboard",
     "Tile",
     "YOUTUBE_PROVIDER",
+    "download_rendition",
     "ensure_youtube_frame",
     "kept_tiles",
     "known_duration",

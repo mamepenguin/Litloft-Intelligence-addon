@@ -27,7 +27,7 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import or_, text as sql_text
+from sqlalchemy import and_, or_, text as sql_text
 from sqlalchemy.exc import OperationalError
 
 import app.config as config
@@ -36,7 +36,7 @@ from app.addon_events import post_addon_event
 from app.vec_partition import insert_vector_sql
 from app.config import is_video_visual_index_available, settings
 from app.database import get_search_db, get_search_db_read
-from app.frame_cache import ensure_frame_cached
+from app.frame_cache import ensure_frame_cached, frame_cache_path
 from app.llm import (
     FAILURE_IMAGE_REJECTED,
     FAILURE_MODEL_MISSING,
@@ -51,6 +51,7 @@ from app.output_language import configured_language_requirement
 from app.policy_client import is_file_feature_enabled
 from app.prompt_loader import render
 from app.workers.clip import VIDEO_TYPES
+from app.workers.whisper import LOFT_MIME
 from app.workers.video_visual_selection import (
     compute_candidate_fingerprint,
     load_selection_inputs,
@@ -147,12 +148,69 @@ def _clip_candidates_exist(file_id: str) -> bool:
         )
 
 
+#: Fetch failures after which a `.loft` is not offered to the Visual Index.
+FETCH_FAILURE_CAP = 3
+
+
+def is_visual_index_file(mime_type: str | None, loft_source: str | None,
+                         failures: int | None) -> bool:
+    """Whether a stored file may have a Visual Index.
+
+    Native videos always may; a `.loft` only when its fetch classified it as
+    YouTube and has not given it up for good.
+    """
+    if mime_type in VIDEO_TYPES:
+        return True
+    return (
+        mime_type == LOFT_MIME
+        and loft_source == "youtube"
+        and int(failures or 0) < FETCH_FAILURE_CAP
+    )
+
+
+def _frame_source_row(file_id: str) -> tuple[str, str | None, str] | None:
+    with get_search_db_read() as session:
+        row = (
+            session.query(IndexedFile)
+            .filter(IndexedFile.file_id == file_id, IndexedFile.active.is_(True))
+            .first()
+        )
+        if row is None:
+            return None
+        return row.mime_type, row.loft_source, row.drive
+
+
 def _read_or_extract_frame(
     file_id: str,
     start_time: float,
     file_path: str,
 ) -> bytes:
-    """Load one frame without exposing synchronous I/O to the event loop."""
+    """Load one frame without exposing synchronous I/O to the event loop.
+
+    A YouTube `.loft` has no video of its own: its scene frame is the kept
+    ``small`` picture when the fetch left one, and otherwise a `small` frame
+    read from YouTube through the lookup it already does. Neither path ever
+    decodes the reference's own file.
+    """
+    row = _frame_source_row(file_id)
+    if row is not None and row[0] == LOFT_MIME:
+        if row[1] != "youtube":
+            raise RuntimeError("no frame source")
+        cache_path = frame_cache_path(file_id, start_time)
+        if cache_path.exists() and cache_path.stat().st_size > 0:
+            return cache_path.read_bytes()
+        from app.youtube_source import (
+            YOUTUBE_PROVIDER,
+            ensure_youtube_frame,
+            read_loft,
+        )
+
+        source = read_loft(file_path, row[2])
+        if source is None or source.provider != YOUTUBE_PROVIDER:
+            raise RuntimeError("no frame source")
+        ensure_youtube_frame(file_id, source.url, cache_path, start_time, "small")
+        return cache_path.read_bytes()
+
     cache_path = ensure_frame_cached(file_id, start_time, file_path)
     return cache_path.read_bytes()
 
@@ -458,7 +516,11 @@ class VideoVisualWorker:
                 )
                 if file_row is None:
                     return "not_found", None, None, False
-                if file_row.mime_type not in VIDEO_TYPES:
+                if not is_visual_index_file(
+                    file_row.mime_type,
+                    file_row.loft_source,
+                    file_row.loft_fetch_failures,
+                ):
                     return "not_eligible", None, None, False
 
                 last_run = (
@@ -686,7 +748,14 @@ class VideoVisualWorker:
                     session.query(IndexedFile.file_id)
                     .filter(
                         IndexedFile.active.is_(True),
-                        IndexedFile.mime_type.in_(list(VIDEO_TYPES)),
+                        or_(
+                            IndexedFile.mime_type.in_(list(VIDEO_TYPES)),
+                            and_(
+                                IndexedFile.mime_type == LOFT_MIME,
+                                IndexedFile.loft_source == "youtube",
+                                IndexedFile.loft_fetch_failures < FETCH_FAILURE_CAP,
+                            ),
+                        ),
                     )
                     .all()
                 )

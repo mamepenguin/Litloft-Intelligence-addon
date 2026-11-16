@@ -110,6 +110,14 @@ class IndexedFile(Base):
     page_ocr_indexed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )
+    # The provider a ``.loft`` reference was classified as by the fetch that
+    # read it: ``"youtube"``, ``"other"``, or NULL while unread. Meaningful
+    # for ``.loft`` rows only.
+    loft_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Counted failures of the ``.loft`` fetch; the cap is 3.
+    loft_fetch_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     tfidf_keywords_indexed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )

@@ -39,6 +39,7 @@ from app.video_frames import (
 )
 from app.workers.metadata import _remove_embeddings, _store_embedding, embed_passages
 from app.workers.ocr import _get_engine, run_engine
+from app.workers.whisper import LOFT_MIME
 
 logger = logging.getLogger(__name__)
 
@@ -372,8 +373,13 @@ def _build_rows(file_id: str) -> bool:
 
 def index_frame_ocr(
     file_id: str, *, is_paused: Callable[[], bool] | None = None,
+    source_path: str | None = None,
 ) -> bool:
     """Read one video's frames, or rebuild its stored read's search rows.
+
+    ``source_path`` is the video a ``.loft`` fetch downloaded for this file;
+    the `.loft`'s own path is never decoded, and a `.loft` without a
+    downloaded source is left exactly as it was.
 
     Returns ``True`` when the video is closed as done, ``False`` when it
     stays pending (unreachable, no engine, embedding or write failure).
@@ -385,6 +391,7 @@ def index_frame_ocr(
         if file is None:
             return False
         path = file.file_path
+        mime_type = file.mime_type
         already_read = bool(file.frame_ocr_read)
         already_indexed = bool(file.frame_ocr_indexed)
 
@@ -392,6 +399,11 @@ def index_frame_ocr(
         return True
     if already_read:
         return _build_rows(file_id)
+
+    if source_path is not None:
+        path = source_path
+    elif mime_type == LOFT_MIME:
+        return False
 
     if not _reachable(path):
         logger.warning(
