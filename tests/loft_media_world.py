@@ -225,3 +225,15 @@ def disk_usage_with(free: int):
         return type(usage)(usage.total, usage.total - free, free)
 
     return _usage
+
+
+class FreeSpace:
+    """The free space the disk-usage seam reports, changeable while a download runs."""
+
+    def __init__(self, free: int) -> None:
+        self.free = free
+        self._usage = shutil.disk_usage("/")
+
+    def __call__(self, _path):
+        usage = self._usage
+        return type(usage)(usage.total, usage.total - self.free, self.free)

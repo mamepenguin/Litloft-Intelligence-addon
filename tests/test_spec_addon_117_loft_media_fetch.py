@@ -17,6 +17,7 @@ from app.frame_cache import frame_cache_path
 from tests.loft_media_world import (
     FLAGS,
     GIB,
+    FreeSpace,
     LoftWorld,
     disk_usage_with,
     fetch,
@@ -64,6 +65,20 @@ def _succeed_once(world, gradient, file_id: str = "ytwarm000001") -> None:
     world.add_loft(file_id)
     fetch(file_id)
     assert world.flags(file_id)[0] is True
+
+
+def _after_download_starts(youtube, action) -> threading.Thread:
+    """Run ``action`` once the download is writing, so a stop rule, not the guard, decides."""
+    def run():
+        limit = time.monotonic() + 10
+        while not youtube.download_commands() and time.monotonic() < limit:
+            time.sleep(0.05)
+        time.sleep(0.3)
+        action()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return thread
 
 
 # ---------------------------------------------------------------------------
@@ -382,12 +397,47 @@ def test_spec_addon_117_i6_a_download_that_fails_is_counted_and_leaves_nothing(
     with caplog.at_level("INFO"):
         fetch("ytloft000001")
 
+    assert world.youtube.partials() != []
     assert world.downloads() != []
     assert world.failures("ytloft000001") == 1
     assert world.scan_rows("ytloft000001") == 0
     assert world.flags("ytloft000001")[0] is False
     assert world.fetch_dir_files() == []
     assert "loft_media download failed (file ytloft000001)" in everything_logged(caplog)
+
+
+def test_spec_addon_117_i6_a_nonzero_exit_after_a_whole_file_is_a_counted_failure(
+    world, gradient, caplog,
+):
+    """yt-dlp can fail after the transfer; the file it wrote must not be scanned."""
+    world.serve(gradient, duration=VIDEO_SECONDS)
+    world.youtube.set_download(exit=1)
+    world.add_loft("ytloft000001")
+
+    with caplog.at_level("INFO"):
+        fetch("ytloft000001")
+
+    assert world.youtube.download_notes() != []
+    assert world.failures("ytloft000001") == 1
+    assert world.flags("ytloft000001")[0] is False
+    assert world.scan_rows("ytloft000001") == 0
+    assert world.change_seconds("ytloft000001") == []
+    assert world.fetch_dir_files() == []
+    assert "loft_media download failed (file ytloft000001)" in everything_logged(caplog)
+
+
+def test_spec_addon_117_i6_a_download_that_writes_an_empty_file_is_counted(world, gradient):
+    """With no lookup duration nothing probes the file, so only the size check refuses it."""
+    world.serve(gradient, duration=None)
+    world.youtube.set_download(empty=True)
+    world.add_loft("ytloft000001")
+
+    fetch("ytloft000001")
+
+    assert world.failures("ytloft000001") == 1
+    assert world.flags("ytloft000001")[0] is False
+    assert world.scan_rows("ytloft000001") == 0
+    assert world.fetch_dir_files() == []
 
 
 @pytest.mark.parametrize(
@@ -490,30 +540,113 @@ def test_spec_addon_117_the_disk_guard_is_an_uncounted_end_before_the_download(
 
 
 # ---------------------------------------------------------------------------
-# Item 1.3 step 6 - the stall rule
+# Item 1.3 step 6 - the download's stop rules (I2)
 # ---------------------------------------------------------------------------
 
 
 def test_spec_addon_117_a_download_with_no_growth_for_120_seconds_is_stopped_and_counted(
     world, gradient, clock,
 ):
-    """The clock jumps 121 s while yt-dlp has written nothing."""
+    """The clock jumps 121 s while yt-dlp holds a partial it already wrote."""
     world.serve(gradient, duration=VIDEO_SECONDS)
-    world.youtube.set_download(hold=30)
+    world.youtube.set_download(hold=30, stall_bytes=8192)
     world.add_loft("ytloft000001")
 
-    def jump():
-        time.sleep(1.0)
-        clock.advance(121)
-
-    threading.Thread(target=jump, daemon=True).start()
+    _after_download_starts(world.youtube, lambda: clock.advance(121))
     started = time.perf_counter()
     fetch("ytloft000001")
 
     assert time.perf_counter() - started < 25
+    assert world.youtube.partials() != []
     assert world.failures("ytloft000001") == 1
     assert world.flags("ytloft000001")[0] is False
     assert world.fetch_dir_files() == []
+    assert world.youtube.downloads_stopped()
+
+
+def test_spec_addon_117_i2_a_download_is_stopped_when_free_space_falls_below_1_gib(
+    world, gradient,
+):
+    """The guard checks once before the start; a download that fills the disk stops mid-way."""
+    free = FreeSpace(50 * GIB)
+    world.monkeypatch.setattr(shutil, "disk_usage", free)
+    world.serve(gradient, duration=VIDEO_SECONDS)
+    world.youtube.set_download(hold=5, stall_bytes=4096)
+    world.add_loft("ytloft000001")
+
+    _after_download_starts(world.youtube, lambda: setattr(free, "free", GIB // 2))
+    fetch("ytloft000001")
+
+    assert world.youtube.partials() != []
+    assert world.failures("ytloft000001") == 1
+    assert world.flags("ytloft000001")[0] is False
+    assert world.scan_rows("ytloft000001") == 0
+    assert world.fetch_dir_files() == []
+    assert world.youtube.downloads_stopped()
+
+
+def test_spec_addon_117_i2_a_download_is_stopped_at_the_time_limit(world, gradient, clock):
+    """The stream keeps growing, so only the time limit can stop it."""
+    world.serve(gradient, duration=VIDEO_SECONDS)
+    world.youtube.set_download(grow=[64, 3.0])
+    world.add_loft("ytloft000001")
+
+    _after_download_starts(world.youtube, lambda: clock.advance(601))
+    fetch("ytloft000001")
+
+    assert world.youtube.partials() != []
+    assert world.failures("ytloft000001") == 1
+    assert world.flags("ytloft000001")[0] is False
+    assert world.scan_rows("ytloft000001") == 0
+    assert world.fetch_dir_files() == []
+    assert world.youtube.downloads_stopped()
+
+
+def test_spec_addon_117_i2_a_download_under_the_600_s_floor_is_not_stopped(world, gradient):
+    """3 s of lookup would give a 4.5 s limit without the floor; this download takes 5 s."""
+    world.serve(gradient, duration=3.0)
+    world.youtube.set_download(hold=5)
+    world.add_loft("ytloft000001")
+
+    fetch("ytloft000001")
+
+    assert world.failures("ytloft000001") == 0
+    assert world.flags("ytloft000001")[0] is True
+    assert world.scan_rows("ytloft000001") == 1
+    assert world.fetch_dir_files() == []
+
+
+def test_spec_addon_117_i2_a_download_of_unknown_duration_is_not_stopped_at_600_s(
+    world, gradient, clock,
+):
+    world.serve(gradient, duration=None)
+    world.youtube.set_download(grow=[64, 3.0])
+    world.add_loft("ytloft000001")
+
+    _after_download_starts(world.youtube, lambda: clock.advance(700))
+    fetch("ytloft000001")
+
+    assert world.failures("ytloft000001") == 0
+    assert world.flags("ytloft000001")[0] is True
+    assert world.scan_rows("ytloft000001") == 1
+    assert world.fetch_dir_files() == []
+
+
+def test_spec_addon_117_i2_a_download_of_unknown_duration_is_stopped_at_7200_s(
+    world, gradient, clock,
+):
+    world.serve(gradient, duration=None)
+    world.youtube.set_download(grow=[64, 3.0])
+    world.add_loft("ytloft000001")
+
+    _after_download_starts(world.youtube, lambda: clock.advance(7201))
+    fetch("ytloft000001")
+
+    assert world.youtube.partials() != []
+    assert world.failures("ytloft000001") == 1
+    assert world.flags("ytloft000001")[0] is False
+    assert world.fetch_dir_files() == []
+    assert world.youtube.downloads_stopped()
 
 
 # ---------------------------------------------------------------------------
@@ -553,6 +686,42 @@ def test_spec_addon_117_i2_the_download_takes_one_video_only_rendition_from_the_
     assert all(
         r["headers"].get("x-fake-auth") == HEADER_TOKEN for r in world.downloads()
     )
+    assert world.fetch_dir_files() == []
+
+
+def test_spec_addon_117_i2_a_leftover_of_the_same_file_id_is_removed_before_the_download(
+    world, gradient,
+):
+    """A crash after the start-up cleanup can leave an output yt-dlp would take as done."""
+    world.serve(gradient, duration=VIDEO_SECONDS)
+    world.fetch_dir.mkdir(parents=True)
+    (world.fetch_dir / "ytloft000001.part.mp4").write_bytes(b"left by a killed fetch")
+    world.add_loft("ytloft000001")
+
+    fetch("ytloft000001")
+
+    assert world.youtube.reused_outputs() == []
+    assert world.downloads() != []
+    assert world.change_seconds("ytloft000001") == [float(s) for s in CHANGE_SECONDS]
+    assert world.failures("ytloft000001") == 0
+    assert world.flags("ytloft000001")[0] is True
+    assert world.fetch_dir_files() == []
+
+
+def test_spec_addon_117_i2_a_temporary_left_by_yt_dlp_is_not_the_finished_file(
+    world, gradient,
+):
+    """yt-dlp writes ``<out>.part`` first; an exit 0 that leaves only that is no download."""
+    world.serve(gradient, duration=VIDEO_SECONDS)
+    world.youtube.set_download(temp=True)
+    world.add_loft("ytloft000001")
+
+    fetch("ytloft000001")
+
+    assert world.youtube.download_notes() != []
+    assert world.failures("ytloft000001") == 1
+    assert world.flags("ytloft000001")[0] is False
+    assert world.scan_rows("ytloft000001") == 0
     assert world.fetch_dir_files() == []
 
 
