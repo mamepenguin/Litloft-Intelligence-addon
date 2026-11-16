@@ -37,7 +37,7 @@ PAGE_MARGINS = (0, 50, 0, 50)
 
 # Bumped when the rules below change: the startup check re-extracts every
 # PDF once for a new value.
-PDF_TEXT_RULES_VERSION = "1"
+PDF_TEXT_RULES_VERSION = "2"
 
 # Characters the containment check ignores besides whitespace, because the
 # library writes Markdown and the recovered line is plain text.
@@ -64,6 +64,87 @@ PYMUPDF_LOCK = threading.Lock()
 
 EXTRACTOR_PRIMARY = "pymupdf4llm"
 EXTRACTOR_FALLBACK = "fitz_fallback"
+
+
+class VerticalTextError(Exception):
+    pass
+
+
+def recover_vertical_texts(
+    path: Path, doc: object, texts: dict[int, str], scanned_pages: set[int],
+) -> dict[int, str]:
+    numbers = sorted(number for number in texts if number not in scanned_pages)
+    if not numbers:
+        return texts
+    try:
+        from pdfminer.high_level import extract_pages
+        from pdfminer.layout import LAParams, LTTextBoxVertical, LTTextContainer
+
+        layouts = extract_pages(
+            str(path), page_numbers=[number - 1 for number in numbers],
+            laparams=LAParams(detect_vertical=True),
+        )
+        for number in numbers:
+            try:
+                layout = next(layouts)
+                counts = [0, 0]
+                try:
+                    import fitz
+
+                    blocks = doc[number - 1].get_text(
+                        "dict", flags=fitz.TEXTFLAGS_DICT,
+                    )["blocks"]
+                except Exception as exc:
+                    logger.warning(
+                        "PDF orientation unavailable for %s page %d (%s)",
+                        path.name, number, type(exc).__name__,
+                    )
+                    blocks = []
+                for block in blocks:
+                    for line in block.get("lines", []):
+                        x, y = line["dir"]
+                        size = sum(
+                            sum(not char.isspace() for char in span["text"])
+                            for span in line["spans"]
+                        )
+                        if abs(x) <= 0.01 and abs(y - 1) <= 0.01:
+                            counts[0] += size
+                        elif abs(x - 1) <= 0.01 and abs(y) <= 0.01:
+                            counts[1] += size
+                boxes = [box for box in layout if isinstance(box, LTTextContainer)]
+                if counts[0] > counts[1]:
+                    text = "\n".join(
+                        box.get_text().strip() for box in boxes
+                    ).strip()
+                    if not text:
+                        raise ValueError("empty vertical page")
+                    texts[number] = text
+                else:
+                    text = texts[number]
+                    for box in boxes:
+                        if not isinstance(box, LTTextBoxVertical):
+                            continue
+                        part = box.get_text().strip()
+                        if _normalise(part) and not _is_contained(
+                            part, _normalise(text),
+                        ):
+                            text = f"{text}\n\n{part}" if text else part
+                    texts[number] = text
+            except Exception as exc:
+                logger.warning(
+                    "Vertical text extraction failed for %s page %d (%s)",
+                    path.name, number, type(exc).__name__,
+                )
+                raise VerticalTextError from exc
+    except VerticalTextError:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "Vertical text extraction failed for %s page %d (%s)",
+            path.name, numbers[0], type(exc).__name__,
+        )
+        raise VerticalTextError from exc
+    return texts
 
 
 class PdfExtractor(ContentExtractor):
@@ -192,10 +273,25 @@ def _extract_with_pymupdf4llm(
     limited = list(page_chunks)[:MAX_PAGES]
     edges = _safe_edge_lines(path)
     scanned = _empty_text_pages(path)
-    chunks = _build_chunks_from_pages(limited, edges, page_ocr_texts, scanned)
-    full_markdown = _join_page_markdown(
-        limited, edges, page_ocr_texts, scanned,
-    )
+    texts = {
+        index + 1: page_text_with_edges(
+            _page_text_for(page, index + 1, page_ocr_texts, scanned),
+            edges.get(index + 1),
+        )
+        for index, page in enumerate(limited)
+    }
+    import fitz
+
+    try:
+        document = fitz.open(str(path))
+    except Exception:
+        document = None
+    if document is not None:
+        with document:
+            texts = recover_vertical_texts(path, document, texts, scanned)
+    pages = [{"text": texts[index + 1]} for index in range(len(limited))]
+    chunks = _build_chunks_from_pages(pages)
+    full_markdown = _join_page_markdown(pages)
     return ExtractionResult(
         chunks=chunks,
         markdown=full_markdown,
@@ -494,6 +590,8 @@ def _fitz_chunks(
     page_count = min(getattr(doc, "page_count", 0), MAX_PAGES)
     chunks: list[TextChunk] = []
 
+    texts = {}
+    scanned = set()
     for page_num in range(page_count):
         try:
             page = doc[page_num]
@@ -501,7 +599,14 @@ def _fitz_chunks(
         except Exception:
             continue
         if not page_text or not page_text.strip():
+            scanned.add(page_num + 1)
             page_text = (page_ocr_texts or {}).get(page_num + 1, "")
+        texts[page_num + 1] = page_text or ""
+    if hasattr(doc, "name") and isinstance(doc.name, str) and doc.name:
+        texts = recover_vertical_texts(Path(doc.name), doc, texts, scanned)
+
+    for page_num in range(page_count):
+        page_text = texts.get(page_num + 1, "")
         if not page_text or not page_text.strip():
             continue
 

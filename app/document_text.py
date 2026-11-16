@@ -215,9 +215,16 @@ def _pdf_page(
         text = (doc[number - 1].get_text("text") or "").strip()
         if scanned and stored and stored.strip():
             text = stored
-        return Unit(number, None, text, False, pdf.EXTRACTOR_FALLBACK)
+        recovered = pdf.recover_vertical_texts(
+            path, doc, {number: text}, {number} if scanned else set(),
+        )[number]
+        return Unit(number, None, recovered, False, pdf.EXTRACTOR_FALLBACK)
+    text = pdf.page_text_with_edges(text, edges)
+    text = pdf.recover_vertical_texts(
+        path, doc, {number: text}, {number} if scanned else set(),
+    )[number]
     return Unit(
-        number, None, pdf.page_text_with_edges(text, edges), False,
+        number, None, text, False,
         pdf.EXTRACTOR_PRIMARY,
     )
 
