@@ -1044,8 +1044,8 @@ async def reindex_file(
 
     # A `.loft`'s frame scan and frame OCR are stages of its fetch, so an OCR
     # request turns into one `loft_media` task instead of its own queue entry.
-    # A CLIP regenerate keeps its own task; the queue knows that enqueuing it
-    # for a `.loft` also makes the next fetch read the reference again.
+    # A CLIP regenerate keeps its own task and also asks for a fetch, whether
+    # or not that CLIP task was already queued.
     loft_ocr_requested = False
     if indexed["mime_type"] == LOFT_MIME and "frame_ocr" in tasks:
         tasks = [t for t in tasks if t != "frame_ocr"]
@@ -1062,11 +1062,11 @@ async def reindex_file(
     loft_requests: list[str] = []
     if loft_ocr_requested:
         loft_requests.append("frame_ocr")
-    if indexed["mime_type"] == LOFT_MIME and "clip" in fresh:
+    if indexed["mime_type"] == LOFT_MIME and "clip" in tasks:
         loft_requests.append("clip")
     loft_running = bool(loft_requests) and loft_media.is_fetch_running(file_id)
     loft_updates = bool(loft_requests) and not loft_running
-    fetch_queued = loft_ocr_requested and manager.is_queued(file_id, "loft_media")
+    fetch_queued = bool(loft_requests) and manager.is_queued(file_id, "loft_media")
     if loft_running:
         loft_media.record_request_during_run(file_id, set(loft_requests))
 
@@ -1138,7 +1138,7 @@ async def reindex_file(
             await manager.enqueue_task_for_file(file_id, t)
         if enqueue_scan:
             await manager.enqueue_task_for_file(file_id, _SCAN_TASK)
-        if loft_updates and loft_ocr_requested:
+        if loft_updates:
             if fetch_queued:
                 await manager.raise_task_priority(file_id, "loft_media")
             else:
@@ -1146,18 +1146,18 @@ async def reindex_file(
     finally:
         _reindex_in_flight.difference_update(claimed)
 
-    # The CLIP task was already queued: the scan may have been queued by this
-    # request, but the body still reports the CLIP task alone.
+    # A fetch that was already queued is raised rather than duplicated, and the
+    # raise is what the answer reports even when a fresh task came with it.
+    if loft_running:
+        return ReindexResponse(
+            status="accepted", file_id=file_id, tasks_reset=loft_requests,
+        )
+    if loft_updates and fetch_queued:
+        return ReindexResponse(
+            status="already_queued", file_id=file_id, tasks_reset=[],
+        )
     if fresh == [] and not rescan:
-        if loft_running:
-            return ReindexResponse(
-                status="accepted", file_id=file_id, tasks_reset=loft_requests,
-            )
         if loft_updates:
-            if fetch_queued:
-                return ReindexResponse(
-                    status="already_queued", file_id=file_id, tasks_reset=[],
-                )
             return ReindexResponse(
                 status="accepted", file_id=file_id, tasks_reset=loft_requests,
             )

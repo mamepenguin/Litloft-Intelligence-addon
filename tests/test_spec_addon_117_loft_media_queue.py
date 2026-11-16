@@ -4,8 +4,11 @@ requests that open it, the status counts and the per-file dialog's payload.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi import HTTPException
+from fastapi.responses import JSONResponse
 
 from tests.ocr_fixtures import (
     SearchDB,
@@ -72,7 +75,11 @@ async def _reindex(manager, monkeypatch, file_id: str, task: str):
 
     monkeypatch.setattr(files_router, "get_index_manager", lambda: manager)
     result = await files_router.reindex_file(file_id, body={"tasks": [task]}, drive="drive1")
-    return result if isinstance(result, dict) else result.model_dump()
+    if isinstance(result, dict):
+        return result
+    if isinstance(result, JSONResponse):
+        return json.loads(result.body)
+    return result.model_dump()
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +244,47 @@ async def test_spec_addon_117_i13_a_clip_regenerate_of_a_loft_unclassifies_it_an
     assert db.flag("loft1", "loft_fetch_failures") == 0
     assert await _queued(manager, FETCH) == [("loft1", 100)]
     assert await _queued(manager, "frame_scan") == []
+
+
+async def test_spec_addon_117_i13_a_clip_regenerate_raises_a_queued_backlog_fetch(
+    db, tmp_path, monkeypatch,
+):
+    """R5-2: one fetch at 100, not a second beside the -10 entry."""
+    patch_features(monkeypatch, video_frame_ocr="on_index")
+    _loft(db, tmp_path, "loft1", None, frame_scan_indexed=False)
+    manager = _manager()
+    await manager._resume_incomplete()
+
+    payload = await _reindex(manager, monkeypatch, "loft1", "clip")
+
+    assert payload["status"] == "already_queued"
+    assert db.flag("loft1", "loft_source") is None
+    assert bool(db.flag("loft1", "frame_scan_indexed")) is False
+    assert db.flag("loft1", "loft_fetch_failures") == 0
+    assert await _queued(manager, FETCH) == [("loft1", 100)]
+
+
+async def test_spec_addon_117_i13_a_clip_regenerate_fetches_although_the_clip_task_is_queued(
+    db, tmp_path, monkeypatch,
+):
+    """R5-3: the queued CLIP task must not swallow the fetch the request asks for."""
+    from app.indexer import IndexTask, TaskType
+
+    patch_features(monkeypatch, video_frame_ocr="on_index")
+    _loft(db, tmp_path, "loft1", "youtube", frame_scan_indexed=True, failures=3)
+    manager = _manager()
+    await manager._enqueue(
+        IndexTask(file_id="loft1", task_type=TaskType.CLIP, priority=0), force=True,
+    )
+
+    payload = await _reindex(manager, monkeypatch, "loft1", "clip")
+
+    assert payload["status"] == "accepted"
+    assert "clip" in payload["tasks_reset"]
+    assert db.flag("loft1", "loft_source") is None
+    assert bool(db.flag("loft1", "frame_scan_indexed")) is False
+    assert db.flag("loft1", "loft_fetch_failures") == 0
+    assert await _queued(manager, FETCH) == [("loft1", 100)]
 
 
 async def test_spec_addon_117_prioritize_of_a_stored_read_queues_the_rebuild_only_task(

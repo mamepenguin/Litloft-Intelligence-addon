@@ -1444,20 +1444,10 @@ class IndexManager:
         ``force=True`` lets us re-enqueue if a stale entry already
         exists; ``is_queued`` is the front-line guard against
         double-clicks.
-
-        A CLIP regenerate of a `.loft` also makes the next fetch read the
-        reference again, so it queues that fetch at the same priority.
         """
         task_type = self._TASK_NAME_TO_TYPE.get(task)
         if task_type is None:
             return
-        if task == "clip" and await asyncio.to_thread(_is_loft_file, file_id):
-            await self._enqueue(
-                IndexTask(
-                    file_id=file_id, task_type=TaskType.LOFT_MEDIA, priority=100,
-                ),
-                force=True,
-            )
         await self._enqueue(
             IndexTask(file_id=file_id, task_type=task_type, priority=100),
             force=True,
@@ -2359,15 +2349,6 @@ class IndexManager:
                 break
 
         return collected
-
-
-def _is_loft_file(file_id: str) -> bool:
-    """Whether ``file_id`` is an active ``.loft`` row."""
-    with get_search_db_read() as session:
-        row = session.query(IndexedFile.mime_type).filter_by(
-            file_id=file_id, active=True
-        ).first()
-    return row is not None and row[0] == LOFT_MIME
 
 
 # --- Startup cleanup ---
