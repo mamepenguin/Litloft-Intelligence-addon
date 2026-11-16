@@ -370,13 +370,17 @@ export default function ScenesSectionContainer({
   const succeededEvent = useWebSocket(EVENT_SUCCEEDED);
   const partialEvent = useWebSocket(EVENT_PARTIAL);
   const failedEvent = useWebSocket(EVENT_FAILED);
+  // The hook keeps returning its last event on every render, so the request is
+  // keyed on the event object: a policy reload must not replay it.
+  const appliedEvent = useRef<unknown>(null);
 
   useEffect(() => {
+    const event = progressEvent ?? succeededEvent ?? partialEvent ?? failedEvent;
+    if (!event || appliedEvent.current === event) return;
+    appliedEvent.current = event;
     if (!isVideo || !shown) return;
     if (!hostDriven && !expandedRef.current) return;
     if (policy.isLoading || !policy.enabled) return;
-    const event = progressEvent ?? succeededEvent ?? partialEvent ?? failedEvent;
-    if (!event) return;
     if ((event.data as { file_id?: unknown }).file_id !== fileId) return;
     void loadVisual(true);
   }, [

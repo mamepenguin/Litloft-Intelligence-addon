@@ -132,6 +132,29 @@ describe("SPEC-ADDON-118 item 4 — the .loft's Visual Index requests", () => {
     await waitFor(() => expect(getVideoVisualIndex).toHaveBeenCalledTimes(1));
   });
 
+  it("does not replay the last WebSocket event when the policy reloads", async () => {
+    const view = renderSection();
+    await screen.findByRole("button", { name: /^Scenes/ });
+    fireEvent.click(header());
+    await waitFor(() => expect(getVideoVisualIndex).toHaveBeenCalledTimes(1));
+
+    wsEvent.value = {
+      event: "intelligence.video_visual.succeeded",
+      data: { file_id: "f1" },
+    };
+    view.rerender(section());
+    await waitFor(() => expect(getVideoVisualIndex).toHaveBeenCalledTimes(2));
+
+    vi.mocked(usePolicy).mockReturnValue({ enabled: true, isLoading: true });
+    view.rerender(section());
+    await flush();
+    vi.mocked(usePolicy).mockReturnValue({ enabled: true, isLoading: false });
+    view.rerender(section());
+    await flush();
+
+    expect(getVideoVisualIndex).toHaveBeenCalledTimes(2);
+  });
+
   it("reloads visual-index on a WebSocket event for the current file only", async () => {
     const view = renderSection();
     await screen.findByRole("button", { name: /^Scenes/ });
