@@ -1,9 +1,9 @@
 """A YouTube ``.loft`` fetch over a real search DB, for SPEC-ADDON-117/118.
 
 ``yt-dlp`` and ``ffmpeg`` are the doubles of ``tests.youtube_frame_doubles``; the
-rendition is a real local video served over HTTP, so the download is a real
-ffmpeg copy and the scan and OCR read real frames. The CLIP model and the OCR
-engine are stand-ins.
+rendition is a real local video served over HTTP, so the download moves those
+bytes and the scan and OCR read real frames. The CLIP model and the OCR engine
+are stand-ins.
 """
 
 from __future__ import annotations
