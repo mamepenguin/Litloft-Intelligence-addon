@@ -16,6 +16,7 @@ import inspect
 import logging
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -41,6 +42,7 @@ MIN_TIME_LIMIT = 600.0
 KNOWN_SIZE_RESERVE = 2 * 1024 ** 3
 UNKNOWN_SIZE_RESERVE = 4 * 1024 ** 3
 DURATION_TOLERANCE = 0.95
+_PAUSE_POLL_SECONDS = 0.2
 
 #: File ids a `frame_ocr` reindex or prioritize asked for; a restart forgets it.
 _OCR_REQUESTED: set[str] = set()
@@ -380,9 +382,10 @@ def _fetch(
                 )
                 return FetchResult()
 
-        if is_paused is not None and is_paused():
-            # A paused queue never starts a stage; time-limit is the next sweep's.
-            return FetchResult()
+        if is_paused is not None:
+            # Discarding the download here would only fetch it again later.
+            while is_paused():
+                time.sleep(_PAUSE_POLL_SECONDS)
 
         ran_scan, ran_ocr = False, False
         scan_set = False
