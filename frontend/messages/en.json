@@ -152,6 +152,9 @@
       },
       "frame_scan": {
         "label": "Scene change scan"
+      },
+      "loft_media": {
+        "label": "YouTube fetch"
       }
     },
     "frameOcrFiles": "Text in video {done} / {total}",

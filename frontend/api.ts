@@ -164,6 +164,7 @@ export type QueueTaskKind =
   | "frame_ocr"
   | "page_ocr"
   | "frame_scan"
+  | "loft_media"
   | "auto_tags"
   | "summaries"
   | "vision_describe"
@@ -1944,6 +1945,9 @@ export interface IndexDetailsResponse {
   image_ocr?: string;
   video_frame_ocr?: string;
   scanned_pdf_ocr?: string;
+  // Which provider a `.loft` points at, once a fetch has read it; null for an
+  // unclassified `.loft` and for every other file.
+  loft_source?: "youtube" | "other" | null;
   status: IndexDetailsStatus;
   indexed_at: string;
   // The embeddings + provider_stats payload is opaque to the
