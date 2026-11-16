@@ -2013,6 +2013,11 @@ class IndexManager:
                     await self._enqueue(task, force=True)
                     await asyncio.sleep(2)
                     continue
+                # The pause and the backoff hold the backlog only.
+                if task.priority == -10 and loft_media.backlog_held():
+                    await self._defer_backlog(task)
+                    await asyncio.sleep(2)
+                    continue
 
                 self._processing_count += 1
                 self._processing_by_type[TaskType.LOFT_MEDIA].append(task.file_id)
@@ -2033,6 +2038,12 @@ class IndexManager:
                             task_type=TaskType.LOFT_MEDIA,
                             priority=100,
                         ), force=True)
+                    elif result.retry_backlog:
+                        await self._enqueue(IndexTask(
+                            file_id=task.file_id,
+                            task_type=TaskType.LOFT_MEDIA,
+                            priority=-10,
+                        ), force=True)
                 except Exception as e:
                     logger.error(
                         "Loft media fetch failed for %s: %s", task.file_id, e
@@ -2051,6 +2062,17 @@ class IndexManager:
             except Exception as e:
                 logger.error("Loft media worker error: %s", e)
                 await asyncio.sleep(5)
+
+    async def _defer_backlog(self, task: IndexTask) -> None:
+        """Put a held backlog task back at the head of the backlog.
+
+        It was the head when taken, so a new tail timestamp would let the
+        files queued behind it overtake it on every pause or backoff check.
+        """
+        self._queued_by_type[task.task_type].add(task.file_id)
+        await self._queues[task.task_type].put(
+            (-task.priority, float("-inf"), task),
+        )
 
     def _native_frame_busy(self) -> bool:
         """Whether a native frame scan or OCR task is queued or running."""

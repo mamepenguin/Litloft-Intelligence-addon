@@ -371,16 +371,17 @@ def test_spec_addon_117_i5_the_duration_is_written_only_from_null_with_a_positiv
 # ---------------------------------------------------------------------------
 
 
-def test_spec_addon_117_i6_no_rendition_is_a_counted_failure_and_is_logged(
+def test_spec_addon_117_i6_no_rendition_is_a_success_result_and_is_logged(
     world, caplog,
 ):
+    """SPEC-ADDON-119 Terms: no rendition is a success, so it is not counted."""
     world.youtube.set_ytdlp(describe=describe([], duration=VIDEO_SECONDS))
     world.add_loft("ytloft000001")
 
     with caplog.at_level("INFO"):
         fetch("ytloft000001")
 
-    assert world.failures("ytloft000001") == 1
+    assert world.failures("ytloft000001") == 0
     assert world.flags("ytloft000001")[0] is False
     assert world.downloads() == []
     assert "loft_media no rendition (file ytloft000001)" in everything_logged(caplog)
@@ -416,6 +417,8 @@ def test_spec_addon_117_i6_a_missing_yt_dlp_is_never_counted(world, gradient):
 def test_spec_addon_117_i6_a_download_that_fails_is_counted_and_leaves_nothing(
     world, gradient, caplog,
 ):
+    """SPEC-ADDON-119 I2: a failure is counted only after a success."""
+    _succeed_once(world, gradient)
     world.serve(gradient, duration=VIDEO_SECONDS)
     world.youtube.override("/v/rendition", status=403)
     world.add_loft("ytloft000001")
@@ -435,7 +438,11 @@ def test_spec_addon_117_i6_a_download_that_fails_is_counted_and_leaves_nothing(
 def test_spec_addon_117_i6_a_nonzero_exit_after_a_whole_file_is_a_counted_failure(
     world, gradient, caplog,
 ):
-    """yt-dlp can fail after the transfer; the file it wrote must not be scanned."""
+    """yt-dlp can fail after the transfer; the file it wrote must not be scanned.
+
+    SPEC-ADDON-119 I2: the failure is counted because a lookup just succeeded.
+    """
+    _succeed_once(world, gradient)
     world.serve(gradient, duration=VIDEO_SECONDS)
     world.youtube.set_download(exit=1)
     world.add_loft("ytloft000001")
@@ -453,7 +460,11 @@ def test_spec_addon_117_i6_a_nonzero_exit_after_a_whole_file_is_a_counted_failur
 
 
 def test_spec_addon_117_i6_a_download_that_writes_an_empty_file_is_counted(world, gradient):
-    """With no lookup duration nothing probes the file, so only the size check refuses it."""
+    """With no lookup duration nothing probes the file, so only the size check refuses it.
+
+    SPEC-ADDON-119 I2: the failure follows a success, so it is counted.
+    """
+    _succeed_once(world, gradient)
     world.serve(gradient, duration=None)
     world.youtube.set_download(empty=True)
     world.add_loft("ytloft000001")
@@ -477,6 +488,8 @@ def test_spec_addon_117_i6_a_download_that_writes_an_empty_file_is_counted(world
 def test_spec_addon_117_i6_a_download_shorter_than_95_percent_of_the_lookup_is_counted(
     world, gradient, looked_up, counted,
 ):
+    """SPEC-ADDON-119 I2: a counted row is counted because a success came first."""
+    _succeed_once(world, gradient)
     world.serve(gradient, duration=looked_up)
     world.add_loft("ytloft000001")
 
@@ -490,6 +503,8 @@ def test_spec_addon_117_i6_a_download_shorter_than_95_percent_of_the_lookup_is_c
 
 
 def test_spec_addon_117_a_truncated_download_is_counted(world, gradient):
+    """SPEC-ADDON-119 I2: the failure follows a success, so it is counted."""
+    _succeed_once(world, gradient)
     world.serve(gradient, duration=VIDEO_SECONDS)
     world.youtube.override("/v/rendition", truncate=0.5)
     world.add_loft("ytloft000001")
@@ -500,15 +515,22 @@ def test_spec_addon_117_a_truncated_download_is_counted(world, gradient):
     assert world.fetch_dir_files() == []
 
 
-def test_spec_addon_117_item_4_the_third_counted_failure_closes_the_wanted_stages(world):
+def test_spec_addon_117_item_4_the_third_counted_failure_closes_the_wanted_stages(
+    world, gradient,
+):
+    """SPEC-ADDON-119 I2: each counted failure here directly follows a success."""
     world.configure(frame_ocr="on_index")
-    world.youtube.set_ytdlp(describe=describe([], duration=VIDEO_SECONDS))
     world.add_loft("ytloft000001", frame_ocr_read=False, frame_ocr_indexed=False)
     world.add_loft("ytloft000002", frame_ocr_read=False, frame_ocr_indexed=False)
     world.set("ytloft000001", loft_fetch_failures=2)
     world.set("ytloft000002", loft_fetch_failures=1)
 
+    _succeed_once(world, gradient, "ytwarm000001")
+    world.youtube.set_ytdlp(fail="ERROR: Private video")
     fetch("ytloft000001")
+
+    _succeed_once(world, gradient, "ytwarm000002")
+    world.youtube.set_ytdlp(fail="ERROR: Private video")
     fetch("ytloft000002")
 
     assert world.failures("ytloft000001") == 3
@@ -573,7 +595,11 @@ def test_spec_addon_117_the_disk_guard_is_an_uncounted_end_before_the_download(
 def test_spec_addon_117_a_download_with_no_growth_for_120_seconds_is_stopped_and_counted(
     world, gradient, clock,
 ):
-    """The clock jumps 121 s while yt-dlp holds a partial it already wrote."""
+    """The clock jumps 121 s while yt-dlp holds a partial it already wrote.
+
+    SPEC-ADDON-119 I2: the failure follows a success, so it is counted.
+    """
+    _succeed_once(world, gradient)
     world.serve(gradient, duration=VIDEO_SECONDS)
     world.youtube.set_download(hold=30, stall_bytes=8192)
     world.add_loft("ytloft000001")
@@ -600,7 +626,10 @@ def test_spec_addon_117_a_download_with_no_growth_for_120_seconds_is_stopped_and
 def test_spec_addon_117_i2_a_download_is_stopped_when_free_space_falls_below_1_gib(
     world, gradient,
 ):
-    """The guard checks once before the start; a download that fills the disk stops mid-way."""
+    """The guard checks once before the start; a download that fills the disk stops mid-way.
+
+    SPEC-ADDON-119 Terms: the free-space stop is no YouTube result, so it is not counted.
+    """
     free = FreeSpace(50 * GIB)
     world.monkeypatch.setattr(shutil, "disk_usage", free)
     world.serve(gradient, duration=VIDEO_SECONDS)
@@ -611,7 +640,7 @@ def test_spec_addon_117_i2_a_download_is_stopped_when_free_space_falls_below_1_g
     fetch("ytloft000001")
 
     assert world.youtube.partials() != []
-    assert world.failures("ytloft000001") == 1
+    assert world.failures("ytloft000001") == 0
     assert world.flags("ytloft000001")[0] is False
     assert world.scan_rows("ytloft000001") == 0
     assert world.fetch_dir_files() == []
@@ -619,7 +648,11 @@ def test_spec_addon_117_i2_a_download_is_stopped_when_free_space_falls_below_1_g
 
 
 def test_spec_addon_117_i2_a_download_is_stopped_at_the_time_limit(world, gradient, clock):
-    """The stream keeps growing, so only the time limit can stop it."""
+    """The stream keeps growing, so only the time limit can stop it.
+
+    SPEC-ADDON-119 I2: the failure follows a success, so it is counted.
+    """
+    _succeed_once(world, gradient)
     world.serve(gradient, duration=VIDEO_SECONDS)
     world.youtube.set_download(grow=[64, 3.0])
     world.add_loft("ytloft000001")
@@ -668,6 +701,8 @@ def test_spec_addon_117_i2_a_download_of_unknown_duration_is_not_stopped_at_600_
 def test_spec_addon_117_i2_a_download_of_unknown_duration_is_stopped_at_7200_s(
     world, gradient, clock,
 ):
+    """SPEC-ADDON-119 I2: the failure follows a success, so it is counted."""
+    _succeed_once(world, gradient)
     world.serve(gradient, duration=None)
     world.youtube.set_download(grow=[64, 3.0])
     world.add_loft("ytloft000001")
@@ -744,7 +779,11 @@ def test_spec_addon_117_i2_a_leftover_of_the_same_file_id_is_removed_before_the_
 def test_spec_addon_117_i2_a_temporary_left_by_yt_dlp_is_not_the_finished_file(
     world, gradient,
 ):
-    """yt-dlp writes ``<out>.part`` first; an exit 0 that leaves only that is no download."""
+    """yt-dlp writes ``<out>.part`` first; an exit 0 that leaves only that is no download.
+
+    SPEC-ADDON-119 I2: the failure follows a success, so it is counted.
+    """
+    _succeed_once(world, gradient)
     world.serve(gradient, duration=VIDEO_SECONDS)
     world.youtube.set_download(temp=True)
     world.add_loft("ytloft000001")
@@ -827,7 +866,11 @@ def test_spec_addon_117_i7_the_ocr_worker_given_a_loft_without_a_download_change
 def test_spec_addon_117_i2_a_known_duration_download_is_stopped_at_one_and_a_half_times_it(
     world, gradient, clock,
 ):
-    """800 s of lookup gives a 1200 s limit: running at 1000 s, stopped and counted past 1200 s."""
+    """800 s of lookup gives a 1200 s limit: running at 1000 s, stopped and counted past 1200 s.
+
+    SPEC-ADDON-119 I2: the failure follows a success, so it is counted.
+    """
+    _succeed_once(world, gradient)
     world.serve(gradient, duration=800.0)
     world.youtube.set_download(grow=[16, 10.0])
     world.add_loft("ytloft000001")

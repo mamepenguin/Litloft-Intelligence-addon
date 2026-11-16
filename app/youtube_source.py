@@ -299,6 +299,19 @@ DOWNLOAD_FORMAT = f"bv*[height<={_MAX_FRAME_HEIGHT}][protocol=https]"
 DOWNLOAD_CHUNK_SIZE = "10M"
 
 
+@dataclass(frozen=True)
+class DownloadOutcome:
+    """What one download attempt left behind.
+
+    ``no_space`` separates the free-space stop from every other failure: the
+    caller must not count it against the video, because the video was never
+    the reason the download ended.
+    """
+
+    path: Path | None = None
+    no_space: bool = False
+
+
 def _partial_outputs(directory: Path, file_id: str) -> list[Path]:
     """Every file the download of ``file_id`` has written so far."""
     return list(directory.glob(f"{file_id}.part.*"))
@@ -311,16 +324,16 @@ def download_rendition(
     *,
     time_limit: float,
     free_bytes: Callable[[], int] | None = None,
-) -> Path | None:
+) -> DownloadOutcome:
     """Download the rendition ``yt-dlp`` picks from ``source_url``, video only.
 
     ``yt-dlp`` writes ``<file_id>.part.<ext>``; the finished file is renamed to
     ``<file_id>.<ext>``, so an interrupted download never looks complete.
 
-    Returns the finished path, or ``None`` when yt-dlp fails, writes nothing,
+    Returns the finished path, or no path when yt-dlp fails, writes nothing,
     stops growing for :data:`DOWNLOAD_STALL_SECONDS`, runs past ``time_limit``,
     or leaves less than :data:`DOWNLOAD_MIN_FREE_BYTES` free; every file the
-    attempt wrote is then gone.
+    attempt wrote is then gone. ``no_space`` is set only for the last case.
     """
     directory.mkdir(parents=True, exist_ok=True)
     for leftover in _partial_outputs(directory, file_id):
@@ -346,6 +359,7 @@ def download_rendition(
     deadline = time.monotonic() + time_limit
     last_size = -1
     last_growth = time.monotonic()
+    stopped_for_space = False
     try:
         while True:
             size = sum(
@@ -364,6 +378,7 @@ def download_rendition(
             if now > deadline:
                 break
             if free_bytes is not None and free_bytes() < DOWNLOAD_MIN_FREE_BYTES:
+                stopped_for_space = True
                 break
             time.sleep(0.2)
     finally:
@@ -393,7 +408,8 @@ def download_rendition(
     if finished is None:
         for leftover in _partial_outputs(directory, file_id):
             leftover.unlink(missing_ok=True)
-    return finished
+        return DownloadOutcome(no_space=stopped_for_space)
+    return DownloadOutcome(path=finished)
 
 
 def ensure_youtube_frame(
@@ -560,6 +576,7 @@ def kept_tiles(board: Storyboard, duration: float, max_frames: int) -> list[Tile
 
 
 __all__ = [
+    "DownloadOutcome",
     "LoftNotAccessible",
     "LoftSource",
     "LoftUnreadable",

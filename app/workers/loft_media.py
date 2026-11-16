@@ -42,6 +42,9 @@ MIN_TIME_LIMIT = 600.0
 KNOWN_SIZE_RESERVE = 2 * 1024 ** 3
 UNKNOWN_SIZE_RESERVE = 4 * 1024 ** 3
 DURATION_TOLERANCE = 0.95
+PAUSE_SECONDS = 30.0
+BACKOFF_START_SECONDS = 30 * 60.0
+BACKOFF_MAX_SECONDS = 6 * 60 * 60.0
 _PAUSE_POLL_SECONDS = 0.2
 
 #: File ids a `frame_ocr` reindex or prioritize asked for; a restart forgets it.
@@ -50,8 +53,15 @@ _OCR_REQUESTED: set[str] = set()
 _RUNNING: set[str] = set()
 #: Per file, the reindex or regenerate requests that arrived during its fetch.
 _REQUESTED_DURING_RUN: dict[str, set[str]] = {}
-#: Whether a lookup has succeeded in this process, for the counted-failure rule.
-_lookup_succeeded = False
+#: Consecutive YouTube failure results across files; a success resets it.
+_failure_run = 0
+#: The length of the next backoff; doubled as each one starts.
+_next_backoff_seconds = BACKOFF_START_SECONDS
+#: Monotonic time a backoff ends, or ``None`` when none is in effect.
+_backoff_until: float | None = None
+#: The previous YouTube result, of any file, and when it was recorded.
+_last_result: str | None = None
+_last_result_at: float | None = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +71,7 @@ class FetchResult:
     scan_set: bool = False
     settled: bool = False
     requeue: bool = False
+    retry_backlog: bool = False
 
 
 def fetch_dir() -> Path:
@@ -94,10 +105,59 @@ def clear_fetch_dir() -> int:
 
 def reset_worker_state() -> None:
     """Forget the in-memory state of a fetch worker that is starting."""
-    global _lookup_succeeded
-    _lookup_succeeded = False
+    global _failure_run, _next_backoff_seconds, _backoff_until
+    global _last_result, _last_result_at
+    _failure_run = 0
+    _next_backoff_seconds = BACKOFF_START_SECONDS
+    _backoff_until = None
+    _last_result = None
+    _last_result_at = None
     _RUNNING.clear()
     _REQUESTED_DURING_RUN.clear()
+
+
+def backlog_held() -> bool:
+    """Whether a backlog fetch must wait for the pause or a backoff."""
+    now = time.monotonic()
+    if _backoff_until is not None and now < _backoff_until:
+        return True
+    return (
+        _last_result_at is not None
+        and now - _last_result_at < PAUSE_SECONDS
+    )
+
+
+def _note_result(kind: str) -> bool:
+    """Record a YouTube result and say whether a failure counts.
+
+    A failure counts only when the previous result, of any file, was a
+    success: a run of refusals is one episode, not one failure per video.
+    """
+    global _failure_run, _next_backoff_seconds, _backoff_until
+    global _last_result, _last_result_at
+    now = time.monotonic()
+    _last_result_at = now
+    if kind == "success":
+        _last_result = "success"
+        _failure_run = 0
+        _backoff_until = None
+        _next_backoff_seconds = BACKOFF_START_SECONDS
+        return False
+
+    counted = _last_result == "success"
+    _last_result = "failure"
+    _failure_run += 1
+    if _failure_run >= FAILURE_CAP:
+        minutes = int(_next_backoff_seconds // 60)
+        logger.info(
+            "loft_media backing off %d min after %d failures in a row",
+            minutes, _failure_run,
+        )
+        _backoff_until = now + _next_backoff_seconds
+        _next_backoff_seconds = min(
+            _next_backoff_seconds * 2, BACKOFF_MAX_SECONDS,
+        )
+    return counted
 
 
 def is_fetch_running(file_id: str) -> bool:
@@ -273,14 +333,25 @@ def index_loft_media(
         requeue = _apply_recorded_requests(file_id)
     return FetchResult(
         scan_set=result.scan_set, settled=result.settled, requeue=requeue,
+        retry_backlog=result.retry_backlog,
     )
+
+
+def _failed_result(
+    state: _State, *, close_scan: bool, close_ocr: bool,
+) -> FetchResult:
+    """Count a failure after a success, or send the file back to the backlog."""
+    if _note_result("failure"):
+        _count_failure(
+            state, {}, close_scan=close_scan, close_ocr=close_ocr,
+        )
+        return FetchResult()
+    return FetchResult(retry_backlog=True)
 
 
 def _fetch(
     state: _State, is_paused: Callable[[], bool] | None,
 ) -> FetchResult:
-    global _lookup_succeeded
-
     file_id = state.file_id
     try:
         source = youtube_source.read_loft(state.file_path, state.drive)
@@ -332,12 +403,9 @@ def _fetch(
         )
     except Exception:
         logger.warning("loft_media lookup failed (file %s)", file_id)
-        if _lookup_succeeded:
-            _count_failure(
-                state, {}, close_scan=scan_wanted, close_ocr=ocr_wanted,
-            )
-        return FetchResult()
-    _lookup_succeeded = True
+        return _failed_result(
+            state, close_scan=scan_wanted, close_ocr=ocr_wanted,
+        )
 
     lookup_duration = youtube_source.known_duration(description, None)
     if state.duration is None and lookup_duration is not None:
@@ -346,7 +414,7 @@ def _fetch(
     fmt = youtube_source.pick_format(description)
     if fmt is None:
         logger.warning("loft_media no rendition (file %s)", file_id)
-        _count_failure(state, {}, close_scan=scan_wanted, close_ocr=ocr_wanted)
+        _note_result("success")
         return FetchResult()
 
     if not _space_allows(file_id, fmt):
@@ -359,27 +427,30 @@ def _fetch(
         return shutil.disk_usage(str(directory)).free
 
     try:
-        destination = youtube_source.download_rendition(
+        outcome = youtube_source.download_rendition(
             source.url, directory, file_id,
             time_limit=_time_limit(lookup_duration),
             free_bytes=_free,
         )
     except Exception:
-        destination = None
-    if destination is None:
+        outcome = None
+    if outcome is None or outcome.path is None:
+        if outcome is not None and outcome.no_space:
+            return FetchResult()
         logger.warning("loft_media download failed (file %s)", file_id)
-        _count_failure(state, {}, close_scan=scan_wanted, close_ocr=ocr_wanted)
-        return FetchResult()
+        return _failed_result(
+            state, close_scan=scan_wanted, close_ocr=ocr_wanted,
+        )
+    destination = outcome.path
 
     try:
         if lookup_duration is not None:
             probed = _probe_duration(str(destination))
             if probed is None or probed < lookup_duration * DURATION_TOLERANCE:
                 logger.warning("loft_media download failed (file %s)", file_id)
-                _count_failure(
-                    state, {}, close_scan=scan_wanted, close_ocr=ocr_wanted,
+                return _failed_result(
+                    state, close_scan=scan_wanted, close_ocr=ocr_wanted,
                 )
-                return FetchResult()
 
         if is_paused is not None:
             # Discarding the download here would only fetch it again later.
@@ -428,6 +499,7 @@ def _fetch(
         if ran_ocr:
             _OCR_REQUESTED.discard(file_id)
 
+        _note_result("success")
         return FetchResult(scan_set=scan_set, settled=settled)
     finally:
         destination.unlink(missing_ok=True)
@@ -470,6 +542,7 @@ def _apply_recorded_requests(file_id: str) -> bool:
 
 __all__ = [
     "FetchResult",
+    "backlog_held",
     "clear_fetch_dir",
     "fetch_dir",
     "index_loft_media",
