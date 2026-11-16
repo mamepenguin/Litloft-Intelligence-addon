@@ -475,11 +475,14 @@ describe("SPEC-ADDON-110 step 4 the union of Smart Collection members is sent as
       code: "scope_unavailable",
       message: "Scope unavailable",
     });
+    const beforeFailedSend = before();
     fireEvent.click(screen.getByTestId("ask-submit"));
     await waitFor(() => expect(askQuestionStream).toHaveBeenCalledTimes(3));
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    await waitFor(() => expect(before()).toBe(beforeFailedSend + 2));
     stream.error = null;
     const beforeRetry = before();
-    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    fireEvent.click(retry);
     await waitFor(() => expect(askQuestionStream).toHaveBeenCalledTimes(4));
     expect(before()).toBe(beforeRetry + 1);
   });
