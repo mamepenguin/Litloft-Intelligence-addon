@@ -127,8 +127,8 @@ def _extract_file_content(
 
     Returns the full ``ExtractionResult`` so the indexing pipeline can
     persist the optional Markdown rendering (PDF) alongside the chunk
-    embeddings. Files with no matching extractor — or that raise during
-    extraction — yield an empty result.
+    embeddings. Vertical text errors propagate so indexing can retry without
+    replacing the previous index.
 
     Args:
         file: The indexed file record.
