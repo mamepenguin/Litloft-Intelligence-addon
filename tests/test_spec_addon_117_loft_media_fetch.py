@@ -67,14 +67,40 @@ def _succeed_once(world, gradient, file_id: str = "ytwarm000001") -> None:
     assert world.flags(file_id)[0] is True
 
 
+def _wait_until(condition, seconds: float = 10.0) -> None:
+    limit = time.monotonic() + seconds
+    while not condition() and time.monotonic() < limit:
+        time.sleep(0.02)
+
+
 def _after_download_starts(youtube, action) -> threading.Thread:
-    """Run ``action`` once the download is writing, so a stop rule, not the guard, decides."""
+    """Run ``action`` once the download has written its first bytes, so a stop rule, not the guard, decides."""
     def run():
-        limit = time.monotonic() + 10
-        while not youtube.download_commands() and time.monotonic() < limit:
-            time.sleep(0.05)
-        time.sleep(0.3)
+        _wait_until(lambda: youtube.partials())
         action()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return thread
+
+
+def _advance_while_growing(world, clock, seconds: float) -> threading.Thread:
+    """Move the clock in steps shorter than the stall limit, each after the file grew.
+
+    One jump past 120 s would read as a stall whatever the stream does.
+    """
+    def size() -> int:
+        return sum(p.stat().st_size for p in world.fetch_dir.glob("*") if p.is_file())
+
+    def run():
+        _wait_until(lambda: world.youtube.partials())
+        moved = 0.0
+        while moved < seconds:
+            step = min(100.0, seconds - moved)
+            before = size()
+            _wait_until(lambda: size() > before, 2.0)
+            clock.advance(step)
+            moved += step
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
@@ -552,7 +578,14 @@ def test_spec_addon_117_a_download_with_no_growth_for_120_seconds_is_stopped_and
     world.youtube.set_download(hold=30, stall_bytes=8192)
     world.add_loft("ytloft000001")
 
-    _after_download_starts(world.youtube, lambda: clock.advance(121))
+    def stall_until_stopped():
+        # The fetch may see the first bytes only after the clock moved, which
+        # restarts its timer; keep moving it until the stall rule fires.
+        while not world.youtube.downloads_stopped():
+            clock.advance(121)
+            time.sleep(0.2)
+
+    _after_download_starts(world.youtube, stall_until_stopped)
     started = time.perf_counter()
     fetch("ytloft000001")
 
@@ -623,7 +656,7 @@ def test_spec_addon_117_i2_a_download_of_unknown_duration_is_not_stopped_at_600_
     world.youtube.set_download(grow=[64, 3.0])
     world.add_loft("ytloft000001")
 
-    _after_download_starts(world.youtube, lambda: clock.advance(700))
+    _advance_while_growing(world, clock, 700)
     fetch("ytloft000001")
 
     assert world.failures("ytloft000001") == 0
@@ -788,3 +821,41 @@ def test_spec_addon_117_i7_the_ocr_worker_given_a_loft_without_a_download_change
     assert world.flags("ytloft000001") == (True, False, False)
     assert world.frame_texts("ytloft000001") == []
     assert world.engine.calls == 0
+
+
+
+def test_spec_addon_117_i2_a_known_duration_download_is_stopped_at_one_and_a_half_times_it(
+    world, gradient, clock,
+):
+    """800 s of lookup gives a 1200 s limit: running at 1000 s, stopped and counted past 1200 s."""
+    world.serve(gradient, duration=800.0)
+    world.youtube.set_download(grow=[16, 10.0])
+    world.add_loft("ytloft000001")
+    seen: dict[str, bool] = {}
+
+    def size() -> int:
+        return sum(p.stat().st_size for p in world.fetch_dir.glob("*") if p.is_file())
+
+    def drive():
+        _wait_until(lambda: world.youtube.partials())
+        for moved in (100.0,) * 10:
+            before = size()
+            _wait_until(lambda: size() > before, 2.0)
+            clock.advance(moved)
+        # The fetch reads the clock every 0.2 s; let it read 1000 s at least
+        # twice while the stream still grows.
+        time.sleep(0.6)
+        seen["running_at_1000"] = not world.youtube.downloads_stopped()
+        for moved in (100.0, 100.0, 1.0):
+            before = size()
+            _wait_until(lambda: size() > before, 2.0)
+            clock.advance(moved)
+
+    threading.Thread(target=drive, daemon=True).start()
+    fetch("ytloft000001")
+
+    assert seen == {"running_at_1000": True}
+    assert world.failures("ytloft000001") == 1
+    assert world.flags("ytloft000001")[0] is False
+    assert world.fetch_dir_files() == []
+    assert world.youtube.downloads_stopped()
