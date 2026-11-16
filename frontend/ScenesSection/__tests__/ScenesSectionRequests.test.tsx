@@ -412,21 +412,23 @@ describe("SPEC-ADDON-099 — a native video as a player-side panel", () => {
 });
 
 describe("SPEC-ADDON-089 I7 — the .loft", () => {
-  it("requests clip-timestamps on mount and on every file change", async () => {
+  it("SPEC-ADDON-118 item 4 — requests clip-timestamps and visual-index on mount and on every file change", async () => {
     vi.mocked(getClipTimestamps).mockResolvedValue(timestamps(makeRows(3)));
 
     const view = renderSection(loft());
     await screen.findByRole("button", { name: /^Scenes/ });
     expect(getClipTimestamps).toHaveBeenCalledTimes(1);
     expect(getClipTimestamps).toHaveBeenCalledWith("f1", "d1");
-    expect(getVideoVisualIndex).not.toHaveBeenCalled();
+    await waitFor(() => expect(getVideoVisualIndex).toHaveBeenCalledTimes(1));
 
     view.rerender(section(loft({ fileId: "f2" })));
     await waitFor(() => expect(getClipTimestamps).toHaveBeenCalledTimes(2));
     expect(getClipTimestamps).toHaveBeenLastCalledWith("f2", "d1");
+    await waitFor(() => expect(getVideoVisualIndex).toHaveBeenCalledTimes(2));
   });
 
   it("shows nothing until the first rows arrive", async () => {
+    vi.mocked(getVideoVisualIndex).mockResolvedValue(indexState({ eligible: false }));
     const pending = deferred<ReturnType<typeof timestamps>>();
     vi.mocked(getClipTimestamps).mockReturnValueOnce(pending.promise);
 
@@ -448,6 +450,7 @@ describe("SPEC-ADDON-089 I7 — the .loft", () => {
     "SPEC-ADDON-089 I7 — stays hidden when $name",
     async ({ value }) => {
       vi.mocked(getClipTimestamps).mockResolvedValue(value);
+      vi.mocked(getVideoVisualIndex).mockResolvedValue(indexState({ eligible: false }));
       const { container } = renderSection(loft());
 
       await waitFor(() => expect(getClipTimestamps).toHaveBeenCalledTimes(1));
@@ -472,16 +475,19 @@ describe("SPEC-ADDON-089 I7 — the .loft", () => {
     expect(tileLabels()).toEqual(["0:00", "0:05", "0:10"]);
   });
 
-  it("expands without a request or a skeleton", async () => {
+  it("SPEC-ADDON-118 item 4 — expands without a further request or a skeleton", async () => {
     vi.mocked(getClipTimestamps).mockResolvedValue(timestamps(makeRows(3)));
     renderSection(loft());
     await screen.findByRole("button", { name: /^Scenes/ });
 
+    await waitFor(() => expect(getVideoVisualIndex).toHaveBeenCalledTimes(1));
+
     fireEvent.click(header());
+    await flush();
 
     expect(getClipTimestamps).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("slider")).toBeInTheDocument();
-    expect(getVideoVisualIndex).not.toHaveBeenCalled();
+    expect(getVideoVisualIndex).toHaveBeenCalledTimes(1);
   });
 
   it("takes every picture from the scene-tile route", async () => {
@@ -526,7 +532,7 @@ describe("SPEC-ADDON-089 I7 — the .loft", () => {
     expect(play).toHaveBeenCalled();
   });
 
-  it("draws no Visual Index part and never requests it", async () => {
+  it("SPEC-ADDON-118 item 4 — draws the Visual Index part as a native video does", async () => {
     vi.mocked(getClipTimestamps).mockResolvedValue(timestamps(makeRows(15)));
     vi.mocked(getVideoVisualIndex).mockResolvedValue(
       indexState({
@@ -538,11 +544,10 @@ describe("SPEC-ADDON-089 I7 — the .loft", () => {
     await screen.findByRole("button", { name: /^Scenes/ });
     fireEvent.click(header());
 
-    expect(getVideoVisualIndex).not.toHaveBeenCalled();
+    await waitFor(() => expect(nameVisible(/^1 scenes$/)).toBe(true));
     expect(screen.queryByRole("slider")).toBeInTheDocument();
-    expect(nameVisible(/^\d+ scenes$/)).toBe(false);
-    expect(actionNames()).toEqual([]);
-    expect(sceneCardNamed(/Label/)).toBeNull();
+    expect(actionNames()).toEqual(["Regenerate scenes"]);
+    expect(sceneCardNamed(/Label/)).not.toBeNull();
   });
 
   it("ignores an earlier file's late rows", async () => {
