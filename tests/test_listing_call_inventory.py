@@ -27,6 +27,7 @@ INVENTORY: dict[tuple[str, str, str], tuple[int, str]] = {
     ("app/sidecar_match.py", "match_siblings", "os.scandir"): (1, STORED_NAME),
     ("app/workers/clip.py", "_extract_scene_frames", "glob"): (1, LISTING_ONLY),
     ("app/workers/clip.py", "_prepare_tiles_dir", "glob"): (1, LISTING_ONLY),
+    ("app/workers/loft_media.py", "clear_fetch_dir", "iterdir"): (1, LISTING_ONLY),
 }
 
 _METHODS = {"glob", "rglob", "iterdir"}

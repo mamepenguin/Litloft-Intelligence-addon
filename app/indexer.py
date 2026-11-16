@@ -280,9 +280,15 @@ class IndexManager:
         removed = await asyncio.to_thread(loft_media.clear_fetch_dir)
         if removed:
             logger.info("Removed %d leftover loft download(s)", removed)
-        reopened = await asyncio.to_thread(_reopen_unclassified_lofts)
-        if reopened:
-            logger.info("Reopened %d unclassified loft(s) for fetching", reopened)
+        try:
+            reopened = await asyncio.to_thread(_reopen_unclassified_lofts)
+        except Exception as exc:  # noqa: BLE001 - the rest of indexing still starts
+            logger.error("Loft reopen failed: %s", type(exc).__name__)
+        else:
+            if reopened:
+                logger.info(
+                    "Reopened %d unclassified loft(s) for fetching", reopened,
+                )
 
         # Start worker tasks
         clip_count = settings.workers.clip_parallel
