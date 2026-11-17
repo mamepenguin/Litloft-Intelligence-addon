@@ -603,9 +603,9 @@ export default function TranscriptSection({
       )
     : -1;
   useEffect(() => {
-    if (!coarse || !selected || selectedPosition !== activeIndex) return;
+    if (!coarse || !following || !selected || selectedPosition !== activeIndex) return;
     revealCue(selected.index);
-  }, [activeIndex, coarse, selected, selectedPosition, revealCue]);
+  }, [activeIndex, coarse, following, selected, selectedPosition, revealCue]);
 
   /**
    * Stop following when the reader takes over.

@@ -679,8 +679,9 @@ describe("SPEC-ADDON-126 I6 — keys and line breaks in the dialog field", () =>
     const field = within(dialog).getByRole("textbox");
     fireEvent.change(field, { target: { value: "下書きの二行目" } });
 
-    fireEvent.keyDown(field, { key: "Enter" });
+    const notPrevented = fireEvent.keyDown(field, { key: "Enter" });
 
+    expect(notPrevented).toBe(false);
     expect(field).toHaveValue("下書きの二行目");
     expect(putRequests()).toHaveLength(0);
     expect(screen.getByRole("dialog")).toBeInTheDocument();
