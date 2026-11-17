@@ -132,7 +132,7 @@ def _fake_refine(monkeypatch, *, apply: bool = True, captured: list[int] | None 
 
     monkeypatch.setattr(refine, "refine_chunks", _refine_chunks)
     monkeypatch.setattr(refine, "_emit_ws_event", AsyncMock())
-    monkeypatch.setattr(refine, "realign_words_for_chunk", lambda *a, **k: 0)
+    monkeypatch.setattr(refine, "realign_words_for_chunk", lambda *a, **k: 1)
     monkeypatch.setattr(refine, "recompute_chunk_embeddings", AsyncMock())
     monkeypatch.setattr(refine, "rechunk_from_words", lambda *a, **k: [])
     monkeypatch.setattr(refine.aligner, "job_scope", nullcontext)

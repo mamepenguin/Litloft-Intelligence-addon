@@ -193,7 +193,8 @@ def test_rechunk_drops_speaker_id_on_new_chunks(session) -> None:
         .all()
     )
     assert chunks, "rechunk must persist new TranscriptChunk rows"
-    assert {c.refined_model for c in chunks} == {"routed-model"}
+    # No chunk was refined before the rebuild, so none carries refined marks.
+    assert {c.refined_model for c in chunks} == {None}
     for c in chunks:
         assert c.speaker_id is None, (
             f"rechunk produced TranscriptChunk(speaker_id={c.speaker_id!r}); "
