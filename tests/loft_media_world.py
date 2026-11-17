@@ -22,6 +22,7 @@ from sqlalchemy import text
 import app.database as database
 from app.config import FeaturesConfig, FrameExtractionConfig, IndexingConfig
 from app.models import IndexedFile
+from tests.ocr_fixtures import WholeImageBoxShim
 from tests.search_endpoint_db import patch_everywhere
 from tests.youtube_frame_doubles import (
     DRIVE,
@@ -109,6 +110,11 @@ class LoftWorld:
         patch_everywhere(self.monkeypatch, "embed_image", self._embed)
         patch_everywhere(self.monkeypatch, "embed_passages", self._embed_passages)
         patch_everywhere(self.monkeypatch, "_get_engine", lambda: self.engine)
+        self.box_shim = WholeImageBoxShim()
+        for name in ("detect_boxes", "recognise_boxes"):
+            patch_everywhere(
+                self.monkeypatch, name, getattr(self.box_shim, name),
+            )
 
     def _embed(self, *_args, **_kwargs):
         self.embedded += 1

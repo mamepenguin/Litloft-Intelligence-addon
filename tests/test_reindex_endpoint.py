@@ -155,6 +155,8 @@ def fake_index_manager(monkeypatch):
             # an enqueue. Tests assert against ``enqueued`` to verify
             # tasks_reset was honoured.
             self.enqueued: list[tuple[str, str]] = []
+            # (file_id, task) pairs a request raised in the queue.
+            self.raised: list[tuple[str, str]] = []
             # Pre-populated by the test to simulate "already in the
             # queue" — handler should observe this and return 202.
             self.queued_pairs: set[tuple[str, str]] = set()
@@ -164,6 +166,9 @@ def fake_index_manager(monkeypatch):
 
         async def enqueue_task_for_file(self, file_id: str, task: str) -> None:
             self.enqueued.append((file_id, task))
+
+        async def raise_task_priority(self, file_id: str, task: str) -> None:
+            self.raised.append((file_id, task))
 
     fake = _FakeManager()
     monkeypatch.setattr(
@@ -510,3 +515,30 @@ class TestReindexAlreadyQueued:
         enqueued = set(fake_index_manager.enqueued)
         assert ("active_one", "whisper") not in enqueued
         assert ("active_one", "clip") in enqueued
+
+    @pytest.mark.asyncio
+    async def test_a_queued_reread_is_raised_when_a_fresh_task_comes_with_it(
+        self, search_db, fake_index_manager, monkeypatch,
+    ):
+        from app.routers.files import reindex_file
+        from tests.ocr_fixtures import patch_features
+
+        patch_features(monkeypatch, video_frame_ocr="on_index")
+        _, Session = search_db
+        with Session() as s:
+            row = s.query(IndexedFile).filter_by(file_id="active_one").one()
+            row.frame_ocr_read = True
+            row.frame_ocr_indexed = True
+            row.frame_ocr_rule = None
+            s.commit()
+        fake_index_manager.queued_pairs.add(("active_one", "frame_ocr"))
+
+        result = await reindex_file(
+            "active_one",
+            body={"tasks": ["frame_ocr", "text"]},
+            drive="drive1",
+        )
+
+        payload = result if isinstance(result, dict) else result.model_dump()
+        assert payload["status"] == "accepted"
+        assert fake_index_manager.raised == [("active_one", "frame_ocr")]

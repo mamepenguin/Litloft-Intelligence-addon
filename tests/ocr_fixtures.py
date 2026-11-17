@@ -236,9 +236,47 @@ class FakeEngine:
         return FakeOcrResult(self.lines, boxes=self.boxes, scores=self.scores)
 
 
+class WholeImageBoxShim:
+    """The frame reader's two engine seams over a whole-image fake.
+
+    A fake written against ``engine(image)`` answers the picture as a whole.
+    This gives each of its lines one box, so the frame reader's detection and
+    recognition return the same lines that call did, and the fake is asked
+    once per picture.
+    """
+
+    def __init__(self) -> None:
+        self._image: Any = None
+        self._lines: list[str] = []
+
+    def _answer(self, engine: Any, image: Any) -> list[str]:
+        if self._image is not image:
+            answer = engine(image)
+            self._image = image
+            self._lines = list(getattr(answer, "txts", None) or ())
+        return self._lines
+
+    def detect_boxes(self, engine: Any, image: Any) -> list[Any]:
+        lines = self._answer(engine, image)
+        width, height = image.size
+        return [
+            np.asarray(
+                [[0, 0], [width - index, 0], [width - index, height], [0, height]],
+                dtype=np.float32,
+            )
+            for index in range(len(lines))
+        ]
+
+    def recognise_boxes(
+        self, engine: Any, image: Any, boxes: Any,
+    ) -> list[str | None]:
+        lines = self._answer(engine, image)
+        width = image.size[0]
+        return [lines[width - int(round(float(box[1][0])))] for box in boxes]
+
+
 class EngineFactory:
     """The one place the worker creates its engine, recorded call by call."""
-
     def __init__(
         self,
         engine: FakeEngine | None = None,
@@ -317,6 +355,7 @@ _SEARCH_DB_MODULES = (
     "app.database",
     "app.indexer",
     "app.workers.ocr",
+    "app.workers.frame_ocr",
     "app.workers.metadata",
     "app.routers.files",
     "app.main",
@@ -383,6 +422,10 @@ class SearchDB:
 
 def build_search_db(tmp_path: Path, monkeypatch) -> SearchDB:
     """A real search.db skeleton wired into every module the OCR path touches."""
+    # Import first: a module imported while the accessors below are patched
+    # would keep the patched function in its own globals for the session.
+    for name in _SEARCH_DB_MODULES:
+        importlib.import_module(name)
     path = tmp_path / "search.db"
     engine = create_engine(
         f"sqlite:///{path}", connect_args={"check_same_thread": False}
