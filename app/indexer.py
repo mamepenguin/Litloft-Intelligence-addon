@@ -2182,7 +2182,16 @@ class IndexManager:
         ) - self._reread_running
         if not frame_ids:
             return bool(self._queues[TaskType.FRAME_OCR].qsize())
-        rereads = await asyncio.to_thread(_outdated_frame_ids, frame_ids)
+        try:
+            rereads = await asyncio.to_thread(_outdated_frame_ids, frame_ids)
+        except Exception as exc:
+            # A lookup that cannot tell a re-read from other frame work must
+            # hold the fetch: letting it raise loses the task already taken
+            # from the queue.
+            logger.warning(
+                "Frame OCR re-read lookup failed for the .loft gate: %s", exc,
+            )
+            return True
         return bool(frame_ids - rereads)
 
     async def _page_ocr_worker(self) -> None:

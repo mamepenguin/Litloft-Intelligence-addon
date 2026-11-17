@@ -78,6 +78,48 @@ async def test_spec_addon_122_i11_a_failed_reread_lookup_still_runs_the_read(
     assert "search.db is busy" in caplog.text
 
 
+async def test_spec_addon_122_i11_a_failed_gate_lookup_puts_the_backlog_fetch_back_and_keeps_it(
+    fetches, worker, gradient, caplog,  # noqa: F811
+):
+    import app.indexer as indexer
+
+    _on_index(fetches)
+    world = fetches.world
+    world.add_native(
+        "old", gradient, frame_scan_indexed=True,
+        frame_ocr_read=True, frame_ocr_indexed=True,
+    )
+    await _queue_native_frame_task(worker, "old")
+    real_lookup = indexer._outdated_frame_ids
+
+    def busy(_file_ids):
+        raise RuntimeError("search.db is busy")
+
+    world.monkeypatch.setattr(indexer, "_outdated_frame_ids", busy)
+    caplog.set_level("WARNING")
+    b = fetches.loft()
+    await worker.enqueue(b, BACKLOG)
+    worker.start()
+
+    limit = time.perf_counter() + 10
+    while "search.db is busy" not in caplog.text and time.perf_counter() < limit:
+        await asyncio.sleep(0.05)
+    assert "search.db is busy" in caplog.text
+
+    await worker.stays(0)
+    limit = time.perf_counter() + 5
+    while (
+        worker.manager.get_queue_breakdown()["loft_media"]["waiting"] != 1
+        and time.perf_counter() < limit
+    ):
+        await asyncio.sleep(0.05)
+    assert worker.manager.get_queue_breakdown()["loft_media"]["waiting"] == 1
+
+    world.monkeypatch.setattr(indexer, "_outdated_frame_ids", real_lookup)
+    await worker.settled(1)
+    assert worker.looked_up() == [b]
+
+
 async def test_spec_addon_122_i11_a_running_reread_past_its_store_does_not_hold_a_backlog_fetch(
     fetches, worker, gradient,  # noqa: F811
 ):
