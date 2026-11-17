@@ -334,3 +334,33 @@ def test_spec_addon_115_fallback_recovers_vertical_text_without_document_name(
         chunk.page == 1 and "VERTICALWORD" in chunk.text
         for chunk in result.chunks
     )
+
+
+def test_spec_addon_115_i10_recovers_nested_pdf_form_text(tmp_path, reader):
+    source = fitz.open()
+    source_page = source.new_page(width=400, height=500)
+    source_page.insert_text((300, 70), "NESTEDVERTICALWORD", rotate=270)
+    source_page.insert_text((40, 300), "NESTEDHORIZONTALWORD")
+    path = tmp_path / "nested.pdf"
+    with fitz.open() as doc:
+        page = doc.new_page(width=400, height=500)
+        page.show_pdf_page(page.rect, source, 0)
+        page.insert_text((40, 40), "H")
+        page = doc.new_page(width=400, height=500)
+        page.show_pdf_page(page.rect, source, 0)
+        page.insert_text((40, 40), "A horizontal line with more text than the vertical label.")
+        page.insert_text((40, 60), "Another horizontal line with additional searchable words.")
+        doc.save(path)
+    source.close()
+    reader.register("nested", path, "application/pdf")
+
+    indexed = PdfExtractor().extract(str(path))
+    units = reader.ok("nested", start=1, count=2)["units"]
+    for number in (1, 2):
+        assert any(
+            chunk.page == number and "NESTEDVERTICALWORD" in chunk.text
+            for chunk in indexed.chunks
+        )
+        assert "NESTEDVERTICALWORD" in units[number - 1]["text"]
+        assert "NESTEDHORIZONTALWORD" in units[number - 1]["text"]
+    assert "horizontal line" in units[1]["text"]

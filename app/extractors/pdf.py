@@ -78,11 +78,20 @@ def recover_vertical_texts(
         return texts
     try:
         from pdfminer.high_level import extract_pages
-        from pdfminer.layout import LAParams, LTTextBoxVertical, LTTextContainer
+        from pdfminer.layout import (
+            LAParams, LTFigure, LTTextBoxVertical, LTTextContainer,
+        )
+
+        def text_boxes(container):
+            for item in container:
+                if isinstance(item, LTTextContainer):
+                    yield item
+                elif isinstance(item, LTFigure):
+                    yield from text_boxes(item)
 
         layouts = extract_pages(
             str(path), page_numbers=[number - 1 for number in numbers],
-            laparams=LAParams(detect_vertical=True),
+            laparams=LAParams(detect_vertical=True, all_texts=True),
         )
         for number in numbers:
             try:
@@ -104,7 +113,7 @@ def recover_vertical_texts(
                             counts[0] += size
                         elif abs(x - 1) <= 0.01 and abs(y) <= 0.01:
                             counts[1] += size
-                boxes = [box for box in layout if isinstance(box, LTTextContainer)]
+                boxes = list(text_boxes(layout))
                 if counts[0] > counts[1]:
                     text = "\n".join(
                         box.get_text().strip() for box in boxes
