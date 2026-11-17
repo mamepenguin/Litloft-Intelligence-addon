@@ -286,6 +286,8 @@ export interface ClipTimestampsResponse {
   file_id: string;
   drive: string;
   timestamps: ClipTimestampItem[];
+  /** The file's stored change frames; absent before the frame scan ran. */
+  changes?: ClipTimestampItem[];
 }
 
 // Semantic search
