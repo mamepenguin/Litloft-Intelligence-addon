@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { FileText, Quote, Sparkles } from "lucide-react";
+import { FileText, Pencil, Quote, Sparkles } from "lucide-react";
 import { useTranslations } from "next-intl";
 
 import {
@@ -20,12 +20,14 @@ import {
 } from "./api";
 import type { TranscriptChunkItem } from "./api";
 import { LLMRequestError } from "./api";
+import { TranscriptEditDialog, type TranscriptEditTarget } from "./TranscriptEditDialog";
 import { formatDuration } from "@/lib/format";
 import { getSubtitleUrl } from "@/lib/api";
 import type { SubtitleInfo } from "@/types";
 import { useAddonStatus } from "@/components/AddonSlotsProvider";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useDialogPortalTarget } from "@/components/DialogPortal";
+import { usePointerMode } from "@/components/player/hooks/usePointerMode";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useImeKeyGuard } from "@/lib/ime";
 import type { MediaController } from "@/lib/mediaController";
@@ -91,9 +93,16 @@ type Source = "chunks" | "words" | "external";
 
 const CJK_LANGUAGES = /^(ja|zh|ko|th)/i;
 
-/** Reveals a row's secondary controls on hover, focus and a coarse pointer. */
+/** Reveals a row's secondary controls on hover and focus. */
 const REVEAL =
-  "opacity-0 transition-opacity group-hover/cue:opacity-100 group-focus-within/cue:opacity-100 pointer-coarse:opacity-100";
+  "opacity-0 transition-opacity group-hover/cue:opacity-100 group-focus-within/cue:opacity-100";
+
+/**
+ * A strip button: 28px tall, with the hit area reaching 44×44 through a
+ * pseudo-element instead of a bigger box.
+ */
+const STRIP_BUTTON =
+  "relative inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-xs font-medium text-text-muted transition-colors before:absolute before:-inset-2 before:content-[''] enabled:hover:text-text-primary enabled:active:text-text-primary disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring";
 
 function parseVttCues(vtt: string): TranscriptChunkItem[] {
   const lines = vtt.split(/\r?\n/);
@@ -228,6 +237,10 @@ export default function TranscriptSection({
   const t = useTranslations("searchIndex");
   const ime = useImeKeyGuard();
   const dialogHost = useDialogPortalTarget();
+  const pointerMode = usePointerMode();
+  // `"unknown"` is the fine layout: a coarse pointer is the one thing worth
+  // changing the rows for, and it is the only answer that says so.
+  const coarse = pointerMode === "coarse";
   const addonStatus = useAddonStatus("intelligence");
   const refineFeature = addonStatus.features?.transcript_refine;
   // Backend sends either boolean false or the string "false" when the
@@ -246,6 +259,14 @@ export default function TranscriptSection({
   const [editExpectedText, setEditExpectedText] = useState("");
   const [editExpectedStart, setEditExpectedStart] = useState(0);
   const [savingEdit, setSavingEdit] = useState(false);
+  // The row whose action strip is drawn, held as its index and start so a
+  // reload can tell whether the same row came back.
+  const [selected, setSelected] = useState<{ index: number; start: number } | null>(
+    null,
+  );
+  const [editTarget, setEditTarget] = useState<TranscriptEditTarget | null>(null);
+  // Set by a tap that has to bring the strip into view once it is drawn.
+  const revealPendingRef = useRef(false);
   const [confirmRestore, setConfirmRestore] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [confirmRefine, setConfirmRefine] = useState(false);
@@ -314,6 +335,8 @@ export default function TranscriptSection({
     setEditText("");
     setEditExpectedText("");
     setEditExpectedStart(0);
+    setSelected(null);
+    setEditTarget(null);
     setConfirmRestore(false);
     setConfirmRefine(false);
     setActionError(null);
@@ -459,6 +482,30 @@ export default function TranscriptSection({
     return whisperChunks;
   }, [source, externalCues, whisperWordCues, whisperChunks]);
 
+  // A different source is a different set of rows, so the row that was
+  // tapped is not the one under the reader any more — and the dialog, which
+  // corrects a chunk, has nothing left to correct.
+  useEffect(() => {
+    setSelected(null);
+    setEditTarget(null);
+  }, [source]);
+
+  // A reload replaces the rows; the selection survives only if the same row
+  // (same index, same start) came back.
+  useEffect(() => {
+    if (!selected) return;
+    const kept = cues.some(
+      (cue) => cue.index === selected.index && cue.start === selected.start,
+    );
+    if (!kept) setSelected(null);
+  }, [cues, selected]);
+
+  // Rows lose their controls with the coarse pointer, so a selection made
+  // with a finger has nothing left to draw once the pointer is fine.
+  useEffect(() => {
+    if (!coarse) setSelected(null);
+  }, [coarse]);
+
   useEffect(() => {
     // The highlight used to bind `timeupdate` on an HTMLVideoElement,
     // which a YouTube IFrame player never dispatches into the parent
@@ -511,6 +558,54 @@ export default function TranscriptSection({
     if (!following) return;
     scrollActiveIntoView();
   }, [activeIndex, following, scrollActiveIntoView]);
+
+  /**
+   * Scroll the least amount that shows a row together with its strip.
+   *
+   * The following scroll aims at the row alone, and a row taller than the
+   * list then leaves the strip under it out of view even though the tap
+   * brought the reader to that row.
+   */
+  const revealCue = useCallback(
+    (index: number) => {
+      const list = listRef.current;
+      if (!list || isHidden(list)) return;
+      const block = list.querySelector<HTMLElement>(
+        `[data-cue-index="${index}"]`,
+      );
+      if (!block) return;
+      const scroller = scrollingBoxOf(list);
+      const covered = scroller === list ? 0 : stripCoverOf(list);
+      const scrollerRect = scroller.getBoundingClientRect();
+      const viewTop = scrollerRect.top + covered;
+      const rect = block.getBoundingClientRect();
+      if (rect.bottom > scrollerRect.bottom) {
+        scroller.scrollTop += rect.bottom - scrollerRect.bottom;
+      } else if (rect.top < viewTop) {
+        scroller.scrollTop -= viewTop - rect.top;
+      }
+    },
+    [isHidden],
+  );
+
+  useEffect(() => {
+    if (!revealPendingRef.current || !selected) return;
+    revealPendingRef.current = false;
+    revealCue(selected.index);
+  }, [selected, revealCue]);
+
+  // The tap's seek reaches the playback clock a tick later, and that tick
+  // scrolls the playing row into view through the follow effect above,
+  // which can push the strip back out.
+  const selectedPosition = selected
+    ? cues.findIndex(
+        (cue) => cue.index === selected.index && cue.start === selected.start,
+      )
+    : -1;
+  useEffect(() => {
+    if (!coarse || !selected || selectedPosition !== activeIndex) return;
+    revealCue(selected.index);
+  }, [activeIndex, coarse, selected, selectedPosition, revealCue]);
 
   /**
    * Stop following when the reader takes over.
@@ -716,8 +811,8 @@ export default function TranscriptSection({
   }, [scrollActiveIntoView]);
 
   useEffect(() => {
-    if (editingIndex !== null) setFollowing(false);
-  }, [editingIndex]);
+    if (editingIndex !== null || editTarget !== null) setFollowing(false);
+  }, [editingIndex, editTarget]);
 
   const seekTo = useCallback(
     (time: number) => {
@@ -729,6 +824,37 @@ export default function TranscriptSection({
       mediaController.play();
     },
     [mediaController]
+  );
+
+  const selectCue = useCallback((cue: TranscriptChunkItem) => {
+    setSelected({ index: cue.index, start: cue.start });
+    revealPendingRef.current = true;
+  }, []);
+
+  const openEditDialog = useCallback((cue: TranscriptChunkItem) => {
+    setActionError(null);
+    setEditTarget({
+      index: cue.index,
+      start: cue.start,
+      text: cue.text,
+    });
+  }, []);
+
+  /** Put focus back where the dialog took it from, once, on close. */
+  const focusRow = useCallback((index: number) => {
+    const block = listRef.current?.querySelector<HTMLElement>(
+      `[data-cue-index="${index}"]`,
+    );
+    const strip = block?.querySelector<HTMLElement>("[data-strip-edit]");
+    (strip ?? block?.querySelector<HTMLElement>("button"))?.focus();
+  }, []);
+
+  const closeEditDialog = useCallback(
+    (target: TranscriptEditTarget) => {
+      setEditTarget(null);
+      focusRow(target.index);
+    },
+    [focusRow],
   );
 
   const captureCue = useCallback(
@@ -981,7 +1107,7 @@ export default function TranscriptSection({
           </div>
         )}
       </div>
-      {actionError && editingIndex === null && (
+      {actionError && editingIndex === null && editTarget === null && (
         <p className="mb-2 text-xs text-danger" role="status">
           {actionError}
         </p>
@@ -1041,14 +1167,27 @@ export default function TranscriptSection({
           const isRefined = Boolean(cue.refinedAt);
           const isCorrected = Boolean(cue.correctedAt);
           const isEditing = editingIndex === cue.index;
-          const rowClass = `group/cue flex w-full flex-wrap items-start rounded-lg text-sm transition-colors hover:bg-bg-primary pointer-coarse:min-h-11 ${
-            cue.index === activeIndex
-              ? "bg-accent/10 text-accent"
-              : "text-text-primary"
-          } ${editingIndex !== null && !isEditing ? "opacity-50" : ""}`;
+          const isPlaying = cue.index === activeIndex;
+          const isSelected =
+            coarse &&
+            selected !== null &&
+            selected.index === cue.index &&
+            selected.start === cue.start;
+          const rowClass = `group/cue flex w-full flex-wrap items-start rounded-lg text-sm transition-colors hover:bg-bg-primary ${
+            coarse ? "min-h-11" : ""
+          } ${
+            isPlaying ? "bg-accent/10 text-accent" : "text-text-primary"
+          } ${isSelected && !isPlaying ? "bg-bg-elevated" : ""} ${
+            editingIndex !== null && !isEditing ? "opacity-50" : ""
+          }`;
           if (isEditing) {
             return (
-              <div key={cue.index} data-cue-start={cue.start} className={rowClass}>
+              <div
+                key={cue.index}
+                data-cue-start={cue.start}
+                data-cue-index={cue.index}
+                className={rowClass}
+              >
                 <span className="flex min-w-0 flex-1 items-start gap-3 px-2 py-1.5 pointer-coarse:basis-full">
                   <span className="shrink-0 font-mono text-xs text-text-muted">
                     {formatDuration(cue.start)}
@@ -1103,6 +1242,7 @@ export default function TranscriptSection({
             <div
               key={cue.index}
               data-cue-start={cue.start}
+              data-cue-index={cue.index}
               className={rowClass}
             >
               <button
@@ -1110,10 +1250,14 @@ export default function TranscriptSection({
                 ref={cue.index === activeIndex ? activeRef : undefined}
                 aria-current={cue.index === activeIndex ? "true" : undefined}
                 onClick={() => {
-                  if (editingIndex === null) seekTo(cue.start);
+                  if (editingIndex !== null) return;
+                  seekTo(cue.start);
+                  if (coarse) selectCue(cue);
                 }}
                 disabled={editingIndex !== null && !isEditing}
-                className="flex min-w-0 flex-1 cursor-pointer gap-3 px-2 py-1.5 text-left pointer-coarse:min-h-11"
+                className={`flex min-w-0 flex-1 cursor-pointer gap-3 px-2 py-1.5 text-left ${
+                  coarse ? "min-h-11" : ""
+                }`}
               >
                 <span className="shrink-0 font-mono text-xs text-text-muted">
                   {formatDuration(cue.start)}
@@ -1136,7 +1280,31 @@ export default function TranscriptSection({
                   )}
                 </span>
               </button>
-              {source === "chunks" && (
+              {isSelected && (
+                <div className="flex basis-full justify-end gap-3 px-1 py-2">
+                  {source === "chunks" && (
+                    <button
+                      type="button"
+                      data-strip-edit
+                      onClick={() => openEditDialog(cue)}
+                      disabled={busy}
+                      className={STRIP_BUTTON}
+                    >
+                      <Pencil size={12} aria-hidden />
+                      {t("transcriptEdit")}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => captureCue(cue)}
+                    className={STRIP_BUTTON}
+                  >
+                    <Quote size={12} aria-hidden />
+                    {t("transcriptQuote")}
+                  </button>
+                </div>
+              )}
+              {!coarse && source === "chunks" && (
                 <button
                   type="button"
                   onClick={() => beginEdit(cue)}
@@ -1152,27 +1320,47 @@ export default function TranscriptSection({
                       ? -1
                       : undefined
                   }
-                  className={`m-0.5 inline-flex h-8 flex-shrink-0 items-center justify-center rounded-lg px-2 text-xs font-medium text-text-muted hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${editingIndex !== null && editingIndex !== cue.index ? "pointer-events-none" : ""} ${REVEAL}`}
+                  className={`m-0.5 inline-flex h-8 flex-shrink-0 items-center justify-center rounded-lg px-2 text-xs font-medium text-text-muted hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50 ${editingIndex !== null && editingIndex !== cue.index ? "pointer-events-none" : ""} ${REVEAL}`}
                 >
                   {t("transcriptEdit")}
                 </button>
               )}
-              <button
-                type="button"
-                onClick={() => captureCue(cue)}
-                disabled={editingIndex !== null}
-                aria-label={t("transcriptCaptureCue", {
-                  time: formatDuration(cue.start),
-                })}
-                className={`relative m-0.5 ml-1.5 inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-text-muted hover:bg-bg-elevated hover:text-text-primary pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5 pointer-coarse:before:content-[''] ${REVEAL}`}
-              >
-                <Quote size={14} />
-              </button>
+              {!coarse && (
+                <button
+                  type="button"
+                  onClick={() => captureCue(cue)}
+                  disabled={editingIndex !== null}
+                  aria-label={t("transcriptCaptureCue", {
+                    time: formatDuration(cue.start),
+                  })}
+                  className={`relative m-0.5 ml-1.5 inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-text-muted hover:bg-bg-elevated hover:text-text-primary ${REVEAL}`}
+                >
+                  <Quote size={14} />
+                </button>
+              )}
             </div>
           );
         })}
       </div>
       </div>
+      {editTarget && (
+        <TranscriptEditDialog
+          fileId={fileId}
+          drive={drive}
+          target={editTarget}
+          errorText={errorText}
+          onClose={() => closeEditDialog(editTarget)}
+          onSaved={() => {
+            closeEditDialog(editTarget);
+            refreshAfterWrite();
+          }}
+          onChanged={(message) => {
+            closeEditDialog(editTarget);
+            refreshAfterWrite();
+            setActionError(message);
+          }}
+        />
+      )}
     </div>
   );
 }
