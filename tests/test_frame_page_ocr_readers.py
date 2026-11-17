@@ -65,6 +65,36 @@ def _encode(path: Path, width: int, height: int, *, seconds: int = 13) -> Path:
     return path
 
 
+def _encode_steady_text(path: Path, width: int = 320, height: int = 240) -> Path:
+    """Red with a moving block for 9 s, then blue: one text, then another."""
+    real_pillow()
+    from PIL import Image, ImageDraw
+
+    fps = 5
+    seconds = 13
+    process = subprocess.Popen(
+        [
+            "ffmpeg", "-v", "error", "-y", "-f", "rawvideo",
+            "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", str(fps),
+            "-i", "-", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-g", "10", str(path),
+        ],
+        stdin=subprocess.PIPE,
+    )
+    assert process.stdin is not None
+    for index in range(seconds * fps):
+        t = index / fps
+        color = (220, 20, 20) if t < 9 else (20, 20, 220)
+        frame = Image.new("RGB", (width, height), color)
+        draw = ImageDraw.Draw(frame)
+        left = int((t * 60) % (width - 120))
+        draw.rectangle((left, 60, left + 120, 180), fill=(255, 255, 255))
+        process.stdin.write(frame.tobytes())
+    process.stdin.close()
+    assert process.wait() == 0
+    return path
+
+
 def _rotate(source: Path, target: Path) -> Path:
     subprocess.run(
         [
@@ -127,6 +157,7 @@ def media(tmp_path_factory) -> dict[str, Path]:
     root = tmp_path_factory.mktemp("frame-ocr-media")
     try:
         landscape = _encode(root / "landscape.mp4", 320, 240)
+        steady = _encode_steady_text(root / "steady-text.mp4")
         portrait_landscape = _encode(root / "portrait-base.mp4", 320, 240)
         portrait = _rotate(portrait_landscape, root / "portrait.mp4")
         large_base = _encode(root / "large-base.mp4", 1600, 1200)
@@ -149,6 +180,7 @@ def media(tmp_path_factory) -> dict[str, Path]:
         sys.modules.update(saved)
     return {
         "landscape": landscape,
+        "steady": steady,
         "portrait": portrait,
         "large": large,
         "large_trim": large_trim,
@@ -294,6 +326,20 @@ def test_spec_addon_066_i1_i2_landscape_reads_the_first_and_the_three_second_cha
     assert all(r[4].startswith("txt_vid1_") for r in embeddings)
     assert search_db.flag("vid1", "frame_ocr_read") == 1
     assert search_db.flag("vid1", "frame_ocr_indexed") == 1
+
+
+def test_spec_addon_066_a4_equal_text_continues_the_open_segment(
+    frame_reader, search_db, tmp_path, media,
+):
+    module, _engine = frame_reader
+    _video(search_db, tmp_path, media["steady"])
+
+    assert module.index_frame_ocr("vid1") is True
+
+    assert _frame_rows(search_db) == [
+        (0, 0.0, 9.0, "ALPHA"),
+        (1, 9.0, 13.0, "BETA"),
+    ]
 
 
 def test_spec_addon_066_i1_a_portrait_video_is_read_upright_at_source_size(

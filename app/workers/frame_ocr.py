@@ -432,7 +432,7 @@ def _read_video(
                     open_segment.end = t
                     result.segments.append(open_segment)
                     open_segment = None
-                if text:
+                if open_segment is None and text:
                     open_segment = _Segment(start=t, text=text)
                 last_hash = current
                 last_read_time = t
