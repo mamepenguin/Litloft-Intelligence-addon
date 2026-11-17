@@ -18,7 +18,6 @@ import {
   rulerFraction,
   seekTime,
   timeLabels,
-  type ScenesMode,
 } from "./scenesModel";
 
 export type ScenesView = "collapsed" | "loading" | "expanded";
@@ -43,20 +42,11 @@ export interface ScenesVisualView {
   actions: ScenesAction[];
 }
 
-export interface ScenesFrameSwitch {
-  mode: ScenesMode;
-  /** Frames in the candidate list and in the change list of the answer. */
-  allCount: number;
-  cutsCount: number;
-}
-
 export interface ScenesSectionPresenterProps {
   view: ScenesView;
   labelledByHost?: boolean;
   panelId: string;
   rows: ClipTimestampItem[];
-  frameSwitch: ScenesFrameSwitch;
-  onFrameModeChange: (mode: ScenesMode) => void;
   length: number;
   point: number;
   playingTime: number;
@@ -99,21 +89,11 @@ function percent(fraction: number): string {
   return `${(fraction * 100).toFixed(3)}%`;
 }
 
-function frameChipClass(selected: boolean): string {
-  return `rounded-full border px-2.5 py-1 text-xs ${
-    selected
-      ? "border-accent font-semibold text-text-primary"
-      : "border-transparent text-text-muted hover:text-text-primary"
-  }`;
-}
-
 export default function ScenesSectionPresenter({
   view,
   labelledByHost = false,
   panelId,
   rows,
-  frameSwitch,
-  onFrameModeChange,
   length,
   point,
   playingTime,
@@ -290,30 +270,6 @@ export default function ScenesSectionPresenter({
             <LoadingSkeleton columns={columns} />
           ) : (
           <>
-          {frameSwitch.cutsCount > 0 && (
-            <div
-              role="group"
-              aria-label={t("scenesFramesShown")}
-              className="flex w-fit gap-1"
-            >
-              <button
-                type="button"
-                aria-pressed={frameSwitch.mode === "all"}
-                onClick={() => onFrameModeChange("all")}
-                className={frameChipClass(frameSwitch.mode === "all")}
-              >
-                {t("scenesFramesAll", { count: frameSwitch.allCount })}
-              </button>
-              <button
-                type="button"
-                aria-pressed={frameSwitch.mode === "cuts"}
-                onClick={() => onFrameModeChange("cuts")}
-                className={frameChipClass(frameSwitch.mode === "cuts")}
-              >
-                {t("scenesFramesCuts", { count: frameSwitch.cutsCount })}
-              </button>
-            </div>
-          )}
           <div
             ref={gridRef}
             className="grid gap-x-2 gap-y-3"

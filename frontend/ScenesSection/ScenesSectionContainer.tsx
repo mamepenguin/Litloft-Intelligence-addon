@@ -35,13 +35,11 @@ import {
 } from "./browseLifetime";
 import {
   LOFT_MIME_TYPE,
-  type ScenesMode,
   dotTileStarts,
   frameIndexAt,
-  frameListFor,
+  rulerLength,
   sceneColumns,
   seekTime,
-  trackLength,
   windowStartFor,
 } from "./scenesModel";
 import { usePlaybackClock } from "./hooks/usePlaybackClock";
@@ -114,8 +112,6 @@ export default function ScenesSectionContainer({
   const [expanded, setExpanded] = useState(false);
   const [nativeState, setNativeState] = useState<NativeState>("idle");
   const [rows, setRows] = useState<ClipTimestampItem[] | null>(null);
-  const [changes, setChanges] = useState<ClipTimestampItem[]>(NO_FRAMES);
-  const [frameMode, setFrameMode] = useState<ScenesMode>("all");
   const [browse, setBrowse] = useState<number | null>(null);
   const [visual, setVisual] = useState<VideoVisualIndexResponse | null>(null);
   const [visualLoaded, setVisualLoaded] = useState(false);
@@ -192,14 +188,15 @@ export default function ScenesSectionContainer({
 
   const playback = usePlaybackClock(mediaController ?? null, handleJump);
 
-  const candidates = rows ?? NO_FRAMES;
-  // A native video's answer replaces its list, so while it is in flight there
-  // is no list to show in either mode and the ruler looks as it does today.
-  const frames =
-    rows === null && !isLoft
-      ? NO_FRAMES
-      : frameListFor(frameMode, candidates, changes);
-  const length = trackLength(candidates, changes, playback.duration);
+  const list = rows ?? NO_FRAMES;
+  // With no candidate frames the player's duration is the only length left
+  // for the ruler to draw its scene marks and seeks against.
+  const length =
+    rows === null
+      ? 0
+      : list.length === 0
+        ? positiveDuration(playback.duration)
+        : rulerLength(list, playback.duration);
 
   const resetVisual = useCallback(() => {
     visualGeneration.current += 1;
@@ -220,8 +217,6 @@ export default function ScenesSectionContainer({
     setExpanded(false);
     setNativeState("idle");
     setRows(null);
-    setChanges(NO_FRAMES);
-    setFrameMode("all");
     clearBrowseOn("filechange");
     setFailedTimes([]);
     setPictureRatio(null);
@@ -239,7 +234,6 @@ export default function ScenesSectionContainer({
           setRows(next);
           setNativeState(next.length > 0 ? "ready" : "hidden");
         }
-        setChanges(result?.changes ?? []);
         onAvailabilityRef.current?.(next.length > 0);
       })
       .catch(() => {
@@ -256,12 +250,9 @@ export default function ScenesSectionContainer({
         .then((result) => {
           if (requestGeneration.current !== generation) return;
           const next = result?.timestamps ?? [];
-          const nextChanges = result?.changes ?? [];
           // The rows land outside a React event; flush so the placeholder ruler
           // and the nine tiles swap in one commit instead of a scheduled later one.
           flushSync(() => {
-            setChanges(nextChanges);
-            if (nextChanges.length === 0) setFrameMode("all");
             if (next.length === 0) {
               setNativeState("hidden");
               setExpanded(false);
@@ -475,7 +466,6 @@ export default function ScenesSectionContainer({
 
   const handleRulerKeyDown = useCallback(
     (event: KeyboardEvent) => {
-      const list = frames;
       const key = normalizeKey(event);
       if (
         key !== "arrowleft" &&
@@ -488,12 +478,12 @@ export default function ScenesSectionContainer({
       }
       event.preventDefault();
       event.stopPropagation();
-      if (list.length === 0) return;
 
       if (key === "enter") {
         if (browseRef.current !== null) activate(browseRef.current);
         return;
       }
+      if (list.length === 0) return;
 
       const playingIndex = frameIndexAt(list, playback.time);
       const currentIndex =
@@ -507,7 +497,7 @@ export default function ScenesSectionContainer({
       else nextIndex = Math.min(list.length - 1, currentIndex + 1);
       setBrowsePoint(list[nextIndex].start, "keyboard");
     },
-    [frames, playback.time, activate, setBrowsePoint],
+    [list, playback.time, activate, setBrowsePoint],
   );
 
   const handlePointerDown = useCallback(
@@ -626,20 +616,20 @@ export default function ScenesSectionContainer({
   const windowStart = useMemo(
     () =>
       windowStartFor(
-        frameIndexAt(frames, point),
-        frames.length,
+        frameIndexAt(list, point),
+        list.length,
         columns,
         rowCount,
       ),
-    [frames, point, columns, rowCount],
+    [list, point, columns, rowCount],
   );
 
   const windowTimes = useMemo(() => {
-    if (frames.length === 0) return NO_TIMES;
-    return frames
+    if (list.length === 0) return NO_TIMES;
+    return list
       .slice(windowStart, windowStart + rowCount * columns)
       .map((row) => row.start);
-  }, [frames, windowStart, columns, rowCount]);
+  }, [list, windowStart, columns, rowCount]);
 
   const requestedTimes = useWindowPictures(windowTimes, view === "expanded");
 
@@ -649,7 +639,7 @@ export default function ScenesSectionContainer({
     visual,
     visualLoaded,
     point,
-    frames,
+    list,
     working,
     t,
   );
@@ -670,7 +660,7 @@ export default function ScenesSectionContainer({
   );
 
   if (!isVideo) return null;
-  if (isLoft && frames.length === 0 && visualView === null) return null;
+  if (isLoft && list.length === 0 && visualView === null) return null;
   if (!isLoft && nativeState === "hidden") return null;
 
   return (
@@ -678,13 +668,7 @@ export default function ScenesSectionContainer({
       view={view}
       labelledByHost={labelledByHost}
       panelId={`scenes-${fileId}`}
-      rows={frames}
-      frameSwitch={{
-        mode: frameMode,
-        allCount: candidates.length,
-        cutsCount: changes.length,
-      }}
-      onFrameModeChange={setFrameMode}
+      rows={list}
       length={length}
       point={point}
       playingTime={playback.time}
@@ -729,6 +713,10 @@ type Translate = (
   key: string,
   values?: Record<string, string | number | Date>,
 ) => string;
+
+function positiveDuration(duration: number): number {
+  return Number.isFinite(duration) && duration > 0 ? duration : 0;
+}
 
 function buildVisualView(
   visual: VideoVisualIndexResponse | null,
