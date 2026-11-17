@@ -104,10 +104,6 @@ def accepted(file_id: str, tasks: list[str]) -> dict:
     return {"status": "accepted", "file_id": file_id, "tasks_reset": tasks}
 
 
-def already_queued(file_id: str) -> dict:
-    return {"status": "already_queued", "file_id": file_id, "tasks_reset": []}
-
-
 def move_drive(world, file_id: str, drive: str) -> None:
     with world.Session() as session:
         session.query(IndexedFile).filter_by(file_id=file_id).update(
@@ -182,9 +178,9 @@ class TestOneRequestLetsTheNextLegCallYouTube:
 
         response = await api.reindex(file_id, {"tasks": ["clip"]})
 
-        assert response.status_code == 202, response.text
-        assert response.json() == already_queued(file_id)
-        assert api.queue.enqueued == []
+        assert response.status_code == 200, response.text
+        assert response.json() == accepted(file_id, ["clip"])
+        assert api.queue.enqueued == [(file_id, "loft_media")]
         before = len(youtube.lookups())
         assert run(file_id) is True
         assert len(youtube.lookups()) == before + 1
@@ -402,19 +398,19 @@ class TestTheRouteAnswersExactlyAsBefore:
 
         assert response.status_code == 200, response.text
         assert response.json() == accepted(file_id, ["clip"])
-        assert api.queue.enqueued == [(file_id, "clip")]
+        assert api.queue.enqueued == [(file_id, "clip"), (file_id, "loft_media")]
         assert flags_of(world, file_id)[0] is False
 
-    async def test_the_already_queued_answer_is_unchanged(self, world, api):
+    async def test_a_queued_clip_task_still_queues_the_fetch(self, world, api):
         file_id = new_id()
         add_loft(world, file_id, clip_indexed=True, clip_thumbnail_indexed=True)
         api.queue.queued_pairs.add((file_id, "clip"))
 
         response = await api.reindex(file_id, {"tasks": ["clip"]})
 
-        assert response.status_code == 202, response.text
-        assert response.json() == already_queued(file_id)
-        assert api.queue.enqueued == []
+        assert response.status_code == 200, response.text
+        assert response.json() == accepted(file_id, ["clip"])
+        assert api.queue.enqueued == [(file_id, "loft_media")]
         assert flags_of(world, file_id)[0] is True
 
     async def test_a_request_without_clip_is_answered_as_before(self, world, api):

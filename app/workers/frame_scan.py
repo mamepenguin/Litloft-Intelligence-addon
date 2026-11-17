@@ -37,6 +37,7 @@ from app.video_frames import (
 )
 from app.workers.clip import VIDEO_TYPES, embed_image, load_image_model
 from app.workers.metadata import _remove_embeddings, _store_embedding
+from app.workers.whisper import LOFT_MIME
 
 logger = logging.getLogger(__name__)
 
@@ -284,8 +285,13 @@ def _store(
 
 def index_frame_scan(
     file_id: str, *, is_paused: Callable[[], bool] | None = None,
+    source_path: str | None = None,
 ) -> bool:
     """Scan one video's seconds and store its change frames.
+
+    ``source_path`` is the video a ``.loft`` fetch downloaded for this file;
+    the `.loft`'s own path is never decoded. A scan that stores change frames
+    from a downloaded source also keeps a 320px picture of each one.
 
     Returns ``True`` when the file is closed as scanned, ``False`` when it
     stays pending (not a native video, already scanned, policy off, model
@@ -302,7 +308,15 @@ def index_frame_scan(
         drive = file.drive
         already_scanned = bool(file.frame_scan_indexed)
 
-    if already_scanned or mime_type not in VIDEO_TYPES:
+    if source_path is not None:
+        path = source_path
+    elif mime_type == LOFT_MIME:
+        # A `.loft` is only ever decoded from the file its fetch downloaded.
+        return False
+    elif mime_type not in VIDEO_TYPES:
+        return False
+
+    if already_scanned:
         return False
 
     try:
@@ -381,7 +395,32 @@ def index_frame_scan(
         return False
 
     try:
-        return _store(file_id, decoded, embedded)
+        stored = _store(file_id, decoded, embedded)
     except Exception as exc:
         logger.error("Frame scan write failed for %s: %s", file_id, exc)
         return False
+    if stored and source_path is not None:
+        _keep_small_pictures(file_id, source_path, [s for s, _ in embedded])
+    return stored
+
+
+def _keep_small_pictures(file_id: str, source_path: str, seconds: list[int]) -> None:
+    """Keep the ``small`` frame cache picture of each stored change frame.
+
+    Runs after the scan's row commit. An entry already there is left alone,
+    and one that cannot be written is skipped: the change frame itself is
+    still usable, so a picture is not worth failing the scan for.
+    """
+    from app.frame_cache import extract_frame_to_cache, frame_cache_path
+
+    for second in seconds:
+        cache_path = frame_cache_path(file_id, float(second))
+        if cache_path.exists() and cache_path.stat().st_size > 0:
+            continue
+        try:
+            extract_frame_to_cache(source_path, cache_path, float(second))
+        except Exception as exc:
+            logger.warning(
+                "Frame scan skipped the small picture at %ds for %s (%s)",
+                second, file_id, type(exc).__name__,
+            )

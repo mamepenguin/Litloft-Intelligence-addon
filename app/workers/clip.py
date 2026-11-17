@@ -15,6 +15,8 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 
@@ -968,6 +970,22 @@ def _consume_storyboard_retry(file_id: str) -> bool:
 _SHEET_DOWNLOAD_SECONDS = 120.0
 _SCENE_SECONDS = 30
 
+# One storyboard writer per file at a time. The leg holds the lock for its whole
+# run and a fetch holds it around its step, so a fetch that arrives while the
+# leg is looking a video up waits instead of reading a storyboard the leg is
+# about to replace.
+_storyboard_locks_guard = threading.Lock()
+_storyboard_locks: dict[str, threading.Lock] = {}
+
+
+@contextmanager
+def storyboard_lock(file_id: str) -> Iterator[None]:
+    """Serialise the storyboard work of ``file_id`` across the leg and a fetch."""
+    with _storyboard_locks_guard:
+        lock = _storyboard_locks.setdefault(file_id, threading.Lock())
+    with lock:
+        yield
+
 
 class _StoryboardFailure(Exception):
     """A transient failure of the storyboard leg; ``failure`` is the log class."""
@@ -1016,19 +1034,41 @@ def _index_youtube_storyboard(
     True on a definite result (rows written, or nothing to write); False on a
     transient failure, with the earlier rows and ``clip_indexed`` untouched.
     """
-    if not _consume_storyboard_retry(file_id) and file_id in _storyboard_failed:
-        return False
-    try:
-        source = read_loft(file_path, validate=validate_file_path)
-    except LoftUnreadable:
-        return _storyboard_failure(file_id, "loft_unreadable")
-    if source is None or source.provider != YOUTUBE_PROVIDER:
-        return _storyboard_definite(file_id)
+    with storyboard_lock(file_id):
+        if (
+            not _consume_storyboard_retry(file_id)
+            and file_id in _storyboard_failed
+        ):
+            return False
+        try:
+            source = read_loft(file_path, validate=validate_file_path)
+        except LoftUnreadable:
+            return _storyboard_failure(file_id, "loft_unreadable")
+        if source is None or source.provider != YOUTUBE_PROVIDER:
+            return _storyboard_definite(file_id)
 
-    try:
-        description = run_lookup(source.url, STORYBOARD_LOOKUP_LIMIT_SECONDS)
-    except Exception:  # noqa: BLE001 - LookupFailed's detail may name a URL
-        return _storyboard_failure(file_id, "lookup_failed")
+        try:
+            description = run_lookup(source.url, STORYBOARD_LOOKUP_LIMIT_SECONDS)
+        except Exception:  # noqa: BLE001 - LookupFailed's detail may name a URL
+            return _storyboard_failure(file_id, "lookup_failed")
+        if index_storyboard(file_id, description, indexed_duration):
+            _storyboard_failed.discard(file_id)
+            return True
+        _storyboard_failed.add(file_id)
+        return False
+
+
+def index_storyboard(
+    file_id: str, description: dict, indexed_duration: float | None,
+) -> bool:
+    """Embed the storyboard ``description`` names as ``file_id``'s scene rows.
+
+    The caller holds :func:`storyboard_lock` for ``file_id``. True on a
+    definite result (rows written, or nothing to write); False when a sheet,
+    an embedding or a tile write failed, with the earlier rows and
+    ``clip_indexed`` untouched. Any other exception leaves no temporary tile
+    directory and propagates.
+    """
     board = storyboard_of(description)
     video_seconds = known_duration(description, indexed_duration)
     if board is None or video_seconds is None:
@@ -1036,7 +1076,8 @@ def _index_youtube_storyboard(
             "youtube storyboard absent: file=%s class=%s sheets=0 tiles=0",
             file_id, "no_sb0" if board is None else "no_duration",
         )
-        return _storyboard_definite(file_id)
+        _close_scene_leg(file_id)
+        return True
 
     frames = settings.indexing.frame_extraction
     tiles = kept_tiles(board, video_seconds, frames.max_frames)
@@ -1060,14 +1101,15 @@ def _index_youtube_storyboard(
                 f.clip_indexed = True
     except _StoryboardFailure as exc:
         shutil.rmtree(new_tiles, ignore_errors=True)
-        return _storyboard_failure(
+        logger.warning(
+            "youtube storyboard failed: file=%s class=%s sheets=%d tiles=%d",
             file_id, exc.failure, len(board.sheets), len(tiles),
         )
+        return False
     except Exception:
         # A failure before the row commit must leave no temporary directory.
         shutil.rmtree(new_tiles, ignore_errors=True)
         raise
-    _storyboard_failed.discard(file_id)
     _swap_tiles(file_id, new_tiles)
     logger.info(
         "youtube storyboard indexed: file=%s class=rows sheets=%d tiles=%d",

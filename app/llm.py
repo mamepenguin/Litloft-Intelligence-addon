@@ -41,6 +41,16 @@ from app.prompt_loader import render
 logger = logging.getLogger(__name__)
 
 
+#: A video's tool and final requests reason before they answer or call
+#: ``get_frames``. The limit is far above what a successful reply used (about
+#: 35,000 characters of reasoning) and stops a reasoning loop, which otherwise
+#: ran until the question's deadline (about 290,000 characters).
+FRAME_TOOL_MAX_TOKENS = 16384
+#: Smaller for ollama: the largest question is about 23,000 tokens and the
+#: recommended context is 32,768, which this must fit beside.
+OLLAMA_FRAME_TOOL_NUM_PREDICT = 8192
+
+
 @dataclass(frozen=True)
 class ChatToolCall:
     """One tool call surfaced by the LLM during an agentic turn."""
@@ -66,6 +76,171 @@ class ChatTurnResult:
     content: str | None
     tool_calls: tuple[ChatToolCall, ...]
     finish_reason: str
+
+
+@dataclass(frozen=True)
+class FrameToolCall:
+    """One tool call of a video's reply, in the shape the provider wrote it.
+
+    ``arguments`` is what the provider handed over — the joined JSON string of
+    an OpenAI-compatible stream, or ollama's own value — so that the exchange
+    can be sent back the way it arrived.
+    """
+
+    id: str
+    name: str
+    arguments: object
+
+
+@dataclass(frozen=True)
+class FrameToolResult:
+    """The text sent back for one tool call of a reply."""
+
+    call: FrameToolCall
+    content: str
+
+
+@dataclass(frozen=True)
+class FrameRound:
+    """One reply to a tool request, the results it got and the frames it asked for.
+
+    ``frames`` holds ``(label, image, mime_type)`` in the order they are sent.
+    """
+
+    text: str
+    results: tuple[FrameToolResult, ...] = ()
+    frames: tuple[tuple[str, bytes, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class FrameReply:
+    """A buffered reply to a tool request: its text and the calls it asked for."""
+
+    text: str
+    calls: tuple[FrameToolCall, ...] = ()
+
+
+def _data_url(image_bytes: bytes, mime_type: str) -> str:
+    b64 = base64.b64encode(image_bytes).decode("ascii")
+    return f"data:{mime_type};base64,{b64}"
+
+
+def _arguments_text(arguments: object) -> str:
+    """A tool call's arguments as the string an OpenAI-compatible body carries."""
+    return arguments if isinstance(arguments, str) else json.dumps(arguments)
+
+
+def _openai_frame_messages(
+    system_prompt: str,
+    user_prompt: str,
+    frames: Sequence[tuple[str, bytes, str]],
+    rounds: Sequence[FrameRound],
+) -> list[dict]:
+    """The exchange so far, with each label in the part right before its image."""
+    parts: list[dict] = [{"type": "text", "text": user_prompt}]
+    for label, image_bytes, mime_type in frames:
+        parts = [
+            *parts,
+            {"type": "text", "text": label},
+            {
+                "type": "image_url",
+                "image_url": {"url": _data_url(image_bytes, mime_type)},
+            },
+        ]
+    messages: list[dict] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": parts},
+    ]
+    for round in rounds:
+        messages = [
+            *messages,
+            {
+                "role": "assistant",
+                "content": round.text,
+                "tool_calls": [
+                    {
+                        "id": result.call.id,
+                        "type": "function",
+                        "function": {
+                            "name": result.call.name,
+                            "arguments": _arguments_text(result.call.arguments),
+                        },
+                    }
+                    for result in round.results
+                ],
+            },
+        ]
+        for result in round.results:
+            messages = [
+                *messages,
+                {
+                    "role": "tool",
+                    "tool_call_id": result.call.id,
+                    "content": result.content,
+                },
+            ]
+        if round.frames:
+            later: list[dict] = []
+            for label, image_bytes, mime_type in round.frames:
+                later = [
+                    *later,
+                    {"type": "text", "text": label},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": _data_url(image_bytes, mime_type)},
+                    },
+                ]
+            messages = [*messages, {"role": "user", "content": later}]
+    return messages
+
+
+def _ollama_frame_messages(
+    system_prompt: str,
+    user_prompt: str,
+    frames: Sequence[tuple[str, bytes, str]],
+    rounds: Sequence[FrameRound],
+) -> list[dict]:
+    """The exchange so far, each label and its one image a message of their own."""
+    messages: list[dict] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    def images(items: Sequence[tuple[str, bytes, str]]) -> list[dict]:
+        return [
+            {
+                "role": "user",
+                "content": label,
+                "images": [base64.b64encode(image_bytes).decode("ascii")],
+            }
+            for label, image_bytes, _mime_type in items
+        ]
+
+    messages = [*messages, *images(frames)]
+    for round in rounds:
+        messages = [
+            *messages,
+            {
+                "role": "assistant",
+                "content": round.text,
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": result.call.name,
+                            "arguments": result.call.arguments,
+                        },
+                    }
+                    for result in round.results
+                ],
+            },
+        ]
+        for result in round.results:
+            messages = [
+                *messages, {"role": "tool", "content": result.content},
+            ]
+        messages = [*messages, *images(round.frames)]
+    return messages
+
 
 # Exceptions that indicate transient failures and should trigger a retry.
 _RETRY_EXCEPTIONS: tuple[type[Exception], ...] = (
@@ -1063,6 +1238,176 @@ class LLMClient:
             logger.warning(
                 "Vision stream open failed with status %d", e.status_code,
             )
+            raise
+
+        async for chunk in stream:
+            try:
+                choices = chunk.choices
+            except AttributeError:
+                continue
+            if not choices:
+                continue
+            delta = getattr(choices[0], "delta", None)
+            if delta is None:
+                continue
+            content = getattr(delta, "content", None)
+            if content:
+                yield content
+
+    def _frame_request(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        frames: Sequence[tuple[str, bytes, str]],
+        rounds: Sequence[FrameRound],
+        *,
+        tools: list[dict] | None,
+        tool_choice: str,
+        temperature: float | None,
+    ) -> dict:
+        """The streamed body of a video's tool or final request.
+
+        The body differs from today's request only by the exchange's messages,
+        by ``tools`` and ``tool_choice`` when ``tools`` is given, and by its
+        own token limit, :data:`FRAME_TOOL_MAX_TOKENS`. The opt-in provider
+        extras stay out so that a 400 is read as a refusal of the images
+        rather than of a body field.
+        """
+        kwargs: dict = {
+            "model": self._config.vision_model,
+            "messages": _openai_frame_messages(
+                system_prompt, user_prompt, frames, rounds,
+            ),
+            "temperature": (
+                temperature
+                if temperature is not None
+                else self._config.vision_temperature
+            ),
+            "stream": True,
+        }
+        if _uses_max_completion_tokens(self._config.vision_model):
+            kwargs["max_completion_tokens"] = FRAME_TOOL_MAX_TOKENS
+        else:
+            kwargs["max_tokens"] = FRAME_TOOL_MAX_TOKENS
+        if tools is not None:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = tool_choice
+        return kwargs
+
+    async def reply_with_frames(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        frames: Sequence[tuple[str, bytes, str]],
+        rounds: Sequence[FrameRound] = (),
+        *,
+        tools: list[dict] | None = None,
+        tool_choice: str = "auto",
+        temperature: float | None = None,
+    ) -> FrameReply:
+        """One buffered reply about a video: its text and the calls it asked for.
+
+        The provider's stream is read to its end before anything is returned,
+        so a caller decides what the reply means from the whole of it. A 400/404
+        is a refusal reported as :class:`ImageRejected`; every other failure
+        propagates.
+        """
+        if not self._enabled or not self._config.vision_model:
+            raise ImageRejected(FAILURE_REQUEST_FAILED)
+
+        await self._wait_for_rate_limit()
+        try:
+            stream = await self._client.chat.completions.create(
+                **self._frame_request(
+                    system_prompt,
+                    user_prompt,
+                    frames,
+                    rounds,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    temperature=temperature,
+                )
+            )
+        except APIStatusError as e:
+            if e.status_code in _VISION_REJECTION_STATUS_CODES:
+                raise ImageRejected(FAILURE_IMAGE_REJECTED) from e
+            raise
+
+        text: list[str] = []
+        calls: dict[int, dict[str, str]] = {}
+        async for chunk in stream:
+            try:
+                choices = chunk.choices
+            except AttributeError:
+                continue
+            if not choices:
+                continue
+            delta = getattr(choices[0], "delta", None)
+            if delta is None:
+                continue
+            content = getattr(delta, "content", None)
+            if content:
+                text = [*text, content]
+            for raw in getattr(delta, "tool_calls", None) or []:
+                index = getattr(raw, "index", 0) or 0
+                call = calls.setdefault(
+                    index, {"id": "", "name": "", "arguments": ""},
+                )
+                if getattr(raw, "id", None):
+                    call["id"] = raw.id
+                function = getattr(raw, "function", None)
+                if function is None:
+                    continue
+                if getattr(function, "name", None):
+                    call["name"] = function.name
+                if getattr(function, "arguments", None):
+                    call["arguments"] += function.arguments
+        return FrameReply(
+            text="".join(text),
+            calls=tuple(
+                FrameToolCall(
+                    id=call["id"], name=call["name"],
+                    arguments=call["arguments"],
+                )
+                for _index, call in sorted(calls.items())
+            ),
+        )
+
+    async def stream_with_frames(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        frames: Sequence[tuple[str, bytes, str]],
+        rounds: Sequence[FrameRound] = (),
+        *,
+        tools: list[dict] | None = None,
+        tool_choice: str = "none",
+        temperature: float | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream a video's final answer token by token.
+
+        Same body as :meth:`reply_with_frames`, read as it arrives; a failure
+        propagates so the caller can decide what the partial answer is worth.
+        """
+        if not self._enabled or not self._config.vision_model:
+            raise ImageRejected(FAILURE_REQUEST_FAILED)
+
+        await self._wait_for_rate_limit()
+        try:
+            stream = await self._client.chat.completions.create(
+                **self._frame_request(
+                    system_prompt,
+                    user_prompt,
+                    frames,
+                    rounds,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    temperature=temperature,
+                )
+            )
+        except APIStatusError as e:
+            if e.status_code in _VISION_REJECTION_STATUS_CODES:
+                raise ImageRejected(FAILURE_IMAGE_REJECTED) from e
             raise
 
         async for chunk in stream:
@@ -2107,6 +2452,171 @@ class OllamaLLMClient:
             raise RuntimeError("vision stream timed out") from e
         except httpx.HTTPError as e:
             raise RuntimeError("vision stream failed") from e
+
+    def _frame_request(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        frames: Sequence[tuple[str, bytes, str]],
+        rounds: Sequence[FrameRound],
+        *,
+        tools: list[dict] | None,
+        tool_choice: str,
+        temperature: float | None,
+    ) -> dict:
+        """The streamed body of a video's tool or final request.
+
+        Thinking is on, because the local model did not call the tool without
+        it, and the reply's thinking is dropped by the readers below so it is
+        never written out or sent back. ``tool_choice`` ``"none"`` leaves the
+        tool out entirely: ollama has no separate switch for it.
+        """
+        body: dict = {
+            "model": self._config.vision_model,
+            "messages": _ollama_frame_messages(
+                system_prompt, user_prompt, frames, rounds,
+            ),
+            "stream": True,
+            "think": True,
+            "options": {
+                "temperature": (
+                    temperature
+                    if temperature is not None
+                    else self._config.vision_temperature
+                ),
+                "num_predict": OLLAMA_FRAME_TOOL_NUM_PREDICT,
+            },
+        }
+        if tools is not None and tool_choice != "none":
+            body["tools"] = tools
+        return body
+
+    async def reply_with_frames(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        frames: Sequence[tuple[str, bytes, str]],
+        rounds: Sequence[FrameRound] = (),
+        *,
+        tools: list[dict] | None = None,
+        tool_choice: str = "auto",
+        temperature: float | None = None,
+    ) -> FrameReply:
+        """One buffered native reply about a video: its text and the calls it asked for.
+
+        Read to the end of the stream before returning, with the thinking text
+        dropped. A 400/404 is a refusal reported as :class:`ImageRejected`; every
+        other failure propagates.
+        """
+        if not self._enabled or not self._config.vision_model:
+            raise ImageRejected(FAILURE_REQUEST_FAILED)
+
+        body = self._frame_request(
+            system_prompt,
+            user_prompt,
+            frames,
+            rounds,
+            tools=tools,
+            tool_choice=tool_choice,
+            temperature=temperature,
+        )
+        text: list[str] = []
+        calls: list[FrameToolCall] = []
+        await self._wait_for_rate_limit()
+        try:
+            async with self._http.stream(
+                "POST", f"{self._base_url}/api/chat", json=body,
+            ) as resp:
+                if resp.status_code in _VISION_REJECTION_STATUS_CODES:
+                    raise ImageRejected(FAILURE_IMAGE_REJECTED)
+                if resp.status_code != 200:
+                    raise RuntimeError(
+                        f"frame request failed with status {resp.status_code}"
+                    )
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    message = data.get("message") or {}
+                    content = message.get("content") or ""
+                    if content:
+                        text = [*text, content]
+                    for raw in message.get("tool_calls") or []:
+                        function = raw.get("function") or {}
+                        calls = [
+                            *calls,
+                            FrameToolCall(
+                                id=raw.get("id") or "",
+                                name=function.get("name") or "",
+                                arguments=function.get("arguments", ""),
+                            ),
+                        ]
+                    if data.get("done", False):
+                        break
+        except httpx.TimeoutException as e:
+            raise RuntimeError("frame request timed out") from e
+        except httpx.HTTPError as e:
+            raise RuntimeError("frame request failed") from e
+        return FrameReply(text="".join(text), calls=tuple(calls))
+
+    async def stream_with_frames(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        frames: Sequence[tuple[str, bytes, str]],
+        rounds: Sequence[FrameRound] = (),
+        *,
+        tools: list[dict] | None = None,
+        tool_choice: str = "none",
+        temperature: float | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream a video's final answer token by token, thinking text dropped.
+
+        Same body as :meth:`reply_with_frames`; a failure propagates so the
+        caller can decide what the partial answer is worth.
+        """
+        if not self._enabled or not self._config.vision_model:
+            raise ImageRejected(FAILURE_REQUEST_FAILED)
+
+        body = self._frame_request(
+            system_prompt,
+            user_prompt,
+            frames,
+            rounds,
+            tools=tools,
+            tool_choice=tool_choice,
+            temperature=temperature,
+        )
+        await self._wait_for_rate_limit()
+        try:
+            async with self._http.stream(
+                "POST", f"{self._base_url}/api/chat", json=body,
+            ) as resp:
+                if resp.status_code in _VISION_REJECTION_STATUS_CODES:
+                    raise ImageRejected(FAILURE_IMAGE_REJECTED)
+                if resp.status_code != 200:
+                    raise RuntimeError(
+                        f"final request failed with status {resp.status_code}"
+                    )
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    content = (data.get("message") or {}).get("content") or ""
+                    if content:
+                        yield content
+                    if data.get("done", False):
+                        return
+        except httpx.TimeoutException as e:
+            raise RuntimeError("final request timed out") from e
+        except httpx.HTTPError as e:
+            raise RuntimeError("final request failed") from e
 
     async def _vision_chat(
         self,

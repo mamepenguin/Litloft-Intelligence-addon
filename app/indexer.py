@@ -14,6 +14,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import and_, or_, select
 from sqlalchemy import text as sql_text
 
 from app.config import resolve_file_path, resolve_stored_path, settings
@@ -61,6 +62,7 @@ from app.workers.metadata import (
 from app.workers.frame_ocr import index_frame_ocr
 from app.workers.frame_scan import index_frame_scan
 from app.workers.page_ocr import index_page_ocr
+from app.workers import loft_media
 from app.workers.ocr import (
     check_idle_unload as check_ocr_idle_unload,
     index_ocr,
@@ -107,6 +109,7 @@ class TaskType(str, Enum):
     FRAME_OCR = "frame_ocr"
     PAGE_OCR = "page_ocr"
     FRAME_SCAN = "frame_scan"
+    LOFT_MEDIA = "loft_media"
 
 
 class QueueState(str, Enum):
@@ -270,6 +273,23 @@ class IndexManager:
         """Start the background processing workers."""
         logger.info("Starting index manager")
 
+        # Before the first sweep can queue a fetch: no download survives the
+        # previous process, and a `.loft` whose stages were closed because no
+        # frames could apply gets them reopened.
+        loft_media.reset_worker_state()
+        removed = await asyncio.to_thread(loft_media.clear_fetch_dir)
+        if removed:
+            logger.info("Removed %d leftover loft download(s)", removed)
+        try:
+            reopened = await asyncio.to_thread(_reopen_unclassified_lofts)
+        except Exception as exc:  # noqa: BLE001 - the rest of indexing still starts
+            logger.error("Loft reopen failed: %s", type(exc).__name__)
+        else:
+            if reopened:
+                logger.info(
+                    "Reopened %d unclassified loft(s) for fetching", reopened,
+                )
+
         # Start worker tasks
         clip_count = settings.workers.clip_parallel
         self._background_tasks = [
@@ -295,6 +315,9 @@ class IndexManager:
             asyncio.create_task(self._ocr_worker(), name="ocr_worker"),
             asyncio.create_task(self._frame_ocr_worker(), name="frame_ocr_worker"),
             asyncio.create_task(self._frame_scan_worker(), name="frame_scan_worker"),
+            asyncio.create_task(
+                self._loft_media_worker(), name="loft_media_worker"
+            ),
             asyncio.create_task(self._page_ocr_worker(), name="page_ocr_worker"),
             asyncio.create_task(
                 self._reconciliation_worker(), name="reconciliation_worker"
@@ -427,9 +450,22 @@ class IndexManager:
             ).count()
 
             video_types = list(VIDEO_TYPES)
+            # Pipeline videos: native videos, YouTube `.loft`s and `.loft`s
+            # the fetch has not classified yet. A `.loft` of another source
+            # has no scan or frame read and is never counted.
+            pipeline_frame = or_(
+                IndexedFile.mime_type.in_(video_types),
+                and_(
+                    IndexedFile.mime_type == LOFT_MIME,
+                    or_(
+                        IndexedFile.loft_source == "youtube",
+                        IndexedFile.loft_source.is_(None),
+                    ),
+                ),
+            )
             frame_ocr = active_files.filter(
                 IndexedFile.frame_ocr_indexed.is_(True),
-                IndexedFile.mime_type.in_(video_types),
+                pipeline_frame,
             ).count()
             page_ocr = active_files.filter(
                 IndexedFile.page_ocr_indexed.is_(True),
@@ -438,7 +474,7 @@ class IndexManager:
             pending_frame_ocr = (
                 active_files.filter(
                     IndexedFile.frame_ocr_indexed.is_(False),
-                    IndexedFile.mime_type.in_(video_types),
+                    pipeline_frame,
                 ).count()
                 if settings.features.video_frame_ocr == "on_index"
                 else 0
@@ -460,11 +496,11 @@ class IndexManager:
 
             frame_scan = active_files.filter(
                 IndexedFile.frame_scan_indexed.is_(True),
-                IndexedFile.mime_type.in_(video_types),
+                pipeline_frame,
             ).count()
             pending_frame_scan = active_files.filter(
                 IndexedFile.frame_scan_indexed.is_(False),
-                IndexedFile.mime_type.in_(video_types),
+                pipeline_frame,
             ).count()
 
             return IndexStatus(
@@ -907,9 +943,15 @@ class IndexManager:
                         f.tfidf_keywords_indexed = True
                     if not f.ocr_indexed and f.mime_type not in OCR_IMAGE_TYPES:
                         f.ocr_indexed = True
+                    # A `.loft` of another source has no frames to read or
+                    # scan; an unclassified or YouTube one is the fetch's job.
+                    loft_stays_open = (
+                        f.mime_type == LOFT_MIME and f.loft_source != "other"
+                    )
                     if (
                         not f.frame_ocr_indexed
                         and f.mime_type not in VIDEO_TYPES
+                        and not loft_stays_open
                     ):
                         f.frame_ocr_read = True
                         f.frame_ocr_indexed = True
@@ -921,6 +963,7 @@ class IndexManager:
                     if (
                         not f.frame_scan_indexed
                         and f.mime_type not in VIDEO_TYPES
+                        and not loft_stays_open
                     ):
                         f.frame_scan_indexed = True
 
@@ -943,6 +986,8 @@ class IndexManager:
                         f.frame_ocr_indexed,
                         f.page_ocr_indexed,
                         f.frame_scan_indexed,
+                        f.loft_source,
+                        f.loft_fetch_failures,
                     )
                     for f in incomplete
                 ]
@@ -962,6 +1007,7 @@ class IndexManager:
             tfidf_kw_done, ocr_done, transcript_corrected,
             picture_text_corrected, has_followup,
             frame_read, frame_done, page_done, frame_scan_done,
+            loft_source, loft_failures,
         ) in file_tasks:
             queued_any = False
 
@@ -1050,6 +1096,37 @@ class IndexManager:
                 ))
                 queued_any = True
 
+            # A `.loft` is never scanned or read from its own path: the fetch
+            # that downloads the referenced video runs both stages. A stored
+            # read whose rows are missing is rebuilt without a download. A
+            # capped `.loft` is only reopened again by a user request; the
+            # sweep must not spend a download on it.
+            if (
+                mime_type == LOFT_MIME
+                and loft_source != "other"
+                and int(loft_failures or 0) < 3
+            ):
+                ocr_mode = settings.features.video_frame_ocr
+                scan_wanted = not frame_scan_done
+                ocr_wanted = (
+                    not frame_read
+                    and ocr_mode != "false"
+                    and (ocr_mode == "on_index" or loft_media.is_ocr_requested(file_id))
+                )
+                any_open = not (frame_scan_done and frame_read and frame_done)
+                if scan_wanted or ocr_wanted or (loft_source is None and any_open):
+                    await self._enqueue(IndexTask(
+                        file_id=file_id, task_type=TaskType.LOFT_MEDIA,
+                        priority=-10,
+                    ))
+                    queued_any = True
+                if loft_source == "youtube" and frame_read and not frame_done:
+                    await self._enqueue(IndexTask(
+                        file_id=file_id, task_type=TaskType.FRAME_OCR,
+                        priority=-10,
+                    ))
+                    queued_any = True
+
             if queued_any:
                 resumed += 1
 
@@ -1080,6 +1157,14 @@ class IndexManager:
         if mime_type in VIDEO_TYPES:
             await self._enqueue(IndexTask(
                 file_id=file_id, task_type=TaskType.FRAME_SCAN
+            ))
+
+        # A `.loft` is read and, if it points at YouTube, fetched and run
+        # through both frame stages by one task; the reference's own path is
+        # never decoded.
+        if mime_type == LOFT_MIME:
+            await self._enqueue(IndexTask(
+                file_id=file_id, task_type=TaskType.LOFT_MEDIA
             ))
 
         # Read the words in a picture on the same pass, like CLIP.
@@ -1236,6 +1321,21 @@ class IndexManager:
                         file_id=file_id, task_type=TaskType.FRAME_SCAN,
                         priority=100,
                     ))
+                if file.mime_type == LOFT_MIME and file.loft_source != "other":
+                    if (
+                        file.loft_source == "youtube"
+                        and file.frame_ocr_read
+                        and not file.frame_ocr_indexed
+                    ):
+                        pending.append(IndexTask(
+                            file_id=file_id, task_type=TaskType.FRAME_OCR,
+                            priority=100,
+                        ))
+                    else:
+                        pending.append(IndexTask(
+                            file_id=file_id, task_type=TaskType.LOFT_MEDIA,
+                            priority=100,
+                        ))
             return pending
 
         # Off the loop: the row lookup is O(1), but taking the write lock
@@ -1276,6 +1376,7 @@ class IndexManager:
         "frame_ocr": TaskType.FRAME_OCR,
         "page_ocr": TaskType.PAGE_OCR,
         "frame_scan": TaskType.FRAME_SCAN,
+        "loft_media": TaskType.LOFT_MEDIA,
     }
 
     def is_queued(self, file_id: str, task: str) -> bool:
@@ -1284,10 +1385,17 @@ class IndexManager:
         Used by ``POST /files/{id}/reindex`` to short-circuit with HTTP
         202 ``already_queued`` so connect-clicks from the failed-jobs
         modal don't pile up duplicate flag flips + enqueue entries.
+
+        A `.loft`'s scan and OCR are stages of its fetch, so both answer
+        from the ``loft_media`` queue (and ``frame_ocr`` also from a
+        rebuild-only entry).
         """
         task_type = self._TASK_NAME_TO_TYPE.get(task)
         if task_type is None:
             return False
+        loft_queued = file_id in self._queued_by_type[TaskType.LOFT_MEDIA]
+        if task in ("frame_scan", "frame_ocr"):
+            return loft_queued or file_id in self._queued_by_type[task_type]
         return file_id in self._queued_by_type[task_type]
 
     def is_processing(self, file_id: str, task: str) -> bool:
@@ -1295,7 +1403,36 @@ class IndexManager:
         task_type = self._TASK_NAME_TO_TYPE.get(task)
         if task_type is None:
             return False
+        loft_running = file_id in self._processing_by_type[TaskType.LOFT_MEDIA]
+        if task in ("frame_scan", "frame_ocr"):
+            return loft_running or file_id in self._processing_by_type[task_type]
         return file_id in self._processing_by_type[task_type]
+
+    async def raise_task_priority(self, file_id: str, task: str) -> None:
+        """Re-queue one ``(file_id, task)`` at priority 100.
+
+        A queued fetch may sit behind other files; a user request must run
+        ahead of them, so its entry is replaced rather than duplicated.
+        """
+        task_type = self._TASK_NAME_TO_TYPE.get(task)
+        if task_type is None:
+            return
+        queue = self._queues[task_type]
+        kept: list[tuple[int, float, IndexTask]] = []
+        while True:
+            try:
+                item = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if item[2].file_id != file_id:
+                kept.append(item)
+        for item in kept:
+            await queue.put(item)
+        self._queued_by_type[task_type].discard(file_id)
+        await self._enqueue(
+            IndexTask(file_id=file_id, task_type=task_type, priority=100),
+            force=True,
+        )
 
     async def enqueue_task_for_file(self, file_id: str, task: str) -> None:
         """Enqueue a single ``(file_id, task)`` pair at high priority.
@@ -1858,6 +1995,94 @@ class IndexManager:
                 logger.error("Frame scan worker error: %s", e)
                 await asyncio.sleep(5)
 
+    async def _loft_media_worker(self) -> None:
+        """Fetch and process one `.loft` reference's video at a time."""
+        while True:
+            try:
+                await self._pause_event.wait()
+                batch = await self._collect_batch(TaskType.LOFT_MEDIA, 1)
+
+                if not batch:
+                    await asyncio.sleep(2)
+                    continue
+
+                task = batch[0]
+                # The backlog waits for native frame work; a new file or a
+                # user request does not.
+                if task.priority == -10 and self._native_frame_busy():
+                    await self._enqueue(task, force=True)
+                    await asyncio.sleep(2)
+                    continue
+                # The pause and the backoff hold the backlog only.
+                if task.priority == -10 and loft_media.backlog_held():
+                    await self._defer_backlog(task)
+                    await asyncio.sleep(2)
+                    continue
+
+                self._processing_count += 1
+                self._processing_by_type[TaskType.LOFT_MEDIA].append(task.file_id)
+
+                try:
+                    result = await asyncio.to_thread(
+                        loft_media.index_loft_media,
+                        task.file_id,
+                        is_paused=self.is_paused,
+                    )
+                    if result.scan_set:
+                        await self._enqueue_video_visual_on_clip(
+                            task.file_id, after_scan=True
+                        )
+                    if result.requeue:
+                        await self._enqueue(IndexTask(
+                            file_id=task.file_id,
+                            task_type=TaskType.LOFT_MEDIA,
+                            priority=100,
+                        ), force=True)
+                    elif result.retry_backlog:
+                        await self._enqueue(IndexTask(
+                            file_id=task.file_id,
+                            task_type=TaskType.LOFT_MEDIA,
+                            priority=-10,
+                        ), force=True)
+                except Exception as e:
+                    logger.error(
+                        "Loft media fetch failed for %s: %s", task.file_id, e
+                    )
+                finally:
+                    self._processing_count -= 1
+                    try:
+                        self._processing_by_type[TaskType.LOFT_MEDIA].remove(
+                            task.file_id
+                        )
+                    except ValueError:
+                        pass
+
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.error("Loft media worker error: %s", e)
+                await asyncio.sleep(5)
+
+    async def _defer_backlog(self, task: IndexTask) -> None:
+        """Put a held backlog task back at the head of the backlog.
+
+        It was the head when taken, so a new tail timestamp would let the
+        files queued behind it overtake it on every pause or backoff check.
+        """
+        self._queued_by_type[task.task_type].add(task.file_id)
+        await self._queues[task.task_type].put(
+            (-task.priority, float("-inf"), task),
+        )
+
+    def _native_frame_busy(self) -> bool:
+        """Whether a native frame scan or OCR task is queued or running."""
+        return bool(
+            self._queues[TaskType.FRAME_SCAN].qsize()
+            or self._queues[TaskType.FRAME_OCR].qsize()
+            or self._processing_by_type[TaskType.FRAME_SCAN]
+            or self._processing_by_type[TaskType.FRAME_OCR]
+        )
+
     async def _page_ocr_worker(self) -> None:
         """Read scanned PDF pages one PDF at a time, off the event loop."""
         while True:
@@ -2149,6 +2374,40 @@ class IndexManager:
 
 
 # --- Startup cleanup ---
+
+
+def _reopen_unclassified_lofts() -> int:
+    """Reopen the frame stages of `.loft`s that were never fetched.
+
+    A `.loft` with no loft source and nothing stored has no scan row or frame
+    text to prove the stages already ran, so its closed flags are reopened
+    for the next fetch. Idempotent.
+    """
+    from app.models import VideoFrameScan, VideoFrameText
+
+    with get_search_db() as session:
+        return (
+            session.query(IndexedFile)
+            .filter(
+                IndexedFile.active.is_(True),
+                IndexedFile.mime_type == LOFT_MIME,
+                IndexedFile.loft_source.is_(None),
+                ~IndexedFile.file_id.in_(
+                    select(VideoFrameScan.file_id)
+                ),
+                ~IndexedFile.file_id.in_(
+                    select(VideoFrameText.file_id)
+                ),
+            )
+            .update(
+                {
+                    IndexedFile.frame_scan_indexed: False,
+                    IndexedFile.frame_ocr_read: False,
+                    IndexedFile.frame_ocr_indexed: False,
+                },
+                synchronize_session=False,
+            )
+        )
 
 
 def reset_falsely_completed_clip() -> int:

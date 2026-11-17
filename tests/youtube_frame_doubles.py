@@ -2,10 +2,13 @@
 
 ``yt-dlp`` and ``ffmpeg`` are replaced by executables placed first (and only) on
 ``PATH``, so the tests hold whatever way the addon starts them. The fake
-``yt-dlp`` prints a recorded ``-J`` description; the fake ``ffmpeg`` waits as
-told and then becomes the real ffmpeg. The "stream" and the storyboard sheets
-are served by a local HTTP server, so a frame is a real decode of a real file
-and every address the addon uses can be seen in the server's request log.
+``yt-dlp`` prints a recorded ``-J`` description and, when asked to download,
+copies the rendition the description names into the template's path, keeping
+what it has written so far when it fails, stalls or is killed, as real yt-dlp
+does; the fake ``ffmpeg`` waits as told and then becomes the real ffmpeg. The
+"stream" and the storyboard sheets are served by a local HTTP server, so a
+frame is a real decode of a real file and every address the addon uses can be
+seen in the server's request log.
 """
 
 from __future__ import annotations
@@ -68,16 +71,96 @@ def real_pil_modules() -> dict:
 
 
 _YTDLP_SCRIPT = """#!{python}
-import json, os, sys, time
+import json, os, sys, time, urllib.request
 d = os.environ["FAKE_YT_DIR"]
+argv = sys.argv[1:]
 cfg = json.load(open(d + "/ytdlp.json"))
-with open(d + "/ytdlp.log", "a") as f:
-    f.write(json.dumps({{"argv": sys.argv[1:], "t": time.time()}}) + "\\n")
-time.sleep(cfg.get("delay", 0))
-if cfg.get("fail"):
-    sys.stderr.write(cfg["fail"] + "\\n")
+if "-J" in argv:
+    with open(d + "/ytdlp.log", "a") as f:
+        f.write(json.dumps({{"argv": argv, "t": time.time()}}) + "\\n")
+    time.sleep(cfg.get("delay", 0))
+    if cfg.get("fail"):
+        sys.stderr.write(cfg["fail"] + "\\n")
+        sys.exit(1)
+    json.dump(cfg["describe"], sys.stdout)
+    sys.exit(0)
+config = json.load(open(d + "/download.json"))
+with open(d + "/download.log", "a") as f:
+    f.write(json.dumps(
+        {{"argv": argv, "pid": os.getpid(), "t": time.time()}}
+    ) + "\\n")
+
+
+def note(kind, **extra):
+    with open(d + "/download-notes.log", "a") as f:
+        f.write(json.dumps(dict(
+            {{"kind": kind, "pid": os.getpid(), "t": time.time()}}, **extra
+        )) + "\\n")
+
+
+def put(target, data):
+    with open(target, "ab") as f:
+        f.write(data)
+
+
+formats = [
+    fmt for fmt in (cfg["describe"].get("formats") or [])
+    if fmt.get("protocol") == "https"
+    and fmt.get("vcodec") not in (None, "none")
+    and fmt.get("acodec") == "none"
+    and isinstance(fmt.get("height"), int) and 0 < fmt["height"] <= 720
+]
+if not formats:
+    sys.stderr.write("No video formats found\\n")
     sys.exit(1)
-json.dump(cfg["describe"], sys.stdout)
+fmt = max(formats, key=lambda item: item["height"])
+template = argv[argv.index("-o") + 1]
+out = template.replace("%(ext)s", fmt.get("ext") or "mp4")
+# Real yt-dlp refuses to fetch a video whose output file is already there.
+if os.path.exists(out) and os.path.getsize(out) > 0:
+    note("already", path=out, bytes=os.path.getsize(out))
+    sys.exit(0)
+target = out + ".part" if config.get("temp") else out
+open(target, "wb").close()
+if config.get("empty"):
+    note("done", path=target, bytes=0)
+    sys.exit(config.get("exit", 0))
+request = urllib.request.Request(
+    fmt["url"], headers=fmt.get("http_headers") or {{}},
+)
+try:
+    with urllib.request.urlopen(request, timeout=60) as response:
+        body = response.read()
+except Exception:
+    # A transfer that dies part-way leaves what it had written on disk.
+    left = config.get("failure_bytes", 4096)
+    put(target, b"\\0" * left)
+    note("partial", path=target, bytes=left)
+    sys.stderr.write("download failed\\n")
+    sys.exit(1)
+stall = config.get("stall_bytes") or 0
+grow = config.get("grow")
+if grow:
+    step, seconds = grow
+    end = time.time() + seconds
+    offset = 0
+    while offset < len(body) and time.time() < end:
+        put(target, body[offset:offset + step])
+        offset += step
+        if offset == step:
+            note("partial", path=target, bytes=offset)
+        time.sleep(0.05)
+    put(target, body[offset:])
+elif stall:
+    put(target, body[:stall])
+    note("partial", path=target, bytes=stall)
+    time.sleep(config.get("hold", 0))
+    put(target, body[stall:])
+else:
+    time.sleep(config.get("hold", 0))
+    put(target, body)
+note("done", path=target, bytes=os.path.getsize(target))
+sys.exit(config.get("exit", 0))
 """
 
 _FFMPEG_SCRIPT = """#!{python}
@@ -141,6 +224,10 @@ class _Handler(BaseHTTPRequestHandler):
         if status == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{len(body)}")
         self.end_headers()
+        if override.get("truncate"):
+            # The length above is the whole body; the reader must see the cut.
+            chunk = chunk[: int(len(chunk) * override["truncate"])]
+            self.close_connection = True
         try:
             self.wfile.write(chunk)
         except (BrokenPipeError, ConnectionResetError):
@@ -175,6 +262,7 @@ class FakeYouTube:
             (self.bin / name).chmod(0o755)
         self.set_ytdlp(describe=describe([]))
         self.set_ffmpeg(hold=0)
+        self.set_download(hold=0)
 
     # -- configuration -------------------------------------------------
 
@@ -185,6 +273,20 @@ class FakeYouTube:
 
     def set_ffmpeg(self, *, hold: float) -> None:
         (self.state / "ffmpeg.json").write_text(json.dumps({"hold": hold}))
+
+    def set_download(self, **options) -> None:
+        """Configure the download the fake ``yt-dlp`` performs.
+
+        ``hold`` waits before the rest of the stream is written; ``stall_bytes``
+        writes that many bytes first, so a stall leaves a real partial;
+        ``grow`` takes ``[bytes, seconds]`` and writes the stream in steps
+        spread over that time; ``failure_bytes`` is what a transfer that dies
+        part-way leaves behind; ``empty`` writes a zero-byte file; ``temp``
+        writes only ``<out>.part``; ``exit`` is the exit code after the write.
+        """
+        (self.state / "download.json").write_text(
+            json.dumps({"hold": 0, **options})
+        )
 
     def remove_ytdlp(self) -> None:
         (self.bin / "yt-dlp").unlink()
@@ -229,6 +331,24 @@ class FakeYouTube:
     def lookups(self) -> list[dict]:
         return self._log("ytdlp.log")
 
+    def download_commands(self) -> list[dict]:
+        return self._log("download.log")
+
+    def download_notes(self) -> list[dict]:
+        return self._log("download-notes.log")
+
+    def partials(self) -> list[dict]:
+        """The partial outputs the download reported writing before it stopped."""
+        return [note for note in self.download_notes() if note["kind"] == "partial"]
+
+    def reused_outputs(self) -> list[dict]:
+        """Downloads the fake skipped because an output of that name was there."""
+        return [note for note in self.download_notes() if note["kind"] == "already"]
+
+    def downloads_stopped(self) -> bool:
+        """Whether every download the fake started has exited."""
+        return not any(_pid_alive(entry["pid"]) for entry in self.download_commands())
+
     def ffmpeg_events(self) -> list[dict]:
         return self._log("ffmpeg.log")
 
@@ -256,6 +376,16 @@ class FakeYouTube:
     def stop(self) -> None:
         self.server.shutdown()
         self.server.server_close()
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
 
 
 def video_format(

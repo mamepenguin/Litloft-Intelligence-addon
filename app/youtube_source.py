@@ -1,8 +1,9 @@
-"""Frames and a storyboard for a ``.loft`` that points at a YouTube video.
+"""Frames, a storyboard and the one video-only rendition of a YouTube ``.loft``.
 
-Nothing is downloaded but one frame at a time (``ffmpeg -ss`` on the video
-stream ``yt-dlp`` names) and the small storyboard sheets. A frame that cannot
-be read is an error; no other frame is ever substituted for it.
+A frame is one ``ffmpeg -ss`` read of the video stream ``yt-dlp`` names, and
+the storyboard is its sheets; the rendition a fetch processes is downloaded by
+``yt-dlp``. A frame that cannot be read is an error; no other frame is ever
+substituted for it.
 
 Neither the stored URL, a signed stream URL nor a request header is ever put in
 a log line: the failure classes below are what is logged.
@@ -288,6 +289,129 @@ def _header_option(headers: Any) -> tuple[str, ...]:
     return ("-headers", "".join(lines)) if lines else ()
 
 
+#: Seconds without the output growing before a download is killed.
+DOWNLOAD_STALL_SECONDS = 120.0
+#: Free space below which a running download is stopped.
+DOWNLOAD_MIN_FREE_BYTES = 1024 ** 3
+#: The one rendition a fetch may download: video only, plain HTTPS, at most 720p.
+DOWNLOAD_FORMAT = f"bv*[height<={_MAX_FRAME_HEIGHT}][protocol=https]"
+#: Range size of yt-dlp's requests; unchunked reads are throttled by YouTube.
+DOWNLOAD_CHUNK_SIZE = "10M"
+
+
+@dataclass(frozen=True)
+class DownloadOutcome:
+    """What one download attempt left behind.
+
+    ``no_space`` separates the free-space stop from every other failure: the
+    caller must not count it against the video, because the video was never
+    the reason the download ended.
+    """
+
+    path: Path | None = None
+    no_space: bool = False
+
+
+def _partial_outputs(directory: Path, file_id: str) -> list[Path]:
+    """Every file the download of ``file_id`` has written so far."""
+    return list(directory.glob(f"{file_id}.part.*"))
+
+
+def download_rendition(
+    source_url: str,
+    directory: Path,
+    file_id: str,
+    *,
+    time_limit: float,
+    free_bytes: Callable[[], int] | None = None,
+) -> DownloadOutcome:
+    """Download the rendition ``yt-dlp`` picks from ``source_url``, video only.
+
+    ``yt-dlp`` writes ``<file_id>.part.<ext>``; the finished file is renamed to
+    ``<file_id>.<ext>``, so an interrupted download never looks complete.
+
+    Returns the finished path, or no path when yt-dlp fails, writes nothing,
+    stops growing for :data:`DOWNLOAD_STALL_SECONDS`, runs past ``time_limit``,
+    or leaves less than :data:`DOWNLOAD_MIN_FREE_BYTES` free; every file the
+    attempt wrote is then gone. ``no_space`` is set only for the last case.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    for leftover in _partial_outputs(directory, file_id):
+        leftover.unlink(missing_ok=True)
+    template = str(directory / f"{file_id}.part.%(ext)s")
+    argv = [
+        "yt-dlp",
+        "-f", DOWNLOAD_FORMAT,
+        "--http-chunk-size", DOWNLOAD_CHUNK_SIZE,
+        "--no-playlist",
+        "--ignore-config",
+        "-o", template,
+        source_url,
+    ]
+    try:
+        process = subprocess.Popen(
+            argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+        )
+    except OSError:
+        return None
+
+    deadline = time.monotonic() + time_limit
+    last_size = -1
+    last_growth = time.monotonic()
+    stopped_for_space = False
+    try:
+        while True:
+            size = sum(
+                path.stat().st_size
+                for path in _partial_outputs(directory, file_id)
+                if path.exists()
+            )
+            now = time.monotonic()
+            if size > last_size:
+                last_size = size
+                last_growth = now
+            if process.poll() is not None:
+                break
+            if now - last_growth > DOWNLOAD_STALL_SECONDS:
+                break
+            if now > deadline:
+                break
+            if free_bytes is not None and free_bytes() < DOWNLOAD_MIN_FREE_BYTES:
+                stopped_for_space = True
+                break
+            time.sleep(0.2)
+    finally:
+        if process.poll() is None:
+            process.kill()
+        try:
+            process.wait(timeout=10)
+        except Exception:  # noqa: BLE001 - a stuck child must not outlive the fetch
+            process.kill()
+
+    finished: Path | None = None
+    if process.returncode == 0:
+        complete = sorted(
+            (
+                path for path in _partial_outputs(directory, file_id)
+                if not path.name.endswith(".part") and path.stat().st_size > 0
+            ),
+            key=lambda path: path.stat().st_size,
+            reverse=True,
+        )
+        if complete:
+            finished = directory / f"{file_id}{complete[0].suffix}"
+            try:
+                os.replace(complete[0], finished)
+            except OSError:
+                finished = None
+    if finished is None:
+        for leftover in _partial_outputs(directory, file_id):
+            leftover.unlink(missing_ok=True)
+        return DownloadOutcome(no_space=stopped_for_space)
+    return DownloadOutcome(path=finished)
+
+
 def ensure_youtube_frame(
     file_id: str, url: str, cache_path: Path, timestamp_seconds: float,
     size: FrameSize = "small",
@@ -452,6 +576,7 @@ def kept_tiles(board: Storyboard, duration: float, max_frames: int) -> list[Tile
 
 
 __all__ = [
+    "DownloadOutcome",
     "LoftNotAccessible",
     "LoftSource",
     "LoftUnreadable",
@@ -460,6 +585,7 @@ __all__ = [
     "Storyboard",
     "Tile",
     "YOUTUBE_PROVIDER",
+    "download_rendition",
     "ensure_youtube_frame",
     "kept_tiles",
     "known_duration",

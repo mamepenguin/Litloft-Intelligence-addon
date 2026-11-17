@@ -28,6 +28,7 @@ from app.config import settings
 from app.database import get_search_db_read, get_search_engine
 from app.document_sections import EPUB_MIME
 from app.frame_cache import extract_frame_to_cache, frame_cache_path, round_ms
+from app.rag.prompt import format_position
 from app.workers.embedder import embed_query
 from app.workers.video_visual_selection import load_selection_inputs, select_scenes
 from app.workers.vision import _load_image_bytes, _preprocess_image
@@ -58,6 +59,12 @@ FRAME_PREPARATIONS = 4
 #: How long a question waits for its frames once the slot is taken.
 FRAME_WAIT_SECONDS = 45.0
 
+#: How many section lines the video's contents list.
+CONTENTS_SECTIONS = 40
+
+#: How long one section's excerpt may be.
+CONTENTS_EXCERPT_CHARS = 120
+
 #: Why an image could not be attached; the route logs the class, never
 #: the question or the bytes.
 IMAGE_FAILURE_PICTURE = "picture_unreadable"
@@ -69,6 +76,12 @@ _VECTOR_BATCH = 400
 
 # ``[n]`` markers in the answer, up to a three-digit chunk number.
 _CITATION_MARKER = re.compile(r"\[(\d{1,3})\]")
+
+# Times a model may ask a frame at: a plain number, ``m:ss`` or ``h:mm:ss``,
+# the clock forms with optional fractional seconds and every field below 60.
+_PLAIN_SECONDS = re.compile(r"^\d+(?:\.\d+)?$")
+_CLOCK_SECONDS = re.compile(r"^(\d+):(\d{1,2})(?:\.(\d+))?$")
+_CLOCK_HOURS = re.compile(r"^(\d+):(\d{1,2}):(\d{1,2})(?:\.(\d+))?$")
 
 
 @dataclass(frozen=True)
@@ -559,24 +572,152 @@ def frame_time(timestamp: float) -> float:
     return round_ms(timestamp) / 1000.0
 
 
-def choose_frame_times(
+def read_time(value: Any) -> float | None:
+    """A time a model asked for, in seconds, or ``None`` when it is unreadable.
+
+    A readable time is a JSON number (not a boolean), or a string that is a
+    number, ``m:ss`` or ``h:mm:ss`` once surrounding whitespace is removed, with
+    optional fractional seconds and every clock field below 60. A negative or
+    non-finite time is unreadable.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        seconds = float(value)
+        return seconds if math.isfinite(seconds) and seconds >= 0 else None
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if _PLAIN_SECONDS.match(text):
+        return float(text)
+    fields = _CLOCK_SECONDS.match(text) or _CLOCK_HOURS.match(text)
+    if fields is None:
+        return None
+    parts = [float(part) for part in fields.groups()[:-1]]
+    fraction = fields.groups()[-1]
+    if any(part >= 60 for part in parts[1:]):
+        return None
+    seconds = 0.0
+    for part in parts:
+        seconds = seconds * 60 + part
+    return seconds + (float(f"0.{fraction}") if fraction else 0.0)
+
+
+def video_contents(
+    file_id: str, sections: Sequence[tuple[float, float]],
+) -> tuple[str, ...]:
+    """The video's table of contents as the prompt lists it, one line a section.
+
+    Each line is the section's time range and, when the file's transcript or
+    frame text falls inside it, what is said and shown there; a section with
+    none of that text is its time range alone.
+    """
+    kept = list(sections)[:CONTENTS_SECTIONS]
+    if not kept:
+        return ()
+    rows = _excerpt_rows(file_id)
+    lines: list[str] = []
+    for start, end in kept:
+        excerpt = _excerpt(rows, start, end)
+        span = f"{format_position(start)}–{format_position(end)}"
+        lines = [*lines, f"{span} {excerpt}" if excerpt else span]
+    return tuple(lines)
+
+
+@dataclass(frozen=True)
+class _ExcerptRow:
+    text: str
+    start: float
+    end: float | None
+    #: 0 for a transcript row, 1 for a frame-text row: the order at one start.
+    kind: int
+
+
+def _excerpt_rows(file_id: str) -> tuple[_ExcerptRow, ...]:
+    """The file's spoken and shown text rows, in the order a section reads them."""
+    with get_search_db_read() as session:
+        transcripts = session.execute(
+            sql_text(
+                "SELECT text, timestamp_start, timestamp_end "
+                "FROM transcript_chunks WHERE file_id = :fid"
+            ),
+            {"fid": file_id},
+        ).fetchall()
+        frames = session.execute(
+            sql_text(
+                "SELECT text, start_time, end_time "
+                "FROM video_frame_texts WHERE file_id = :fid"
+            ),
+            {"fid": file_id},
+        ).fetchall()
+    rows: list[_ExcerptRow] = []
+    for text, start, end in transcripts:
+        if text and start is not None:
+            rows = [
+                *rows,
+                _ExcerptRow(
+                    text=text,
+                    start=float(start),
+                    end=None if end is None else float(end),
+                    kind=0,
+                ),
+            ]
+    for text, start, end in frames:
+        if text and start is not None:
+            rows = [
+                *rows,
+                _ExcerptRow(
+                    text=text,
+                    start=float(start),
+                    end=None if end is None else float(end),
+                    kind=1,
+                ),
+            ]
+    rows.sort(key=lambda row: (row.start, row.kind))
+    return tuple(rows)
+
+
+def _overlaps(row: _ExcerptRow, start: float, end: float) -> bool:
+    """Whether the row's span, or its start alone, falls inside ``[start, end)``."""
+    row_end = row.start if row.end is None else row.end
+    return row.start < end and row_end > start
+
+
+def _excerpt(rows: Sequence[_ExcerptRow], start: float, end: float) -> str:
+    """What the rows overlapping one section say, in time order and cut short."""
+    parts = [
+        " ".join(_without_markers(row.text).split())
+        for row in rows
+        if _overlaps(row, start, end)
+    ]
+    joined = " ".join(part for part in parts if part)
+    return joined[:CONTENTS_EXCERPT_CHARS].rstrip()
+
+
+def choose_frame_set(
     material: Material, position_seconds: float | None,
-) -> tuple[float | None, list[float]]:
-    """The position frame's time and the scene frame times, in time order.
+) -> tuple[float | None, list[float], tuple[tuple[float, float], ...]]:
+    """The position frame's time, the scene frame times, and the sections listed.
 
     The scene frames are the frame times of the Ask list of SPEC-ADDON-112 over
     the whole file, then thinned to the budget or filled with evenly spaced
-    times. A failed read leaves them empty and the fill still runs.
+    times; the sections are that same run's navigation list. A failed read
+    leaves both empty and the fill still runs.
     """
     budget = (
         FRAME_BUDGET_WITH_POSITION
         if position_seconds is not None
         else FRAME_BUDGET
     )
+    sections: tuple[tuple[float, float], ...] = ()
     try:
         inputs = load_selection_inputs(material.file_id)
         selection = select_scenes(inputs, 0.0, material.duration)
         times = [item.frame_time for item in selection.ask]
+        sections = tuple(
+            (item.section_start, item.section_end)
+            for item in selection.navigation
+        )
     except Exception:  # noqa: BLE001 - an empty selection is still answerable
         logger.warning("scene_candidates_failed (file %s)", material.file_id)
         times = []
@@ -616,39 +757,40 @@ def choose_frame_times(
     position = (
         frame_time(position_seconds) if position_seconds is not None else None
     )
-    return position, sorted(frame_time(time) for time in times)
+    return position, sorted(frame_time(time) for time in times), sections
 
 
 async def prepare_frames(
     material: Material, position_seconds: float | None, *, deadline: float,
     cancelled: threading.Event | None = None,
-) -> tuple[list[Frame], int]:
-    """Prepare one question's frames and report the ones that were dropped.
+) -> tuple[list[Frame], int, tuple[str, ...]]:
+    """Prepare one question's frames, the ones dropped, and its contents.
 
     The position frame is started first, then the scene frames in time
     order, and at most :data:`FRAME_PREPARATIONS` of them run at once. No
     preparation is started at or after ``deadline``; one that failed or is
     still running then is dropped, and none is replaced by another time.
     ``cancelled`` is the tab's own stop signal, so a preparation that is
-    still waiting for a worker does not begin its extraction.
+    still waiting for a worker does not begin its extraction. The contents are
+    read from the selection's sections while the deadline leaves time for them.
     """
     loop = asyncio.get_running_loop()
     remaining = deadline - loop.time()
     if remaining <= 0 or (cancelled is not None and cancelled.is_set()):
-        return [], 0
+        return [], 0, ()
     try:
-        position, scene_times = await asyncio.wait_for(
-            asyncio.to_thread(choose_frame_times, material, position_seconds),
+        position, scene_times, sections = await asyncio.wait_for(
+            asyncio.to_thread(choose_frame_set, material, position_seconds),
             timeout=remaining,
         )
     except asyncio.TimeoutError:
         logger.warning("scene_candidates_failed (file %s)", material.file_id)
-        position, scene_times = None, []
+        position, scene_times, sections = None, [], ()
     except asyncio.CancelledError:
         raise
     timestamps = ([position] if position is not None else []) + scene_times
     if not timestamps:
-        return [], 0
+        return [], 0, await _contents(material, sections, deadline, cancelled)
 
     slots = asyncio.Semaphore(FRAME_PREPARATIONS)
 
@@ -687,7 +829,86 @@ async def prepare_frames(
         "frames_dropped: chosen=%d dropped=%d (file %s)",
         len(frames), dropped, material.file_id,
     )
-    return frames, dropped
+    return frames, dropped, await _contents(material, sections, deadline, cancelled)
+
+
+async def _contents(
+    material: Material,
+    sections: tuple[tuple[float, float], ...],
+    deadline: float,
+    cancelled: threading.Event | None,
+) -> tuple[str, ...]:
+    """The contents lines, or none when they do not arrive by the deadline."""
+    if not sections or (cancelled is not None and cancelled.is_set()):
+        return ()
+    remaining = deadline - asyncio.get_running_loop().time()
+    if remaining <= 0:
+        return ()
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(video_contents, material.file_id, sections),
+            timeout=remaining,
+        )
+    except Exception:  # noqa: BLE001 - the question is answerable without them
+        return ()
+
+
+async def cut_frames(
+    material: Material, times: Sequence[float], *, deadline: float,
+    cancelled: threading.Event | None = None,
+) -> list[Frame]:
+    """Cut the frames at ``times`` in time order, and report the ones that came.
+
+    At most :data:`FRAME_PREPARATIONS` run at once and none is started at or
+    after ``deadline`` or once the question is cancelled. A frame that fails is
+    dropped, not replaced; anything else that goes wrong is the caller's.
+    """
+    if not times:
+        return []
+    loop = asyncio.get_running_loop()
+    slots = asyncio.Semaphore(FRAME_PREPARATIONS)
+
+    async def cut(timestamp: float) -> Frame | None:
+        async with slots:
+            if loop.time() >= deadline or (
+                cancelled is not None and cancelled.is_set()
+            ):
+                return None
+            image = await asyncio.to_thread(
+                _frame_image, material, timestamp, cancelled,
+            )
+            return Frame(time=timestamp, data=image.data)
+
+    tasks = [asyncio.create_task(cut(timestamp)) for timestamp in times]
+    try:
+        done, pending = await asyncio.wait(
+            tasks, timeout=max(0.0, deadline - loop.time()),
+        )
+    except asyncio.CancelledError:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    frames: list[Frame] = []
+    error: BaseException | None = None
+    for task in done:
+        try:
+            frame = task.result()
+        except ImageUnavailable:
+            continue
+        except Exception as exc:  # noqa: BLE001 - reported to the caller
+            error = error or exc
+            continue
+        if frame is not None:
+            frames = [*frames, frame]
+    if error is not None:
+        raise error
+    frames.sort(key=lambda frame: frame.time)
+    return frames
 
 
 def citations(

@@ -345,7 +345,7 @@ def _route(path: str) -> dict:
 def test_spec_addon_055_manifest_declares_search_images_like_search():
     route = _route(PATH)
 
-    assert route["methods"] == ["GET"]
+    assert route["methods"] == ["GET", "POST"]
     assert route["pre_check"] == {"type": "addon_feature", "feature": "search"}
     assert route["response_filter"] == {
         "type": "current_drive_only",
