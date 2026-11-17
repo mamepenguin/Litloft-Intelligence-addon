@@ -582,7 +582,12 @@ export default function TranscriptSection({
       if (rect.bottom > scrollerRect.bottom) {
         scroller.scrollTop += rect.bottom - scrollerRect.bottom;
       } else if (rect.top < viewTop) {
-        scroller.scrollTop -= viewTop - rect.top;
+        // A block taller than the list cannot show both ends; the strip at
+        // its bottom is what the reveal is for, so never scroll it out.
+        scroller.scrollTop -= Math.min(
+          viewTop - rect.top,
+          scrollerRect.bottom - rect.bottom,
+        );
       }
     },
     [isHidden],
