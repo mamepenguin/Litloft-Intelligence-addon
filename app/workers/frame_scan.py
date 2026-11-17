@@ -1,9 +1,9 @@
 """The frame scan: one difference hash and picture size per second.
 
-The seconds whose picture changed enough (the frame-OCR rule) become the
-file's change frames: the positions where a representative is likely to be
-worth choosing. Only the selection reads them, so they get a vector table of
-their own.
+The seconds whose picture changed by at least 16 bits since the last kept
+second, at least 10 apart, become the file's change frames: the positions
+where a representative is likely to be worth choosing. Only the selection
+reads them, so they get a vector table of their own.
 """
 
 from __future__ import annotations

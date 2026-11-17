@@ -1266,6 +1266,10 @@ def _migrate_frame_page_ocr_columns(conn: object) -> None:
                     f"{name} BOOLEAN NOT NULL DEFAULT 0"
                 )
             )
+    if "frame_ocr_rule" not in cols:
+        conn.execute(text(
+            "ALTER TABLE indexed_files ADD COLUMN frame_ocr_rule INTEGER"
+        ))
     conn.execute(text(
         "CREATE TABLE IF NOT EXISTS video_frame_texts ("
         "  id INTEGER PRIMARY KEY AUTOINCREMENT,"

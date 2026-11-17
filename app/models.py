@@ -101,6 +101,9 @@ class IndexedFile(Base):
     frame_ocr_indexed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )
+    # The selection rule the stored frame read was made under; NULL is a read
+    # from before the rules were numbered.
+    frame_ocr_rule: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # True when the video's per-second change hashes and change frames are
     # stored, or the file is not a native video.
     frame_scan_indexed: Mapped[bool] = mapped_column(

@@ -18,11 +18,13 @@ import pytest
 
 from app.models import VideoFrameText  # noqa: F401 - registers the table
 from tests.ocr_fixtures import (
+    WholeImageBoxShim,
     build_search_db,
     pillow_real,  # noqa: F401  - the usefixtures marker resolves it
     real_pillow,
     seed_indexed_file,
 )
+from tests.search_endpoint_db import patch_everywhere
 
 pytestmark = pytest.mark.usefixtures("pillow_real")
 
@@ -57,6 +59,36 @@ def _encode(path: Path, width: int, height: int, *, seconds: int = 13) -> Path:
             (left, int(height * 0.2), left + int(width * 0.4), int(height * 0.8)),
             fill=(255, 255, 255),
         )
+        process.stdin.write(frame.tobytes())
+    process.stdin.close()
+    assert process.wait() == 0
+    return path
+
+
+def _encode_steady_text(path: Path, width: int = 320, height: int = 240) -> Path:
+    """Red with a moving block for 9 s, then blue: one text, then another."""
+    real_pillow()
+    from PIL import Image, ImageDraw
+
+    fps = 5
+    seconds = 13
+    process = subprocess.Popen(
+        [
+            "ffmpeg", "-v", "error", "-y", "-f", "rawvideo",
+            "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", str(fps),
+            "-i", "-", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-g", "10", str(path),
+        ],
+        stdin=subprocess.PIPE,
+    )
+    assert process.stdin is not None
+    for index in range(seconds * fps):
+        t = index / fps
+        color = (220, 20, 20) if t < 9 else (20, 20, 220)
+        frame = Image.new("RGB", (width, height), color)
+        draw = ImageDraw.Draw(frame)
+        left = int((t * 60) % (width - 120))
+        draw.rectangle((left, 60, left + 120, 180), fill=(255, 255, 255))
         process.stdin.write(frame.tobytes())
     process.stdin.close()
     assert process.wait() == 0
@@ -125,6 +157,7 @@ def media(tmp_path_factory) -> dict[str, Path]:
     root = tmp_path_factory.mktemp("frame-ocr-media")
     try:
         landscape = _encode(root / "landscape.mp4", 320, 240)
+        steady = _encode_steady_text(root / "steady-text.mp4")
         portrait_landscape = _encode(root / "portrait-base.mp4", 320, 240)
         portrait = _rotate(portrait_landscape, root / "portrait.mp4")
         large_base = _encode(root / "large-base.mp4", 1600, 1200)
@@ -147,6 +180,7 @@ def media(tmp_path_factory) -> dict[str, Path]:
         sys.modules.update(saved)
     return {
         "landscape": landscape,
+        "steady": steady,
         "portrait": portrait,
         "large": large,
         "large_trim": large_trim,
@@ -230,6 +264,11 @@ def frame_reader(search_db, monkeypatch):
     ])
     engine = ColourEngine()
     monkeypatch.setattr(module, "_get_engine", lambda: engine)
+    shim = WholeImageBoxShim()
+    for name in ("detect_boxes", "recognise_boxes"):
+        answer = getattr(shim, name)
+        monkeypatch.setattr(ocr, name, answer)
+        patch_everywhere(monkeypatch, name, answer)
     return module, engine
 
 
@@ -263,7 +302,7 @@ def _frame_rows(db, file_id: str = "vid1"):
 # ---------------------------------------------------------------------------
 
 
-def test_spec_addon_066_i1_i2_landscape_reads_the_first_and_the_ten_second_change(
+def test_spec_addon_066_i1_i2_landscape_reads_the_first_and_the_three_second_change(
     frame_reader, search_db, tmp_path, media,
 ):
     module, engine = frame_reader
@@ -273,8 +312,8 @@ def test_spec_addon_066_i1_i2_landscape_reads_the_first_and_the_ten_second_chang
 
     assert engine.calls == [(320, 240), (320, 240)]
     assert _frame_rows(search_db) == [
-        (0, 0.0, 10.0, "ALPHA"),
-        (1, 10.0, 13.0, "BETA"),
+        (0, 0.0, 6.0, "ALPHA"),
+        (1, 6.0, 13.0, "BETA"),
     ]
     embeddings = search_db.rows(
         "SELECT chunk_index, page, timestamp_start, timestamp_end, id "
@@ -282,11 +321,25 @@ def test_spec_addon_066_i1_i2_landscape_reads_the_first_and_the_ten_second_chang
         "ORDER BY chunk_index"
     )
     assert [(r[0], r[1], r[2], r[3]) for r in embeddings] == [
-        (0, None, 0.0, 10.0), (1, None, 10.0, 13.0),
+        (0, None, 0.0, 6.0), (1, None, 6.0, 13.0),
     ]
     assert all(r[4].startswith("txt_vid1_") for r in embeddings)
     assert search_db.flag("vid1", "frame_ocr_read") == 1
     assert search_db.flag("vid1", "frame_ocr_indexed") == 1
+
+
+def test_spec_addon_066_a4_equal_text_continues_the_open_segment(
+    frame_reader, search_db, tmp_path, media,
+):
+    module, _engine = frame_reader
+    _video(search_db, tmp_path, media["steady"])
+
+    assert module.index_frame_ocr("vid1") is True
+
+    assert _frame_rows(search_db) == [
+        (0, 0.0, 9.0, "ALPHA"),
+        (1, 9.0, 13.0, "BETA"),
+    ]
 
 
 def test_spec_addon_066_i1_a_portrait_video_is_read_upright_at_source_size(
@@ -300,8 +353,8 @@ def test_spec_addon_066_i1_a_portrait_video_is_read_upright_at_source_size(
 
     assert engine.calls == [(240, 320), (240, 320)]
     assert _frame_rows(search_db) == [
-        (0, 0.0, 10.0, "ALPHA"),
-        (1, 10.0, 13.0, "BETA"),
+        (0, 0.0, 6.0, "ALPHA"),
+        (1, 6.0, 13.0, "BETA"),
     ]
 
 
@@ -316,7 +369,7 @@ def test_spec_addon_066_i1_above_1080_uses_the_short_side_and_the_key_frame_path
 
     assert engine.calls == [(1080, 1440), (1080, 1440)]
     assert [row[:3] for row in _frame_rows(search_db)] == [
-        (0, 0.0, 10.0), (1, 10.0, 13.0),
+        (0, 0.0, 6.0), (1, 6.0, 13.0),
     ]
 
 
@@ -333,11 +386,11 @@ def test_spec_addon_066_a1_a_copy_trimmed_video_uses_the_decoded_key_frames(
 
     rows = _frame_rows(search_db)
     starts = [row[1] for row in rows]
-    assert starts == [1.4, 11.4]
+    assert starts == [1.4, 5.4]
     assert all(start >= 0 for start in starts)
     assert rows == [
-        (0, 1.4, 11.4, "ALPHA"),
-        (1, 11.4, 12.4, "BETA"),
+        (0, 1.4, 5.4, "ALPHA"),
+        (1, 5.4, 12.4, "BETA"),
     ]
 
 

@@ -131,8 +131,8 @@ def test_spec_addon_075_i8_frame_ocr_writes_no_lines_and_keeps_its_text(
         "SELECT chunk_index, start_time, end_time, text FROM video_frame_texts "
         "WHERE file_id = 'vid1' ORDER BY chunk_index"
     ) == [
-        (0, 0.0, 10.0, "ALPHA"),
-        (1, 10.0, 13.0, "BETA"),
+        (0, 0.0, 6.0, "ALPHA"),
+        (1, 6.0, 13.0, "BETA"),
     ]
     assert search_db.ocr_fts("vid1") == [(0, "", "ALPHA"), (1, "", "BETA")]
 

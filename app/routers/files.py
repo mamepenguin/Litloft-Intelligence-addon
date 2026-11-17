@@ -17,6 +17,7 @@ from app.document_sections import EPUB_MIME, load_section_titles
 from app.drive_context import assert_file_in_drive, require_drive
 from app.workers.ocr import OCR_IMAGE_TYPES
 from app.workers.clip import VIDEO_TYPES, request_storyboard_retry
+from app.workers.frame_ocr import frame_read_is_outdated
 from app.workers import loft_media
 from app.schemas import (
     BatchSuggestedTagsRequest,
@@ -84,6 +85,8 @@ def _get_indexed_file_or_404(file_id: str, drive: str) -> dict[str, Any]:
             "text_indexed": indexed.text_indexed,
             "ocr_indexed": indexed.ocr_indexed,
             "frame_ocr_indexed": indexed.frame_ocr_indexed,
+            "frame_ocr_read": indexed.frame_ocr_read,
+            "frame_ocr_rule": indexed.frame_ocr_rule,
             "page_ocr_indexed": indexed.page_ocr_indexed,
             "loft_source": indexed.loft_source,
             "loft_fetch_failures": indexed.loft_fetch_failures,
@@ -1059,6 +1062,26 @@ async def reindex_file(
         else:
             fresh.append(t)
 
+    # A re-read that is already queued answers as a duplicate request does,
+    # but a user request still moves it ahead of the backlog.
+    running_frame_task = bool(
+        getattr(manager, "is_processing", lambda *_: False)(
+            file_id, "frame_ocr",
+        )
+    )
+    raise_reread = (
+        "frame_ocr" in already_queued
+        and frame_read_is_outdated(
+            mime_type=indexed["mime_type"],
+            frame_ocr_read=bool(indexed["frame_ocr_read"]),
+            frame_ocr_indexed=bool(indexed["frame_ocr_indexed"]),
+            frame_ocr_rule=indexed["frame_ocr_rule"],
+            mode=settings.features.video_frame_ocr,
+        )
+        and manager.is_queued(file_id, "frame_ocr")
+        and not running_frame_task
+    )
+
     loft_requests: list[str] = []
     if loft_ocr_requested:
         loft_requests.append("frame_ocr")
@@ -1081,6 +1104,8 @@ async def reindex_file(
 
     # All tasks were already queued — short-circuit per spec §2.1.
     if fresh == [] and not rescan and not loft_updates and not loft_running:
+        if raise_reread:
+            await manager.raise_task_priority(file_id, "frame_ocr")
         return JSONResponse(
             status_code=202,
             content={
@@ -1145,6 +1170,10 @@ async def reindex_file(
                 await manager.enqueue_task_for_file(file_id, "loft_media")
     finally:
         _reindex_in_flight.difference_update(claimed)
+
+    # A fresh task in the same request must not leave the re-read at -10.
+    if raise_reread:
+        await manager.raise_task_priority(file_id, "frame_ocr")
 
     # A fetch that was already queued is raised rather than duplicated, and the
     # raise is what the answer reports even when a fresh task came with it.
@@ -1244,7 +1273,15 @@ async def get_index_details(
             "whisper": indexed["whisper_indexed"],
             "text": indexed["text_indexed"],
             "ocr": indexed["ocr_indexed"],
-            "frame_ocr": indexed["frame_ocr_indexed"],
+            "frame_ocr": bool(indexed["frame_ocr_indexed"]) and not (
+                frame_read_is_outdated(
+                    mime_type=indexed["mime_type"],
+                    frame_ocr_read=bool(indexed["frame_ocr_read"]),
+                    frame_ocr_indexed=bool(indexed["frame_ocr_indexed"]),
+                    frame_ocr_rule=indexed["frame_ocr_rule"],
+                    mode=settings.features.video_frame_ocr,
+                )
+            ),
             "page_ocr": indexed["page_ocr_indexed"],
         },
         indexed_at=indexed["indexed_at"],
