@@ -388,3 +388,4 @@ def test_spec_addon_115_i10_vertical_dominant_form_page(tmp_path, reader):
     )
     assert "NESTEDVERTICALWORD" in unit["text"]
     assert "CHARTLABEL" in unit["text"]
+    assert unit["text"].splitlines() == ["NESTEDVERTICALWORD", "CHARTLABEL", "H"]
