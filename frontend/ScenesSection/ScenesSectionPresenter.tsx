@@ -99,14 +99,6 @@ function percent(fraction: number): string {
   return `${(fraction * 100).toFixed(3)}%`;
 }
 
-/**
- * A scene mark is a 7px dot centered on its time, so the first and last
- * frames would hang past the track's ends without the clamp.
- */
-function markLeft(fraction: number): string {
-  return `clamp(3px, ${percent(fraction)}, calc(100% - 4px))`;
-}
-
 function frameChipClass(selected: boolean): string {
   return `rounded-full border px-2.5 py-1 text-xs ${
     selected
@@ -567,7 +559,7 @@ function Ruler({
         </svg>
 
         {marks?.map((scene) => {
-          const left = markLeft(rulerFraction(seekTime(scene), length));
+          const left = percent(rulerFraction(seekTime(scene), length));
           const tone = markTone(scene);
           return (
             <span key={`mark-${scene.ordering}`} aria-hidden="true">
