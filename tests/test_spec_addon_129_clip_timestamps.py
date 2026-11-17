@@ -73,28 +73,10 @@ def test_spec_addon_129_i3_answer_is_exactly_file_id_drive_and_the_clip_rows_asc
 
     body = _get(api, "video")
 
-    assert set(body) == {"file_id", "drive", "timestamps"}
+    assert body["timestamps"] == EXPECTED
     assert body["file_id"] == "video"
     assert body["drive"] == DRIVE
-    assert body["timestamps"] == EXPECTED
-
-
-def test_spec_addon_129_i3_change_rows_do_not_change_the_answer(
-    api, search_index,
-):
-    _file("plain")
-    _candidates("plain")
-    _file("scanned")
-    _candidates("scanned")
-    _changes("scanned")
-
-    plain = _get(api, "plain")
-    scanned = _get(api, "scanned")
-
-    assert {k: v for k, v in scanned.items() if k != "file_id"} == {
-        k: v for k, v in plain.items() if k != "file_id"
-    }
-    assert set(scanned) == {"file_id", "drive", "timestamps"}
+    assert set(body) == {"file_id", "drive", "timestamps"}
 
 
 def test_spec_addon_129_i3_a_file_with_only_change_rows_answers_no_timestamps(

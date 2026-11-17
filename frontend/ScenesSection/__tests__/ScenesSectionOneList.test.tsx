@@ -256,10 +256,11 @@ describe("SPEC-ADDON-129 I1 — no frame-list switch", () => {
     async ({ locale }) => {
       intl.locale = locale;
       const pending = deferred<ReturnType<typeof answer>>();
-      vi.mocked(getClipTimestamps)
-        .mockReturnValueOnce(pending.promise as never)
-        .mockResolvedValueOnce(answer(CANDIDATES, undefined, "f2"))
-        .mockResolvedValueOnce(answer([], CHANGES, "f3"));
+      vi.mocked(getClipTimestamps).mockImplementation(((fileId: string) => {
+        if (fileId === "f2") return Promise.resolve(answer(CANDIDATES, undefined, "f2"));
+        if (fileId === "f3") return Promise.resolve(answer([], CHANGES, "f3"));
+        return pending.promise;
+      }) as never);
       vi.mocked(getVideoVisualIndex).mockResolvedValue(withScenes());
       const controller = makeController({ duration: 70 }).controller;
       const view = render(
@@ -278,7 +279,7 @@ describe("SPEC-ADDON-129 I1 — no frame-list switch", () => {
       view.rerender(
         section({ fileId: "f2", active: true, labelledByHost: true, onAvailability: vi.fn(), mediaController: controller }),
       );
-      await waitFor(() => expect(getClipTimestamps).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(getClipTimestamps).toHaveBeenCalledWith("f2", "d1"));
       await screen.findByRole("slider");
       await flush(8);
       expect(switchTraces()).toEqual([]);
@@ -293,7 +294,7 @@ describe("SPEC-ADDON-129 I1 — no frame-list switch", () => {
           mediaController: controller,
         }),
       );
-      await waitFor(() => expect(getClipTimestamps).toHaveBeenCalledTimes(3));
+      await waitFor(() => expect(getClipTimestamps).toHaveBeenCalledWith("f3", "d1"));
       await screen.findByRole("slider");
       await flush(8);
       expect(switchTraces()).toEqual([]);
