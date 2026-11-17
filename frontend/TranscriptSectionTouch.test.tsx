@@ -324,6 +324,10 @@ async function reload(
   };
   view.rerender(ui({ fileId }));
   await waitFor(() => expect(transcriptReads()).toBeGreaterThan(before));
+  // The read has been issued, not answered: let its response reach the rows.
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 }
 
 /** A tap on the tapped row's 修正, then the dialog it must have opened. */
