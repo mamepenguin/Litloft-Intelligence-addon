@@ -40,9 +40,64 @@ _active_jobs: int = 0
 # that subtitle_builder.py already expects.
 _CJK_LANGS = frozenset({"ja", "zh", "ko", "th"})
 
+# ISO 639-2/639-3 codes for the languages WhisperX ships alignment
+# models for, including the 639-2/B (bibliographic) spellings such as
+# ``ger`` and ``chi``. Codes with no ISO 639-1 equivalent (``haw``,
+# ``yue``, …) are absent and pass through unchanged.
+_ISO639_2_TO_1 = {
+    "ara": "ar",
+    "bul": "bg",
+    "cat": "ca",
+    "ces": "cs",
+    "chi": "zh",
+    "cze": "cs",
+    "dan": "da",
+    "deu": "de",
+    "dut": "nl",
+    "ell": "el",
+    "eng": "en",
+    "est": "et",
+    "fas": "fa",
+    "fin": "fi",
+    "fra": "fr",
+    "fre": "fr",
+    "ger": "de",
+    "gre": "el",
+    "heb": "he",
+    "hrv": "hr",
+    "hun": "hu",
+    "ita": "it",
+    "jpn": "ja",
+    "kor": "ko",
+    "lav": "lv",
+    "lit": "lt",
+    "mal": "ml",
+    "nld": "nl",
+    "nno": "nn",
+    "nor": "no",
+    "per": "fa",
+    "pol": "pl",
+    "por": "pt",
+    "ron": "ro",
+    "rum": "ro",
+    "rus": "ru",
+    "slk": "sk",
+    "slo": "sk",
+    "slv": "sl",
+    "spa": "es",
+    "tha": "th",
+    "tur": "tr",
+    "ukr": "uk",
+    "vie": "vi",
+    "zho": "zh",
+}
+
 
 def _normalise_lang(language: str) -> str:
-    return (language or "").lower().strip().split("-", 1)[0]
+    code = (language or "").strip().lower()
+    for separator in ("-", "_"):
+        code = code.split(separator, 1)[0]
+    return _ISO639_2_TO_1.get(code, code)
 
 
 def _load_align_model(language: str) -> tuple[Any, Any] | None:

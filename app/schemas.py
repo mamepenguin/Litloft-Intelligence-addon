@@ -377,6 +377,7 @@ class ClipTimestampsResponse(BaseModel):
     file_id: str
     drive: str
     timestamps: list[ClipTimestampItem]
+    changes: list[ClipTimestampItem] = []
 
 
 # --- Processing status (SPEC-CORE-031 / SPEC-ADDON-057) ---
