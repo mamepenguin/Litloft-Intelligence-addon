@@ -30,7 +30,7 @@ def vertical_pdf(tmp_path):
     return path
 
 
-def test_spec_addon_115_i1_i2_vertical_pages_reach_index_and_reader(
+def test_spec_addon_122_i1_i2_vertical_pages_reach_index_and_reader(
     vertical_pdf, reader,
 ):
     reader.register("vertical", vertical_pdf, "application/pdf")
@@ -47,7 +47,7 @@ def test_spec_addon_115_i1_i2_vertical_pages_reach_index_and_reader(
     assert "Horizontal paragraph" in parts[1]
 
 
-def test_spec_addon_115_i2_dominant_page_uses_plain_page_text(
+def test_spec_addon_122_i2_dominant_page_uses_plain_page_text(
     vertical_pdf, monkeypatch, reader,
 ):
     reader.register("vertical", vertical_pdf, "application/pdf")
@@ -72,7 +72,7 @@ def test_spec_addon_115_i2_dominant_page_uses_plain_page_text(
     assert parts[1].index("MARKDOWNONLY") < parts[1].index("MIXEDLABEL")
 
 
-def test_spec_addon_115_i7_reader_recovers_a_requested_page_past_index_cap(
+def test_spec_addon_122_i7_reader_recovers_a_requested_page_past_index_cap(
     tmp_path, reader,
 ):
     path = tmp_path / "long.pdf"
@@ -109,7 +109,7 @@ def _embeddings(monkeypatch, index):
     )
 
 
-def test_spec_addon_115_i5_parser_failure_keeps_index_and_sections_and_read_fails(
+def test_spec_addon_122_i5_parser_failure_keeps_index_and_sections_and_read_fails(
     vertical_pdf, reader, search_index, monkeypatch, caplog,
 ):
     from pdfminer.pdfparser import PDFParser
@@ -145,7 +145,7 @@ def test_spec_addon_115_i5_parser_failure_keeps_index_and_sections_and_read_fail
     assert all("VERTICALWORD" not in record.getMessage() for record in caplog.records)
 
 
-def test_spec_addon_115_i4_reindex_and_reader_keep_stored_ocr(
+def test_spec_addon_122_i4_reindex_and_reader_keep_stored_ocr(
     tmp_path, reader, search_index, monkeypatch,
 ):
     from app.workers import metadata
@@ -170,7 +170,7 @@ def test_spec_addon_115_i4_reindex_and_reader_keep_stored_ocr(
     ))
 
 
-def test_spec_addon_115_i5_empty_vertical_extraction_keeps_index_and_read_fails(
+def test_spec_addon_122_i5_empty_vertical_extraction_keeps_index_and_read_fails(
     vertical_pdf, reader, search_index, monkeypatch,
 ):
     from pdfminer.converter import PDFPageAggregator
@@ -204,7 +204,7 @@ def test_spec_addon_115_i5_empty_vertical_extraction_keeps_index_and_read_fails(
     ) == [(0,)]
 
 
-def test_spec_addon_115_i7_late_page_does_not_read_unneeded_earlier_edges(
+def test_spec_addon_122_i7_late_page_does_not_read_unneeded_earlier_edges(
     tmp_path, reader, monkeypatch,
 ):
     from app.extractors import pdf
@@ -230,7 +230,7 @@ def test_spec_addon_115_i7_late_page_does_not_read_unneeded_earlier_edges(
     assert calls == []
 
 
-def test_spec_addon_115_i5_reopen_failure_keeps_existing_index(
+def test_spec_addon_122_i5_reopen_failure_keeps_existing_index(
     vertical_pdf, reader, search_index, monkeypatch,
 ):
     from app.workers import metadata
@@ -260,7 +260,7 @@ def test_spec_addon_115_i5_reopen_failure_keeps_existing_index(
     ) == [(0,)]
 
 
-def test_spec_addon_115_i5_orientation_failure_keeps_existing_index(
+def test_spec_addon_122_i5_orientation_failure_keeps_existing_index(
     vertical_pdf, reader, search_index, monkeypatch,
 ):
     from app.workers import metadata
@@ -295,7 +295,7 @@ def test_spec_addon_115_i5_orientation_failure_keeps_existing_index(
     ) == [(0,)]
 
 
-def test_spec_addon_115_fallback_recovers_vertical_text_without_document_name(
+def test_spec_addon_122_fallback_recovers_vertical_text_without_document_name(
     vertical_pdf, monkeypatch,
 ):
     real_open = fitz.open
@@ -336,7 +336,7 @@ def test_spec_addon_115_fallback_recovers_vertical_text_without_document_name(
     )
 
 
-def test_spec_addon_115_i10_recovers_nested_pdf_form_text(tmp_path, reader):
+def test_spec_addon_122_i10_recovers_nested_pdf_form_text(tmp_path, reader):
     source = fitz.open()
     source_page = source.new_page(width=400, height=500)
     source_page.insert_text((300, 70), "NESTEDVERTICALWORD", rotate=270)
@@ -366,7 +366,7 @@ def test_spec_addon_115_i10_recovers_nested_pdf_form_text(tmp_path, reader):
     assert "horizontal line" in units[1]["text"]
 
 
-def test_spec_addon_115_i10_vertical_dominant_form_page(tmp_path, reader):
+def test_spec_addon_122_i10_vertical_dominant_form_page(tmp_path, reader):
     source = fitz.open()
     source_page = source.new_page(width=400, height=500)
     source_page.insert_text((300, 70), "NESTEDVERTICALWORD", rotate=270)
