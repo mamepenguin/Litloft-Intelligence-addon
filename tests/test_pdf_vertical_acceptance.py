@@ -1,3 +1,5 @@
+"""SPEC-ADDON-122: vertical PDF indexing and document reads."""
+
 from __future__ import annotations
 
 import fitz
