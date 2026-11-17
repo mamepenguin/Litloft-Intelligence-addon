@@ -122,8 +122,6 @@ class _ReadResult:
     exit_status: int | None = None
     engine_lost: bool = False
     times_failed: bool = False
-    #: The longest gap between two decoded frames; a key-frame read's GOP.
-    frame_gap: float = 0.0
 
 
 def _showinfo_time(line: str) -> float | None:
@@ -400,8 +398,6 @@ def _read_video(
                     t = float(index)
                 index += 1
                 result.frames += 1
-                if result.frames > 1:
-                    result.frame_gap = max(result.frame_gap, t - result.last_time)
                 result.last_time = t
                 image = Image.frombytes("RGB", (width, height), raw)
                 current = _dhash(image)
