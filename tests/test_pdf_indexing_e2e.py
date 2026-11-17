@@ -150,9 +150,13 @@ def search_db(tmp_path, monkeypatch, open_write_sessions):
 
 @pytest.fixture()
 def fake_pdf(tmp_path: Path) -> Path:
-    """Non-empty file with a ``.pdf`` extension; the extractor only stats it."""
+    import fitz
+
     path = tmp_path / "doc.pdf"
-    path.write_bytes(b"%PDF-1.4\n%fake\n")
+    with fitz.open() as doc:
+        for _ in range(3):
+            doc.new_page()
+        doc.save(path)
     return path
 
 
@@ -206,7 +210,10 @@ def _stub_fitz(monkeypatch: pytest.MonkeyPatch, pages: list[str]) -> MagicMock:
     fake_pages = []
     for page_text in pages:
         page = MagicMock()
-        page.get_text.return_value = page_text
+        page.get_text.side_effect = (
+            lambda mode, *args, _text=page_text, **kwargs:
+            {"blocks": []} if mode == "dict" else _text
+        )
         fake_pages = [*fake_pages, page]
 
     doc = MagicMock()

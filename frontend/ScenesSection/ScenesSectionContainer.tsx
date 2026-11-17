@@ -63,6 +63,8 @@ const DRAG_THRESHOLD_PX = 8;
 
 const NO_TIMES: number[] = [];
 
+const NO_FRAMES: ClipTimestampItem[] = [];
+
 interface ScenesSectionProps {
   fileId: string;
   drive: string;
@@ -185,6 +187,16 @@ export default function ScenesSectionContainer({
   }, [clearBrowseOn]);
 
   const playback = usePlaybackClock(mediaController ?? null, handleJump);
+
+  const list = rows ?? NO_FRAMES;
+  // With no candidate frames the player's duration is the only length left
+  // for the ruler to draw its scene marks and seeks against.
+  const length =
+    rows === null
+      ? 0
+      : list.length === 0
+        ? positiveDuration(playback.duration)
+        : rulerLength(list, playback.duration);
 
   const resetVisual = useCallback(() => {
     visualGeneration.current += 1;
@@ -454,7 +466,6 @@ export default function ScenesSectionContainer({
 
   const handleRulerKeyDown = useCallback(
     (event: KeyboardEvent) => {
-      const list = rows ?? [];
       const key = normalizeKey(event);
       if (
         key !== "arrowleft" &&
@@ -467,12 +478,12 @@ export default function ScenesSectionContainer({
       }
       event.preventDefault();
       event.stopPropagation();
-      if (list.length === 0) return;
 
       if (key === "enter") {
         if (browseRef.current !== null) activate(browseRef.current);
         return;
       }
+      if (list.length === 0) return;
 
       const playingIndex = frameIndexAt(list, playback.time);
       const currentIndex =
@@ -486,7 +497,7 @@ export default function ScenesSectionContainer({
       else nextIndex = Math.min(list.length - 1, currentIndex + 1);
       setBrowsePoint(list[nextIndex].start, "keyboard");
     },
-    [rows, playback.time, activate, setBrowsePoint],
+    [list, playback.time, activate, setBrowsePoint],
   );
 
   const handlePointerDown = useCallback(
@@ -564,8 +575,6 @@ export default function ScenesSectionContainer({
   }, []);
 
   const point = browse ?? playback.time;
-  const list = rows ?? [];
-  const length = rulerLength(list, playback.duration);
 
   const view: ScenesView = !shown
     ? "collapsed"
@@ -704,6 +713,10 @@ type Translate = (
   key: string,
   values?: Record<string, string | number | Date>,
 ) => string;
+
+function positiveDuration(duration: number): number {
+  return Number.isFinite(duration) && duration > 0 ? duration : 0;
+}
 
 function buildVisualView(
   visual: VideoVisualIndexResponse | null,

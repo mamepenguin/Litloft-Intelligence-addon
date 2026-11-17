@@ -113,8 +113,9 @@ def test_spec_addon_060_i5_an_edge_read_that_fails_for_the_document_keeps_the_li
         [("EDGE TWO", 72, 30), ("Body two.", 72, 72)],
     ])
     _stub_conversion(monkeypatch, ["Body one.\n", "Body two.\n"])
-    monkeypatch.setattr(fitz, "open", lambda *_a, **_k: _UnwalkableDoc(2))
-    monkeypatch.setattr(pymupdf, "open", lambda *_a, **_k: _UnwalkableDoc(2))
+    monkeypatch.setattr(
+        "app.extractors.pdf.read_edge_lines", _UnwalkableDoc(2)._fail,
+    )
 
     with caplog.at_level(logging.WARNING):
         result = PdfExtractor().extract(str(path))

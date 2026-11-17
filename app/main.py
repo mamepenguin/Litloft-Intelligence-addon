@@ -58,6 +58,9 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+# pdfminer warns once per glyph for fonts that lack a FontBBox, hundreds of
+# lines per PDF; a page it cannot read raises instead, and that is logged.
+logging.getLogger("pdfminer").setLevel(logging.ERROR)
 logger = logging.getLogger(__name__)
 
 

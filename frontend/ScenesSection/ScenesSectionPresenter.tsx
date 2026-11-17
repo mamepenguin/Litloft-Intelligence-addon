@@ -205,10 +205,10 @@ export default function ScenesSectionPresenter({
           className="flex w-full cursor-pointer items-center gap-2 text-sm text-text-muted transition-colors hover:text-text-primary"
         >
           <Film size={14} aria-hidden="true" />
-          <span>{t("scenesTitle")}</span>
+          <span>{t("scenesTitle")}</span>{" "}
           {expanded && rows.length > 0 && (
             <span className="tabular-nums">{rows.length}</span>
-          )}
+          )}{" "}
           {ready && visual?.count != null && (
             <span
               aria-label={t("scenesCount", { count: visual.count })}

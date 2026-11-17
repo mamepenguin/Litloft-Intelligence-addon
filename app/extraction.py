@@ -190,14 +190,26 @@ def snapshot_transcript(session: Any, file_id: str) -> tuple[str, str]:
 
 
 def store_original_if_absent(
-    session: Any, file_id: str, kind: str, trigger: str
+    session: Any,
+    file_id: str,
+    kind: str,
+    trigger: str,
+    *,
+    snapshot: tuple[str, str] | None = None,
 ) -> bool:
-    """Store the state as it is now, once per file and kind."""
+    """Store the state as it is now, once per file and kind.
+
+    ``snapshot`` is a ``(chunks_json, words_json)`` pair read before the
+    caller started writing; pass it when the transcript may already have
+    been mutated in this transaction.
+    """
     if has_original(session, file_id, kind):
         return False
     row = KeptOriginal(file_id=file_id, kind=kind, trigger=trigger)
     if kind == KIND_TRANSCRIPT:
-        row.chunks_json, row.words_json = snapshot_transcript(session, file_id)
+        row.chunks_json, row.words_json = snapshot or snapshot_transcript(
+            session, file_id
+        )
     else:
         row.text = get_picture_text(session, file_id) or ""
     session.add(row)
