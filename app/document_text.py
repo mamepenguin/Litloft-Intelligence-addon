@@ -195,8 +195,12 @@ def _pdf_page(
     stored = (page_ocr_texts or {}).get(number)
     try:
         layer = doc[number - 1].get_text("text") or ""
-    except Exception:
-        layer = ""
+    except Exception as exc:
+        logger.warning(
+            "PDF text layer read failed for %s page %d (%s)",
+            path.name, number, type(exc).__name__,
+        )
+        raise pdf.VerticalTextError from exc
     scanned = not layer.strip()
     try:
         pages = pymupdf4llm.to_markdown(

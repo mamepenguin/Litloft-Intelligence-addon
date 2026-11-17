@@ -391,3 +391,42 @@ def test_spec_addon_122_i10_vertical_dominant_form_page(tmp_path, reader):
     assert "NESTEDVERTICALWORD" in unit["text"]
     assert "CHARTLABEL" in unit["text"]
     assert unit["text"].splitlines() == ["NESTEDVERTICALWORD", "CHARTLABEL", "H"]
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+def test_spec_addon_122_i12_text_layer_failure_preserves_index_and_fails_read(
+    vertical_pdf, reader, search_index, monkeypatch, fallback,
+):
+    from app.workers import metadata
+
+    reader.register("vertical", vertical_pdf, "application/pdf")
+    _embeddings(monkeypatch, search_index)
+    assert metadata.index_text_content("vertical") is True
+    reader.seed.section("vertical", 1, "Existing section")
+    search_index.sql("UPDATE indexed_files SET text_indexed = 0 WHERE file_id = 'vertical'")
+    queries = [
+        "SELECT * FROM fts_text_content WHERE file_id = 'vertical'",
+        "SELECT * FROM embeddings WHERE file_id = 'vertical'",
+        "SELECT * FROM pdf_markdown WHERE file_id = 'vertical'",
+        "SELECT * FROM document_sections WHERE file_id = 'vertical'",
+    ]
+    before = [_rows(search_index, query) for query in queries]
+    assert all(before)
+    get_text = fitz.Page.get_text
+
+    def fail_text_layer(page, option="text", *args, **kwargs):
+        if option == "text":
+            raise RuntimeError("simulated text layer failure")
+        return get_text(page, option, *args, **kwargs)
+
+    monkeypatch.setattr(fitz.Page, "get_text", fail_text_layer)
+    def convert(*_args, **_kwargs):
+        if fallback:
+            raise RuntimeError("simulated converter failure")
+        return [{"text": "partial content"}]
+
+    monkeypatch.setattr(pymupdf4llm, "to_markdown", convert)
+    assert metadata.index_text_content("vertical") is False
+    assert reader.get("vertical", start=1, count=1).status_code == 422
+    assert [_rows(search_index, query) for query in queries] == before
+    assert _rows(search_index, "SELECT text_indexed FROM indexed_files WHERE file_id = 'vertical'") == [(0,)]

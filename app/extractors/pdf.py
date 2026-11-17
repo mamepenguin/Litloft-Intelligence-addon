@@ -316,8 +316,14 @@ def _empty_text_pages(path: Path) -> set[int]:
                 try:
                     if not document[index].get_text("text").strip():
                         scanned.add(index + 1)
-                except Exception:
-                    continue
+                except Exception as exc:
+                    logger.warning(
+                        "PDF text layer read failed for %s page %d (%s)",
+                        path.name, index + 1, type(exc).__name__,
+                    )
+                    raise VerticalTextError from exc
+    except VerticalTextError:
+        raise
     except Exception:
         return scanned
     return scanned
@@ -601,8 +607,12 @@ def _fitz_chunks(
         try:
             page = doc[page_num]
             page_text = page.get_text("text")
-        except Exception:
-            continue
+        except Exception as exc:
+            logger.warning(
+                "PDF text layer read failed for %s page %d (%s)",
+                path.name, page_num + 1, type(exc).__name__,
+            )
+            raise VerticalTextError from exc
         if not page_text or not page_text.strip():
             scanned.add(page_num + 1)
             page_text = (page_ocr_texts or {}).get(page_num + 1, "")
