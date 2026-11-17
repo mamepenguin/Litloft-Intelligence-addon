@@ -995,6 +995,41 @@ describe("SPEC-ADDON-126 I8 — what keeps and what discards the draft", () => {
     expect(stripQuotes()).toHaveLength(0);
   });
 
+  for (const late of [
+    { name: "a success", response: () => json({ index: 1, text: "前の保存", start: 5, end: 10 }) },
+    { name: "changed", response: () => json({ detail: { code: "changed" } }, 409) },
+  ]) {
+    it(`keeps the next file's dialog and draft when the previous file's save answers ${late.name} late`, async () => {
+      const view = renderSection();
+      await screen.findByText(TEXT[1]);
+      const first = openDialog(TEXT[1]);
+      fireEvent.change(within(first).getByRole("textbox"), {
+        target: { value: "前の保存" },
+      });
+      pendingPut = deferred();
+      fireEvent.click(within(first).getByRole("button", { name: "保存" }));
+      await waitFor(() => expect(putRequests()).toHaveLength(1));
+
+      view.rerender(ui({ fileId: OTHER_FILE }));
+      await screen.findByText(OTHER_FILE_TEXT);
+      const next = openDialog(OTHER_FILE_TEXT);
+      fireEvent.change(within(next).getByRole("textbox"), {
+        target: { value: "次のファイルの下書き" },
+      });
+
+      pendingPut.resolve(late.response());
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(within(screen.getByRole("dialog")).getByRole("textbox")).toHaveValue(
+        "次のファイルの下書き",
+      );
+      expect(screen.queryByText(CHANGED_MESSAGE)).toBeNull();
+    });
+  }
+
   it("closes and discards the draft when the source switches by itself", async () => {
     const view = renderSection();
     await screen.findByText(TEXT[1]);

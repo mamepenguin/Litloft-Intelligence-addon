@@ -66,6 +66,17 @@ export function TranscriptEditDialog({
     field.setSelectionRange(target.text.length, target.text.length);
   }, [target.text]);
 
+  // A save can outlive this dialog when the panel moves to another file; its
+  // answer then belongs to nothing on screen and must not close the dialog
+  // that replaced this one or report into its panel.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const close = useCallback(() => {
     if (saving) return;
     onClose();
@@ -101,8 +112,9 @@ export function TranscriptEditDialog({
         target.start,
         drive,
       );
-      onSaved();
+      if (mountedRef.current) onSaved();
     } catch (err) {
+      if (!mountedRef.current) return;
       const code =
         err instanceof LLMRequestError &&
         typeof err.detail === "object" &&
@@ -114,7 +126,7 @@ export function TranscriptEditDialog({
       if (code === "changed") onChanged(errorText(err, "transcriptSaveFailed"));
       else setError(errorText(err, "transcriptSaveFailed"));
     } finally {
-      setSaving(false);
+      if (mountedRef.current) setSaving(false);
     }
   }, [
     saving,
