@@ -192,7 +192,7 @@ def _make_times_fail(module, monkeypatch, path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("outcome", ["unreadable", "times-failed"])
+@pytest.mark.parametrize("outcome", ["unreadable", "times-failed", "no-frame"])
 def test_spec_addon_122_i8_an_incomplete_reread_keeps_the_earlier_read_and_sets_rule_two(
     reader, search_db, media, monkeypatch, outcome,  # noqa: F811
 ):
@@ -200,10 +200,16 @@ def test_spec_addon_122_i8_an_incomplete_reread_keeps_the_earlier_read_and_sets_
     clip = {
         "unreadable": media["corrupt"],
         "times-failed": media["large_trim"],
+        "no-frame": media["landscape"],
     }[outcome]
     _seed_earlier_read(search_db, clip)
     if outcome == "times-failed":
         _make_times_fail(module, monkeypatch, clip)
+    if outcome == "no-frame":
+        monkeypatch.setattr(
+            module, "_frame_command",
+            lambda *args: ["sh", "-c", "exit 0"],
+        )
     before = _snapshot(search_db)
 
     module.index_frame_ocr("vid1")
