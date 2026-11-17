@@ -145,8 +145,9 @@ describe("SPEC-ADDON-099 Detailed summary as a player-side panel", () => {
     render(panel({ active: true, onAvailability: report }));
     await screen.findByTestId("detailed-summary-dormant");
 
+    // Reported from an effect, which can run after the line is drawn.
+    await waitFor(() => expect(answers(report).at(-1)).toBe(true));
     expect(answers(report)[0]).toBe(false);
-    expect(answers(report).at(-1)).toBe(true);
   });
 
   it("SPEC-ADDON-099 I10 answers false again on a file change", async () => {
