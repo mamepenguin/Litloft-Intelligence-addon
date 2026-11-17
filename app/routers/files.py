@@ -1171,6 +1171,11 @@ async def reindex_file(
     finally:
         _reindex_in_flight.difference_update(claimed)
 
+    # Not only in the all-queued branch: a fresh task in the same request must
+    # not leave the re-read behind it at -10.
+    if raise_reread:
+        await manager.raise_task_priority(file_id, "frame_ocr")
+
     # A fetch that was already queued is raised rather than duplicated, and the
     # raise is what the answer reports even when a fresh task came with it.
     if loft_running:
