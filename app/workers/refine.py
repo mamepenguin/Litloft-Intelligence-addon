@@ -3,9 +3,8 @@
 Windows ``transcript_chunks`` into fixed-size batches and calls the
 configured LLM to correct ASR mis-recognitions. Malformed responses,
 id mismatches, and LLM exceptions all skip the offending window
-instead of corrupting chunks — partial application across a window
-is specifically disallowed because the time-proportional word
-re-alignment step depends on the whole window being consistent.
+instead of corrupting chunks — a window is applied only when the model
+answers for every chunk in it.
 
 Public surface (called by ``app.routers.refine`` and tested directly):
 
@@ -146,9 +145,9 @@ async def refine_chunks(
     """Refine ``chunks`` in windows of ``WINDOW_SIZE`` via the LLM.
 
     On any failure the full window is preserved (no mutations). On
-    success each chunk's ``text`` is overwritten and ``text_refined_at``
-    is stamped. The file's kept original is taken by the job before the
-    first window is applied, so the correction is recoverable.
+    success each chunk object in the window receives the refined text
+    and marks; the caller decides whether to persist them, because a
+    chunk whose words cannot be realigned is left as it was.
     """
     if not chunks:
         return RefineResult(refined_count=0, skipped_count=0)
@@ -241,6 +240,8 @@ def realign_words_for_chunk(
     0 **without touching existing rows** — the original Whisper word
     timestamps stay as-is rather than being replaced by a degraded
     time-proportional fallback (decision: hako iG6Uotc_uQ8cpXufZQf6v).
+    A return of 0 covers both "no word rows in the span" and "alignment
+    failed"; callers that must tell them apart check the rows first.
 
     LoftRef-origin chunks have no ``TranscriptWord`` rows and no audio
     we can realign against; they're short-circuited here so the
@@ -319,8 +320,10 @@ def rechunk_from_words(
     yield precise RAG citations.
 
     All old chunk rows + their embeddings are deleted and replaced with
-    the new set. Word rows are not touched. Returns the list of new
-    chunk IDs so the caller can drive ``recompute_chunk_embeddings``.
+    the new set. Word rows are not touched. A rebuilt chunk carries the
+    refined marks only when its span overlaps a chunk that was refined
+    before the rebuild. Returns the list of new chunk IDs so the caller
+    can drive ``recompute_chunk_embeddings``.
     """
     from app.workers.whisper import _build_chunks_from_words
 
@@ -370,6 +373,12 @@ def rechunk_from_words(
             "prev_end": prev_end,
         })
         kept_spans.append((chunk.timestamp_start, chunk.timestamp_end))
+
+    refined_spans = [
+        (float(c.timestamp_start), float(c.timestamp_end))
+        for c in all_chunks
+        if c.text_refined_at is not None
+    ]
 
     if not words and not kept:
         return []
@@ -441,20 +450,23 @@ def rechunk_from_words(
     session.flush()
 
     now = datetime.now(UTC)
-    combined: list[dict[str, Any]] = [
-        {
+    combined: list[dict[str, Any]] = []
+    for chunk in new_chunks:
+        overlaps_refined = any(
+            chunk["start"] < end and start < chunk["end"]
+            for start, end in refined_spans
+        )
+        combined.append({
             "text": chunk["text"],
             "start": chunk["start"],
             "end": chunk["end"],
             "language": chunk.get("language", language),
-            "refined_at": now,
-            "refined_model": refined_model,
+            "refined_at": now if overlaps_refined else None,
+            "refined_model": refined_model if overlaps_refined else None,
             "speaker_id": None,
             "corrected_at": None,
             "words_pending": False,
-        }
-        for chunk in new_chunks
-    ]
+        })
     combined.extend(kept)
     combined.sort(key=lambda c: (c["start"], c["end"]))
 
@@ -857,7 +869,6 @@ async def _run_refine_job(
                 result = await refine_chunks(
                     None, llm, window, model=resolved.profile.config.model
                 )
-                refined_total += result.refined_count
                 skipped_total += result.skipped_count
 
                 refined_window = [s for s in window if s.text_refined_at is not None]
@@ -868,12 +879,13 @@ async def _run_refine_job(
                         nonlocal aligned_total, aligner_skipped_total
                         applied_ids: list[int] = []
                         with get_search_db() as session:
-                            extraction.store_original_if_absent(
-                                session,
-                                file_id,
-                                extraction.KIND_TRANSCRIPT,
-                                "refine",
-                            )
+                            snapshot = None
+                            if not extraction.has_original(
+                                session, file_id, extraction.KIND_TRANSCRIPT
+                            ):
+                                snapshot = extraction.snapshot_transcript(
+                                    session, file_id
+                                )
                             fresh = (
                                 session.query(TranscriptChunk)
                                 .filter(
@@ -888,34 +900,58 @@ async def _run_refine_job(
                                 orm = by_id.get(snap.id)
                                 if orm is None:
                                     continue
+                                has_words = bool(
+                                    _load_words_in_range(
+                                        session,
+                                        orm.file_id,
+                                        orm.timestamp_start,
+                                        orm.timestamp_end,
+                                    )
+                                )
+                                if has_words:
+                                    aligned = realign_words_for_chunk(
+                                        session,
+                                        orm.file_id,
+                                        orm.timestamp_start,
+                                        orm.timestamp_end,
+                                        snap.text,
+                                        waveform=waveform,
+                                    )
+                                    if aligned <= 0:
+                                        aligner_skipped_total += 1
+                                        continue
+                                    aligned_total += 1
+                                if snapshot is not None:
+                                    # First chunk this run actually applies:
+                                    # the original is still the pre-run state.
+                                    extraction.store_original_if_absent(
+                                        session,
+                                        file_id,
+                                        extraction.KIND_TRANSCRIPT,
+                                        "refine",
+                                        snapshot=snapshot,
+                                    )
+                                    snapshot = None
                                 orm.text = snap.text
                                 orm.text_refined_at = snap.text_refined_at
                                 orm.refined_model = snap.refined_model
-                                aligned = realign_words_for_chunk(
-                                    session,
-                                    orm.file_id,
-                                    orm.timestamp_start,
-                                    orm.timestamp_end,
-                                    orm.text,
-                                    waveform=waveform,
-                                )
-                                if aligned > 0:
-                                    aligned_total += 1
-                                else:
-                                    aligner_skipped_total += 1
                                 applied_ids.append(int(orm.id))
-                            _reindex_keywords(session, file_id)
-                            mark_idf_terms_stale(session, file_id)
-                            extraction.bump_generation(
-                                session, file_id, extraction.KIND_TRANSCRIPT
-                            )
+                            if applied_ids:
+                                _reindex_keywords(session, file_id)
+                                mark_idf_terms_stale(session, file_id)
+                                extraction.bump_generation(
+                                    session, file_id, extraction.KIND_TRANSCRIPT
+                                )
                         return applied_ids
 
                     applied_ids = await asyncio.to_thread(_apply)
+                    refined_total += len(applied_ids)
+                    skipped_total += len(refined_window) - len(applied_ids)
 
                     # Outside the write block: recompute_chunk_embeddings()
                     # embeds off-thread and takes the lock itself.
-                    await recompute_chunk_embeddings(applied_ids)
+                    if applied_ids:
+                        await recompute_chunk_embeddings(applied_ids)
 
                 await _emit_ws_event(
                     "intelligence.refine.progress",
@@ -931,9 +967,16 @@ async def _run_refine_job(
             # Re-chunk at sentence boundaries now that punctuation is in
             # place. Runs once after all windows settle so we don't
             # thrash chunk IDs while per-window embeddings are recomputed.
-            # Skip if nothing was refined — the chunker's output would be
+            # Skip if no chunk was applied — the chunker's output would be
             # identical to the originals and the mass-delete + re-insert
             # would churn IDs for no RAG benefit.
+            if aligner_skipped_total:
+                logger.warning(
+                    "refine: %s: left %d chunk(s) as they were because "
+                    "realignment failed",
+                    file_id,
+                    aligner_skipped_total,
+                )
             rechunked_count = 0
             if refined_total > 0:
                 def _rechunk() -> list[int]:
