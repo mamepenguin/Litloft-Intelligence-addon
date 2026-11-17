@@ -88,18 +88,11 @@ def recover_vertical_texts(
             try:
                 layout = next(layouts)
                 counts = [0, 0]
-                try:
-                    import fitz
+                import fitz
 
-                    blocks = doc[number - 1].get_text(
-                        "dict", flags=fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES,
-                    )["blocks"]
-                except Exception as exc:
-                    logger.warning(
-                        "PDF orientation unavailable for %s page %d (%s)",
-                        path.name, number, type(exc).__name__,
-                    )
-                    blocks = []
+                blocks = doc[number - 1].get_text(
+                    "dict", flags=fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES,
+                )["blocks"]
                 for block in blocks:
                     for line in block.get("lines", []):
                         x, y = line["dir"]

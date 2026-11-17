@@ -258,3 +258,38 @@ def test_spec_addon_115_i5_reopen_failure_keeps_existing_index(
     assert _rows(
         search_index, "SELECT text_indexed FROM indexed_files WHERE file_id = 'vertical'"
     ) == [(0,)]
+
+
+def test_spec_addon_115_i5_orientation_failure_keeps_existing_index(
+    vertical_pdf, reader, search_index, monkeypatch,
+):
+    from app.workers import metadata
+
+    reader.register("vertical", vertical_pdf, "application/pdf")
+    _embeddings(monkeypatch, search_index)
+    assert metadata.index_text_content("vertical") is True
+    search_index.sql("UPDATE indexed_files SET text_indexed = 0 WHERE file_id = 'vertical'")
+    queries = [
+        "SELECT * FROM fts_text_content WHERE file_id = 'vertical'",
+        "SELECT * FROM embeddings WHERE file_id = 'vertical'",
+        "SELECT * FROM pdf_markdown WHERE file_id = 'vertical'",
+    ]
+    before = [_rows(search_index, query) for query in queries]
+    monkeypatch.setattr(
+        pymupdf4llm, "to_markdown", lambda *_a, **_k: [{"text": "partial"}]
+    )
+    original = fitz.Page.get_text
+    orientation_flags = fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES
+
+    def fail_orientation(page, *args, **kwargs):
+        if args[:1] == ("dict",) and kwargs.get("flags") == orientation_flags:
+            raise OSError("orientation unavailable")
+        return original(page, *args, **kwargs)
+
+    monkeypatch.setattr(fitz.Page, "get_text", fail_orientation)
+    assert metadata.index_text_content("vertical") is False
+    assert reader.get("vertical", start=1, count=1).status_code == 422
+    assert [_rows(search_index, query) for query in queries] == before
+    assert _rows(
+        search_index, "SELECT text_indexed FROM indexed_files WHERE file_id = 'vertical'"
+    ) == [(0,)]
