@@ -138,7 +138,7 @@ export function TranscriptEditDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="absolute inset-x-4 top-14 mx-auto flex max-w-md animate-fade-in flex-col gap-4 rounded-2xl bg-bg-card p-5 shadow-lg"
+        className="absolute inset-x-4 top-14 mx-auto flex max-w-md animate-fade-in-scale flex-col gap-4 rounded-2xl bg-bg-card p-5 shadow-lg"
       >
         <div className="flex items-center gap-2">
           <h2
