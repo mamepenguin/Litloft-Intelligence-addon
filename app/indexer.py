@@ -2011,10 +2011,18 @@ class IndexManager:
                 self._processing_by_type[TaskType.FRAME_OCR].append(task.file_id)
 
                 try:
-                    if await asyncio.to_thread(
-                        _is_outdated_frame_read, task.file_id
-                    ):
-                        self._reread_running.add(task.file_id)
+                    try:
+                        is_reread = await asyncio.to_thread(
+                            _is_outdated_frame_read, task.file_id
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Frame OCR re-read lookup failed for %s: %s",
+                            task.file_id, e,
+                        )
+                    else:
+                        if is_reread:
+                            self._reread_running.add(task.file_id)
                     await asyncio.to_thread(
                         index_frame_ocr, task.file_id, is_paused=self.is_paused
                     )
