@@ -284,11 +284,14 @@ def _extract_with_pymupdf4llm(
 
     try:
         document = fitz.open(str(path))
-    except Exception:
-        document = None
-    if document is not None:
-        with document:
-            texts = recover_vertical_texts(path, document, texts, scanned)
+    except Exception as exc:
+        logger.warning(
+            "PDF text recovery could not open %s (%s)",
+            path.name, type(exc).__name__,
+        )
+        raise VerticalTextError from exc
+    with document:
+        texts = recover_vertical_texts(path, document, texts, scanned)
     pages = [{"text": texts[index + 1]} for index in range(len(limited))]
     chunks = _build_chunks_from_pages(pages)
     full_markdown = _join_page_markdown(pages)

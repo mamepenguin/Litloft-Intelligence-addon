@@ -150,9 +150,13 @@ def search_db(tmp_path, monkeypatch, open_write_sessions):
 
 @pytest.fixture()
 def fake_pdf(tmp_path: Path) -> Path:
-    """Non-empty file with a ``.pdf`` extension; the extractor only stats it."""
+    import fitz
+
     path = tmp_path / "doc.pdf"
-    path.write_bytes(b"%PDF-1.4\n%fake\n")
+    with fitz.open() as doc:
+        for _ in range(3):
+            doc.new_page()
+        doc.save(path)
     return path
 
 

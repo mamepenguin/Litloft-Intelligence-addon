@@ -35,9 +35,13 @@ from app.extractors.pdf import (  # noqa: E402
 
 @pytest.fixture()
 def fake_pdf(tmp_path: Path) -> Path:
-    """Create a non-empty file with a ``.pdf`` extension for size checks."""
+    import fitz
+
     path = tmp_path / "doc.pdf"
-    path.write_bytes(b"%PDF-1.4\n%fake\n")
+    with fitz.open() as doc:
+        for _ in range(3):
+            doc.new_page()
+        doc.save(path)
     return path
 
 

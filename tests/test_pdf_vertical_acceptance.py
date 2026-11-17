@@ -228,3 +228,33 @@ def test_spec_addon_115_i7_late_page_does_not_read_unneeded_earlier_edges(
     unit = reader.ok("late", start=501, count=1)["units"][0]
     assert "LATEVERTICAL" in unit["text"]
     assert calls == []
+
+
+def test_spec_addon_115_i5_reopen_failure_keeps_existing_index(
+    vertical_pdf, reader, search_index, monkeypatch,
+):
+    from app.workers import metadata
+
+    reader.register("vertical", vertical_pdf, "application/pdf")
+    _embeddings(monkeypatch, search_index)
+    assert metadata.index_text_content("vertical") is True
+    search_index.sql("UPDATE indexed_files SET text_indexed = 0 WHERE file_id = 'vertical'")
+    queries = [
+        "SELECT * FROM fts_text_content WHERE file_id = 'vertical'",
+        "SELECT * FROM embeddings WHERE file_id = 'vertical'",
+        "SELECT * FROM pdf_markdown WHERE file_id = 'vertical'",
+    ]
+    before = [_rows(search_index, query) for query in queries]
+    monkeypatch.setattr(
+        pymupdf4llm, "to_markdown", lambda *_a, **_k: [{"text": "partial"}]
+    )
+
+    def fail_open(*_args, **_kwargs):
+        raise OSError("file became unreadable")
+
+    monkeypatch.setattr(fitz, "open", fail_open)
+    assert metadata.index_text_content("vertical") is False
+    assert [_rows(search_index, query) for query in queries] == before
+    assert _rows(
+        search_index, "SELECT text_indexed FROM indexed_files WHERE file_id = 'vertical'"
+    ) == [(0,)]
