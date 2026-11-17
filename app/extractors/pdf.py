@@ -562,7 +562,7 @@ def _extract_with_fitz_fallback(
         return _empty_fallback()
 
     try:
-        chunks = _fitz_chunks(doc, page_ocr_texts)
+        chunks = _fitz_chunks(path, doc, page_ocr_texts)
         page_count = min(getattr(doc, "page_count", 0), MAX_PAGES)
     finally:
         try:
@@ -579,7 +579,7 @@ def _extract_with_fitz_fallback(
 
 
 def _fitz_chunks(
-    doc: object, page_ocr_texts: dict[int, str] | None = None,
+    path: Path, doc: object, page_ocr_texts: dict[int, str] | None = None,
 ) -> list[TextChunk]:
     """Walk a fitz document and produce TextChunks page-by-page."""
     chunk_config = settings.indexing.text_chunking
@@ -598,8 +598,7 @@ def _fitz_chunks(
             scanned.add(page_num + 1)
             page_text = (page_ocr_texts or {}).get(page_num + 1, "")
         texts[page_num + 1] = page_text or ""
-    if hasattr(doc, "name") and isinstance(doc.name, str) and doc.name:
-        texts = recover_vertical_texts(Path(doc.name), doc, texts, scanned)
+    texts = recover_vertical_texts(path, doc, texts, scanned)
 
     for page_num in range(page_count):
         page_text = texts.get(page_num + 1, "")

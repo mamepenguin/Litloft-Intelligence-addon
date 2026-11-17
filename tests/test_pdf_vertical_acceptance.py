@@ -293,3 +293,44 @@ def test_spec_addon_115_i5_orientation_failure_keeps_existing_index(
     assert _rows(
         search_index, "SELECT text_indexed FROM indexed_files WHERE file_id = 'vertical'"
     ) == [(0,)]
+
+
+def test_spec_addon_115_fallback_recovers_vertical_text_without_document_name(
+    vertical_pdf, monkeypatch,
+):
+    real_open = fitz.open
+
+    class PageWithoutJoinedText:
+        def __init__(self, page):
+            self.page = page
+
+        def get_text(self, mode, **kwargs):
+            text = self.page.get_text(mode, **kwargs)
+            if mode == "text" and self.page.number == 0:
+                return "\n".join("VERTICALWORD")
+            return text
+
+    class NamelessDocument:
+        name = None
+
+        def __init__(self, path):
+            self.doc = real_open(path)
+            self.page_count = self.doc.page_count
+
+        def __getitem__(self, number):
+            return PageWithoutJoinedText(self.doc[number])
+
+        def close(self):
+            self.doc.close()
+
+    def fail_conversion(*_args, **_kwargs):
+        raise RuntimeError("conversion unavailable")
+
+    monkeypatch.setattr(pymupdf4llm, "to_markdown", fail_conversion)
+    monkeypatch.setattr(fitz, "open", NamelessDocument)
+    result = PdfExtractor().extract(str(vertical_pdf))
+
+    assert any(
+        chunk.page == 1 and "VERTICALWORD" in chunk.text
+        for chunk in result.chunks
+    )

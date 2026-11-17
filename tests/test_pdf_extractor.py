@@ -86,7 +86,10 @@ def _install_fitz(
     fake_pages = []
     for text in pages:
         page = MagicMock()
-        page.get_text.return_value = text
+        page.get_text.side_effect = (
+            lambda mode, *args, _text=text, **kwargs:
+            {"blocks": []} if mode == "dict" else _text
+        )
         fake_pages = [*fake_pages, page]
 
     doc = MagicMock()

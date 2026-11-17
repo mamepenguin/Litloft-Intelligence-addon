@@ -210,7 +210,10 @@ def _stub_fitz(monkeypatch: pytest.MonkeyPatch, pages: list[str]) -> MagicMock:
     fake_pages = []
     for page_text in pages:
         page = MagicMock()
-        page.get_text.return_value = page_text
+        page.get_text.side_effect = (
+            lambda mode, *args, _text=page_text, **kwargs:
+            {"blocks": []} if mode == "dict" else _text
+        )
         fake_pages = [*fake_pages, page]
 
     doc = MagicMock()
