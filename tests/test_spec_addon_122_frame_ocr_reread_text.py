@@ -236,7 +236,14 @@ def test_spec_addon_122_i8_an_incomplete_reread_that_read_text_keeps_the_earlier
     fake = SimpleBoxEngine()
     install(monkeypatch, fake)
     if outcome == "ended-early":
-        clip = media["large_tail"]
+        # A truncated file still ends with ffmpeg's exit 0, so the decode is
+        # the real one with a non-zero exit after its last frame.
+        clip = media["landscape"]
+        command = reader._frame_command
+        monkeypatch.setattr(
+            reader, "_frame_command",
+            lambda *args: ["sh", "-c", '"$@"; exit 1', "sh", *command(*args)],
+        )
     else:
         clip = media["landscape"]
         fake.recognise_raises_on = 2

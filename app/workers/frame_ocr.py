@@ -587,25 +587,6 @@ def _build_rows(file_id: str) -> bool:
         return False
 
 
-def _declared_duration(path: str) -> float | None:
-    """The container duration ffprobe reports, or ``None`` when unreadable."""
-    try:
-        finished = subprocess.run(
-            [
-                "ffprobe", "-v", "error", "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1", path,
-            ],
-            capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    try:
-        value = float(finished.stdout.strip())
-    except ValueError:
-        return None
-    return value if value > 0 else None
-
-
 def _reread(
     file_id: str, path: str, is_paused: Callable[[], bool] | None,
 ) -> bool:
@@ -678,19 +659,6 @@ def _reread(
         logger.warning(
             "Frame OCR for %s decoded no frame; keeping the earlier read",
             file_id,
-        )
-        return _keep_earlier_read(file_id)
-
-    # A truncated file can leave ffmpeg with a clean exit, so a decode that
-    # stopped a whole frame gap or more before the declared end is early too.
-    duration = _declared_duration(path)
-    if duration is not None and result.last_time < duration - max(
-        1.0, result.frame_gap,
-    ):
-        logger.warning(
-            "Frame OCR for %s ended early (decoded to %ss of %ss); "
-            "keeping the earlier read",
-            file_id, round(result.last_time, 1), round(duration, 1),
         )
         return _keep_earlier_read(file_id)
 
