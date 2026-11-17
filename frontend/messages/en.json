@@ -365,7 +365,10 @@
     "scenesRetry": "Retry the {count} failed",
     "scenesFailedNote": "{count} failed",
     "scenesRuler": "Frame timeline",
-    "scenesPlayFrom": "Play from {time}"
+    "scenesPlayFrom": "Play from {time}",
+    "scenesFramesShown": "Frames shown",
+    "scenesFramesAll": "All {count}",
+    "scenesFramesCuts": "Cuts {count}"
   },
   "detailedSummary": {
     "citations": {
