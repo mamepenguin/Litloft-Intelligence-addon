@@ -367,7 +367,7 @@
     "scenesRuler": "Frame timeline",
     "scenesPlayFrom": "Play from {time}",
     "scenesFramesShown": "Frames shown",
-    "scenesFramesAll": "All {count}",
+    "scenesFramesAll": "Default {count}",
     "scenesFramesCuts": "Cuts {count}"
   },
   "detailedSummary": {

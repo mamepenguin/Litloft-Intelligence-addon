@@ -139,7 +139,7 @@ function switchGroup(): HTMLElement | null {
 }
 
 function allChip(): HTMLElement {
-  return within(switchGroup()!).getByRole("button", { name: /^All \d+$/ });
+  return within(switchGroup()!).getByRole("button", { name: /^Default \d+$/ });
 }
 
 function cutsChip(): HTMLElement {
@@ -181,12 +181,12 @@ afterEach(() => {
 });
 
 describe("SPEC-ADDON-124 I1/I5 — the switch and its counts", () => {
-  it("SPEC-ADDON-124 I1/I5 — draws 「All n」 and 「Cuts m」 in a 'Frames shown' group, All pressed", async () => {
+  it("SPEC-ADDON-124 I1/I5 — draws 「Default n」 and 「Cuts m」 in a 'Frames shown' group, Default pressed", async () => {
     renderSection({ mediaController: makeController({ duration: 70 }).controller });
     await openNative();
 
     await expectSwitch();
-    expect(allChip()).toHaveAccessibleName("All 15");
+    expect(allChip()).toHaveAccessibleName("Default 15");
     expect(cutsChip()).toHaveAccessibleName("Cuts 13");
     expect(allChip()).toHaveAttribute("aria-pressed", "true");
     expect(cutsChip()).toHaveAttribute("aria-pressed", "false");
@@ -580,7 +580,7 @@ describe("SPEC-ADDON-124 I7 — the mode across responses", () => {
   );
 
   it.each(REOPEN)(
-    "SPEC-ADDON-124 I7 — an answer without changes after $name drops the switch and resets the selection to All",
+    "SPEC-ADDON-124 I7 — an answer without changes after $name drops the switch and resets the selection to Default",
     async ({ props, open, reopen }) => {
       const base = { ...props, mediaController: makeController({ duration: 70 }).controller };
       const view = renderSection(base);
@@ -612,7 +612,7 @@ describe("SPEC-ADDON-124 I7 — the mode across responses", () => {
     },
   );
 
-  it("SPEC-ADDON-124 I7 — a file change returns to All", async () => {
+  it("SPEC-ADDON-124 I7 — a file change returns to Default", async () => {
     const view = renderSection({ mediaController: makeController({ duration: 70 }).controller });
     await openNative();
     await expectSwitch();
@@ -711,7 +711,7 @@ describe("SPEC-ADDON-124 §2 — failure cases", () => {
     expect(getFrameUrl).not.toHaveBeenCalled();
   });
 
-  it("SPEC-ADDON-124 §3 — available through the Visual Index with no candidates: All has no tiles, Cuts shows the cuts", async () => {
+  it("SPEC-ADDON-124 §3 — available through the Visual Index with no candidates: Default has no tiles, Cuts shows the cuts", async () => {
     vi.mocked(getClipTimestamps).mockResolvedValue(answer([], CHANGES));
     vi.mocked(getVideoVisualIndex).mockResolvedValue(
       indexState({
@@ -723,7 +723,7 @@ describe("SPEC-ADDON-124 §2 — failure cases", () => {
     fireEvent.click(await screen.findByRole("button", { name: /^Scenes/ }));
     await expectSwitch();
 
-    expect(allChip()).toHaveAccessibleName("All 0");
+    expect(allChip()).toHaveAccessibleName("Default 0");
     expect(cutsChip()).toHaveAccessibleName("Cuts 13");
     expect(screen.queryAllByRole("button", { name: /^Play from / })).toEqual([]);
 
@@ -764,8 +764,8 @@ describe("SPEC-ADDON-124 §9 — the switch row", () => {
 
 describe("SPEC-ADDON-124 I8 — the new labels in both locales", () => {
   it.each([
-    { locale: "en" as const, group: "Frames shown", all: "All 15", cuts: "Cuts 13" },
-    { locale: "ja" as const, group: "表示するフレーム", all: "すべて 15", cuts: "カット 13" },
+    { locale: "en" as const, group: "Frames shown", all: "Default 15", cuts: "Cuts 13" },
+    { locale: "ja" as const, group: "表示するフレーム", all: "標準 15", cuts: "カット 13" },
   ])(
     "SPEC-ADDON-124 I8 — $locale renders the group name and both chips from its locale file",
     async ({ locale, group, all, cuts }) => {
