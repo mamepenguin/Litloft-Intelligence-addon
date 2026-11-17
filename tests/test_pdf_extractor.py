@@ -35,9 +35,13 @@ from app.extractors.pdf import (  # noqa: E402
 
 @pytest.fixture()
 def fake_pdf(tmp_path: Path) -> Path:
-    """Create a non-empty file with a ``.pdf`` extension for size checks."""
+    import fitz
+
     path = tmp_path / "doc.pdf"
-    path.write_bytes(b"%PDF-1.4\n%fake\n")
+    with fitz.open() as doc:
+        for _ in range(3):
+            doc.new_page()
+        doc.save(path)
     return path
 
 
@@ -82,7 +86,10 @@ def _install_fitz(
     fake_pages = []
     for text in pages:
         page = MagicMock()
-        page.get_text.return_value = text
+        page.get_text.side_effect = (
+            lambda mode, *args, _text=text, **kwargs:
+            {"blocks": []} if mode == "dict" else _text
+        )
         fake_pages = [*fake_pages, page]
 
     doc = MagicMock()

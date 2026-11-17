@@ -177,8 +177,7 @@ def test_spec_addon_060_i5_an_edge_read_that_fails_for_the_document_serves_the_l
     def broken(*_args, **_kwargs):
         raise RuntimeError("simulated document walk failure")
 
-    for name in ("__getitem__", "__iter__", "__len__", "load_page"):
-        monkeypatch.setattr(pymupdf.Document, name, broken, raising=False)
+    monkeypatch.setattr("app.document_text.pdf.read_edge_lines", broken)
 
     with caplog.at_level(logging.WARNING):
         body = reader.ok("f1", count=3, max_chars=200_000)

@@ -164,15 +164,16 @@ def _pdf_range(
         if doc.needs_pass:
             raise Unreadable("password-protected")
         unit_count = doc.page_count
-        try:
-            edges = pdf.read_edge_lines(doc, path.name)
-        except Exception as exc:
-            logger.warning(
-                "document-text: edge lines unavailable for %s (%s)",
-                path.name,
-                type(exc).__name__,
-            )
-            edges = {}
+        edges = {}
+        if start <= pdf.MAX_PAGES:
+            try:
+                edges = pdf.read_edge_lines(doc, path.name)
+            except Exception as exc:
+                logger.warning(
+                    "document-text: edge lines unavailable for %s (%s)",
+                    path.name,
+                    type(exc).__name__,
+                )
         units = tuple(
             _pdf_page(
                 path, doc, number, edges.get(number), page_ocr_texts,
@@ -194,8 +195,12 @@ def _pdf_page(
     stored = (page_ocr_texts or {}).get(number)
     try:
         layer = doc[number - 1].get_text("text") or ""
-    except Exception:
-        layer = ""
+    except Exception as exc:
+        logger.warning(
+            "PDF text layer read failed for %s page %d (%s)",
+            path.name, number, type(exc).__name__,
+        )
+        raise pdf.VerticalTextError from exc
     scanned = not layer.strip()
     try:
         pages = pymupdf4llm.to_markdown(
@@ -215,9 +220,16 @@ def _pdf_page(
         text = (doc[number - 1].get_text("text") or "").strip()
         if scanned and stored and stored.strip():
             text = stored
-        return Unit(number, None, text, False, pdf.EXTRACTOR_FALLBACK)
+        recovered = pdf.recover_vertical_texts(
+            path, doc, {number: text}, {number} if scanned else set(),
+        )[number]
+        return Unit(number, None, recovered, False, pdf.EXTRACTOR_FALLBACK)
+    text = pdf.page_text_with_edges(text, edges)
+    text = pdf.recover_vertical_texts(
+        path, doc, {number: text}, {number} if scanned else set(),
+    )[number]
     return Unit(
-        number, None, pdf.page_text_with_edges(text, edges), False,
+        number, None, text, False,
         pdf.EXTRACTOR_PRIMARY,
     )
 

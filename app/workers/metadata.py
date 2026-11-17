@@ -29,7 +29,7 @@ from app.extractors.base import ExtractionResult, TextChunk
 from app.extractors.epub import EpubExtractor
 from app.extractors.html import HtmlExtractor
 from app.extractors.office import OfficeExtractor
-from app.extractors.pdf import PdfExtractor
+from app.extractors.pdf import PdfExtractor, VerticalTextError
 from app.extractors.text import TextExtractor
 from app.models import Embedding, IndexedFile
 from app.processing_events import emit_processing_updated
@@ -127,8 +127,8 @@ def _extract_file_content(
 
     Returns the full ``ExtractionResult`` so the indexing pipeline can
     persist the optional Markdown rendering (PDF) alongside the chunk
-    embeddings. Files with no matching extractor — or that raise during
-    extraction — yield an empty result.
+    embeddings. Vertical text errors propagate so indexing can retry without
+    replacing the previous index.
 
     Args:
         file: The indexed file record.
@@ -148,6 +148,8 @@ def _extract_file_content(
                             file.file_path, page_ocr_texts=page_ocr_texts,
                         )
                 return extractor.extract(file.file_path)
+            except VerticalTextError:
+                raise
             except Exception as e:
                 logger.warning(
                     "Content extraction failed for %s: %s",
@@ -389,11 +391,14 @@ def index_text_content(file_id: str) -> bool:
     page_ocr_texts = (
         _stored_page_ocr_texts(file_id) if is_pdf else None
     )
-    result = (
-        _extract_file_content(file, page_ocr_texts)
-        if page_ocr_texts
-        else _extract_file_content(file)
-    )
+    try:
+        result = (
+            _extract_file_content(file, page_ocr_texts)
+            if page_ocr_texts
+            else _extract_file_content(file)
+        )
+    except VerticalTextError:
+        return False
     chunks = list(result.chunks)
     if not chunks:
         # No chunks: still call _upsert_pdf_markdown so an empty
