@@ -842,6 +842,33 @@ describe("SPEC-ADDON-126 I7 — a save in flight and its failures", () => {
   });
 });
 
+describe("SPEC-ADDON-126 B1 — the dialog suspends following", () => {
+  it("stops following while the dialog is open and does not resume on close", async () => {
+    const state = { currentTime: 0, paused: false };
+    const mc = controller(state);
+    renderSection({ mediaController: mc });
+    await screen.findByText(TEXT[0]);
+    tapRow(TEXT[0]);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { current: true })).toHaveTextContent(
+        TEXT[0],
+      ),
+    );
+    expect(screen.queryByRole("button", { name: "再生位置に戻る" })).toBeNull();
+
+    const dialog = openDialog(TEXT[0]);
+    expect(
+      await screen.findByRole("button", { name: "再生位置に戻る" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "キャンセル" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "再生位置に戻る" }),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("SPEC-ADDON-126 I8 — what keeps and what discards the draft", () => {
   it("keeps the dialog and the draft through a backdrop tap", async () => {
     renderSection();
