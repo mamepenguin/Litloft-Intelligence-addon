@@ -24,9 +24,9 @@ from typing import Callable
 from app import youtube_source
 from app.config import settings
 from app.database import get_search_db, get_search_db_read
-from app.models import IndexedFile
+from app.models import Embedding, IndexedFile
 from app.policy_client import is_feature_enabled
-from app.workers.clip import load_image_model
+from app.workers.clip import index_storyboard, load_image_model, storyboard_lock
 from app.workers.frame_ocr import index_frame_ocr
 from app.workers.frame_scan import index_frame_scan
 from app.workers.ocr import _get_engine
@@ -232,6 +232,47 @@ def _flag(file_id: str, column: str) -> bool:
         return row is not None and bool(getattr(row, column))
 
 
+def _has_candidates(file_id: str) -> bool:
+    """Whether the reference already has storyboard rows."""
+    with get_search_db_read() as session:
+        return (
+            session.query(Embedding)
+            .filter_by(file_id=file_id, embedding_type="clip")
+            .first()
+            is not None
+        )
+
+
+def _storyboard_step(
+    state: _State, description: dict, scan_wanted: bool,
+) -> None:
+    """Read the storyboard the lookup names, for a reference that has none.
+
+    Best effort: a failure writes no candidate and changes nothing the fetch
+    counts, flags or reports, so the download and the stages still run. The
+    step is the fetch's own write, not the CLIP leg's, so it neither consults
+    nor records that leg's retry gate.
+    """
+    file_id = state.file_id
+    try:
+        with storyboard_lock(file_id):
+            # Checked under the lock: a leg finishing first may have just left
+            # the reference with the very candidates this step would replace.
+            if _has_candidates(file_id):
+                return
+            if not scan_wanted:
+                try:
+                    load_image_model()
+                except Exception:
+                    return
+            index_storyboard(file_id, description, state.duration)
+    except Exception as exc:  # noqa: BLE001 - the fetch goes on regardless
+        logger.warning(
+            "youtube storyboard failed: file=%s class=%s",
+            file_id, type(exc).__name__,
+        )
+
+
 def _policy_allows(drive: str) -> bool:
     """Whether the drive has the ``index`` feature on.
 
@@ -410,6 +451,8 @@ def _fetch(
     lookup_duration = youtube_source.known_duration(description, None)
     if state.duration is None and lookup_duration is not None:
         _write(file_id, {"duration": lookup_duration})
+
+    _storyboard_step(state, description, scan_wanted)
 
     fmt = youtube_source.pick_format(description)
     if fmt is None:
