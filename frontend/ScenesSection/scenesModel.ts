@@ -35,17 +35,6 @@ export function estimateLabelWidth(text: string): number {
   return text.length * 7;
 }
 
-/** The candidate frames, or the frame scan's change frames. */
-export type ScenesMode = "all" | "cuts";
-
-export function frameListFor(
-  mode: ScenesMode,
-  candidates: ClipTimestampItem[],
-  changes: ClipTimestampItem[],
-): ClipTimestampItem[] {
-  return mode === "cuts" ? changes : candidates;
-}
-
 /**
  * The ruler's length. The player's duration wins when it can hold every
  * frame; otherwise the last frame plus the median gap keeps the track from
@@ -73,20 +62,6 @@ export function rulerLength(
       ? gaps[middle]
       : (gaps[middle - 1] + gaps[middle]) / 2;
   return last + median;
-}
-
-/**
- * The track's length while a list is drawn. It follows the candidate frames
- * so that switching the drawn list leaves the playhead, the browse line and
- * click-to-time where they were; a file with no candidate frames takes it
- * from the change frames.
- */
-export function trackLength(
-  candidates: ClipTimestampItem[],
-  changes: ClipTimestampItem[],
-  duration: number,
-): number {
-  return rulerLength(candidates.length > 0 ? candidates : changes, duration);
 }
 
 /** The last frame at or before `point`, or frame 0 before the first frame. */
