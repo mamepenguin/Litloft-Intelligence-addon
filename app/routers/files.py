@@ -1353,16 +1353,6 @@ def get_clip_timestamps(
             .order_by(Embedding.timestamp_start.asc())
             .all()
         )
-        change_frames = (
-            db.query(Embedding)
-            .filter(
-                Embedding.file_id == file_id,
-                Embedding.embedding_type == "clip_change",
-                Embedding.vector_table == "vec_clip_change",
-            )
-            .order_by(Embedding.timestamp_start.asc())
-            .all()
-        )
 
     return ClipTimestampsResponse(
         file_id=file_id,
@@ -1373,13 +1363,6 @@ def get_clip_timestamps(
                 content_preview=c.content_preview,
             )
             for c in clips
-        ],
-        changes=[
-            ClipTimestampItem(
-                start=c.timestamp_start or 0.0,
-                content_preview=c.content_preview,
-            )
-            for c in change_frames
         ],
     )
 
