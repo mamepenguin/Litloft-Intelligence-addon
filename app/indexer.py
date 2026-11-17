@@ -59,7 +59,11 @@ from app.workers.metadata import (
     index_metadata_batch,
     index_text_content,
 )
-from app.workers.frame_ocr import index_frame_ocr
+from app.workers.frame_ocr import (
+    FRAME_OCR_RULE,
+    frame_read_is_outdated,
+    index_frame_ocr,
+)
 from app.workers.frame_scan import index_frame_scan
 from app.workers.page_ocr import index_page_ocr
 from app.workers import loft_media
@@ -162,6 +166,45 @@ class IndexStatus:
     pending_frame_scan: int = 0
 
 
+def _outdated_frame_read():
+    """SQL condition: a native video's stored read was made under an older rule."""
+    return and_(
+        IndexedFile.mime_type.in_(list(VIDEO_TYPES)),
+        IndexedFile.frame_ocr_read.is_(True),
+        IndexedFile.frame_ocr_indexed.is_(True),
+        or_(
+            IndexedFile.frame_ocr_rule.is_(None),
+            IndexedFile.frame_ocr_rule < FRAME_OCR_RULE,
+        ),
+    )
+
+
+def _outdated_frame_ids(file_ids: set[str]) -> set[str]:
+    """The ids among ``file_ids`` whose frame task is a re-read."""
+    with get_search_db_read() as session:
+        rows = (
+            session.query(IndexedFile)
+            .filter(IndexedFile.file_id.in_(file_ids))
+            .all()
+        )
+        return {
+            row.file_id
+            for row in rows
+            if frame_read_is_outdated(
+                mime_type=row.mime_type,
+                frame_ocr_read=bool(row.frame_ocr_read),
+                frame_ocr_indexed=bool(row.frame_ocr_indexed),
+                frame_ocr_rule=row.frame_ocr_rule,
+                mode=settings.features.video_frame_ocr,
+            )
+        }
+
+
+def _is_outdated_frame_read(file_id: str) -> bool:
+    """Whether ``file_id`` is about to be read again under the current rule."""
+    return file_id in _outdated_frame_ids({file_id})
+
+
 def _drifted_file_ids(rows: list[tuple[str, dict, dict]]) -> list[str]:
     """File ids whose IndexedFile snapshot no longer matches core.
 
@@ -257,6 +300,10 @@ class IndexManager:
         self._queued_by_type: dict[TaskType, set[str]] = {
             task_type: set() for task_type in TaskType
         }
+        # Frame tasks that are re-reads of an outdated read, tracked while they
+        # run so the `.loft` backlog is not held by them once the store has
+        # moved the row on to the new rule.
+        self._reread_running: set[str] = set()
         self._background_tasks: list[asyncio.Task] = []
         # Lifecycle webhooks (deleted / restored / purged / missing /
         # recovered) flip the same rows in opposite directions. While
@@ -466,19 +513,27 @@ class IndexManager:
             frame_ocr = active_files.filter(
                 IndexedFile.frame_ocr_indexed.is_(True),
                 pipeline_frame,
-            ).count()
+            )
+            outdated_frames = _outdated_frame_read()
+            pending_frame_query = active_files.filter(
+                or_(
+                    IndexedFile.frame_ocr_indexed.is_(False),
+                    outdated_frames,
+                ),
+                pipeline_frame,
+            )
+            if settings.features.video_frame_ocr == "on_index":
+                # An outdated read counts as pending and not as indexed, so
+                # the widget's indexed + pending stays the number of videos.
+                frame_ocr_count = frame_ocr.filter(~outdated_frames).count()
+                pending_frame_ocr = pending_frame_query.count()
+            else:
+                frame_ocr_count = frame_ocr.count()
+                pending_frame_ocr = 0
             page_ocr = active_files.filter(
                 IndexedFile.page_ocr_indexed.is_(True),
                 IndexedFile.mime_type == "application/pdf",
             ).count()
-            pending_frame_ocr = (
-                active_files.filter(
-                    IndexedFile.frame_ocr_indexed.is_(False),
-                    pipeline_frame,
-                ).count()
-                if settings.features.video_frame_ocr == "on_index"
-                else 0
-            )
             pending_page_ocr = (
                 active_files.filter(
                     IndexedFile.page_ocr_indexed.is_(False),
@@ -512,7 +567,7 @@ class IndexManager:
                 text_indexed=text,
                 tfidf_keywords_indexed=tfidf_kw,
                 ocr_indexed=ocr,
-                frame_ocr_indexed=frame_ocr,
+                frame_ocr_indexed=frame_ocr_count,
                 page_ocr_indexed=page_ocr,
                 frame_scan_indexed=frame_scan,
                 pending_metadata=pending_metadata,
@@ -867,7 +922,7 @@ class IndexManager:
         def _collect_incomplete() -> list[
             tuple[
                 str, str, bool, bool, bool, bool, bool, bool, bool, bool, bool,
-                bool, bool, bool, bool, bool,
+                bool, bool, bool, "int | None", bool, bool, "str | None", int,
             ]
         ]:
             with get_search_db() as session:
@@ -899,6 +954,7 @@ class IndexManager:
                             IndexedFile.frame_ocr_indexed.is_(False),
                             IndexedFile.page_ocr_indexed.is_(False),
                             IndexedFile.frame_scan_indexed.is_(False),
+                            _outdated_frame_read(),
                         ),
                     )
                     .all()
@@ -984,6 +1040,7 @@ class IndexManager:
                         f.file_id in pending_ids,
                         f.frame_ocr_read,
                         f.frame_ocr_indexed,
+                        f.frame_ocr_rule,
                         f.page_ocr_indexed,
                         f.frame_scan_indexed,
                         f.loft_source,
@@ -1006,7 +1063,7 @@ class IndexManager:
             meta_done, clip_done, thumb_done, whisper_done, text_done,
             tfidf_kw_done, ocr_done, transcript_corrected,
             picture_text_corrected, has_followup,
-            frame_read, frame_done, page_done, frame_scan_done,
+            frame_read, frame_done, frame_rule, page_done, frame_scan_done,
             loft_source, loft_failures,
         ) in file_tasks:
             queued_any = False
@@ -1067,11 +1124,25 @@ class IndexManager:
                 queued_any = True
 
             # A video's frame text is read under on_index, but a rebuild-only
-            # task (text already stored) runs under every mode.
-            if (
-                mime_type in VIDEO_TYPES
-                and not frame_done
-                and (frame_read or settings.features.video_frame_ocr == "on_index")
+            # task (text already stored) runs under every mode. A read stored
+            # under an older rule is read again while the mode picks it up.
+            frame_outdated = (
+                frame_read
+                and frame_done
+                and (frame_rule is None or int(frame_rule) < FRAME_OCR_RULE)
+            )
+            if mime_type in VIDEO_TYPES and (
+                (
+                    not frame_done
+                    and (
+                        frame_read
+                        or settings.features.video_frame_ocr == "on_index"
+                    )
+                )
+                or (
+                    frame_outdated
+                    and settings.features.video_frame_ocr == "on_index"
+                )
             ):
                 await self._enqueue(IndexTask(
                     file_id=file_id, task_type=TaskType.FRAME_OCR, priority=-10
@@ -1295,8 +1366,15 @@ class IndexManager:
                     pending.append(IndexTask(
                         file_id=file_id, task_type=TaskType.OCR, priority=100
                     ))
+                frame_outdated = frame_read_is_outdated(
+                    mime_type=file.mime_type,
+                    frame_ocr_read=bool(file.frame_ocr_read),
+                    frame_ocr_indexed=bool(file.frame_ocr_indexed),
+                    frame_ocr_rule=file.frame_ocr_rule,
+                    mode=settings.features.video_frame_ocr,
+                )
                 if (
-                    not file.frame_ocr_indexed
+                    (not file.frame_ocr_indexed or frame_outdated)
                     and file.mime_type in VIDEO_TYPES
                     and settings.features.video_frame_ocr != "false"
                 ):
@@ -1933,6 +2011,10 @@ class IndexManager:
                 self._processing_by_type[TaskType.FRAME_OCR].append(task.file_id)
 
                 try:
+                    if await asyncio.to_thread(
+                        _is_outdated_frame_read, task.file_id
+                    ):
+                        self._reread_running.add(task.file_id)
                     await asyncio.to_thread(
                         index_frame_ocr, task.file_id, is_paused=self.is_paused
                     )
@@ -1941,6 +2023,7 @@ class IndexManager:
                         "Frame OCR indexing failed for %s: %s", task.file_id, e
                     )
                 finally:
+                    self._reread_running.discard(task.file_id)
                     self._processing_count -= 1
                     try:
                         self._processing_by_type[TaskType.FRAME_OCR].remove(
@@ -2009,7 +2092,7 @@ class IndexManager:
                 task = batch[0]
                 # The backlog waits for native frame work; a new file or a
                 # user request does not.
-                if task.priority == -10 and self._native_frame_busy():
+                if task.priority == -10 and await self._native_frame_busy():
                     await self._enqueue(task, force=True)
                     await asyncio.sleep(2)
                     continue
@@ -2074,14 +2157,25 @@ class IndexManager:
             (-task.priority, float("-inf"), task),
         )
 
-    def _native_frame_busy(self) -> bool:
-        """Whether a native frame scan or OCR task is queued or running."""
-        return bool(
+    async def _native_frame_busy(self) -> bool:
+        """Whether native frame work other than a re-read is queued or running.
+
+        A re-read of an outdated read runs alongside the backlog instead of
+        holding it back.
+        """
+        if (
             self._queues[TaskType.FRAME_SCAN].qsize()
-            or self._queues[TaskType.FRAME_OCR].qsize()
             or self._processing_by_type[TaskType.FRAME_SCAN]
-            or self._processing_by_type[TaskType.FRAME_OCR]
-        )
+        ):
+            return True
+        frame_ids = (
+            set(self._queued_by_type[TaskType.FRAME_OCR])
+            | set(self._processing_by_type[TaskType.FRAME_OCR])
+        ) - self._reread_running
+        if not frame_ids:
+            return bool(self._queues[TaskType.FRAME_OCR].qsize())
+        rereads = await asyncio.to_thread(_outdated_frame_ids, frame_ids)
+        return bool(frame_ids - rereads)
 
     async def _page_ocr_worker(self) -> None:
         """Read scanned PDF pages one PDF at a time, off the event loop."""

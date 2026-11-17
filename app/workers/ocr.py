@@ -143,6 +143,95 @@ def run_engine(engine: Any, image: Any, timeout: float | None = None) -> Any:
         _engine_call_lock.release()
 
 
+def detect_boxes(engine: Any, image: Any) -> list[Any]:
+    """The engine's detected text boxes, in detection order.
+
+    Each entry is the raw quadrilateral (4x2) the engine's ``engine(image)``
+    call would return, in the order it would return its lines. Detection
+    follows that call's own steps, so a frame reader can reuse the pixels
+    those boxes cover without running the whole picture again.
+    """
+    with _engine_call_lock:
+        return _detect_boxes(engine, image)
+
+
+def recognise_boxes(
+    engine: Any, image: Any, boxes: list[Any],
+) -> list[str | None]:
+    """Recognise ``boxes`` in one engine call, one result per box.
+
+    A result is the engine's line, or ``None`` when the engine drops that box
+    (an empty line, or a score under its ``text_score``). Preprocessing,
+    cropping, classification, recognition and the filter are the ones
+    ``engine(image)`` runs, so a frame whose boxes are all recognised here
+    reads the lines that call would.
+    """
+    with _engine_call_lock:
+        return _recognise_boxes(engine, image, boxes)
+
+
+def _detected_and_prepared(engine: Any, image: Any) -> tuple[Any, Any, dict]:
+    """The engine's loaded picture, its detection-sized copy and the record."""
+    ori_img = engine.load_img(image)
+    # Imported after the engine's loader has handled the picture: RapidOCR is
+    # optional at import time, so the module imports without the wheel.
+    from rapidocr.utils.process_img import apply_vertical_padding
+
+    img, op_record = engine.preprocess_img(ori_img)
+    if engine.cfg.Global.use_vertical_padding:
+        img, op_record = apply_vertical_padding(
+            img, op_record, engine.width_height_ratio, engine.min_height,
+        )
+    else:
+        op_record["padding_1"] = {"top": 0, "left": 0}
+    return ori_img, img, op_record
+
+
+def _detect_boxes(engine: Any, image: Any) -> list[Any]:
+    ori_img, img, op_record = _detected_and_prepared(engine, image)
+    from rapidocr.utils.process_img import map_boxes_to_original
+
+    det_res = engine._load_det_model()(img)
+    if det_res.boxes is None:
+        return []
+    ori_h, ori_w = ori_img.shape[:2]
+    return list(map_boxes_to_original(det_res.boxes, op_record, ori_h, ori_w))
+
+
+def _recognise_boxes(
+    engine: Any, image: Any, boxes: list[Any],
+) -> list[str | None]:
+    import numpy as np
+
+    _ori_img, img, op_record = _detected_and_prepared(engine, image)
+    from rapidocr.utils.process_img import map_img_to_original
+
+    ratio_h = op_record["preprocess"]["ratio_h"]
+    ratio_w = op_record["preprocess"]["ratio_w"]
+    top = op_record["padding_1"]["top"]
+    left = op_record["padding_1"]["left"]
+
+    prepared = []
+    for box in boxes:
+        points = np.asarray(box, dtype=np.float32).copy()
+        points[:, 0] = points[:, 0] / ratio_w + left
+        points[:, 1] = points[:, 1] / ratio_h + top
+        prepared.append(points)
+
+    crops = map_img_to_original(
+        engine.crop_text_regions(img, prepared), ratio_h, ratio_w,
+    )
+    rotated, _cls = engine.cls_and_rotate(crops)
+    result = engine.recognize_txt(rotated)
+    answers = []
+    for text, score in zip(result.txts, result.scores):
+        if not text.strip() or score < engine.text_score:
+            answers.append(None)
+        else:
+            answers.append(text)
+    return answers
+
+
 def _to_rgb(image: Any) -> Any:
     """RGB with any alpha flattened onto white and palettes expanded."""
     from PIL import Image
