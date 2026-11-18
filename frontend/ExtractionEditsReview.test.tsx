@@ -424,9 +424,14 @@ describe("SPEC-ADDON-070 — design requirements", () => {
     await screen.findByText("text-A-0");
     expect(screen.getByText("修正済み").className).toContain("bg-warm-light");
     const edit = screen.getAllByRole("button", { name: "修正" })[0];
-    expect(edit.className).toContain("pointer-coarse:min-h-11");
+    // Drawn on a fine pointer only: a coarse pointer draws 修正 in the strip
+    // under the tapped row instead, so this control takes no coarse sizing.
+    expect(edit.className).not.toContain("pointer-coarse:min-h-11");
     fireEvent.click(edit);
     expect(screen.getByRole("textbox").className).toContain("rounded-2xl");
+    expect(screen.getByRole("button", { name: "保存" }).className).toContain(
+      "pointer-coarse:min-h-11",
+    );
   });
 
   it("puts the edit field and keys on the design's touch layout", async () => {

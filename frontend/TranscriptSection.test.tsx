@@ -1008,11 +1008,11 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
 // line each one would quote.
 //
 // The reveal itself is CSS (`opacity-0` lifted by `group-hover/cue`,
-// `group-focus-within/cue`, `pointer-coarse`), and jsdom loads no
-// stylesheet, so no assertion here can see the button appear. What these
-// check is the contract the CSS hangs off: the row is the group, the
-// button names the signals, and it stays in the tab order while hidden.
-// The appearance itself is on the manual 1512 / 400 / 375 pass.
+// `group-focus-within/cue`), and jsdom loads no stylesheet, so no
+// assertion here can see the button appear. What these check is the
+// contract the CSS hangs off: the row is the group, the button names the
+// signals, and it stays in the tab order while hidden.
+// The appearance itself is on the manual 1512 / 400 pass.
 describe("TranscriptSection — per-row capture buttons", () => {
   beforeEach(() => {
     mockAddonStatus.features.transcript_refine = "manual";
@@ -1088,24 +1088,16 @@ describe("TranscriptSection — per-row capture buttons", () => {
     }
   });
 
-  it("grows its hit area, not its box, where there is no hover to give", async () => {
+  it("keeps the button's own box 32px on the fine path", async () => {
     renderSection();
     const buttons = await captureButtons();
 
     for (const button of buttons) {
       const classes = button.classList;
-      expect(classes.contains("pointer-coarse:opacity-100")).toBe(true);
-      // The target grows from a pseudo-element overhanging the box by
-      // 6px a side rather than from a bigger box, so the icon stays the
-      // same size at every pointer type. The row is what grows (see the
-      // test below), which is also what keeps this pseudo-element from
-      // overlapping its neighbour's.
-      expect(classes.contains("relative")).toBe(true);
-      expect(classes.contains("pointer-coarse:before:absolute")).toBe(true);
-      expect(classes.contains("pointer-coarse:before:-inset-1.5")).toBe(true);
-      // The box itself stays 32px at every pointer type, which already
-      // clears the 24px floor for repeated icon-only controls (hako
-      // Prwd_iaXmCjWfY24KjFz2).
+      // The icon-only box is sized, not padded, and no pointer type grows
+      // it: on a coarse pointer this control is not drawn at all.
+      // 32px already clears the 24px floor for repeated icon-only controls
+      // (hako Prwd_iaXmCjWfY24KjFz2).
       expect(classes.contains("h-8")).toBe(true);
       expect(classes.contains("w-8")).toBe(true);
       expect(classes.contains("pointer-coarse:h-11")).toBe(false);
@@ -1113,28 +1105,20 @@ describe("TranscriptSection — per-row capture buttons", () => {
     }
   });
 
-  it("takes the 44px floor on the row, and only where it is a rule", async () => {
+  it("leaves the 44px row floor to the coarse path", async () => {
     renderSection();
     const buttons = await captureButtons();
 
     for (const button of buttons) {
       const row = button.parentElement!;
-      // The floor lives in the mobile sizing rules, so it is about
-      // touch. `pointer-coarse` is that condition; a plain `min-h-11`
-      // would add 37% of height to a transcript of several hundred
-      // lines on a desktop the rule was not written about, where 32px
-      // already clears the 24px minimum for repeated icon-only controls
-      // (hako Prwd_iaXmCjWfY24KjFz2).
-      expect(row.classList.contains("pointer-coarse:min-h-11")).toBe(true);
+      // A 44px row on a desktop the rule was not written about would add
+      // 37% of height to a transcript of several hundred lines. The coarse
+      // path draws its own rows at that height; this one is unchanged.
       expect(row.classList.contains("min-h-11")).toBe(false);
 
-      // The seek button takes it too. It is the row's *primary* action,
-      // and `items-start` means it does not inherit the row's height —
-      // a list whose secondary control clears the floor while its main
-      // one does not has bought nothing.
       const seek = row.querySelector("button[aria-current], button:first-child");
       expect(seek).not.toBeNull();
-      expect(seek!.classList.contains("pointer-coarse:min-h-11")).toBe(true);
+      expect(seek!.classList.contains("min-h-11")).toBe(false);
     }
   });
 });
