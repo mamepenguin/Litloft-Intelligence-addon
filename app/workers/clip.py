@@ -27,7 +27,7 @@ from PIL import Image
 
 from app.vec_partition import insert_vector_sql
 from app.config import settings, validate_file_path
-from app.database import get_search_db
+from app.database import get_search_db, get_search_db_read
 from app.frame_cache import frame_cache_dir, round_ms, tile_cache_dir
 from app.models import Embedding, IndexedFile
 from app.video_frames import extract_frame
@@ -1046,6 +1046,24 @@ def _storyboard_definite(file_id: str) -> bool:
     return True
 
 
+def candidates_gate_holds(file_id: str) -> bool:
+    """Whether the `.loft`'s candidates are settled with at least one row.
+
+    While this holds, a storyboard would replace the video's own frames, so the
+    storyboard leg and a fetch's storyboard step make no lookup.
+    """
+    with get_search_db_read() as session:
+        row = session.query(IndexedFile).filter_by(file_id=file_id).first()
+        if row is None or not row.loft_candidates_done:
+            return False
+        return (
+            session.query(Embedding)
+            .filter_by(file_id=file_id, embedding_type="clip")
+            .first()
+            is not None
+        )
+
+
 def _index_youtube_storyboard(
     file_id: str, file_path: str, indexed_duration: float | None,
 ) -> bool:
@@ -1055,6 +1073,8 @@ def _index_youtube_storyboard(
     transient failure, with the earlier rows and ``clip_indexed`` untouched.
     """
     with storyboard_lock(file_id):
+        if candidates_gate_holds(file_id):
+            return _storyboard_definite(file_id)
         if (
             not _consume_storyboard_retry(file_id)
             and file_id in _storyboard_failed

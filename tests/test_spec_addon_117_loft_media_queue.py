@@ -132,8 +132,11 @@ async def test_spec_addon_117_outside_on_index_an_ocr_read_alone_queues_no_fetch
     db, tmp_path, monkeypatch, mode,
 ):
     patch_features(monkeypatch, video_frame_ocr=mode)
-    _loft(db, tmp_path, "yt1", "youtube", frame_ocr_read=False, frame_ocr_indexed=False)
-    _loft(db, tmp_path, "yt2", "youtube", frame_scan_indexed=False)
+    # Candidates already settled: this test measures the OCR read alone.
+    _loft(db, tmp_path, "yt1", "youtube", frame_ocr_read=False, frame_ocr_indexed=False,
+          loft_candidates_done=True)
+    _loft(db, tmp_path, "yt2", "youtube", frame_scan_indexed=False,
+          loft_candidates_done=True)
     manager = _manager()
 
     await manager._resume_incomplete()
@@ -163,7 +166,8 @@ async def test_spec_addon_117_i7_a_stored_read_is_rebuilt_by_the_rebuild_only_ta
     db, tmp_path, monkeypatch, mode,
 ):
     patch_features(monkeypatch, video_frame_ocr=mode)
-    _loft(db, tmp_path, "yt1", "youtube", frame_ocr_read=True, frame_ocr_indexed=False)
+    _loft(db, tmp_path, "yt1", "youtube", frame_ocr_read=True, frame_ocr_indexed=False,
+          loft_candidates_done=True)
 
     manager = _manager()
     await manager._resume_incomplete()
@@ -291,7 +295,8 @@ async def test_spec_addon_117_prioritize_of_a_stored_read_queues_the_rebuild_onl
     db, tmp_path, monkeypatch,
 ):
     patch_features(monkeypatch, video_frame_ocr="manual")
-    _loft(db, tmp_path, "yt1", "youtube", frame_ocr_read=True, frame_ocr_indexed=False)
+    _loft(db, tmp_path, "yt1", "youtube", frame_ocr_read=True, frame_ocr_indexed=False,
+          loft_candidates_done=True)
     manager = _manager()
 
     await manager.prioritize("yt1")
@@ -317,8 +322,9 @@ async def test_spec_addon_117_is_queued_for_a_lofts_frame_tasks_answers_from_its
     db, tmp_path, monkeypatch,
 ):
     patch_features(monkeypatch, video_frame_ocr="on_index")
-    _loft(db, tmp_path, "yt1", "youtube", frame_scan_indexed=False)
-    _loft(db, tmp_path, "yt2", "youtube")
+    _loft(db, tmp_path, "yt1", "youtube", frame_scan_indexed=False,
+          loft_candidates_done=True)
+    _loft(db, tmp_path, "yt2", "youtube", loft_candidates_done=True)
     manager = _manager()
     await manager._resume_incomplete()
 

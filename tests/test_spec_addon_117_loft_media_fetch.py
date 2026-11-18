@@ -133,7 +133,7 @@ def test_spec_addon_117_i11_the_scan_of_a_loft_writes_no_frame_cache_entry(
 ):
     """SPEC-ADDON-145 item 1, revised SPEC-ADDON-117 I11: the scan writes no picture."""
     world.serve(gradient, duration=VIDEO_SECONDS)
-    world.add_loft("ytloft000001")
+    world.add_loft("ytloft000001", loft_candidates_done=True)
     kept = frame_cache_path("ytloft000001", 10.0)
     kept.parent.mkdir(parents=True, exist_ok=True)
     kept.write_bytes(b"KEPT")
@@ -150,7 +150,7 @@ def test_spec_addon_117_i11_a_native_scan_keeps_no_small_pictures(world, gradien
     from app.workers import frame_scan
 
     world.serve(gradient, duration=VIDEO_SECONDS)
-    world.add_loft("ytloft000001")
+    world.add_loft("ytloft000001", loft_candidates_done=True)
     world.add_native("native000001", gradient)
 
     fetch("ytloft000001")
@@ -272,7 +272,7 @@ def test_spec_addon_117_i3_a_fetch_with_no_stage_wanted_classifies_and_downloads
 ):
     world.configure(frame_ocr=mode)
     world.serve(gradient, duration=VIDEO_SECONDS)
-    world.add_loft("ytloft000001", **flags)
+    world.add_loft("ytloft000001", loft_candidates_done=True, **flags)
 
     fetch("ytloft000001")
 

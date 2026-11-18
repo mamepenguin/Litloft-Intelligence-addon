@@ -1,8 +1,9 @@
 """One fetch of a `.loft` reference's video.
 
 The reference is read and classified, its video is looked up and downloaded
-once at up to 720p without audio, the frame scan and frame OCR run on that
-file exactly as on a native video, and the download is deleted again. Nothing
+once at up to 720p without audio, its scene candidates are built from that
+file when they are still the storyboard, the frame scan and frame OCR run on
+it exactly as on a native video, and the download is deleted again. Nothing
 is fetched for a reference that turns out not to point at a YouTube video.
 
 Neither the stored URL, a signed stream URL nor a request header reaches a log
@@ -16,19 +17,35 @@ import inspect
 import logging
 import shutil
 import subprocess
+import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+import numpy as np
+from PIL import Image
+
 from app import youtube_source
 from app.config import settings
 from app.database import get_search_db, get_search_db_read
+from app.frame_cache import extract_frame_to_cache, frame_cache_path, tile_cache_dir
 from app.models import Embedding, IndexedFile
 from app.policy_client import is_feature_enabled
-from app.workers.clip import index_storyboard, load_image_model, storyboard_lock
+from app.workers.clip import (
+    _extract_frame_paths,
+    _remove_clip_embeddings,
+    _store_clip_embedding,
+    candidates_gate_holds,
+    embed_image,
+    index_storyboard,
+    load_image_model,
+    storyboard_lock,
+)
 from app.workers.frame_ocr import index_frame_ocr
 from app.workers.frame_scan import index_frame_scan
+from app.workers.metadata import _remove_embeddings
 from app.workers.ocr import _get_engine
 from app.workers.whisper import LOFT_MIME
 
@@ -45,6 +62,11 @@ DURATION_TOLERANCE = 0.95
 PAUSE_SECONDS = 30.0
 BACKOFF_START_SECONDS = 30 * 60.0
 BACKOFF_MAX_SECONDS = 6 * 60 * 60.0
+#: Seconds the candidates stage may spend embedding the video's frames.
+EMBED_BUDGET_SECONDS = 600.0
+#: The span a scene candidate keeps, as the native leg writes it.
+SCENE_SECONDS = 30.0
+CHANGE_TYPE = "clip_change"
 _PAUSE_POLL_SECONDS = 0.2
 
 #: File ids a `frame_ocr` reindex or prioritize asked for; a restart forgets it.
@@ -69,6 +91,7 @@ class FetchResult:
     """What one fetch did, for the queue worker that ran it."""
 
     scan_set: bool = False
+    candidates_set: bool = False
     settled: bool = False
     requeue: bool = False
     retry_backlog: bool = False
@@ -191,6 +214,7 @@ class _State:
     frame_ocr_read: bool
     frame_ocr_indexed: bool
     failures: int
+    candidates_done: bool
 
 
 def _load_state(file_id: str) -> _State | None:
@@ -210,6 +234,7 @@ def _load_state(file_id: str) -> _State | None:
             frame_ocr_read=bool(row.frame_ocr_read),
             frame_ocr_indexed=bool(row.frame_ocr_indexed),
             failures=int(row.loft_fetch_failures or 0),
+            candidates_done=bool(row.loft_candidates_done),
         )
 
 
@@ -244,23 +269,26 @@ def _has_candidates(file_id: str) -> bool:
 
 
 def _storyboard_step(
-    state: _State, description: dict, scan_wanted: bool,
+    state: _State, description: dict, candidates_wanted: bool,
 ) -> None:
     """Read the storyboard the lookup names, for a reference that has none.
 
     Best effort: a failure writes no candidate and changes nothing the fetch
     counts, flags or reports, so the download and the stages still run. The
     step is the fetch's own write, not the CLIP leg's, so it neither consults
-    nor records that leg's retry gate.
+    nor records that leg's retry gate. The model is loaded here unless the
+    candidates stage, which is about to replace these rows, has loaded it.
     """
     file_id = state.file_id
     try:
         with storyboard_lock(file_id):
             # Checked under the lock: a leg finishing first may have just left
             # the reference with the very candidates this step would replace.
+            if candidates_gate_holds(file_id):
+                return
             if _has_candidates(file_id):
                 return
-            if not scan_wanted:
+            if not candidates_wanted:
                 try:
                     load_image_model()
                 except Exception:
@@ -325,8 +353,146 @@ def _time_limit(duration: float | None) -> float:
     return max(MIN_TIME_LIMIT, duration * 1.5)
 
 
+class _CandidatesFailure(Exception):
+    """A candidates stage that ends without a result; ``failure`` is the log class."""
+
+    def __init__(self, failure: str) -> None:
+        super().__init__(failure)
+        self.failure = failure
+
+
+def _embed_frames(
+    frames: list[tuple[float, Path]], is_paused: Callable[[], bool] | None,
+) -> list[tuple[float, np.ndarray]]:
+    """Embed every frame that reads, holding the vectors instead of storing them."""
+    deadline = time.monotonic() + EMBED_BUDGET_SECONDS
+    batch_size = settings.workers.clip_frame_batch_size
+    embedded: list[tuple[float, np.ndarray]] = []
+    for start in range(0, len(frames), batch_size):
+        if is_paused is not None:
+            while is_paused():
+                time.sleep(_PAUSE_POLL_SECONDS)
+        for timestamp, frame_path in frames[start:start + batch_size]:
+            if time.monotonic() >= deadline:
+                raise _CandidatesFailure("BudgetExceeded")
+            try:
+                image = Image.open(str(frame_path)).convert("RGB")
+                image.load()
+                vector = embed_image(image)
+                del image
+            except Exception:  # noqa: BLE001 - one frame is not the stage
+                continue
+            embedded.append((timestamp, vector))
+    return embedded
+
+
+def _write_candidates(
+    file_id: str, embedded: list[tuple[float, np.ndarray]],
+) -> str:
+    """Replace the file's scene candidates, or say why nothing was written."""
+    with storyboard_lock(file_id):
+        with get_search_db() as session:
+            row = session.query(IndexedFile).filter_by(
+                file_id=file_id, active=True
+            ).first()
+            if row is None:
+                return "inactive"
+            _remove_clip_embeddings(session, file_id)
+            _remove_embeddings(session, file_id, CHANGE_TYPE)
+            for timestamp, vector in embedded:
+                _store_clip_embedding(
+                    session=session,
+                    embedding_id=f"clip_{file_id}_{uuid.uuid4().hex[:8]}",
+                    file_id=file_id,
+                    vector=vector,
+                    content_preview=f"Frame at {timestamp:.1f}s",
+                    timestamp_start=timestamp,
+                    timestamp_end=timestamp + SCENE_SECONDS,
+                )
+            row.loft_candidates_done = True
+            row.clip_indexed = True
+        _clear_tiles(file_id)
+        from app.search import invalidate_similar_cache
+
+        invalidate_similar_cache()
+    return "committed"
+
+
+def _clear_tiles(file_id: str) -> None:
+    """Drop the storyboard tiles the committed rows replace."""
+    directory = tile_cache_dir(file_id)
+    if not directory.exists():
+        return
+    try:
+        shutil.rmtree(directory)
+    except OSError as exc:
+        logger.warning(
+            "loft_media tile removal failed for %s (%s)", file_id, type(exc).__name__,
+        )
+
+
+def _discard_entries(written: list[Path]) -> None:
+    for path in written:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _stored_duration(file_id: str) -> float | None:
+    with get_search_db_read() as session:
+        value = session.query(IndexedFile.duration).filter_by(
+            file_id=file_id, active=True
+        ).scalar()
+    return None if value is None else float(value)
+
+
+def _candidates_stage(
+    state: _State, source_path: Path, is_paused: Callable[[], bool] | None,
+) -> str:
+    """Build the `.loft`'s scene candidates from its downloaded video.
+
+    Returns ``"committed"``, ``"failed"`` or ``"inactive"``. A stage that does
+    not commit removes the cache entries it wrote; a committed one keeps them,
+    because a scene-tile serves them for the video's frames.
+    """
+    file_id = state.file_id
+    written: list[Path] = []
+    try:
+        duration = _probe_duration(str(source_path)) or _stored_duration(file_id)
+        with tempfile.TemporaryDirectory(prefix="loft_frames_") as tmp:
+            frames = _extract_frame_paths(str(source_path), duration, Path(tmp))
+            embedded = _embed_frames(frames, is_paused)
+            if not embedded:
+                raise _CandidatesFailure("NoFrames")
+            for timestamp, _vector in embedded:
+                path = frame_cache_path(file_id, timestamp)
+                if path.exists() and path.stat().st_size > 0:
+                    continue
+                try:
+                    extract_frame_to_cache(str(source_path), path, timestamp)
+                except Exception:  # noqa: BLE001 - a missing picture is not a failure
+                    continue
+                written.append(path)
+        outcome = _write_candidates(file_id, embedded)
+    except _CandidatesFailure as exc:
+        _discard_entries(written)
+        logger.warning("loft_media candidates failed for %s (%s)", file_id, exc.failure)
+        return "failed"
+    except Exception as exc:  # noqa: BLE001 - one stage is not the fetch
+        _discard_entries(written)
+        logger.warning(
+            "loft_media candidates failed for %s (%s)", file_id, type(exc).__name__,
+        )
+        return "failed"
+    if outcome != "committed":
+        _discard_entries(written)
+    return outcome
+
+
 def _count_failure(
     state: _State, values: dict, *, close_scan: bool, close_ocr: bool,
+    close_candidates: bool = False,
 ) -> None:
     """Add one counted failure and close the failed stage at the cap."""
     failures = state.failures + 1
@@ -337,10 +503,12 @@ def _count_failure(
         if close_ocr:
             values["frame_ocr_read"] = True
             values["frame_ocr_indexed"] = True
+        if close_candidates:
+            values["loft_candidates_done"] = True
     _write(state.file_id, values)
 
 
-def _stages_wanted(state: _State) -> tuple[bool, bool]:
+def _stages_wanted(state: _State) -> tuple[bool, bool, bool]:
     mode = settings.features.video_frame_ocr
     scan = not state.frame_scan_indexed
     ocr = (
@@ -348,7 +516,8 @@ def _stages_wanted(state: _State) -> tuple[bool, bool]:
         and mode != "false"
         and (mode == "on_index" or state.file_id in _OCR_REQUESTED)
     )
-    return scan, ocr
+    candidates = not state.candidates_done
+    return scan, ocr, candidates
 
 
 def index_loft_media(
@@ -373,21 +542,31 @@ def index_loft_media(
         _RUNNING.discard(file_id)
         requeue = _apply_recorded_requests(file_id)
     return FetchResult(
-        scan_set=result.scan_set, settled=result.settled, requeue=requeue,
+        scan_set=result.scan_set, candidates_set=result.candidates_set,
+        settled=result.settled, requeue=requeue,
         retry_backlog=result.retry_backlog,
     )
 
 
 def _failed_result(
-    state: _State, *, close_scan: bool, close_ocr: bool,
+    state: _State, *, scan_wanted: bool, ocr_wanted: bool,
+    candidates_wanted: bool,
 ) -> FetchResult:
-    """Count a failure after a success, or send the file back to the backlog."""
-    if _note_result("failure"):
-        _count_failure(
-            state, {}, close_scan=close_scan, close_ocr=close_ocr,
-        )
+    """Count a failure after a success, or send the file back to the backlog.
+
+    A candidates-only fetch never moves the count; a counted failure closes its
+    candidates flag instead, so one user-requested retry is all it gets.
+    """
+    if not _note_result("failure"):
+        return FetchResult(retry_backlog=True)
+    if not scan_wanted and not ocr_wanted:
+        _write(state.file_id, {"loft_candidates_done": True})
         return FetchResult()
-    return FetchResult(retry_backlog=True)
+    _count_failure(
+        state, {}, close_scan=scan_wanted, close_ocr=ocr_wanted,
+        close_candidates=candidates_wanted,
+    )
+    return FetchResult()
 
 
 def _fetch(
@@ -405,14 +584,16 @@ def _fetch(
             "frame_scan_indexed": True,
             "frame_ocr_read": True,
             "frame_ocr_indexed": True,
+            "loft_candidates_done": True,
         })
         return FetchResult()
 
     _write(file_id, {"loft_source": "youtube"})
 
-    scan_wanted, ocr_wanted = _stages_wanted(state)
-    if not scan_wanted and not ocr_wanted:
+    scan_wanted, ocr_wanted, candidates_wanted = _stages_wanted(state)
+    if not scan_wanted and not ocr_wanted and not candidates_wanted:
         return FetchResult()
+    candidates_only = candidates_wanted and not scan_wanted and not ocr_wanted
 
     try:
         permitted = _policy_allows(state.drive)
@@ -421,7 +602,7 @@ def _fetch(
     if not permitted:
         return FetchResult()
 
-    if scan_wanted:
+    if candidates_wanted:
         try:
             load_image_model()
         except Exception:
@@ -445,14 +626,15 @@ def _fetch(
     except Exception:
         logger.warning("loft_media lookup failed (file %s)", file_id)
         return _failed_result(
-            state, close_scan=scan_wanted, close_ocr=ocr_wanted,
+            state, scan_wanted=scan_wanted, ocr_wanted=ocr_wanted,
+            candidates_wanted=candidates_wanted,
         )
 
     lookup_duration = youtube_source.known_duration(description, None)
     if state.duration is None and lookup_duration is not None:
         _write(file_id, {"duration": lookup_duration})
 
-    _storyboard_step(state, description, scan_wanted)
+    _storyboard_step(state, description, candidates_wanted)
 
     fmt = youtube_source.pick_format(description)
     if fmt is None:
@@ -460,7 +642,13 @@ def _fetch(
         # YouTube answered, so the run of refusals ends; the video itself has
         # nothing to fetch, which counts against it as before.
         _note_result("success")
-        _count_failure(state, {}, close_scan=scan_wanted, close_ocr=ocr_wanted)
+        if candidates_only:
+            _write(file_id, {"loft_candidates_done": True})
+            return FetchResult()
+        _count_failure(
+            state, {}, close_scan=scan_wanted, close_ocr=ocr_wanted,
+            close_candidates=candidates_wanted,
+        )
         return FetchResult()
 
     if not _space_allows(file_id, fmt):
@@ -485,7 +673,8 @@ def _fetch(
             return FetchResult()
         logger.warning("loft_media download failed (file %s)", file_id)
         return _failed_result(
-            state, close_scan=scan_wanted, close_ocr=ocr_wanted,
+            state, scan_wanted=scan_wanted, ocr_wanted=ocr_wanted,
+            candidates_wanted=candidates_wanted,
         )
     destination = outcome.path
 
@@ -495,7 +684,8 @@ def _fetch(
             if probed is None or probed < lookup_duration * DURATION_TOLERANCE:
                 logger.warning("loft_media download failed (file %s)", file_id)
                 return _failed_result(
-                    state, close_scan=scan_wanted, close_ocr=ocr_wanted,
+                    state, scan_wanted=scan_wanted, ocr_wanted=ocr_wanted,
+                    candidates_wanted=candidates_wanted,
                 )
 
         if is_paused is not None:
@@ -503,9 +693,17 @@ def _fetch(
             while is_paused():
                 time.sleep(_PAUSE_POLL_SECONDS)
 
-        ran_scan, ran_ocr = False, False
+        ran_scan, ran_ocr, ran_candidates = False, False, False
         scan_set = False
         ocr_set = False
+        candidates_set = False
+
+        if candidates_wanted:
+            ran_candidates = True
+            candidates_outcome = _candidates_stage(state, destination, is_paused)
+            candidates_set = candidates_outcome == "committed"
+            if candidates_outcome == "inactive":
+                return FetchResult()
 
         if scan_wanted:
             ran_scan = True
@@ -531,7 +729,20 @@ def _fetch(
                 )
             ocr_set = _flag(file_id, "frame_ocr_read")
 
-        settled = (not ran_scan or scan_set) and (not ran_ocr or ocr_set)
+        if ran_ocr:
+            _OCR_REQUESTED.discard(file_id)
+
+        settled = (
+            (not ran_scan or scan_set)
+            and (not ran_ocr or ocr_set)
+            and (not ran_candidates or candidates_set)
+        )
+        if candidates_only:
+            if not candidates_set:
+                _write(file_id, {"loft_candidates_done": True})
+            _note_result("success")
+            return FetchResult(candidates_set=candidates_set)
+
         if settled:
             _write(file_id, {"loft_fetch_failures": 0})
         else:
@@ -540,13 +751,13 @@ def _fetch(
                 {},
                 close_scan=scan_wanted and not scan_set,
                 close_ocr=ocr_wanted and not ocr_set,
+                close_candidates=ran_candidates and not candidates_set,
             )
 
-        if ran_ocr:
-            _OCR_REQUESTED.discard(file_id)
-
         _note_result("success")
-        return FetchResult(scan_set=scan_set, settled=settled)
+        return FetchResult(
+            scan_set=scan_set, candidates_set=candidates_set, settled=settled,
+        )
     finally:
         destination.unlink(missing_ok=True)
 
@@ -582,6 +793,7 @@ def _apply_recorded_requests(file_id: str) -> bool:
     if "clip" in tasks:
         values["loft_source"] = None
         values["frame_scan_indexed"] = False
+        values["loft_candidates_done"] = False
     _write(file_id, values)
     return True
 

@@ -488,6 +488,19 @@ def _migrate_vec_clip_if_needed(conn: object) -> None:
     # Reset clip_indexed so the indexer re-processes all files
     conn.execute(text("UPDATE indexed_files SET clip_indexed = 0"))
 
+    # The scene candidates are gone, so a YouTube `.loft` under the cap must be
+    # fetched again; one at the cap keeps its storyboard and stays closed.
+    from app.workers.whisper import LOFT_MIME
+
+    conn.execute(
+        text(
+            "UPDATE indexed_files SET loft_candidates_done = 0 "
+            "WHERE mime_type = :loft_mime AND loft_source = 'youtube' "
+            "AND loft_fetch_failures < 3"
+        ),
+        {"loft_mime": LOFT_MIME},
+    )
+
     conn.commit()
 
 
@@ -1189,7 +1202,7 @@ def _migrate_frame_scan_column(conn: object) -> None:
 
 
 def _migrate_loft_columns(conn: object) -> None:
-    """Add the ``.loft`` source and fetch-failure state.
+    """Add the ``.loft`` source, fetch-failure and candidates state.
 
     Additive and idempotent: an existing column keeps its rows. It runs before
     the vector-table migrations that read ``loft_source``.
@@ -1210,6 +1223,25 @@ def _migrate_loft_columns(conn: object) -> None:
                 "ALTER TABLE indexed_files ADD COLUMN "
                 "loft_fetch_failures INTEGER NOT NULL DEFAULT 0"
             )
+        )
+    if "loft_candidates_done" not in cols:
+        from app.workers.whisper import LOFT_MIME
+
+        conn.execute(
+            text(
+                "ALTER TABLE indexed_files ADD COLUMN "
+                "loft_candidates_done BOOLEAN NOT NULL DEFAULT 0"
+            )
+        )
+        # Neither a source with no video nor a reference already at the cap
+        # can ever be given the video's candidates, so they start closed.
+        conn.execute(
+            text(
+                "UPDATE indexed_files SET loft_candidates_done = 1 "
+                "WHERE mime_type = :loft_mime AND (loft_source = 'other' "
+                "OR loft_fetch_failures >= 3)"
+            ),
+            {"loft_mime": LOFT_MIME},
         )
 
 
