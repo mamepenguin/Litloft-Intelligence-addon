@@ -68,6 +68,10 @@ _MAX_FRAME_HEIGHT = 720
 
 YOUTUBE_PROVIDER = "youtube"
 
+# Why not only ``--js-runtimes=node``: yt-dlp adds the listed runtimes to the
+# default one (Deno), and ``--no-js-runtimes`` is what removes it.
+_JS_RUNTIME_ARGV = ("--no-js-runtimes", "--js-runtimes=node")
+
 
 @dataclass(frozen=True)
 class LoftSource:
@@ -157,7 +161,7 @@ def run_lookup(url: str, limit: float) -> dict[str, Any]:
     """
     try:
         result = subprocess.run(
-            ["yt-dlp", "-J", "--no-playlist", "--ignore-config", url],
+            ["yt-dlp", "-J", "--no-playlist", "--ignore-config", *_JS_RUNTIME_ARGV, url],
             capture_output=True,
             text=True,
             timeout=limit,
@@ -346,6 +350,7 @@ def download_rendition(
         "--no-playlist",
         "--ignore-config",
         "-o", template,
+        *_JS_RUNTIME_ARGV,
         source_url,
     ]
     try:
