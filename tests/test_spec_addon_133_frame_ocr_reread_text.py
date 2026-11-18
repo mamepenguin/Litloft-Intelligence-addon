@@ -1,4 +1,4 @@
-"""SPEC-ADDON-122 with an engine that answers: a stored read writes rule 2, a
+"""SPEC-ADDON-133 with an engine that answers: a stored read writes rule 2, a
 completed re-read replaces the earlier read through the store-then-build path,
 and an incomplete or failed one leaves it.
 
@@ -32,7 +32,7 @@ from tests.ocr_fixtures import (
     seed_ocr_rows,
 )
 from tests.test_frame_page_ocr_readers import media  # noqa: F401 - fixture
-from tests.test_spec_addon_122_frame_ocr_reread import wire_reader
+from tests.test_spec_addon_133_frame_ocr_reread import wire_reader
 
 pytestmark = pytest.mark.usefixtures("pillow_real")
 
@@ -105,7 +105,7 @@ def _searchable(db) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def test_spec_addon_122_i6_a_first_read_is_stored_under_rule_two(db, reader, scene):
+def test_spec_addon_133_i6_a_first_read_is_stored_under_rule_two(db, reader, scene):
     path, _fake = scene
     _seed(db, path, earlier=False)
 
@@ -115,7 +115,7 @@ def test_spec_addon_122_i6_a_first_read_is_stored_under_rule_two(db, reader, sce
     assert _state(db) == (True, True, 2)
 
 
-def test_spec_addon_122_section_3_a_completed_reread_replaces_the_earlier_read(db, reader, scene):
+def test_spec_addon_133_section_3_a_completed_reread_replaces_the_earlier_read(db, reader, scene):
     path, fake = scene
     _seed(db, path, earlier=True)
 
@@ -130,7 +130,7 @@ def test_spec_addon_122_section_3_a_completed_reread_replaces_the_earlier_read(d
     assert any("A#0" in text for text in searchable)
 
 
-def test_spec_addon_122_i6_the_store_sets_indexed_false_and_the_build_sets_it_true(
+def test_spec_addon_133_i6_the_store_sets_indexed_false_and_the_build_sets_it_true(
     db, reader, scene, monkeypatch,
 ):
     path, fake = scene
@@ -159,7 +159,7 @@ def test_spec_addon_122_i6_the_store_sets_indexed_false_and_the_build_sets_it_tr
     assert any("A#0" in text for text in _searchable(db))
 
 
-def test_spec_addon_122_i6_a_reread_whose_store_fails_writes_nothing_and_is_tried_again(
+def test_spec_addon_133_i6_a_reread_whose_store_fails_writes_nothing_and_is_tried_again(
     db, reader, scene,
 ):
     import asyncio
@@ -195,7 +195,7 @@ def test_spec_addon_122_i6_a_reread_whose_store_fails_writes_nothing_and_is_trie
 # ---------------------------------------------------------------------------
 
 
-def test_spec_addon_122_i8_a_running_reread_leaves_the_earlier_read_searchable(db, reader, scene):
+def test_spec_addon_133_i8_a_running_reread_leaves_the_earlier_read_searchable(db, reader, scene):
     path, fake = scene
     _seed(db, path, earlier=True)
     before = _snapshot(db)
@@ -230,7 +230,7 @@ def test_spec_addon_122_i8_a_running_reread_leaves_the_earlier_read_searchable(d
 
 
 @pytest.mark.parametrize("outcome", ["ended-early", "one-frame-raised"])
-def test_spec_addon_122_i8_an_incomplete_reread_that_read_text_keeps_the_earlier_read(
+def test_spec_addon_133_i8_an_incomplete_reread_that_read_text_keeps_the_earlier_read(
     db, reader, media, monkeypatch, outcome,  # noqa: F811
 ):
     fake = SimpleBoxEngine()
@@ -257,7 +257,7 @@ def test_spec_addon_122_i8_an_incomplete_reread_that_read_text_keeps_the_earlier
     assert db.flag("vid1", "frame_ocr_rule") == 2
 
 
-def test_spec_addon_122_failure_a_first_read_that_ended_early_keeps_its_frames_under_rule_two(
+def test_spec_addon_133_failure_a_first_read_that_ended_early_keeps_its_frames_under_rule_two(
     db, reader, media, monkeypatch,  # noqa: F811
 ):
     fake = SimpleBoxEngine()

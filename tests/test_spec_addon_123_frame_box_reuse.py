@@ -29,7 +29,7 @@ from tests.ocr_fixtures import (
     pillow_real,  # noqa: F401  - the usefixtures marker resolves it
     seed_indexed_file,
 )
-from tests.test_spec_addon_122_frame_ocr_reread import wire_reader
+from tests.test_spec_addon_133_frame_ocr_reread import wire_reader
 
 pytestmark = pytest.mark.usefixtures("pillow_real")
 

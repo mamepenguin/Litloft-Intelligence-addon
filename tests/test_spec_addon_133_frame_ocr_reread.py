@@ -1,4 +1,4 @@
-"""SPEC-ADDON-122: what a frame-OCR task does with a read stored under the old
+"""SPEC-ADDON-133: what a frame-OCR task does with a read stored under the old
 rule, and what a re-read that does not complete leaves behind.
 
 Item 1 step 8, §2, §3, I6, I7, I8. The task's work is ``index_frame_ocr``, the
@@ -193,7 +193,7 @@ def _make_times_fail(module, monkeypatch, path: Path) -> None:
 
 
 @pytest.mark.parametrize("outcome", ["unreadable", "times-failed", "no-frame"])
-def test_spec_addon_122_i8_an_incomplete_reread_keeps_the_earlier_read_and_sets_rule_two(
+def test_spec_addon_133_i8_an_incomplete_reread_keeps_the_earlier_read_and_sets_rule_two(
     reader, search_db, media, monkeypatch, outcome,  # noqa: F811
 ):
     module, _source = reader
@@ -219,7 +219,7 @@ def test_spec_addon_122_i8_an_incomplete_reread_keeps_the_earlier_read_and_sets_
     assert search_db.flag("vid1", "frame_ocr_rule") == 2
 
 
-async def test_spec_addon_122_i8_an_incomplete_reread_is_not_queued_again(
+async def test_spec_addon_133_i8_an_incomplete_reread_is_not_queued_again(
     reader, search_db, media,  # noqa: F811
 ):
     module, _source = reader
@@ -232,7 +232,7 @@ async def test_spec_addon_122_i8_an_incomplete_reread_is_not_queued_again(
     assert search_db.flag("vid1", "frame_ocr_rule") == 2
 
 
-def test_spec_addon_122_section_8_an_incomplete_reread_logs_one_warning_and_no_first_read_line(
+def test_spec_addon_133_section_8_an_incomplete_reread_logs_one_warning_and_no_first_read_line(
     reader, search_db, media, caplog,  # noqa: F811
 ):
     module, _source = reader
@@ -248,7 +248,7 @@ def test_spec_addon_122_section_8_an_incomplete_reread_logs_one_warning_and_no_f
     assert "keeping the frames read" not in logged
 
 
-def test_spec_addon_122_i8_an_engine_raising_on_every_frame_was_asked_and_still_keeps_the_read(
+def test_spec_addon_133_i8_an_engine_raising_on_every_frame_was_asked_and_still_keeps_the_read(
     reader, search_db, media,  # noqa: F811
 ):
     module, source = reader
@@ -269,7 +269,7 @@ def test_spec_addon_122_i8_an_engine_raising_on_every_frame_was_asked_and_still_
 
 
 @pytest.mark.parametrize("outcome", ["unreachable", "no-engine"])
-async def test_spec_addon_122_i8_a_reread_that_cannot_start_changes_nothing_and_is_tried_again(
+async def test_spec_addon_133_i8_a_reread_that_cannot_start_changes_nothing_and_is_tried_again(
     reader, search_db, media, tmp_path, monkeypatch, outcome,  # noqa: F811
 ):
     module, _source = reader
@@ -292,7 +292,7 @@ async def test_spec_addon_122_i8_a_reread_that_cannot_start_changes_nothing_and_
 # ---------------------------------------------------------------------------
 
 
-def test_spec_addon_122_item_8_a_rule_two_read_is_closed_without_asking_for_the_engine(
+def test_spec_addon_133_item_8_a_rule_two_read_is_closed_without_asking_for_the_engine(
     reader, search_db, media,  # noqa: F811
 ):
     module, source = reader
@@ -313,7 +313,7 @@ def test_spec_addon_122_item_8_a_rule_two_read_is_closed_without_asking_for_the_
 
 
 @pytest.mark.parametrize("rule", [None, 2])
-def test_spec_addon_122_i7_a_rebuild_calls_no_engine_and_leaves_the_rule(
+def test_spec_addon_133_i7_a_rebuild_calls_no_engine_and_leaves_the_rule(
     reader, search_db, media, rule,  # noqa: F811
 ):
     module, source = reader

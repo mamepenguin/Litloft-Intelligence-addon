@@ -1,4 +1,4 @@
-"""SPEC-ADDON-122 I1: the frame reader's 8-bit rule for a later frame.
+"""SPEC-ADDON-133 I1: the frame reader's 8-bit rule for a later frame.
 
 The clip's one change moves the difference hash by exactly 8 bits, the
 smallest difference this reader reads. The frame scan's 16 bits, or 9, would
@@ -109,7 +109,7 @@ class BlockBoxes:
         return [side.upper() if side != "none" else None]
 
 
-def test_spec_addon_122_i1_a_picture_that_moved_by_eight_hash_bits_is_read(
+def test_spec_addon_133_i1_a_picture_that_moved_by_eight_hash_bits_is_read(
     frame_reader, search_db, monkeypatch, tmp_path,
 ):
     module, _engine = frame_reader
