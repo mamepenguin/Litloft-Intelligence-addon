@@ -39,6 +39,9 @@ class SearchPassage(BaseModel):
     keyword: bool
     highlight_terms: list[str]
     frame_url: str | None = None
+    line_box: list[float] | None = None
+    line_match: list[float] | None = None
+    line_frame_url: str | None = None
 
 
 class SearchResultItem(BaseModel):
@@ -523,6 +526,9 @@ class FileFindRow(BaseModel):
     match_start: int
     match_length: int
     boxes: list[list[float]] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+    frame_size: list[int] | None = Field(
         default=None, exclude_if=lambda value: value is None,
     )
 

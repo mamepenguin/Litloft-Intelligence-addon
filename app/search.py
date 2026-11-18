@@ -11,7 +11,7 @@ import math
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 from sqlalchemy import text as sql_text
@@ -21,6 +21,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.database import get_search_db, get_search_db_read, get_search_engine, validate_vector_table
 from app.document_sections import EPUB_MIME, load_section_titles
+from app.exact_search import _ascii_lower
+from app.extractors.base import ContentExtractor
 from app.file_kind import apply_kind_filter
 from app.models import Embedding, IndexedFile, TranscriptChunk
 from app.workers.clip import embed_text_clip
@@ -152,6 +154,11 @@ class SearchPassage:
     keyword: bool
     highlight_terms: tuple[str, ...]
     frame_url: str | None
+    # The line a keyword frame-text match falls on, the fractions of that line
+    # it covers, and the large frame the line can be cropped out of.
+    line_box: list[float] | None = None
+    line_match: list[float] | None = None
+    line_frame_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2171,11 +2178,12 @@ def _build_results(
 
     if passages:
         terms = _highlight_terms(query)
+        reader = FrameLineReader()
         results = [
             replace(
                 result,
                 passages=_build_passages(
-                    result, file_scores[result.file_id].matches, terms,
+                    result, file_scores[result.file_id].matches, terms, reader,
                 ),
             )
             for result in results
@@ -2262,6 +2270,9 @@ def _group_matches_into_segments(
 # ---------------------------------------------------------------------------
 
 _FRAME_URL = "/api/addons/intelligence/files/{file_id}/frame?t={second}"
+_FRAME_LINE_URL = (
+    "/api/addons/intelligence/files/{file_id}/frame?t={start:.3f}&size=large"
+)
 #: How much stored text precedes a keyword excerpt's first occurrence.
 _EXCERPT_LEAD = 40
 _EXCERPT_LENGTH = 200
@@ -2359,7 +2370,8 @@ def _frame_url(
 
 def _frame_segment(
     file_id: str, chunk_index: int,
-) -> tuple[float, float] | None:
+) -> tuple[float, float, list[str]] | None:
+    """A screen-text passage's segment and its chunk texts, in index order."""
     with get_search_db_read() as session:
         row = session.execute(
             sql_text(
@@ -2368,7 +2380,202 @@ def _frame_segment(
             ),
             {"f": file_id, "c": chunk_index},
         ).fetchone()
-    return (row.start_time, row.end_time) if row is not None else None
+        if row is None:
+            return None
+        chunks = [
+            chunk.chunk_text
+            for chunk in session.execute(
+                sql_text(
+                    "SELECT text AS chunk_text FROM video_frame_texts "
+                    "WHERE file_id = :f AND start_time = :s AND end_time = :e "
+                    "ORDER BY chunk_index"
+                ),
+                {"f": file_id, "s": row.start_time, "e": row.end_time},
+            ).fetchall()
+        ]
+    return (row.start_time, row.end_time, chunks)
+
+
+FrameLines = list[tuple[str, list[float]]]
+
+
+@dataclass(frozen=True)
+class FrameLineSegment:
+    """One stored ``video_frame_lines`` row, its payload already decoded."""
+
+    lines: FrameLines | None
+    width: int | None
+    height: int | None
+
+
+def _decode_frame_lines(lines_json: str) -> FrameLines | None:
+    """A stored ``lines_json`` as lines, or ``None`` when it is of another shape.
+
+    Raises ``ValueError`` when the payload is not JSON at all; a reader treats
+    that as a file it cannot read, not as a file without lines.
+    """
+    stored = json.loads(lines_json)
+    if not isinstance(stored, list):
+        return None
+    lines: FrameLines = []
+    for line in stored:
+        if not isinstance(line, dict):
+            return None
+        text, quad = line.get("text"), line.get("quad")
+        if not isinstance(text, str) or not isinstance(quad, list):
+            return None
+        lines.append((text, quad))
+    return lines
+
+
+def _frame_quad_is_usable(quad: list[Any]) -> bool:
+    """Whether ``quad`` is eight finite numbers, as a stored quad must be."""
+    return len(quad) == 8 and all(
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        for value in quad
+    )
+
+
+def _usable_frame_lines(
+    lines: FrameLines | None,
+    chunks: list[str],
+    merged: str | None = None,
+) -> FrameLines | None:
+    """The lines when they still describe the segment's chunks, else ``None``.
+
+    ``merged`` is find's extra condition: the text find merges from the same
+    chunks must be the lines' joined text for its offsets to be the segment's.
+    """
+    if not lines:
+        return None
+    joined = "\n".join(text for text, _quad in lines)
+    if ContentExtractor.chunk_text(joined) != list(chunks):
+        return None
+    if merged is not None and merged != joined:
+        return None
+    if any(not _frame_quad_is_usable(quad) for _text, quad in lines):
+        return None
+    return lines
+
+
+class FrameLineReader:
+    """A request's stored frame lines, read once per file it is asked about.
+
+    A file whose rows cannot be read gets no lines for the rest of the request,
+    and one warning naming it.
+    """
+
+    def __init__(self) -> None:
+        self._files: dict[
+            str, dict[tuple[float, float], FrameLineSegment] | None
+        ] = {}
+
+    def segments(
+        self, file_id: str,
+    ) -> dict[tuple[float, float], FrameLineSegment] | None:
+        if file_id not in self._files:
+            self._files[file_id] = self._read(file_id)
+        return self._files[file_id]
+
+    def _read(
+        self, file_id: str,
+    ) -> dict[tuple[float, float], FrameLineSegment] | None:
+        try:
+            with get_search_db_read() as session:
+                rows = session.execute(
+                    sql_text(
+                        "SELECT start_time, end_time, lines_json, "
+                        "frame_width, frame_height FROM video_frame_lines "
+                        "WHERE file_id = :f"
+                    ),
+                    {"f": file_id},
+                ).fetchall()
+            return {
+                (row.start_time, row.end_time): FrameLineSegment(
+                    lines=_decode_frame_lines(row.lines_json),
+                    width=row.frame_width,
+                    height=row.frame_height,
+                )
+                for row in rows
+            }
+        except Exception as exc:
+            logger.warning(
+                "Frame line boxes unavailable for %s: %s",
+                file_id, type(exc).__name__,
+            )
+            return None
+
+
+def _first_occurrence(text: str, terms: tuple[str, ...]) -> tuple[int, int] | None:
+    """The first of ``terms`` in ``text``: earliest start, then longest."""
+    folded = _ascii_lower(text)
+    best: tuple[int, int] | None = None
+    for term in terms:
+        needle = _ascii_lower(term)
+        if not needle:
+            continue
+        at = folded.find(needle)
+        if at < 0:
+            continue
+        if (
+            best is None
+            or at < best[0]
+            or (at == best[0] and at + len(needle) > best[1])
+        ):
+            best = (at, at + len(needle))
+    return best
+
+
+def _hit_line(
+    lines: FrameLines, occurrence: tuple[int, int],
+) -> tuple[list[float], list[float]] | None:
+    """The first line the occurrence overlaps, and the fractions it covers."""
+    at, stop_at = occurrence
+    start = 0
+    for text, quad in lines:
+        end = start + len(text)
+        if text and start < stop_at and at < end:
+            return (
+                quad,
+                [
+                    round((max(at, start) - start) / len(text), 4),
+                    round((min(stop_at, end) - start) / len(text), 4),
+                ],
+            )
+        start = end + 1
+    return None
+
+
+def _passage_line(
+    reader: FrameLineReader,
+    file_id: str,
+    start: float,
+    end: float,
+    chunks: list[str],
+    terms: tuple[str, ...],
+) -> tuple[list[float], list[float], str] | None:
+    """A keyword passage's line box, covered fractions and large frame URL."""
+    segments = reader.segments(file_id)
+    if segments is None:
+        return None
+    stored = segments.get((start, end))
+    if stored is None:
+        return None
+    lines = _usable_frame_lines(stored.lines, chunks)
+    if lines is None:
+        return None
+    occurrence = _first_occurrence(
+        "\n".join(text for text, _quad in lines), terms,
+    )
+    if occurrence is None:
+        return None
+    hit = _hit_line(lines, occurrence)
+    if hit is None:
+        return None
+    quad, match = hit
+    return (quad, match, _FRAME_LINE_URL.format(file_id=file_id, start=start))
 
 
 def _finish_passage(
@@ -2377,6 +2584,7 @@ def _finish_passage(
     result: SearchResult,
     section_titles: dict[int, str],
     terms: tuple[str, ...],
+    reader: FrameLineReader,
 ) -> SearchPassage | None:
     vector_matches = [m for m in matches if m.channel == "vector"]
     keyword_matches = [m for m in matches if m.channel == "keyword"]
@@ -2384,6 +2592,7 @@ def _finish_passage(
     best_keyword = max(keyword_matches, key=lambda m: m.score, default=None)
 
     start = end = page = section = section_title = chunk_index = None
+    chunks: list[str] = []
     if kind in ("utterance", "scene"):
         start = matches[0].timestamp_start
         end = matches[0].timestamp_end
@@ -2403,7 +2612,7 @@ def _finish_passage(
         )
         if segment is None:
             return None
-        start, end = segment
+        start, end, chunks = segment
     elif kind in ("picture_text", "text"):
         chunk_index = matches[0].chunk_index
 
@@ -2433,6 +2642,20 @@ def _finish_passage(
         alpha * best_vector_score + (1.0 - alpha) * best_keyword_score, 4,
     )
 
+    line_box: list[float] | None = None
+    line_match: list[float] | None = None
+    line_frame_url: str | None = None
+    if (
+        kind == "screen_text"
+        and keyword_matches
+        and result.mime_type != LOFT_MIME
+        and start is not None
+        and end is not None
+    ):
+        hit = _passage_line(reader, result.file_id, start, end, chunks, terms)
+        if hit is not None:
+            line_box, line_match, line_frame_url = hit
+
     return SearchPassage(
         kind=kind,  # type: ignore[arg-type]
         start=start,
@@ -2446,6 +2669,9 @@ def _finish_passage(
         keyword=bool(keyword_matches),
         highlight_terms=terms if keyword_matches else (),
         frame_url=_frame_url(result, kind, start),
+        line_box=line_box,
+        line_match=line_match,
+        line_frame_url=line_frame_url,
     )
 
 
@@ -2464,6 +2690,7 @@ def _build_passages(
     result: SearchResult,
     matches: list[MatchInfo],
     terms: tuple[str, ...],
+    reader: FrameLineReader,
 ) -> tuple[SearchPassage, ...]:
     """One passage per distinct (kind, place) among ``matches``, by score."""
     section_titles = dict(result.section_titles)
@@ -2478,7 +2705,7 @@ def _build_passages(
     passages = [
         passage
         for passage in (
-            _finish_passage(kind, group, result, section_titles, terms)
+            _finish_passage(kind, group, result, section_titles, terms, reader)
             for (kind, _place), group in grouped.items()
         )
         if passage is not None

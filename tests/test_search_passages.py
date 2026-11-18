@@ -39,6 +39,7 @@ MATCH_FIELDS = {"type", "text", "score", "page", "section", "section_title"}
 PASSAGE_FIELDS = {
     "kind", "start", "end", "page", "section", "section_title", "chunk_index",
     "text", "score", "keyword", "highlight_terms", "frame_url",
+    "line_box", "line_match", "line_frame_url",
 }
 
 
