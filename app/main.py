@@ -45,6 +45,7 @@ from app.routers import (
 )
 from app.schemas import FeaturesStatus, LLMStatus, StatusResponse
 from app.workers.auto_tags import AutoTagsWorker
+from app.workers.change_frames import move_change_frames
 from app.workers.chapter_suggestions import ChapterSuggestionsWorker
 from app.workers.pickup import PickupWorker
 from app.workers.retrieval_keywords import RetrievalKeywordsWorker
@@ -127,6 +128,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     cleaned = await asyncio.to_thread(cleanup_orphaned_embeddings)
     if cleaned > 0:
         logger.info("Cleaned up %d orphaned embeddings from previous run", cleaned)
+
+    change_frame_move_task = asyncio.create_task(
+        asyncio.to_thread(move_change_frames), name="change_frame_move",
+    )
 
     try:
         await asyncio.to_thread(repair_unkeyed_vec_rows)
@@ -465,6 +470,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await retrieval_keywords_task
         except asyncio.CancelledError:
             pass
+    change_frame_move_task.cancel()
+    try:
+        await change_frame_move_task
+    except asyncio.CancelledError:
+        pass
     if dependencies._index_manager is not None:
         await dependencies._index_manager.stop()
     watchdog.stop()

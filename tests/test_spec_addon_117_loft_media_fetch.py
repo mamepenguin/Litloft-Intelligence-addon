@@ -35,7 +35,6 @@ from tests.youtube_frame_doubles import (  # noqa: F401 - fixtures
     everything_logged,
     log_everything,
     needs_ffmpeg,
-    webp_size,
     youtube,
 )
 
@@ -115,23 +114,24 @@ def _advance_while_growing(world, clock, seconds: float) -> threading.Thread:
 def test_spec_addon_117_a_youtube_loft_is_scanned_from_its_download_as_a_native_video_is(
     world, gradient,
 ):
-    """I4: the same change frames, scan row and flag as a native scan of that video."""
+    """I4: the same scan row and flag as a native scan, with no change frames."""
     world.serve(gradient, duration=VIDEO_SECONDS)
     world.add_loft("ytloft000001")
 
     fetch("ytloft000001")
 
     assert world.source("ytloft000001") == "youtube"
-    assert world.change_seconds("ytloft000001") == [float(s) for s in CHANGE_SECONDS]
+    assert world.change_seconds("ytloft000001") == []
     assert world.scan_rows("ytloft000001") == 1
     assert world.flags("ytloft000001")[0] is True
     assert world.failures("ytloft000001") == 0
     assert world.fetch_dir_files() == []
 
 
-def test_spec_addon_117_i11_the_scan_of_a_loft_keeps_a_320px_picture_of_each_change_frame(
-    world, gradient, tmp_path,
+def test_spec_addon_117_i11_the_scan_of_a_loft_writes_no_frame_cache_entry(
+    world, gradient,
 ):
+    """SPEC-ADDON-145 item 1, revised SPEC-ADDON-117 I11: the scan writes no picture."""
     world.serve(gradient, duration=VIDEO_SECONDS)
     world.add_loft("ytloft000001")
     kept = frame_cache_path("ytloft000001", 10.0)
@@ -142,13 +142,11 @@ def test_spec_addon_117_i11_the_scan_of_a_loft_keeps_a_320px_picture_of_each_cha
 
     assert kept.read_bytes() == b"KEPT"
     for second in (0, 20, 30):
-        picture = frame_cache_path("ytloft000001", float(second))
-        assert picture.exists(), f"no small picture at {second}s"
-        assert webp_size(picture.read_bytes(), tmp_path)[0] == 320
+        assert not frame_cache_path("ytloft000001", float(second)).exists()
 
 
 def test_spec_addon_117_i11_a_native_scan_keeps_no_small_pictures(world, gradient):
-    """Item 7 / I11: only the scan of a ``.loft`` writes them."""
+    """SPEC-ADDON-145 item 1, revised SPEC-ADDON-117 I11: no scan writes them."""
     from app.workers import frame_scan
 
     world.serve(gradient, duration=VIDEO_SECONDS)
@@ -158,10 +156,13 @@ def test_spec_addon_117_i11_a_native_scan_keeps_no_small_pictures(world, gradien
     fetch("ytloft000001")
     frame_scan.index_frame_scan("native000001")
 
-    assert frame_cache_path("ytloft000001", 10.0).exists()
-    assert world.change_seconds("native000001") == [float(s) for s in CHANGE_SECONDS]
+    assert not frame_cache_path("ytloft000001", 10.0).exists()
+    assert world.change_seconds("native000001") == []
+    assert world.change_seconds("ytloft000001") == []
     assert not any(
-        frame_cache_path("native000001", float(s)).exists() for s in CHANGE_SECONDS
+        frame_cache_path(file_id, float(s)).exists()
+        for file_id in ("native000001", "ytloft000001")
+        for s in CHANGE_SECONDS
     )
 
 
@@ -195,7 +196,7 @@ def test_spec_addon_117_one_fetch_runs_the_scan_and_then_the_ocr_read(world, gra
     fetch("ytloft000001")
 
     assert world.flags("ytloft000001") == (True, True, True)
-    assert world.change_seconds("ytloft000001") == [float(s) for s in CHANGE_SECONDS]
+    assert world.change_seconds("ytloft000001") == []
     assert world.frame_texts("ytloft000001") != []
     assert world.lookups() == 1
     assert len({r["path"] for r in world.downloads()}) == 1
@@ -770,7 +771,7 @@ def test_spec_addon_117_i2_a_leftover_of_the_same_file_id_is_removed_before_the_
 
     assert world.youtube.reused_outputs() == []
     assert world.downloads() != []
-    assert world.change_seconds("ytloft000001") == [float(s) for s in CHANGE_SECONDS]
+    assert world.change_seconds("ytloft000001") == []
     assert world.failures("ytloft000001") == 0
     assert world.flags("ytloft000001")[0] is True
     assert world.fetch_dir_files() == []

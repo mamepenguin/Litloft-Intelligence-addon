@@ -8,6 +8,7 @@ For videos, uses hybrid frame extraction: scene detection + minimum interval.
 import asyncio
 import io
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -450,9 +451,10 @@ def _extract_frame_paths(
 ) -> list[tuple[float, Path]]:
     """Extract key frames from a video to disk using hybrid scene detection.
 
-    Uses ffmpeg scene detection with minimum interval guarantee.
-    Frames are saved as JPEG files in output_dir. The caller is
-    responsible for managing the lifetime of output_dir.
+    Uses ffmpeg scene detection with a fill that leaves no gap longer than
+    ``min_interval``, and thins the time-ordered list evenly when it exceeds
+    ``max_frames``. Frames are saved as JPEG files in output_dir. The caller
+    is responsible for managing the lifetime of output_dir.
 
     Args:
         video_path: Path to the video file.
@@ -464,14 +466,12 @@ def _extract_frame_paths(
     """
     frame_config = settings.indexing.frame_extraction
 
-    # Step 1: Scene detection frames
     scene_frames = _extract_scene_frames(
         video_path, output_dir, frame_config.scene_threshold
     )
 
-    # Step 2: Fill gaps with interval-based frames
     if duration is not None and duration > 0:
-        all_frames = _fill_interval_gaps(
+        return _fill_interval_gaps(
             video_path,
             output_dir,
             scene_frames,
@@ -479,11 +479,7 @@ def _extract_frame_paths(
             frame_config.min_interval,
             frame_config.max_frames,
         )
-    else:
-        all_frames = scene_frames
-
-    # Limit total frames
-    return all_frames[: frame_config.max_frames]
+    return _thin_frames(scene_frames, frame_config.max_frames)
 
 
 def _extract_scene_frames(
@@ -548,6 +544,27 @@ def _extract_scene_frames(
         return []
 
 
+def _thin_frames(
+    frames: list[tuple[float, Path]], max_frames: int
+) -> list[tuple[float, Path]]:
+    """Keep at most ``max_frames`` of a time-ordered list, evenly over all of it."""
+    if len(frames) <= max_frames:
+        return frames
+    count = len(frames)
+    return [frames[(i * count) // max_frames] for i in range(max_frames)]
+
+
+def _gap_fill_times(start: float, end: float, min_interval: int) -> list[float]:
+    """Times that split a gap into pieces no longer than ``min_interval``."""
+    gap = end - start
+    if gap <= min_interval:
+        return []
+    count = math.ceil(gap / min_interval) - 1
+    if count <= 0:
+        return []
+    return [start + k * gap / (count + 1) for k in range(1, count + 1)]
+
+
 def _fill_interval_gaps(
     video_path: str,
     output_dir: Path,
@@ -556,7 +573,11 @@ def _fill_interval_gaps(
     min_interval: int,
     max_frames: int,
 ) -> list[tuple[float, Path]]:
-    """Fill gaps between scene frames with interval-based frames.
+    """Fill gaps between scene frames, thin the times, then extract the fill.
+
+    Anchor 0 s is a fill time unless a scene frame lies below 1 s, which then
+    takes its place. Thinning happens on the whole time-ordered list before any
+    fill frame is extracted, so at most ``max_frames`` extractions run.
 
     Args:
         video_path: Path to the video.
@@ -569,37 +590,36 @@ def _fill_interval_gaps(
     Returns:
         Combined and sorted list of (timestamp, frame_path) tuples.
     """
-    existing_times = {t for t, _ in existing_frames}
+    ordered = sorted(existing_frames, key=lambda frame: frame[0])
+    if ordered and ordered[0][0] < 1.0:
+        anchors = [(timestamp, path) for timestamp, path in ordered]
+    else:
+        anchors = [(0.0, None), *[(timestamp, path) for timestamp, path in ordered]]
 
-    # Generate interval timestamps that aren't covered by scene detection
-    needed_times: list[float] = []
-    current_time = 0.0
-
-    while current_time < duration:
-        # Check if any existing frame is within min_interval of this time
-        is_covered = any(
-            abs(current_time - et) < min_interval for et in existing_times
+    times: list[tuple[float, Path | None]] = list(anchors)
+    for (earlier, _), (later, _) in zip(anchors, anchors[1:]):
+        times.extend(
+            (timestamp, None)
+            for timestamp in _gap_fill_times(earlier, later, min_interval)
         )
-        if not is_covered:
-            needed_times = [*needed_times, current_time]
-        current_time += min_interval
+    times.extend(
+        (timestamp, None)
+        for timestamp in _gap_fill_times(anchors[-1][0], duration, min_interval)
+    )
 
-    if not needed_times:
-        return existing_frames
+    if len(times) > max_frames:
+        count = len(times)
+        times = [times[(i * count) // max_frames] for i in range(max_frames)]
 
-    # Extract interval frames
-    interval_frames: list[tuple[float, Path]] = []
-
-    for idx, timestamp in enumerate(needed_times):
-        if len(existing_frames) + len(interval_frames) >= max_frames:
-            break
-
-        frame_path = output_dir / f"interval_{idx:04d}.jpg"
-        if extract_frame(video_path, timestamp, frame_path):
-            interval_frames = [*interval_frames, (timestamp, frame_path)]
-
-    combined = [*existing_frames, *interval_frames]
-    return sorted(combined, key=lambda x: x[0])
+    kept: list[tuple[float, Path]] = []
+    for index, (timestamp, frame_path) in enumerate(times):
+        if frame_path is not None:
+            kept.append((timestamp, frame_path))
+            continue
+        extracted = output_dir / f"interval_{index:04d}.jpg"
+        if extract_frame(video_path, timestamp, extracted):
+            kept.append((timestamp, extracted))
+    return sorted(kept, key=lambda frame: frame[0])
 
 
 async def index_clip(file_id: str) -> bool:

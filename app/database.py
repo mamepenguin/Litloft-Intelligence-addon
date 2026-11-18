@@ -494,18 +494,12 @@ def _migrate_vec_clip_if_needed(conn: object) -> None:
 def _migrate_vec_clip_change_if_needed(conn: object) -> None:
     """Drop and recreate vec_clip_change if its dimension differs from config.
 
-    Compared on its own, independently of ``vec_clip``: the change table is
-    written by the frame scan, which can run under a different CLIP model than
-    the one the scene rows were made with, and sqlite-vec cannot hold two
-    dimensions in one virtual table.
-
-    The scan rows stay; the change frames do not survive the rebuild, so every
-    native video's flag goes back to false and it is scanned again.
+    The table stays empty because nothing writes a change frame any more. Its
+    rows are deleted with the rebuild, and no file's flags move: the scan row
+    and the scene candidates are what the file keeps.
     """
     import logging
     import re
-
-    from app.workers.clip import VIDEO_TYPES
 
     logger = logging.getLogger(__name__)
 
@@ -526,42 +520,14 @@ def _migrate_vec_clip_change_if_needed(conn: object) -> None:
         return
 
     logger.warning(
-        "CLIP dimension changed (%d → %d). Dropping vec_clip_change, "
-        "deleting its change frames and rescanning every video.",
+        "CLIP dimension changed (%d → %d). Dropping vec_clip_change and "
+        "deleting its change frames.",
         current_dim, expected_dim,
     )
     conn.execute(
         text("DELETE FROM embeddings WHERE embedding_type = 'clip_change'")
     )
     conn.execute(text("DROP TABLE vec_clip_change"))
-
-    mimes = sorted(VIDEO_TYPES)
-    placeholders = ", ".join(f":mime{i}" for i in range(len(mimes)))
-    parameters = {f"mime{i}": mime for i, mime in enumerate(mimes)}
-    # A YouTube `.loft` is scanned like a native video; a `.loft` of another
-    # source has no scan to reopen.
-    columns = {
-        row[1]
-        for row in conn.execute(
-            text("PRAGMA table_info(indexed_files)")
-        ).fetchall()
-    }
-    loft_clause = (
-        f" OR (mime_type = :loft_mime AND loft_source = 'youtube')"
-        if "loft_source" in columns
-        else ""
-    )
-    if loft_clause:
-        from app.workers.whisper import LOFT_MIME
-
-        parameters["loft_mime"] = LOFT_MIME
-    conn.execute(
-        text(
-            "UPDATE indexed_files SET frame_scan_indexed = 0 "
-            f"WHERE mime_type IN ({placeholders}){loft_clause}"
-        ),
-        parameters,
-    )
     conn.commit()
 
 

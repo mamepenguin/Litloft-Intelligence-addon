@@ -557,7 +557,7 @@ indexing:
     # Scene detection threshold (0.0-1.0, higher = fewer frames)
     scene_threshold: 0.3
     # Minimum interval between frames (seconds)
-    min_interval: 30
+    min_interval: 10
     # Maximum frames per video
     max_frames: 500
 
