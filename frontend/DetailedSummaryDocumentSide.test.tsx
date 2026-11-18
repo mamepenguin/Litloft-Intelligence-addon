@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { NextIntlClientProvider } from "next-intl";
 
 const routerPush = vi.hoisted(() => vi.fn());
@@ -13,11 +21,13 @@ vi.mock("@/hooks/useWebSocket", () => ({
   useWebSocket: () => null,
 }));
 
+type ActiveSummaryState = {
+  data: { has_active_summary: boolean; summary_note?: unknown } | null;
+  loading: boolean;
+};
+
 const mockActiveSummary = vi.hoisted(() => ({
-  current: { data: null, loading: false } as {
-    data: { has_active_summary: boolean; summary_note?: unknown } | null;
-    loading: boolean;
-  },
+  current: { data: null, loading: false } as ActiveSummaryState,
 }));
 vi.mock("@/hooks/useActiveSummary", () => ({
   useActiveSummary: () => mockActiveSummary.current,
@@ -224,6 +234,111 @@ describe("SPEC-ADDON-135 starting a detailed summary selects its tab", () => {
       (_call, index) => onAvailability.mock.invocationCallOrder[index] < selectedAt,
     );
     expect(reportsBefore.at(-1)).toEqual([true]);
+  });
+});
+
+describe("SPEC-ADDON-135 the AI menu starts generation beside a summary note", () => {
+  it("generates and selects when a summary note is active and nothing was generated yet", async () => {
+    mockActiveSummary.current = {
+      data: { has_active_summary: true, summary_note: { file_id: "n1" } },
+      loading: false,
+    };
+    vi.mocked(getDetailedSummary).mockResolvedValue({
+      available: false,
+      reason: "not_generated",
+    } as never);
+    vi.mocked(regenerateDetailedSummary).mockReturnValue(
+      new Promise(() => {}) as never,
+    );
+    const select = vi.fn();
+
+    render(
+      <NextIntlClientProvider locale="ja" messages={{}}>
+        <Section
+          fileId="f1"
+          drive="drive1"
+          fillHeight
+          labelledByHost
+          active={false}
+          onAvailability={vi.fn()}
+          select={select}
+        />
+        <FileAIActionsButton fileId="f1" />
+      </NextIntlClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "AI" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Create detailed summary/ }));
+
+    await waitFor(() => expect(regenerateDetailedSummary).toHaveBeenCalledTimes(1));
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/The summary will be created again/)).toBeNull();
+  });
+});
+
+describe("SPEC-ADDON-135 regenerating inside the tab leaves the selection alone", () => {
+  it.each<[string, ActiveSummaryState]>([
+    ["no summary note", { data: null, loading: false }],
+    [
+      "a summary note",
+      {
+        data: { has_active_summary: true, summary_note: { file_id: "n1" } },
+        loading: false,
+      },
+    ],
+  ])("retries a failed run without selecting its tab (%s)", async (_name, note) => {
+    mockActiveSummary.current = note;
+    vi.mocked(getDetailedSummary).mockResolvedValue({
+      available: false,
+      status: "failed",
+      error: "boom",
+    } as never);
+    vi.mocked(regenerateDetailedSummary).mockReturnValue(
+      new Promise(() => {}) as never,
+    );
+    const select = vi.fn();
+
+    render(tab({ select, active: false }));
+    fireEvent.click(await screen.findByRole("button", { name: /Retry/ }));
+
+    await waitFor(() => expect(regenerateDetailedSummary).toHaveBeenCalledTimes(1));
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("regenerates from the body without selecting its tab", async () => {
+    vi.mocked(getDetailedSummary).mockResolvedValue(generated as never);
+    vi.mocked(regenerateDetailedSummary).mockReturnValue(
+      new Promise(() => {}) as never,
+    );
+    const select = vi.fn();
+
+    render(tab({ select }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Create again$/ }));
+
+    await waitFor(() => expect(regenerateDetailedSummary).toHaveBeenCalledTimes(1));
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("confirms a regenerate over a summary note without selecting its tab", async () => {
+    mockActiveSummary.current = {
+      data: { has_active_summary: true, summary_note: { file_id: "n1" } },
+      loading: false,
+    };
+    vi.mocked(getDetailedSummary).mockResolvedValue(generated as never);
+    vi.mocked(regenerateDetailedSummary).mockReturnValue(
+      new Promise(() => {}) as never,
+    );
+    const select = vi.fn();
+
+    render(tab({ select }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Create again$/ }));
+    const message = await screen.findByText(/The summary will be created again/);
+    const dialog = message.closest("[aria-modal='true']")!;
+    fireEvent.click(
+      within(dialog as HTMLElement).getByRole("button", { name: /^Create again$/ }),
+    );
+
+    await waitFor(() => expect(regenerateDetailedSummary).toHaveBeenCalledTimes(1));
+    expect(select).not.toHaveBeenCalled();
   });
 });
 

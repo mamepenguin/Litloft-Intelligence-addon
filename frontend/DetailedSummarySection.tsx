@@ -297,59 +297,73 @@ export default function DetailedSummarySection({
     canGenerate,
   );
 
-  const doRegenerate = useCallback(async (force: boolean, profile?: string) => {
-    setWorking(true);
-    setCollapsed(false);
-    setProfileRejected(false);
-    // A run started from the AI menu has no tab yet: mark it generating and
-    // bring it into view before the first poll comes back. A body or a failure
-    // already draws itself, so those stay as they are.
-    setData((prev) =>
-      prev?.available || prev?.status
-        ? prev
-        : { ...(prev ?? { available: false }), status: "generating" },
-    );
-    onAvailabilityRef.current?.(true);
-    selectRef.current?.();
-    try {
-      // Single endpoint for every regenerate case (edited / un-edited /
-      // first-time generation). The backend superseded-not-deleted
-      // history changes mean the prior DELETE+POST fallback would
-      // have dropped the history we now want to keep.
-      await regenerateDetailedSummary(
-        fileId,
-        drive,
-        profile === undefined ? { force } : { force, profile },
-      );
-      await pollUntilDone();
-    } catch (err) {
-      if (isProfileUnavailable(err)) {
-        setProfileRejected(true);
-        refetchChoices();
+  const doRegenerate = useCallback(
+    async (force: boolean, profile?: string, announce = false) => {
+      setWorking(true);
+      setCollapsed(false);
+      setProfileRejected(false);
+      if (announce) {
+        // A run started from the AI menu has no tab yet: mark it generating
+        // and bring it into view before the first poll comes back. A run
+        // started inside the tab already draws itself and must not move the
+        // reader off the tab they are looking at.
+        setData((prev) =>
+          prev?.available || prev?.status
+            ? prev
+            : { ...(prev ?? { available: false }), status: "generating" },
+        );
+        onAvailabilityRef.current?.(true);
+        selectRef.current?.();
       }
-      await fetchData();
-    } finally {
-      setWorking(false);
-    }
-  }, [fileId, drive, pollUntilDone, fetchData, refetchChoices]);
+      try {
+        // Single endpoint for every regenerate case (edited / un-edited /
+        // first-time generation). The backend superseded-not-deleted
+        // history changes mean the prior DELETE+POST fallback would
+        // have dropped the history we now want to keep.
+        await regenerateDetailedSummary(
+          fileId,
+          drive,
+          profile === undefined ? { force } : { force, profile },
+        );
+        await pollUntilDone();
+      } catch (err) {
+        if (isProfileUnavailable(err)) {
+          setProfileRejected(true);
+          refetchChoices();
+        }
+        await fetchData();
+      } finally {
+        setWorking(false);
+      }
+    },
+    [fileId, drive, pollUntilDone, fetchData, refetchChoices],
+  );
 
-  const startGenerate = useCallback((profile: string | undefined) => {
-    // Entering regenerate from the edited state surfaces a confirm
-    // dialog first; once accepted the confirm handler calls
-    // doRegenerate(true). Also confirm when a knowledge note is
-    // currently the active summary — regenerating flips the file
-    // detail page back to the AI view, which the user deserves to
-    // opt into. Untouched summaries with no active note skip the
-    // dialog.
-    if (data?.edited_at || hasActiveSummary) {
-      setPendingProfile(profile);
-      setConfirmRegenerateOpen(true);
-      return;
-    }
-    void doRegenerate(false, profile);
-  }, [data?.edited_at, hasActiveSummary, doRegenerate]);
+  const startGenerate = useCallback(
+    (profile: string | undefined, announce = false) => {
+      // The confirmation is drawn inside the body, which only exists once a
+      // summary has been generated. With nothing generated there is no AI
+      // version for the reader to replace and no edits to lose, and the
+      // plain generate item in the AI menu is already the consent.
+      if (data?.available && (data.edited_at || hasActiveSummary)) {
+        setPendingProfile(profile);
+        setConfirmRegenerateOpen(true);
+        return;
+      }
+      void doRegenerate(false, profile, announce);
+    },
+    [data?.available, data?.edited_at, hasActiveSummary, doRegenerate],
+  );
 
-  const handleGenerate = useCallback(() => startGenerate(undefined), [startGenerate]);
+  const handleGenerate = useCallback(
+    () => startGenerate(undefined, true),
+    [startGenerate],
+  );
+
+  const handleRegenerate = useCallback(
+    () => startGenerate(undefined),
+    [startGenerate],
+  );
 
   const handleConfirmRegenerate = useCallback(() => {
     setConfirmRegenerateOpen(false);
@@ -551,7 +565,7 @@ export default function DetailedSummarySection({
         )}
         <div className="mt-2 flex items-center">
           <button
-            onClick={handleGenerate}
+            onClick={handleRegenerate}
             disabled={working}
             className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
           >
@@ -615,7 +629,7 @@ export default function DetailedSummarySection({
         onOpenRevert={() => setConfirmRevertOpen(true)}
         onCloseRevert={() => setConfirmRevertOpen(false)}
         onConfirmRevert={handleRevert}
-        onGenerate={handleGenerate}
+        onGenerate={handleRegenerate}
         offeredChoices={offeredChoices}
         onGenerateWith={startGenerate}
         profileRejected={profileRejected}
