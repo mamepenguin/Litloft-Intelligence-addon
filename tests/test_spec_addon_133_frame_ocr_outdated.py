@@ -189,20 +189,21 @@ async def test_spec_addon_133_i7_an_outdated_native_video_is_queued_at_minus_ten
     assert _rule_flags(db, "old") == (True, True, None)
 
 
-async def test_spec_addon_133_i7_a_rule_two_read_a_loft_and_an_inactive_video_are_not_outdated(
+async def test_spec_addon_133_i7_a_current_rule_read_a_loft_and_an_inactive_video_are_not_outdated(
     db, tmp_path, monkeypatch,
 ):
     patch_features(monkeypatch, video_frame_ocr="on_index")
     _video(db, tmp_path, "old")
-    _video(db, tmp_path, "new", frame_ocr_rule=2)
+    _video(db, tmp_path, "new", frame_ocr_rule=3)
     _video(db, tmp_path, "below", frame_ocr_rule=1)
+    _video(db, tmp_path, "two", frame_ocr_rule=2)
     _video(db, tmp_path, "gone", active=False)
     _loft(db, tmp_path, "yt1")
     manager = _manager()
 
     await manager._resume_incomplete()
 
-    assert await _queued(manager) == [("below", -10), ("old", -10)]
+    assert await _queued(manager) == [("below", -10), ("old", -10), ("two", -10)]
 
 
 @pytest.mark.parametrize("mode", ["manual", "false"])
@@ -256,13 +257,13 @@ def test_spec_addon_133_i7_status_moves_an_outdated_read_from_indexed_to_pending
     assert status.indexed["frame_ocr"] - baseline.indexed["frame_ocr"] == 1
 
 
-def test_spec_addon_133_i7_status_counts_a_rule_two_read_as_indexed(
+def test_spec_addon_133_i7_status_counts_a_current_rule_read_as_indexed(
     db, tmp_path, monkeypatch,
 ):
     patch_features(monkeypatch, video_frame_ocr="on_index")
     _video(db, tmp_path, "old")
     baseline = _status(monkeypatch)
-    _video(db, tmp_path, "new", frame_ocr_rule=2)
+    _video(db, tmp_path, "new", frame_ocr_rule=3)
 
     status = _status(monkeypatch)
 
@@ -304,11 +305,11 @@ async def test_spec_addon_133_i7_index_details_show_an_outdated_read_as_not_done
     assert await _details_frame_ocr("old") is True
 
 
-async def test_spec_addon_133_i7_index_details_show_a_rule_two_read_as_done(
+async def test_spec_addon_133_i7_index_details_show_a_current_rule_read_as_done(
     db, tmp_path, monkeypatch,
 ):
     patch_features(monkeypatch, video_frame_ocr="on_index")
-    _video(db, tmp_path, "new", frame_ocr_rule=2)
+    _video(db, tmp_path, "new", frame_ocr_rule=3)
 
     assert await _details_frame_ocr("new") is True
 
@@ -325,11 +326,11 @@ async def test_spec_addon_133_i7_prioritize_queues_an_outdated_read_at_100(
     assert _rule_flags(db, "old") == (True, True, None)
 
 
-async def test_spec_addon_133_i7_prioritize_leaves_a_rule_two_read_and_a_manual_old_read_alone(
+async def test_spec_addon_133_i7_prioritize_leaves_a_current_rule_read_and_a_manual_old_read_alone(
     db, tmp_path, monkeypatch,
 ):
     patch_features(monkeypatch, video_frame_ocr="on_index")
-    _video(db, tmp_path, "new", frame_ocr_rule=2)
+    _video(db, tmp_path, "new", frame_ocr_rule=3)
     manager = _manager()
     await manager.prioritize("new")
     assert await _queued(manager) == []
@@ -366,7 +367,7 @@ async def test_spec_addon_133_item_9_a_reindex_with_no_queued_task_resets_r_and_
 ):
     patch_features(monkeypatch, video_frame_ocr="on_index")
     _video(db, tmp_path, "old")
-    _video(db, tmp_path, "new", frame_ocr_rule=2)
+    _video(db, tmp_path, "new", frame_ocr_rule=3)
     manager = _manager()
 
     for file_id in ("old", "new"):
@@ -375,5 +376,5 @@ async def test_spec_addon_133_item_9_a_reindex_with_no_queued_task_resets_r_and_
         assert "frame_ocr" in payload["tasks_reset"]
 
     assert _rule_flags(db, "old") == (False, False, None)
-    assert _rule_flags(db, "new") == (False, False, 2)
+    assert _rule_flags(db, "new") == (False, False, 3)
     assert await _queued(manager) == [("new", 100), ("old", 100)]

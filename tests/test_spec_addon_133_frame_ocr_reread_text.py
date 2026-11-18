@@ -1,4 +1,4 @@
-"""SPEC-ADDON-133 with an engine that answers: a stored read writes rule 2, a
+"""SPEC-ADDON-133 with an engine that answers: a stored read writes the current rule, a
 completed re-read replaces the earlier read through the store-then-build path,
 and an incomplete or failed one leaves it.
 
@@ -101,18 +101,18 @@ def _searchable(db) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Item 1 step 6, §3, I6 - a stored read writes rule 2
+# Item 1 step 6, §3, I6 - a stored read writes the current rule
 # ---------------------------------------------------------------------------
 
 
-def test_spec_addon_133_i6_a_first_read_is_stored_under_rule_two(db, reader, scene):
+def test_spec_addon_133_i6_a_first_read_is_stored_under_the_current_rule(db, reader, scene):
     path, _fake = scene
     _seed(db, path, earlier=False)
 
     assert reader.index_frame_ocr("vid1") is True
 
     assert frame_texts(db) == NEW
-    assert _state(db) == (True, True, 2)
+    assert _state(db) == (True, True, 3)
 
 
 def test_spec_addon_133_section_3_a_completed_reread_replaces_the_earlier_read(db, reader, scene):
@@ -123,7 +123,7 @@ def test_spec_addon_133_section_3_a_completed_reread_replaces_the_earlier_read(d
 
     assert fake.detects() == [0, 1, 2]
     assert frame_texts(db) == NEW
-    assert _state(db) == (True, True, 2)
+    assert _state(db) == (True, True, 3)
     searchable = _searchable(db)
     assert searchable
     assert not any(line in text for text in searchable for line in EARLIER)
@@ -143,7 +143,7 @@ def test_spec_addon_133_i6_the_store_sets_indexed_false_and_the_build_sets_it_tr
     reader.index_frame_ocr("vid1")
 
     assert frame_texts(db) == NEW
-    assert _state(db) == (True, False, 2)
+    assert _state(db) == (True, False, 3)
     assert db.ocr_embeddings("vid1") == []
     assert db.ocr_fts("vid1") == []
 
@@ -154,7 +154,7 @@ def test_spec_addon_133_i6_the_store_sets_indexed_false_and_the_build_sets_it_tr
     reader.index_frame_ocr("vid1")
 
     assert len(fake.detects()) == detects
-    assert _state(db) == (True, True, 2)
+    assert _state(db) == (True, True, 3)
     assert db.ocr_embeddings("vid1") != []
     assert any("A#0" in text for text in _searchable(db))
 
@@ -221,7 +221,7 @@ def test_spec_addon_133_i8_a_running_reread_leaves_the_earlier_read_searchable(d
     assert during == before
     assert rule_during is None
     assert frame_texts(db) == NEW
-    assert _state(db) == (True, True, 2)
+    assert _state(db) == (True, True, 3)
 
 
 # ---------------------------------------------------------------------------
@@ -254,10 +254,10 @@ def test_spec_addon_133_i8_an_incomplete_reread_that_read_text_keeps_the_earlier
 
     assert fake.recognises >= 1
     assert _snapshot(db) == before
-    assert db.flag("vid1", "frame_ocr_rule") == 2
+    assert db.flag("vid1", "frame_ocr_rule") == 3
 
 
-def test_spec_addon_133_failure_a_first_read_that_ended_early_keeps_its_frames_under_rule_two(
+def test_spec_addon_133_failure_a_first_read_that_ended_early_keeps_its_frames_under_the_current_rule(
     db, reader, media, monkeypatch,  # noqa: F811
 ):
     fake = SimpleBoxEngine()
@@ -268,4 +268,4 @@ def test_spec_addon_133_failure_a_first_read_that_ended_early_keeps_its_frames_u
 
     assert fake.recognises >= 1
     assert frame_texts(db)
-    assert _state(db) == (True, True, 2)
+    assert _state(db) == (True, True, 3)
