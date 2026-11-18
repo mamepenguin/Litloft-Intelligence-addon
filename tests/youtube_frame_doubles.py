@@ -82,6 +82,8 @@ if "-J" in argv:
     if cfg.get("fail"):
         sys.stderr.write(cfg["fail"] + "\\n")
         sys.exit(1)
+    if cfg.get("stderr"):
+        sys.stderr.write(cfg["stderr"] + "\\n")
     json.dump(cfg["describe"], sys.stdout)
     sys.exit(0)
 config = json.load(open(d + "/download.json"))
@@ -266,9 +268,9 @@ class FakeYouTube:
 
     # -- configuration -------------------------------------------------
 
-    def set_ytdlp(self, *, describe=None, fail=None, delay=0.0) -> None:
+    def set_ytdlp(self, *, describe=None, fail=None, delay=0.0, stderr=None) -> None:
         (self.state / "ytdlp.json").write_text(json.dumps(
-            {"describe": describe, "fail": fail, "delay": delay}
+            {"describe": describe, "fail": fail, "delay": delay, "stderr": stderr}
         ))
 
     def set_ffmpeg(self, *, hold: float) -> None:
