@@ -1,5 +1,5 @@
 """SPEC-ADDON-133 §3: the frame read of a YouTube ``.loft``'s download is a stored
-read like a native one, so it writes rule 2 and the ``.loft`` is never outdated.
+read like a native one, so it writes the current rule and the ``.loft`` is never outdated.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ def world(search_index, youtube, monkeypatch, tmp_path, make_settings):  # noqa:
     return LoftWorld(search_index, youtube, monkeypatch, tmp_path, make_settings)
 
 
-def test_spec_addon_133_section_3_a_loft_read_is_stored_under_rule_two(
+def test_spec_addon_133_section_3_a_loft_read_is_stored_under_the_current_rule(
     world, gradient, monkeypatch,  # noqa: F811
 ):
     world.configure(frame_ocr="on_index")
@@ -40,4 +40,4 @@ def test_spec_addon_133_section_3_a_loft_read_is_stored_under_rule_two(
     assert fake.recognises >= 1
     assert world.frame_texts("ytloft000001") != []
     assert world.flags("ytloft000001") == (True, True, True)
-    assert world.value("ytloft000001", "frame_ocr_rule") == 2
+    assert world.value("ytloft000001", "frame_ocr_rule") == 3

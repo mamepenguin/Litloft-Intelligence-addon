@@ -138,7 +138,7 @@ async def test_spec_addon_133_i11_a_running_reread_past_its_store_does_not_hold_
         # The store step of a re-read: the row is no longer outdated while the
         # read is still the work this task is doing.
         world.set(
-            file_id, frame_ocr_read=1, frame_ocr_indexed=0, frame_ocr_rule=2,
+            file_id, frame_ocr_read=1, frame_ocr_indexed=0, frame_ocr_rule=3,
         )
         entered.set()
         release.wait(timeout=30)

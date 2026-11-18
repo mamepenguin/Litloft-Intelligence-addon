@@ -193,7 +193,7 @@ def _make_times_fail(module, monkeypatch, path: Path) -> None:
 
 
 @pytest.mark.parametrize("outcome", ["unreadable", "times-failed", "no-frame"])
-def test_spec_addon_133_i8_an_incomplete_reread_keeps_the_earlier_read_and_sets_rule_two(
+def test_spec_addon_133_i8_an_incomplete_reread_keeps_the_earlier_read_and_sets_the_current_rule(
     reader, search_db, media, monkeypatch, outcome,  # noqa: F811
 ):
     module, _source = reader
@@ -216,7 +216,7 @@ def test_spec_addon_133_i8_an_incomplete_reread_keeps_the_earlier_read_and_sets_
 
     assert _snapshot(search_db) == before
     assert before["frames"] == [tuple(row) for row in EARLIER]
-    assert search_db.flag("vid1", "frame_ocr_rule") == 2
+    assert search_db.flag("vid1", "frame_ocr_rule") == 3
 
 
 async def test_spec_addon_133_i8_an_incomplete_reread_is_not_queued_again(
@@ -229,7 +229,7 @@ async def test_spec_addon_133_i8_an_incomplete_reread_is_not_queued_again(
     module.index_frame_ocr("vid1")
 
     assert await _queued_again() == []
-    assert search_db.flag("vid1", "frame_ocr_rule") == 2
+    assert search_db.flag("vid1", "frame_ocr_rule") == 3
 
 
 def test_spec_addon_133_section_8_an_incomplete_reread_logs_one_warning_and_no_first_read_line(
@@ -260,7 +260,7 @@ def test_spec_addon_133_i8_an_engine_raising_on_every_frame_was_asked_and_still_
     assert source.asked >= 1
     assert source.engine.calls >= 1
     assert _snapshot(search_db) == before
-    assert search_db.flag("vid1", "frame_ocr_rule") == 2
+    assert search_db.flag("vid1", "frame_ocr_rule") == 3
 
 
 # ---------------------------------------------------------------------------
@@ -292,11 +292,11 @@ async def test_spec_addon_133_i8_a_reread_that_cannot_start_changes_nothing_and_
 # ---------------------------------------------------------------------------
 
 
-def test_spec_addon_133_item_8_a_rule_two_read_is_closed_without_asking_for_the_engine(
+def test_spec_addon_133_item_8_a_current_rule_read_is_closed_without_asking_for_the_engine(
     reader, search_db, media,  # noqa: F811
 ):
     module, source = reader
-    _seed_earlier_read(search_db, media["landscape"], frame_ocr_rule=2)
+    _seed_earlier_read(search_db, media["landscape"], frame_ocr_rule=3)
     before = _snapshot(search_db)
 
     module.index_frame_ocr("vid1")
@@ -304,7 +304,7 @@ def test_spec_addon_133_item_8_a_rule_two_read_is_closed_without_asking_for_the_
     assert source.asked == 0
     assert source.engine.calls == 0
     assert _snapshot(search_db) == before
-    assert search_db.flag("vid1", "frame_ocr_rule") == 2
+    assert search_db.flag("vid1", "frame_ocr_rule") == 3
 
 
 # ---------------------------------------------------------------------------

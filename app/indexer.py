@@ -3144,9 +3144,12 @@ def _purge_file(file_id: str) -> None:
                 {"fid": file_id},
             )
 
-        # The two OCR text stores and the frame scan's per-second row. Probe
-        # the tables so an old DB keeps purging while it upgrades.
-        for table in ("video_frame_texts", "pdf_page_ocr_texts", "video_frame_scans"):
+        # The OCR stores and the frame scan's per-second row. Probe the
+        # tables so an old DB keeps purging while it upgrades.
+        for table in (
+            "video_frame_texts", "video_frame_lines", "pdf_page_ocr_texts",
+            "video_frame_scans",
+        ):
             present = session.execute(
                 sql_text(
                     "SELECT 1 FROM sqlite_master "
