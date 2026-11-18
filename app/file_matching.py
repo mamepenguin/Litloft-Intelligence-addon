@@ -45,6 +45,7 @@ COLLECTION_MAX_LENGTH = 100
 RANGE_MAX_COUNT = 4
 MAX_SIZE_BYTES = 2**53 - 1
 MAX_DURATION_SECONDS = Decimal("10000000")
+MAX_MODIFIED_SECONDS = 253402300799
 
 _WIRE_FORM = re.compile(r"^(gt|gte|lt|lte):(.*)$")
 _SIZE_NUMBER = re.compile(r"^(0|[1-9]\d*)$")
@@ -79,6 +80,16 @@ def _parse_duration(item: str) -> str:
     if text is None or Decimal(text) > MAX_DURATION_SECONDS:
         raise ValueError(f"invalid duration comparison: {item!r}")
     return f"{operator}:{text}"
+
+
+def _parse_modified(item: str) -> str:
+    match = _WIRE_FORM.match(item)
+    if match is None:
+        raise ValueError(f"invalid modified comparison: {item!r}")
+    operator, amount = match.groups()
+    if not _SIZE_NUMBER.fullmatch(amount) or int(amount) > MAX_MODIFIED_SECONDS:
+        raise ValueError(f"invalid modified comparison: {item!r}")
+    return f"{operator}:{int(amount)}"
 
 
 def _normalise_comparisons(
@@ -206,6 +217,7 @@ class SearchFilter(BaseModel):
     collections: list[str] = Field(default_factory=list)
     sizes: list[str] = Field(default_factory=list)
     durations: list[str] = Field(default_factory=list)
+    modified: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _normalise(self) -> "SearchFilter":
@@ -213,6 +225,9 @@ class SearchFilter(BaseModel):
         self.sizes = _normalise_comparisons(self.sizes, _parse_size, "sizes")
         self.durations = _normalise_comparisons(
             self.durations, _parse_duration, "durations"
+        )
+        self.modified = _normalise_comparisons(
+            self.modified, _parse_modified, "modified"
         )
         return self
 
