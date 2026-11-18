@@ -228,6 +228,8 @@ def test_spec_addon_144_i1_the_fill_times_follow_the_anchors_and_the_duration(le
     "max_frames, expected",
     [
         pytest.param(1, [0.0], id="M-1"),
+        pytest.param(2, [0.0, 18.5], id="M-2"),
+        pytest.param(3, [0.0, 12.0, 25.0], id="M-3"),
         pytest.param(4, [0.0, 5.0, 18.5, 25.0], id="M-4"),
         pytest.param(5, [0.0, 5.0, 12.0, 18.5, 25.0], id="M-one-below-count"),
         pytest.param(6, GRADIENT_TIMES, id="M-equal-to-count"),

@@ -7,6 +7,8 @@ The move is driven through the addon's lifespan, as a start runs it.
 
 from __future__ import annotations
 
+import importlib
+
 import asyncio
 import logging
 import re
@@ -50,6 +52,9 @@ def lifespan(search_index, monkeypatch):  # noqa: F811
 class CacheClears:
     def __init__(self, monkeypatch):
         self.count = 0
+        # patch_everywhere only reaches modules already imported, and the
+        # code under test imports app.search lazily.
+        importlib.import_module("app.search")
         patch_everywhere(monkeypatch, "invalidate_similar_cache", self)
 
     def __call__(self, *_args, **_kwargs):

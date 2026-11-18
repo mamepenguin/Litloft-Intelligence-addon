@@ -607,6 +607,7 @@ def _fill_interval_gaps(
         for timestamp in _gap_fill_times(anchors[-1][0], duration, min_interval)
     )
 
+    times.sort(key=lambda frame: frame[0])
     if len(times) > max_frames:
         count = len(times)
         times = [times[(i * count) // max_frames] for i in range(max_frames)]
