@@ -23,7 +23,7 @@ from app.exact_search import (
     _int_or_none,
     _snippet,
 )
-from app.search import text_content_kind
+from app.search import FrameLineReader, _usable_frame_lines, text_content_kind
 
 logger = logging.getLogger(__name__)
 
@@ -138,17 +138,34 @@ def _frame_occurrences(
     segments: dict[tuple[float, float], list[str]] = {}
     for row in rows:
         segments.setdefault((row.start_time, row.end_time), []).append(row.text)
+    stored = FrameLineReader().segments(file_id) or {}
     out: list[tuple[tuple, dict[str, Any]]] = []
     for (start, end), chunks in segments.items():
         text = _merge_chunks(chunks, _CHUNK_TEXT_OVERLAP)
+        segment = stored.get((start, end))
+        lines = (
+            _usable_frame_lines(segment.lines, chunks, merged=text)
+            if segment is not None else None
+        )
+        frame_size = (
+            [segment.width, segment.height]
+            if lines is not None
+            and segment.width is not None
+            and segment.height is not None
+            else None
+        )
         for at, ordinal in _positions(text, needle):
-            out.append((
-                (_MEDIA, start, 2, ordinal),
-                _row(
-                    text, at, needle, ordinal,
-                    kind="scene", start=start, end=end,
-                ),
-            ))
+            row = _row(
+                text, at, needle, ordinal,
+                kind="scene", start=start, end=end,
+            )
+            if lines is not None:
+                boxes = _overlapped_quads(lines, at, len(needle))
+                if boxes:
+                    row["boxes"] = boxes
+                    if frame_size is not None:
+                        row["frame_size"] = frame_size
+            out.append(((_MEDIA, start, 2, ordinal), row))
     return out
 
 
