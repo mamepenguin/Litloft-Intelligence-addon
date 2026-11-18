@@ -75,6 +75,7 @@ import { choiceOffered, useLLMChoices } from "./llmChoice";
 import { RegenerateWithMenu } from "./RegenerateWithMenu";
 import { DetailedSummaryCitationPopover } from "./DetailedSummaryCitationPopover";
 import { CitationInlinePanel } from "./CitationInlinePanel";
+import type { CitationViewerTarget } from "./CitationInlinePanel";
 import { InlineMarkdown } from "./InlineMarkdown";
 import {
   CitationRailProvider,
@@ -96,6 +97,10 @@ interface DetailedSummarySectionProps {
   labelledByHost?: boolean;
   /** Whether there is anything for this file to draw. Silence means available. */
   onAvailability?: (available: boolean) => void;
+  /** The host's viewer for the open file, when it can move in place. */
+  openInViewer?: (target: CitationViewerTarget) => boolean;
+  /** Brings this summary's tab into view; absent where it is not a tab. */
+  select?: () => void;
 }
 
 // Detailed summary generation is expensive: tens of seconds to a few
@@ -118,6 +123,8 @@ export default function DetailedSummarySection({
   active,
   labelledByHost = false,
   onAvailability,
+  openInViewer,
+  select,
 }: DetailedSummarySectionProps) {
   const t = useTranslations("file");
   const td = useTranslations("detailedSummary");
@@ -168,17 +175,23 @@ export default function DetailedSummarySection({
     onAvailabilityRef.current = onAvailability;
   });
 
+  const selectRef = useRef(select);
+  useEffect(() => {
+    selectRef.current = select;
+  });
+
   useLayoutEffect(() => {
     onAvailabilityRef.current?.(false);
   }, [fileId]);
 
-  // A toggle only means something when pressing it would reveal something.
+  // A toggle only means something when pressing it would reveal something. A
+  // summary note with no detailed summary behind it reveals nothing — the note
+  // is the summary — so this must not put a tab on screen for it.
   const canShow =
     loaded &&
-    (hasActiveSummary ||
+    (data?.available === true ||
       data?.status === "generating" ||
-      data?.status === "failed" ||
-      data?.available === true);
+      data?.status === "failed");
 
   // Knowledge availability gate for the "save" button. The addon
   // catalogue is per-drive, so this flips when the user switches
@@ -288,6 +301,16 @@ export default function DetailedSummarySection({
     setWorking(true);
     setCollapsed(false);
     setProfileRejected(false);
+    // A run started from the AI menu has no tab yet: mark it generating and
+    // bring it into view before the first poll comes back. A body or a failure
+    // already draws itself, so those stay as they are.
+    setData((prev) =>
+      prev?.available || prev?.status
+        ? prev
+        : { ...(prev ?? { available: false }), status: "generating" },
+    );
+    onAvailabilityRef.current?.(true);
+    selectRef.current?.();
     try {
       // Single endpoint for every regenerate case (edited / un-edited /
       // first-time generation). The backend superseded-not-deleted
@@ -581,6 +604,7 @@ export default function DetailedSummarySection({
         drive={drive}
         videoRef={videoRef}
         mediaController={mediaController}
+        openInViewer={openInViewer}
         confirmRevertOpen={confirmRevertOpen}
         confirmRegenerateOpen={confirmRegenerateOpen}
         onStartEdit={handleStartEdit}
@@ -638,6 +662,7 @@ interface DetailedSummaryBodyProps {
   drive: string;
   videoRef?: React.RefObject<HTMLVideoElement | null>;
   mediaController?: MediaController | null;
+  openInViewer?: (target: CitationViewerTarget) => boolean;
   confirmRevertOpen: boolean;
   confirmRegenerateOpen: boolean;
   onStartEdit: (sectionName: string, subsectionName: string | null) => void;
@@ -680,6 +705,7 @@ function DetailedSummaryBody({
   drive,
   videoRef,
   mediaController,
+  openInViewer,
   confirmRevertOpen,
   confirmRegenerateOpen,
   onStartEdit,
@@ -1060,7 +1086,8 @@ function DetailedSummaryBody({
                 fileId={fileId}
                 drive={drive}
                 videoRef={videoRef}
-        mediaController={mediaController}
+                mediaController={mediaController}
+                openInViewer={openInViewer}
                 citationByPath={citationByPath}
                 edited={edited}
               />
@@ -1551,6 +1578,7 @@ interface SectionViewProps {
   drive: string;
   videoRef?: React.RefObject<HTMLVideoElement | null>;
   mediaController?: MediaController | null;
+  openInViewer?: (target: CitationViewerTarget) => boolean;
   citationByPath: Map<string, DetailedSummaryCitation>;
   onStartEdit: (subsectionHeading: string | null) => void;
   onCancelEdit: () => void;
@@ -1567,6 +1595,7 @@ function SectionView({
   drive,
   videoRef,
   mediaController,
+  openInViewer,
   citationByPath,
   onStartEdit,
   onCancelEdit,
@@ -1585,6 +1614,7 @@ function SectionView({
           drive,
           videoRef,
           mediaController,
+          openInViewer,
         })}
       </div>
     );
@@ -1638,6 +1668,7 @@ function SectionView({
             drive,
             videoRef,
             mediaController,
+            openInViewer,
           })}
           {section.subsections.map((sub) => {
             const subEditing =
@@ -1676,6 +1707,7 @@ function SectionView({
                     drive,
                     videoRef,
                     mediaController,
+                    openInViewer,
                   })
                 )}
               </div>
@@ -1765,7 +1797,8 @@ function renderSegments(
     fileId: string;
     drive: string;
     videoRef?: React.RefObject<HTMLVideoElement | null>;
-  mediaController?: MediaController | null;
+    mediaController?: MediaController | null;
+    openInViewer?: (target: CitationViewerTarget) => boolean;
   },
 ): ReactNode[] {
   const nodes: ReactNode[] = [];
@@ -1829,7 +1862,8 @@ function BulletGroup({
     fileId: string;
     drive: string;
     videoRef?: React.RefObject<HTMLVideoElement | null>;
-  mediaController?: MediaController | null;
+    mediaController?: MediaController | null;
+    openInViewer?: (target: CitationViewerTarget) => boolean;
   };
 }) {
   // The first bullet's indent anchors the group — anything deeper gets
@@ -1880,7 +1914,8 @@ function BulletGroup({
                 citation={citation}
                 segmentType="bullet"
                 videoRef={ctx.videoRef}
-          mediaController={ctx.mediaController}
+                mediaController={ctx.mediaController}
+                openInViewer={ctx.openInViewer}
               />
             )}
           </li>
@@ -1901,7 +1936,8 @@ function TableGroup({
     fileId: string;
     drive: string;
     videoRef?: React.RefObject<HTMLVideoElement | null>;
-  mediaController?: MediaController | null;
+    mediaController?: MediaController | null;
+    openInViewer?: (target: CitationViewerTarget) => boolean;
   };
 }) {
   // Subscribe to expanded set so the accordion row only mounts when
@@ -1986,7 +2022,8 @@ function TableGroup({
                         citation={citation}
                         segmentType="table"
                         videoRef={ctx.videoRef}
-          mediaController={ctx.mediaController}
+                        mediaController={ctx.mediaController}
+                        openInViewer={ctx.openInViewer}
                       />
                     </td>
                   </tr>
@@ -2007,7 +2044,8 @@ function renderSegmentLine(
     fileId: string;
     drive: string;
     videoRef?: React.RefObject<HTMLVideoElement | null>;
-  mediaController?: MediaController | null;
+    mediaController?: MediaController | null;
+    openInViewer?: (target: CitationViewerTarget) => boolean;
   },
 ): ReactNode {
   // ``bullet`` and ``table-row`` never reach this function — they are
@@ -2038,7 +2076,8 @@ function ParagraphSegment({
     fileId: string;
     drive: string;
     videoRef?: React.RefObject<HTMLVideoElement | null>;
-  mediaController?: MediaController | null;
+    mediaController?: MediaController | null;
+    openInViewer?: (target: CitationViewerTarget) => boolean;
   };
 }) {
   const { isExpanded } = useCitationRail();
@@ -2070,6 +2109,7 @@ function ParagraphSegment({
           segmentType="paragraph"
           videoRef={ctx.videoRef}
           mediaController={ctx.mediaController}
+          openInViewer={ctx.openInViewer}
         />
       )}
     </div>
