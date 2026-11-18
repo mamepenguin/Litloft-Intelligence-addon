@@ -12,6 +12,7 @@ recognised in a second engine call.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import queue
@@ -34,7 +35,7 @@ from app.database import (
     upsert_fts_text_content,
 )
 from app.extractors.base import ContentExtractor
-from app.models import IndexedFile, VideoFrameText
+from app.models import IndexedFile, VideoFrameLines, VideoFrameText
 from app.video_frames import (
     Unreadable as _Unreadable,
     dhash as _dhash,
@@ -56,7 +57,7 @@ READ_HASH_BITS = 8
 #: Seconds between two read frames of one video here.
 READ_GAP_SECONDS = 3.0
 #: The ``frame_ocr_rule`` this reader's stored reads are written under.
-FRAME_OCR_RULE = 2
+FRAME_OCR_RULE = 3
 #: Pixels a box grows by before its region is compared with the earlier frame.
 BOX_PADDING = 4
 #: Intersection over union a box needs with one of the earlier frame's boxes.
@@ -110,6 +111,7 @@ class _Segment:
     start: float
     text: str
     end: float | None = None
+    lines: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -159,6 +161,20 @@ def _ocr_image(image: Any) -> Any:
     width -= width % 2
     height -= height % 2
     return image.resize((width, height))
+
+
+def _normalised_quad(quad: Any, width: int, height: int) -> list[float] | None:
+    """A box quad as eight fractions of the frame, or ``None`` when unusable."""
+    if width <= 0 or height <= 0:
+        return None
+    points = np.asarray(quad, dtype=float).reshape(-1)
+    if points.size != 8 or not np.all(np.isfinite(points)):
+        return None
+    flat: list[float] = []
+    for x, y in points.reshape(-1, 2):
+        flat.append(round(min(max(float(x) / width, 0.0), 1.0), 4))
+        flat.append(round(min(max(float(y) / height, 0.0), 1.0), 4))
+    return flat
 
 
 @dataclass
@@ -407,9 +423,8 @@ def _read_video(
                 ):
                     continue
                 try:
-                    boxes = _read_boxes(
-                        _ocr_image(image), previous_boxes, paused,
-                    )
+                    ocr_image = _ocr_image(image)
+                    boxes = _read_boxes(ocr_image, previous_boxes, paused)
                 except _EngineLost:
                     result.engine_lost = True
                     process.kill()
@@ -429,7 +444,21 @@ def _read_video(
                     result.segments.append(open_segment)
                     open_segment = None
                 if open_segment is None and text:
-                    open_segment = _Segment(start=t, text=text)
+                    ocr_width, ocr_height = ocr_image.size
+                    open_segment = _Segment(
+                        start=t,
+                        text=text,
+                        lines=[
+                            {
+                                "text": box.line,
+                                "quad": _normalised_quad(
+                                    box.quad, ocr_width, ocr_height,
+                                ),
+                            }
+                            for box in boxes
+                            if box.line is not None
+                        ],
+                    )
                 last_hash = current
                 last_read_time = t
                 previous_boxes = boxes
@@ -461,8 +490,32 @@ def _chunks_for_segments(segments: list[_Segment]) -> list[dict[str, Any]]:
     return chunks
 
 
-def _store_read(file_id: str, chunks: list[dict[str, Any]]) -> bool:
-    """A5: replace the stored read in one short transaction."""
+def _store_read(file_id: str, segments: list[_Segment]) -> bool:
+    """A5: replace the stored read, lines included, in one short transaction."""
+    chunks = _chunks_for_segments(segments)
+    rows: list[VideoFrameLines] = []
+    for segment_index, segment in enumerate(segments):
+        if any(line["quad"] is None for line in segment.lines):
+            logger.warning(
+                "Frame OCR for %s: no lines stored for the segment at %s "
+                "(unusable quad)",
+                file_id, segment.start,
+            )
+            continue
+        rows.append(VideoFrameLines(
+            file_id=file_id,
+            segment_index=segment_index,
+            start_time=segment.start,
+            end_time=segment.end if segment.end is not None else segment.start,
+            lines_json=json.dumps(
+                [
+                    {"text": line["text"], "quad": line["quad"]}
+                    for line in segment.lines
+                ],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        ))
     try:
         with get_search_db() as session:
             row = session.query(IndexedFile).filter_by(
@@ -471,6 +524,7 @@ def _store_read(file_id: str, chunks: list[dict[str, Any]]) -> bool:
             if row is None:
                 return False
             session.query(VideoFrameText).filter_by(file_id=file_id).delete()
+            session.query(VideoFrameLines).filter_by(file_id=file_id).delete()
             _remove_embeddings(session, file_id, "text_content")
             delete_fts_text_content(session, file_id)
             for chunk in chunks:
@@ -481,6 +535,7 @@ def _store_read(file_id: str, chunks: list[dict[str, Any]]) -> bool:
                     end_time=chunk["end_time"],
                     text=chunk["text"],
                 ))
+            session.add_all(rows)
             row.frame_ocr_read = True
             row.frame_ocr_indexed = False
             row.frame_ocr_rule = FRAME_OCR_RULE
@@ -666,8 +721,7 @@ def _reread(
         )
         return _keep_earlier_read(file_id)
 
-    chunks = _chunks_for_segments(result.segments)
-    if not _store_read(file_id, chunks):
+    if not _store_read(file_id, result.segments):
         return False
     return _build_rows(file_id)
 
@@ -786,7 +840,6 @@ def index_frame_ocr(
             file_id, result.engine_errors,
         )
 
-    chunks = _chunks_for_segments(result.segments)
-    if not _store_read(file_id, chunks):
+    if not _store_read(file_id, result.segments):
         return False
     return _build_rows(file_id)

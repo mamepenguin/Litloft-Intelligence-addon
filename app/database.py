@@ -1285,6 +1285,20 @@ def _migrate_frame_page_ocr_columns(conn: object) -> None:
         "ON video_frame_texts(file_id)"
     ))
     conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS video_frame_lines ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  file_id TEXT NOT NULL,"
+        "  segment_index INTEGER NOT NULL,"
+        "  start_time REAL NOT NULL,"
+        "  end_time REAL NOT NULL,"
+        "  lines_json TEXT NOT NULL,"
+        "  UNIQUE(file_id, segment_index))"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_video_frame_lines_file "
+        "ON video_frame_lines(file_id)"
+    ))
+    conn.execute(text(
         "CREATE TABLE IF NOT EXISTS pdf_page_ocr_texts ("
         "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
         "  file_id TEXT NOT NULL,"

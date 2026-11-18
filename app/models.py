@@ -875,6 +875,26 @@ class VideoFrameText(Base):
     )
 
 
+class VideoFrameLines(Base):
+    """Where each line of one video frame-text segment sits on its frame."""
+
+    __tablename__ = "video_frame_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    file_id: Mapped[str] = mapped_column(String(12), nullable=False)
+    segment_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_time: Mapped[float] = mapped_column(Float, nullable=False)
+    end_time: Mapped[float] = mapped_column(Float, nullable=False)
+    lines_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "file_id", "segment_index", name="uq_video_frame_lines_file_segment"
+        ),
+        Index("idx_video_frame_lines_file", "file_id"),
+    )
+
+
 class VideoFrameScan(Base):
     """A video's per-second difference hashes and picture sizes.
 
