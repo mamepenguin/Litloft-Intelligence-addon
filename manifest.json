@@ -94,6 +94,15 @@
         "priority": 30
       }
     ],
+    "document-side": [
+      {
+        "id": "detailed-summary",
+        "label": "Detailed summary",
+        "i18n_key": "intelligence.slots.detailedSummary",
+        "priority": 10,
+        "wide": true
+      }
+    ],
     "inspector-tabs": [
       {
         "id": "ask",

@@ -32,6 +32,13 @@ import type { CitationChunkExcerpt, DetailedSummaryCitation } from "./api";
 import { copyText } from "@/lib/copyText";
 import type { MediaController } from "@/lib/mediaController";
 
+/** A location in the open file that a host's own viewer can move to. */
+export interface CitationViewerTarget {
+  fileId: string;
+  page?: number;
+  section?: number;
+}
+
 interface CitationInlinePanelProps {
   sectionPath: string;
   /**
@@ -56,6 +63,11 @@ interface CitationInlinePanelProps {
   mediaController?: MediaController | null;
   videoRef?: React.RefObject<HTMLVideoElement | null> | null;
   onJump?: (excerpt: CitationChunkExcerpt) => boolean | void;
+  /**
+   * The host's viewer for this file, when the summary is drawn beside it.
+   * Answers whether it moved, so the panel only navigates when it did not.
+   */
+  openInViewer?: (target: CitationViewerTarget) => boolean;
 }
 
 export function CitationInlinePanel({
@@ -65,6 +77,7 @@ export function CitationInlinePanel({
   mediaController,
   videoRef,
   onJump,
+  openInViewer,
 }: CitationInlinePanelProps) {
   const t = useTranslations("detailedSummary");
   const { isExpanded, excerptState } = useCitationRail();
@@ -141,6 +154,7 @@ export function CitationInlinePanel({
         mediaController={mediaController}
         videoRef={videoRef}
         onJump={onJump}
+        openInViewer={openInViewer}
       />
     </aside>
   );
@@ -211,11 +225,13 @@ function InlineExcerptBody({
   mediaController,
   videoRef,
   onJump,
+  openInViewer,
 }: {
   state: CitationFetchState;
   mediaController?: MediaController | null;
   videoRef?: React.RefObject<HTMLVideoElement | null> | null;
   onJump?: (excerpt: CitationChunkExcerpt) => boolean | void;
+  openInViewer?: (target: CitationViewerTarget) => boolean;
 }) {
   const t = useTranslations("detailedSummary");
   const router = useRouter();
@@ -272,6 +288,15 @@ function InlineExcerptBody({
       const handled = onJump(excerpt);
       if (handled) return;
     }
+    // A host drawing this file in its own viewer moves that viewer and
+    // leaves the URL alone; only a host that cannot answer gets a push.
+    const inPlaceTarget: CitationViewerTarget | null =
+      excerpt.page != null
+        ? { fileId: excerpt.file_id, page: excerpt.page }
+        : excerpt.section != null
+          ? { fileId: excerpt.file_id, section: excerpt.section }
+          : null;
+    if (inPlaceTarget && openInViewer?.(inPlaceTarget)) return;
     if (excerpt.section != null) {
       router.push(`/files/${excerpt.file_id}?section=${excerpt.section}`);
       return;

@@ -75,6 +75,7 @@ import { choiceOffered, useLLMChoices } from "./llmChoice";
 import { RegenerateWithMenu } from "./RegenerateWithMenu";
 import { DetailedSummaryCitationPopover } from "./DetailedSummaryCitationPopover";
 import { CitationInlinePanel } from "./CitationInlinePanel";
+import type { CitationViewerTarget } from "./CitationInlinePanel";
 import { InlineMarkdown } from "./InlineMarkdown";
 import {
   CitationRailProvider,
@@ -96,6 +97,10 @@ interface DetailedSummarySectionProps {
   labelledByHost?: boolean;
   /** Whether there is anything for this file to draw. Silence means available. */
   onAvailability?: (available: boolean) => void;
+  /** The host's viewer for the open file, when it can move in place. */
+  openInViewer?: (target: CitationViewerTarget) => boolean;
+  /** Brings this summary's tab into view; absent where it is not a tab. */
+  select?: () => void;
 }
 
 // Detailed summary generation is expensive: tens of seconds to a few
@@ -118,6 +123,8 @@ export default function DetailedSummarySection({
   active,
   labelledByHost = false,
   onAvailability,
+  openInViewer,
+  select,
 }: DetailedSummarySectionProps) {
   const t = useTranslations("file");
   const td = useTranslations("detailedSummary");
@@ -168,17 +175,23 @@ export default function DetailedSummarySection({
     onAvailabilityRef.current = onAvailability;
   });
 
+  const selectRef = useRef(select);
+  useEffect(() => {
+    selectRef.current = select;
+  });
+
   useLayoutEffect(() => {
     onAvailabilityRef.current?.(false);
   }, [fileId]);
 
-  // A toggle only means something when pressing it would reveal something.
+  // A toggle only means something when pressing it would reveal something. A
+  // summary note with no detailed summary behind it reveals nothing — the note
+  // is the summary — so this must not put a tab on screen for it.
   const canShow =
     loaded &&
-    (hasActiveSummary ||
+    (data?.available === true ||
       data?.status === "generating" ||
-      data?.status === "failed" ||
-      data?.available === true);
+      data?.status === "failed");
 
   // Knowledge availability gate for the "save" button. The addon
   // catalogue is per-drive, so this flips when the user switches
@@ -284,49 +297,73 @@ export default function DetailedSummarySection({
     canGenerate,
   );
 
-  const doRegenerate = useCallback(async (force: boolean, profile?: string) => {
-    setWorking(true);
-    setCollapsed(false);
-    setProfileRejected(false);
-    try {
-      // Single endpoint for every regenerate case (edited / un-edited /
-      // first-time generation). The backend superseded-not-deleted
-      // history changes mean the prior DELETE+POST fallback would
-      // have dropped the history we now want to keep.
-      await regenerateDetailedSummary(
-        fileId,
-        drive,
-        profile === undefined ? { force } : { force, profile },
-      );
-      await pollUntilDone();
-    } catch (err) {
-      if (isProfileUnavailable(err)) {
-        setProfileRejected(true);
-        refetchChoices();
+  const doRegenerate = useCallback(
+    async (force: boolean, profile?: string, announce = false) => {
+      setWorking(true);
+      setCollapsed(false);
+      setProfileRejected(false);
+      if (announce) {
+        // A run started from the AI menu has no tab yet: mark it generating
+        // and bring it into view before the first poll comes back. A run
+        // started inside the tab already draws itself and must not move the
+        // reader off the tab they are looking at.
+        setData((prev) =>
+          prev?.available || prev?.status
+            ? prev
+            : { ...(prev ?? { available: false }), status: "generating" },
+        );
+        onAvailabilityRef.current?.(true);
+        selectRef.current?.();
       }
-      await fetchData();
-    } finally {
-      setWorking(false);
-    }
-  }, [fileId, drive, pollUntilDone, fetchData, refetchChoices]);
+      try {
+        // Single endpoint for every regenerate case (edited / un-edited /
+        // first-time generation). The backend superseded-not-deleted
+        // history changes mean the prior DELETE+POST fallback would
+        // have dropped the history we now want to keep.
+        await regenerateDetailedSummary(
+          fileId,
+          drive,
+          profile === undefined ? { force } : { force, profile },
+        );
+        await pollUntilDone();
+      } catch (err) {
+        if (isProfileUnavailable(err)) {
+          setProfileRejected(true);
+          refetchChoices();
+        }
+        await fetchData();
+      } finally {
+        setWorking(false);
+      }
+    },
+    [fileId, drive, pollUntilDone, fetchData, refetchChoices],
+  );
 
-  const startGenerate = useCallback((profile: string | undefined) => {
-    // Entering regenerate from the edited state surfaces a confirm
-    // dialog first; once accepted the confirm handler calls
-    // doRegenerate(true). Also confirm when a knowledge note is
-    // currently the active summary — regenerating flips the file
-    // detail page back to the AI view, which the user deserves to
-    // opt into. Untouched summaries with no active note skip the
-    // dialog.
-    if (data?.edited_at || hasActiveSummary) {
-      setPendingProfile(profile);
-      setConfirmRegenerateOpen(true);
-      return;
-    }
-    void doRegenerate(false, profile);
-  }, [data?.edited_at, hasActiveSummary, doRegenerate]);
+  const startGenerate = useCallback(
+    (profile: string | undefined, announce = false) => {
+      // The confirmation is drawn inside the body, which only exists once a
+      // summary has been generated. With nothing generated there is no AI
+      // version for the reader to replace and no edits to lose, and the
+      // plain generate item in the AI menu is already the consent.
+      if (data?.available && (data.edited_at || hasActiveSummary)) {
+        setPendingProfile(profile);
+        setConfirmRegenerateOpen(true);
+        return;
+      }
+      void doRegenerate(false, profile, announce);
+    },
+    [data?.available, data?.edited_at, hasActiveSummary, doRegenerate],
+  );
 
-  const handleGenerate = useCallback(() => startGenerate(undefined), [startGenerate]);
+  const handleGenerate = useCallback(
+    () => startGenerate(undefined, true),
+    [startGenerate],
+  );
+
+  const handleRegenerate = useCallback(
+    () => startGenerate(undefined),
+    [startGenerate],
+  );
 
   const handleConfirmRegenerate = useCallback(() => {
     setConfirmRegenerateOpen(false);
@@ -528,7 +565,7 @@ export default function DetailedSummarySection({
         )}
         <div className="mt-2 flex items-center">
           <button
-            onClick={handleGenerate}
+            onClick={handleRegenerate}
             disabled={working}
             className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
           >
@@ -581,6 +618,7 @@ export default function DetailedSummarySection({
         drive={drive}
         videoRef={videoRef}
         mediaController={mediaController}
+        openInViewer={openInViewer}
         confirmRevertOpen={confirmRevertOpen}
         confirmRegenerateOpen={confirmRegenerateOpen}
         onStartEdit={handleStartEdit}
@@ -591,7 +629,7 @@ export default function DetailedSummarySection({
         onOpenRevert={() => setConfirmRevertOpen(true)}
         onCloseRevert={() => setConfirmRevertOpen(false)}
         onConfirmRevert={handleRevert}
-        onGenerate={handleGenerate}
+        onGenerate={handleRegenerate}
         offeredChoices={offeredChoices}
         onGenerateWith={startGenerate}
         profileRejected={profileRejected}
@@ -638,6 +676,7 @@ interface DetailedSummaryBodyProps {
   drive: string;
   videoRef?: React.RefObject<HTMLVideoElement | null>;
   mediaController?: MediaController | null;
+  openInViewer?: (target: CitationViewerTarget) => boolean;
   confirmRevertOpen: boolean;
   confirmRegenerateOpen: boolean;
   onStartEdit: (sectionName: string, subsectionName: string | null) => void;
@@ -680,6 +719,7 @@ function DetailedSummaryBody({
   drive,
   videoRef,
   mediaController,
+  openInViewer,
   confirmRevertOpen,
   confirmRegenerateOpen,
   onStartEdit,
@@ -1060,7 +1100,8 @@ function DetailedSummaryBody({
                 fileId={fileId}
                 drive={drive}
                 videoRef={videoRef}
-        mediaController={mediaController}
+                mediaController={mediaController}
+                openInViewer={openInViewer}
                 citationByPath={citationByPath}
                 edited={edited}
               />
@@ -1551,6 +1592,7 @@ interface SectionViewProps {
   drive: string;
   videoRef?: React.RefObject<HTMLVideoElement | null>;
   mediaController?: MediaController | null;
+  openInViewer?: (target: CitationViewerTarget) => boolean;
   citationByPath: Map<string, DetailedSummaryCitation>;
   onStartEdit: (subsectionHeading: string | null) => void;
   onCancelEdit: () => void;
@@ -1567,6 +1609,7 @@ function SectionView({
   drive,
   videoRef,
   mediaController,
+  openInViewer,
   citationByPath,
   onStartEdit,
   onCancelEdit,
@@ -1585,6 +1628,7 @@ function SectionView({
           drive,
           videoRef,
           mediaController,
+          openInViewer,
         })}
       </div>
     );
@@ -1638,6 +1682,7 @@ function SectionView({
             drive,
             videoRef,
             mediaController,
+            openInViewer,
           })}
           {section.subsections.map((sub) => {
             const subEditing =
@@ -1676,6 +1721,7 @@ function SectionView({
                     drive,
                     videoRef,
                     mediaController,
+                    openInViewer,
                   })
                 )}
               </div>
@@ -1765,7 +1811,8 @@ function renderSegments(
     fileId: string;
     drive: string;
     videoRef?: React.RefObject<HTMLVideoElement | null>;
-  mediaController?: MediaController | null;
+    mediaController?: MediaController | null;
+    openInViewer?: (target: CitationViewerTarget) => boolean;
   },
 ): ReactNode[] {
   const nodes: ReactNode[] = [];
@@ -1829,7 +1876,8 @@ function BulletGroup({
     fileId: string;
     drive: string;
     videoRef?: React.RefObject<HTMLVideoElement | null>;
-  mediaController?: MediaController | null;
+    mediaController?: MediaController | null;
+    openInViewer?: (target: CitationViewerTarget) => boolean;
   };
 }) {
   // The first bullet's indent anchors the group — anything deeper gets
@@ -1880,7 +1928,8 @@ function BulletGroup({
                 citation={citation}
                 segmentType="bullet"
                 videoRef={ctx.videoRef}
-          mediaController={ctx.mediaController}
+                mediaController={ctx.mediaController}
+                openInViewer={ctx.openInViewer}
               />
             )}
           </li>
@@ -1901,7 +1950,8 @@ function TableGroup({
     fileId: string;
     drive: string;
     videoRef?: React.RefObject<HTMLVideoElement | null>;
-  mediaController?: MediaController | null;
+    mediaController?: MediaController | null;
+    openInViewer?: (target: CitationViewerTarget) => boolean;
   };
 }) {
   // Subscribe to expanded set so the accordion row only mounts when
@@ -1986,7 +2036,8 @@ function TableGroup({
                         citation={citation}
                         segmentType="table"
                         videoRef={ctx.videoRef}
-          mediaController={ctx.mediaController}
+                        mediaController={ctx.mediaController}
+                        openInViewer={ctx.openInViewer}
                       />
                     </td>
                   </tr>
@@ -2007,7 +2058,8 @@ function renderSegmentLine(
     fileId: string;
     drive: string;
     videoRef?: React.RefObject<HTMLVideoElement | null>;
-  mediaController?: MediaController | null;
+    mediaController?: MediaController | null;
+    openInViewer?: (target: CitationViewerTarget) => boolean;
   },
 ): ReactNode {
   // ``bullet`` and ``table-row`` never reach this function — they are
@@ -2038,7 +2090,8 @@ function ParagraphSegment({
     fileId: string;
     drive: string;
     videoRef?: React.RefObject<HTMLVideoElement | null>;
-  mediaController?: MediaController | null;
+    mediaController?: MediaController | null;
+    openInViewer?: (target: CitationViewerTarget) => boolean;
   };
 }) {
   const { isExpanded } = useCitationRail();
@@ -2070,6 +2123,7 @@ function ParagraphSegment({
           segmentType="paragraph"
           videoRef={ctx.videoRef}
           mediaController={ctx.mediaController}
+          openInViewer={ctx.openInViewer}
         />
       )}
     </div>

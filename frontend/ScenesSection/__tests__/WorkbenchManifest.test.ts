@@ -43,3 +43,17 @@ describe("SPEC-ADDON-099 the intelligence manifest's player-side panels", () => 
     expect(ids("file-detail-sections")).toContain("detailed-summary");
   });
 });
+
+describe("SPEC-ADDON-135 the detailed summary as a document-side tab", () => {
+  it("registers detailed-summary in document-side, wide, labelled intelligence.slots.detailedSummary, and keeps it in file-detail-sections for the collection route", () => {
+    const entries = (manifest.slots["document-side"] ?? []).filter(
+      (entry) => entry.id === "detailed-summary",
+    ) as (SlotEntry & { wide?: boolean })[];
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].i18n_key).toBe("intelligence.slots.detailedSummary");
+    expect(entries[0].wide).toBe(true);
+    expect(ids("file-detail-sections")).toContain("detailed-summary");
+    expect(ids("player-side")).toContain("detailed-summary");
+  });
+});
