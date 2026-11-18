@@ -1298,6 +1298,19 @@ def _migrate_frame_page_ocr_columns(conn: object) -> None:
         "CREATE INDEX IF NOT EXISTS idx_video_frame_lines_file "
         "ON video_frame_lines(file_id)"
     ))
+    # The size of the image a stored segment's quads were normalised by.
+    # Nullable, so a row stored without it keeps NULL in both.
+    line_cols = {
+        row[1]
+        for row in conn.execute(
+            text("PRAGMA table_info(video_frame_lines)")
+        ).fetchall()
+    }
+    for name in ("frame_width", "frame_height"):
+        if name not in line_cols:
+            conn.execute(text(
+                f"ALTER TABLE video_frame_lines ADD COLUMN {name} INTEGER"
+            ))
     conn.execute(text(
         "CREATE TABLE IF NOT EXISTS pdf_page_ocr_texts ("
         "  id INTEGER PRIMARY KEY AUTOINCREMENT,"

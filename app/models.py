@@ -886,6 +886,10 @@ class VideoFrameLines(Base):
     start_time: Mapped[float] = mapped_column(Float, nullable=False)
     end_time: Mapped[float] = mapped_column(Float, nullable=False)
     lines_json: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Pixel width and height of the image the quads were normalised by, for
+    #: the frame that opened the segment; NULL when that size is not stored.
+    frame_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    frame_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (
         UniqueConstraint(
