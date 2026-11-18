@@ -112,6 +112,10 @@ class _Segment:
     text: str
     end: float | None = None
     lines: list[dict[str, Any]] = field(default_factory=list)
+    # The size of the image the engine read the opening frame at, which the
+    # quads are fractions of.
+    width: int | None = None
+    height: int | None = None
 
 
 @dataclass
@@ -448,6 +452,8 @@ def _read_video(
                     open_segment = _Segment(
                         start=t,
                         text=text,
+                        width=ocr_width,
+                        height=ocr_height,
                         lines=[
                             {
                                 "text": box.line,
@@ -515,6 +521,8 @@ def _store_read(file_id: str, segments: list[_Segment]) -> bool:
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
+            frame_width=segment.width,
+            frame_height=segment.height,
         ))
     try:
         with get_search_db() as session:

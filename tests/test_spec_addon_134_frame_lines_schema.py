@@ -103,6 +103,7 @@ def test_spec_addon_134_section_4_the_migration_creates_the_table_twice_keeping_
     columns = _columns(reader)
     assert set(columns) == {
         "id", "file_id", "segment_index", "start_time", "end_time", "lines_json",
+        "frame_width", "frame_height",
     }
     assert (columns["id"][0], columns["id"][2]) == ("INTEGER", 1)
     assert {name: columns[name][:2] for name in columns if name != "id"} == {
@@ -111,6 +112,8 @@ def test_spec_addon_134_section_4_the_migration_creates_the_table_twice_keeping_
         "start_time": ("REAL", 1),
         "end_time": ("REAL", 1),
         "lines_json": ("TEXT", 1),
+        "frame_width": ("INTEGER", 0),
+        "frame_height": ("INTEGER", 0),
     }
     indexes = _indexes(reader)
     assert (True, ["file_id", "segment_index"]) in indexes

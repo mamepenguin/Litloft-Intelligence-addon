@@ -100,6 +100,9 @@ async def _to_response_model(
                             keyword=p.keyword,
                             highlight_terms=list(p.highlight_terms),
                             frame_url=p.frame_url,
+                            line_box=p.line_box,
+                            line_match=p.line_match,
+                            line_frame_url=p.line_frame_url,
                         )
                         for p in r.passages
                     ]
