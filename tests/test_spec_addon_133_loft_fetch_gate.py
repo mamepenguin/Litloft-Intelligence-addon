@@ -1,4 +1,4 @@
-"""SPEC-ADDON-122 item 1 step 10, I11 (revising SPEC-ADDON-117 I3): a queued
+"""SPEC-ADDON-133 item 1 step 10, I11 (revising SPEC-ADDON-117 I3): a queued
 re-read of an outdated native read does not hold a backlog ``.loft`` fetch, and
 a native first read still does.
 """
@@ -59,7 +59,7 @@ async def _queue_native_frame_task(worker, file_id: str) -> None:
     )
 
 
-async def test_spec_addon_122_i11_a_queued_reread_does_not_hold_a_backlog_fetch_and_a_first_read_does(
+async def test_spec_addon_133_i11_a_queued_reread_does_not_hold_a_backlog_fetch_and_a_first_read_does(
     fetches, worker, gradient,  # noqa: F811
 ):
     _on_index(fetches)

@@ -1,4 +1,4 @@
-"""SPEC-ADDON-122: the frame OCR worker's re-read bookkeeping.
+"""SPEC-ADDON-133: the frame OCR worker's re-read bookkeeping.
 
 A re-read is decided by a lookup that can fail on its own, and while it runs
 its stored row is what the `.loft` gate must not read as native frame work.
@@ -20,7 +20,7 @@ from tests.test_spec_addon_119_loft_fetch_counting import (  # noqa: F401 - fixt
     gradient,
 )
 from tests.test_spec_addon_119_loft_fetch_pacing import BACKLOG, Worker
-from tests.test_spec_addon_122_loft_fetch_gate import (  # noqa: F401 - fixtures
+from tests.test_spec_addon_133_loft_fetch_gate import (  # noqa: F401 - fixtures
     _on_index,
     _queue_native_frame_task,
     fetches,
@@ -43,7 +43,7 @@ async def worker(fetches):  # noqa: F811
     await w.stop()
 
 
-async def test_spec_addon_122_i11_a_failed_reread_lookup_still_runs_the_read(
+async def test_spec_addon_133_i11_a_failed_reread_lookup_still_runs_the_read(
     monkeypatch, caplog,
 ):
     from app.indexer import IndexManager, IndexTask, TaskType
@@ -78,7 +78,7 @@ async def test_spec_addon_122_i11_a_failed_reread_lookup_still_runs_the_read(
     assert "search.db is busy" in caplog.text
 
 
-async def test_spec_addon_122_i11_a_failed_gate_lookup_puts_the_backlog_fetch_back_and_keeps_it(
+async def test_spec_addon_133_i11_a_failed_gate_lookup_puts_the_backlog_fetch_back_and_keeps_it(
     fetches, worker, gradient, caplog,  # noqa: F811
 ):
     import app.indexer as indexer
@@ -120,7 +120,7 @@ async def test_spec_addon_122_i11_a_failed_gate_lookup_puts_the_backlog_fetch_ba
     assert worker.looked_up() == [b]
 
 
-async def test_spec_addon_122_i11_a_running_reread_past_its_store_does_not_hold_a_backlog_fetch(
+async def test_spec_addon_133_i11_a_running_reread_past_its_store_does_not_hold_a_backlog_fetch(
     fetches, worker, gradient,  # noqa: F811
 ):
     _on_index(fetches)

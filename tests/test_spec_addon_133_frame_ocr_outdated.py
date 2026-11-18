@@ -1,4 +1,4 @@
-"""SPEC-ADDON-122: a frame read stored under the old selection rule is outdated
+"""SPEC-ADDON-133: a frame read stored under the old selection rule is outdated
 under ``on_index``, and is queued, counted, shown and reindexed as pending.
 
 Item 1 steps 6, 7 and 9, §3, §4, I6, I7, I10, and the revised SPEC-ADDON-117 I10.
@@ -125,7 +125,7 @@ def _columns(engine) -> dict[str, tuple[str, int]]:
         }
 
 
-def test_spec_addon_122_i6_the_migration_adds_a_nullable_rule_column_twice_leaving_rows_null(
+def test_spec_addon_133_i6_the_migration_adds_a_nullable_rule_column_twice_leaving_rows_null(
     init_database,  # noqa: F811
 ):
     start, path = init_database
@@ -176,7 +176,7 @@ def test_spec_addon_122_i6_the_migration_adds_a_nullable_rule_column_twice_leavi
 # ---------------------------------------------------------------------------
 
 
-async def test_spec_addon_122_i7_an_outdated_native_video_is_queued_at_minus_ten(
+async def test_spec_addon_133_i7_an_outdated_native_video_is_queued_at_minus_ten(
     db, tmp_path, monkeypatch,
 ):
     patch_features(monkeypatch, video_frame_ocr="on_index")
@@ -189,7 +189,7 @@ async def test_spec_addon_122_i7_an_outdated_native_video_is_queued_at_minus_ten
     assert _rule_flags(db, "old") == (True, True, None)
 
 
-async def test_spec_addon_122_i7_a_rule_two_read_a_loft_and_an_inactive_video_are_not_outdated(
+async def test_spec_addon_133_i7_a_rule_two_read_a_loft_and_an_inactive_video_are_not_outdated(
     db, tmp_path, monkeypatch,
 ):
     patch_features(monkeypatch, video_frame_ocr="on_index")
@@ -206,7 +206,7 @@ async def test_spec_addon_122_i7_a_rule_two_read_a_loft_and_an_inactive_video_ar
 
 
 @pytest.mark.parametrize("mode", ["manual", "false"])
-async def test_spec_addon_122_i7_outside_on_index_an_old_read_is_not_queued_until_the_mode_changes(
+async def test_spec_addon_133_i7_outside_on_index_an_old_read_is_not_queued_until_the_mode_changes(
     db, tmp_path, monkeypatch, mode,
 ):
     _video(db, tmp_path, "old")
@@ -228,7 +228,7 @@ async def test_spec_addon_122_i7_outside_on_index_an_old_read_is_not_queued_unti
 # ---------------------------------------------------------------------------
 
 
-def test_spec_addon_122_i7_get_status_counts_an_outdated_read_as_pending_only_under_on_index(
+def test_spec_addon_133_i7_get_status_counts_an_outdated_read_as_pending_only_under_on_index(
     db, tmp_path, monkeypatch,
 ):
     _video(db, tmp_path, "old")
@@ -240,7 +240,7 @@ def test_spec_addon_122_i7_get_status_counts_an_outdated_read_as_pending_only_un
     assert _manager().get_index_status().pending_frame_ocr == 0
 
 
-def test_spec_addon_122_i7_status_moves_an_outdated_read_from_indexed_to_pending(
+def test_spec_addon_133_i7_status_moves_an_outdated_read_from_indexed_to_pending(
     db, tmp_path, monkeypatch,
 ):
     patch_features(monkeypatch, video_frame_ocr="on_index")
@@ -256,7 +256,7 @@ def test_spec_addon_122_i7_status_moves_an_outdated_read_from_indexed_to_pending
     assert status.indexed["frame_ocr"] - baseline.indexed["frame_ocr"] == 1
 
 
-def test_spec_addon_122_i7_status_counts_a_rule_two_read_as_indexed(
+def test_spec_addon_133_i7_status_counts_a_rule_two_read_as_indexed(
     db, tmp_path, monkeypatch,
 ):
     patch_features(monkeypatch, video_frame_ocr="on_index")
@@ -271,7 +271,7 @@ def test_spec_addon_122_i7_status_counts_a_rule_two_read_as_indexed(
     assert status.indexed["frame_ocr"] - baseline.indexed["frame_ocr"] == 1
 
 
-def test_spec_addon_122_i7_outside_on_index_an_old_read_counts_as_indexed(
+def test_spec_addon_133_i7_outside_on_index_an_old_read_counts_as_indexed(
     db, tmp_path, monkeypatch,
 ):
     _video(db, tmp_path, "old")
@@ -290,7 +290,7 @@ def test_spec_addon_122_i7_outside_on_index_an_old_read_counts_as_indexed(
 # ---------------------------------------------------------------------------
 
 
-async def test_spec_addon_122_i7_index_details_show_an_outdated_read_as_not_done(
+async def test_spec_addon_133_i7_index_details_show_an_outdated_read_as_not_done(
     db, tmp_path, monkeypatch,
 ):
     _video(db, tmp_path, "old")
@@ -304,7 +304,7 @@ async def test_spec_addon_122_i7_index_details_show_an_outdated_read_as_not_done
     assert await _details_frame_ocr("old") is True
 
 
-async def test_spec_addon_122_i7_index_details_show_a_rule_two_read_as_done(
+async def test_spec_addon_133_i7_index_details_show_a_rule_two_read_as_done(
     db, tmp_path, monkeypatch,
 ):
     patch_features(monkeypatch, video_frame_ocr="on_index")
@@ -313,7 +313,7 @@ async def test_spec_addon_122_i7_index_details_show_a_rule_two_read_as_done(
     assert await _details_frame_ocr("new") is True
 
 
-async def test_spec_addon_122_i7_prioritize_queues_an_outdated_read_at_100(
+async def test_spec_addon_133_i7_prioritize_queues_an_outdated_read_at_100(
     db, tmp_path, monkeypatch,
 ):
     patch_features(monkeypatch, video_frame_ocr="on_index")
@@ -325,7 +325,7 @@ async def test_spec_addon_122_i7_prioritize_queues_an_outdated_read_at_100(
     assert _rule_flags(db, "old") == (True, True, None)
 
 
-async def test_spec_addon_122_i7_prioritize_leaves_a_rule_two_read_and_a_manual_old_read_alone(
+async def test_spec_addon_133_i7_prioritize_leaves_a_rule_two_read_and_a_manual_old_read_alone(
     db, tmp_path, monkeypatch,
 ):
     patch_features(monkeypatch, video_frame_ocr="on_index")
@@ -346,7 +346,7 @@ async def test_spec_addon_122_i7_prioritize_leaves_a_rule_two_read_and_a_manual_
 # ---------------------------------------------------------------------------
 
 
-async def test_spec_addon_122_i10_a_reindex_of_a_queued_outdated_read_raises_it_to_100(
+async def test_spec_addon_133_i10_a_reindex_of_a_queued_outdated_read_raises_it_to_100(
     db, tmp_path, monkeypatch,
 ):
     patch_features(monkeypatch, video_frame_ocr="on_index")
@@ -361,7 +361,7 @@ async def test_spec_addon_122_i10_a_reindex_of_a_queued_outdated_read_raises_it_
     assert _rule_flags(db, "old") == (True, True, None)
 
 
-async def test_spec_addon_122_item_9_a_reindex_with_no_queued_task_resets_r_and_x_and_keeps_f(
+async def test_spec_addon_133_item_9_a_reindex_with_no_queued_task_resets_r_and_x_and_keeps_f(
     db, tmp_path, monkeypatch,
 ):
     patch_features(monkeypatch, video_frame_ocr="on_index")

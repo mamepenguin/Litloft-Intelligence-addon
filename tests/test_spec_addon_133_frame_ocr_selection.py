@@ -1,4 +1,4 @@
-"""SPEC-ADDON-122 item 1 step 2, I1: a later frame is read only 3 seconds or
+"""SPEC-ADDON-133 item 1 step 2, I1: a later frame is read only 3 seconds or
 more after the last read frame.
 
 The picture flips between a left-to-right and a right-to-left ramp every second,
@@ -24,7 +24,7 @@ from tests.ocr_fixtures import (
     real_pillow,
     seed_indexed_file,
 )
-from tests.test_spec_addon_122_frame_ocr_reread import wire_reader
+from tests.test_spec_addon_133_frame_ocr_reread import wire_reader
 
 pytestmark = pytest.mark.usefixtures("pillow_real")
 
@@ -82,7 +82,7 @@ def reader(tmp_path, monkeypatch):
     return module, db, source.engine
 
 
-def test_spec_addon_122_i1_a_frame_is_read_three_seconds_after_the_last_read_and_not_sooner(
+def test_spec_addon_133_i1_a_frame_is_read_three_seconds_after_the_last_read_and_not_sooner(
     reader, flips,
 ):
     module, db, engine = reader

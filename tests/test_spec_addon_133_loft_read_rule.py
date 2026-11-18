@@ -1,4 +1,4 @@
-"""SPEC-ADDON-122 §3: the frame read of a YouTube ``.loft``'s download is a stored
+"""SPEC-ADDON-133 §3: the frame read of a YouTube ``.loft``'s download is a stored
 read like a native one, so it writes rule 2 and the ``.loft`` is never outdated.
 """
 
@@ -25,7 +25,7 @@ def world(search_index, youtube, monkeypatch, tmp_path, make_settings):  # noqa:
     return LoftWorld(search_index, youtube, monkeypatch, tmp_path, make_settings)
 
 
-def test_spec_addon_122_section_3_a_loft_read_is_stored_under_rule_two(
+def test_spec_addon_133_section_3_a_loft_read_is_stored_under_rule_two(
     world, gradient, monkeypatch,  # noqa: F811
 ):
     world.configure(frame_ocr="on_index")
