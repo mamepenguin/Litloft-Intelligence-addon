@@ -44,6 +44,12 @@ class _Rig:
         self.core.add_file(file_id, kind=kind, **(file_kw or {}))
         self.core.watch(file_id, viewer=viewer,
                         played_at=utcnow() - timedelta(days=age_days), **watch_kw)
+        # A row at or past half is meant as watched, so give it the
+        # recorded coverage that makes it so.
+        if (kind == "video"
+                and 2 * watch_kw.get("position", 100.0)
+                >= watch_kw.get("duration", 100.0)):
+            self.core.segments(file_id, [5.0] * 10, viewer=viewer)
         if angle is not None:
             self.search.index(file_id, at_angle(angle), channel=channel, kind=kind)
 
@@ -159,7 +165,11 @@ async def test_spec_addon_095_i2_an_unengaged_or_document_row_only_excludes(rig)
     base = rig.feed()
     assert "brief" in base
 
-    rig.core.watch("brief", played_at=utcnow() - timedelta(hours=1), position=1.0)
+    rig.core.watch(
+        "brief", played_at=utcnow() - timedelta(hours=1),
+        position=0.0, dismissed_at=utcnow(),
+    )
+    rig.core.segments("brief", [5.0] * 10)
     rig.watched("doc", angle=90.0, kind="document", age_days=0.1)
     await rig.sweep()
 

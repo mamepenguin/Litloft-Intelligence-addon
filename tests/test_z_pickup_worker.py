@@ -82,6 +82,16 @@ def rig(monkeypatch, tmp_path):
                 f,
                 state["played"].get((v, f), "2026-08-01 00:00:00"),
                 state["live"].get((v, f), 1),
+                0,
+                0,
+                0,
+                "video",
+                "video/mp4",
+                "0.0",
+                "0.0",
+                "0.0",
+                "0.0",
+                1,
             )
             for f in sorted(state["watched"].get(v, ()))
         ],

@@ -9,8 +9,8 @@ Per drive:
      The stamp moves the checkpoint of every viewer of the drive when a
      video or one of its Pickup embeddings arrives.
   2. Per viewer, read their history twice — the whole set of file ids
-     they have opened, which bounds nothing, and the engaged videos for
-     the window, which is capped.
+     they must not be offered, which bounds nothing, and the engaged
+     videos for the window, which is capped.
   3. Skip if their history and the stamp have not moved since the last
      run.
   4. Read the live-video set and load the candidate rows for each
@@ -279,7 +279,7 @@ class PickupWorker:
         signature = profile_mod.watch_signature(drive, viewer_id)
         if not signature:
             return None
-        watched = {row[0] for row in signature}
+        watched = profile_mod.signature_exclusions(signature)
 
         checkpoint = _checkpoint(signature, stamp)
         with get_search_db_read() as session:

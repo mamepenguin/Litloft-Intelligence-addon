@@ -21,8 +21,10 @@ for _mod in ("PIL", "PIL.Image", "open_clip", "torch", "sentence_transformers"):
 from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
+import app.database as database  # noqa: E402
 from app.models import Base, PickupItem, PickupProfile  # noqa: E402
 from app.routers import pickup as endpoint  # noqa: E402
+from tests.pickup_accuracy_rig import CoreDB  # noqa: E402
 
 
 @pytest.fixture()
@@ -43,6 +45,8 @@ def store(monkeypatch, tmp_path):
             s.close()
 
     monkeypatch.setattr(endpoint, "get_search_db_read", session_cm)
+    core = CoreDB(tmp_path / "litloft.db")
+    monkeypatch.setattr(database, "_HomevaultSession", core.sessions)
 
     def seed(count, drive="a", viewer="v1", prefix="f"):
         s = maker()

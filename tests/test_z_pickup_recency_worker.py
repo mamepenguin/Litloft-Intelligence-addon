@@ -44,6 +44,10 @@ class _Rig:
                 drive="a"):
         self.core.add_file(file_id, kind=kind, drive=drive)
         self.core.watch(file_id, viewer=viewer, played_at=utcnow() - timedelta(days=age_days))
+        # Every row this fixture seeds is meant as watched, so give it
+        # the recorded coverage that makes it so.
+        if kind == "video":
+            self.core.segments(file_id, [5.0] * 10, viewer=viewer)
         if angle is not None:
             self.search.index(file_id, at_angle(angle), kind=kind, drive=drive)
 

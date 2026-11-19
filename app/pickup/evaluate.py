@@ -94,6 +94,7 @@ class _HistoryRow:
     file_id: str
     played_at: datetime | None
     engagement: float
+    watched: bool
     file_type: str
     created_at: datetime | None
     live: bool
@@ -159,16 +160,14 @@ SELECT wh.file_id,
             THEN 1 ELSE 0 END AS live,
        CASE WHEN f.liked_at IS NOT NULL THEN 1 ELSE 0 END AS liked,
        COALESCE(f.is_favorite, 0) AS favourite,
-       COALESCE(ps.seconds, 0.0) AS played_seconds
+       ps.segment_index,
+       ps.played_seconds
 FROM watch_history wh
 JOIN files f ON wh.file_id = f.id
-LEFT JOIN (
-    SELECT file_id, SUM(played_seconds) AS seconds
-    FROM played_segments
-    WHERE viewer_id = :viewer
-    GROUP BY file_id
-) ps ON ps.file_id = wh.file_id
+LEFT JOIN played_segments ps
+       ON ps.file_id = wh.file_id AND ps.viewer_id = wh.viewer_id
 WHERE f.drive = :drive AND wh.viewer_id = :viewer
+ORDER BY wh.file_id, ps.segment_index
 """
 
 
@@ -180,25 +179,44 @@ def _read_history(drive: str, viewer_id: str) -> list[_HistoryRow]:
             {"drive": drive, "viewer": viewer_id},
         ).fetchall()
 
-    return [
-        _HistoryRow(
-            file_id=row[0],
-            played_at=profile_mod._parse_naive_utc(row[1]),
-            engagement=profile_mod.engagement(
-                liked=bool(row[9]),
-                favourite=bool(row[10]),
-                dismissed=profile_mod._is_dismissed(row[2], row[1]),
-                playback_position=row[3],
-                duration=row[4],
-                played_seconds=row[11],
-                mime_type=row[6],
+    grouped: dict[str, list] = {}
+    for row in rows:
+        grouped.setdefault(row[0], []).append(row)
+
+    history: list[_HistoryRow] = []
+    for file_id, group in grouped.items():
+        head = group[0]
+        watch_row = profile_mod.WatchRow(
+            file_id=file_id,
+            played_at=profile_mod._parse_naive_utc(head[1]),
+            dismissed=profile_mod._is_dismissed(head[2], head[1]),
+            position=profile_mod._finite(head[3]),
+            duration=profile_mod._finite(head[4]),
+            file_type=head[5],
+            mime_type=head[6],
+            live=bool(head[8]),
+            liked=bool(head[9]),
+            favourite=bool(head[10]),
+            played_seconds=sum(
+                profile_mod._finite(row[12]) or 0.0 for row in group
             ),
-            file_type=row[5],
-            created_at=profile_mod._parse_naive_utc(row[7]),
-            live=bool(row[8]),
+            segments=tuple(
+                (int(row[11]), profile_mod._finite(row[12]) or 0.0)
+                for row in group
+                if row[11] is not None
+            ),
         )
-        for row in rows
-    ]
+        state = profile_mod.watch_state(watch_row)
+        history.append(_HistoryRow(
+            file_id=file_id,
+            played_at=watch_row.played_at,
+            engagement=state.engagement,
+            watched=state.watched,
+            file_type=watch_row.file_type,
+            created_at=profile_mod._parse_naive_utc(head[7]),
+            live=watch_row.live,
+        ))
+    return history
 
 
 def _viewer_ids(drive: str, viewer_id: str | None) -> list[str]:
@@ -232,6 +250,21 @@ def _opened_before(rows: list[_HistoryRow], t: datetime) -> set[str]:
         row.file_id
         for row in rows
         if row.played_at is None or row.played_at < t
+    }
+
+
+def _excluded_before(rows: list[_HistoryRow], t: datetime) -> set[str]:
+    """Files the feed must not hold at ``t`` under SPEC-ADDON-149.
+
+    A row whose timestamp does not parse cannot date the open, so it is
+    judged as already opened: the same treatment ``_opened_before``
+    gives it.
+    """
+    return {
+        row.file_id
+        for row in rows
+        if (row.played_at is None or row.played_at < t)
+        and (row.file_type != "video" or row.watched)
     }
 
 
@@ -410,23 +443,31 @@ def _rank_configs(
         universe_all if allowed_videos == allowed_all
         else _universe(candidates, allowed_videos)
     )
+    excluded_now = _excluded_before(rows, t)
+    allowed_after = _allowed_files(files, excluded_now, t, videos_only=True)
+    universe_after = (
+        universe_video if allowed_after == allowed_videos
+        else _universe(candidates, allowed_after)
+    )
 
     rankings: dict[str, list[str]] = {}
     lanes_by_config: dict[str, list] = {}
     for name, videos_only, weighted in _CONFIGS:
+        if name == "after":
+            exclusion, universe = excluded_now, universe_after
+        else:
+            exclusion = opened
+            universe = universe_video if videos_only else universe_all
         history = profile_mod.profile_history(
             drive, viewer_id, now=t, until=t,
             videos_only=videos_only, weighted=weighted,
+            version_4=(name == "depth"),
         )
         lanes = profile_mod.build_lanes(
             history, key=f"{drive}\x1f{viewer_id}", now=t, vectors=vectors,
         )
         lanes_by_config[name] = lanes
-        rankings[name] = _rank_lanes(
-            lanes,
-            universe_video if videos_only else universe_all,
-            opened=opened,
-        )
+        rankings[name] = _rank_lanes(lanes, universe, opened=exclusion)
 
     voted = {
         file_id
@@ -447,8 +488,8 @@ def _rank_configs(
         }
         rankings[f"fresh_h{half_life:g}_f{floor:g}"] = _rank_lanes(
             lanes_by_config["after"],
-            universe_video,
-            opened=opened,
+            universe_after,
+            opened=excluded_now,
             freshness=mapping,
         )
 
