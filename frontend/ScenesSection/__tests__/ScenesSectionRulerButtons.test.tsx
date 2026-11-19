@@ -130,6 +130,30 @@ describe("SPEC-ADDON-153 I13 — only the primary mouse button drives the ruler"
     expect(visibleRows()).toEqual(rows);
   });
 
+  it("SPEC-ADDON-153 I13 — after a ruler drag released off the ruler, a press elsewhere dragged onto it sets no point", async () => {
+    const { controller } = makeController({ duration: L, currentTime: 10 });
+    render(section({ mediaController: controller }));
+    await settle(0);
+    await settle(0);
+
+    const el = ruler();
+    const mouse = { pointerType: "mouse", button: 0 } as const;
+    fireEvent.pointerDown(el, { ...mouse, buttons: 1, clientX: pointerX(60, L, WIDTH) });
+    fireEvent.pointerMove(el, { ...mouse, buttons: 1, clientX: pointerX(80, L, WIDTH) });
+    fireEvent.pointerUp(document.body, { ...mouse, buttons: 0, clientX: 1, clientY: 400 });
+    await settle(0);
+    const pointAfterDrag = ruler().getAttribute("aria-valuenow");
+    const placed = scrollTopOf(scroller());
+
+    fireEvent.pointerDown(document.body, { ...mouse, buttons: 1, clientX: 1, clientY: 400 });
+    fireEvent.pointerMove(el, { ...mouse, buttons: 1, clientX: pointerX(140, L, WIDTH) });
+    fireEvent.pointerUp(document.body, { ...mouse, buttons: 0, clientX: 1, clientY: 400 });
+    await settle(0);
+
+    expect(ruler().getAttribute("aria-valuenow"), "the earlier drag's point stays").toBe(pointAfterDrag);
+    expect(scrollTopOf(scroller()), "the list does not move").toBe(placed);
+  });
+
   it("SPEC-ADDON-153 I13 — a right-button press and drag leave the point unset and the list where it was", async () => {
     const { controller } = makeController({ duration: L, currentTime: 10 });
     render(section({ mediaController: controller }));

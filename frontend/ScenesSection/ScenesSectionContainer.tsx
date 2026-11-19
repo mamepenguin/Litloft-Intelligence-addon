@@ -151,6 +151,15 @@ export default function ScenesSectionContainer({
   const browseRef = useRef<number | null>(null);
   const expandedRef = useRef(false);
   const dragStart = useRef<DragStart | null>(null);
+  // A mouse is not captured by the ruler, so a drag released off it never
+  // reaches the ruler's pointerup.
+  useEffect(() => {
+    const endMouseDrag = (event: PointerEvent) => {
+      if (event.pointerType === "mouse") dragStart.current = null;
+    };
+    window.addEventListener("pointerup", endMouseDrag);
+    return () => window.removeEventListener("pointerup", endMouseDrag);
+  }, []);
   const rulerRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLButtonElement>(null);
