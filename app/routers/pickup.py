@@ -10,11 +10,11 @@ import random
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Response
 
 from app.database import get_search_db_read
 from app.drive_context import require_drive
-from app.models import PickupItem, PickupProfile
+from app.models import PickupItem, PickupNotInterested, PickupProfile
 from app.pickup import profile as profile_mod
 
 logger = logging.getLogger(__name__)
@@ -92,8 +92,14 @@ async def pickup_endpoint(
                 .order_by(PickupItem.rank)
                 .all()
             ]
+            marks = {
+                row[0]
+                for row in session.query(PickupNotInterested.file_id)
+                .filter_by(drive_id=drive, viewer_id=viewer_id)
+                .all()
+            }
 
-        excluded = profile_mod.watched_file_ids(drive, viewer_id)
+        excluded = profile_mod.watched_file_ids(drive, viewer_id) | marks
         kept = [file_id for file_id in stored if file_id not in excluded]
         if window == "daily":
             return len(kept), kept[:min(_WINDOW_POOL, len(kept))]
@@ -111,3 +117,66 @@ async def pickup_endpoint(
         pool = pool[:limit]
 
     return {"file_ids": pool, "total": total}
+
+
+#: The core's file-id alphabet, so a malformed id never reaches a write.
+_FILE_ID_PATTERN = r"^[A-Za-z0-9_-]{12}$"
+
+
+def _store_mark(drive: str, viewer_id: str, file_id: str) -> None:
+    from app.database import get_search_db
+    from app.models import PickupNotInterested
+
+    now = datetime.now(UTC).replace(tzinfo=None)
+    with get_search_db() as session:
+        if session.get(PickupNotInterested, (drive, viewer_id, file_id)) is not None:
+            # A repeated PUT keeps the first mark's time: the feed only
+            # asks whether the file is marked, and the sweep's rebuild
+            # should not be triggered by the second click's arrival.
+            return
+        session.add(PickupNotInterested(
+            drive_id=drive,
+            viewer_id=viewer_id,
+            file_id=file_id,
+            marked_at=now,
+        ))
+
+
+def _remove_mark(drive: str, viewer_id: str, file_id: str) -> None:
+    from app.database import get_search_db
+    from app.models import PickupNotInterested
+
+    with get_search_db() as session:
+        session.query(PickupNotInterested).filter_by(
+            drive_id=drive, viewer_id=viewer_id, file_id=file_id,
+        ).delete(synchronize_session=False)
+
+
+@router.put("/pickup/not-interested/{file_id}", status_code=204)
+async def mark_not_interested(
+    file_id: Annotated[str, Path(pattern=_FILE_ID_PATTERN)],
+    drive: str = Depends(require_drive),
+    viewer_id: Annotated[str | None, Header(alias="X-Lit-Viewer-Id")] = None,
+) -> Response:
+    """Keep one video out of this viewer's feed in this drive.
+
+    Answers 204 whether or not the mark already existed. A drive whose
+    ``index`` policy is off answers 404 at the proxy before this runs.
+    """
+    if not viewer_id:
+        raise HTTPException(status_code=400, detail="viewer_required")
+    await asyncio.to_thread(_store_mark, drive, viewer_id, file_id)
+    return Response(status_code=204)
+
+
+@router.delete("/pickup/not-interested/{file_id}", status_code=204)
+async def unmark_not_interested(
+    file_id: Annotated[str, Path(pattern=_FILE_ID_PATTERN)],
+    drive: str = Depends(require_drive),
+    viewer_id: Annotated[str | None, Header(alias="X-Lit-Viewer-Id")] = None,
+) -> Response:
+    """Undo a mark. 204 whether or not it existed."""
+    if not viewer_id:
+        raise HTTPException(status_code=400, detail="viewer_required")
+    await asyncio.to_thread(_remove_mark, drive, viewer_id, file_id)
+    return Response(status_code=204)

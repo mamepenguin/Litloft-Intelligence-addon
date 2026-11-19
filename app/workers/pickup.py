@@ -40,7 +40,13 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import delete
 
 from app.database import get_search_db, get_search_db_read
-from app.models import IndexedFile, PickupFeedLog, PickupItem, PickupProfile
+from app.models import (
+    IndexedFile,
+    PickupFeedLog,
+    PickupItem,
+    PickupNotInterested,
+    PickupProfile,
+)
 from app.pickup import feed as feed_mod
 from app.pickup import freshness as freshness_mod
 from app.pickup import profile as profile_mod
@@ -71,6 +77,23 @@ _LOG_TTL_DAYS = 180
 _CANDIDATES_PER_LANE = 120
 
 _PERIODIC_INTERVAL_SECONDS = 3600
+
+
+def _not_interested_ids(drive: str, viewer_id: str) -> set[str]:
+    """This viewer's marked files in the drive.
+
+    Read through this module's session getter, like every other search-DB
+    read here, and allowed to raise: a viewer whose marks cannot be read
+    must get no feed and no checkpoint rather than one built without
+    them.
+    """
+    with get_search_db_read() as session:
+        rows = (
+            session.query(PickupNotInterested.file_id)
+            .filter_by(drive_id=drive, viewer_id=viewer_id)
+            .all()
+        )
+    return {row[0] for row in rows}
 
 
 class PickupWorker:
@@ -279,9 +302,10 @@ class PickupWorker:
         signature = profile_mod.watch_signature(drive, viewer_id)
         if not signature:
             return None
-        watched = profile_mod.signature_exclusions(signature)
+        marks = _not_interested_ids(drive, viewer_id)
+        watched = profile_mod.signature_exclusions(signature) | marks
 
-        checkpoint = _checkpoint(signature, stamp)
+        checkpoint = _checkpoint(signature, stamp, marks)
         with get_search_db_read() as session:
             existing = (
                 session.query(PickupProfile)
@@ -435,7 +459,9 @@ def _log_feed(
         )
 
 
-def _checkpoint(signature: Sequence[tuple], stamp: str) -> str:
+def _checkpoint(
+    signature: Sequence[tuple], stamp: str, marks: set[str] | None = None,
+) -> str:
     """A hash of what this viewer has opened, how it was engaged, and what arrived.
 
     *Anything watched*, not just the newest — a hash of the first twenty
@@ -467,6 +493,10 @@ def _checkpoint(signature: Sequence[tuple], stamp: str) -> str:
     The drive's arrival stamp covers it. The stamp is read before the
     candidate load, so a checkpoint written from it never vouches for
     arrivals the feed was not built from.
+
+    *What they refused.* A not-interested mark removes one file and
+    changes no history row, so the viewer's marked ids are hashed too: a
+    mark or its undo must rebuild the feed on the next sweep.
     """
     date = datetime.now(UTC).strftime("%Y-%m-%d")
     version = profile_mod.PROFILE_VERSION
@@ -474,6 +504,7 @@ def _checkpoint(signature: Sequence[tuple], stamp: str) -> str:
         f"{row[0]}@{row[1]}#{'#'.join(str(value) for value in row[2:])}"
         for row in sorted(signature, key=lambda row: row[0])
     )
+    refused = ",".join(sorted(marks or ()))
     return hashlib.md5(
-        f"v{version}|{date}|{stamp}|{joined}".encode()
+        f"v{version}|{date}|{stamp}|{joined}|{refused}".encode()
     ).hexdigest()[:32]

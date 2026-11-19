@@ -38,7 +38,9 @@
       "description": "Videos you have not watched yet, drawn from what you have been watching.",
       "empty": "Nothing to suggest yet.",
       "loading": "Loading…",
-      "retry": "Try again"
+      "retry": "Try again",
+      "notInterested": "Not interested",
+      "notInterestedToast": "Removed from your picks"
     },
     "processing": {
       "search": "Search index",

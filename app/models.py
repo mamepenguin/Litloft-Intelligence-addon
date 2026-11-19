@@ -593,6 +593,24 @@ class PickupFeedLog(Base):
     )
 
 
+class PickupNotInterested(Base):
+    """A video its viewer told Pickup not to suggest in this drive.
+
+    Separate from Continue's set-aside (``watch_history.dismissed_at``),
+    which changes engagement: a mark leaves no trace in the profile and
+    only keeps the file out of that viewer's feed. It stays a candidate
+    for every other viewer and drive.
+    """
+
+    __tablename__ = "pickup_not_interested"
+
+    drive_id: Mapped[str] = mapped_column(String, primary_key=True)
+    viewer_id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    file_id: Mapped[str] = mapped_column(String(12), primary_key=True)
+
+    marked_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
 class PdfMarkdown(Base):
     """Markdown rendering of a PDF file produced by PyMuPDF4LLM.
 

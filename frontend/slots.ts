@@ -1,5 +1,11 @@
 import { lazy } from "react";
+import { CircleSlash } from "lucide-react";
 
+import type { ShelfItemActions } from "@/lib/addons";
+import {
+  markPickupNotInterested,
+  unmarkPickupNotInterested,
+} from "./api";
 import {
   pickupPageProvider,
   pickupShelfProvider,
@@ -48,4 +54,29 @@ export const slotProviders: Record<string, ShelfProvider> = {
 
 export const slotPageProviders: Record<string, ShelfPageProvider> = {
   pickup: pickupPageProvider,
+};
+
+/**
+ * The video app's `pickup` cards get one action: mark the video "not
+ * interested" for this viewer and drive, with an undo that removes the
+ * mark. Labels come through the core's translator over the merged
+ * messages, so the action reads in the viewer's language.
+ */
+export const slotItemActions: Record<string, ShelfItemActions> = {
+  pickup: ({ drive, t }) => [
+    {
+      id: "pickup-not-interested",
+      label: t("intelligence.pickup.notInterested"),
+      icon: CircleSlash,
+      run: async (fileId: string) => {
+        await markPickupNotInterested(fileId, drive);
+        return {
+          message: t("intelligence.pickup.notInterestedToast"),
+          undo: async () => {
+            await unmarkPickupNotInterested(fileId, drive);
+          },
+        };
+      },
+    },
+  ],
 };

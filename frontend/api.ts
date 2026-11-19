@@ -2321,3 +2321,33 @@ export function localDateStamp(now: Date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
+
+async function writePickupNotInterested(
+  fileId: string,
+  drive: string,
+  method: "PUT" | "DELETE",
+): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/addons/intelligence/pickup/not-interested/${encodeURIComponent(fileId)}`,
+    { method, credentials: "include", headers: driveHeaders(drive) },
+  );
+  if (!res.ok) {
+    throw new Error(`Pickup mark failed: ${res.status} ${res.statusText}`);
+  }
+}
+
+/** Keep one video out of this viewer's Pickup feed in this drive. */
+export async function markPickupNotInterested(
+  fileId: string,
+  drive: string,
+): Promise<void> {
+  await writePickupNotInterested(fileId, drive, "PUT");
+}
+
+/** Undo a not-interested mark. */
+export async function unmarkPickupNotInterested(
+  fileId: string,
+  drive: string,
+): Promise<void> {
+  await writePickupNotInterested(fileId, drive, "DELETE");
+}

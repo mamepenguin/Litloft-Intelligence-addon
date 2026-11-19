@@ -293,6 +293,18 @@
         "response_filter": null
       },
       {
+        "path": "/pickup/not-interested/{file_id}",
+        "methods": [
+          "PUT",
+          "DELETE"
+        ],
+        "pre_check": {
+          "type": "addon_feature",
+          "feature": "index"
+        },
+        "response_filter": null
+      },
+      {
         "path": "/search/by-image/available",
         "methods": [
           "GET"
