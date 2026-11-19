@@ -610,8 +610,13 @@ def watched_file_ids(drive: str, viewer_id: str) -> set[str]:
     seen, not what is currently on disk. They cannot be candidates
     anyway, so including them costs nothing, and dropping them would risk
     recommending a file whose row came back.
+
+    Not-interested marks are deliberately absent: they are not history,
+    and each reader of the feed's exclusion set adds them from the
+    search DB itself.
     """
     return signature_exclusions(watch_signature(drive, viewer_id))
+
 
 
 def profile_history(

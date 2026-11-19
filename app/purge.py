@@ -39,10 +39,27 @@ def purge_drive(drive: str) -> int:
     drive has no indexed data (returns 0). Best-effort: per-file
     failures are logged and skipped so a single bad row does not block
     cleanup for the whole drive.
+
+    The viewer's not-interested marks are deleted even when the drive
+    has no indexed files: a mark is the viewer's, not a file's, and a
+    policy-off drive that was only ever marked stays in the count that
+    makes the startup purge visit it again until the rows are gone.
     """
     from app.database import get_search_db
     from app.indexer import _purge_file
+    from app.models import PickupNotInterested
     from app.search import invalidate_similar_cache
+
+    try:
+        with get_search_db() as session:
+            session.query(PickupNotInterested).filter_by(
+                drive_id=drive,
+            ).delete(synchronize_session=False)
+    except Exception as e:
+        logger.error(
+            "purge_drive: failed to delete not-interested marks for drive %s: %s",
+            drive, e,
+        )
 
     with get_search_db() as session:
         file_ids = [
@@ -169,15 +186,28 @@ def purge_vision_for_drive(drive: str) -> int:
 
 
 def _indexed_drives() -> list[str]:
+    """Every drive the addon holds something for.
+
+    Marks are a drive's data even when none of its files were indexed
+    (the drive may have been turned off before ever being scanned, or its
+    index rows purged while a mark delete failed), so they count towards
+    the startup purge visiting it.
+    """
     from app.database import get_search_db
+    from app.models import PickupNotInterested
 
     with get_search_db() as session:
-        return [
+        drives = {
             row.drive
-            for row in session.query(IndexedFile.drive)
-            .distinct()
-            .all()
-        ]
+            for row in session.query(IndexedFile.drive).distinct().all()
+        }
+        drives.update(
+            row.drive
+            for row in session.query(
+                PickupNotInterested.drive_id.label("drive"),
+            ).distinct().all()
+        )
+    return sorted(drives)
 
 
 async def purge_disabled_vision_drives() -> dict[str, int]:

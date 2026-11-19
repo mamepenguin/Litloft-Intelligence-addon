@@ -238,6 +238,30 @@ def _midnight_utc() -> datetime:
 # ---------------------------------------------------------------------------
 
 
+_MARKS_SQL = """
+SELECT file_id, marked_at
+FROM pickup_not_interested
+WHERE drive_id = :drive AND viewer_id = :viewer
+"""
+
+
+def _read_marks(drive: str, viewer_id: str) -> list[tuple[str, datetime | None]]:
+    """This viewer's not-interested marks, with when each was made.
+
+    A failure here aborts the command: a replay that ignored the marks
+    would score a feed nobody was served.
+    """
+    with get_search_db_read() as session:
+        rows = session.execute(
+            sql_text(_MARKS_SQL),
+            {"drive": drive, "viewer": viewer_id},
+        ).fetchall()
+    return [
+        (row[0], profile_mod._parse_naive_utc(row[1]))
+        for row in rows
+    ]
+
+
 def _opened_before(rows: list[_HistoryRow], t: datetime) -> set[str]:
     """Files the viewer opened before ``t``.
 
@@ -433,6 +457,7 @@ def _rank_configs(
     vectors,
     *,
     t: datetime,
+    marks: list[tuple[str, datetime | None]] = (),
 ) -> tuple[dict[str, list[str]], set[str]]:
     """One ranking per configuration at ``t``, and the video universe."""
     opened = _opened_before(rows, t)
@@ -444,7 +469,17 @@ def _rank_configs(
         else _universe(candidates, allowed_videos)
     )
     excluded_now = _excluded_before(rows, t)
-    allowed_after = _allowed_files(files, excluded_now, t, videos_only=True)
+    # A mark hides its file only for cut points after it was made: an
+    # earlier feed could not have known about it, and scoring one as if
+    # it had would flatter the row. An unparseable mark's time cannot
+    # place it, so it is not used to exclude anything.
+    refused = {
+        file_id
+        for file_id, marked_at in marks
+        if marked_at is not None and marked_at < t
+    }
+    excluded_after = excluded_now | refused
+    allowed_after = _allowed_files(files, excluded_after, t, videos_only=True)
     universe_after = (
         universe_video if allowed_after == allowed_videos
         else _universe(candidates, allowed_after)
@@ -454,7 +489,7 @@ def _rank_configs(
     lanes_by_config: dict[str, list] = {}
     for name, videos_only, weighted in _CONFIGS:
         if name == "after":
-            exclusion, universe = excluded_now, universe_after
+            exclusion, universe = excluded_after, universe_after
         else:
             exclusion = opened
             universe = universe_video if videos_only else universe_all
@@ -489,7 +524,7 @@ def _rank_configs(
         rankings[f"fresh_h{half_life:g}_f{floor:g}"] = _rank_lanes(
             lanes_by_config["after"],
             universe_after,
-            opened=excluded_now,
+            opened=excluded_after,
             freshness=mapping,
         )
 
@@ -514,13 +549,14 @@ def _cut_rankings(
     *,
     t: datetime,
     horizon: timedelta,
+    marks: list[tuple[str, datetime | None]] = (),
 ) -> tuple[dict[str, list[str]], list[_HistoryRow], int] | None:
     """One ranking per configuration at ``t``, or None with no target."""
     targets = _targets(rows, t, horizon)
     if not targets:
         return None
     rankings, voted = _rank_configs(
-        drive, viewer_id, rows, files, candidates, vectors, t=t,
+        drive, viewer_id, rows, files, candidates, vectors, t=t, marks=marks,
     )
     return rankings, targets, len(voted)
 
@@ -551,6 +587,7 @@ def _replay_viewer(
     horizon: timedelta,
 ) -> str:
     rows = _read_history(drive, viewer_id)
+    marks = _read_marks(drive, viewer_id)
     vectors = _vector_lookup(_history_vectors(rows))
 
     cut_points = [
@@ -565,7 +602,7 @@ def _replay_viewer(
     for t in cut_points:
         result = _cut_rankings(
             drive, viewer_id, rows, files, candidates, vectors,
-            t=t, horizon=horizon,
+            t=t, horizon=horizon, marks=marks,
         )
         if result is None:
             skipped += 1
