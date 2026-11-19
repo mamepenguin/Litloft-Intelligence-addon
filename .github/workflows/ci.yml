@@ -72,8 +72,11 @@ jobs:
           # tmpfs is capped at half the runner's RAM and pytest keeps every
           # `tmp_path` until the session ends (6.2 GB at peak), so a passed
           # test's directory is dropped at its teardown.
+          #
+          # `-n 4` is the runner's vCPU count. The suite was serial for 23
+          # minutes; four workers give the same count and the same total.
           docker run --rm --tmpfs /tmp:exec -v "$RUNNER_TEMP/cov:/out" \
-            -e PYTEST_ADDOPTS="--cov-fail-under=$COV_FLOOR --cov-report=json:/out/cov.json -o tmp_path_retention_policy=failed" \
+            -e PYTEST_ADDOPTS="-n 4 --cov-fail-under=$COV_FLOOR --cov-report=json:/out/cov.json -o tmp_path_retention_policy=failed" \
             intelligence-test
 
       # The floor is a lower bound, and a lower bound cannot see the
