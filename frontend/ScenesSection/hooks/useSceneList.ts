@@ -242,15 +242,18 @@ export function useSceneList({
       const tiles = tileElements(list);
       if (tiles.length === 0) return;
       const count = rowCountOf(list, cols);
-      const target = second
-        ? clampRow(row, count) - (row > 0 ? 1 : 0)
-        : clampRow(row, count);
+      const view = viewportOf(list, rulerBox.current, cardBox.current);
+      const roomForTwo =
+        view.bottom - view.top >= 2 * rowStepOf(list, cols);
+      const target =
+        second && roomForTwo
+          ? clampRow(row, count) - (row > 0 ? 1 : 0)
+          : clampRow(row, count);
       if (target <= 0) {
         placeListTop();
         return;
       }
       const tile = tiles[Math.min(target * cols, tiles.length - 1)];
-      const view = viewportOf(list, rulerBox.current, cardBox.current);
       const rect = tile.getBoundingClientRect();
       const scroller = scrollerOf(list);
       scroller.scrollTop = Math.max(
