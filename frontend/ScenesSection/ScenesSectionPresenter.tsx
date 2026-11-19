@@ -170,6 +170,7 @@ export default function ScenesSectionPresenter({
     visual?.note != null ||
     error != null ||
     (visual?.actions.length ?? 0) > 0;
+  const cardDrawn = awaitingVisual || visual?.scene != null;
 
   const timeAt = (clientX: number, target: HTMLElement): number => {
     const rect = target.getBoundingClientRect();
@@ -372,10 +373,12 @@ export default function ScenesSectionPresenter({
             <>
               <div
                 ref={cardBoxRef}
-                style={flow ? { bottom: -cardBottomInset } : undefined}
+                style={flow && cardDrawn ? { bottom: -cardBottomInset } : undefined}
                 className={
                   flow
-                    ? `sticky z-[2] flex-shrink-0 pt-3.5 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] ${ground(flow)}`
+                    ? cardDrawn
+                      ? `sticky z-[2] flex-shrink-0 pt-3.5 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] ${ground(flow)}`
+                      : "hidden"
                     : "flex-shrink-0"
                 }
               >

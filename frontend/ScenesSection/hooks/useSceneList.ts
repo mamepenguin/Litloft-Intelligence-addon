@@ -124,10 +124,12 @@ export function useSceneList({
   const visibleRef = useRef<SceneListVisible>(INITIAL_VISIBLE);
   const topFrameRef = useRef(0);
   const shownRef = useRef(shown);
+  const hasPlaybackRef = useRef(hasPlayback);
   const previousColumns = useRef(0);
   const previousStep = useRef(0);
 
   shownRef.current = shown;
+  hasPlaybackRef.current = hasPlayback;
 
   const setFollowing = useCallback((value: boolean) => {
     followingRef.current = value;
@@ -287,7 +289,8 @@ export function useSceneList({
 
   // Showing, a file change and the frames arriving all start at the playing
   // row, or at the list's top when nothing plays. Runs before paint, so the
-  // first frame the reader sees is the placed one.
+  // first frame the reader sees is the placed one. A controller appearing is
+  // read through a ref: re-running this for it would set following again.
   useLayoutEffect(() => {
     if (!shown) return;
     const geometry = measure();
@@ -295,7 +298,7 @@ export function useSceneList({
     setFollowing(true);
     if (rows.length === 0) {
       placeListTop();
-    } else if (hasPlayback) {
+    } else if (hasPlaybackRef.current) {
       const row = Math.floor(
         frameIndexAt(rows, playbackTimeRef.current) / geometry.columns,
       );
@@ -304,7 +307,7 @@ export function useSceneList({
       placeListTop();
     }
     syncVisible();
-  }, [shown, fileId, rows, hasPlayback, measure, placeListTop, placeRow, syncVisible, setFollowing]);
+  }, [shown, fileId, rows, measure, placeListTop, placeRow, syncVisible, setFollowing]);
 
   // A column or row-step change keeps the old top row's first frame in the
   // new top row, unless following with a controller: then the playing row

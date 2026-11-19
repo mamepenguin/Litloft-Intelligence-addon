@@ -166,9 +166,7 @@ export default function ScenesSectionContainer({
     setBrowse(value);
   }, []);
 
-  const noop = useCallback(() => {}, []);
-
-  const playback = usePlaybackClock(mediaController ?? null, noop);
+  const playback = usePlaybackClock(mediaController ?? null);
 
   const list = rows ?? NO_FRAMES;
   // With no candidate frames the player's duration is the only length left
@@ -504,7 +502,7 @@ export default function ScenesSectionContainer({
         previousFollowing: following,
         previousScroll: scroller?.scrollTop ?? 0,
       };
-      if (pointerType !== "mouse" || button === 1) return;
+      if (pointerType !== "mouse" || button !== 0) return;
       applyRulerPoint(time);
     },
     [applyRulerPoint, following, list.length],
@@ -515,7 +513,7 @@ export default function ScenesSectionContainer({
       if (list.length === 0) return;
       if (pointerType === "mouse") {
         setHover(time);
-        if (buttons !== 0) applyRulerPoint(time);
+        if ((buttons & 1) !== 0) applyRulerPoint(time);
         return;
       }
       const start = dragStart.current;
@@ -626,7 +624,7 @@ export default function ScenesSectionContainer({
     setBrowsePoint(null);
     setFollowTarget(null);
     setFailedTimes([]);
-  }, [shown, fileId, rows, mediaController != null, setBrowsePoint]);
+  }, [shown, fileId, rows, setBrowsePoint]);
 
   const handlePictureLoad = useCallback((width: number, height: number) => {
     if (width <= 0 || height <= 0) return;
