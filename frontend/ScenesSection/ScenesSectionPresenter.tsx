@@ -56,6 +56,8 @@ export interface ScenesSectionPresenterProps {
   columns: number;
   flow: boolean;
   oneLine: boolean;
+  /** The scroller's bottom padding, which a pinned card has to cover. */
+  cardBottomInset: number;
   listMinHeight: number;
   band: { left: number; right: number };
   failedTimes: ReadonlySet<number>;
@@ -123,6 +125,7 @@ export default function ScenesSectionPresenter({
   columns,
   flow,
   oneLine,
+  cardBottomInset,
   listMinHeight,
   band,
   failedTimes,
@@ -369,9 +372,10 @@ export default function ScenesSectionPresenter({
             <>
               <div
                 ref={cardBoxRef}
+                style={flow ? { bottom: -cardBottomInset } : undefined}
                 className={
                   flow
-                    ? `sticky bottom-0 z-[2] flex-shrink-0 pt-3.5 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] ${ground(flow)}`
+                    ? `sticky z-[2] flex-shrink-0 pt-3.5 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] ${ground(flow)}`
                     : "flex-shrink-0"
                 }
               >

@@ -1,14 +1,16 @@
 const TILE_SELECTOR = "button[data-scene-tile]";
 const SHARED_SCROLLER = "[data-inspector-scroller]";
 
-/** The full card's minimum height, 7.6rem at the default root font size. */
-export const FULL_CARD_MIN_PX = 7.6 * 16;
+/** The full card's minimum height, in rem. */
+export const FULL_CARD_MIN_REM = 7.6;
 
-/**
- * The full placeholder stands in for the full card and the action row, so the
- * card's form is decided from a height that does not change with the form.
- */
-export const FULL_PLACEHOLDER_PX = 7.75 * 16 + 2.25 * 16;
+/** The root font size, 16 px when it is not a positive number. */
+export function rootRemPx(): number {
+  const size = Number.parseFloat(
+    getComputedStyle(document.documentElement).fontSize,
+  );
+  return size > 0 ? size : 16;
+}
 
 export function isFlowForm(list: HTMLElement): boolean {
   return list.closest(SHARED_SCROLLER) !== null;

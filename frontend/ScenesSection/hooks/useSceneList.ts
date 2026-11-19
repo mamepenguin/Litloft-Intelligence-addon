@@ -11,12 +11,12 @@ import { flushSync } from "react-dom";
 import { frameIndexAt, sceneColumns } from "../scenesModel";
 import type { ClipTimestampItem } from "../../api";
 import {
-  FULL_CARD_MIN_PX,
-  FULL_PLACEHOLDER_PX,
+  FULL_CARD_MIN_REM,
   canScroll as canScrollOf,
   contentOffsetTop,
   isFlowForm,
   isWhollyVisible,
+  rootRemPx,
   rowAt,
   rowCountOf,
   rowStepOf,
@@ -47,6 +47,7 @@ export interface SceneListState {
   step: number;
   flow: boolean;
   oneLine: boolean;
+  cardBottomInset: number;
   visible: SceneListVisible;
   scrollVersion: number;
   placeIndex: (index: number, second: boolean) => void;
@@ -111,6 +112,7 @@ export function useSceneList({
   const [step, setStep] = useState(0);
   const [flow, setFlow] = useState(false);
   const [oneLine, setOneLine] = useState(true);
+  const [cardBottomInset, setCardBottomInset] = useState(0);
   const [visible, setVisible] = useState<SceneListVisible>(INITIAL_VISIBLE);
   const [scrollVersion, setScrollVersion] = useState(0);
   const [viewportVersion, setViewportVersion] = useState(0);
@@ -153,17 +155,24 @@ export function useSceneList({
       flowRef.current = nextFlow;
       setFlow(nextFlow);
     }
+    const drawnCard = cardBox.current?.getBoundingClientRect().height ?? 0;
+    const fullCardMin = FULL_CARD_MIN_REM * rootRemPx();
     const sparesFullCard =
-      list.clientHeight + FULL_PLACEHOLDER_PX - FULL_CARD_MIN_PX >=
-      2 * nextStep;
+      list.clientHeight + drawnCard - fullCardMin >= 2 * nextStep;
     const nextOneLine = nextFlow
       ? true
       : nextStep > 0
         ? !sparesFullCard
         : false;
     setOneLine((current) => (current === nextOneLine ? current : nextOneLine));
+    const nextInset = nextFlow
+      ? px(getComputedStyle(scrollerOf(list)).paddingBottom)
+      : 0;
+    setCardBottomInset((current) =>
+      current === nextInset ? current : nextInset,
+    );
     return { columns: nextColumns, step: nextStep, flow: nextFlow };
-  }, [listRef]);
+  }, [cardBox, listRef]);
 
   const syncVisible = useCallback(() => {
     const list = listRef.current;
@@ -305,16 +314,17 @@ export function useSceneList({
       previousColumns.current !== 0 &&
       previousColumns.current !== geometry.columns;
     const stepChanged =
-      previousStep.current !== 0 && previousStep.current !== geometry.step;
+      previousStep.current !== 0 &&
+      previousStep.current !== geometry.step;
     previousColumns.current = geometry.columns;
     previousStep.current = geometry.step;
-    if (!columnsChanged && !stepChanged) return;
-    if (followingRef.current && hasPlayback) {
-      syncVisible();
-      return;
+    if (
+      (columnsChanged || stepChanged) &&
+      !(followingRef.current && hasPlayback)
+    ) {
+      const firstFrame = topFrameRef.current;
+      placeRow(Math.floor(firstFrame / geometry.columns), false);
     }
-    const firstFrame = topFrameRef.current;
-    placeRow(Math.floor(firstFrame / geometry.columns), false);
     syncVisible();
   }, [shown, viewportVersion, measure, placeRow, syncVisible, hasPlayback]);
 
@@ -443,8 +453,12 @@ export function useSceneList({
     if (grid) observer.observe(grid);
     const tile = tileElements(list)[0];
     if (tile) observer.observe(tile);
+    const scroller = scrollerOf(list);
+    if (scroller !== list) observer.observe(scroller);
+    if (rulerBox.current) observer.observe(rulerBox.current);
+    if (cardBox.current) observer.observe(cardBox.current);
     return () => observer.disconnect();
-  }, [shown, flow, rows, columns, listRef]);
+  }, [shown, flow, rows, columns, listRef, rulerBox, cardBox]);
 
   return {
     following,
@@ -453,6 +467,7 @@ export function useSceneList({
     step,
     flow,
     oneLine,
+    cardBottomInset,
     visible,
     scrollVersion,
     placeIndex,

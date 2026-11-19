@@ -451,6 +451,7 @@ export default function ScenesSectionContainer({
     step,
     flow,
     oneLine,
+    cardBottomInset,
     visible,
     scrollVersion,
     placeIndex,
@@ -743,6 +744,7 @@ export default function ScenesSectionContainer({
       columns={columns}
       flow={flow}
       oneLine={oneLine}
+      cardBottomInset={cardBottomInset}
       listMinHeight={step}
       band={band}
       failedTimes={new Set(failedTimes)}
