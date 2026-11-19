@@ -88,6 +88,8 @@ interface DragStart {
   previousBrowse: number | null;
   previousFollowing: boolean;
   previousScroll: number;
+  /** A touch drag the browser cancelled, held until its gesture ends. */
+  cancelled?: boolean;
 }
 
 export default function ScenesSectionContainer({
@@ -157,8 +159,18 @@ export default function ScenesSectionContainer({
     const endMouseDrag = (event: PointerEvent) => {
       if (event.pointerType === "mouse") dragStart.current = null;
     };
+    // A cancelled touch drag still owns the rest of its gesture's touchmoves.
+    const endCancelledTouch = () => {
+      if (dragStart.current?.cancelled) dragStart.current = null;
+    };
     window.addEventListener("pointerup", endMouseDrag);
-    return () => window.removeEventListener("pointerup", endMouseDrag);
+    window.addEventListener("touchend", endCancelledTouch);
+    window.addEventListener("touchcancel", endCancelledTouch);
+    return () => {
+      window.removeEventListener("pointerup", endMouseDrag);
+      window.removeEventListener("touchend", endCancelledTouch);
+      window.removeEventListener("touchcancel", endCancelledTouch);
+    };
   }, []);
   const rulerRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLDivElement>(null);
@@ -533,7 +545,7 @@ export default function ScenesSectionContainer({
         return;
       }
       const start = dragStart.current;
-      if (!start) return;
+      if (!start || start.cancelled) return;
       if (Math.abs(clientX - start.x) >= DRAG_THRESHOLD_PX) {
         start.dragged = true;
         applyRulerPoint(time);
@@ -560,6 +572,7 @@ export default function ScenesSectionContainer({
     const start = dragStart.current;
     dragStart.current = null;
     if (!start || start.pointerType === "mouse" || !start.dragged) return;
+    dragStart.current = { ...start, cancelled: true };
     setBrowsePoint(start.previousBrowse);
     setFollowTarget(null);
     setFollowing(start.previousFollowing);

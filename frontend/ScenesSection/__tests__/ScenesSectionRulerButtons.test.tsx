@@ -24,6 +24,7 @@ import { getClipTimestamps } from "@/addons/intelligence/api";
 import { usePolicy } from "@/hooks/usePolicy";
 import {
   advance,
+  firePointer,
   flush,
   installPointerEvents,
   makeController,
@@ -191,5 +192,46 @@ describe("SPEC-ADDON-153 I13 — only the primary mouse button drives the ruler"
     );
     expect(scrollTopOf(scroller()), "the list does not move").toBe(placed);
     expect(visibleRows()).toEqual(rows);
+  });
+});
+
+describe("SPEC-ADDON-153 I9 — a cancelled touch drag on the ruler in flow form", () => {
+  it("SPEC-ADDON-153 I9 — touchmoves of the cancelled gesture keep the ruler point and following it put back", async () => {
+    const { controller } = makeController({ duration: L, currentTime: 10 });
+    render(<div data-inspector-scroller="">{section({ mediaController: controller })}</div>);
+    await settle(0);
+    await settle(0);
+    const el = ruler();
+    const x = (time: number) => pointerX(time, L, WIDTH);
+
+    firePointer(el, "pointerDown", { pointerType: "touch", clientX: x(12), buttons: 1 });
+    firePointer(el, "pointerMove", { pointerType: "touch", clientX: x(72), buttons: 1 });
+    fireEvent.touchMove(el, { touches: [{ clientX: x(132), clientY: 10 }] });
+    firePointer(el, "pointerMove", { pointerType: "touch", clientX: x(132), buttons: 1 });
+    await settle(0);
+    expect(ruler()).toHaveAttribute("aria-valuenow", "130");
+
+    firePointer(el, "pointerCancel", { pointerType: "touch", clientX: x(132) });
+    await settle(0);
+    expect(ruler()).toHaveAttribute("aria-valuenow", "10");
+    const restored = scrollTopOf(scroller());
+
+    fireEvent.touchMove(el, { touches: [{ clientX: x(132), clientY: 40 }] });
+    fireEvent.touchMove(el, { touches: [{ clientX: x(132), clientY: 80 }] });
+    await settle(0);
+    expect(ruler(), "the gesture's touchmoves are not a reader's scroll").toHaveAttribute(
+      "aria-valuenow",
+      "10",
+    );
+    expect(scrollTopOf(scroller())).toBe(restored);
+
+    fireEvent.touchEnd(el, { changedTouches: [{ clientX: x(132), clientY: 80 }] });
+    const list = scroller();
+    fireEvent.touchMove(list, { touches: [{ clientX: 10, clientY: 200 }] });
+    await settle(0);
+    expect(ruler(), "a later touch on the list is a reader's scroll again").not.toHaveAttribute(
+      "aria-valuenow",
+      "10",
+    );
   });
 });
