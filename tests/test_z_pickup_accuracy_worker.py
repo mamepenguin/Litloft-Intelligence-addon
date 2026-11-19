@@ -402,7 +402,7 @@ async def test_spec_addon_097_i7_a_long_feed_logs_its_first_40_in_stored_order(r
     assert len(logs) == 1
     computed_at, version, file_ids = logs[0]
     assert json.loads(file_ids) == stored[:40]
-    assert version == profile.PROFILE_VERSION == 4
+    assert version == profile.PROFILE_VERSION == 5
     assert _as_naive(computed_at) == _as_naive(header.computed_at)
 
 
