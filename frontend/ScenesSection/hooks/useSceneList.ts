@@ -266,6 +266,13 @@ export function useSceneList({
     }
   }, [followTarget, onFollowTargetConsumed, playbackTime]);
 
+  // The placement on showing reads the clock without re-running on each tick:
+  // a later tick is a placement event of its own.
+  const playbackTimeRef = useRef(playbackTime);
+  useLayoutEffect(() => {
+    playbackTimeRef.current = playbackTime;
+  }, [playbackTime]);
+
   // Showing, a file change and the frames arriving all start at the playing
   // row, or at the list's top when nothing plays. Runs before paint, so the
   // first frame the reader sees is the placed one.
@@ -278,16 +285,13 @@ export function useSceneList({
       placeListTop();
     } else if (hasPlayback) {
       const row = Math.floor(
-        frameIndexAt(rows, playbackTime) / geometry.columns,
+        frameIndexAt(rows, playbackTimeRef.current) / geometry.columns,
       );
       placeRow(row, true);
     } else {
       placeListTop();
     }
     syncVisible();
-    // `playbackTime` is read, not tracked: a later tick is a placement event
-    // of its own, and this one must run once per showing.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shown, fileId, rows, hasPlayback, measure, placeListTop, placeRow, syncVisible, setFollowing]);
 
   // A column or row-step change keeps the old top row's first frame in the
@@ -367,7 +371,7 @@ export function useSceneList({
 
   // The reader's own input ends following; a scroll the section makes does
   // not. The scroller is the shared one in flow form, so a swipe that starts
-  // on the pinned ruler counts there and nowhere else (I11).
+  // on the pinned ruler counts there and nowhere else.
   useEffect(() => {
     if (!shown) return;
     const list = listRef.current;

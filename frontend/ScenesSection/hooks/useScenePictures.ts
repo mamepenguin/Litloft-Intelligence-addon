@@ -32,12 +32,17 @@ export function useScenePictures({
     setRequested((current) => (current.length === 0 ? current : []));
   }, [resetKey, active]);
 
+  const timesRef = useRef(times);
+  useEffect(() => {
+    timesRef.current = times;
+  }, [times]);
+
   const key = active ? times.join(",") : "";
   useEffect(() => {
     if (!active || !key) return;
     const timer = setTimeout(() => {
       let changed = false;
-      for (const time of times) {
+      for (const time of timesRef.current) {
         if (!requestedRef.current.has(time)) {
           requestedRef.current.add(time);
           changed = true;
@@ -48,9 +53,8 @@ export function useScenePictures({
       }
     }, PICTURE_SETTLE_MS);
     return () => clearTimeout(timer);
-    // `times` is read through `key`; `settleKey` restarts the settle without
-    // changing which rows are visible.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // `times` is read through `key`, which changes only when the frames do;
+    // `settleKey` restarts the settle without changing them.
   }, [key, active, resetKey, settleKey]);
 
   return requested;
