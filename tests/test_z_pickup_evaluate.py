@@ -99,6 +99,11 @@ def _today() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0)
 
 
+def _covered(core: CoreDB, file_id: str, *, viewer: str = "v1") -> None:
+    """Playback over half of the default 100-second duration."""
+    core.segments(file_id, [5.0] * 10, viewer=viewer)
+
+
 # ---------------------------------------------------------------------------
 # replay
 # ---------------------------------------------------------------------------
@@ -114,15 +119,18 @@ def _replay_documents_dataset(tmp_path):
     for i in range(5):
         core.add_file(f"h{i}", created_at=old)
         core.watch(f"h{i}", played_at=t0 - timedelta(days=9, hours=i))
+        _covered(core, f"h{i}")
         search.index(f"h{i}", at_angle(0.0))
     for i in range(15):
         core.add_file(f"dc{i:02d}", kind="document", created_at=old)
         search.index(f"dc{i:02d}", at_angle(6.0 + i * 0.25), kind="document")
     core.add_file("X", created_at=_today() - timedelta(days=25))
     core.watch("X", played_at=t0 + timedelta(hours=1))
+    _covered(core, "X")
     search.index("X", at_angle(18.0))
     core.add_file("Q", created_at=_today() - timedelta(days=25))
     core.watch("Q", played_at=t0 + timedelta(hours=2))
+    _covered(core, "Q")
     for i in range(13):
         core.add_file(f"o{i:02d}", created_at=_today() - timedelta(days=20) + timedelta(hours=i))
         search.index(f"o{i:02d}", at_angle(30.0 + 2 * i))
@@ -213,6 +221,7 @@ def test_spec_addon_098_i9_replay_weights_by_engagement_at_the_cut(tmp_path):
     for i in range(4):
         core.add_file(f"h{i}", created_at=old)
         core.watch(f"h{i}", played_at=t0 - timedelta(days=9, hours=i))
+        _covered(core, f"h{i}")
         search.index(f"h{i}", at_angle(0.0))
     for i in range(4):
         core.add_file(f"g{i}", created_at=old)
@@ -224,6 +233,7 @@ def test_spec_addon_098_i9_replay_weights_by_engagement_at_the_cut(tmp_path):
         search.index(f"k{i:02d}", at_angle(26.0 + i))
     core.add_file("X", created_at=_today() - timedelta(days=25))
     core.watch("X", played_at=t0 + timedelta(hours=1))
+    _covered(core, "X")
     search.index("X", at_angle(18.0))
     core.engine.dispose()
     search.engine.dispose()
@@ -251,9 +261,11 @@ def test_spec_addon_098_i9_the_target_window_includes_t_and_excludes_t_plus_hori
     for i in range(5):
         core.add_file(f"h{i}", created_at=old)
         core.watch(f"h{i}", played_at=t0 - timedelta(days=9, hours=i))
+        _covered(core, f"h{i}")
         search.index(f"h{i}", at_angle(0.0))
     core.add_file("at_t", created_at=old)
     core.watch("at_t", played_at=t0)
+    _covered(core, "at_t")
     search.index("at_t", at_angle(10.0))
     core.add_file("at_end", created_at=old)
     core.watch("at_end", played_at=_today())
@@ -292,6 +304,7 @@ def _online_dataset(tmp_path):
     for file_id, at in played.items():
         core.add_file(file_id, created_at=old)
         core.watch(file_id, played_at=at)
+        _covered(core, file_id)
     for file_id in ("W", "O", "Tv", "D"):
         core.add_file(file_id, created_at=old,
                       kind="document" if file_id == "D" else "video",
@@ -381,6 +394,7 @@ def test_spec_addon_098_i10_a_feed_exactly_48_hours_before_counts(tmp_path):
     played = utcnow() - timedelta(days=3)
     core.add_file("X", created_at=played - timedelta(days=100))
     core.watch("X", played_at=played)
+    _covered(core, "X")
     search.add_feed_log(computed_at=played - timedelta(hours=48), version=3, file_ids=["X"])
     core.engine.dispose()
     search.engine.dispose()

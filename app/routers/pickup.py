@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Header, Query
 from app.database import get_search_db_read
 from app.drive_context import require_drive
 from app.models import PickupItem, PickupProfile
+from app.pickup import profile as profile_mod
 
 logger = logging.getLogger(__name__)
 
@@ -64,9 +65,10 @@ async def pickup_endpoint(
             malformed value can do nothing worse than reorder cards.
 
     Returns:
-        ``file_ids`` in order, and ``total`` rows held. Callers use
-        ``total`` as the stock figure; counting eligible files directly
-        would mean scanning every unopened file in the drive.
+        ``file_ids`` in order, and ``total`` rows held once the viewer's
+        current exclusion set is removed. Callers use ``total`` as the
+        stock figure; counting eligible files directly would mean
+        scanning every unopened file in the drive.
     """
     if not viewer_id:
         return {"file_ids": [], "total": 0}
@@ -83,20 +85,19 @@ async def pickup_endpoint(
             )
             if header is None or header.total == 0:
                 return None
-            total = header.total
-
-            query = (
-                session.query(PickupItem.file_id)
+            stored = [
+                row[0]
+                for row in session.query(PickupItem.file_id)
                 .filter_by(drive_id=drive, viewer_id=viewer_id)
                 .order_by(PickupItem.rank)
-            )
-            if window == "daily":
-                return total, [
-                    row[0] for row in query.limit(min(_WINDOW_POOL, total)).all()
-                ]
-            return total, [
-                row[0] for row in query.offset(offset).limit(limit).all()
+                .all()
             ]
+
+        excluded = profile_mod.watched_file_ids(drive, viewer_id)
+        kept = [file_id for file_id in stored if file_id not in excluded]
+        if window == "daily":
+            return len(kept), kept[:min(_WINDOW_POOL, len(kept))]
+        return len(kept), kept[offset:offset + limit]
 
     read = await asyncio.to_thread(_read)
     if read is None:

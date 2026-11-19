@@ -44,6 +44,10 @@ class _Rig:
                 drive="a"):
         self.core.add_file(file_id, kind=kind, drive=drive)
         self.core.watch(file_id, viewer=viewer, played_at=utcnow() - timedelta(days=age_days))
+        # Every row this fixture seeds is meant as watched, so give it
+        # the recorded coverage that makes it so.
+        if kind == "video":
+            self.core.segments(file_id, [5.0] * 10, viewer=viewer)
         if angle is not None:
             self.search.index(file_id, at_angle(angle), kind=kind, drive=drive)
 
@@ -187,17 +191,17 @@ async def test_spec_addon_102_i3_unknown_and_future_dates_rank_at_the_floor(rig,
     assert rig.feed() == ["new", "skew", "bad", "future"]
 
 
-async def test_spec_addon_102_profile_version_is_4_in_the_feed_log(rig, monkeypatch):
-    """SPEC-ADDON-102: PROFILE_VERSION 4, written on new feed log rows."""
+async def test_spec_addon_149_profile_version_is_5_in_the_feed_log(rig, monkeypatch):
+    """SPEC-ADDON-149 rule 5: PROFILE_VERSION 5, written on new feed log rows."""
     rig.search.create_feed_log()
     rig.kept()
     rig.candidate("c0", 5.0)
 
     await rig.sweep()
 
-    assert profile_mod.PROFILE_VERSION == 4
+    assert profile_mod.PROFILE_VERSION == 5
     rows = rig.search.query("SELECT profile_version, file_ids FROM pickup_feed_log")
-    assert [(v, json.loads(f)) for v, f in rows] == [(4, ["c0"])]
+    assert [(v, json.loads(f)) for v, f in rows] == [(5, ["c0"])]
 
 
 # ---------------------------------------------------------------------------
