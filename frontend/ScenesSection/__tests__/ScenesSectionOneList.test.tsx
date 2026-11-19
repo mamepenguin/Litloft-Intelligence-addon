@@ -273,7 +273,7 @@ describe("SPEC-ADDON-129 I1 — no frame-list switch", () => {
       await screen.findByRole("slider");
       await waitForVisualIndex();
       await flush(8);
-      expect(screen.getAllByRole("button", { name: /^Play from |から再生$/ })).toHaveLength(9);
+      expect(screen.getAllByRole("button", { name: /^Play from |から再生$/ })).toHaveLength(15);
       expect(switchTraces()).toEqual([]);
 
       view.rerender(
@@ -446,8 +446,8 @@ describe("SPEC-ADDON-129 I4 — no candidates: the ruler takes the player's dura
     expectMarkerAt(100);
   });
 
-  it("SPEC-ADDON-129 I4 — a click at a fraction of the ruler seeks to that fraction of D", async () => {
-    const { seek, play } = await openEmptyLoft({ duration: D, currentTime: 0 });
+  it("SPEC-ADDON-129 I4 as revised by SPEC-ADDON-153 — a click at a fraction of the ruler does nothing", async () => {
+    const { seek, play } = await openEmptyLoft({ duration: D, currentTime: 40 });
     const el = ruler();
     stubRect(el);
     const x = 0.6 * 700;
@@ -456,15 +456,15 @@ describe("SPEC-ADDON-129 I4 — no candidates: the ruler takes the player's dura
     firePointer(el, "pointerUp", { pointerType: "mouse", clientX: x });
     fireEvent.click(el, { clientX: x });
 
-    expect(seek).toHaveBeenCalledTimes(1);
-    expect(seek.mock.calls[0][0]).toBeCloseTo(0.6 * D, 1);
-    expect(play).toHaveBeenCalled();
+    expect(seek).not.toHaveBeenCalled();
+    expect(play).not.toHaveBeenCalled();
+    expect(ruler()).toHaveAttribute("aria-valuenow", "40");
   });
 
-  it("SPEC-ADDON-129 I4 — hover sets the browse point, the arrows and Home/End move nothing, Enter seeks the browse point", async () => {
+  it("SPEC-ADDON-129 I4 as revised by SPEC-ADDON-153 — hover, the arrows, Home/End and Enter all do nothing", async () => {
     vi.mocked(getClipTimestamps).mockResolvedValue(answer([]));
     vi.mocked(getVideoVisualIndex).mockResolvedValue(withScenes(scenes));
-    const { controller, seek } = makeController({ duration: D, currentTime: 0 });
+    const { controller, seek } = makeController({ duration: D, currentTime: 40 });
     render(
       <ShortcutsProvider>
         <PageShortcuts />
@@ -477,18 +477,14 @@ describe("SPEC-ADDON-129 I4 — no candidates: the ruler takes the player's dura
     stubRect(el);
 
     firePointer(el, "pointerMove", { pointerType: "mouse", clientX: pointerX(50, D) });
-    expect(ruler()).toHaveAttribute("aria-valuenow", "50");
+    expect(ruler()).toHaveAttribute("aria-valuenow", "40");
 
     el.focus();
-    for (const key of ["ArrowRight", "ArrowLeft", "Home", "End"]) {
+    for (const key of ["ArrowRight", "ArrowLeft", "Home", "End", "Enter"]) {
       fireEvent.keyDown(el, { key });
-      expect(ruler()).toHaveAttribute("aria-valuenow", "50");
+      expect(ruler()).toHaveAttribute("aria-valuenow", "40");
     }
     expect(seek).not.toHaveBeenCalled();
-
-    fireEvent.keyDown(el, { key: "Enter" });
-    expect(seek).toHaveBeenCalledTimes(1);
-    expect(seek.mock.calls[0][0]).toBeCloseTo(50, 0);
   });
 
   it("SPEC-ADDON-129 I4 — while the first answer is in flight the ruler, if drawn, has aria-valuemax 0 and no time labels", async () => {
@@ -671,7 +667,7 @@ describe("SPEC-ADDON-129 kept cases — behaviour the switch's removal keeps", (
     await waitForVisualIndex();
 
     expect(ruler()).toHaveAttribute("aria-valuemax", "75");
-    expect(tileLabels()).toEqual(labels([0, 5, 10, 15, 20, 25, 30, 35, 40]));
+    expect(tileLabels()).toEqual(labels(CANDIDATES.map((row) => row.start)));
   });
 
   it.each([

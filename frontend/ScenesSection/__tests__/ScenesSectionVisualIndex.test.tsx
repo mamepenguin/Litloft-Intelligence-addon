@@ -680,7 +680,7 @@ describe("SPEC-ADDON-090 I9 — no Visual Index", () => {
       expect(sceneCardNamed(/Alpha/)).toBeNull();
       expect(actionNames()).toEqual([]);
       expect(screen.getByRole("slider")).toBeInTheDocument();
-      expect(allTiles()).toHaveLength(9);
+      expect(allTiles()).toHaveLength(15);
 
       if (requested) {
         expect(getVideoVisualIndex).toHaveBeenCalledTimes(1);

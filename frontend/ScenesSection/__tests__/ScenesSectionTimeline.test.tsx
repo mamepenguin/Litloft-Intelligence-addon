@@ -142,42 +142,35 @@ describe("SPEC-ADDON-089 I1 — ruler length L", () => {
   });
 });
 
-describe("SPEC-ADDON-089 I1 — the nine-frame window", () => {
+describe("SPEC-ADDON-152 I1 — every frame is drawn", () => {
   it.each([
-    { n: 15, time: 0, windowStart: 0, label: "i = 0" },
-    { n: 15, time: 20, windowStart: 0, label: "i = 4" },
-    { n: 15, time: 35, windowStart: 3, label: "i = 7" },
-    { n: 15, time: 70, windowStart: 6, label: "i = n-1" },
-    { n: 5, time: 0, windowStart: 0, label: "n < 9" },
-  ])(
-    "SPEC-ADDON-089 I1 — the window follows the clock at $label",
-    async ({ n, time, windowStart }) => {
-      const rows = makeRows(n);
-      const { controller } = controllerAt(time, 70);
-      vi.mocked(getClipTimestamps).mockResolvedValue(timestamps(rows));
-
-      renderSection({ mediaController: controller });
-      await openNative();
-      await waitForVisualIndex();
-
-      const expected = rows
-        .slice(windowStart, windowStart + 9)
-        .map((row) => formatDuration(row.start));
-      expect(tileLabels()).toEqual(expected);
-    },
-  );
-
-  it("SPEC-ADDON-089 I1 — one path or canvas carries the ticks, so their count is not observable in jsdom", async () => {
-    // A single SVG path or canvas has no per-tick element to count. The
-    // window and L are the parts of I1 a jsdom tree can hold.
+    { n: 15, label: "fifteen frames" },
+    { n: 5, label: "fewer frames than a row" },
+    { n: 1, label: "one frame" },
+  ])("SPEC-ADDON-152 I1 — $label are all drawn, in time order", async ({ n }) => {
+    const rows = makeRows(n);
+    vi.mocked(getClipTimestamps).mockResolvedValue(timestamps(rows));
     const { controller } = controllerAt(0, 70);
+
     renderSection({ mediaController: controller });
     await openNative();
     await waitForVisualIndex();
 
-    expect(ruler().querySelectorAll("canvas").length).toBeLessThanOrEqual(1);
-    expect(ruler()).toHaveAttribute("aria-valuemax", "70");
-    expect(tileLabels()).toHaveLength(9);
+    expect(tileLabels()).toEqual(
+      rows.map((row) => formatDuration(row.start)),
+    );
+  });
+
+  it("SPEC-ADDON-089 I1 — the ruler draws one tick per frame", async () => {
+    const rows = makeRows(15);
+    vi.mocked(getClipTimestamps).mockResolvedValue(timestamps(rows));
+    renderSection({ mediaController: makeController({ duration: 70 }).controller });
+    await openNative();
+    await waitForVisualIndex();
+
+    const path = ruler().querySelector("path");
+    expect(path).not.toBeNull();
+    expect((path!.getAttribute("d") ?? "").match(/M/g)).toHaveLength(rows.length);
   });
 });
 
@@ -238,19 +231,19 @@ describe("I11 — time labels leave at least 4 px between drawn boxes", () => {
   });
 });
 
-describe("SPEC-ADDON-089 I2 — a mouse browse point", () => {
-  it("moves the grid and the scene card without seeking", async () => {
+describe("SPEC-ADDON-153 I9 — hovering the ruler moves nothing", () => {
+  it("SPEC-ADDON-153 I9 — a mouse move without a button draws the line only", async () => {
     const { controller, seek, play } = makeController({
       duration: 70,
       paused: true,
+      currentTime: 10,
     });
     vi.mocked(getVideoVisualIndex).mockResolvedValue(
       indexState({
         active_run: makeRun({ succeeded_count: 1 }),
-        scenes: [makeScene({ start_time: 30, scene_label: "Thirty" })],
+        scenes: [makeScene({ start_time: 30, section_start: 30, scene_label: "Thirty" })],
       }),
     );
-    vi.mocked(usePolicy).mockReturnValue({ enabled: true, isLoading: false });
 
     renderSection({ mediaController: controller });
     await openNative();
@@ -260,62 +253,16 @@ describe("SPEC-ADDON-089 I2 — a mouse browse point", () => {
 
     firePointer(el, "pointerMove", { pointerType: "mouse", clientX: pointerX(60, 70) });
 
-    expect(tileLabels()).toEqual(
-      makeRows(15).slice(6, 15).map((row) => formatDuration(row.start)),
-    );
+    expect(ruler()).toHaveAttribute("aria-valuenow", "10");
     expect(screen.getByRole("button", { name: /Thirty/ })).toBeInTheDocument();
+    expect(allTiles()).toHaveLength(15);
     expect(seek).not.toHaveBeenCalled();
     expect(play).not.toHaveBeenCalled();
-  });
-
-  it("keeps the point over the grid and drops it when the pointer leaves the section", async () => {
-    const { controller } = controllerAt(0, 70);
-    const { container } = renderSection({ mediaController: controller });
-    await openNative();
-    await waitForVisualIndex();
-    const el = ruler();
-    stubRect(el);
-
-    firePointer(el, "pointerMove", { pointerType: "mouse", clientX: pointerX(60, 70) });
-    expect(ruler()).toHaveAttribute("aria-valuenow", "60");
-
-    fireEvent.pointerOut(el, { pointerType: "mouse", relatedTarget: allTiles()[6] });
-    firePointer(allTiles()[6], "pointerMove", { pointerType: "mouse" });
-    expect(ruler()).toHaveAttribute("aria-valuenow", "60");
-
-    const root = container.firstElementChild!;
-    fireEvent.pointerOut(root, { pointerType: "mouse", relatedTarget: document.body });
-    firePointer(root, "pointerLeave", { pointerType: "mouse" });
-
-    expect(ruler()).toHaveAttribute("aria-valuenow", "0");
-    expect(tileLabels()).toEqual(
-      makeRows(15).slice(0, 9).map((row) => formatDuration(row.start)),
-    );
-  });
-});
-
-describe("SPEC-ADDON-089 I2 — a mouse browse point clears when the pointer leaves the document from inside", () => {
-  it.each([
-    ["the ruler", () => ruler()],
-    ["a tile", () => allTiles()[4]],
-  ])("leaving straight from %s with no related target clears it", async (_name, from) => {
-    renderSection({ mediaController: makeController({ duration: 70 }).controller });
-    await openNative();
-    await waitForVisualIndex();
-    const el = ruler();
-    stubRect(el);
-
-    firePointer(el, "pointerMove", { pointerType: "mouse", clientX: pointerX(60, 70) });
-    expect(ruler()).toHaveAttribute("aria-valuenow", "60");
-
-    fireEvent.pointerOut(from(), { pointerType: "mouse", relatedTarget: null });
-
-    expect(ruler()).toHaveAttribute("aria-valuenow", "0");
   });
 });
 
 describe("SPEC-ADDON-089 I2 — the playing tile follows the clock", () => {
-  it("moves the accent outline while a browse point is set", async () => {
+  it("moves the accent outline with the shared clock", async () => {
     vi.useFakeTimers();
     const { controller, state } = makeController({
       duration: 70,
@@ -325,10 +272,7 @@ describe("SPEC-ADDON-089 I2 — the playing tile follows the clock", () => {
     renderSection({ mediaController: controller });
     await openNative();
     await waitForVisualIndex();
-    const el = ruler();
-    stubRect(el);
 
-    firePointer(el, "pointerMove", { pointerType: "mouse", clientX: pointerX(10, 70) });
     expect(accentTiles()).toEqual(["0:00"]);
 
     for (let time = 1.5; time <= 6; time += 1.5) {
@@ -338,7 +282,7 @@ describe("SPEC-ADDON-089 I2 — the playing tile follows the clock", () => {
     }
 
     expect(accentTiles()).toEqual(["0:05"]);
-    expect(ruler()).toHaveAttribute("aria-valuenow", "10");
+    expect(ruler()).toHaveAttribute("aria-valuenow", "6");
   });
 });
 
@@ -358,7 +302,7 @@ describe("SPEC-ADDON-089 I2 — the no-controller fallback", () => {
 
     expect(accentTiles()).toEqual([]);
     expect(tileLabels()).toEqual(
-      makeRows(15).slice(0, 9).map((row) => formatDuration(row.start)),
+      makeRows(15).map((row) => formatDuration(row.start)),
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Play from 0:30" }));

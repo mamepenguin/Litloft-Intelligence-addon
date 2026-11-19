@@ -597,7 +597,7 @@ describe("SPEC-ADDON-089 I8 — picture requests", () => {
     expect(imgTimes()).not.toContain(45);
   });
 
-  it("requests only the final window after a sweep, and only after 150 ms", async () => {
+  it("SPEC-ADDON-153 I9 — hovering the ruler requests nothing and moves the drawn frames not at all", async () => {
     vi.useFakeTimers();
     vi.mocked(usePolicy).mockReturnValue({ enabled: false, isLoading: false });
     vi.mocked(getClipTimestamps).mockResolvedValue(timestamps(makeRows(40)));
@@ -611,22 +611,14 @@ describe("SPEC-ADDON-089 I8 — picture requests", () => {
     await advance(150);
     const initial = imgTimes();
     expect(initial).toEqual([0, 5, 10, 15, 20, 25, 30, 35, 40]);
+    const labels = tileLabels();
 
     firePointer(el, "pointerMove", { pointerType: "mouse", clientX: pointerX(60, 200) });
-    await advance(149);
-    for (const time of [45, 50, 55, 60, 65, 70]) {
-      expect(imgTimes()).not.toContain(time);
-    }
-
+    await advance(150);
     firePointer(el, "pointerMove", { pointerType: "mouse", clientX: pointerX(150, 200) });
-    await advance(149);
-    for (const time of [135, 140, 145, 150, 155, 160, 165, 170, 175]) {
-      expect(imgTimes()).not.toContain(time);
-    }
+    await advance(150);
 
-    await advance(1);
-    for (const time of [135, 140, 145, 150, 155, 160, 165, 170, 175]) {
-      expect(imgTimes()).toContain(time);
-    }
+    expect(tileLabels()).toEqual(labels);
+    expect(imgTimes()).toEqual(initial);
   });
 });

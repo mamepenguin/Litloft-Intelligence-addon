@@ -366,7 +366,8 @@
     "scenesRetry": "失敗した {count} 件をやり直す",
     "scenesFailedNote": "{count} 件失敗",
     "scenesRuler": "フレームの時間軸",
-    "scenesPlayFrom": "{time} から再生"
+    "scenesPlayFrom": "{time} から再生",
+    "scenesCurrentPosition": "現在位置に戻る"
   },
   "detailedSummary": {
     "citations": {

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 
-import { getMediaClockSnapshot, subscribeMediaClock } from "@/lib/mediaClock";
 import type { MediaController } from "@/lib/mediaController";
 
 export interface PlaybackState {
@@ -40,20 +39,23 @@ function isJump(
 
 function readSnapshot(controller: MediaController): PlaybackState {
   try {
-    const snapshot = getMediaClockSnapshot(controller);
     return {
-      time: snapshot.currentTime,
-      duration: snapshot.duration,
-      paused: snapshot.paused,
+      time: finite(controller.getCurrentTime()),
+      duration: finite(controller.getDuration()),
+      paused: controller.isPaused(),
     };
   } catch {
     return IDLE_PLAYBACK;
   }
 }
 
+function finite(value: number): number {
+  return Number.isFinite(value) ? value : 0;
+}
+
 /**
- * The shared media clock, followed locally so the section alone decides what
- * a jump is. `onJump` fires between two samples whose distance is larger than
+ * The controller's clock, sampled locally so the section alone decides what a
+ * jump is. `onJump` fires between two samples whose distance is larger than
  * playback would explain.
  */
 export function usePlaybackClock(
@@ -82,12 +84,21 @@ export function usePlaybackClock(
         onJumpRef.current();
       }
       previous = { ...next, at: now };
-      setPlayback(next);
+      setPlayback((current) =>
+        current.time === next.time &&
+        current.duration === next.duration &&
+        current.paused === next.paused
+          ? current
+          : next,
+      );
     };
 
-    const unsubscribe = subscribeMediaClock(controller, update);
     update();
-    return unsubscribe;
+    // A paused player can still be seeked (the transcript, the bar, a
+    // shortcut) and a placement event must not wait for a beat that only
+    // playing earns.
+    const timer = setInterval(update, 250);
+    return () => clearInterval(timer);
   }, [controller]);
 
   return playback;
