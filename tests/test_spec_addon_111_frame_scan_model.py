@@ -1,9 +1,5 @@
-"""SPEC-ADDON-111 §2 Failure cases, I7: a frame scan whose CLIP model cannot be
-loaded writes nothing and leaves the flag false.
-
-The model is loaded once, before the first change frame is embedded, through the
-same loader ``clip.embed_image`` uses — so the failure is known before any frame
-has been embedded, and there is nothing to undo.
+"""SPEC-ADDON-111 §2 Failure cases, I7 as revised by SPEC-ADDON-145: a frame scan
+runs, stores its hashes and sets its flag without the CLIP model.
 """
 
 from __future__ import annotations
@@ -74,41 +70,42 @@ def _seed_previous_scan(search_index) -> None:
 
 
 @pytest.mark.parametrize("previous", [False, True], ids=["no-previous", "rescan"])
-def test_spec_addon_111_a_scan_whose_model_cannot_load_writes_nothing(
+def test_spec_addon_111_revised_i7_the_scan_runs_without_the_clip_model(
     search_index, tmp_path, monkeypatch, previous,
 ):
+    """SPEC-ADDON-145 item 1, revised SPEC-ADDON-111 I7."""
     video = _video(tmp_path / "vid1.mp4")
     _seed(search_index, video)
     if previous:
         _seed_previous_scan(search_index)
 
-    from app.workers import clip, frame_scan
+    from app.workers import frame_scan
 
-    # The scan loads the model through the very loader embed_image uses.
-    assert frame_scan.load_image_model is clip.load_image_model
+    attempts: list[int] = []
 
     def _cannot_load() -> None:
+        attempts.append(1)
         raise RuntimeError("the CLIP weights are not on disk")
 
     def _no_embedding(_image):
-        raise AssertionError("no frame may be embedded without a model")
+        raise AssertionError("no frame may be embedded")
 
     patch_everywhere(monkeypatch, "load_image_model", _cannot_load)
     patch_everywhere(monkeypatch, "embed_image", _no_embedding)
     patch_everywhere(monkeypatch, "is_feature_enabled", unreadable_policy)
 
-    assert frame_scan.index_frame_scan("vid1") is False
+    assert frame_scan.index_frame_scan("vid1") is True
 
+    assert attempts == []
     with search_index.engine.connect() as conn:
         assert conn.execute(text(
             "SELECT frame_scan_indexed FROM indexed_files WHERE file_id = 'vid1'"
-        )).scalar() == 0
-    changes = [
+        )).scalar() == 1
+    assert [
         e[0] for e in search_index.embeddings("vid1") if e[1] == "clip_change"
-    ]
-    assert changes == ([PREVIOUS_CHANGE] if previous else [])
-    assert set(search_index.vectors("vec_clip_change")) == set(changes)
+    ] == []
+    assert search_index.vectors("vec_clip_change") == {}
     with search_index.engine.connect() as conn:
         assert conn.execute(text(
             "SELECT COUNT(*) FROM video_frame_scans WHERE file_id = 'vid1'"
-        )).scalar() == (1 if previous else 0)
+        )).scalar() == 1

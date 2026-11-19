@@ -923,6 +923,7 @@ class IndexManager:
             tuple[
                 str, str, bool, bool, bool, bool, bool, bool, bool, bool, bool,
                 bool, bool, bool, "int | None", bool, bool, "str | None", int,
+                bool,
             ]
         ]:
             with get_search_db() as session:
@@ -955,6 +956,19 @@ class IndexManager:
                             IndexedFile.page_ocr_indexed.is_(False),
                             IndexedFile.frame_scan_indexed.is_(False),
                             _outdated_frame_read(),
+                            # A `.loft` whose fetch never built the video's
+                            # candidates. The mime and source guards matter:
+                            # the flag is false by default for every other row,
+                            # so an unguarded check would sweep them all.
+                            and_(
+                                IndexedFile.mime_type == LOFT_MIME,
+                                or_(
+                                    IndexedFile.loft_source == "youtube",
+                                    IndexedFile.loft_source.is_(None),
+                                ),
+                                IndexedFile.loft_fetch_failures < 3,
+                                IndexedFile.loft_candidates_done.is_(False),
+                            ),
                         ),
                     )
                     .all()
@@ -1022,6 +1036,12 @@ class IndexManager:
                         and not loft_stays_open
                     ):
                         f.frame_scan_indexed = True
+                    if (
+                        not f.loft_candidates_done
+                        and f.mime_type == LOFT_MIME
+                        and f.loft_source == "other"
+                    ):
+                        f.loft_candidates_done = True
 
                 # Snapshot what we need for queuing
                 snapshot = [
@@ -1045,6 +1065,7 @@ class IndexManager:
                         f.frame_scan_indexed,
                         f.loft_source,
                         f.loft_fetch_failures,
+                        f.loft_candidates_done,
                     )
                     for f in incomplete
                 ]
@@ -1064,7 +1085,7 @@ class IndexManager:
             tfidf_kw_done, ocr_done, transcript_corrected,
             picture_text_corrected, has_followup,
             frame_read, frame_done, frame_rule, page_done, frame_scan_done,
-            loft_source, loft_failures,
+            loft_source, loft_failures, loft_candidates_done,
         ) in file_tasks:
             queued_any = False
 
@@ -1185,7 +1206,13 @@ class IndexManager:
                     and (ocr_mode == "on_index" or loft_media.is_ocr_requested(file_id))
                 )
                 any_open = not (frame_scan_done and frame_read and frame_done)
-                if scan_wanted or ocr_wanted or (loft_source is None and any_open):
+                candidates_wanted = not loft_candidates_done
+                if (
+                    scan_wanted
+                    or ocr_wanted
+                    or candidates_wanted
+                    or (loft_source is None and any_open)
+                ):
                     await self._enqueue(IndexTask(
                         file_id=file_id, task_type=TaskType.LOFT_MEDIA,
                         priority=-10,
@@ -1400,16 +1427,22 @@ class IndexManager:
                         priority=100,
                     ))
                 if file.mime_type == LOFT_MIME and file.loft_source != "other":
-                    if (
+                    rebuild_only = (
                         file.loft_source == "youtube"
                         and file.frame_ocr_read
                         and not file.frame_ocr_indexed
-                    ):
+                    )
+                    wants_candidates = (
+                        file.loft_source == "youtube"
+                        and not file.loft_candidates_done
+                        and int(file.loft_fetch_failures or 0) < 3
+                    )
+                    if rebuild_only:
                         pending.append(IndexTask(
                             file_id=file_id, task_type=TaskType.FRAME_OCR,
                             priority=100,
                         ))
-                    else:
+                    if wants_candidates or not rebuild_only:
                         pending.append(IndexTask(
                             file_id=file_id, task_type=TaskType.LOFT_MEDIA,
                             priority=100,
@@ -2119,7 +2152,7 @@ class IndexManager:
                         task.file_id,
                         is_paused=self.is_paused,
                     )
-                    if result.scan_set:
+                    if result.scan_set or result.candidates_set:
                         await self._enqueue_video_visual_on_clip(
                             task.file_id, after_scan=True
                         )

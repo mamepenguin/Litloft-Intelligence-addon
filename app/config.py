@@ -91,7 +91,7 @@ class SearchConfig:
 @dataclass(frozen=True)
 class FrameExtractionConfig:
     scene_threshold: float = 0.3
-    min_interval: int = 30
+    min_interval: int = 10
     max_frames: int = 500
 
 

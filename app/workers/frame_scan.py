@@ -1,9 +1,7 @@
 """The frame scan: one difference hash and picture size per second.
 
-The seconds whose picture changed by at least 16 bits since the last kept
-second, at least 10 apart, become the file's change frames: the positions
-where a representative is likely to be worth choosing. Only the selection
-reads them, so they get a vector table of their own.
+The scan stores no frame of its own. Its hashes and sizes let the selection
+pick steady seconds, and the scene candidates are the file's only frame list.
 """
 
 from __future__ import annotations
@@ -15,28 +13,22 @@ import logging
 import os
 import select
 import subprocess
-import tempfile
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
 
-from app.config import settings
 from app.database import get_search_db, get_search_db_read
 from app.models import IndexedFile, VideoFrameScan
 from app.video_frames import (
-    GAP_SECONDS,
-    HASH_BITS_THRESHOLD,
     Unreadable,
     dhash,
-    extract_frame,
     probe_geometry,
     reachable,
 )
-from app.workers.clip import VIDEO_TYPES, embed_image, load_image_model
-from app.workers.metadata import _remove_embeddings, _store_embedding
+from app.workers.clip import VIDEO_TYPES
+from app.workers.metadata import _remove_embeddings
 from app.workers.whisper import LOFT_MIME
 
 logger = logging.getLogger(__name__)
@@ -48,10 +40,7 @@ SCAN_WIDTH = 160
 SIZE_QUALITY = 75
 #: Seconds without a decoded byte before ffmpeg is killed.
 STALL_SECONDS = 120.0
-#: Extraction and embedding together stop after this long, keeping what they have.
-EMBED_SECONDS = 600.0
 CHANGE_TYPE = "clip_change"
-CHANGE_TABLE = "vec_clip_change"
 
 
 @dataclass
@@ -141,28 +130,6 @@ def _decode(
     return decoded
 
 
-def _change_seconds(hashes: Any) -> list[int]:
-    seconds = [0]
-    last = 0
-    for second in range(1, len(hashes)):
-        if second - last < GAP_SECONDS:
-            continue
-        changed = int(np.count_nonzero(hashes[second] != hashes[last]))
-        if changed < HASH_BITS_THRESHOLD:
-            continue
-        seconds.append(second)
-        last = second
-    return seconds
-
-
-def _spread(seconds: list[int], max_frames: int) -> list[int]:
-    """At most ``max_frames`` of ``seconds``, evenly over the whole list."""
-    if len(seconds) <= max_frames:
-        return seconds
-    count = len(seconds)
-    return [seconds[(i * count) // max_frames] for i in range(max_frames)]
-
-
 def _pack_sizes(sizes: list[int]) -> bytes:
     return np.asarray(sizes, dtype="<u2").tobytes()
 
@@ -182,66 +149,8 @@ def _policy_allows(drive: str) -> bool:
     return bool(verdict)
 
 
-def _embed_changes(
-    path: str,
-    seconds: list[int],
-    *,
-    paused: Callable[[], bool] | None,
-) -> list[tuple[int, Any]] | None:
-    """Embed each change second's own frame.
-
-    Returns ``None`` when the model cannot be loaded, before anything is
-    embedded. A frame that cannot be taken or embedded is skipped; the rest
-    are kept.
-    """
-    from PIL import Image
-
-    if not seconds:
-        return []
-    try:
-        load_image_model()
-    except Exception:
-        return None
-
-    embedded: list[tuple[int, Any]] = []
-    deadline = time.monotonic() + EMBED_SECONDS
-    with tempfile.TemporaryDirectory(prefix="frame_scan_") as tmpdir:
-        for second in seconds:
-            if time.monotonic() > deadline:
-                logger.warning(
-                    "Frame scan stopped at the %ds budget after %d frame(s)",
-                    int(EMBED_SECONDS), len(embedded),
-                )
-                break
-            if paused is not None:
-                while paused():
-                    time.sleep(0.2)
-            frame_path = Path(tmpdir) / f"{second:06d}.jpg"
-            if not extract_frame(path, float(second), frame_path):
-                logger.warning(
-                    "Frame scan skipped the change frame at %ds", second,
-                )
-                continue
-            try:
-                with Image.open(frame_path) as opened:
-                    image = opened.convert("RGB")
-                vector = np.asarray(embed_image(image), dtype=np.float32)
-            except Exception as exc:
-                logger.warning(
-                    "Frame scan skipped the change frame at %ds (%s)",
-                    second, type(exc).__name__,
-                )
-                continue
-            embedded.append((second, vector))
-    return embedded
-
-
-def _store(
-    file_id: str,
-    decoded: _Decoded,
-    embedded: list[tuple[int, Any]],
-) -> bool:
-    """Replace the file's scan and change frames, and close its flag.
+def _store(file_id: str, decoded: _Decoded) -> bool:
+    """Replace the file's scan, delete its change frames, and close its flag.
 
     One transaction, so a failure leaves the previous scan and change frames in
     use and the flag false.
@@ -258,17 +167,6 @@ def _store(
             return False
         _remove_embeddings(session, file_id, CHANGE_TYPE)
         session.query(VideoFrameScan).filter_by(file_id=file_id).delete()
-        for second, vector in embedded:
-            _store_embedding(
-                session=session,
-                embedding_id=f"chg_{file_id}_{second}",
-                file_id=file_id,
-                embedding_type=CHANGE_TYPE,
-                vector_table=CHANGE_TABLE,
-                vector=vector,
-                content_preview=f"Frame at {second}s",
-                timestamp_start=float(second),
-            )
         # No second decoded: a scan row would claim a scan of a video that has
         # none, which is how a file with no decodable picture is closed.
         if decoded.seconds:
@@ -287,15 +185,14 @@ def index_frame_scan(
     file_id: str, *, is_paused: Callable[[], bool] | None = None,
     source_path: str | None = None,
 ) -> bool:
-    """Scan one video's seconds and store its change frames.
+    """Scan one video's seconds and store its hashes and sizes.
 
     ``source_path`` is the video a ``.loft`` fetch downloaded for this file;
-    the `.loft`'s own path is never decoded. A scan that stores change frames
-    from a downloaded source also keeps a 320px picture of each one.
+    the `.loft`'s own path is never decoded.
 
     Returns ``True`` when the file is closed as scanned, ``False`` when it
-    stays pending (not a native video, already scanned, policy off, model
-    unavailable, unreachable, or the write failed).
+    stays pending (not a native video, already scanned, policy off,
+    unreachable, or the write failed).
     """
     with get_search_db_read() as session:
         file = session.query(IndexedFile).filter_by(
@@ -375,18 +272,6 @@ def index_frame_scan(
             "Frame scan for %s decoded no second; closing it as scanned", file_id,
         )
 
-    changes = _change_seconds(decoded.hashes) if decoded.seconds else []
-    kept = _spread(
-        changes, settings.indexing.frame_extraction.max_frames,
-    )
-    embedded = _embed_changes(path, kept, paused=is_paused)
-    if embedded is None:
-        logger.warning(
-            "Frame scan skipped for %s: the CLIP model could not be loaded",
-            file_id,
-        )
-        return False
-
     if not reachable(path):
         logger.warning(
             "Frame scan skipped for %s: file became unreachable before the write",
@@ -395,32 +280,7 @@ def index_frame_scan(
         return False
 
     try:
-        stored = _store(file_id, decoded, embedded)
+        return _store(file_id, decoded)
     except Exception as exc:
         logger.error("Frame scan write failed for %s: %s", file_id, exc)
         return False
-    if stored and source_path is not None:
-        _keep_small_pictures(file_id, source_path, [s for s, _ in embedded])
-    return stored
-
-
-def _keep_small_pictures(file_id: str, source_path: str, seconds: list[int]) -> None:
-    """Keep the ``small`` frame cache picture of each stored change frame.
-
-    Runs after the scan's row commit. An entry already there is left alone,
-    and one that cannot be written is skipped: the change frame itself is
-    still usable, so a picture is not worth failing the scan for.
-    """
-    from app.frame_cache import extract_frame_to_cache, frame_cache_path
-
-    for second in seconds:
-        cache_path = frame_cache_path(file_id, float(second))
-        if cache_path.exists() and cache_path.stat().st_size > 0:
-            continue
-        try:
-            extract_frame_to_cache(source_path, cache_path, float(second))
-        except Exception as exc:
-            logger.warning(
-                "Frame scan skipped the small picture at %ds for %s (%s)",
-                second, file_id, type(exc).__name__,
-            )

@@ -70,6 +70,8 @@ async def _start(manager):
 async def test_spec_addon_117_i10_a_start_reopens_unclassified_lofts_with_nothing_stored(
     db, settings, tmp_path,
 ):
+    """Revised SPEC-ADDON-146 I8: every YouTube or unclassified `.loft` whose
+    candidates are not settled is queued for the backfill fetch too."""
     from app.indexer import IndexManager, TaskType
 
     _loft(db, tmp_path, "fresh", None)
@@ -106,7 +108,9 @@ async def test_spec_addon_117_i10_a_start_reopens_unclassified_lofts_with_nothin
 
     assert reopened == (False, False, False)
     assert untouched == {f: (True, True, True) for f in untouched}
-    assert queued == [("fresh", -10)]
+    assert queued == [
+        ("fresh", -10), ("scanned", -10), ("read", -10), ("youtube", -10),
+    ]
 
 
 async def test_spec_addon_117_i2_a_start_empties_the_fetch_directory(db, settings, tmp_path):

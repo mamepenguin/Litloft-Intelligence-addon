@@ -117,10 +117,10 @@ def _scan_row(index, file_id: str) -> None:
 
 
 class TestStates:
-    def test_spec_addon_111_a_change_table_of_another_dimension_is_rebuilt_and_rescanned(
+    def test_spec_addon_111_revised_i8_a_change_table_of_another_dimension_is_rebuilt_without_moving_flags(
         self, search_index,
     ):
-        """§3 States: compared on its own, independently of vec_clip."""
+        """SPEC-ADDON-145 item 5, revised SPEC-ADDON-111 I8: compared on its own."""
         dim = search_index.dim("vec_clip")
         _add_file("video", "video/mp4")
         _add_file("picture", "image/jpeg")
@@ -143,7 +143,7 @@ class TestStates:
         assert search_index.vectors("vec_clip_change") == {}
         assert [e for e in search_index.embeddings("video") if e[1] == "clip_change"] == []
         assert set(search_index.vectors("vec_clip")) == {"clip_video_1"}
-        assert (_flag("video"), _flag("picture")) == (0, 1)
+        assert (_flag("video"), _flag("picture")) == (1, 1)
         with database._search_engine.connect() as conn:
             assert conn.execute(text("SELECT file_id FROM video_frame_scans")).scalars().all() \
                 == ["video"]

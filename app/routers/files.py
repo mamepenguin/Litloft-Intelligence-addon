@@ -1146,6 +1146,7 @@ async def reindex_file(
                 if "clip" in loft_requests:
                     row.loft_source = None
                     row.frame_scan_indexed = False
+                    row.loft_candidates_done = False
                 row.loft_fetch_failures = 0
 
     # ``is_queued`` lives on the loop and cannot join the flag flip's

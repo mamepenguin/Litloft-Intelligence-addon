@@ -4,6 +4,10 @@ The fetch is the ``LoftWorld`` of SPEC-ADDON-117 (real search DB, the gradient
 rendition served over HTTP); its lookup answer also names an ``sb0`` storyboard
 whose sheets are the flat-colour PNGs of the SPEC-ADDON-078 tests, so a tile is
 told from a scan frame by its colour.
+
+The references here carry ``loft_candidates_done``, so no fetch wants the
+SPEC-ADDON-146 candidates stage that would replace the storyboard with the
+video's own frames.
 """
 
 from __future__ import annotations
@@ -210,7 +214,9 @@ def world(search_index, youtube, monkeypatch, tmp_path, make_settings, gradient)
 
 def test_spec_addon_121_i1_a_fetch_writes_the_candidates_and_tiles_the_leg_writes(world):
     world.answer()
-    fetched, by_leg = world.add(), world.add()
+    fetched, by_leg = world.add(loft_candidates_done=True), world.add(
+        loft_candidates_done=True
+    )
 
     fetch(fetched)
 
@@ -269,7 +275,7 @@ def test_spec_addon_121_revised_117_i3_a_fetch_stopped_by_the_disk_guard_keeps_i
 def test_spec_addon_121_item_1_2_a_fetch_runs_the_step_after_the_leg_failed_in_this_process(
     world,
 ):
-    file_id = world.add()
+    file_id = world.add(loft_candidates_done=True)
     world.youtube.set_ytdlp(fail=LOOKUP_FAILURE)
     assert world.leg(file_id) is False
     assert world.leg(file_id) is False
@@ -284,7 +290,7 @@ def test_spec_addon_121_item_1_2_a_fetch_runs_the_step_after_the_leg_failed_in_t
 
 def test_spec_addon_121_item_1_2_a_failed_step_does_not_stop_the_leg_retrying(world):
     world.answer()
-    file_id = world.add()
+    file_id = world.add(loft_candidates_done=True)
     world.youtube.override("/sb/sheet1.png", status=500)
 
     fetch(file_id)
@@ -426,9 +432,9 @@ async def test_spec_addon_121_item_1_4_a_fetched_reference_is_eligible_for_a_vis
 
 def test_spec_addon_121_i2_only_a_reference_without_clip_rows_gets_the_step(world):
     world.answer()
-    has_candidates = world.add()
+    has_candidates = world.add(loft_candidates_done=True)
     world.add_row(has_candidates, "clip", 5.0)
-    thumbnail_only = world.add()
+    thumbnail_only = world.add(loft_candidates_done=True)
     world.add_row(thumbnail_only, "clip_thumbnail")
     vectors = world.vectors()
 
@@ -465,7 +471,7 @@ def test_spec_addon_121_section_2_no_storyboard_sets_clip_indexed_and_writes_not
     world, answer,
 ):
     world.answer(**answer)
-    file_id = world.add()
+    file_id = world.add(loft_candidates_done=True)
 
     fetch(file_id)
 
@@ -489,13 +495,13 @@ def test_spec_addon_121_section_2_each_fetch_of_a_reference_without_a_storyboard
     world, caplog,
 ):
     world.answer(storyboard=False)
-    control = world.add()
+    control = world.add(loft_candidates_done=True)
     with caplog.at_level("DEBUG"):
         assert world.leg(control) is True
     expected = _storyboard_lines(caplog, control)
     assert expected, "the leg logged no storyboard line for the control reference"
 
-    file_id = world.add()
+    file_id = world.add(loft_candidates_done=True)
     lookups = world.loft.lookups()
     caplog.clear()
     with caplog.at_level("DEBUG"):
@@ -544,7 +550,7 @@ def test_spec_addon_121_i3_a_failed_step_writes_nothing_and_the_fetch_still_down
     world, how,
 ):
     world.answer()
-    file_id = world.add()
+    file_id = world.add(loft_candidates_done=True)
     _break_the_step(world, how)
     vectors = world.vectors()
 
@@ -580,7 +586,7 @@ def test_spec_addon_121_i3_a_failed_step_changes_no_flag_count_or_youtube_result
     failed_lookup()
 
     world.answer()
-    file_id = world.add()
+    file_id = world.add(loft_candidates_done=True)
     world.loft.set(file_id, loft_fetch_failures=1)
     _break_the_step(world, how)
     world.free.free = 1 * GIB
@@ -611,7 +617,8 @@ def test_spec_addon_121_i3_a_failed_step_changes_no_flag_count_or_youtube_result
 def _ocr_only(world) -> str:
     world.configure(frame_ocr="on_index")
     world.answer()
-    return world.add(frame_scan_indexed=True, frame_ocr_read=False, frame_ocr_indexed=False)
+    return world.add(frame_scan_indexed=True, frame_ocr_read=False,
+                     frame_ocr_indexed=False, loft_candidates_done=True)
 
 
 def test_spec_addon_121_section_2_with_only_ocr_wanted_the_step_loads_the_model_and_runs(world):

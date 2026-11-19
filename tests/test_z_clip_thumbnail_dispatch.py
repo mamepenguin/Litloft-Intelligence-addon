@@ -87,6 +87,7 @@ def patched_db(monkeypatch, search_engine):
 
     monkeypatch.setattr(db_mod, "get_search_db", _get_search_db)
     monkeypatch.setattr(clip_worker, "get_search_db", _get_search_db)
+    monkeypatch.setattr(clip_worker, "get_search_db_read", _get_search_db)
     return Session
 
 

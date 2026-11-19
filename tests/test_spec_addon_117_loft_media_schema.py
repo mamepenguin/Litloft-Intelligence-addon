@@ -98,10 +98,10 @@ def _add(file_id: str, mime: str) -> None:
         ))
 
 
-def test_spec_addon_117_a_change_table_dimension_reset_reopens_native_videos_and_youtube_lofts(
+def test_spec_addon_117_a_change_table_dimension_reset_moves_no_flag(
     search_index,  # noqa: F811
 ):
-    """A capped ``.loft`` is reopened without its count changing."""
+    """SPEC-ADDON-145 item 5, revised SPEC-ADDON-111 I8: the rebuild leaves every flag."""
     for file_id, mime in (("native", "video/mp4"), ("youtube", LOFT_MIME),
                           ("capped", LOFT_MIME), ("other", LOFT_MIME),
                           ("unclassified", LOFT_MIME)):
@@ -131,6 +131,6 @@ def test_spec_addon_117_a_change_table_dimension_reset_reopens_native_videos_and
             "SELECT loft_fetch_failures FROM indexed_files WHERE file_id = 'capped'"
         )).scalar()
     assert rows == {
-        "native": 0, "youtube": 0, "capped": 0, "other": 1, "unclassified": 1,
+        "native": 1, "youtube": 1, "capped": 1, "other": 1, "unclassified": 1,
     }
     assert capped_failures == 3

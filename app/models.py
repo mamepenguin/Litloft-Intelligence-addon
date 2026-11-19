@@ -121,6 +121,12 @@ class IndexedFile(Base):
     loft_fetch_failures: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
+    # True when a ``.loft``'s scene candidates are settled: built from the
+    # downloaded video, or closed for a source that has none. Read for
+    # ``.loft`` rows only. SPEC-ADDON-146.
+    loft_candidates_done: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
     tfidf_keywords_indexed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )

@@ -1,5 +1,5 @@
-"""SPEC-ADDON-111 items 2-8, the failure table and I7: ``index_frame_scan`` over
-real ffmpeg-made videos, with the CLIP model replaced by a recording stand-in.
+"""SPEC-ADDON-111 items 2-8, the failure table and I7 as revised by
+SPEC-ADDON-145: ``index_frame_scan`` stores its hashes and writes no change frame.
 
 The test video alternates two horizontal gradients that run in opposite
 directions, so every difference hash bit flips at each switch.
@@ -187,22 +187,22 @@ def _bits(hashes: bytes, second: int) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def test_spec_addon_111_change_seconds_are_written_as_change_frames_with_the_scan(
+def test_spec_addon_111_revised_i7_the_scan_stores_its_hashes_and_writes_no_change_frame(
     scan, media,
 ):
+    """SPEC-ADDON-145 item 1, revised SPEC-ADDON-111 I7."""
     scan.video(media["video"])
 
     assert scan.run() is True
 
-    assert scan.changes() == [
-        (f"chg_vid1_{s}", float(s), "vec_clip_change") for s in CHANGE_SECONDS
-    ]
-    assert set(scan.index.vectors("vec_clip_change")) == {
-        f"chg_vid1_{s}" for s in CHANGE_SECONDS
-    }
+    assert scan.changes() == []
+    assert scan.index.vectors("vec_clip_change") == {}
     assert scan.index.vectors("vec_clip") == {}
-    assert scan.embedded == len(CHANGE_SECONDS)
+    assert scan.embedded == 0
     assert scan.flag() == 1
+    version, seconds, hashes, sizes = scan.scan_row()
+    assert len(hashes) == seconds * 32
+    assert len(sizes) == seconds * 2
 
 
 def test_spec_addon_111_the_scan_row_holds_a_hash_and_a_size_per_second(scan, media):
@@ -220,19 +220,23 @@ def test_spec_addon_111_the_scan_row_holds_a_hash_and_a_size_per_second(scan, me
     assert all(v > 0 for v in np.frombuffer(sizes, dtype="<u2"))
 
 
-def test_spec_addon_111_more_change_seconds_than_max_frames_are_spread(scan, media):
-    """Item 6: positions floor(i * n / max_frames) of the change seconds."""
+def test_spec_addon_111_revised_i7_max_frames_does_not_thin_the_scan(scan, media):
+    """SPEC-ADDON-145 item 1, revised SPEC-ADDON-111 I7: max_frames caps frames, not hashes."""
     scan.max_frames = 2
     scan.video(media["video"])
 
     assert scan.run() is True
 
-    assert [t for _, t, _ in scan.changes()] == [0.0, 20.0]
+    assert scan.scan_row()[1] >= 39
+    assert scan.changes() == []
+    assert scan.embedded == 0
+    assert scan.flag() == 1
 
 
-def test_spec_addon_111_a_rescan_replaces_the_previous_change_frames_and_scan(
+def test_spec_addon_111_revised_i7_a_rescan_replaces_the_scan_and_removes_the_change_frames(
     scan, media,
 ):
+    """SPEC-ADDON-145 item 1, revised SPEC-ADDON-111 I7."""
     scan.video(media["video"])
     scan.index.add_embedding("chg_vid1_99", "vid1", "clip_change", "vec_clip_change")
     scan.index.put_vector("vec_clip_change", "chg_vid1_99", np.ones(scan.dim),
@@ -245,7 +249,7 @@ def test_spec_addon_111_a_rescan_replaces_the_previous_change_frames_and_scan(
 
     assert scan.run() is True
 
-    assert [t for _, t, _ in scan.changes()] == [float(s) for s in CHANGE_SECONDS]
+    assert scan.changes() == []
     assert "chg_vid1_99" not in scan.index.vectors("vec_clip_change")
     assert scan.scan_row()[1] >= 39
 
@@ -341,8 +345,17 @@ def test_spec_addon_111_an_unreachable_file_writes_nothing_and_is_logged(
 
 
 def test_spec_addon_111_a_file_gone_after_extraction_writes_nothing(scan, media):
-    path = scan.video(media["video"])
-    scan.on_embed = lambda n: path.unlink() if n == 2 else None
+    scan.video(media["video"])
+    from app.workers import frame_scan
+
+    original = frame_scan._decode
+
+    def decode_then_remove(source, *, paused):
+        decoded = original(source, paused=paused)
+        Path(source).unlink()
+        return decoded
+
+    scan.monkeypatch.setattr(frame_scan, "_decode", decode_then_remove)
 
     assert scan.run() is False
 
@@ -352,32 +365,36 @@ def test_spec_addon_111_a_file_gone_after_extraction_writes_nothing(scan, media)
 
 def test_spec_addon_111_a_file_trashed_during_the_scan_writes_nothing(scan, media):
     scan.video(media["video"])
+    from app.workers import frame_scan
 
-    def trash(n):
-        if n == 1:
-            scan.index.sql("UPDATE indexed_files SET active = 0 WHERE file_id = 'vid1'")
+    original = frame_scan._decode
 
-    scan.on_embed = trash
+    def decode_then_trash(source, *, paused):
+        decoded = original(source, paused=paused)
+        scan.index.sql("UPDATE indexed_files SET active = 0 WHERE file_id = 'vid1'")
+        return decoded
+
+    scan.monkeypatch.setattr(frame_scan, "_decode", decode_then_trash)
 
     assert scan.run() is False
 
     assert scan.nothing_written()
+    assert scan.flag() == 0
 
 
-def test_spec_addon_111_one_change_frame_that_fails_to_embed_is_skipped(scan, media):
+def test_spec_addon_111_revised_i7_the_scan_embeds_no_frame(scan, media):
+    """SPEC-ADDON-145 item 1, revised SPEC-ADDON-111 I7."""
     scan.video(media["video"])
 
     def fail_second(n):
-        if n == 2:
-            raise RuntimeError("one frame could not be embedded")
+        raise RuntimeError("no frame may be embedded")
 
     scan.on_embed = fail_second
 
     assert scan.run() is True
 
-    seconds = [t for _, t, _ in scan.changes()]
-    assert len(seconds) == len(CHANGE_SECONDS) - 1
-    assert set(seconds) < {float(s) for s in CHANGE_SECONDS}
+    assert scan.embedded == 0
+    assert scan.changes() == []
     assert scan.flag() == 1
 
 
@@ -389,7 +406,7 @@ def test_spec_addon_111_an_early_ffmpeg_end_keeps_the_seconds_read(scan, media):
     version, seconds, hashes, sizes = scan.scan_row()
     assert 0 < seconds < 39
     assert len(hashes) == seconds * 32
-    assert scan.changes()[0][1] == 0.0
+    assert scan.changes() == []
     assert scan.flag() == 1
 
 
