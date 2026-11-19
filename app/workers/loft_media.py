@@ -370,8 +370,10 @@ def _embed_frames(
     embedded: list[tuple[float, np.ndarray]] = []
     for start in range(0, len(frames), batch_size):
         if is_paused is not None:
+            paused_at = time.monotonic()
             while is_paused():
                 time.sleep(_PAUSE_POLL_SECONDS)
+            deadline += time.monotonic() - paused_at
         for timestamp, frame_path in frames[start:start + batch_size]:
             if time.monotonic() >= deadline:
                 raise _CandidatesFailure("BudgetExceeded")

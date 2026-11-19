@@ -208,6 +208,7 @@ async def test_spec_addon_146_i8_prioritize_queues_a_fetch_at_100_when_only_the_
     await manager.prioritize("yt1")
 
     assert await _queued(manager, FETCH) == [("yt1", 100)]
+    assert await _queued(manager, "frame_ocr") == [("yt1", 100)]
 
 
 # ---------------------------------------------------------------------------

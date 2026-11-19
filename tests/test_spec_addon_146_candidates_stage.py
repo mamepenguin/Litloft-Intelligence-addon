@@ -116,6 +116,38 @@ def test_spec_addon_146_i5_a_fetch_replaces_the_storyboard_with_the_videos_scene
     assert world.loft.fetch_dir_files() == []
 
 
+def test_spec_addon_146_time_paused_during_embedding_is_not_spent_from_the_budget(
+    world, monkeypatch,
+):
+    """Item 5.2: the stage waits while paused, and only working time counts."""
+    import time
+
+    from app.workers import loft_media
+    from tests.loft_media_world import fetch as run
+
+    world.answer()
+    file_id = world.add()
+    monkeypatch.setattr(loft_media, "EMBED_BUDGET_SECONDS", 1.0)
+    extract = loft_media._extract_frame_paths
+    state: dict[str, float | None] = {"paused_until": None}
+
+    def extracting(*args, **kwargs):
+        frames = extract(*args, **kwargs)
+        state["paused_until"] = time.monotonic() + 1.5
+        return frames
+
+    def is_paused() -> bool:
+        until = state["paused_until"]
+        return until is not None and time.monotonic() < until
+
+    monkeypatch.setattr(loft_media, "_extract_frame_paths", extracting)
+
+    run(file_id, is_paused=is_paused)
+
+    assert world.clip_seconds(file_id) == _approx(CANDIDATE_SECONDS)
+    assert _flag(world, file_id) is True
+
+
 def test_spec_addon_146_i8_an_already_fetched_loft_downloads_once_and_runs_only_the_candidates_stage(
     world,
 ):

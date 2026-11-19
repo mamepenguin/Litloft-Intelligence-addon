@@ -1437,12 +1437,12 @@ class IndexManager:
                         and not file.loft_candidates_done
                         and int(file.loft_fetch_failures or 0) < 3
                     )
-                    if rebuild_only and not wants_candidates:
+                    if rebuild_only:
                         pending.append(IndexTask(
                             file_id=file_id, task_type=TaskType.FRAME_OCR,
                             priority=100,
                         ))
-                    else:
+                    if wants_candidates or not rebuild_only:
                         pending.append(IndexTask(
                             file_id=file_id, task_type=TaskType.LOFT_MEDIA,
                             priority=100,
