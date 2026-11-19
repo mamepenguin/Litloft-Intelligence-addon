@@ -91,7 +91,7 @@ jobs:
           report="$RUNNER_TEMP/cov/cov.json"
           python3 scripts/check-coverage-population.py "$report" "$COV_FLOOR"
 
-  frontend:
+  frontend-static:
     # This addon's frontend has no runner of its own. Its components import
     # core's (@/components, @/hooks, @/lib) and its tests are collected by
     # core's vitest through `frontend/src/addons/<name>/`, which
@@ -108,7 +108,7 @@ jobs:
     # A pull request that changes nothing here can go red later because core
     # moved. If a branch you have not touched fails in a core file, re-run the
     # job — if core has since merged the fix, that is all it needs.
-    name: frontend (core vitest / tsc)
+    name: frontend (core collection / tsc)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -179,10 +179,6 @@ jobs:
             exit 1
           }
 
-      - name: Test
-        run: pnpm test
-        working-directory: core/frontend
-
       # tsc reads this addon's sources through `frontend/src/addons/<name>`
       # and type-checks them against core's.
       #
@@ -198,3 +194,105 @@ jobs:
       - name: Type-check
         run: pnpm exec tsc --noEmit
         working-directory: core/frontend
+
+  frontend-shards:
+    # Core's suite is ~13,000 cases, almost all of them core's and the other
+    # addons'. Run whole and without a retry, one intermittent case anywhere in
+    # it turns this addon red; vitest's retry reports such a case as flaky
+    # instead, and a case that fails twice still fails the job.
+    name: frontend (core vitest ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: addon
+
+      - uses: actions/checkout@v4
+        with:
+          repository: mamepenguin/Litloft
+          ref: develop
+          submodules: recursive
+          path: core
+
+      # The other three addons stay at the commits core pins; only this one is
+      # replaced, and .git is dropped so the tree is a plain directory.
+      #
+      # No pipe here on purpose. A `run:` step's default shell on Linux is
+      # `bash -e {0}` — `pipefail` is only added when `shell: bash` is set
+      # explicitly — so `producer | consumer` reports only the consumer's
+      # status, and a half-copied tree would sail through as success.
+      - name: Stand this commit in for the pinned submodule
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf core/addons/intelligence
+          mkdir -p core/addons/intelligence
+          cp -a addon/. core/addons/intelligence/
+          rm -rf core/addons/intelligence/.git
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: core/frontend/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: core/frontend/pnpm-lock.yaml
+
+      # Builds the gitignored `frontend/src/addons/<name>/`: a real directory
+      # holding one symlink per file, rather than a symlink to the addon's
+      # `frontend/`, because a tool that walks a tree descends the first and
+      # not the second. Without it vitest collects no addon test and the suite
+      # is green for the wrong reason.
+      - name: Link addons into backend/ and frontend/
+        run: ./setup-addons.sh
+        working-directory: core
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: core/frontend
+
+      - name: Merge addon translations
+        run: node scripts/merge-addon-messages.mjs
+        working-directory: core/frontend
+
+      # A tree that failed to land costs nothing at collection time: vitest
+      # finds fewer files and reports every one of them passing. Ask the
+      # collector what it found rather than assuming this addon is in it.
+      - name: Fail if this addon's tests were not collected
+        shell: bash
+        working-directory: core/frontend
+        run: |
+          set -euo pipefail
+          collected="$(pnpm exec vitest list --filesOnly)"
+          printf '%s\n' "$collected" | grep -q '^src/addons/intelligence/' || {
+            echo "::error::vitest collected no tests from addons/intelligence"
+            exit 1
+          }
+
+      - name: Test
+        run: pnpm exec vitest run --retry=1 --shard=${{ matrix.shard }}/4
+        working-directory: core/frontend
+
+  frontend:
+    # The required check keeps this name. A job whose `needs` failed is
+    # skipped, and a skipped required check counts as passing, so this one
+    # runs whenever the run was not cancelled and fails unless every part
+    # succeeded.
+    name: frontend (core vitest / tsc)
+    needs: [frontend-static, frontend-shards]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every frontend part succeeded
+        env:
+          STATIC: ${{ needs.frontend-static.result }}
+          SHARDS: ${{ needs.frontend-shards.result }}
+        run: |
+          echo "static=$STATIC shards=$SHARDS"
+          [ "$STATIC" = success ] && [ "$SHARDS" = success ]
