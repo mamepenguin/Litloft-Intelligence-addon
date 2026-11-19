@@ -58,7 +58,6 @@ import {
   makeScene,
   nameVisible,
   pointerX,
-  ruler,
   SceneSectionProps,
   sceneCardNamed,
   stubRect,
@@ -530,6 +529,24 @@ describe("SPEC-ADDON-089 I7 — the .loft", () => {
 
     expect(seek).toHaveBeenCalledWith(65);
     expect(play).toHaveBeenCalled();
+  });
+
+  it("asks a failed .loft picture again on the next showing", async () => {
+    const { controller } = makeController({ duration: 70 });
+    const shown = (active: boolean) =>
+      section(loft({ mediaController: controller, active, labelledByHost: true }));
+    const view = render(shown(true));
+    await waitFor(() => expect(imgTimes()).toContain(10));
+
+    const failed = images().find((img) => /[?&]t=10(?:&|$)/.test(img.src))!;
+    fireEvent.error(failed);
+    expect(tile(10).querySelector("img")).toBeNull();
+
+    view.rerender(shown(false));
+    await flush();
+    view.rerender(shown(true));
+
+    await waitFor(() => expect(tile(10).querySelector("img")).not.toBeNull());
   });
 
   it("SPEC-ADDON-118 item 4 — draws the Visual Index part as a native video does", async () => {

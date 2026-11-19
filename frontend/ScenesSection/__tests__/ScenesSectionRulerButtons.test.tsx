@@ -85,6 +85,51 @@ afterEach(() => {
 });
 
 describe("SPEC-ADDON-153 I13 — only the primary mouse button drives the ruler", () => {
+  it("SPEC-ADDON-153 I13 — a press outside the ruler and a drag onto it set no point and move no list", async () => {
+    const { controller } = makeController({ duration: L, currentTime: 10 });
+    render(section({ mediaController: controller }));
+    await settle(0);
+    await settle(0);
+
+    const el = ruler();
+    const placed = scrollTopOf(scroller());
+    const rows = visibleRows();
+
+    fireEvent.pointerDown(document.body, {
+      pointerType: "mouse",
+      button: 0,
+      buttons: 1,
+      clientX: 1,
+      clientY: 400,
+    });
+    fireEvent.pointerMove(el, {
+      pointerType: "mouse",
+      button: 0,
+      buttons: 1,
+      clientX: pointerX(120, L, WIDTH),
+    });
+    fireEvent.pointerMove(el, {
+      pointerType: "mouse",
+      button: 0,
+      buttons: 1,
+      clientX: pointerX(140, L, WIDTH),
+    });
+    fireEvent.pointerUp(el, {
+      pointerType: "mouse",
+      button: 0,
+      buttons: 0,
+      clientX: pointerX(140, L, WIDTH),
+    });
+    await settle(0);
+
+    expect(ruler(), "no press on the ruler, no ruler point").toHaveAttribute(
+      "aria-valuenow",
+      "10",
+    );
+    expect(scrollTopOf(scroller()), "the list does not move").toBe(placed);
+    expect(visibleRows()).toEqual(rows);
+  });
+
   it("SPEC-ADDON-153 I13 — a right-button press and drag leave the point unset and the list where it was", async () => {
     const { controller } = makeController({ duration: L, currentTime: 10 });
     render(section({ mediaController: controller }));

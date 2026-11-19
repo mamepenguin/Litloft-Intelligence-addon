@@ -158,6 +158,7 @@ export default function ScenesSectionContainer({
   const listBoxRef = useRef<HTMLDivElement>(null);
   const rulerBoxRef = useRef<HTMLDivElement>(null);
   const cardBoxRef = useRef<HTMLDivElement>(null);
+  const actionRowRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const tileRef = useRef<HTMLButtonElement>(null);
 
@@ -433,6 +434,7 @@ export default function ScenesSectionContainer({
     hasPlayback: mediaController != null,
     playbackTime: playback.time,
     followTarget,
+    rulerDrag: dragStart,
     onFollowTargetConsumed,
     onReaderTakeOver,
     refs: {
@@ -440,6 +442,7 @@ export default function ScenesSectionContainer({
       list: listRef,
       rulerBox: rulerBoxRef,
       cardBox: cardBoxRef,
+      actionRow: actionRowRef,
     },
   });
   const {
@@ -493,15 +496,18 @@ export default function ScenesSectionContainer({
   const handlePointerDown = useCallback(
     (time: number, pointerType: string, clientX: number, button: number) => {
       if (list.length === 0) return;
+      const primary = pointerType !== "mouse" || button === 0;
       const scroller = listRef.current ? scrollerOf(listRef.current) : null;
-      dragStart.current = {
-        pointerType,
-        x: clientX,
-        dragged: false,
-        previousBrowse: browseRef.current,
-        previousFollowing: following,
-        previousScroll: scroller?.scrollTop ?? 0,
-      };
+      dragStart.current = primary
+        ? {
+            pointerType,
+            x: clientX,
+            dragged: false,
+            previousBrowse: browseRef.current,
+            previousFollowing: following,
+            previousScroll: scroller?.scrollTop ?? 0,
+          }
+        : null;
       if (pointerType !== "mouse" || button !== 0) return;
       applyRulerPoint(time);
     },
@@ -513,7 +519,10 @@ export default function ScenesSectionContainer({
       if (list.length === 0) return;
       if (pointerType === "mouse") {
         setHover(time);
-        if ((buttons & 1) !== 0) applyRulerPoint(time);
+        const start = dragStart.current;
+        if ((buttons & 1) !== 0 && start?.pointerType === "mouse") {
+          applyRulerPoint(time);
+        }
         return;
       }
       const start = dragStart.current;
@@ -759,6 +768,7 @@ export default function ScenesSectionContainer({
       listBoxRef={listBoxRef}
       rulerBoxRef={rulerBoxRef}
       cardBoxRef={cardBoxRef}
+      actionRowRef={actionRowRef}
       gridRef={gridRef}
       tileRef={tileRef}
       rulerRef={rulerRef}

@@ -59,7 +59,14 @@ export interface SceneListRefs {
   list: RefObject<HTMLDivElement | null>;
   rulerBox: RefObject<HTMLDivElement | null>;
   cardBox: RefObject<HTMLDivElement | null>;
+  actionRow?: RefObject<HTMLElement | null>;
   frameStep?: number;
+}
+
+/** A touch or pen drag the ruler is following, until it ends or is cancelled. */
+export interface RulerDrag {
+  pointerType: string;
+  dragged: boolean;
 }
 
 export interface SceneListOptions {
@@ -69,6 +76,7 @@ export interface SceneListOptions {
   hasPlayback: boolean;
   playbackTime: number;
   followTarget: number | null;
+  rulerDrag: RefObject<RulerDrag | null>;
   onFollowTargetConsumed: () => void;
   onReaderTakeOver: () => void;
   refs: SceneListRefs;
@@ -102,11 +110,12 @@ export function useSceneList({
   hasPlayback,
   playbackTime,
   followTarget,
+  rulerDrag,
   onFollowTargetConsumed,
   onReaderTakeOver,
   refs,
 }: SceneListOptions): SceneListState {
-  const { section, list: listRef, rulerBox, cardBox } = refs;
+  const { section, list: listRef, rulerBox, cardBox, actionRow } = refs;
   const [following, setFollowingState] = useState(true);
   const [columns, setColumns] = useState(3);
   const [step, setStep] = useState(0);
@@ -158,9 +167,17 @@ export function useSceneList({
       setFlow(nextFlow);
     }
     const drawnCard = cardBox.current?.getBoundingClientRect().height ?? 0;
+    const action = actionRow?.current;
+    const actionPart =
+      action !== null && action !== undefined
+        ? action.getBoundingClientRect().height +
+          (Number.parseFloat(
+            getComputedStyle(action.parentElement ?? action).rowGap,
+          ) || 0)
+        : 0;
     const fullCardMin = FULL_CARD_MIN_REM * rootRemPx();
     const sparesFullCard =
-      list.clientHeight + drawnCard - fullCardMin >= 2 * nextStep;
+      list.clientHeight + drawnCard + actionPart - fullCardMin >= 2 * nextStep;
     const nextOneLine = nextFlow
       ? true
       : nextStep > 0
@@ -174,7 +191,7 @@ export function useSceneList({
       current === nextInset ? current : nextInset,
     );
     return { columns: nextColumns, step: nextStep, flow: nextFlow };
-  }, [cardBox, listRef]);
+  }, [actionRow, cardBox, listRef]);
 
   const syncVisible = useCallback(() => {
     const list = listRef.current;
@@ -400,6 +417,22 @@ export function useSceneList({
         onReaderTakeOver();
       });
     };
+    const onTouchMove = () => {
+      const drag = rulerDrag.current;
+      if (drag && drag.pointerType !== "mouse") {
+        // The ruler drag owns this touch. Once the browser takes the gesture
+        // for a scroll it cancels the pointer; until then its moves are the
+        // drag's, not a reader's scroll of the list.
+        return;
+      }
+      takeOver();
+    };
+    const onPointerCancel = (event: PointerEvent) => {
+      if (event.pointerType === "mouse") return;
+      const drag = rulerDrag.current;
+      if (!drag || drag.pointerType === "mouse" || drag.dragged) return;
+      takeOver();
+    };
     const onPointerDown = (event: PointerEvent) => {
       if (!shownRef.current || !visibleRef.current.canScroll) return;
       if (event.button === 1) {
@@ -431,20 +464,22 @@ export function useSceneList({
     // Not passive: a reader's wheel has to end following before the scroll is
     // handed on, so the chip is there in the same beat as the movement.
     scroller.addEventListener("wheel", takeOver);
-    scroller.addEventListener("touchmove", takeOver, { passive: true });
+    scroller.addEventListener("touchmove", onTouchMove, { passive: true });
+    scroller.addEventListener("pointercancel", onPointerCancel);
     scroller.addEventListener("pointerdown", onPointerDown);
     scroller.addEventListener("keydown", onKeyDown);
     scroller.addEventListener("focusin", onFocusIn);
     scroller.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       scroller.removeEventListener("wheel", takeOver);
-      scroller.removeEventListener("touchmove", takeOver);
+      scroller.removeEventListener("touchmove", onTouchMove);
+      scroller.removeEventListener("pointercancel", onPointerCancel);
       scroller.removeEventListener("pointerdown", onPointerDown);
       scroller.removeEventListener("keydown", onKeyDown);
       scroller.removeEventListener("focusin", onFocusIn);
       scroller.removeEventListener("scroll", onScroll);
     };
-  }, [shown, flow, syncVisible, setFollowing, onReaderTakeOver, listRef, rulerBox, cardBox]);
+  }, [shown, flow, syncVisible, setFollowing, onReaderTakeOver, listRef, rulerBox, cardBox, rulerDrag]);
 
   useEffect(() => {
     if (!shown) return;
