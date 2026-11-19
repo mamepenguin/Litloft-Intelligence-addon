@@ -16,6 +16,7 @@ import {
   contentOffsetTop,
   isFlowForm,
   isWhollyVisible,
+  partsBelowList,
   rootRemPx,
   rowAt,
   rowCountOf,
@@ -59,7 +60,6 @@ export interface SceneListRefs {
   list: RefObject<HTMLDivElement | null>;
   rulerBox: RefObject<HTMLDivElement | null>;
   cardBox: RefObject<HTMLDivElement | null>;
-  actionRow?: RefObject<HTMLElement | null>;
   frameStep?: number;
 }
 
@@ -115,7 +115,7 @@ export function useSceneList({
   onReaderTakeOver,
   refs,
 }: SceneListOptions): SceneListState {
-  const { section, list: listRef, rulerBox, cardBox, actionRow } = refs;
+  const { section, list: listRef, rulerBox, cardBox } = refs;
   const [following, setFollowingState] = useState(true);
   const [columns, setColumns] = useState(3);
   const [step, setStep] = useState(0);
@@ -166,18 +166,10 @@ export function useSceneList({
       flowRef.current = nextFlow;
       setFlow(nextFlow);
     }
-    const drawnCard = cardBox.current?.getBoundingClientRect().height ?? 0;
-    const action = actionRow?.current;
-    const actionPart =
-      action !== null && action !== undefined
-        ? action.getBoundingClientRect().height +
-          (Number.parseFloat(
-            getComputedStyle(action.parentElement ?? action).rowGap,
-          ) || 0)
-        : 0;
+    const below = cardBox.current ? partsBelowList(cardBox.current) : 0;
     const fullCardMin = FULL_CARD_MIN_REM * rootRemPx();
     const sparesFullCard =
-      list.clientHeight + drawnCard + actionPart - fullCardMin >= 2 * nextStep;
+      list.clientHeight + below - fullCardMin >= 2 * nextStep;
     const nextOneLine = nextFlow
       ? true
       : nextStep > 0
@@ -191,7 +183,7 @@ export function useSceneList({
       current === nextInset ? current : nextInset,
     );
     return { columns: nextColumns, step: nextStep, flow: nextFlow };
-  }, [actionRow, cardBox, listRef]);
+  }, [cardBox, listRef]);
 
   const syncVisible = useCallback(() => {
     const list = listRef.current;

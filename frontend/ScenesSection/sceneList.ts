@@ -154,3 +154,21 @@ export function isWhollyVisible(
   const rect = tile.getBoundingClientRect();
   return rect.top >= view.top - 0.5 && rect.bottom <= view.bottom + 0.5;
 }
+
+/**
+ * From the top of the card box to the bottom of the last part after it (the
+ * stale note, the action row), gaps included: the height the list gives up to
+ * whatever is drawn below it.
+ */
+export function partsBelowList(cardBox: HTMLElement): number {
+  const top = cardBox.getBoundingClientRect().top;
+  let bottom = cardBox.getBoundingClientRect().bottom;
+  for (
+    let node = cardBox.nextElementSibling;
+    node;
+    node = node.nextElementSibling
+  ) {
+    bottom = Math.max(bottom, node.getBoundingClientRect().bottom);
+  }
+  return Math.max(0, bottom - top);
+}

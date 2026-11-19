@@ -74,7 +74,6 @@ export interface ScenesSectionPresenterProps {
   listBoxRef: RefObject<HTMLDivElement | null>;
   rulerBoxRef: RefObject<HTMLDivElement | null>;
   cardBoxRef: RefObject<HTMLDivElement | null>;
-  actionRowRef: RefObject<HTMLDivElement | null>;
   gridRef: RefObject<HTMLDivElement | null>;
   tileRef: RefObject<HTMLButtonElement | null>;
   rulerRef: RefObject<HTMLDivElement | null>;
@@ -143,7 +142,6 @@ export default function ScenesSectionPresenter({
   listBoxRef,
   rulerBoxRef,
   cardBoxRef,
-  actionRowRef,
   gridRef,
   tileRef,
   rulerRef,
@@ -419,10 +417,7 @@ export default function ScenesSectionPresenter({
               )}
 
               {actionRowDrawn && (
-                <div
-                  ref={actionRowRef}
-                  className="flex min-h-9 flex-shrink-0 items-center justify-between gap-2"
-                >
+                <div className="flex min-h-9 flex-shrink-0 items-center justify-between gap-2">
                   <span className="text-xs tabular-nums text-text-muted">
                     {error ?? visual?.note ?? ""}
                   </span>

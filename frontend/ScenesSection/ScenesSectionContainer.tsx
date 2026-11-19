@@ -167,7 +167,6 @@ export default function ScenesSectionContainer({
   const listBoxRef = useRef<HTMLDivElement>(null);
   const rulerBoxRef = useRef<HTMLDivElement>(null);
   const cardBoxRef = useRef<HTMLDivElement>(null);
-  const actionRowRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const tileRef = useRef<HTMLButtonElement>(null);
 
@@ -451,7 +450,6 @@ export default function ScenesSectionContainer({
       list: listRef,
       rulerBox: rulerBoxRef,
       cardBox: cardBoxRef,
-      actionRow: actionRowRef,
     },
   });
   const {
@@ -777,7 +775,6 @@ export default function ScenesSectionContainer({
       listBoxRef={listBoxRef}
       rulerBoxRef={rulerBoxRef}
       cardBoxRef={cardBoxRef}
-      actionRowRef={actionRowRef}
       gridRef={gridRef}
       tileRef={tileRef}
       rulerRef={rulerRef}
