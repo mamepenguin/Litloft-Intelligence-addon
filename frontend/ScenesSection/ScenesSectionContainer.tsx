@@ -1,11 +1,9 @@
 "use client";
 
-import type { FocusEvent } from "react";
 import {
   useCallback,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -29,24 +27,19 @@ import {
   type VideoVisualSceneItem,
 } from "../api";
 import {
-  type BrowseClearEvent,
-  type BrowseSource,
-  browseClearedBy,
-} from "./browseLifetime";
-import {
   LOFT_MIME_TYPE,
   dotTileStarts,
   frameIndexAt,
+  rulerFraction,
   rulerLength,
-  sceneColumns,
   seekTime,
-  windowStartFor,
 } from "./scenesModel";
+import { scrollerOf } from "./sceneList";
 import { usePlaybackClock } from "./hooks/usePlaybackClock";
 import { useRulerKeys } from "./hooks/useRulerKeys";
 import { useRulerWidth } from "./hooks/useRulerWidth";
-import { useSceneRows } from "./hooks/useSceneRows";
-import { useWindowPictures } from "./hooks/useWindowPictures";
+import { useSceneList } from "./hooks/useSceneList";
+import { useScenePictures } from "./hooks/useScenePictures";
 import ScenesSectionPresenter, {
   type ScenesAction,
   type ScenesActionKind,
@@ -60,8 +53,6 @@ const EVENT_PARTIAL = "intelligence.video_visual.partial";
 const EVENT_FAILED = "intelligence.video_visual.failed";
 
 const DRAG_THRESHOLD_PX = 8;
-
-const NO_TIMES: number[] = [];
 
 const NO_FRAMES: ClipTimestampItem[] = [];
 
@@ -90,6 +81,17 @@ type NativeState = "idle" | "loading" | "ready" | "hidden";
 
 type ActionError = "waiting" | "generic" | null;
 
+interface DragStart {
+  pointerType: string;
+  x: number;
+  dragged: boolean;
+  previousBrowse: number | null;
+  previousFollowing: boolean;
+  previousScroll: number;
+  /** A touch drag the browser cancelled, held until its gesture ends. */
+  cancelled?: boolean;
+}
+
 export default function ScenesSectionContainer({
   fileId,
   drive,
@@ -113,6 +115,8 @@ export default function ScenesSectionContainer({
   const [nativeState, setNativeState] = useState<NativeState>("idle");
   const [rows, setRows] = useState<ClipTimestampItem[] | null>(null);
   const [browse, setBrowse] = useState<number | null>(null);
+  const [hover, setHover] = useState<number | null>(null);
+  const [followTarget, setFollowTarget] = useState<number | null>(null);
   const [visual, setVisual] = useState<VideoVisualIndexResponse | null>(null);
   const [visualLoaded, setVisualLoaded] = useState(false);
   const [working, setWorking] = useState<ScenesActionKind | null>(null);
@@ -147,46 +151,43 @@ export default function ScenesSectionContainer({
   // generation.
   const visualRequestedFile = useRef<string | null>(null);
   const browseRef = useRef<number | null>(null);
-  const browseSource = useRef<BrowseSource | null>(null);
   const expandedRef = useRef(false);
-  const lastPointerType = useRef("mouse");
-  const dragStart = useRef<{
-    x: number;
-    previous: number | null;
-    previousSource: BrowseSource | null;
-  } | null>(null);
+  const dragStart = useRef<DragStart | null>(null);
+  // A mouse is not captured by the ruler, so a drag released off it never
+  // reaches the ruler's pointerup.
+  useEffect(() => {
+    const endMouseDrag = (event: PointerEvent) => {
+      if (event.pointerType === "mouse") dragStart.current = null;
+    };
+    // A cancelled touch drag still owns the rest of its gesture's touchmoves.
+    const endCancelledTouch = () => {
+      if (dragStart.current?.cancelled) dragStart.current = null;
+    };
+    window.addEventListener("pointerup", endMouseDrag);
+    window.addEventListener("touchend", endCancelledTouch);
+    window.addEventListener("touchcancel", endCancelledTouch);
+    return () => {
+      window.removeEventListener("pointerup", endMouseDrag);
+      window.removeEventListener("touchend", endCancelledTouch);
+      window.removeEventListener("touchcancel", endCancelledTouch);
+    };
+  }, []);
   const rulerRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const listBoxRef = useRef<HTMLDivElement>(null);
+  const rulerBoxRef = useRef<HTMLDivElement>(null);
+  const cardBoxRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const tileRef = useRef<HTMLButtonElement>(null);
-  const lastPartRef = useRef<HTMLElement>(null);
-  const setLastPart = useCallback((element: HTMLElement | null) => {
-    lastPartRef.current = element;
+
+  const setBrowsePoint = useCallback((value: number | null) => {
+    browseRef.current = value;
+    setBrowse(value);
   }, []);
 
-  const setBrowsePoint = useCallback(
-    (value: number | null, source: BrowseSource | null = null) => {
-      browseRef.current = value;
-      browseSource.current = source;
-      setBrowse(value);
-    },
-    [],
-  );
-
-  const clearBrowseOn = useCallback(
-    (event: BrowseClearEvent) => {
-      if (!browseClearedBy(browseSource.current, event)) return;
-      setBrowsePoint(null);
-    },
-    [setBrowsePoint],
-  );
-
-  const handleJump = useCallback(() => {
-    clearBrowseOn("jump");
-  }, [clearBrowseOn]);
-
-  const playback = usePlaybackClock(mediaController ?? null, handleJump);
+  const playback = usePlaybackClock(mediaController ?? null);
 
   const list = rows ?? NO_FRAMES;
   // With no candidate frames the player's duration is the only length left
@@ -217,7 +218,7 @@ export default function ScenesSectionContainer({
     setExpanded(false);
     setNativeState("idle");
     setRows(null);
-    clearBrowseOn("filechange");
+    setBrowsePoint(null);
     setFailedTimes([]);
     setPictureRatio(null);
     resetVisual();
@@ -240,7 +241,7 @@ export default function ScenesSectionContainer({
         if (availabilityGeneration.current !== availability) return;
         onAvailabilityRef.current?.(false);
       });
-  }, [fileId, drive, isVideo, isLoft, panel, clearBrowseOn, resetVisual]);
+  }, [fileId, drive, isVideo, isLoft, panel, setBrowsePoint, resetVisual]);
 
   const loadNative = useCallback(
     (generation: number) => {
@@ -251,7 +252,7 @@ export default function ScenesSectionContainer({
           if (requestGeneration.current !== generation) return;
           const next = result?.timestamps ?? [];
           // The rows land outside a React event; flush so the placeholder ruler
-          // and the nine tiles swap in one commit instead of a scheduled later one.
+          // and every tile swap in one commit instead of a scheduled later one.
           flushSync(() => {
             if (next.length === 0) {
               setNativeState("hidden");
@@ -289,12 +290,12 @@ export default function ScenesSectionContainer({
     if (!wasShown.current) return;
     wasShown.current = false;
     requestGeneration.current += 1;
-    clearBrowseOn("collapse");
+    setBrowsePoint(null);
     // A hidden `.loft` keeps its Visual Index: showing it again asks nothing,
     // so clearing it here would leave the section blank.
     if (isLoft) return;
     resetVisual();
-  }, [hostDriven, hostShows, isLoft, clearBrowseOn, resetVisual]);
+  }, [hostDriven, hostShows, isLoft, setBrowsePoint, resetVisual]);
 
   const expand = useCallback(() => {
     const generation = (requestGeneration.current += 1);
@@ -309,7 +310,7 @@ export default function ScenesSectionContainer({
 
   const collapse = useCallback(() => {
     requestGeneration.current += 1;
-    clearBrowseOn("collapse");
+    setBrowsePoint(null);
     expandedRef.current = false;
     dragStart.current = null;
     setExpanded(false);
@@ -317,7 +318,7 @@ export default function ScenesSectionContainer({
     resetVisual();
     setNativeState("idle");
     setRows(null);
-  }, [isLoft, clearBrowseOn, resetVisual]);
+  }, [isLoft, setBrowsePoint, resetVisual]);
 
   const toggle = useCallback(() => {
     if (expanded) collapse();
@@ -437,9 +438,50 @@ export default function ScenesSectionContainer({
     [fileId, drive, loadVisual],
   );
 
+  const onFollowTargetConsumed = useCallback(() => {
+    setFollowTarget(null);
+  }, []);
+
+  const onReaderTakeOver = useCallback(() => {
+    setBrowsePoint(null);
+    setFollowTarget(null);
+  }, [setBrowsePoint]);
+
+  const sceneList = useSceneList({
+    shown,
+    fileId,
+    rows: list,
+    hasPlayback: mediaController != null,
+    playbackTime: playback.time,
+    followTarget,
+    rulerDrag: dragStart,
+    onFollowTargetConsumed,
+    onReaderTakeOver,
+    refs: {
+      section: sectionRef,
+      list: listRef,
+      rulerBox: rulerBoxRef,
+      cardBox: cardBoxRef,
+    },
+  });
+  const {
+    following,
+    setFollowing,
+    columns,
+    step,
+    flow,
+    oneLine,
+    cardBottomInset,
+    visible,
+    scrollVersion,
+    placeIndex,
+  } = sceneList;
+
   const activate = useCallback(
     (time: number) => {
-      clearBrowseOn("seek");
+      setBrowsePoint(null);
+      setFollowTarget(time);
+      setFollowing(true);
       if (mediaController) {
         mediaController.seek(time);
         mediaController.play();
@@ -453,16 +495,94 @@ export default function ScenesSectionContainer({
         void started.catch(() => {});
       }
     },
-    [mediaController, videoRef, clearBrowseOn],
+    [mediaController, videoRef, setBrowsePoint, setFollowing],
   );
 
-  const handleRulerClick = useCallback(
-    (time: number, pointerType: string | null) => {
-      if ((pointerType ?? lastPointerType.current) !== "mouse") return;
-      activate(time);
+  const applyRulerPoint = useCallback(
+    (time: number) => {
+      if (list.length === 0) return;
+      const index = frameIndexAt(list, time);
+      setBrowsePoint(list[index].start);
+      placeIndex(index, true);
+      if (visible.canScroll) {
+        setFollowing(false);
+        setFollowTarget(null);
+      }
     },
-    [activate],
+    [list, placeIndex, setBrowsePoint, setFollowing, visible.canScroll],
   );
+
+  const handlePointerDown = useCallback(
+    (time: number, pointerType: string, clientX: number, button: number) => {
+      if (list.length === 0) return;
+      const primary = pointerType !== "mouse" || button === 0;
+      const scroller = listRef.current ? scrollerOf(listRef.current) : null;
+      dragStart.current = primary
+        ? {
+            pointerType,
+            x: clientX,
+            dragged: false,
+            previousBrowse: browseRef.current,
+            previousFollowing: following,
+            previousScroll: scroller?.scrollTop ?? 0,
+          }
+        : null;
+      if (pointerType !== "mouse" || button !== 0) return;
+      applyRulerPoint(time);
+    },
+    [applyRulerPoint, following, list.length],
+  );
+
+  const handlePointerMove = useCallback(
+    (time: number, pointerType: string, clientX: number, buttons: number) => {
+      if (list.length === 0) return;
+      if (pointerType === "mouse") {
+        setHover(time);
+        const start = dragStart.current;
+        if ((buttons & 1) !== 0 && start?.pointerType === "mouse") {
+          applyRulerPoint(time);
+        }
+        return;
+      }
+      const start = dragStart.current;
+      if (!start || start.cancelled) return;
+      if (Math.abs(clientX - start.x) >= DRAG_THRESHOLD_PX) {
+        start.dragged = true;
+        applyRulerPoint(time);
+      }
+    },
+    [applyRulerPoint, list.length],
+  );
+
+  const handlePointerUp = useCallback(
+    (time: number, pointerType: string) => {
+      if (pointerType === "mouse") {
+        dragStart.current = null;
+        return;
+      }
+      const start = dragStart.current;
+      dragStart.current = null;
+      if (!start || start.dragged) return;
+      applyRulerPoint(time);
+    },
+    [applyRulerPoint],
+  );
+
+  const handlePointerCancel = useCallback(() => {
+    const start = dragStart.current;
+    dragStart.current = null;
+    if (!start || start.pointerType === "mouse" || !start.dragged) return;
+    dragStart.current = { ...start, cancelled: true };
+    setBrowsePoint(start.previousBrowse);
+    setFollowTarget(null);
+    setFollowing(start.previousFollowing);
+    const listEl = listRef.current;
+    if (listEl) scrollerOf(listEl).scrollTop = start.previousScroll;
+  }, [setBrowsePoint, setFollowing]);
+
+  const handleRulerHover = useCallback((time: number | null) => {
+    setHover(time);
+  }, []);
 
   const handleRulerKeyDown = useCallback(
     (event: KeyboardEvent) => {
@@ -478,90 +598,62 @@ export default function ScenesSectionContainer({
       }
       event.preventDefault();
       event.stopPropagation();
+      if (list.length === 0) return;
 
       if (key === "enter") {
         if (browseRef.current !== null) activate(browseRef.current);
         return;
       }
-      if (list.length === 0) return;
 
-      const playingIndex = frameIndexAt(list, playback.time);
-      const currentIndex =
-        browseRef.current === null
-          ? playingIndex
-          : frameIndexAt(list, browseRef.current);
+      let currentIndex: number;
+      if (browseRef.current !== null) {
+        currentIndex = frameIndexAt(list, browseRef.current);
+      } else if (following && mediaController) {
+        currentIndex = frameIndexAt(list, playback.time);
+      } else {
+        currentIndex = Math.min(visible.first * columns, list.length - 1);
+      }
       let nextIndex = currentIndex;
       if (key === "home") nextIndex = 0;
       else if (key === "end") nextIndex = list.length - 1;
       else if (key === "arrowleft") nextIndex = Math.max(0, currentIndex - 1);
       else nextIndex = Math.min(list.length - 1, currentIndex + 1);
-      setBrowsePoint(list[nextIndex].start, "keyboard");
-    },
-    [list, playback.time, activate, setBrowsePoint],
-  );
-
-  const handlePointerDown = useCallback(
-    (_time: number, pointerType: string, clientX: number) => {
-      lastPointerType.current = pointerType;
-      if (pointerType === "mouse") {
-        dragStart.current = null;
-        return;
-      }
-      dragStart.current = {
-        x: clientX,
-        previous: browseRef.current,
-        previousSource: browseSource.current,
-      };
-    },
-    [],
-  );
-
-  const handlePointerMove = useCallback(
-    (time: number, pointerType: string, clientX: number) => {
-      if (pointerType === "mouse") {
-        setBrowsePoint(time, "mouse");
-        return;
-      }
-      const start = dragStart.current;
-      if (!start) return;
-      if (Math.abs(clientX - start.x) >= DRAG_THRESHOLD_PX) {
-        setBrowsePoint(time, "touch");
+      setBrowsePoint(list[nextIndex].start);
+      placeIndex(nextIndex, true);
+      if (visible.canScroll) {
+        setFollowing(false);
+        setFollowTarget(null);
       }
     },
-    [setBrowsePoint],
+    [
+      list,
+      following,
+      mediaController,
+      playback.time,
+      visible.first,
+      visible.canScroll,
+      columns,
+      activate,
+      setBrowsePoint,
+      placeIndex,
+      setFollowing,
+    ],
   );
 
-  const handlePointerUp = useCallback(
-    (time: number, pointerType: string) => {
-      if (pointerType === "mouse") return;
-      if (dragStart.current) setBrowsePoint(time, "touch");
-      dragStart.current = null;
-    },
-    [setBrowsePoint],
-  );
+  const handleResume = useCallback(() => {
+    setBrowsePoint(null);
+    setFollowTarget(null);
+    setFollowing(true);
+  }, [setBrowsePoint, setFollowing]);
 
-  const handlePointerCancel = useCallback(() => {
-    if (dragStart.current) {
-      setBrowsePoint(
-        dragStart.current.previous,
-        dragStart.current.previousSource,
-      );
-    }
-    dragStart.current = null;
-  }, [setBrowsePoint]);
-
-  const handleSectionPointerLeave = useCallback(() => {
-    clearBrowseOn("pointerleave");
-  }, [clearBrowseOn]);
-
-  const handleSectionBlur = useCallback(
-    (event: FocusEvent<HTMLDivElement>) => {
-      const next = event.relatedTarget as Node | null;
-      if (next && event.currentTarget.contains(next)) return;
-      clearBrowseOn("focusleave");
-    },
-    [clearBrowseOn],
-  );
+  // A showing, a file and the frames arriving all start from the top with
+  // following set, whatever the reader left behind.
+  useLayoutEffect(() => {
+    if (!shown) return;
+    setBrowsePoint(null);
+    setFollowTarget(null);
+    setFailedTimes([]);
+  }, [shown, fileId, rows, setBrowsePoint]);
 
   const handlePictureLoad = useCallback((width: number, height: number) => {
     if (width <= 0 || height <= 0) return;
@@ -574,7 +666,19 @@ export default function ScenesSectionContainer({
     );
   }, []);
 
-  const point = browse ?? playback.time;
+  const count = list.length;
+  const topFirstIndex =
+    count > 0 ? Math.min(visible.first * columns, count - 1) : -1;
+  const followsPlayback = following && mediaController != null;
+  const point =
+    browse ??
+    (followsPlayback
+      ? playback.time
+      : count > 0 && topFirstIndex >= 0
+        ? list[topFirstIndex].start
+        : mediaController
+          ? playback.time
+          : 0);
 
   const view: ScenesView = !shown
     ? "collapsed"
@@ -583,55 +687,43 @@ export default function ScenesSectionContainer({
       : "loading";
 
   const rulerWidth = useRulerWidth(rulerRef, view !== "collapsed");
-  const {
-    rows: rowCount,
-    fullWidthColumns,
-    scrollbarColumns,
-    hasScrollbar,
-  } = useSceneRows(
-    {
-      root: sectionRef,
-      header: headerRef,
-      ruler: rulerRef,
-      grid: gridRef,
-      tile: tileRef,
-      lastPart: lastPartRef,
-    },
-    view === "expanded",
+
+  const bandFirst =
+    count > 0 ? Math.min(visible.first * columns, count - 1) : 0;
+  const bandEndIndex = Math.min(
+    count,
+    (Math.max(visible.first, visible.last) + 1) * columns,
   );
-  // Beside a scrollbar at 3 rows the grid keeps the narrower width, as it
-  // always has. Everywhere else it draws the columns the rows were measured
-  // at, so a scrollbar cannot redraw wider, taller tiles under a row count
-  // chosen without one.
-  const columns = useMemo(() => {
-    if (rowCount <= 3 && hasScrollbar && scrollbarColumns > 0) {
-      return scrollbarColumns;
+  const band =
+    count > 0 && length > 0
+      ? {
+          left: rulerFraction(list[bandFirst].start, length),
+          right:
+            bandEndIndex < count
+              ? rulerFraction(list[bandEndIndex].start, length)
+              : 1,
+        }
+      : { left: 0, right: 0 };
+
+  const rowTotal = count > 0 ? Math.ceil(count / columns) : 0;
+  const pictureFirstRow = visible.measured ? Math.max(0, visible.first - 1) : 0;
+  const pictureLastRow = visible.measured
+    ? visible.last + 1
+    : Math.min(rowTotal - 1, 2);
+  const pictureTimes: number[] = [];
+  for (let row = pictureFirstRow; row <= pictureLastRow; row += 1) {
+    const from = row * columns;
+    const to = Math.min(count, from + columns);
+    for (let index = from; index < to; index += 1) {
+      pictureTimes.push(list[index].start);
     }
-    return fullWidthColumns > 0 ? fullWidthColumns : sceneColumns(rulerWidth);
-  }, [rowCount, hasScrollbar, scrollbarColumns, fullWidthColumns, rulerWidth]);
-
-  // The one window of this render: the pictures requested, the drawn grid and
-  // the ruler's band all read it, so they cannot disagree about which frames
-  // are on screen.
-  const windowStart = useMemo(
-    () =>
-      windowStartFor(
-        frameIndexAt(list, point),
-        list.length,
-        columns,
-        rowCount,
-      ),
-    [list, point, columns, rowCount],
-  );
-
-  const windowTimes = useMemo(() => {
-    if (list.length === 0) return NO_TIMES;
-    return list
-      .slice(windowStart, windowStart + rowCount * columns)
-      .map((row) => row.start);
-  }, [list, windowStart, columns, rowCount]);
-
-  const requestedTimes = useWindowPictures(windowTimes, view === "expanded");
+  }
+  const requestedTimes = useScenePictures({
+    times: pictureTimes,
+    active: view === "expanded",
+    resetKey: `${fileId}|${shown ? 1 : 0}|${rows === null ? "none" : rows.length}`,
+    settleKey: scrollVersion,
+  });
 
   useRulerKeys(rulerRef, handleRulerKeyDown, view === "expanded");
 
@@ -674,33 +766,39 @@ export default function ScenesSectionContainer({
       playingTime={playback.time}
       hasPlayback={mediaController != null}
       browse={browse}
+      hover={hover}
       requestedTimes={requestedTimes}
       columns={columns}
-      rowCount={rowCount}
-      windowStart={windowStart}
+      flow={flow}
+      oneLine={oneLine}
+      cardBottomInset={cardBottomInset}
+      listMinHeight={step}
+      band={band}
       failedTimes={new Set(failedTimes)}
       pictureRatio={pictureRatio}
-      isLoft={isLoft}
       visual={visualView}
       awaitingVisual={awaitingVisual}
       error={errorMessage}
       working={working !== null}
+      showChip={view === "expanded" && !following && mediaController != null && visible.canScroll}
       pictureUrl={pictureUrl}
       sectionRef={sectionRef}
       headerRef={headerRef}
+      listRef={listRef}
+      listBoxRef={listBoxRef}
+      rulerBoxRef={rulerBoxRef}
+      cardBoxRef={cardBoxRef}
       gridRef={gridRef}
       tileRef={tileRef}
-      lastPartRef={setLastPart}
       rulerRef={rulerRef}
       rulerWidth={rulerWidth}
       onToggle={toggle}
-      onRulerClick={handleRulerClick}
+      onRulerHover={handleRulerHover}
       onRulerPointerDown={handlePointerDown}
       onRulerPointerMove={handlePointerMove}
       onRulerPointerUp={handlePointerUp}
       onRulerPointerCancel={handlePointerCancel}
-      onSectionPointerLeave={handleSectionPointerLeave}
-      onSectionBlur={handleSectionBlur}
+      onResume={handleResume}
       onSeek={activate}
       onAction={runAction}
       onPictureLoad={handlePictureLoad}

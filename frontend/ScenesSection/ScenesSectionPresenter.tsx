@@ -1,11 +1,10 @@
 "use client";
 
-import type {
-  FocusEvent,
-  MouseEvent,
-  PointerEvent as ReactPointerEvent,
-  Ref,
-  RefObject,
+import {
+  forwardRef,
+  memo,
+  type PointerEvent as ReactPointerEvent,
+  type RefObject,
 } from "react";
 import { ChevronDown, ChevronUp, Film, Loader2 } from "lucide-react";
 import { useTranslations } from "next-intl";
@@ -52,33 +51,50 @@ export interface ScenesSectionPresenterProps {
   playingTime: number;
   hasPlayback: boolean;
   browse: number | null;
+  hover: number | null;
   requestedTimes: number[];
   columns: number;
-  rowCount: number;
-  windowStart: number;
+  flow: boolean;
+  oneLine: boolean;
+  /** The scroller's bottom padding, which a pinned card has to cover. */
+  cardBottomInset: number;
+  listMinHeight: number;
+  band: { left: number; right: number };
   failedTimes: ReadonlySet<number>;
   pictureRatio: number | null;
-  isLoft: boolean;
   visual: ScenesVisualView | null;
   awaitingVisual: boolean;
   error: string | null;
   working: boolean;
+  showChip: boolean;
   pictureUrl: (time: number) => string;
   sectionRef: RefObject<HTMLDivElement | null>;
   headerRef: RefObject<HTMLButtonElement | null>;
+  listRef: RefObject<HTMLDivElement | null>;
+  listBoxRef: RefObject<HTMLDivElement | null>;
+  rulerBoxRef: RefObject<HTMLDivElement | null>;
+  cardBoxRef: RefObject<HTMLDivElement | null>;
   gridRef: RefObject<HTMLDivElement | null>;
   tileRef: RefObject<HTMLButtonElement | null>;
-  lastPartRef: (element: HTMLElement | null) => void;
   rulerRef: RefObject<HTMLDivElement | null>;
   rulerWidth: number;
   onToggle: () => void;
-  onRulerClick: (time: number, pointerType: string | null) => void;
-  onRulerPointerDown: (time: number, pointerType: string, clientX: number) => void;
-  onRulerPointerMove: (time: number, pointerType: string, clientX: number) => void;
-  onRulerPointerUp: (time: number, pointerType: string, clientX: number) => void;
+  onRulerHover: (time: number | null) => void;
+  onRulerPointerDown: (
+    time: number,
+    pointerType: string,
+    clientX: number,
+    button: number,
+  ) => void;
+  onRulerPointerMove: (
+    time: number,
+    pointerType: string,
+    clientX: number,
+    buttons: number,
+  ) => void;
+  onRulerPointerUp: (time: number, pointerType: string) => void;
   onRulerPointerCancel: () => void;
-  onSectionPointerLeave: () => void;
-  onSectionBlur: (event: FocusEvent<HTMLDivElement>) => void;
+  onResume: () => void;
   onSeek: (time: number) => void;
   onAction: (kind: ScenesActionKind) => void;
   onPictureLoad: (width: number, height: number) => void;
@@ -87,6 +103,11 @@ export interface ScenesSectionPresenterProps {
 
 function percent(fraction: number): string {
   return `${(fraction * 100).toFixed(3)}%`;
+}
+
+/** The box a pinned part paints so tiles do not show through it. */
+function ground(flow: boolean): string {
+  return flow ? "bg-bg-card" : "bg-bg-elevated";
 }
 
 export default function ScenesSectionPresenter({
@@ -99,33 +120,39 @@ export default function ScenesSectionPresenter({
   playingTime,
   hasPlayback,
   browse,
+  hover,
   requestedTimes,
   columns,
-  rowCount,
-  windowStart,
+  flow,
+  oneLine,
+  cardBottomInset,
+  listMinHeight,
+  band,
   failedTimes,
   pictureRatio,
-  isLoft,
   visual,
   awaitingVisual,
   error,
   working,
+  showChip,
   pictureUrl,
   sectionRef,
   headerRef,
+  listRef,
+  listBoxRef,
+  rulerBoxRef,
+  cardBoxRef,
   gridRef,
   tileRef,
-  lastPartRef,
   rulerRef,
   rulerWidth,
   onToggle,
-  onRulerClick,
+  onRulerHover,
   onRulerPointerDown,
   onRulerPointerMove,
   onRulerPointerUp,
   onRulerPointerCancel,
-  onSectionPointerLeave,
-  onSectionBlur,
+  onResume,
   onSeek,
   onAction,
   onPictureLoad,
@@ -133,7 +160,6 @@ export default function ScenesSectionPresenter({
 }: ScenesSectionPresenterProps) {
   const t = useTranslations("file");
 
-  const windowRows = rows.slice(windowStart, windowStart + rowCount * columns);
   const playingIndex = frameIndexAt(rows, playingTime);
   const browseIndex = browse === null ? null : frameIndexAt(rows, browse);
   const requested = new Set(requestedTimes);
@@ -144,15 +170,7 @@ export default function ScenesSectionPresenter({
     visual?.note != null ||
     error != null ||
     (visual?.actions.length ?? 0) > 0;
-  const lastPart = actionRowDrawn
-    ? "action"
-    : visual?.stale
-      ? "stale"
-      : visual?.scene
-        ? "card"
-        : awaitingVisual
-          ? "placeholder"
-          : "grid";
+  const cardDrawn = awaitingVisual || visual?.scene != null;
 
   const timeAt = (clientX: number, target: HTMLElement): number => {
     const rect = target.getBoundingClientRect();
@@ -162,16 +180,24 @@ export default function ScenesSectionPresenter({
   };
 
   const handlePointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.type === "pointerleave") {
+      onRulerHover(null);
+    }
     const time = timeAt(event.clientX, event.currentTarget);
     switch (event.type) {
       case "pointerdown":
-        onRulerPointerDown(time, event.pointerType, event.clientX);
+        onRulerPointerDown(time, event.pointerType, event.clientX, event.button);
         break;
       case "pointermove":
-        onRulerPointerMove(time, event.pointerType, event.clientX);
+        onRulerPointerMove(
+          time,
+          event.pointerType,
+          event.clientX,
+          event.buttons,
+        );
         break;
       case "pointerup":
-        onRulerPointerUp(time, event.pointerType, event.clientX);
+        onRulerPointerUp(time, event.pointerType);
         break;
       case "pointercancel":
         onRulerPointerCancel();
@@ -181,19 +207,39 @@ export default function ScenesSectionPresenter({
     }
   };
 
-  const handleClick = (event: MouseEvent<HTMLDivElement>) => {
-    onRulerClick(
-      timeAt(event.clientX, event.currentTarget),
-      (event.nativeEvent as PointerEvent).pointerType || null,
+  const tileElements = rows.map((row, index) => {
+    const isPlaying = hasPlayback && index === playingIndex;
+    const isBrowsed =
+      !isPlaying && browseIndex !== null && index === browseIndex;
+    return (
+      <SceneTile
+        key={row.start}
+        ref={index === 0 ? tileRef : undefined}
+        start={row.start}
+        label={t("scenesPlayFrom", { time: formatDuration(row.start) })}
+        timeLabel={formatDuration(row.start)}
+        requested={requested.has(row.start)}
+        failed={failedTimes.has(row.start)}
+        playing={isPlaying}
+        browsed={isBrowsed}
+        dot={visual != null && visual.dots.includes(row.start)}
+        aspectRatio={aspectRatio}
+        pictureUrl={requested.has(row.start) ? pictureUrl(row.start) : ""}
+        onSeek={onSeek}
+        onPictureLoad={onPictureLoad}
+        onPictureError={onPictureError}
+      />
     );
-  };
+  });
 
   return (
     <div
       ref={sectionRef}
-      className="flex w-full flex-col gap-3.5"
-      onPointerLeave={onSectionPointerLeave}
-      onBlur={onSectionBlur}
+      className={
+        flow
+          ? "flex w-full flex-col gap-3.5"
+          : "flex min-h-0 w-full flex-1 flex-col gap-3.5"
+      }
     >
       {!labelledByHost && (
         <button
@@ -247,159 +293,154 @@ export default function ScenesSectionPresenter({
       )}
 
       {expanded && (
-        <div id={panelId} className="flex flex-col gap-3.5">
-          <Ruler
-            rows={rows}
-            length={length}
-            point={point}
-            playingTime={playingTime}
-            hasPlayback={hasPlayback}
-            browse={browse}
-            columns={columns}
-            rowCount={rowCount}
-            windowStart={windowStart}
-            marks={view === "expanded" ? visual?.marks : undefined}
-            disabled={view === "loading"}
-            rulerRef={rulerRef}
-            rulerWidth={rulerWidth}
-            onPointer={handlePointer}
-            onClick={handleClick}
-          />
-
-          {view === "loading" ? (
-            <LoadingSkeleton columns={columns} />
-          ) : (
-          <>
+        <div
+          id={panelId}
+          className={
+            flow
+              ? "flex flex-col gap-3.5"
+              : "flex min-h-0 flex-1 flex-col gap-3.5"
+          }
+        >
           <div
-            ref={gridRef}
-            className="grid gap-x-2 gap-y-3"
-            style={{
-              gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-            }}
+            ref={rulerBoxRef}
+            className={`relative flex-shrink-0 ${flow ? `sticky z-[2] pb-3.5 pt-1 ${ground(flow)}` : ""}`}
+            style={flow ? { top: "var(--inspector-sticky-top, 0px)" } : undefined}
           >
-            {windowRows.map((row, offset) => {
-              const absoluteIndex = windowStart + offset;
-              const isPlaying = hasPlayback && absoluteIndex === playingIndex;
-              const isBrowsed =
-                !isPlaying && browseIndex !== null && absoluteIndex === browseIndex;
-              const hasDot =
-                visual != null && visual.dots.includes(row.start);
-              const failed = failedTimes.has(row.start);
-              const outline = isPlaying
-                ? "outline-2 outline-offset-2 outline-solid outline-accent"
-                : isBrowsed
-                  ? "outline-2 outline-offset-2 outline-solid outline-text-primary"
-                  : "";
-              return (
+            <Ruler
+              rows={rows}
+              length={length}
+              point={point}
+              playingTime={playingTime}
+              hasPlayback={hasPlayback}
+              browse={browse}
+              hover={hover}
+              band={band}
+              marks={ready ? visual?.marks : undefined}
+              disabled={view === "loading"}
+              rulerRef={rulerRef}
+              rulerWidth={rulerWidth}
+              onPointer={handlePointer}
+            />
+            {showChip && (
+              <div
+                className="pointer-events-none absolute inset-x-0 z-[5] flex justify-center"
+                style={{ top: "calc(100% + 0.875rem)" }}
+              >
                 <button
-                  key={row.start}
-                  ref={offset === 0 ? tileRef : undefined}
                   type="button"
-                  aria-label={t("scenesPlayFrom", {
-                    time: formatDuration(row.start),
-                  })}
-                  onClick={() => onSeek(row.start)}
-                  className="group relative flex min-w-0 cursor-pointer flex-col gap-1"
+                  onClick={onResume}
+                  className="pointer-events-auto mt-1 h-fit w-fit rounded-full bg-accent px-3 py-1 text-xs font-medium text-white shadow-card hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
                 >
-                  <span
-                    className={`relative block w-full overflow-hidden rounded-lg bg-bg-elevated ${outline}`}
-                    style={{ aspectRatio }}
-                  >
-                    {isLoft && failed ? null : requested.has(row.start) ? (
-                      <img
-                        src={pictureUrl(row.start)}
-                        alt=""
-                        loading="lazy"
-                        onLoad={(event) =>
-                          onPictureLoad(
-                            event.currentTarget.naturalWidth,
-                            event.currentTarget.naturalHeight,
-                          )
-                        }
-                        onError={
-                          isLoft ? () => onPictureError(row.start) : undefined
-                        }
-                        className="h-full w-full object-contain"
-                      />
-                    ) : null}
-                    {hasDot && (
-                      <span
-                        aria-hidden="true"
-                        className="absolute left-1.5 top-1.5 h-2 w-2 rounded-full bg-accent-teal ring-2 ring-bg-primary/80"
-                      />
-                    )}
-                  </span>
-                  <span
-                    className={`text-center text-xs tabular-nums ${
-                      isPlaying ? "text-text-primary" : "text-text-muted"
-                    }`}
-                  >
-                    {formatDuration(row.start)}
-                  </span>
+                  {t("scenesCurrentPosition")}
                 </button>
-              );
-            })}
+              </div>
+            )}
           </div>
 
-          {awaitingVisual && (
+          <div
+            ref={listBoxRef}
+            className={
+              flow ? "relative" : "relative flex min-h-0 flex-1 flex-col"
+            }
+            style={flow ? undefined : { minHeight: listMinHeight || undefined }}
+          >
             <div
-              ref={lastPart === "placeholder" ? lastPartRef : undefined}
-              aria-hidden="true"
-              data-testid="scenes-visual-placeholder"
-              className="flex flex-col gap-3"
+              ref={listRef}
+              data-scene-list=""
+              className={
+                flow
+                  ? "px-1 py-1"
+                  : "h-full overflow-y-auto overscroll-contain px-1 py-1 [scrollbar-gutter:stable]"
+              }
             >
-              <div className="h-[7.75rem] rounded-xl bg-bg-card" />
-              <div className="h-9" />
+              {view === "loading" ? (
+                <LoadingSkeleton columns={columns} />
+              ) : (
+                <div
+                  ref={gridRef}
+                  className="grid gap-x-2 gap-y-3"
+                  style={{
+                    gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+                  }}
+                >
+                  {tileElements}
+                </div>
+              )}
             </div>
-          )}
+          </div>
 
-          {visual?.scene && (
-            <SceneCard
-              ref={lastPart === "card" ? lastPartRef : undefined}
-              scene={visual.scene}
-              onSeek={onSeek}
-            />
-          )}
-
-          {visual?.stale && (
-            <p
-              ref={lastPart === "stale" ? lastPartRef : undefined}
-              className="text-xs text-accent-amber"
-            >
-              {t("visualIndexStale")}
-            </p>
-          )}
-
-          {(visual?.note != null ||
-            error != null ||
-            (visual?.actions.length ?? 0) > 0) && (
-            <div
-              ref={lastPart === "action" ? lastPartRef : undefined}
-              className="flex min-h-9 items-center justify-between gap-2"
-            >
-              <span className="text-xs tabular-nums text-text-muted">
-                {error ?? visual?.note ?? ""}
-              </span>
-              <div className="flex items-center gap-2">
-                {visual?.actions.map((action) => (
-                  <button
-                    key={action.kind}
-                    type="button"
-                    onClick={() => onAction(action.kind)}
-                    disabled={working}
-                    className={`cursor-pointer rounded-2xl transition-colors disabled:cursor-not-allowed disabled:bg-transparent disabled:text-warm-silver ${
-                      action.filled
-                        ? "bg-bg-elevated px-3.5 py-2 text-[13px] text-text-primary enabled:hover:bg-sand"
-                        : "px-2.5 py-1.5 text-xs text-text-muted enabled:hover:bg-(--bg-elevated) enabled:hover:text-text-primary"
-                    }`}
+          {view === "expanded" && (
+            <>
+              <div
+                ref={cardBoxRef}
+                style={flow && cardDrawn ? { bottom: -cardBottomInset } : undefined}
+                className={
+                  flow
+                    ? cardDrawn
+                      ? `sticky z-[2] flex-shrink-0 pt-3.5 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] ${ground(flow)}`
+                      : "hidden"
+                    : "flex-shrink-0"
+                }
+              >
+                {awaitingVisual && (
+                  <div
+                    aria-hidden="true"
+                    data-testid="scenes-visual-placeholder"
+                    style={{
+                      height: oneLine
+                        ? "calc(2.75rem + 2.25rem)"
+                        : "calc(7.75rem + 2.25rem)",
+                    }}
+                    className="flex flex-col gap-3"
                   >
-                    {action.label}
-                  </button>
-                ))}
+                    <div
+                      className="rounded-xl bg-bg-card"
+                      style={{ height: oneLine ? "2.75rem" : "7.75rem" }}
+                    />
+                    <div className="h-9" />
+                  </div>
+                )}
+
+                {visual?.scene && (
+                  <SceneCard
+                    scene={visual.scene}
+                    oneLine={oneLine}
+                    onSeek={onSeek}
+                  />
+                )}
               </div>
-            </div>
-          )}
-          </>
+
+              {visual?.stale && (
+                <p className="flex-shrink-0 text-xs text-accent-amber">
+                  {t("visualIndexStale")}
+                </p>
+              )}
+
+              {actionRowDrawn && (
+                <div className="flex min-h-9 flex-shrink-0 items-center justify-between gap-2">
+                  <span className="text-xs tabular-nums text-text-muted">
+                    {error ?? visual?.note ?? ""}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    {visual?.actions.map((action) => (
+                      <button
+                        key={action.kind}
+                        type="button"
+                        onClick={() => onAction(action.kind)}
+                        disabled={working}
+                        className={`cursor-pointer rounded-2xl transition-colors disabled:cursor-not-allowed disabled:bg-transparent disabled:text-warm-silver ${
+                          action.filled
+                            ? "bg-bg-elevated px-3.5 py-2 text-[13px] text-text-primary enabled:hover:bg-sand"
+                            : "px-2.5 py-1.5 text-xs text-text-muted enabled:hover:bg-(--bg-elevated) enabled:hover:text-text-primary"
+                        }`}
+                      >
+                        {action.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -430,15 +471,13 @@ interface RulerProps {
   playingTime: number;
   hasPlayback: boolean;
   browse: number | null;
-  columns: number;
-  rowCount: number;
-  windowStart: number;
+  hover: number | null;
+  band: { left: number; right: number };
   marks: VideoVisualSceneItem[] | undefined;
   disabled: boolean;
   rulerRef: RefObject<HTMLDivElement | null>;
   rulerWidth: number;
   onPointer: (event: ReactPointerEvent<HTMLDivElement>) => void;
-  onClick: (event: MouseEvent<HTMLDivElement>) => void;
 }
 
 function Ruler({
@@ -448,23 +487,15 @@ function Ruler({
   playingTime,
   hasPlayback,
   browse,
-  columns,
-  rowCount,
-  windowStart,
+  hover,
+  band,
   marks,
   disabled,
   rulerRef,
   rulerWidth,
   onPointer,
-  onClick,
 }: RulerProps) {
   const t = useTranslations("file");
-  const windowRows = rows.slice(windowStart, windowStart + rowCount * columns);
-  const nextRow = rows[windowStart + windowRows.length];
-  const windowLeft = windowRows.length > 0
-    ? rulerFraction(windowRows[0].start, length)
-    : 0;
-  const windowRight = nextRow ? rulerFraction(nextRow.start, length) : 1;
   const ticks = rows
     .map((row) => rulerFraction(row.start, length))
     .map((fraction) => `M${(fraction * 100).toFixed(3)} 16V36`)
@@ -487,7 +518,7 @@ function Ruler({
         onPointerMove={disabled ? undefined : onPointer}
         onPointerUp={disabled ? undefined : onPointer}
         onPointerCancel={disabled ? undefined : onPointer}
-        onClick={disabled ? undefined : onClick}
+        onPointerLeave={disabled ? undefined : onPointer}
         className="relative h-11 w-full cursor-pointer touch-pan-y overflow-hidden rounded-lg bg-bg-elevated"
       >
         {!disabled && (
@@ -495,8 +526,8 @@ function Ruler({
             aria-hidden="true"
             className="absolute inset-y-0 bg-text-primary/10"
             style={{
-              left: percent(windowLeft),
-              width: percent(Math.max(0, windowRight - windowLeft)),
+              left: percent(band.left),
+              width: percent(Math.max(0, band.right - band.left)),
             }}
           />
         )}
@@ -531,6 +562,13 @@ function Ruler({
           );
         })}
 
+        {hover !== null && (
+          <span
+            aria-hidden="true"
+            className="absolute inset-y-0 -ml-px w-px bg-text-primary"
+            style={{ left: percent(rulerFraction(hover, length)) }}
+          />
+        )}
         {browse !== null && (
           <span
             aria-hidden="true"
@@ -568,18 +606,40 @@ function Ruler({
 
 function SceneCard({
   scene,
+  oneLine,
   onSeek,
-  ref,
 }: {
   scene: { time: number; label: string; text: string | null };
+  oneLine: boolean;
   onSeek: (time: number) => void;
-  ref?: Ref<HTMLButtonElement>;
 }) {
+  const time = formatDuration(scene.time);
+  if (oneLine) {
+    return (
+      <button
+        type="button"
+        onClick={() => onSeek(scene.time)}
+        aria-label={`${time} ${scene.label}`}
+        className="flex h-11 w-full cursor-pointer items-center gap-2 rounded-xl bg-bg-elevated px-3 text-left transition-colors hover:bg-sand"
+      >
+        <span
+          aria-hidden="true"
+          className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-accent-teal"
+        />
+        <span className="flex-shrink-0 text-xs tabular-nums text-text-muted">
+          {time}
+        </span>
+        <span className="min-w-0 truncate text-[13px] text-text-primary">
+          {scene.label}
+        </span>
+      </button>
+    );
+  }
   return (
     <button
-      ref={ref}
       type="button"
       onClick={() => onSeek(scene.time)}
+      aria-label={`${time} ${scene.label}`}
       className="flex min-h-[7.6rem] w-full cursor-pointer flex-col justify-start gap-1 rounded-xl bg-bg-elevated px-3 py-2.5 text-left transition-colors hover:bg-sand"
     >
       <span className="flex items-center gap-1.5 text-xs tabular-nums text-text-muted">
@@ -587,7 +647,7 @@ function SceneCard({
           aria-hidden="true"
           className="h-1.5 w-1.5 rounded-full bg-accent-teal"
         />
-        {formatDuration(scene.time)}
+        {time}
       </span>
       <span className="line-clamp-2 text-sm leading-snug text-text-primary">
         {scene.label}
@@ -599,26 +659,114 @@ function SceneCard({
   );
 }
 
+interface SceneTileProps {
+  start: number;
+  label: string;
+  timeLabel: string;
+  requested: boolean;
+  failed: boolean;
+  playing: boolean;
+  browsed: boolean;
+  dot: boolean;
+  aspectRatio: number;
+  pictureUrl: string;
+  onSeek: (time: number) => void;
+  onPictureLoad: (width: number, height: number) => void;
+  onPictureError: (time: number) => void;
+}
+
+/**
+ * One tile. Memoised so a clock tick re-renders only the tiles whose playing
+ * outline changes, not every frame in the list.
+ */
+const SceneTile = memo(
+  forwardRef<HTMLButtonElement, SceneTileProps>(function SceneTile(
+    {
+      start,
+      label,
+      timeLabel,
+      requested,
+      failed,
+      playing,
+      browsed,
+      dot,
+      aspectRatio,
+      pictureUrl,
+      onSeek,
+      onPictureLoad,
+      onPictureError,
+    },
+    ref,
+  ) {
+    const outline = playing
+      ? "outline-2 outline-offset-2 outline-solid outline-accent"
+      : browsed
+        ? "outline-2 outline-offset-2 outline-solid outline-text-primary"
+        : "";
+    return (
+      <button
+        ref={ref}
+        type="button"
+        data-scene-tile=""
+        aria-label={label}
+        onClick={() => onSeek(start)}
+        className="group relative flex min-w-0 cursor-pointer flex-col gap-1"
+      >
+        <span
+          className={`relative block w-full overflow-hidden rounded-lg bg-bg-elevated ${outline}`}
+          style={{ aspectRatio }}
+        >
+          {failed ? null : requested ? (
+            <img
+              src={pictureUrl}
+              alt=""
+              loading="lazy"
+              onLoad={(event) =>
+                onPictureLoad(
+                  event.currentTarget.naturalWidth,
+                  event.currentTarget.naturalHeight,
+                )
+              }
+              onError={() => onPictureError(start)}
+              className="h-full w-full object-contain"
+            />
+          ) : null}
+          {dot && (
+            <span
+              aria-hidden="true"
+              className="absolute left-1.5 top-1.5 h-2 w-2 rounded-full bg-accent-teal ring-2 ring-bg-primary/80"
+            />
+          )}
+        </span>
+        <span
+          className={`text-center text-xs tabular-nums ${
+            playing ? "text-text-primary" : "text-text-muted"
+          }`}
+        >
+          {timeLabel}
+        </span>
+      </button>
+    );
+  }),
+);
+
 function LoadingSkeleton({ columns }: { columns: number }) {
   return (
-    <div className="flex flex-col gap-3.5">
-      <div className="h-3.5" />
-      <div
-        className="grid gap-x-2 gap-y-3"
-        style={{
-          gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-        }}
-      >
-        {Array.from({ length: 3 * columns }, (_, index) => (
-          <div key={index} className="flex flex-col gap-1">
-            <div
-              className="w-full rounded-lg bg-bg-elevated"
-              style={{ aspectRatio: 4 / 3 }}
-            />
-            <div className="mx-auto h-3.5 w-2/5 rounded bg-bg-elevated" />
-          </div>
-        ))}
-      </div>
+    <div
+      className="grid gap-x-2 gap-y-3"
+      style={{
+        gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+      }}
+    >
+      {Array.from({ length: 3 * columns }, (_, index) => (
+        <div key={index} className="flex flex-col gap-1">
+          <div
+            className="w-full rounded-lg bg-bg-elevated"
+            style={{ aspectRatio: 4 / 3 }}
+          />
+          <div className="mx-auto h-3.5 w-2/5 rounded bg-bg-elevated" />
+        </div>
+      ))}
     </div>
   );
 }

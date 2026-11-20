@@ -38,7 +38,6 @@ import {
 } from "@/components/ShortcutsProvider";
 import {
   flush,
-  header,
   installPointerEvents,
   makeController,
   makeRows,
@@ -91,7 +90,7 @@ function renderKeyboard(
 }
 
 async function openWithFocus(): Promise<HTMLElement> {
-  fireEvent.click(header());
+  fireEvent.click(screen.getByRole("button", { name: /^Scenes/ }));
   const el = await screen.findByRole("slider");
   el.focus();
   return el;
@@ -173,7 +172,7 @@ describe("SPEC-ADDON-089 I4 — the ruler as a slider", () => {
     expect(onDocument).not.toHaveBeenCalled();
   });
 
-  it("moves by one frame from the playing frame", async () => {
+  it("SPEC-ADDON-153 I9 — moves by one frame from the playing frame", async () => {
     const pageShortcut = vi.fn();
     const { controller } = makeController({ duration: 70, currentTime: 10 });
     renderKeyboard(pageShortcut, { mediaController: controller });
@@ -187,7 +186,7 @@ describe("SPEC-ADDON-089 I4 — the ruler as a slider", () => {
     expect(ruler()).toHaveAttribute("aria-valuenow", "10");
   });
 
-  it("Home and End reach the first and last frame", async () => {
+  it("SPEC-ADDON-153 I9 — Home and End reach the first and last frame", async () => {
     const pageShortcut = vi.fn();
     const { controller } = makeController({ duration: 70, currentTime: 10 });
     renderKeyboard(pageShortcut, { mediaController: controller });
@@ -201,7 +200,7 @@ describe("SPEC-ADDON-089 I4 — the ruler as a slider", () => {
     expect(ruler()).toHaveAttribute("aria-valuenow", "70");
   });
 
-  it("Enter seeks the browse frame, plays and clears the point", async () => {
+  it("SPEC-ADDON-153 I9 — Enter seeks the ruler point, plays and removes it", async () => {
     const pageShortcut = vi.fn();
     const { controller, seek, play } = makeController({
       duration: 70,
@@ -222,7 +221,7 @@ describe("SPEC-ADDON-089 I4 — the ruler as a slider", () => {
     expect(pageShortcut).not.toHaveBeenCalled();
   });
 
-  it("Enter with no browse point does nothing", async () => {
+  it("SPEC-ADDON-153 I9 — Enter with no ruler point does nothing", async () => {
     const pageShortcut = vi.fn();
     const { controller, seek, play } = makeController({
       duration: 70,
@@ -240,7 +239,7 @@ describe("SPEC-ADDON-089 I4 — the ruler as a slider", () => {
     expect(ruler()).toHaveAttribute("aria-valuenow", "10");
   });
 
-  it("reports the point in whole seconds and formatted text", async () => {
+  it("SPEC-ADDON-089 I4 — reports the point in whole seconds and formatted text", async () => {
     const pageShortcut = vi.fn();
     const { controller } = makeController({ duration: 70, currentTime: 10 });
     renderKeyboard(pageShortcut, { mediaController: controller });
@@ -261,7 +260,7 @@ describe("SPEC-ADDON-089 I4 — the ruler as a slider", () => {
     expect(ruler()).toHaveAttribute("aria-valuetext", "1:10");
   });
 
-  it("keeps the point when focus moves to a tile and clears it when focus leaves", async () => {
+  it("SPEC-ADDON-152 I3 — keeps the point when focus moves to a tile and when it leaves", async () => {
     const pageShortcut = vi.fn();
     const { controller } = makeController({ duration: 70, currentTime: 10 });
     renderKeyboard(pageShortcut, { mediaController: controller });
@@ -276,6 +275,6 @@ describe("SPEC-ADDON-089 I4 — the ruler as a slider", () => {
 
     act(() => screen.getByRole("button", { name: "outside" }).focus());
     await flush();
-    expect(ruler()).toHaveAttribute("aria-valuenow", "10");
+    expect(ruler()).toHaveAttribute("aria-valuenow", "15");
   });
 });

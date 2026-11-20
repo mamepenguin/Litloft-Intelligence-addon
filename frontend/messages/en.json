@@ -368,7 +368,8 @@
     "scenesRetry": "Retry the {count} failed",
     "scenesFailedNote": "{count} failed",
     "scenesRuler": "Frame timeline",
-    "scenesPlayFrom": "Play from {time}"
+    "scenesPlayFrom": "Play from {time}",
+    "scenesCurrentPosition": "Back to current position"
   },
   "detailedSummary": {
     "citations": {

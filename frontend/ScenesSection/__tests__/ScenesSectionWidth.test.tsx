@@ -2,7 +2,6 @@ import "./intlMock";
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 
-import type { MediaController } from "@/lib/mediaController";
 import { formatDuration } from "@/lib/format";
 
 vi.mock("@/addons/intelligence/api", () => ({
@@ -29,11 +28,8 @@ import {
 } from "@/addons/intelligence/api";
 import { usePolicy } from "@/hooks/usePolicy";
 import {
-  advance,
   flush,
   header,
-  images,
-  imgTimes,
   installPointerEvents,
   makeController,
   makeRows,
@@ -45,9 +41,9 @@ import {
 } from "./helpers";
 
 /**
- * jsdom lays nothing out, so the section's width comes from the same places
- * the production code reads it: the ruler's border box, the `ResizeObserver`
- * callback made from a width change, and the root font size.
+ * jsdom lays nothing out. The section now reads its column count from the
+ * list's content width, so this gives the list the width a host would and
+ * leaves its height unmeasured.
  */
 let measuredWidth = 0;
 let rootFontSize = "16px";
@@ -93,6 +89,15 @@ function rect(width: number): DOMRect {
   } as DOMRect;
 }
 
+function measured(el: Element): boolean {
+  return (
+    el.getAttribute("role") === "slider" ||
+    el.matches("[data-scene-list]") ||
+    el.matches("button[data-scene-tile]") ||
+    el.querySelector("[data-scene-list], button[data-scene-tile]") !== null
+  );
+}
+
 function renderSection(
   props: Partial<SceneSectionProps> = {},
   font = "16px",
@@ -124,32 +129,14 @@ async function measure(width: number): Promise<void> {
   });
 }
 
-function labelsFor(
-  rows: ReturnType<typeof makeRows>,
-  start: number,
-  count: number,
-): string[] {
-  return rows.slice(start, start + count).map((row) => formatDuration(row.start));
-}
-
-/** The ruler's window band, which the section draws with left and width. */
-function windowBand(): HTMLElement {
-  const band = Array.from(ruler().querySelectorAll<HTMLElement>("div")).find(
-    (el) => el.style.left !== "" && el.style.width !== "",
-  );
-  if (!band) throw new Error("no window band is drawn");
-  return band;
-}
-
-function percentOf(value: string): number {
-  return Number.parseFloat(value);
-}
-
 /** jsdom does not lay the grid out, so its declared tracks are what it has. */
 function declaredColumns(grid: HTMLElement | null): string {
   if (!grid) throw new Error("no grid is drawn");
   return grid.style.gridTemplateColumns;
 }
+
+const labels = (rows: ReturnType<typeof makeRows>) =>
+  rows.map((row) => formatDuration(row.start));
 
 beforeAll(() => {
   installPointerEvents();
@@ -158,9 +145,15 @@ beforeAll(() => {
   ).ResizeObserver = ResizeObserverStub;
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
     function (this: Element) {
-      return rect(this.getAttribute("role") === "slider" ? measuredWidth : 0);
+      return rect(measured(this) ? measuredWidth : 0);
     },
   );
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return measured(this) ? measuredWidth : 0;
+    },
+  });
   const real = window.getComputedStyle.bind(window);
   vi.spyOn(window, "getComputedStyle").mockImplementation(((
     element: Element,
@@ -186,7 +179,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("SPEC-ADDON-093 I1 — the column count comes from the measured width", () => {
+describe("SPEC-ADDON-093 I1 — the column count comes from the measured list width", () => {
   const rows = makeRows(40);
 
   it.each([
@@ -198,7 +191,7 @@ describe("SPEC-ADDON-093 I1 — the column count comes from the measured width",
     { name: "a 1400px host", width: 1400, columns: 11 },
     { name: "a width too narrow for three columns", width: 200, columns: 3 },
   ])(
-    "SPEC-ADDON-093 I1 — $name draws three rows of $columns",
+    "SPEC-ADDON-093 I1 — $name draws every frame in $columns columns",
     async ({ width, columns }) => {
       vi.mocked(getClipTimestamps).mockResolvedValue(timestamps(rows));
       const { controller } = makeController({ duration: 200 });
@@ -210,7 +203,7 @@ describe("SPEC-ADDON-093 I1 — the column count comes from the measured width",
       await openNative();
       await waitForVisualIndex();
 
-      expect(tileLabels()).toEqual(labelsFor(rows, 0, 3 * columns));
+      expect(tileLabels()).toEqual(labels(rows));
       expect(declaredColumns(container.querySelector(".grid"))).toBe(
         `repeat(${columns}, minmax(0, 1fr))`,
       );
@@ -227,7 +220,7 @@ describe("SPEC-ADDON-093 I1 — the column count comes from the measured width",
     await openNative();
     await waitForVisualIndex();
 
-    expect(tileLabels()).toEqual(labelsFor(rows, 0, 12));
+    expect(tileLabels()).toEqual(labels(makeRows(15)));
     expect(declaredColumns(container.querySelector(".grid"))).toBe(
       "repeat(4, minmax(0, 1fr))",
     );
@@ -245,7 +238,6 @@ describe("SPEC-ADDON-093 I1 — the column count comes from the measured width",
       await openNative();
       await waitForVisualIndex();
 
-      expect(tileLabels()).toEqual(labelsFor(rows, 0, 15));
       expect(declaredColumns(container.querySelector(".grid"))).toBe(
         "repeat(5, minmax(0, 1fr))",
       );
@@ -253,81 +245,8 @@ describe("SPEC-ADDON-093 I1 — the column count comes from the measured width",
   );
 });
 
-describe("SPEC-ADDON-089 I1 — the window starts from the column count", () => {
-  it.each([
-    { name: "i = 0", n: 40, time: 0, start: 0, count: 15 },
-    { name: "a middle i", n: 40, time: 50, start: 5, count: 15 },
-    { name: "i = n − 1", n: 40, time: 195, start: 25, count: 15 },
-    { name: "n < 3c", n: 12, time: 0, start: 0, count: 12 },
-    { name: "n not a multiple of c", n: 17, time: 80, start: 2, count: 15 },
-  ])(
-    "SPEC-ADDON-089 I1 — five columns at $name",
-    async ({ n, time, start, count }) => {
-      const rows = makeRows(n);
-      vi.mocked(getClipTimestamps).mockResolvedValue(timestamps(rows));
-      const { controller } = makeController({ currentTime: time, duration: 200 });
-      renderSection({ mediaController: controller }, "16px", 688);
-      await openNative();
-      await waitForVisualIndex();
-
-      expect(tileLabels()).toEqual(labelsFor(rows, start, count));
-      if (n >= 15) expect(tileLabels()).toHaveLength(15);
-    },
-  );
-});
-
-describe("SPEC-ADDON-093 I3 and SPEC-ADDON-089 I8 — the pictures requested are the drawn tiles' frames", () => {
-  it("SPEC-ADDON-089 I8 — requests the fifteen drawn frames after 150ms and nothing before", async () => {
-    vi.useFakeTimers();
-    vi.mocked(usePolicy).mockReturnValue({ enabled: false, isLoading: false });
-    const rows = makeRows(40);
-    vi.mocked(getClipTimestamps).mockResolvedValue(timestamps(rows));
-    const { controller } = makeController({ duration: 200, paused: true });
-    renderSection({ mediaController: controller }, "16px", 688);
-
-    fireEvent.click(header());
-    await flush();
-
-    expect(tileLabels()).toEqual(labelsFor(rows, 0, 15));
-    expect(images()).toHaveLength(0);
-
-    await advance(149);
-    expect(images()).toHaveLength(0);
-
-    await advance(1);
-
-    const drawn = rows.slice(0, 15).map((row) => row.start);
-    expect(imgTimes()).toEqual(drawn);
-    expect(images()).toHaveLength(15);
-    for (const img of images()) {
-      expect(img.getAttribute("src")).toContain("/frame/f1?t=");
-    }
-  });
-});
-
-describe("SPEC-ADDON-093 I4 — the ruler's window band spans the drawn frames", () => {
-  it.each([
-    { name: "the first window", time: 0, left: 0, width: 37.5 },
-    { name: "a middle window", time: 50, left: 12.5, width: 37.5 },
-    { name: "the last window, which ends at L", time: 195, left: 62.5, width: 37.5 },
-  ])(
-    "SPEC-ADDON-093 I4 — $name",
-    async ({ time, left, width }) => {
-      vi.mocked(getClipTimestamps).mockResolvedValue(timestamps(makeRows(40)));
-      const { controller } = makeController({ currentTime: time, duration: 200 });
-      renderSection({ mediaController: controller }, "16px", 688);
-      await openNative();
-      await waitForVisualIndex();
-
-      const band = windowBand();
-      expect(percentOf(band.style.left)).toBeCloseTo(left, 3);
-      expect(percentOf(band.style.width)).toBeCloseTo(width, 3);
-    },
-  );
-});
-
-describe("SPEC-ADDON-093 I5 — a width change redraws around the same point", () => {
-  it("goes from nine tiles at 352px to fifteen at 688px with the playing frame drawn", async () => {
+describe("SPEC-ADDON-093 I5 — a width change redraws in the new column count", () => {
+  it("goes from 352px to 688px, drawing every frame in the new columns", async () => {
     const rows = makeRows(40);
     vi.mocked(getClipTimestamps).mockResolvedValue(timestamps(rows));
     const { controller } = makeController({
@@ -335,17 +254,24 @@ describe("SPEC-ADDON-093 I5 — a width change redraws around the same point", (
       duration: 200,
       paused: true,
     });
-    renderSection({ mediaController: controller }, "16px", 352);
+    const { container } = renderSection(
+      { mediaController: controller },
+      "16px",
+      352,
+    );
     await openNative();
     await waitForVisualIndex();
 
-    expect(tileLabels()).toEqual(labelsFor(rows, 6, 9));
+    expect(declaredColumns(container.querySelector(".grid"))).toBe(
+      "repeat(3, minmax(0, 1fr))",
+    );
 
     await measure(688);
 
-    const window = labelsFor(rows, 5, 15);
-    expect(tileLabels()).toEqual(window);
-    expect(window).toContain(formatDuration(50));
+    expect(declaredColumns(container.querySelector(".grid"))).toBe(
+      "repeat(5, minmax(0, 1fr))",
+    );
+    expect(tileLabels()).toEqual(labels(rows));
   });
 });
 
