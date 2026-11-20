@@ -23,21 +23,12 @@ const MANIFEST = JSON.parse(
   readFileSync(resolve(ADDON_ROOT, "manifest.json"), "utf-8"),
 ) as Manifest;
 
-// The manifest at the commit the spec was approved against, minus the two
-// entries the spec removes. Bound to this change: drop it once it merges.
-const BASELINE = JSON.parse(
-  readFileSync(resolve(ADDON_ROOT, "frontend/__tests__/retireFind.manifestBaseline.json"), "utf-8"),
-) as { slots: Record<string, unknown[]>; routes: Route[] };
-
 describe("SPEC-ADDON-158 I5 the manifest declares no Find", () => {
-  it("has no search-modes key and no POST /find route, and every other slot and route as before", () => {
+  it("has no search-modes key and no POST /find route", () => {
     expect(Object.keys(MANIFEST.slots ?? {})).not.toContain("search-modes");
     expect(
       MANIFEST.proxy.routes.filter((route) => route.path === "/find"),
     ).toEqual([]);
-
-    expect(MANIFEST.slots).toEqual(BASELINE.slots);
-    expect(MANIFEST.proxy.routes).toEqual(BASELINE.routes);
   });
 });
 
