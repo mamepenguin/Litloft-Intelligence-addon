@@ -19,6 +19,12 @@ program nobody runs. So it calls the worker's own profile, clustering,
 scoring and interleaving functions, passing the cut point as the
 reference time and video-only candidates where a configuration says so.
 
+``interests`` asks a third question: which interests the profile found
+in one viewer's history, and how that viewer treated each one. It prints
+the lanes the worker would build at one instant, with the rows glanced
+at, set aside or marked attributed to the lane they resemble, and the
+candidates each lane would lead with. It measures; it decides nothing.
+
 Everything is read: the commands open both databases ``mode=ro`` and
 never migrate, create or log.
 """
@@ -28,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import statistics
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -49,7 +56,11 @@ from app.pickup.retrieval import (
     restrict_candidates,
     score_lanes,
 )
-from app.workers.pickup import _CANDIDATES_PER_LANE, _FEED_DEPTH
+from app.workers.pickup import (
+    _CANDIDATES_PER_LANE,
+    _FEED_DEPTH,
+    _not_interested_ids,
+)
 
 #: The feeds compared by ``replay``, in report order. ``after`` is the
 #: worker's path with freshness off: videos only, weighted by engagement.
@@ -796,6 +807,250 @@ def _online_viewer(
 
 
 # ---------------------------------------------------------------------------
+# Interests
+# ---------------------------------------------------------------------------
+
+#: The classes a kept history row falls into, in the counts line's order.
+#: Each row is in exactly one, and the class is not the same thing as
+#: ``watch_state``: a row with no duration cannot be judged by it, and a
+#: dismissal is read before one is tried.
+_ROW_CLASSES = ("watched", "glanced", "set aside", "no length", "legacy zero")
+
+#: The classes attributed to a lane, in the lane table's order.
+_ATTRIBUTED = ("glanced", "set aside", "marked")
+
+_TITLES_SQL = """
+SELECT id, title, filename
+FROM files
+WHERE drive = :drive
+"""
+
+
+def _read_titles(drive: str) -> dict[str, str]:
+    """What to print for each file of the drive: title, filename, else id."""
+    with get_litloft_db() as session:
+        rows = session.execute(
+            sql_text(_TITLES_SQL), {"drive": drive},
+        ).fetchall()
+    return {row[0]: row[1] or row[2] or row[0] for row in rows}
+
+
+def _row_class(row: profile_mod.WatchRow, now: datetime) -> str | None:
+    """The one class this history row belongs to, or None if it is not kept.
+
+    The filters before the class are exactly ``profile_history``'s before
+    weighting, and are applied without its cap: the report says how much
+    of the history is which class, and a cap would hide the rest. A
+    liked or favourite row is watched before anything else is asked, and
+    a row played before recording began is judged by engagement alone:
+    neither the dismissal nor the duration rule decides those.
+    """
+    if not row.live or row.file_type != "video":
+        return None
+    played = row.played_at
+    if played is None:
+        return None
+    age = profile_mod.age_days(played, now=now)
+    if (
+        age < -profile_mod._FUTURE_TOLERANCE_DAYS
+        or age > profile_mod.PROFILE_WINDOW_DAYS
+    ):
+        return None
+
+    if row.liked or row.favourite:
+        return "watched"
+    if played < profile_mod.RECORDING_START:
+        engagement = profile_mod.watch_state(row).engagement
+        return "watched" if engagement > 0.0 else "legacy zero"
+    if row.dismissed:
+        return "set aside"
+    if profile_mod._known_duration(row.duration) is None:
+        return "no length"
+    if profile_mod.watch_state(row).watched:
+        return "watched"
+    return "glanced"
+
+
+def _interests_viewer(
+    drive: str,
+    viewer_id: str,
+    *,
+    now: datetime,
+    live_ids: set[str],
+    candidates: dict[str, CandidateSet],
+    freshness: dict[str, float],
+    titles: dict[str, str],
+    titles_limit: int,
+    picks_limit: int,
+) -> str:
+    """One viewer's report: counts, the lane table, and a block per lane."""
+    history = profile_mod.profile_history(drive, viewer_id, now=now)
+    lanes = profile_mod.cluster_lanes(
+        history, key=f"{drive}\x1f{viewer_id}", now=now,
+    )
+    engagements = {entry.file_id: entry.engagement for entry in history}
+    played = {entry.file_id: entry.last_played_at for entry in history}
+
+    counts = dict.fromkeys(_ROW_CLASSES, 0)
+    glanced: list[str] = []
+    set_aside: list[str] = []
+    for row in profile_mod.watch_rows(drive, viewer_id):
+        row_class = _row_class(row, now)
+        if row_class is None:
+            continue
+        counts[row_class] += 1
+        if row_class == "glanced":
+            glanced.append(row.file_id)
+        elif row_class == "set aside":
+            set_aside.append(row.file_id)
+
+    marked = _not_interested_ids(drive, viewer_id)
+    marked_videos = sorted(marked & live_ids)
+
+    counts_line = (
+        f"watched {counts['watched']}, glanced {counts['glanced']}, "
+        f"set aside {counts['set aside']}, no length {counts['no length']}, "
+        f"legacy zero {counts['legacy zero']}, marked {len(marked_videos)}"
+    )
+    if len(history) == profile_mod.PROFILE_VECTOR_CAP:
+        counts_line += f"\nmembers capped at {profile_mod.PROFILE_VECTOR_CAP}"
+    blocks = [f"viewer {viewer_id}", counts_line]
+    if not lanes:
+        blocks.append("no lanes")
+        return "\n\n".join(blocks)
+
+    # One read per type over every attributed class: a file can be both
+    # glanced at and marked.
+    groups = {"glanced": glanced, "set aside": set_aside, "marked": marked_videos}
+    attributed = {
+        lane.cluster_id: dict.fromkeys(_ATTRIBUTED, 0) for lane, _ in lanes
+    }
+    for channel in profile_mod.CHANNELS:
+        channel_lanes = [pair for pair in lanes if pair[0].channel == channel]
+        if not channel_lanes:
+            continue
+        file_ids = sorted({f for ids in groups.values() for f in ids})
+        vectors = profile_mod.representative_vectors(file_ids, channel)
+        if not vectors:
+            continue
+        centroids = np.stack([lane.centroid for lane, _ in channel_lanes])
+        nearest = {
+            file_id: channel_lanes[int(np.argmax(centroids @ vector))][0]
+            for file_id, vector in vectors.items()
+        }
+        for label, ids in groups.items():
+            for file_id in ids:
+                lane = nearest.get(file_id)
+                if lane is not None:
+                    attributed[lane.cluster_id][label] += 1
+
+    scored: dict[str, list[tuple[str, float, float]]] = {}
+    exclusions = profile_mod.watched_file_ids(drive, viewer_id) | marked
+    for channel in profile_mod.CHANNELS:
+        channel_lanes = [pair for pair in lanes if pair[0].channel == channel]
+        candidate_set = candidates.get(channel)
+        if not channel_lanes or candidate_set is None or len(candidate_set) == 0:
+            continue
+        results = score_lanes(
+            candidate_set,
+            [lane.centroid for lane, _ in channel_lanes],
+            channel=channel,
+            exclude_file_ids=exclusions,
+            limit=_CANDIDATES_PER_LANE,
+            freshness=freshness,
+        )
+        for (lane, _), hits in zip(channel_lanes, results, strict=True):
+            scored[lane.cluster_id] = hits
+
+    table = [
+        "| # | type | weight | members | 14d | 90d | median age | recorded"
+        " | glanced | glance rate | set aside | marked |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    lane_blocks: list[str] = []
+    for number, (lane, member_vectors) in enumerate(lanes, start=1):
+        ages = [profile_mod.age_days(played[f], now=now) for f in member_vectors]
+        recorded = sum(
+            1
+            for f in member_vectors
+            if played[f] >= profile_mod.RECORDING_START
+        )
+        lane_counts = attributed[lane.cluster_id]
+        judged = recorded + lane_counts["glanced"]
+        rate = f"{lane_counts['glanced'] / judged:.3f}" if judged else "-"
+        table.append(
+            f"| {number} | {lane.channel} | {lane.weight:.3f} | "
+            f"{lane.member_count} | "
+            f"{sum(1 for age in ages if age <= 14)} | "
+            f"{sum(1 for age in ages if age <= 90)} | "
+            f"{statistics.median(ages):.1f} | {recorded} | "
+            f"{lane_counts['glanced']} | {rate} | "
+            f"{lane_counts['set aside']} | {lane_counts['marked']} |"
+        )
+
+        lines = [f"### {number} {lane.channel}"]
+        if titles_limit:
+            ordered = sorted(
+                member_vectors.items(),
+                key=lambda item: (-float(lane.centroid @ item[1]), item[0]),
+            )
+            chosen = [
+                f"- {titles.get(f, f)} ({engagements[f]:.2f})"
+                for f, _ in ordered[:titles_limit]
+            ]
+            lines += ["members", *(chosen or ["- none"])]
+        if picks_limit:
+            chosen = [
+                f"- {titles.get(hit[0], hit[0])}"
+                for hit in scored.get(lane.cluster_id, [])[:picks_limit]
+            ]
+            lines += ["picks", *(chosen or ["- none"])]
+        lane_blocks.append("\n".join(lines))
+
+    blocks.append("\n".join(table))
+    blocks += lane_blocks
+    return "\n\n".join(blocks)
+
+
+def _interests(
+    drive: str, viewer_id: str | None, *, titles: int, picks: int,
+) -> int:
+    viewers = _viewer_ids(drive, viewer_id)
+    if not viewers:
+        print("no viewers")
+        return 0
+
+    # One instant for the window, the lanes, the ages and freshness: the
+    # report compares lanes against the ages of the rows that made them.
+    now = freshness_mod.reference_now()
+    videos = profile_mod.live_videos(drive)
+    live_ids = set(videos)
+    candidates = {
+        channel: restrict_candidates(
+            load_candidates(drive=drive, channel=channel), live_ids,
+        )
+        for channel in profile_mod.CHANNELS
+    }
+    freshness = {
+        file_id: freshness_mod.freshness(created_at, now)
+        for file_id, created_at in videos.items()
+    }
+    names = _read_titles(drive)
+
+    reports = [
+        _interests_viewer(
+            drive, viewer,
+            now=now, live_ids=live_ids, candidates=candidates,
+            freshness=freshness, titles=names,
+            titles_limit=titles, picks_limit=picks,
+        )
+        for viewer in viewers
+    ]
+    print("\n\n".join(reports))
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # The command
 # ---------------------------------------------------------------------------
 
@@ -872,6 +1127,21 @@ def _parser() -> argparse.ArgumentParser:
         help="How far back to collect targets.",
     )
     online.add_argument("--viewer")
+
+    interests_parser = subcommands.add_parser(
+        "interests",
+        help="List the interests Pickup learned, and how they were treated.",
+    )
+    interests_parser.add_argument("--drive", required=True)
+    interests_parser.add_argument(
+        "--titles", type=int, default=5, choices=range(0, 21),
+        help="Members to list per lane, from 0 to 20.",
+    )
+    interests_parser.add_argument(
+        "--picks", type=int, default=3, choices=range(0, 21),
+        help="Candidates to list per lane, from 0 to 20.",
+    )
+    interests_parser.add_argument("--viewer")
     return parser
 
 
@@ -884,7 +1154,11 @@ def main(argv: list[str] | None = None) -> int:
                 args.drive, args.viewer,
                 days=args.days, horizon=args.horizon,
             )
-        return _online(args.drive, args.viewer, days=args.days)
+        if args.command == "online":
+            return _online(args.drive, args.viewer, days=args.days)
+        return _interests(
+            args.drive, args.viewer, titles=args.titles, picks=args.picks,
+        )
     except Exception as error:
         print(f"{type(error).__name__}: {error}", file=sys.stderr)
         return 1
