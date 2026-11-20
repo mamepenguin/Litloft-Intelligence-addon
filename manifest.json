@@ -23,13 +23,6 @@
         "priority": 10
       }
     ],
-    "search-modes": [
-      {
-        "id": "find-mode",
-        "label": "Find",
-        "priority": 15
-      }
-    ],
     "file-detail-sections": [
       {
         "id": "unverified-source",
@@ -921,18 +914,6 @@
             "sources": "drive"
           }
         }
-      },
-      {
-        "path": "/find",
-        "methods": [
-          "POST"
-        ],
-        "pre_check": {
-          "type": "addon_feature",
-          "feature": "rag"
-        },
-        "timeout": 90,
-        "response_filter": null
       },
       {
         "path": "/llm/choices/summaries",

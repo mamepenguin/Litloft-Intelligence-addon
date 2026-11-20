@@ -262,14 +262,6 @@ describe("SPEC-ADDON-064 the Ask page's scope", () => {
     expect(listing).toBeDefined();
     expect(listing!.searchParams.getAll("folder")).toContain("Work");
     expect(listing!.searchParams.get("limit")).toBe("1");
-
-    for (const link of screen.getAllByRole("link")) {
-      expect(
-        new URL(link.getAttribute("href")!, "http://localhost").searchParams.get(
-          "scope",
-        ),
-      ).toBe("path:Work");
-    }
   });
 
   it("sends the four normalised keys as the request body's scope", async () => {

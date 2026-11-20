@@ -799,14 +799,13 @@ describe("IntelligenceAskPage — status probe fallback", () => {
 });
 
 /**
- * The page's own chrome, after adopting core's `PageHeader` and `PageTabs`
- * (UI redesign Phase 3, C2a).
+ * The page's own chrome, after adopting core's `PageHeader` (UI redesign
+ * Phase 3, C2a).
  *
- * Three things this page used to say for itself and now takes from core: the
- * heading and its size, the mode row's vocabulary, and how many accent fills
- * the screen is allowed.
+ * Two things this page used to say for itself and now takes from core: the
+ * heading and its size, and how many accent fills the screen is allowed.
  */
-describe("IntelligenceAskPage — page header, mode tabs and accent budget", () => {
+describe("IntelligenceAskPage — page header and accent budget", () => {
   beforeEach(() => {
     streamState.current = makeController();
     clearSourceCaptures("family");

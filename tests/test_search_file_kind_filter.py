@@ -195,21 +195,9 @@ def test_flat_kinds_are_unchanged(search_db):
     assert _search("video") == {"video0000001"}
 
 
-def test_every_find_hint_names_a_kind_that_can_match(search_db):
-    # Find's query decomposer has its own label set. Its "text" asks for
-    # text documents in general, so it maps to the whole of ``document``
-    # (PDFs and office files included), not to the narrower ``text`` kind.
-    from app.rag.query_decomposer import _FILE_TYPE_LABELS
-    from app.rag.service import _find_kind_for_hint
-
-    assert {label: _find_kind_for_hint(label) for label in _FILE_TYPE_LABELS} == {
-        "video": "video",
-        "audio": "audio",
-        "image": "image",
-        "text": "document",
-        "none": None,
-    }
-    assert _search(_find_kind_for_hint("text")) == _search("document")
+def test_document_covers_more_than_the_text_kind(search_db):
+    # ``text`` is the narrower kind: PDFs and office files are documents
+    # too, and only the name or the mime reveals which are text.
     assert _search("document") - TEXT == {
         "code0000cccc",
         "code0000perl",

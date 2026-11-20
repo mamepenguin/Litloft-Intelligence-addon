@@ -18,11 +18,9 @@ from app.main import app
 
 DRIVE = "family"
 ASK = "/ask"
-FIND = "/find"
 
 BODIES = {
     ASK: '{"query": "what is on the table", "top_k": %s}',
-    FIND: '{"question": "what is on the table", "limit": %s}',
 }
 
 ROWS = [
@@ -30,10 +28,6 @@ ROWS = [
     (ASK, "Infinity", "ask-infinity"),
     (ASK, "-Infinity", "ask-negative-infinity"),
     (ASK, '"many"', "ask-wrong-type"),
-    (FIND, "NaN", "find-nan"),
-    (FIND, "Infinity", "find-infinity"),
-    (FIND, "-Infinity", "find-negative-infinity"),
-    (FIND, '"many"', "find-wrong-type"),
 ]
 
 

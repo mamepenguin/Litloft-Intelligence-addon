@@ -49,7 +49,6 @@ from app.drive_context import require_drive
 from app.rag import file_question
 from app.rag.service import (
     AnswerEvent,
-    find_files,
     stream_answer,
 )
 from app.rag.prompt import (
@@ -58,7 +57,7 @@ from app.rag.prompt import (
     build_file_question_user_prompt,
     format_position,
 )
-from app.schemas import AskRequest, FileQuestionRequest, FindRequest
+from app.schemas import AskRequest, FileQuestionRequest
 
 logger = logging.getLogger(__name__)
 
@@ -1727,74 +1726,3 @@ async def _answer_with_keepalive(stream) -> AsyncIterator[str | None]:
         except asyncio.CancelledError:
             if asyncio.current_task().cancelling():
                 raise
-
-
-@router.post("/find")
-async def find_endpoint(
-    body: FindRequest,
-    request: Request = None,
-    access_token: str | None = None,
-    drive: str = Depends(require_drive),
-    viewer_id: Annotated[
-        str | None, Header(alias="X-Lit-Viewer-Id")
-    ] = None,
-) -> dict:
-    """File-listing sibling of /ask (spec
-    ``2026-04-30-intelligence-find-mode.md``).
-
-    Returns a single-shot JSON payload (NOT SSE) with the structured
-    decomposed query plus the retrieve hits. Stage E (LLM answer
-    generation) is deliberately skipped — the whole point of Find mode
-    is "no hallucination, just files" — so the hit text comes verbatim
-    from the retriever's segments.
-
-    Gating mirrors /ask: ``features.rag`` must be on, the LLM provider
-    must be enabled (Stages A and C use it), and the question must be
-    >= 3 non-whitespace chars after strip. Drive header is required —
-    we read it via ``require_drive`` for FastAPI dispatch and re-check
-    here so direct-call tests with ``drive=""`` produce the expected
-    400.
-
-    Viewer-id is opt-in: a personal-scope question with no
-    ``X-Lit-Viewer-Id`` header degrades gracefully (Stage B is skipped
-    inside the service, no 4xx).
-    """
-    # Drive non-empty check. ``require_drive`` already raises 400 on a
-    # missing header, but tests invoke the handler directly with
-    # ``drive=""`` to simulate that path — re-validate so both code
-    # paths produce the same status code.
-    if not drive:
-        raise HTTPException(status_code=400, detail="Drive context required")
-
-    resolved = await _require_rag_enabled(drive)
-
-    if len(body.question.strip()) < 3:
-        raise HTTPException(status_code=400, detail="Query too short")
-
-    # Share the /ask semaphore. Find calls Stages A and C (decompose +
-    # category expand) which are the same LLM provider as /ask, so the
-    # operator's "max concurrent LLM calls" budget applies uniformly. A
-    # 1ms wait keeps acquire non-blocking while still yielding — same
-    # pattern as ask_endpoint.
-    semaphore = _get_ask_semaphore()
-    try:
-        await asyncio.wait_for(semaphore.acquire(), timeout=0.001)
-    except asyncio.TimeoutError:
-        raise HTTPException(
-            status_code=503,
-            detail="Too many concurrent requests, please retry shortly",
-        )
-
-    try:
-        credential = _caller_credential(request, access_token)
-        return await find_files(
-            question=body.question,
-            drive=drive,
-            viewer_id=viewer_id,
-            credential=credential,
-            overrides=body.overrides,
-            limit=body.limit,
-            resolved=resolved,
-        )
-    finally:
-        semaphore.release()

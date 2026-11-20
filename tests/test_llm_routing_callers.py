@@ -577,7 +577,7 @@ async def test_chapter_generate_resolves_before_reading_the_transcript(
 
 
 # ---------------------------------------------------------------------------
-# Ask / Find
+# Ask
 # ---------------------------------------------------------------------------
 
 
@@ -594,51 +594,22 @@ def _rag_on(monkeypatch) -> None:
     ("result", "status"),
     [(Defer("unavailable"), 503), (Skip("llm_cloud off"), 400)],
 )
-@pytest.mark.parametrize("route", ["ask", "find"])
-async def test_ask_and_find_refuse_an_unresolved_drive(
-    monkeypatch, use_llm, route, result, status
+async def test_ask_refuses_an_unresolved_drive(
+    monkeypatch, use_llm, result, status
 ) -> None:
     from app.routers import rag as rag_router
-    from app.schemas import AskRequest, FindRequest
+    from app.schemas import AskRequest
 
     _rag_on(monkeypatch)
     asked = use_llm(result=result)
 
     with pytest.raises(HTTPException) as exc:
-        if route == "ask":
-            await rag_router.ask_endpoint(
-                AskRequest(query="what happened"), None, None, DRIVE, None
-            )
-        else:
-            await rag_router.find_endpoint(
-                FindRequest(question="what happened"), None, None, DRIVE, None
-            )
+        await rag_router.ask_endpoint(
+            AskRequest(query="what happened"), None, None, DRIVE, None
+        )
 
     assert exc.value.status_code == status
     assert asked == [(DRIVE, "rag")]
-
-
-@pytest.mark.asyncio
-async def test_find_hands_the_resolved_profile_to_the_service(monkeypatch, use_llm) -> None:
-    from app.routers import rag as rag_router
-    from app.schemas import FindRequest
-
-    _rag_on(monkeypatch)
-    client = MagicMock()
-    use_llm(client)
-    seen: list = []
-
-    async def _find(**kwargs):
-        seen.append(kwargs["resolved"].client)
-        return {}
-
-    monkeypatch.setattr(rag_router, "find_files", _find)
-
-    await rag_router.find_endpoint(
-        FindRequest(question="what happened"), None, None, DRIVE, None
-    )
-
-    assert seen == [client]
 
 
 @pytest.mark.asyncio
@@ -726,24 +697,6 @@ async def test_a_stream_closed_from_another_context_does_not_raise(monkeypatch) 
     await stream.aclose()
 
     assert (first, closed) == (1, [client])
-
-
-@pytest.mark.asyncio
-async def test_find_binds_its_profile_for_the_helpers(monkeypatch) -> None:
-    from app.rag import service
-
-    client = MagicMock()
-    seen: list = []
-
-    async def _inner(*args, **kwargs):
-        seen.append(llm_routing.bound_client())
-        return {}
-
-    monkeypatch.setattr(service, "_find_files", _inner)
-
-    await service.find_files("q", DRIVE, resolved=resolved_with(client))
-
-    assert seen == [client]
 
 
 @pytest.mark.asyncio
