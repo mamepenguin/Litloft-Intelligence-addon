@@ -9,7 +9,7 @@ import { vi } from "vitest";
  * the same numbers, so the result does not depend on which one the section
  * uses.
  */
-export const ROW = 88;
+export let ROW = 88;
 export const VIEW = 264;
 export const WIDTH = 352;
 export const COLS = 3;
@@ -283,7 +283,13 @@ export function installLayout(): void {
   );
 }
 
+/** A new row step for every tile, as a picture of another ratio would give. */
+export function setRowStep(px: number): void {
+  ROW = px;
+}
+
 export function resetLayout(): void {
+  ROW = 88;
   writes.length = 0;
   touched.clear();
   ResizeObserverStub.all.length = 0;

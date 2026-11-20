@@ -432,19 +432,14 @@ describe("SPEC-ADDON-152 I5 — the scene card's point", () => {
   });
 });
 
-describe("SPEC-ADDON-152 I6 — pictures", () => {
+describe("SPEC-ADDON-155 — pictures (SPEC-ADDON-152 I6 as revised)", () => {
   function imgAt(time: number): HTMLImageElement | undefined {
     return images().find((img) => new RegExp(`[?&]t=${time}(?:&|$)`).test(img.src));
   }
 
-  it("SPEC-ADDON-152 I6 — on opening, nothing before 150 ms, then the visible rows and the row within one row step below", async () => {
+  it("SPEC-ADDON-155 I1 — on opening, the visible rows and the row within one row step below are asked for with no time advanced", async () => {
     await open({ mediaController: makeController({ duration: L }).controller });
     expect(visibleRows()).toEqual([0, 1, 2]);
-    await advance(140);
-    expect(imgTimes()).toEqual([]);
-
-    await advance(20);
-    await flush(4);
 
     const times = imgTimes();
     for (const time of [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]) {
@@ -455,10 +450,8 @@ describe("SPEC-ADDON-152 I6 — pictures", () => {
     }
   });
 
-  it("SPEC-ADDON-152 I6 — scrolling requests nothing until the list has been still for 150 ms, and drawn pictures stay", async () => {
+  it("SPEC-ADDON-155 I2 I5 — while scrolling, a row first near at the last wheel is asked for 200 ms after it, not at 199 ms, and drawn pictures stay", async () => {
     await open({ mediaController: makeController({ duration: L }).controller });
-    await advance(200);
-    await flush(4);
     const first = imgAt(0);
     expect(first).toBeDefined();
 
@@ -469,10 +462,11 @@ describe("SPEC-ADDON-152 I6 — pictures", () => {
       expect(imgTimes()).not.toContain(120);
     }
     expect(visibleRows()).toEqual([6, 7, 8]);
-    await advance(40);
+    await advance(99);
+    await flush(4);
     expect(imgTimes()).not.toContain(120);
 
-    await advance(20);
+    await advance(1);
     await flush(4);
     for (const time of [75, 90, 105, 120, 135, 145]) {
       expect(imgTimes(), `the picture at ${time}s`).toContain(time);
@@ -486,11 +480,9 @@ describe("SPEC-ADDON-152 I6 — pictures", () => {
     expect(images().filter((img) => /[?&]t=0(?:&|$)/.test(img.src))).toHaveLength(1);
   });
 
-  it("SPEC-ADDON-152 I6 — a native frame that fails is not asked for again until the next showing", async () => {
+  it("SPEC-ADDON-155 I8 — a native frame that fails is not asked for again until the next showing, which asks for it at once", async () => {
     const { controller } = makeController({ duration: L });
     const view = await open({ mediaController: controller });
-    await advance(200);
-    await flush(4);
     fireEvent.error(imgAt(5)!);
     expect(tile(5).querySelector("img")).toBeNull();
     expect(tile(5)).toHaveAttribute("aria-label", "Play from 0:05");
@@ -507,8 +499,8 @@ describe("SPEC-ADDON-152 I6 — pictures", () => {
     view.rerender(section({ mediaController: controller, active: false }));
     await settle(0);
     view.rerender(section({ mediaController: controller, active: true }));
-    await settle(200);
-    await flush(4);
+    await settle(0);
+    await settle(0);
     expect(imgTimes()).toContain(5);
   });
 });
