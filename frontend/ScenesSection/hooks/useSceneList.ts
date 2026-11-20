@@ -32,6 +32,8 @@ export interface SceneListGeometry {
   columns: number;
   step: number;
   flow: boolean;
+  /** True when measuring changed a value the next commit draws with. */
+  changed: boolean;
 }
 
 export interface SceneListVisible {
@@ -50,7 +52,13 @@ export interface SceneListState {
   oneLine: boolean;
   cardBottomInset: number;
   visible: SceneListVisible;
-  scrollVersion: number;
+  /** True until the reader first scrolls the list or uses the ruler. */
+  opening: boolean;
+  /** True once the start placement's own reading has been taken. */
+  ready: boolean;
+  /** Changes when the showing, the file or the frames change. */
+  resetKey: string;
+  endOpening: () => void;
   placeIndex: (index: number, second: boolean) => void;
   placeRow: (row: number, second: boolean) => void;
 }
@@ -74,6 +82,8 @@ export interface SceneListOptions {
   fileId: string;
   rows: ClipTimestampItem[];
   hasPlayback: boolean;
+  /** False while a part below the list is still waiting for its answer. */
+  layoutSettled: boolean;
   playbackTime: number;
   followTarget: number | null;
   rulerDrag: RefObject<RulerDrag | null>;
@@ -108,6 +118,7 @@ export function useSceneList({
   fileId,
   rows,
   hasPlayback,
+  layoutSettled,
   playbackTime,
   followTarget,
   rulerDrag,
@@ -123,7 +134,8 @@ export function useSceneList({
   const [oneLine, setOneLine] = useState(true);
   const [cardBottomInset, setCardBottomInset] = useState(0);
   const [visible, setVisible] = useState<SceneListVisible>(INITIAL_VISIBLE);
-  const [scrollVersion, setScrollVersion] = useState(0);
+  const [opening, setOpening] = useState(true);
+  const [placedKey, setPlacedKey] = useState<string | null>(null);
   const [viewportVersion, setViewportVersion] = useState(0);
 
   const followingRef = useRef(true);
@@ -136,13 +148,31 @@ export function useSceneList({
   const hasPlaybackRef = useRef(hasPlayback);
   const previousColumns = useRef(0);
   const previousStep = useRef(0);
+  const openingRef = useRef(true);
+  const placedKeyRef = useRef<string | null>(null);
+  const pendingSettleRef = useRef<{ key: string; seen: boolean } | null>(null);
+  const lastWrittenRef = useRef<number | null>(null);
+  const oneLineStateRef = useRef(oneLine);
+  const insetStateRef = useRef(cardBottomInset);
 
   shownRef.current = shown;
   hasPlaybackRef.current = hasPlayback;
+  oneLineStateRef.current = oneLine;
+  insetStateRef.current = cardBottomInset;
+
+  const resetKey = `${fileId}|${shown ? 1 : 0}|${rows
+    .map((row) => row.start)
+    .join(",")}`;
 
   const setFollowing = useCallback((value: boolean) => {
     followingRef.current = value;
     setFollowingState(value);
+  }, []);
+
+  const endOpening = useCallback(() => {
+    if (!openingRef.current) return;
+    openingRef.current = false;
+    setOpening(false);
   }, []);
 
   const measure = useCallback((): SceneListGeometry | null => {
@@ -154,17 +184,21 @@ export function useSceneList({
     const nextColumns = width > 0 ? sceneColumns(width) : 3;
     const nextStep = rowStepOf(list, nextColumns);
     const nextFlow = isFlowForm(list);
+    let changed = false;
     if (nextColumns !== columnsRef.current) {
       columnsRef.current = nextColumns;
       setColumns(nextColumns);
+      changed = true;
     }
     if (nextStep !== stepRef.current) {
       stepRef.current = nextStep;
       setStep(nextStep);
+      changed = true;
     }
     if (nextFlow !== flowRef.current) {
       flowRef.current = nextFlow;
       setFlow(nextFlow);
+      changed = true;
     }
     const below = cardBox.current ? partsBelowList(cardBox.current) : 0;
     const fullCardMin = FULL_CARD_MIN_REM * rootRemPx();
@@ -175,14 +209,21 @@ export function useSceneList({
       : nextStep > 0
         ? !sparesFullCard
         : false;
+    if (nextOneLine !== oneLineStateRef.current) changed = true;
     setOneLine((current) => (current === nextOneLine ? current : nextOneLine));
     const nextInset = nextFlow
       ? px(getComputedStyle(scrollerOf(list)).paddingBottom)
       : 0;
+    if (nextInset !== insetStateRef.current) changed = true;
     setCardBottomInset((current) =>
       current === nextInset ? current : nextInset,
     );
-    return { columns: nextColumns, step: nextStep, flow: nextFlow };
+    return {
+      columns: nextColumns,
+      step: nextStep,
+      flow: nextFlow,
+      changed,
+    };
   }, [cardBox, listRef]);
 
   const syncVisible = useCallback(() => {
@@ -234,6 +275,7 @@ export function useSceneList({
     const scroller = scrollerOf(list);
     if (scroller === list) {
       scroller.scrollTop = 0;
+      lastWrittenRef.current = scroller.scrollTop;
       return;
     }
     const host = section.current ?? list;
@@ -243,6 +285,7 @@ export function useSceneList({
       0,
       contentOffsetTop(list, scroller) - pinned,
     );
+    lastWrittenRef.current = scroller.scrollTop;
   }, [listRef, rulerBox, section]);
 
   const placeRow = useCallback(
@@ -271,6 +314,7 @@ export function useSceneList({
         0,
         scroller.scrollTop + rect.top - view.top,
       );
+      lastWrittenRef.current = scroller.scrollTop;
     },
     [cardBox, listRef, placeListTop, rulerBox],
   );
@@ -304,6 +348,13 @@ export function useSceneList({
     if (!shown) return;
     const geometry = measure();
     if (!geometry) return;
+    if (placedKeyRef.current === resetKey) {
+      syncVisible();
+      return;
+    }
+    lastWrittenRef.current = null;
+    openingRef.current = true;
+    setOpening(true);
     setFollowing(true);
     if (rows.length === 0) {
       placeListTop();
@@ -316,7 +367,55 @@ export function useSceneList({
       placeListTop();
     }
     syncVisible();
-  }, [shown, fileId, rows, measure, placeListTop, placeRow, syncVisible, setFollowing]);
+    // The first pass lays the list out at the column count, row step and card
+    // form it is about to apply; the reading that follows belongs to the next
+    // commit. A part below the list that is still waiting will change the
+    // list's height when it arrives, so the reading waits for that too.
+    if (geometry.changed || !layoutSettled) {
+      pendingSettleRef.current = { key: resetKey, seen: false };
+    } else {
+      placedKeyRef.current = resetKey;
+      setPlacedKey(resetKey);
+    }
+  }, [
+    shown,
+    resetKey,
+    rows,
+    layoutSettled,
+    measure,
+    placeListTop,
+    placeRow,
+    syncVisible,
+    setFollowing,
+  ]);
+
+  useLayoutEffect(() => {
+    const pending = pendingSettleRef.current;
+    if (!pending || pending.key !== resetKey) return;
+    if (!pending.seen) {
+      pending.seen = true;
+      return;
+    }
+    if (!layoutSettled && openingRef.current) return;
+    pendingSettleRef.current = null;
+    measure();
+    syncVisible();
+    placedKeyRef.current = resetKey;
+    setPlacedKey(resetKey);
+  }, [
+    shown,
+    resetKey,
+    opening,
+    layoutSettled,
+    columns,
+    step,
+    flow,
+    oneLine,
+    cardBottomInset,
+    viewportVersion,
+    measure,
+    syncVisible,
+  ]);
 
   // A column or row-step change keeps the old top row's first frame in the
   // new top row, unless following with a controller: then the playing row
@@ -451,7 +550,7 @@ export function useSceneList({
     };
     const onScroll = () => {
       syncVisible();
-      setScrollVersion((version) => version + 1);
+      if (lastWrittenRef.current !== scroller.scrollTop) endOpening();
     };
     // Not passive: a reader's wheel has to end following before the scroll is
     // handed on, so the chip is there in the same beat as the movement.
@@ -471,7 +570,7 @@ export function useSceneList({
       scroller.removeEventListener("focusin", onFocusIn);
       scroller.removeEventListener("scroll", onScroll);
     };
-  }, [shown, flow, syncVisible, setFollowing, onReaderTakeOver, listRef, rulerBox, cardBox, rulerDrag]);
+  }, [shown, flow, syncVisible, setFollowing, onReaderTakeOver, endOpening, listRef, rulerBox, cardBox, rulerDrag]);
 
   useEffect(() => {
     if (!shown) return;
@@ -502,7 +601,10 @@ export function useSceneList({
     oneLine,
     cardBottomInset,
     visible,
-    scrollVersion,
+    opening,
+    ready: shown && placedKey === resetKey,
+    resetKey,
+    endOpening,
     placeIndex,
     placeRow,
   };
