@@ -1016,14 +1016,14 @@ def _normalise(raws: list[float]) -> list[float]:
 # ---------------------------------------------------------------------------
 
 
-def build_lanes(
+def cluster_lanes(
     history: Sequence[WatchedFile],
     *,
     key: str,
     now: datetime | None = None,
     vectors: Callable[[Iterable[str], str], dict[str, np.ndarray]] = representative_vectors,
-) -> list[Lane]:
-    """Cluster ``history`` into weighted lanes across every channel.
+) -> list[tuple[Lane, dict[str, np.ndarray]]]:
+    """Cluster ``history`` into weighted lanes, keeping each lane's members.
 
     Every mean of member vectors is weighted by engagement and then
     normalized, so the lane points where the watched time went rather
@@ -1040,7 +1040,9 @@ def build_lanes(
             vectors it loaded once.
 
     Returns:
-        Lanes with normalized weights, heaviest first.
+        ``(lane, members)`` pairs, lanes with normalized weights and
+        heaviest first, each ``members`` mapping a member file id to the
+        vector of the lane's channel that clustering used.
     """
     if not history:
         return []
@@ -1049,7 +1051,9 @@ def build_lanes(
     engagements = {w.file_id: w.engagement for w in history}
     file_ids = [w.file_id for w in history]
 
-    pending: list[tuple[str, str, np.ndarray, int, float]] = []
+    pending: list[
+        tuple[str, str, np.ndarray, int, float, dict[str, np.ndarray]]
+    ] = []
     for channel in CHANNELS:
         loaded = vectors(file_ids, channel)
         if not loaded:
@@ -1085,22 +1089,56 @@ def build_lanes(
                     [ages[members[i]] for i in group],
                     [weights[i] for i in group],
                 ),
+                {members[i]: loaded[members[i]] for i in group},
             ))
 
     if not pending:
         return []
 
-    weights = _normalise([raw for *_, raw in pending])
-    lanes = [
-        Lane(
-            channel=channel,
-            cluster_id=cluster_id,
-            centroid=centroid,
-            member_count=count,
-            raw_weight=raw,
-            weight=weight,
+    weights = _normalise([entry[4] for entry in pending])
+    pairs = [
+        (
+            Lane(
+                channel=channel,
+                cluster_id=cluster_id,
+                centroid=centroid,
+                member_count=count,
+                raw_weight=raw,
+                weight=weight,
+            ),
+            member_vectors,
         )
-        for (channel, cluster_id, centroid, count, raw), weight
+        for (channel, cluster_id, centroid, count, raw, member_vectors), weight
         in zip(pending, weights, strict=True)
     ]
-    return sorted(lanes, key=lambda lane: (-lane.weight, lane.cluster_id))
+    return sorted(pairs, key=lambda pair: (-pair[0].weight, pair[0].cluster_id))
+
+
+def build_lanes(
+    history: Sequence[WatchedFile],
+    *,
+    key: str,
+    now: datetime | None = None,
+    vectors: Callable[[Iterable[str], str], dict[str, np.ndarray]] = representative_vectors,
+) -> list[Lane]:
+    """Cluster ``history`` into weighted lanes across every channel.
+
+    The lanes are :func:`cluster_lanes` pairs' lanes, without the members.
+
+    Args:
+        history: The viewer's kept entries, newest first.
+        key: Stable identity for this (drive, viewer), used to seed
+            clustering so repeated runs agree.
+        now: Reference time for the ages in the lane weights. None means
+            the current time.
+        vectors: ``(file_ids, channel) -> {file_id: unit vector}``. The
+            worker reads the index through the default; replay passes
+            vectors it loaded once.
+
+    Returns:
+        Lanes with normalized weights, heaviest first.
+    """
+    return [
+        lane
+        for lane, _ in cluster_lanes(history, key=key, now=now, vectors=vectors)
+    ]
