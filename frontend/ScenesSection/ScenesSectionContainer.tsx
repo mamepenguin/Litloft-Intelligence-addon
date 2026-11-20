@@ -447,11 +447,15 @@ export default function ScenesSectionContainer({
     setFollowTarget(null);
   }, [setBrowsePoint]);
 
+  const awaitingVisual =
+    shown && !isLoft && !visualLoaded && policy.enabled;
+
   const sceneList = useSceneList({
     shown,
     fileId,
     rows: list,
     hasPlayback: mediaController != null,
+    layoutSettled: !awaitingVisual,
     playbackTime: playback.time,
     followTarget,
     rulerDrag: dragStart,
@@ -473,7 +477,10 @@ export default function ScenesSectionContainer({
     oneLine,
     cardBottomInset,
     visible,
-    scrollVersion,
+    opening,
+    ready,
+    resetKey,
+    endOpening,
     placeIndex,
   } = sceneList;
 
@@ -514,6 +521,7 @@ export default function ScenesSectionContainer({
 
   const handlePointerDown = useCallback(
     (time: number, pointerType: string, clientX: number, button: number) => {
+      endOpening();
       if (list.length === 0) return;
       const primary = pointerType !== "mouse" || button === 0;
       const scroller = listRef.current ? scrollerOf(listRef.current) : null;
@@ -530,7 +538,7 @@ export default function ScenesSectionContainer({
       if (pointerType !== "mouse" || button !== 0) return;
       applyRulerPoint(time);
     },
-    [applyRulerPoint, following, list.length],
+    [applyRulerPoint, endOpening, following, list.length],
   );
 
   const handlePointerMove = useCallback(
@@ -598,6 +606,7 @@ export default function ScenesSectionContainer({
       }
       event.preventDefault();
       event.stopPropagation();
+      endOpening();
       if (list.length === 0) return;
 
       if (key === "enter") {
@@ -634,6 +643,7 @@ export default function ScenesSectionContainer({
       visible.canScroll,
       columns,
       activate,
+      endOpening,
       setBrowsePoint,
       placeIndex,
       setFollowing,
@@ -721,8 +731,9 @@ export default function ScenesSectionContainer({
   const requestedTimes = useScenePictures({
     times: pictureTimes,
     active: view === "expanded",
-    resetKey: `${fileId}|${shown ? 1 : 0}|${rows === null ? "none" : rows.length}`,
-    settleKey: scrollVersion,
+    opening,
+    ready,
+    resetKey,
   });
 
   useRulerKeys(rulerRef, handleRulerKeyDown, view === "expanded");
@@ -736,8 +747,6 @@ export default function ScenesSectionContainer({
     t,
   );
 
-  const awaitingVisual =
-    shown && !isLoft && !visualLoaded && policy.enabled;
   const errorMessage =
     actionError === "waiting"
       ? t("visualIndexWaitingPrerequisite")

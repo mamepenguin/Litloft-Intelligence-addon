@@ -614,7 +614,7 @@ describe("SPEC-ADDON-089 I8 — picture requests", () => {
     expect(imgTimes()).not.toContain(45);
   });
 
-  it("SPEC-ADDON-153 I9 — hovering the ruler requests nothing and moves the drawn frames not at all", async () => {
+  it("SPEC-ADDON-153 I9, SPEC-ADDON-155 I1 — with no layout measured rows 0–2 are asked for at once; hovering the ruler requests nothing and moves the drawn frames not at all", async () => {
     vi.useFakeTimers();
     vi.mocked(usePolicy).mockReturnValue({ enabled: false, isLoading: false });
     vi.mocked(getClipTimestamps).mockResolvedValue(timestamps(makeRows(40)));
@@ -625,7 +625,7 @@ describe("SPEC-ADDON-089 I8 — picture requests", () => {
     const el = screen.getByRole("slider");
     stubRect(el);
 
-    await advance(150);
+    await advance(0);
     const initial = imgTimes();
     expect(initial).toEqual([0, 5, 10, 15, 20, 25, 30, 35, 40]);
     const labels = tileLabels();

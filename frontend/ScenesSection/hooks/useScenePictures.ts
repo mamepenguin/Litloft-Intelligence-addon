@@ -1,61 +1,117 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-/** How long a row must stay put before its picture is asked for. */
-export const PICTURE_SETTLE_MS = 150;
+/** How long a tile must stay near the visible area before its picture is asked for. */
+export const PICTURE_DWELL_MS = 200;
 
 export interface ScenePictureOptions {
-  /** Frames within one row step of the visible area, in time order. */
+  /** Frames near the visible area, in time order. */
   times: number[];
   active: boolean;
-  /** Changes when the showing, the file or the rows change. */
+  /** Until the reader first scrolls the list or uses the ruler after a start event. */
+  opening: boolean;
+  /** False until the start placement's own reading has been taken. */
+  ready: boolean;
+  /** Changes when the showing, the file or the frames change. */
   resetKey: string;
-  /** Changes on every scroll of the scroller, so a still list is required. */
-  settleKey: number;
 }
 
 /**
- * The frames whose pictures may be fetched. A drawn picture is never dropped
- * while the panel stays shown, and a reader's scroll restarts the settle, so a
- * sweep through the list asks for nothing until it stops.
+ * The frames whose pictures may be fetched. Opening asks for every near tile at
+ * once; afterwards each tile is asked for once it has stayed near for the dwell
+ * time, however much the list moves around it.
  */
 export function useScenePictures({
   times,
   active,
+  opening,
+  ready,
   resetKey,
-  settleKey,
 }: ScenePictureOptions): number[] {
   const [requested, setRequested] = useState<number[]>([]);
   const requestedRef = useRef(new Set<number>());
+  const dwellsRef = useRef(new Map<number, number>());
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const timesRef = useRef(times);
+  timesRef.current = times;
+  const stateRef = useRef({ active, opening, ready });
+  stateRef.current = { active, opening, ready };
+
+  const request = useCallback((wanted: number[]) => {
+    let changed = false;
+    for (const time of wanted) {
+      if (!requestedRef.current.has(time)) {
+        requestedRef.current.add(time);
+        changed = true;
+      }
+    }
+    if (changed) {
+      setRequested([...requestedRef.current].sort((a, b) => a - b));
+    }
+  }, []);
+
+  const clearTimer = useCallback(() => {
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  const read = useCallback(
+    (now: number) => {
+      const state = stateRef.current;
+      if (!state.active || !state.ready) return;
+      const near = new Set(timesRef.current);
+      for (const time of Array.from(dwellsRef.current.keys())) {
+        if (!near.has(time)) dwellsRef.current.delete(time);
+      }
+      if (state.opening) {
+        dwellsRef.current.clear();
+        request(timesRef.current);
+        return;
+      }
+      for (const time of near) {
+        if (!dwellsRef.current.has(time)) dwellsRef.current.set(time, now);
+      }
+      const due: number[] = [];
+      let next = Number.POSITIVE_INFINITY;
+      for (const [time, start] of dwellsRef.current) {
+        const deadline = start + PICTURE_DWELL_MS;
+        if (deadline <= now) due.push(time);
+        else if (deadline < next) next = deadline;
+      }
+      request(due);
+      clearTimer();
+      if (Number.isFinite(next)) {
+        timerRef.current = setTimeout(
+          () => {
+            timerRef.current = null;
+            read(Date.now());
+          },
+          Math.max(0, next - now),
+        );
+      }
+    },
+    [clearTimer, request],
+  );
 
   useEffect(() => {
     requestedRef.current = new Set();
+    dwellsRef.current.clear();
+    clearTimer();
     setRequested((current) => (current.length === 0 ? current : []));
-  }, [resetKey, active]);
+  }, [resetKey, active, clearTimer]);
 
-  const timesRef = useRef(times);
   useEffect(() => {
-    timesRef.current = times;
-  }, [times]);
+    if (!active) {
+      dwellsRef.current.clear();
+      clearTimer();
+      return;
+    }
+    read(Date.now());
+  }, [times, active, opening, ready, read, clearTimer]);
 
-  const key = active ? times.join(",") : "";
-  useEffect(() => {
-    if (!active || !key) return;
-    const timer = setTimeout(() => {
-      let changed = false;
-      for (const time of timesRef.current) {
-        if (!requestedRef.current.has(time)) {
-          requestedRef.current.add(time);
-          changed = true;
-        }
-      }
-      if (changed) {
-        setRequested([...requestedRef.current].sort((a, b) => a - b));
-      }
-    }, PICTURE_SETTLE_MS);
-    return () => clearTimeout(timer);
-    // `times` is read through `key`, which changes only when the frames do;
-    // `settleKey` restarts the settle without changing them.
-  }, [key, active, resetKey, settleKey]);
+  useEffect(() => clearTimer, [clearTimer]);
 
   return requested;
 }

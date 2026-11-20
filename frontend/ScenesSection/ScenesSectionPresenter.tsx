@@ -720,7 +720,6 @@ const SceneTile = memo(
             <img
               src={pictureUrl}
               alt=""
-              loading="lazy"
               onLoad={(event) =>
                 onPictureLoad(
                   event.currentTarget.naturalWidth,
