@@ -138,6 +138,20 @@ class _Library:
                     "dur": duration, "t": played.isoformat(sep=" "),
                 },
             )
+            if file_type == "video" and 2 * position >= duration:
+                # A row seeded here is meant as watched, so give it the
+                # recorded coverage that makes it so.
+                conn.execute(
+                    text(
+                        "INSERT INTO played_segments"
+                        " (viewer_id, file_id, segment_index, played_seconds)"
+                        " VALUES (:v, :f, :n, 5.0)"
+                    ),
+                    [
+                        {"v": viewer, "f": file_id, "n": n}
+                        for n in range(10)
+                    ],
+                )
 
     def index(
         self,
@@ -535,6 +549,14 @@ def test_an_aware_timestamp_is_read_as_utc(lib):
             " (viewer_id, file_id, playback_position, duration, last_played_at)"
             " VALUES ('v1', 'f', 100, 100, :t)"
         ), {"t": datetime.now(UTC).isoformat()})
+        conn.execute(
+            text(
+                "INSERT INTO played_segments"
+                " (viewer_id, file_id, segment_index, played_seconds)"
+                " VALUES ('v1', 'f', :n, 5.0)"
+            ),
+            [{"n": n} for n in range(10)],
+        )
 
     got = profile.profile_history("a", "v1")
 

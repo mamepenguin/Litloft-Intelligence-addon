@@ -19,7 +19,7 @@ from app.pickup import retrieval
 from app.pickup.retrieval import load_candidates
 from app.workers import pickup as worker_mod
 from tests.pickup_accuracy_rig import CoreDB, SearchDB, at_angle, utcnow, wire
-from tests.test_z_pickup_evaluate import _run, _sections, _table, _today
+from tests.test_z_pickup_evaluate import _covered, _run, _sections, _table, _today
 
 GRID = [(h, f) for h in (7, 30, 90, 365) for f in (0, 0.5)]
 GRID_NAMES = [f"fresh_h{h:g}_f{f:g}" for h, f in GRID]
@@ -39,12 +39,14 @@ def _new_target_dataset(tmp_path):
     for i in range(5):
         core.add_file(f"h{i}", created_at=old)
         core.watch(f"h{i}", played_at=t0 - timedelta(days=9, hours=i))
+        _covered(core, f"h{i}")
         search.index(f"h{i}", at_angle(0.0))
     for i in range(15):
         core.add_file(f"k{i:02d}", created_at=old + timedelta(hours=i))
         search.index(f"k{i:02d}", at_angle(2.0 + i))
     core.add_file("X", created_at=t0 - timedelta(hours=12))
     core.watch("X", played_at=t0 + timedelta(hours=1))
+    _covered(core, "X")
     search.index("X", at_angle(30.0))
     core.engine.dispose()
     search.engine.dispose()
@@ -101,6 +103,7 @@ def _parity_dataset(tmp_path):
     for i in range(5):
         core.add_file(f"h{i}", created_at=old)
         core.watch(f"h{i}", played_at=now - timedelta(days=10 + i))
+        _covered(core, f"h{i}")
         search.index(f"h{i}", at_angle(0.0))
     for i in range(3):
         core.add_file(f"d{i}", created_at=old)

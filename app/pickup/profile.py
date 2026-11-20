@@ -14,16 +14,17 @@ interleave bounds what one cluster is worth.
 
 Pickup recommends videos, so the profile reads videos only. Each one
 enters with an engagement between 0 and 1: how much of it was watched,
-lifted to 1 by a like or a favourite, and 0 for a brief open or a
-dismissal. That engagement weights every mean of member vectors and the
-lane's raw weight, so one video watched to the end shapes an interest
-more than five opened for a few seconds.
+lifted to 1 by a like or a favourite, and 0 for a glance or a dismissal.
+That engagement weights every mean of member vectors and the lane's raw
+weight, so one video watched to the end shapes an interest more than five
+opened for a few seconds.
 
-Two reads of the history, not one. The exclusion set — every file the
-viewer has opened, of any kind — is never capped, because a cap on it
-would start recommending watched files to anyone past the cap. The
-profile's vector load is capped, because clustering does not get better
-past a couple of thousand points and the cost is real.
+Two reads of the history, not one. The exclusion set — every non-video
+file the viewer has opened, and every video they watched — is never
+capped, because a cap on it would start recommending watched files to
+anyone past the cap. The profile's vector load is capped, because
+clustering does not get better past a couple of thousand points and the
+cost is real.
 """
 
 from __future__ import annotations
@@ -53,23 +54,41 @@ logger = logging.getLogger(__name__)
 #: lands and every viewer whose history is quiet keeps yesterday's
 #: ranking until the date rolls, up to a day later. Cheap to get right,
 #: and invisible when it is wrong.
-PROFILE_VERSION = 4
+PROFILE_VERSION = 5
+
+#: Watch history played before this instant is judged by the rule that
+#: predates recorded coverage: opened at all meant seen, and the position
+#: was the engagement. A margin after the core's playback recording
+#: landed, so no row that predates it is read as a glance.
+RECORDING_START = datetime(2026, 11, 5, 0, 0, 0)
+
+#: The core's playback segment width (``PLAYED_SEGMENT_SECONDS``). A
+#: segment records that playback happened inside those five seconds, not
+#: how much of them, so it stands for the whole bucket.
+PLAYED_SEGMENT_SECONDS = 5.0
+
+#: Below this length a video records too few segments to say anything:
+#: played stretches under ten seconds are never written, so a short
+#: video's coverage reads as zero however it was watched.
+SHORT_VIDEO_SECONDS = 20.0
 
 #: The core's mime type for a ``.loft`` embed. Some embed providers
 #: cannot report position or duration, and an embed that reports
 #: neither was not necessarily abandoned.
 LOFT_MIME = "application/vnd.litloft.loft+json"
 
-#: Watched fractions below this are a brief open, not interest.
+#: On history recorded before :data:`RECORDING_START`, watched fractions
+#: below this are a brief open, not interest.
 F_MIN = 0.10
 
-#: Reaching this fraction of a video counts as fully watched, so the
-#: difference between a third and eighty percent does not decide the
-#: profile.
+#: On the same history, reaching this fraction of a video counts as fully
+#: watched, so the difference between a third and eighty percent does not
+#: decide the profile.
 F_FULL = 0.5
 
-#: What an embed that never reported playback counts. Absence of a
-#: position from a provider that cannot send one is unknown, not zero.
+#: On the same history, what an embed that never reported playback
+#: counts. Absence of a position from a provider that cannot send one is
+#: unknown, not zero.
 E_UNKNOWN = 0.5
 
 #: Embedding types the profile is built on. ``metadata`` is absent for
@@ -288,40 +307,129 @@ def _is_dismissed(dismissed_at: object, last_played_at: object) -> bool:
     return dismissed >= played
 
 
-def engagement(
-    *,
-    liked: bool,
-    favourite: bool,
-    dismissed: bool,
-    playback_position: object,
-    duration: object,
-    played_seconds: object,
-    mime_type: str | None,
-) -> float:
-    """How much one video's history row shapes the profile, in [0, 1].
+@dataclass(frozen=True)
+class WatchRow:
+    """One watch-history row with everything watched-ness and engagement read.
 
-    The watched fraction comes from the reported duration, never the
-    probed length: a row whose reported duration is zero was opened but
-    never reported playback, whatever the file's real length.
+    ``segments`` holds ``(segment_index, played_seconds)`` for this
+    viewer and file; ``played_seconds`` is their sum, which the old
+    engagement reads.
     """
-    if liked or favourite:
+
+    file_id: str
+    played_at: datetime | None
+    dismissed: bool
+    position: float | None
+    duration: float | None
+    file_type: str
+    mime_type: str | None
+    live: bool
+    liked: bool
+    favourite: bool
+    played_seconds: float
+    segments: tuple[tuple[int, float], ...]
+
+
+@dataclass(frozen=True)
+class WatchState:
+    """Whether one video counts as watched, and how much it seeds the profile."""
+
+    watched: bool
+    engagement: float
+    coverage: float
+
+
+def _known_duration(duration: float | None) -> float | None:
+    """The reported duration when it can bound a video, else None."""
+    if duration is None or duration <= 0.0:
+        return None
+    return duration
+
+
+def _reported_position(position: float | None) -> float:
+    """The reported position, with an absent, non-finite or negative one as 0."""
+    return position if position is not None and position > 0.0 else 0.0
+
+
+def playback_coverage(
+    segments: Iterable[tuple[int, float]], duration: float | None,
+) -> float:
+    """Seconds of ``duration`` covered by the viewer's played segments.
+
+    Each segment with any playback stands for its whole bucket, and a
+    bucket that starts past the end of the video is ignored: the duration
+    can shrink after recording, and the rows left beyond it describe a
+    longer cut than the one the viewer has.
+    """
+    known = _known_duration(duration)
+    if known is None:
+        return 0.0
+    total = 0.0
+    for index, played in segments:
+        if played <= 0.0:
+            continue
+        start = PLAYED_SEGMENT_SECONDS * index
+        if start >= known:
+            continue
+        total += min(PLAYED_SEGMENT_SECONDS, known - start)
+    return total
+
+
+def _version_4_engagement(row: WatchRow) -> float:
+    """How much the row shaped the profile at ``PROFILE_VERSION`` 4.
+
+    Kept for the evaluation rows that must not move with this rule.
+    """
+    if row.liked or row.favourite:
         return 1.0
-    if dismissed:
+    if row.dismissed:
         return 0.0
 
-    reported = _finite(duration)
-    if reported is not None and reported > 0.0:
-        position = _finite(playback_position) or 0.0
-        played = _finite(played_seconds) or 0.0
+    reported = _known_duration(row.duration)
+    if reported is not None:
+        position = _reported_position(row.position)
+        played = row.played_seconds
         fraction = max(position, min(played, reported)) / reported
         fraction = min(1.0, max(0.0, fraction))
         if fraction < F_MIN:
             return 0.0
         return min(1.0, fraction / F_FULL)
 
-    if mime_type == LOFT_MIME:
+    if row.mime_type == LOFT_MIME:
         return E_UNKNOWN
     return 0.0
+
+
+def watch_state(row: WatchRow) -> WatchState:
+    """Judge one video by what was played, not by where the page was left.
+
+    A video is watched when it is liked or favourite, when its history
+    predates recording, when it is short and its position is at least
+    half, or when its played coverage is at least half its duration. Every
+    other video with a row is a glance: it stays a candidate, and it is
+    no seed.
+    """
+    duration = _known_duration(row.duration)
+    coverage = playback_coverage(row.segments, row.duration)
+    position = _reported_position(row.position)
+    legacy = row.played_at is None or row.played_at < RECORDING_START
+
+    if row.liked or row.favourite:
+        return WatchState(True, 1.0, coverage)
+    if legacy:
+        watched, engagement = True, _version_4_engagement(row)
+    elif duration is not None and (
+        2.0 * position >= duration
+        if duration < SHORT_VIDEO_SECONDS
+        else 2.0 * coverage >= duration
+    ):
+        watched, engagement = True, 1.0
+    else:
+        watched, engagement = False, 0.0
+
+    if row.dismissed:
+        engagement = 0.0
+    return WatchState(watched, engagement, coverage)
 
 
 def viewer_ids(drive: str) -> list[str]:
@@ -339,32 +447,76 @@ def viewer_ids(drive: str) -> list[str]:
     return [row[0] for row in rows if row[0]]
 
 
-#: Every watched row the profile depends on, with the fields that move
-#: it without moving the row's timestamp.
-_WATCH_SIGNATURE_SQL = """
+#: Every watched row the profile depends on, one row per played segment.
+_WATCH_ROWS_SQL = """
 SELECT wh.file_id,
        wh.last_played_at,
        wh.dismissed_at,
+       wh.playback_position,
+       wh.duration,
+       f.file_type,
+       f.mime_type,
        CASE WHEN f.deleted_at IS NULL AND f.missing_since IS NULL
             THEN 1 ELSE 0 END AS live,
        CASE WHEN f.liked_at IS NOT NULL THEN 1 ELSE 0 END AS liked,
        COALESCE(f.is_favorite, 0) AS favourite,
-       COALESCE(ps.seconds, 0.0) AS played_seconds
+       ps.segment_index,
+       ps.played_seconds
 FROM watch_history wh
 JOIN files f ON wh.file_id = f.id
-LEFT JOIN (
-    SELECT file_id, SUM(played_seconds) AS seconds
-    FROM played_segments
-    WHERE viewer_id = :viewer
-    GROUP BY file_id
-) ps ON ps.file_id = wh.file_id
+LEFT JOIN played_segments ps
+       ON ps.file_id = wh.file_id AND ps.viewer_id = wh.viewer_id
 WHERE f.drive = :drive AND wh.viewer_id = :viewer
+ORDER BY wh.file_id, ps.segment_index
 """
 
 
-def watch_signature(
-    drive: str, viewer_id: str,
-) -> list[tuple[str, str, int, int, int, str, int]]:
+def watch_rows(drive: str, viewer_id: str) -> list[WatchRow]:
+    """This viewer's history in the drive, one entry per file, live or not."""
+    with get_litloft_db() as session:
+        rows = session.execute(
+            sql_text(_WATCH_ROWS_SQL),
+            {"drive": drive, "viewer": viewer_id},
+        ).fetchall()
+
+    grouped: dict[str, list] = {}
+    for row in rows:
+        grouped.setdefault(row[0], []).append(row)
+
+    out: list[WatchRow] = []
+    for file_id, group in grouped.items():
+        head = group[0]
+        out.append(WatchRow(
+            file_id=file_id,
+            played_at=_parse_naive_utc(head[1]),
+            dismissed=_is_dismissed(head[2], head[1]),
+            position=_finite(head[3]),
+            duration=_finite(head[4]),
+            file_type=head[5],
+            mime_type=head[6],
+            live=bool(head[7]),
+            liked=bool(head[8]),
+            favourite=bool(head[9]),
+            played_seconds=sum(_finite(row[11]) or 0.0 for row in group),
+            segments=tuple(
+                (int(row[10]), _finite(row[11]) or 0.0)
+                for row in group
+                if row[10] is not None
+            ),
+        ))
+    out.sort(key=lambda row: row.file_id)
+    return out
+
+
+#: Positions in a signature row, for the two fields the exclusion set
+#: reads: ``(file_id, played_at, live, liked, favourite, dismissed,
+#: file_type, mime_type, played_seconds, duration, position, coverage,
+#: watched)``.
+_SIGNATURE_FILE_TYPE = 6
+_SIGNATURE_WATCHED = 12
+
+
+def watch_signature(drive: str, viewer_id: str) -> list[tuple]:
     """Everything about this viewer's history that the profile depends on.
 
     The **timestamps** are what make this a signature rather than a set.
@@ -377,36 +529,56 @@ def watch_signature(
     the profile is built from while leaving ids and timestamps
     untouched, and the feed would go on describing the old set.
 
-    The **liked, favourite and dismissal flags** and the **played
-    seconds** are here because engagement reads them. Liking a video,
-    favouriting it, recording a played range or dismissing a row changes
-    how much it shapes the profile without moving ``last_played_at``.
+    The **liked, favourite and dismissal flags**, the **file type and
+    mime type**, the **played seconds**, and the **duration, position and
+    coverage** are here because engagement and watched-ness read them.
+    Liking a video, favouriting it, recording a played range, reporting a
+    longer duration or seeking changes how much it shapes the profile
+    without moving ``last_played_at``.
+
+    The **watched flag** is carried beside the rounded coverage and
+    position: a flip between watched and glanced inside one decimal still
+    changes the checkpoint.
 
     Rows are *not* filtered by any of these flags: the exclusion set is
     derived from this too, and a file in the trash is still a file this
     viewer has opened. Rows are sorted by file id so the signature is
-    stable, and played seconds are written to one decimal so float
-    noise in the sum does not move the checkpoint.
+    stable, and every number is written to one decimal so float noise
+    does not move the checkpoint.
     """
-    with get_litloft_db() as session:
-        rows = session.execute(
-            sql_text(_WATCH_SIGNATURE_SQL),
-            {"drive": drive, "viewer": viewer_id},
-        ).fetchall()
-
-    signature = [
-        (
-            row[0],
-            str(row[1]),
-            int(row[3]),
-            int(row[4]),
-            int(row[5]),
-            f"{_finite(row[6]) or 0.0:.1f}",
-            1 if _is_dismissed(row[2], row[1]) else 0,
-        )
-        for row in sorted(rows, key=lambda row: row[0])
-    ]
+    signature = []
+    for row in watch_rows(drive, viewer_id):
+        state = watch_state(row)
+        signature.append((
+            row.file_id,
+            str(row.played_at) if row.played_at is not None else "",
+            int(row.live),
+            int(row.liked),
+            int(row.favourite),
+            int(row.dismissed),
+            row.file_type,
+            row.mime_type or "",
+            f"{row.played_seconds:.1f}",
+            f"{row.duration if row.duration is not None else 0.0:.1f}",
+            f"{_reported_position(row.position):.1f}",
+            f"{state.coverage:.1f}",
+            int(state.watched),
+        ))
     return signature
+
+
+def signature_exclusions(signature: Sequence[tuple]) -> set[str]:
+    """The exclusion set a ``watch_signature`` describes.
+
+    Rule 1: every non-video file the viewer has a row for, and every
+    watched video. Read from the signature so the sweep needs no second
+    pass over the history.
+    """
+    return {
+        row[0]
+        for row in signature
+        if row[_SIGNATURE_FILE_TYPE] != "video" or row[_SIGNATURE_WATCHED]
+    }
 
 
 def live_videos(drive: str) -> dict[str, datetime | None]:
@@ -430,52 +602,21 @@ def live_videos(drive: str) -> dict[str, datetime | None]:
 
 
 def watched_file_ids(drive: str, viewer_id: str) -> set[str]:
-    """Every file this viewer has opened in this drive. Never capped.
+    """Every file this viewer's feed must not hold. Never capped.
 
-    Trashed and missing files stay in: the question is what the viewer
-    has already seen, not what is currently on disk. They cannot be
-    candidates anyway, so including them costs nothing, and dropping
-    them would risk recommending a file whose row came back.
+    A non-video file the viewer has a row for, and a video they watched;
+    a glanced video stays a candidate, like one never opened. Trashed and
+    missing files stay in: the question is what the viewer has already
+    seen, not what is currently on disk. They cannot be candidates
+    anyway, so including them costs nothing, and dropping them would risk
+    recommending a file whose row came back.
+
+    Not-interested marks are deliberately absent: they are not history,
+    and each reader of the feed's exclusion set adds them from the
+    search DB itself.
     """
-    with get_litloft_db() as session:
-        rows = session.execute(
-            sql_text(
-                "SELECT wh.file_id "
-                "FROM watch_history wh "
-                "JOIN files f ON wh.file_id = f.id "
-                "WHERE f.drive = :drive AND wh.viewer_id = :viewer"
-            ),
-            {"drive": drive, "viewer": viewer_id},
-        ).fetchall()
-    return {row[0] for row in rows}
+    return signature_exclusions(watch_signature(drive, viewer_id))
 
-
-#: One row per watched file, with everything engagement reads. The
-#: filters run in Python, before the cap: a document, an unparseable
-#: timestamp or a video with no engagement must not push a kept row out
-#: of the profile.
-_PROFILE_HISTORY_SQL = """
-SELECT wh.file_id,
-       wh.last_played_at,
-       wh.playback_position,
-       wh.duration,
-       wh.dismissed_at,
-       f.file_type,
-       f.mime_type,
-       CASE WHEN f.liked_at IS NOT NULL THEN 1 ELSE 0 END AS liked,
-       COALESCE(f.is_favorite, 0) AS favourite,
-       COALESCE(ps.seconds, 0.0) AS played_seconds
-FROM watch_history wh
-JOIN files f ON wh.file_id = f.id
-LEFT JOIN (
-    SELECT file_id, SUM(played_seconds) AS seconds
-    FROM played_segments
-    WHERE viewer_id = :viewer
-    GROUP BY file_id
-) ps ON ps.file_id = wh.file_id
-WHERE f.drive = :drive AND wh.viewer_id = :viewer
-  AND f.deleted_at IS NULL AND f.missing_since IS NULL
-"""
 
 
 def profile_history(
@@ -488,8 +629,13 @@ def profile_history(
     until: datetime | None = None,
     videos_only: bool = True,
     weighted: bool = True,
+    version_4: bool = False,
 ) -> list[WatchedFile]:
     """This viewer's kept entries inside the window, newest first.
+
+    Every filter runs before the cap: a document, an unparseable
+    timestamp or a video with no engagement must not push a kept row out
+    of the profile.
 
     Args:
         drive: The drive to read, and the only one.
@@ -502,6 +648,8 @@ def profile_history(
         videos_only: Keep live videos only, or live files of every kind.
         weighted: Give video rows their engagement and drop those with
             none. Without it every row counts fully.
+        version_4: Weight every video by ``PROFILE_VERSION`` 4's
+            engagement, for the evaluation rows that must not move.
 
     Returns:
         ``WatchedFile`` rows, newest first.
@@ -514,34 +662,24 @@ def profile_history(
         reference = now
     upper = _parse_naive_utc(until) if until is not None else None
 
-    statement = _PROFILE_HISTORY_SQL
-    if videos_only:
-        statement += "  AND f.file_type = 'video'\n"
-
-    with get_litloft_db() as session:
-        rows = session.execute(
-            sql_text(statement),
-            {"drive": drive, "viewer": viewer_id},
-        ).fetchall()
-
     history: list[WatchedFile] = []
     unweighted = 0
-    for row in rows:
-        (
-            file_id, played_at, position, reported, dismissed_at,
-            file_type, mime_type, liked, favourite, played_seconds,
-        ) = row
-        parsed = _parse_naive_utc(played_at)
+    for row in watch_rows(drive, viewer_id):
+        if not row.live:
+            continue
+        if videos_only and row.file_type != "video":
+            continue
+        parsed = row.played_at
         if parsed is None:
             logger.debug(
                 "Pickup: unreadable last_played_at for file=%s viewer=%s",
-                file_id, viewer_id,
+                row.file_id, viewer_id,
             )
             continue
         age = (reference - parsed).total_seconds() / 86400.0
         if age < -_FUTURE_TOLERANCE_DAYS:
             logger.debug(
-                "Pickup: last_played_at is in the future for file=%s", file_id,
+                "Pickup: last_played_at is in the future for file=%s", row.file_id,
             )
             continue
         if age > window_days:
@@ -549,15 +687,11 @@ def profile_history(
         if upper is not None and parsed >= upper:
             continue
 
-        if weighted and file_type == "video":
-            value = engagement(
-                liked=bool(liked),
-                favourite=bool(favourite),
-                dismissed=_is_dismissed(dismissed_at, played_at),
-                playback_position=position,
-                duration=reported,
-                played_seconds=played_seconds,
-                mime_type=mime_type,
+        if weighted and row.file_type == "video":
+            value = (
+                _version_4_engagement(row)
+                if version_4
+                else watch_state(row).engagement
             )
             if value <= 0.0:
                 unweighted += 1
@@ -565,7 +699,9 @@ def profile_history(
         else:
             value = 1.0
         history.append(
-            WatchedFile(file_id=file_id, last_played_at=parsed, engagement=value)
+            WatchedFile(
+                file_id=row.file_id, last_played_at=parsed, engagement=value,
+            )
         )
 
     history.sort(key=lambda entry: entry.last_played_at, reverse=True)

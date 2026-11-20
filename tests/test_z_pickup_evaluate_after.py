@@ -18,6 +18,11 @@ from app.workers import pickup as worker_mod
 from tests.pickup_accuracy_rig import CoreDB, SearchDB, at_angle, utcnow, wire
 
 
+def _covered(core: CoreDB, file_id: str) -> None:
+    """Playback over half of the default 100-second duration."""
+    core.segments(file_id, [5.0] * 10)
+
+
 def _dataset(directory):
     directory.mkdir(parents=True, exist_ok=True)
     core = CoreDB(directory / "litloft.db")
@@ -28,6 +33,7 @@ def _dataset(directory):
     for i in range(5):
         core.add_file(f"h{i}", created_at=old)
         core.watch(f"h{i}", played_at=now - timedelta(days=10 + i))
+        _covered(core, f"h{i}")
         search.index(f"h{i}", at_angle(0.0))
     # Dismissed videos: kept by the unweighted configurations, dropped by
     # `after`, so a wrong weighting shows in the ranking.
