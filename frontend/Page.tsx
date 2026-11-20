@@ -1403,8 +1403,6 @@ function IntelligenceAskPageInner() {
       width="reading"
       header={
         <AskFindHeader
-          current="ask"
-          query={input}
           drive={drive}
           scope={scopeString}
           matchedCount={scopeMatchedCount}

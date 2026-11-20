@@ -24,7 +24,7 @@ Key = tuple[str, str]
 _OFFLOADERS = {"to_thread", "run_in_threadpool", "run_in_executor"}
 
 # POST routes that only read: the body carries the query.
-_READ_POSTS = {"/ask", "/find"}
+_READ_POSTS = {"/ask"}
 
 
 def _own_nodes(fn: ast.AST):

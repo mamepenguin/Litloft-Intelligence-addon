@@ -259,25 +259,6 @@
     "save": "保存",
     "saving": "保存中…"
   },
-  "modeTabs": {
-    "ariaLabel": "回答モード",
-    "ask": "Ask",
-    "find": "Find"
-  },
-  "find": {
-    "pageHeading": "Find: ファイルを探す",
-    "pageDescription": "「{query}」に関連しそうなファイルを表示します",
-    "pageCta": "Findページを開く",
-    "placeholder": "例: 先週観たSFっぽい映画",
-    "submit": "探す",
-    "loading": "検索中…",
-    "error": "検索に失敗しました",
-    "empty": "該当するファイルが見つかりませんでした",
-    "totalCount": "{count} 件見つかりました",
-    "categoryExpansion": "関連語: {terms}",
-    "chipPersonalViewed": "視聴済み",
-    "chipPersonalNotViewed": "未視聴"
-  },
   "file": {
     "similarFiles": "似たファイル",
     "similarFilesDetecting": "検出中...",

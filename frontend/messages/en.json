@@ -259,25 +259,6 @@
     "save": "Save",
     "saving": "Saving…"
   },
-  "modeTabs": {
-    "ariaLabel": "Answer mode",
-    "ask": "Ask",
-    "find": "Find"
-  },
-  "find": {
-    "pageHeading": "Find: Search files",
-    "pageDescription": "Shows files that may be related to “{query}”",
-    "pageCta": "Open Find page",
-    "placeholder": "e.g. sci-fi-ish movies I watched last week",
-    "submit": "Find",
-    "loading": "Searching…",
-    "error": "Search failed",
-    "empty": "No files matched",
-    "totalCount": "{count} results",
-    "categoryExpansion": "Related terms: {terms}",
-    "chipPersonalViewed": "viewed",
-    "chipPersonalNotViewed": "not viewed"
-  },
   "file": {
     "similarFiles": "Similar files",
     "similarFilesDetecting": "Searching...",

@@ -167,23 +167,6 @@ async def test_credential_is_still_forwarded(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_find_keeps_unverified_files_visible(monkeypatch):
-    """Find presents files; it is not a citation surface.
-
-    Ask must not quote an unvouched source back as evidence, but Find
-    answering "which of my files are about X" has to keep showing clips — they
-    are findable, just not evidence. The two Stage D calls opt out explicitly.
-    """
-    import inspect
-
-    from app.rag import service
-
-    source = inspect.getsource(service._find_files)
-    # Both Stage D branches (per-term expansion and the single-query path).
-    assert source.count("trust_tier=None") == 2
-
-
-@pytest.mark.asyncio
 async def test_retrieval_entry_points_default_to_verified():
     """A caller that forgets the argument gets the safer behaviour."""
     import inspect

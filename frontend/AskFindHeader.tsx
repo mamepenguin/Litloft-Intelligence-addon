@@ -8,8 +8,6 @@ import { PageHeader } from "@/components/PageHeader";
 import { getDriveFiles, getDrives } from "@/lib/api";
 import { filterFromParsed, parseSearchQuery } from "@/lib/searchQuery";
 
-import ModeTabs from "./ModeTabs";
-
 /**
  * The drive's own `file_count` from core, not the size of the index: what Ask
  * can retrieve from is a smaller subset this page cannot know. The addon's
@@ -78,21 +76,16 @@ function useScopeFileCount(
 }
 
 /**
- * One header for both modes, so moving between the Ask and Find tabs does not
- * move or rename the title. A count that failed to load leaves the drive alone
+ * The Ask page's header. A count that failed to load leaves the drive alone
  * rather than a number that would be believed.
  */
 export function AskFindHeader({
-  current,
-  query,
   drive,
   scope = "",
   matchedCount = null,
   smartCollectionScope = false,
   smartMemberCount = null,
 }: {
-  current: "ask" | "find";
-  query: string;
   drive: string | null;
   scope?: string;
   matchedCount?: number | null;
@@ -105,10 +98,10 @@ export function AskFindHeader({
   const tCommon = useTranslations("common");
   const count = useScopeFileCount(
     drive,
-    current === "ask" ? scope : "",
+    scope,
     matchedCount,
-    current === "ask" && smartCollectionScope,
-    current === "ask" ? smartMemberCount : null,
+    smartCollectionScope,
+    smartMemberCount,
   );
 
   const scopeLine = drive ? (
@@ -124,16 +117,6 @@ export function AskFindHeader({
       titleIcon={MessageCircleQuestion}
       title={tNav("label")}
       scope={scopeLine}
-      tabs={
-        drive ? (
-          <ModeTabs
-            current={current}
-            query={query}
-            drive={drive}
-            scope={scope}
-          />
-        ) : undefined
-      }
     />
   );
 }

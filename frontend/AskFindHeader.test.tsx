@@ -1,5 +1,5 @@
 /**
- * The header Ask and Find share, and its scope line.
+ * The Ask page's header and its scope line.
  *
  * The failure half is the half worth testing: a wrong count reads as "the
  * index holds this many of your files" and is believed, so a count that did
@@ -16,11 +16,6 @@ vi.mock("next-intl", () => ({
         : key === "items"
           ? `${values!.count} items`
           : `${ns}.${key}`,
-}));
-vi.mock("./ModeTabs", () => ({
-  default: ({ current, query, drive }: { current: string; query: string; drive: string }) => (
-    <nav data-testid="mode-tabs" data-current={current} data-query={query} data-drive={drive} />
-  ),
 }));
 
 const getDrives = vi.fn();
@@ -48,7 +43,7 @@ describe("AskFindHeader", () => {
 
   it("names the drive it is scoped to and its count", async () => {
     getDrives.mockResolvedValue(drives);
-    render(<AskFindHeader current="ask" query="" drive="family" />);
+    render(<AskFindHeader drive="family" />);
 
     // The count of the drive asked for, not of the first one that came
     // back: both are in the response and only one is the subject.
@@ -59,7 +54,7 @@ describe("AskFindHeader", () => {
 
   it("names the drive alone when the call fails", async () => {
     getDrives.mockRejectedValue(new Error("network down"));
-    render(<AskFindHeader current="ask" query="" drive="family" />);
+    render(<AskFindHeader drive="family" />);
 
     await waitFor(() => expect(getDrives).toHaveBeenCalled());
     expect(screen.getByTestId("drive-scope").textContent).toBe("family");
@@ -69,29 +64,24 @@ describe("AskFindHeader", () => {
     // Access control lives in the response: core returns only the drives
     // this viewer may open, so an absent one is not a zero.
     getDrives.mockResolvedValue([{ name: "work", file_count: 3 }]);
-    render(<AskFindHeader current="ask" query="" drive="family" />);
+    render(<AskFindHeader drive="family" />);
 
     await waitFor(() => expect(getDrives).toHaveBeenCalled());
     expect(screen.getByTestId("drive-scope").textContent).toBe("family");
   });
 
-  it("offers neither a scope nor tabs before a drive is known", () => {
-    render(<AskFindHeader current="ask" query="" drive={null} />);
+  it("offers no scope before a drive is known", () => {
+    render(<AskFindHeader drive={null} />);
     expect(getDrives).not.toHaveBeenCalled();
     expect(screen.queryByTestId("drive-scope")).toBeNull();
-    expect(screen.queryByTestId("mode-tabs")).toBeNull();
   });
 
-  // Ask and Find render this same header, so switching tabs keeps the title,
-  // the icon and the scope line where they were.
-  it.each(["ask", "find"] as const)("titles the %s mode with the sidebar row's label and icon", async (mode) => {
+  it("titles the page with the sidebar row's label and icon", async () => {
     getDrives.mockResolvedValue(drives);
-    const { container } = render(<AskFindHeader current={mode} query="cats" drive="family" />);
+    const { container } = render(<AskFindHeader drive="family" />);
     await screen.findByText("family · 619 items");
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("intelligence.nav.label");
     expect(container.querySelector("svg.lucide-message-circle-question-mark")).not.toBeNull();
-    const tabs = screen.getByTestId("mode-tabs");
-    expect(tabs.dataset).toMatchObject({ current: mode, query: "cats", drive: "family" });
   });
 
   /**
@@ -107,7 +97,7 @@ describe("AskFindHeader", () => {
     const unhandled = vi.fn();
     process.on("unhandledRejection", unhandled);
     getDrives.mockRejectedValue(new Error("network down"));
-    render(<AskFindHeader current="ask" query="" drive="family" />);
+    render(<AskFindHeader drive="family" />);
 
     await waitFor(() => expect(getDrives).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 0));
@@ -132,8 +122,8 @@ describe("AskFindHeader", () => {
       .mockReturnValueOnce(new Promise((r) => { resolveSlow = r; }))
       .mockResolvedValueOnce(drives);
 
-    const { rerender } = render(<AskFindHeader current="ask" query="" drive="family" />);
-    rerender(<AskFindHeader current="ask" query="" drive="work" />);
+    const { rerender } = render(<AskFindHeader drive="family" />);
+    rerender(<AskFindHeader drive="work" />);
     expect(await screen.findByTestId("drive-scope")).toHaveTextContent(
       "work · 3 items",
     );

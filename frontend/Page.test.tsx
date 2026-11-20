@@ -19,7 +19,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, act, waitFor, fireEvent, cleanup } from "@testing-library/react";
+import { MessageCircleQuestion } from "lucide-react";
 import React from "react";
 
 // --- Mock next/navigation (Ask page reads useSearchParams + usePathname). ----
@@ -798,14 +799,13 @@ describe("IntelligenceAskPage — status probe fallback", () => {
 });
 
 /**
- * The page's own chrome, after adopting core's `PageHeader` and `PageTabs`
- * (UI redesign Phase 3, C2a).
+ * The page's own chrome, after adopting core's `PageHeader` (UI redesign
+ * Phase 3, C2a).
  *
- * Three things this page used to say for itself and now takes from core: the
- * heading and its size, the mode row's vocabulary, and how many accent fills
- * the screen is allowed.
+ * Two things this page used to say for itself and now takes from core: the
+ * heading and its size, and how many accent fills the screen is allowed.
  */
-describe("IntelligenceAskPage — page header, mode tabs and accent budget", () => {
+describe("IntelligenceAskPage — page header and accent budget", () => {
   beforeEach(() => {
     streamState.current = makeController();
     clearSourceCaptures("family");
@@ -950,23 +950,38 @@ describe("IntelligenceAskPage — page header, mode tabs and accent budget", () 
     expect(h1s[0].className).toContain("text-2xl");
   });
 
-  it("marks the current mode the way a set of links does, and not twice", async () => {
-    render(<IntelligenceAskPage />);
-    const ask = await screen.findByRole("link", { name: /ask/i });
-    expect(ask).toHaveAttribute("aria-current", "page");
-    // Ask and Find are separate routes, so the row navigates. `role="tab"`
-    // promises a screen reader that activating it swaps a region in this
-    // view, which a `<Link>` does not do — and this row used to carry both
-    // that promise and `aria-current` at once. Media Import resolved the same
-    // pairing from the other end: its two views are one page, so it kept the
-    // tablist and dropped `aria-current`.
-    expect(ask).not.toHaveAttribute("aria-selected");
-    expect(screen.queryByRole("tablist")).toBeNull();
-    expect(screen.queryAllByRole("tab")).toHaveLength(0);
-    // The other mode is present and is not marked current — without this the
-    // assertions above would pass on a row that had lost its second tab.
-    const find = screen.getByRole("link", { name: /find/i });
-    expect(find).not.toHaveAttribute("aria-current");
+  it("SPEC-ADDON-158 I1: draws no mode row and no way to Find, with a drive and without one", async () => {
+    const { container: iconHost } = render(<MessageCircleQuestion />);
+    const askIconClass = iconHost.querySelector("svg")!.getAttribute("class");
+    cleanup();
+
+    for (const drive of ["family", null]) {
+      currentDrive.current = drive as string;
+      try {
+        const { container, unmount } = render(<IntelligenceAskPage />);
+        await screen.findByRole("textbox", { name: /question input/i });
+        const heading = screen.getByRole("heading", { level: 1 });
+        expect(heading.textContent).toBe("Ask");
+        expect(heading.closest("header")!.querySelector("svg")?.getAttribute("class")).toBe(
+          askIconClass,
+        );
+        if (drive) {
+          await screen.findByText(/619/, { selector: "[data-testid='drive-scope']" });
+        }
+
+        expect(screen.queryByRole("tablist")).toBeNull();
+        expect(screen.queryAllByRole("tab")).toHaveLength(0);
+        expect(screen.queryByRole("link", { name: /^find$/i })).toBeNull();
+        expect(screen.queryByRole("link", { name: /^ask$/i })).toBeNull();
+        const hrefs = Array.from(container.querySelectorAll("a[href]")).map(
+          (a) => a.getAttribute("href") ?? "",
+        );
+        expect(hrefs.filter((href) => href.includes("/addons/intelligence/find"))).toEqual([]);
+        unmount();
+      } finally {
+        currentDrive.current = "family";
+      }
+    }
   });
 
   it("spends its one accent fill on asking, with the answer on screen", async () => {
