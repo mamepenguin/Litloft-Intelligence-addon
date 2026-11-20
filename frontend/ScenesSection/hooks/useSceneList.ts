@@ -345,7 +345,12 @@ export function useSceneList({
   // first frame the reader sees is the placed one. A controller appearing is
   // read through a ref: re-running this for it would set following again.
   useLayoutEffect(() => {
-    if (!shown) return;
+    if (!shown) {
+      placedKeyRef.current = null;
+      pendingSettleRef.current = null;
+      setPlacedKey(null);
+      return;
+    }
     const geometry = measure();
     if (!geometry) return;
     if (placedKeyRef.current === resetKey) {
