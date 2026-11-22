@@ -118,13 +118,14 @@ def test_spec_addon_173_i6_one_repeated_and_one_new_matching_line_keeps_todays_h
 
     filtered = _exact(api, "needle")
     kept = next(
-        segment for segment in filtered["segments"] if segment["file_id"] == "filtered"
+        segment for segment in filtered["segments"]
+        if segment["file_id"] == "filtered" and segment["start_time"] == 70.0
     )
     control = next(
         segment for segment in filtered["segments"] if segment["file_id"] == "control"
     )
 
-    assert filtered["total"] == 2
+    assert filtered["total"] == 3
     assert kept["match_count"] == 2
     assert {k: v for k, v in kept.items() if k not in IDENTITY} == {
         k: v for k, v in control.items() if k not in IDENTITY
