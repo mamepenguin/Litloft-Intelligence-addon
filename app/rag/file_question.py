@@ -28,6 +28,7 @@ from app.config import settings
 from app.database import get_search_db_read, get_search_engine
 from app.document_sections import EPUB_MIME
 from app.frame_cache import extract_frame_to_cache, frame_cache_path, round_ms
+from app.frame_text_lines import frame_segments
 from app.rag.prompt import format_position
 from app.workers.embedder import embed_query
 from app.workers.video_visual_selection import load_selection_inputs, select_scenes
@@ -385,20 +386,23 @@ def load_material(
             ),
             {"fid": file_id},
         ).fetchall()
-        frame_starts = (
-            {
-                int(row[0]): row[1]
-                for row in session.execute(
-                    sql_text(
-                        "SELECT chunk_index, start_time FROM video_frame_texts "
-                        "WHERE file_id = :fid"
-                    ),
-                    {"fid": file_id},
-                ).fetchall()
-            }
+        frame_rows = (
+            session.execute(
+                sql_text(
+                    "SELECT chunk_index, start_time, end_time, text "
+                    "FROM video_frame_texts WHERE file_id = :fid"
+                ),
+                {"fid": file_id},
+            ).fetchall()
             if file_type == "video"
-            else {}
+            else []
         )
+        frame_starts = {int(row[0]): row[1] for row in frame_rows}
+        repeated_by_chunk = {
+            index: segment.repeated
+            for segment in frame_segments(frame_rows)
+            for index, _text in segment.chunks
+        }
 
     by_time = {
         (round(row[1], 3), round(row[2], 3)): row[0]
@@ -433,6 +437,11 @@ def load_material(
             continue
         index = _as_int(chunk_index)
         if file_type == "video" and index is not None and index in frame_starts:
+            text = _filter_frame_text(
+                text, repeated_by_chunk.get(index, frozenset()),
+            )
+            if text is None:
+                continue
             position = {"seconds": frame_starts[index]}
         else:
             position = _document_position(mime, page, section_titles)
@@ -1019,6 +1028,17 @@ def _cosine(left: np.ndarray, right: np.ndarray) -> float:
     if denominator == 0.0:
         return 0.0
     return float(np.dot(left, right)) / denominator
+
+
+def _filter_frame_text(text: str, repeated: frozenset[str]) -> str | None:
+    """``text`` without its parts that repeat, or ``None`` when none is left."""
+    parts = text.split("\n")
+    kept = [part for part in parts if part.strip() not in repeated]
+    if len(kept) == len(parts):
+        return text
+    if not any(part.strip() for part in kept):
+        return None
+    return "\n".join(kept)
 
 
 def _document_position(

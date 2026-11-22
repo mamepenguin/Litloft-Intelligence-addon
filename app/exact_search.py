@@ -16,6 +16,7 @@ from sqlalchemy import text as sql_text
 
 from app.database import get_search_db_read
 from app.document_sections import EPUB_MIME
+from app.frame_text_lines import frame_segments
 
 SOURCES = ("text", "transcript", "scene")
 SNIPPET_CONTEXT_CHARS = 80
@@ -78,21 +79,36 @@ _IN_DRIVE = "f.drive = :drive AND f.active = 1"
 
 def _frame_segments(
     db, keys: list[tuple[str, int]],
-) -> dict[tuple[str, int], tuple[float, float]]:
+) -> dict[tuple[str, int], tuple[float, float, frozenset[str]]]:
     if not keys:
         return {}
     file_ids = sorted({file_id for file_id, _ in keys})
     rows = db.execute(
         sql_text(
-            "SELECT file_id, chunk_index, start_time, end_time "
+            "SELECT file_id, chunk_index, start_time, end_time, text "
             "FROM video_frame_texts WHERE file_id IN :ids"
         ).bindparams(bindparam("ids", expanding=True)),
         {"ids": file_ids},
     ).fetchall()
-    return {
-        (row.file_id, int(row.chunk_index)): (row.start_time, row.end_time)
-        for row in rows
-    }
+    by_file: dict[str, list[Any]] = {}
+    for row in rows:
+        by_file.setdefault(row.file_id, []).append(row)
+    out: dict[tuple[str, int], tuple[float, float, frozenset[str]]] = {}
+    for file_id, file_rows in by_file.items():
+        for segment in frame_segments(file_rows):
+            for index, _text in segment.chunks:
+                out[(file_id, index)] = (
+                    segment.start, segment.end, segment.repeated,
+                )
+    return out
+
+
+def _matching_lines(text: str, needle: str) -> list[str]:
+    """The stripped lines of ``text`` that contain the folded ``needle``."""
+    return [
+        line for line in (part.strip() for part in text.split("\n"))
+        if line and needle in _ascii_lower(line)
+    ]
 
 
 def _text_hits(db, q: str, needle: str, drive: str) -> list[_Hit]:
@@ -125,6 +141,9 @@ def _text_hits(db, q: str, needle: str, drive: str) -> list[_Hit]:
         if r.file_type == "video":
             segment = video_segments.get((r.file_id, index))
             if segment is not None:
+                matching = _matching_lines(r.text, needle)
+                if matching and all(line in segment[2] for line in matching):
+                    continue
                 location = {
                     "page": page,
                     "start_time": segment[0],
