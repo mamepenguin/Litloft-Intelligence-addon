@@ -34,11 +34,6 @@
       "distilHint": "To keep just one passage, select it in the document and add it to the quotation basket."
     },
     "pickup": {
-      "heading": "Pickup",
-      "description": "Videos you have not watched yet, drawn from what you have been watching.",
-      "empty": "Nothing to suggest yet.",
-      "loading": "Loading…",
-      "retry": "Try again",
       "notInterested": "Not interested",
       "notInterestedToast": "Removed from your picks"
     },
