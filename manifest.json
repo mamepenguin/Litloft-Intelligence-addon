@@ -104,13 +104,6 @@
         "priority": 10
       }
     ],
-    "drive-home-sections": [
-      {
-        "id": "pickup",
-        "label": "Pickup",
-        "priority": 5
-      }
-    ],
     "video-discover-recommended": [
       {
         "id": "pickup",
