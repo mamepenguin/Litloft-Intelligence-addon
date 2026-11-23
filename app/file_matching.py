@@ -105,7 +105,7 @@ def _normalise_comparisons(
     return comparisons
 
 KINDS = frozenset(
-    {"video", "image", "audio", "document", "archive", "other", "text", "pdf"}
+    {"video", "image", "audio", "document", "archive", "other", "text", "pdf", "epub"}
 )
 _KIND_ALIASES = {"markdown": "text"}
 
@@ -118,6 +118,86 @@ class FilterUnavailable(RuntimeError):
     """The core did not answer ``/files/matching`` with a list of file ids."""
 
 
+def _normalise_tags(values: list[str], label: str) -> list[str]:
+    tags: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        tag = raw.strip()
+        if not tag:
+            continue
+        if len(tag) > TAG_MAX_LENGTH:
+            raise ValueError(
+                f"{label}: a tag is at most {TAG_MAX_LENGTH} characters"
+            )
+        key = tag.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        tags.append(tag)
+    if len(tags) > TAG_MAX_COUNT:
+        raise ValueError(f"{label}: at most {TAG_MAX_COUNT} tags")
+    return tags
+
+
+def _normalise_kinds(values: list[str], label: str) -> list[str]:
+    kinds: list[str] = []
+    seen: set[str] = set()
+    for raw_kind in values:
+        kind = _KIND_ALIASES.get(raw_kind, raw_kind)
+        if kind not in KINDS:
+            raise ValueError(f"{label}: unknown kind: {raw_kind}")
+        if kind in seen:
+            continue
+        seen.add(kind)
+        kinds.append(kind)
+    if len(kinds) > KIND_MAX_COUNT:
+        raise ValueError(f"{label}: at most {KIND_MAX_COUNT} kinds")
+    return kinds
+
+
+def _normalise_folders(values: list[str], label: str) -> list[str]:
+    folders: list[str] = []
+    for raw_folder in values:
+        folder = unicodedata.normalize("NFC", raw_folder).strip("/")
+        if (
+            not folder
+            or "\x00" in folder
+            or any(segment in ("", ".", "..") for segment in folder.split("/"))
+        ):
+            raise ValueError(f"{label}: invalid folder: {raw_folder!r}")
+        if len(folder) > FOLDER_MAX_LENGTH:
+            raise ValueError(
+                f"{label}: a folder is at most {FOLDER_MAX_LENGTH} characters"
+            )
+        if folder not in folders:
+            folders.append(folder)
+    if len(folders) > FOLDER_MAX_COUNT:
+        raise ValueError(f"{label}: at most {FOLDER_MAX_COUNT} folders")
+    return folders
+
+
+def _normalise_collections(values: list[str], label: str) -> list[str]:
+    collections: list[str] = []
+    seen: set[str] = set()
+    for raw_collection in values:
+        name = raw_collection.strip()
+        if not name:
+            continue
+        if len(name) > COLLECTION_MAX_LENGTH:
+            raise ValueError(
+                f"{label}: a collection is at most "
+                f"{COLLECTION_MAX_LENGTH} characters"
+            )
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        collections.append(name)
+    if len(collections) > COLLECTION_MAX_COUNT:
+        raise ValueError(f"{label}: at most {COLLECTION_MAX_COUNT} collections")
+    return collections
+
+
 def apply_filter_normalisation(model: BaseModel) -> None:
     """Normalise the four condition lists on ``model`` in place.
 
@@ -127,73 +207,10 @@ def apply_filter_normalisation(model: BaseModel) -> None:
     ``markdown`` alias, folders are NFC-normalised and trimmed of ``/``, then
     the caps apply. Raises ``ValueError`` for a value either model rejects.
     """
-    tags: list[str] = []
-    seen: set[str] = set()
-    for raw in model.tags:
-        tag = raw.strip()
-        if not tag:
-            continue
-        if len(tag) > TAG_MAX_LENGTH:
-            raise ValueError(f"a tag is at most {TAG_MAX_LENGTH} characters")
-        key = tag.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        tags.append(tag)
-    if len(tags) > TAG_MAX_COUNT:
-        raise ValueError(f"at most {TAG_MAX_COUNT} tags")
-
-    kinds: list[str] = []
-    seen_kinds: set[str] = set()
-    for raw_kind in model.kinds:
-        kind = _KIND_ALIASES.get(raw_kind, raw_kind)
-        if kind not in KINDS:
-            raise ValueError(f"unknown kind: {raw_kind}")
-        if kind in seen_kinds:
-            continue
-        seen_kinds.add(kind)
-        kinds.append(kind)
-    if len(kinds) > KIND_MAX_COUNT:
-        raise ValueError(f"at most {KIND_MAX_COUNT} kinds")
-
-    folders: list[str] = []
-    for raw_folder in model.folders:
-        folder = unicodedata.normalize("NFC", raw_folder).strip("/")
-        if (
-            not folder
-            or "\x00" in folder
-            or any(segment in ("", ".", "..") for segment in folder.split("/"))
-        ):
-            raise ValueError(f"invalid folder: {raw_folder!r}")
-        if len(folder) > FOLDER_MAX_LENGTH:
-            raise ValueError(f"a folder is at most {FOLDER_MAX_LENGTH} characters")
-        if folder not in folders:
-            folders.append(folder)
-    if len(folders) > FOLDER_MAX_COUNT:
-        raise ValueError(f"at most {FOLDER_MAX_COUNT} folders")
-
-    collections: list[str] = []
-    seen_collections: set[str] = set()
-    for raw_collection in model.collections:
-        name = raw_collection.strip()
-        if not name:
-            continue
-        if len(name) > COLLECTION_MAX_LENGTH:
-            raise ValueError(
-                f"a collection is at most {COLLECTION_MAX_LENGTH} characters"
-            )
-        key = name.lower()
-        if key in seen_collections:
-            continue
-        seen_collections.add(key)
-        collections.append(name)
-    if len(collections) > COLLECTION_MAX_COUNT:
-        raise ValueError(f"at most {COLLECTION_MAX_COUNT} collections")
-
-    model.tags = tags
-    model.kinds = kinds
-    model.folders = folders
-    model.collections = collections
+    model.tags = _normalise_tags(model.tags, "tags")
+    model.kinds = _normalise_kinds(model.kinds, "kinds")
+    model.folders = _normalise_folders(model.folders, "folders")
+    model.collections = _normalise_collections(model.collections, "collections")
 
 
 class SearchFilter(BaseModel):
@@ -202,7 +219,8 @@ class SearchFilter(BaseModel):
     Normalisation matches core's: a blank tag is dropped, tags are deduplicated
     case-insensitively, kinds after the ``markdown`` alias, folders are NFC-
     normalised and trimmed of ``/``, collection names are trimmed and deduped
-    case-insensitively, then the caps apply.
+    case-insensitively, then the caps apply. Each ``exclude_`` list follows its
+    positive counterpart's rule and holds its own cap.
     """
 
     # A field the core does not know must fail here too; otherwise this addon
@@ -218,10 +236,24 @@ class SearchFilter(BaseModel):
     sizes: list[str] = Field(default_factory=list)
     durations: list[str] = Field(default_factory=list)
     modified: list[str] = Field(default_factory=list)
+    exclude_tags: list[str] = Field(default_factory=list)
+    exclude_kinds: list[str] = Field(default_factory=list)
+    exclude_folders: list[str] = Field(default_factory=list)
+    exclude_collections: list[str] = Field(default_factory=list)
+    has_tag: StrictBool | None = None
+    has_collection: StrictBool | None = None
 
     @model_validator(mode="after")
     def _normalise(self) -> "SearchFilter":
         apply_filter_normalisation(self)
+        self.exclude_tags = _normalise_tags(self.exclude_tags, "exclude_tags")
+        self.exclude_kinds = _normalise_kinds(self.exclude_kinds, "exclude_kinds")
+        self.exclude_folders = _normalise_folders(
+            self.exclude_folders, "exclude_folders"
+        )
+        self.exclude_collections = _normalise_collections(
+            self.exclude_collections, "exclude_collections"
+        )
         self.sizes = _normalise_comparisons(self.sizes, _parse_size, "sizes")
         self.durations = _normalise_comparisons(
             self.durations, _parse_duration, "durations"
@@ -252,6 +284,16 @@ def _internal_api_base_url() -> str:
     )
 
 
+_OMITTED_WHEN_UNSET = (
+    "exclude_tags",
+    "exclude_kinds",
+    "exclude_folders",
+    "exclude_collections",
+    "has_tag",
+    "has_collection",
+)
+
+
 async def fetch_matching_file_ids(drive: str, search_filter: SearchFilter) -> list[str]:
     """Ask the core for ``drive``'s active file ids that satisfy ``search_filter``.
 
@@ -261,6 +303,12 @@ async def fetch_matching_file_ids(drive: str, search_filter: SearchFilter) -> li
     """
     url = f"{_internal_api_base_url().rstrip('/')}{_MATCHING_PATH}"
     payload = {"drive": drive, **search_filter.model_dump()}
+    # Sent only when set, unlike the positive keys: the core's defaults say the
+    # same as an empty list or a null flag, and an unset key must not turn a
+    # filter into a different request.
+    for key in _OMITTED_WHEN_UNSET:
+        if payload[key] is None or payload[key] == []:
+            del payload[key]
 
     try:
         async with httpx.AsyncClient(

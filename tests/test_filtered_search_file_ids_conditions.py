@@ -35,6 +35,12 @@ FILTER = {
     "durations": ["lte:60"],
     "favorite": True,
     "liked": False,
+    "exclude_tags": ["draft"],
+    "exclude_kinds": ["pdf"],
+    "exclude_folders": ["Notes/old"],
+    "exclude_collections": ["Archive"],
+    "has_tag": True,
+    "has_collection": False,
 }
 
 
