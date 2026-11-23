@@ -598,7 +598,7 @@ def test_spec_addon_136_failure_2_find_treats_valid_json_of_another_shape_as_no_
     _video(seed)
     _segment(seed, FIND_ID, 0, 10.0, 20.0, LINES)
     single = [{"text": "warehouse moved to Osaka", "quad": Q1}]
-    _segment(seed, FIND_ID, 1, 30.0, 40.0, None, chunk_base=1,
+    _segment(seed, FIND_ID, 1, 90.0, 100.0, None, chunk_base=1,
              chunks=[_joined(single)], lines_json=lines_json)
 
     caplog.set_level(logging.WARNING)
@@ -606,7 +606,7 @@ def test_spec_addon_136_failure_2_find_treats_valid_json_of_another_shape_as_no_
 
     rows = {row["start"]: row for row in body["rows"]}
     assert rows[10.0]["boxes"] == [Q1]
-    assert "boxes" not in rows[30.0]
-    assert "frame_size" not in rows[30.0]
+    assert "boxes" not in rows[90.0]
+    assert "frame_size" not in rows[90.0]
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert [w for w in warnings if FIND_ID in w] == []

@@ -23,12 +23,12 @@ from app.exact_search import (
     _int_or_none,
     _snippet,
 )
+from app.frame_text_lines import _merge_chunks, frame_segments, line_at
 from app.search import FrameLineReader, _usable_frame_lines, text_content_kind
 
 logger = logging.getLogger(__name__)
 
 ROW_CAP = 2000
-_OVERLAP_MIN = 20
 #: ``ContentExtractor.chunk_text``'s default, which Office extraction and
 #: picture OCR use because they pass no overlap.
 _CHUNK_TEXT_OVERLAP = 200
@@ -61,28 +61,6 @@ def _replay_limit(mime_type: str, file_type: str) -> int:
     if file_type in ("image", "video") or mime_type in _OFFICE_MIMES:
         return _CHUNK_TEXT_OVERLAP
     return settings.indexing.text_chunking.overlap
-
-
-def _overlap(text: str, chunk: str, limit: int) -> int:
-    limit = min(limit, len(text), len(chunk))
-    for size in range(limit, _OVERLAP_MIN - 1, -1):
-        if text.endswith(chunk[:size]):
-            return size
-    return 0
-
-
-def _merge_chunks(chunks: list[str], limit: int) -> str:
-    text = ""
-    for chunk in chunks:
-        if not text:
-            text = chunk
-            continue
-        overlap = _overlap(text, chunk, limit)
-        if overlap:
-            text += chunk[overlap:]
-        else:
-            text += "\n" + chunk
-    return text
 
 
 def _positions(text: str, needle: str):
@@ -135,26 +113,28 @@ def _frame_occurrences(
         ),
         {"file_id": file_id},
     ).fetchall()
-    segments: dict[tuple[float, float], list[str]] = {}
-    for row in rows:
-        segments.setdefault((row.start_time, row.end_time), []).append(row.text)
     stored = FrameLineReader().segments(file_id) or {}
     out: list[tuple[tuple, dict[str, Any]]] = []
-    for (start, end), chunks in segments.items():
-        text = _merge_chunks(chunks, _CHUNK_TEXT_OVERLAP)
-        segment = stored.get((start, end))
+    for segment in frame_segments(rows):
+        start, end = segment.start, segment.end
+        text = segment.text
+        chunks = [chunk for _index, chunk in segment.chunks]
+        stored_segment = stored.get((start, end))
         lines = (
-            _usable_frame_lines(segment.lines, chunks, merged=text)
-            if segment is not None else None
+            _usable_frame_lines(stored_segment.lines, chunks, merged=text)
+            if stored_segment is not None else None
         )
         frame_size = (
-            [segment.width, segment.height]
+            [stored_segment.width, stored_segment.height]
             if lines is not None
-            and segment.width is not None
-            and segment.height is not None
+            and stored_segment.width is not None
+            and stored_segment.height is not None
             else None
         )
         for at, ordinal in _positions(text, needle):
+            line = line_at(text, at)
+            if line is not None and line in segment.repeated:
+                continue
             row = _row(
                 text, at, needle, ordinal,
                 kind="scene", start=start, end=end,
