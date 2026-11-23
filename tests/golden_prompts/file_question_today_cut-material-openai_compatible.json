@@ -1,0 +1,524 @@
+[
+ {
+  "max_tokens": 16384,
+  "messages": [
+   {
+    "content": "You answer a question about a single file, using the numbered passages below, the numbered passages get_transcript returns, and the numbered frames that follow the question.\n\nRules:\n- The passages below are part of the file's text, the parts closest to the question; the frames that follow the question are moments of the video, in time order after the passages.\n- Each passage and each frame is introduced by its number in square brackets, e.g. [1].\n- Cite the passages and the frames your answer uses inline as [n], right after the sentence they support.\n- Cite only numbers that appear among the passages and frames; never name a number you were not given.\n- Where a passage and a frame differ, take exact characters (numbers, names, labels) from the passage.\n- Take exact characters from a frame when no passage has them.\n- If the frames you have do not show what the question asks about, you must call get_frames before answering, at the times where the passages or the contents mention it. Never say that something is not shown unless you have called get_frames. If it is still not shown after that, say so plainly instead of guessing.\n- If the answer may be in a part of the video the passages do not include, you must call get_transcript for that part before answering, using the times the contents give. Never say that something is not said in the video unless you have called get_transcript for the part where it would be.\n\n- Answer in short Markdown, with the most useful point first. Use headings, lists, tables and **bold** when they make it clearer.\n- Do not use raw HTML. Do not use code fences unless the question is about code.\n\n\nMore frames and text:\n- The frames you are given are a sample of the video, not all of it, and the passages are part of its text, not all of it.\n- The tool get_frames returns frames of this video at the times you give it: up to 4 times per call.\n- The tool get_transcript returns what is said and shown in this video between two times, up to 3,000 characters per call; a part you already have is named by its number instead.\n- You may make at most 3 calls of get_frames and get_transcript together for this question.\n- Call get_frames when the answer depends on what is shown at moments the frames you have do not show, and get_transcript when it may be said or shown in a part the passages do not include.\n- Never ask the viewer for times; choose them yourself from the times the prompt gives you.\n- The frames and passages these tools return are numbered and cited exactly as the ones you already have: [n], right after the sentence they support.",
+    "role": "system"
+   },
+   {
+    "content": [
+     {
+      "text": "Question: QUESTION-MARKER what does it show\n\n\n\nPassages from the file:\n[1]\nCUT-ROW-0.....................\n\n\nDuration of the video: 1:20.\n\n\n\nThe frames follow the question, each introduced by its number and time.\n",
+      "type": "text"
+     },
+     {
+      "text": "[2] 0:05",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANTAwMA=="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[3] 0:15",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVAMTUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[4] 0:25",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVAMjUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[5] 0:35",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVAMzUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[6] 0:45",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANDUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[7] 0:55",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANTUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[8] 1:05",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANjUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[9] 1:15",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANzUwMDA="
+      },
+      "type": "image_url"
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "model": "vision-model",
+  "stream": true,
+  "temperature": 0.0,
+  "tool_choice": "auto",
+  "tools": [
+   {
+    "function": {
+     "description": "Return frames of this video at the times you choose, to see what is on screen there.",
+     "name": "get_frames",
+     "parameters": {
+      "properties": {
+       "times": {
+        "description": "Times in the video, as seconds (83.5) or m:ss (\"1:23\"); at most 4.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "times"
+      ],
+      "type": "object"
+     }
+    },
+    "type": "function"
+   },
+   {
+    "function": {
+     "description": "Return what is said and shown in this video between two times, apart from what you already have.",
+     "name": "get_transcript",
+     "parameters": {
+      "properties": {
+       "end": {
+        "description": "Times in the video, as seconds (83.5) or m:ss (\"1:23\")",
+        "type": "string"
+       },
+       "start": {
+        "description": "Times in the video, as seconds (83.5) or m:ss (\"1:23\")",
+        "type": "string"
+       }
+      },
+      "required": [
+       "start",
+       "end"
+      ],
+      "type": "object"
+     }
+    },
+    "type": "function"
+   }
+  ]
+ },
+ {
+  "max_tokens": 16384,
+  "messages": [
+   {
+    "content": "You answer a question about a single file, using the numbered passages below, the numbered passages get_transcript returns, and the numbered frames that follow the question.\n\nRules:\n- The passages below are part of the file's text, the parts closest to the question; the frames that follow the question are moments of the video, in time order after the passages.\n- Each passage and each frame is introduced by its number in square brackets, e.g. [1].\n- Cite the passages and the frames your answer uses inline as [n], right after the sentence they support.\n- Cite only numbers that appear among the passages and frames; never name a number you were not given.\n- Where a passage and a frame differ, take exact characters (numbers, names, labels) from the passage.\n- Take exact characters from a frame when no passage has them.\n- If the frames you have do not show what the question asks about, you must call get_frames before answering, at the times where the passages or the contents mention it. Never say that something is not shown unless you have called get_frames. If it is still not shown after that, say so plainly instead of guessing.\n- If the answer may be in a part of the video the passages do not include, you must call get_transcript for that part before answering, using the times the contents give. Never say that something is not said in the video unless you have called get_transcript for the part where it would be.\n\n- Answer in short Markdown, with the most useful point first. Use headings, lists, tables and **bold** when they make it clearer.\n- Do not use raw HTML. Do not use code fences unless the question is about code.\n\n\nMore frames and text:\n- The frames you are given are a sample of the video, not all of it, and the passages are part of its text, not all of it.\n- The tool get_frames returns frames of this video at the times you give it: up to 4 times per call.\n- The tool get_transcript returns what is said and shown in this video between two times, up to 3,000 characters per call; a part you already have is named by its number instead.\n- You may make at most 3 calls of get_frames and get_transcript together for this question.\n- Call get_frames when the answer depends on what is shown at moments the frames you have do not show, and get_transcript when it may be said or shown in a part the passages do not include.\n- Never ask the viewer for times; choose them yourself from the times the prompt gives you.\n- The frames and passages these tools return are numbered and cited exactly as the ones you already have: [n], right after the sentence they support.",
+    "role": "system"
+   },
+   {
+    "content": [
+     {
+      "text": "Question: QUESTION-MARKER what does it show\n\n\n\nPassages from the file:\n[1]\nCUT-ROW-0.....................\n\n\nDuration of the video: 1:20.\n\n\n\nThe frames follow the question, each introduced by its number and time.\n",
+      "type": "text"
+     },
+     {
+      "text": "[2] 0:05",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANTAwMA=="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[3] 0:15",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVAMTUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[4] 0:25",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVAMjUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[5] 0:35",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVAMzUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[6] 0:45",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANDUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[7] 0:55",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANTUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[8] 1:05",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANjUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[9] 1:15",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANzUwMDA="
+      },
+      "type": "image_url"
+     }
+    ],
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{\"start\": 20.0, \"end\": 25.0}",
+       "name": "get_transcript"
+      },
+      "id": "call_1",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "[10]\nCUT-ROW-1.....................",
+    "role": "tool",
+    "tool_call_id": "call_1"
+   }
+  ],
+  "model": "vision-model",
+  "stream": true,
+  "temperature": 0.0,
+  "tool_choice": "auto",
+  "tools": [
+   {
+    "function": {
+     "description": "Return frames of this video at the times you choose, to see what is on screen there.",
+     "name": "get_frames",
+     "parameters": {
+      "properties": {
+       "times": {
+        "description": "Times in the video, as seconds (83.5) or m:ss (\"1:23\"); at most 4.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "times"
+      ],
+      "type": "object"
+     }
+    },
+    "type": "function"
+   },
+   {
+    "function": {
+     "description": "Return what is said and shown in this video between two times, apart from what you already have.",
+     "name": "get_transcript",
+     "parameters": {
+      "properties": {
+       "end": {
+        "description": "Times in the video, as seconds (83.5) or m:ss (\"1:23\")",
+        "type": "string"
+       },
+       "start": {
+        "description": "Times in the video, as seconds (83.5) or m:ss (\"1:23\")",
+        "type": "string"
+       }
+      },
+      "required": [
+       "start",
+       "end"
+      ],
+      "type": "object"
+     }
+    },
+    "type": "function"
+   }
+  ]
+ },
+ {
+  "max_tokens": 16384,
+  "messages": [
+   {
+    "content": "You answer a question about a single file, using the numbered passages below, the numbered passages get_transcript returns, and the numbered frames that follow the question.\n\nRules:\n- The passages below are part of the file's text, the parts closest to the question; the frames that follow the question are moments of the video, in time order after the passages.\n- Each passage and each frame is introduced by its number in square brackets, e.g. [1].\n- Cite the passages and the frames your answer uses inline as [n], right after the sentence they support.\n- Cite only numbers that appear among the passages and frames; never name a number you were not given.\n- Where a passage and a frame differ, take exact characters (numbers, names, labels) from the passage.\n- Take exact characters from a frame when no passage has them.\n- If the frames you have do not show what the question asks about, you must call get_frames before answering, at the times where the passages or the contents mention it. Never say that something is not shown unless you have called get_frames. If it is still not shown after that, say so plainly instead of guessing.\n- If the answer may be in a part of the video the passages do not include, you must call get_transcript for that part before answering, using the times the contents give. Never say that something is not said in the video unless you have called get_transcript for the part where it would be.\n\n- Answer in short Markdown, with the most useful point first. Use headings, lists, tables and **bold** when they make it clearer.\n- Do not use raw HTML. Do not use code fences unless the question is about code.\n\n\nMore frames and text:\n- The frames you are given are a sample of the video, not all of it, and the passages are part of its text, not all of it.\n- The tool get_frames returns frames of this video at the times you give it: up to 4 times per call.\n- The tool get_transcript returns what is said and shown in this video between two times, up to 3,000 characters per call; a part you already have is named by its number instead.\n- You may make at most 3 calls of get_frames and get_transcript together for this question.\n- Call get_frames when the answer depends on what is shown at moments the frames you have do not show, and get_transcript when it may be said or shown in a part the passages do not include.\n- Never ask the viewer for times; choose them yourself from the times the prompt gives you.\n- The frames and passages these tools return are numbered and cited exactly as the ones you already have: [n], right after the sentence they support.",
+    "role": "system"
+   },
+   {
+    "content": [
+     {
+      "text": "Question: QUESTION-MARKER what does it show\n\n\n\nPassages from the file:\n[1]\nCUT-ROW-0.....................\n\n\nDuration of the video: 1:20.\n\n\n\nThe frames follow the question, each introduced by its number and time.\n",
+      "type": "text"
+     },
+     {
+      "text": "[2] 0:05",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANTAwMA=="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[3] 0:15",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVAMTUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[4] 0:25",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVAMjUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[5] 0:35",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVAMzUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[6] 0:45",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANDUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[7] 0:55",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANTUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[8] 1:05",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANjUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[9] 1:15",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANzUwMDA="
+      },
+      "type": "image_url"
+     }
+    ],
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{\"start\": 20.0, \"end\": 25.0}",
+       "name": "get_transcript"
+      },
+      "id": "call_1",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "[10]\nCUT-ROW-1.....................",
+    "role": "tool",
+    "tool_call_id": "call_1"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{\"times\": [12.0]}",
+       "name": "get_frames"
+      },
+      "id": "call_2",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "1 frame follow.",
+    "role": "tool",
+    "tool_call_id": "call_2"
+   },
+   {
+    "content": [
+     {
+      "text": "[11] 0:12",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVAMTIwMDA="
+      },
+      "type": "image_url"
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "model": "vision-model",
+  "stream": true,
+  "temperature": 0.0,
+  "tool_choice": "auto",
+  "tools": [
+   {
+    "function": {
+     "description": "Return frames of this video at the times you choose, to see what is on screen there.",
+     "name": "get_frames",
+     "parameters": {
+      "properties": {
+       "times": {
+        "description": "Times in the video, as seconds (83.5) or m:ss (\"1:23\"); at most 4.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "times"
+      ],
+      "type": "object"
+     }
+    },
+    "type": "function"
+   },
+   {
+    "function": {
+     "description": "Return what is said and shown in this video between two times, apart from what you already have.",
+     "name": "get_transcript",
+     "parameters": {
+      "properties": {
+       "end": {
+        "description": "Times in the video, as seconds (83.5) or m:ss (\"1:23\")",
+        "type": "string"
+       },
+       "start": {
+        "description": "Times in the video, as seconds (83.5) or m:ss (\"1:23\")",
+        "type": "string"
+       }
+      },
+      "required": [
+       "start",
+       "end"
+      ],
+      "type": "object"
+     }
+    },
+    "type": "function"
+   }
+  ]
+ }
+]

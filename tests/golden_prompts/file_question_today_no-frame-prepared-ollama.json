@@ -1,0 +1,21 @@
+[
+ {
+  "messages": [
+   {
+    "content": "You answer a question about a single file, using only the numbered passages below.\n\nRules:\n- Each passage is introduced by its number in square brackets, e.g. [1].\n- Cite the passages your answer uses inline as [n], right after the sentence they support.\n- Cite only numbers that appear among the passages; never invent one.\n- If the passages do not contain the answer, say so plainly instead of guessing.\n\n- Answer in short Markdown, with the most useful point first. Use headings, lists, tables and **bold** when they make it clearer.\n- Do not use raw HTML. Do not use code fences unless the question is about code.\n",
+    "role": "system"
+   },
+   {
+    "content": "Question: QUESTION-MARKER what does it show\n\n\n\nPassages from the file:\n[1]\nSPOKEN-PASSAGE-ALPHA....................\n\n",
+    "role": "user"
+   }
+  ],
+  "model": "text-model",
+  "options": {
+   "num_predict": 2048,
+   "temperature": 0.0
+  },
+  "stream": true,
+  "think": false
+ }
+]

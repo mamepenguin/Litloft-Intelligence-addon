@@ -14,6 +14,7 @@ from pathlib import Path
 
 from app.routers import rag as rag_router
 from app.workers.video_visual_selection import SelectedFrame, Selection, SelectionInputs
+from tests.file_context_rules import ANSWER_LINE, S179, S181A, S181B, block
 from tests.file_question_doubles import chunk, toward
 from tests.file_question_vision_doubles import Reply, ToolCall, Wire, vision_client
 from tests.search_endpoint_db import patch_everywhere
@@ -48,10 +49,32 @@ def todays_request(provider: str, kind: str) -> dict:
     """The request the frames path sent for ``seed_video`` before tools existed.
 
     Recorded from the addon at 895d334 with ``seed_video(kind)``, ``EVEN_80``
-    frames and ``QUESTION``.
+    frames and ``QUESTION``, then given the file block and rules of
+    SPEC-ADDON-179/181. ``drive_mounts`` is empty in these tests, so the block
+    has no ``Folder:`` line.
     """
     path = GOLDEN_DIR / f"frame_request_today_{provider}_{kind}.json"
-    return json.loads(path.read_text())
+    return with_file_context(
+        json.loads(path.read_text()),
+        block(file=f"{VIDEO}.bin", type_="video/mp4"),
+    )
+
+
+def with_file_context(request: dict, file_block: str) -> dict:
+    """``request`` with ``file_block`` before the question and S179/S181a/S181b added."""
+    system = request["messages"][0]
+    assert system["role"] == "system"
+    system["content"] = (
+        system["content"]
+        .replace("\nRules:\n", f"\nRules:\n{S179}\n", 1)
+        .replace(f"\n{ANSWER_LINE}", f"\n{S181A}\n{S181B}\n{ANSWER_LINE}", 1)
+    )
+    user = request["messages"][1]
+    if isinstance(user["content"], str):
+        user["content"] = file_block + user["content"]
+    else:
+        user["content"][0]["text"] = file_block + user["content"][0]["text"]
+    return request
 
 
 def seed_video(db, tmp_path, kind: str, *, duration: float | None = 80.0) -> int:

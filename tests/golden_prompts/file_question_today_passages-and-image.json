@@ -1,0 +1,29 @@
+[
+ {
+  "max_tokens": 2048,
+  "messages": [
+   {
+    "content": "You answer a question about a single file, using the numbered passages below and the image attached to this message.\n\nRules:\n- Each passage is introduced by its number in square brackets, e.g. [1].\n- Cite the passages your answer uses inline as [n], right after the sentence they support.\n- Cite only numbers that appear among the passages; never invent one.\n- If the passages do not contain the answer, say so plainly instead of guessing.\n- An image of the file is attached. Where the image and the passages differ, take exact characters from the passages.\n- Answer in short Markdown, with the most useful point first. Use headings, lists, tables and **bold** when they make it clearer.\n- Do not use raw HTML. Do not use code fences unless the question is about code.\n",
+    "role": "system"
+   },
+   {
+    "content": [
+     {
+      "text": "Question: QUESTION-MARKER what does it show\n\n\nAn image of the file is attached to this message.\n\n\nPassages from the file:\n[1]\nPokemon: Since 1996.....................\n\n",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/png;base64,UElDVFVSRS1CWVRFUy1NQVJLRVI="
+      },
+      "type": "image_url"
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "model": "vision-model",
+  "stream": true,
+  "temperature": 0.0
+ }
+]

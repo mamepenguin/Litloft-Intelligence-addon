@@ -1,0 +1,229 @@
+[
+ {
+  "max_tokens": 16384,
+  "messages": [
+   {
+    "content": "You answer a question about a single file, using the numbered frames that follow the question.\n\nRules:\n- The frames that follow the question are the only moments of the video you see.\n- Each frame is introduced by its number in square brackets, e.g. [1], followed by the time in the video it shows.\n- Cite the frames your answer uses inline as [n], right after the sentence they support.\n- Cite only numbers that appear among the frames; never name a number you were not given.\n- If the frames you have do not show what the question asks about, you must call get_frames before answering, at the times where the contents mention it. Never say that something is not shown unless you have called get_frames. If it is still not shown after that, say so plainly instead of guessing.\n- Take exact characters (numbers, names, labels) from the frames.\n\n- Answer in short Markdown, with the most useful point first. Use headings, lists, tables and **bold** when they make it clearer.\n- Do not use raw HTML. Do not use code fences unless the question is about code.\n\n\nMore frames:\n- The frames you are given are a sample of the video, not all of it.\n- The tool get_frames returns frames of this video at the times you give it: up to 4 times per call, and at most 3 calls for this question.\n- Call get_frames when the answer depends on what is shown at moments the frames you have do not show.\n- Never ask the viewer for times; choose them yourself from the times the prompt gives you.\n- The frames it returns are numbered and cited exactly as the frames you already have: [n], right after the sentence they support.\n",
+    "role": "system"
+   },
+   {
+    "content": [
+     {
+      "text": "Question: QUESTION-MARKER what does it show\n\n\n\n\nDuration of the video: 1:20.\n\n\n\nThe frames follow the question, each introduced by its number and time.\n",
+      "type": "text"
+     },
+     {
+      "text": "[1] 0:05",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANTAwMA=="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[2] 0:15",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVAMTUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[3] 0:25",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVAMjUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[4] 0:35",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVAMzUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[5] 0:45",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANDUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[6] 0:55",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANTUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[7] 1:05",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANjUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[8] 1:15",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANzUwMDA="
+      },
+      "type": "image_url"
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "model": "vision-model",
+  "stream": true,
+  "temperature": 0.0,
+  "tool_choice": "auto",
+  "tools": [
+   {
+    "function": {
+     "description": "Return frames of this video at the times you choose, to see what is on screen there.",
+     "name": "get_frames",
+     "parameters": {
+      "properties": {
+       "times": {
+        "description": "Times in the video, as seconds (83.5) or m:ss (\"1:23\"); at most 4.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "times"
+      ],
+      "type": "object"
+     }
+    },
+    "type": "function"
+   }
+  ]
+ },
+ {
+  "max_tokens": 2048,
+  "messages": [
+   {
+    "content": "You answer a question about a single file, using the numbered frames that follow the question.\n\nRules:\n- The frames that follow the question are the only moments of the video you see.\n- Each frame is introduced by its number in square brackets, e.g. [1], followed by the time in the video it shows.\n- Cite the frames your answer uses inline as [n], right after the sentence they support.\n- Cite only numbers that appear among the frames; never name a number you were not given.\n- If the frames do not show the answer, say so plainly instead of guessing.\n- Take exact characters (numbers, names, labels) from the frames.\n\n- Answer in short Markdown, with the most useful point first. Use headings, lists, tables and **bold** when they make it clearer.\n- Do not use raw HTML. Do not use code fences unless the question is about code.\n",
+    "role": "system"
+   },
+   {
+    "content": [
+     {
+      "text": "Question: QUESTION-MARKER what does it show\n\n\n\n\nThe frames follow the question, each introduced by its number and time.\n",
+      "type": "text"
+     },
+     {
+      "text": "[1] 0:05",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANTAwMA=="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[2] 0:15",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVAMTUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[3] 0:25",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVAMjUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[4] 0:35",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVAMzUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[5] 0:45",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANDUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[6] 0:55",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANTUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[7] 1:05",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANjUwMDA="
+      },
+      "type": "image_url"
+     },
+     {
+      "text": "[8] 1:15",
+      "type": "text"
+     },
+     {
+      "image_url": {
+       "url": "data:image/webp;base64,RlJBTUVANzUwMDA="
+      },
+      "type": "image_url"
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "model": "vision-model",
+  "stream": true,
+  "temperature": 0.0
+ }
+]

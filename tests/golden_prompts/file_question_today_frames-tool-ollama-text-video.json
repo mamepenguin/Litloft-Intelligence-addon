@@ -1,0 +1,536 @@
+[
+ {
+  "messages": [
+   {
+    "content": "You answer a question about a single file, using the numbered passages below and the numbered frames that follow the question.\n\nRules:\n- The passages below are the file's text; the frames that follow the question are moments of the video, in time order after the passages.\n- Each passage and each frame is introduced by its number in square brackets, e.g. [1].\n- Cite the passages and the frames your answer uses inline as [n], right after the sentence they support.\n- Cite only numbers that appear among the passages and frames; never name a number you were not given.\n- Where a passage and a frame differ, take exact characters (numbers, names, labels) from the passage.\n- Take exact characters from a frame when no passage has them.\n- If the frames you have do not show what the question asks about, you must call get_frames before answering, at the times where the passages or the contents mention it. Never say that something is not shown unless you have called get_frames. If it is still not shown after that, say so plainly instead of guessing.\n\n- Answer in short Markdown, with the most useful point first. Use headings, lists, tables and **bold** when they make it clearer.\n- Do not use raw HTML. Do not use code fences unless the question is about code.\n\n\nMore frames:\n- The frames you are given are a sample of the video, not all of it.\n- The tool get_frames returns frames of this video at the times you give it: up to 4 times per call, and at most 3 calls for this question.\n- Call get_frames when the answer depends on what is shown at moments the frames you have do not show.\n- Never ask the viewer for times; choose them yourself from the times the prompt gives you.\n- The frames it returns are numbered and cited exactly as the frames you already have: [n], right after the sentence they support.\n",
+    "role": "system"
+   },
+   {
+    "content": "Question: QUESTION-MARKER what does it show\n\n\n\nPassages from the file:\n[1]\nSPOKEN-PASSAGE-ALPHA....................\n\n\nDuration of the video: 1:20.\n\n\n\nThe frames follow the question, each introduced by its number and time.\n",
+    "role": "user"
+   },
+   {
+    "content": "[2] 0:05",
+    "images": [
+     "RlJBTUVANTAwMA=="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[3] 0:15",
+    "images": [
+     "RlJBTUVAMTUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[4] 0:25",
+    "images": [
+     "RlJBTUVAMjUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[5] 0:35",
+    "images": [
+     "RlJBTUVAMzUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[6] 0:45",
+    "images": [
+     "RlJBTUVANDUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[7] 0:55",
+    "images": [
+     "RlJBTUVANTUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[8] 1:05",
+    "images": [
+     "RlJBTUVANjUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[9] 1:15",
+    "images": [
+     "RlJBTUVANzUwMDA="
+    ],
+    "role": "user"
+   }
+  ],
+  "model": "vision-model",
+  "options": {
+   "num_predict": 8192,
+   "temperature": 0.0
+  },
+  "stream": true,
+  "think": true,
+  "tools": [
+   {
+    "function": {
+     "description": "Return frames of this video at the times you choose, to see what is on screen there.",
+     "name": "get_frames",
+     "parameters": {
+      "properties": {
+       "times": {
+        "description": "Times in the video, as seconds (83.5) or m:ss (\"1:23\"); at most 4.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "times"
+      ],
+      "type": "object"
+     }
+    },
+    "type": "function"
+   }
+  ]
+ },
+ {
+  "messages": [
+   {
+    "content": "You answer a question about a single file, using the numbered passages below and the numbered frames that follow the question.\n\nRules:\n- The passages below are the file's text; the frames that follow the question are moments of the video, in time order after the passages.\n- Each passage and each frame is introduced by its number in square brackets, e.g. [1].\n- Cite the passages and the frames your answer uses inline as [n], right after the sentence they support.\n- Cite only numbers that appear among the passages and frames; never name a number you were not given.\n- Where a passage and a frame differ, take exact characters (numbers, names, labels) from the passage.\n- Take exact characters from a frame when no passage has them.\n- If the frames you have do not show what the question asks about, you must call get_frames before answering, at the times where the passages or the contents mention it. Never say that something is not shown unless you have called get_frames. If it is still not shown after that, say so plainly instead of guessing.\n\n- Answer in short Markdown, with the most useful point first. Use headings, lists, tables and **bold** when they make it clearer.\n- Do not use raw HTML. Do not use code fences unless the question is about code.\n\n\nMore frames:\n- The frames you are given are a sample of the video, not all of it.\n- The tool get_frames returns frames of this video at the times you give it: up to 4 times per call, and at most 3 calls for this question.\n- Call get_frames when the answer depends on what is shown at moments the frames you have do not show.\n- Never ask the viewer for times; choose them yourself from the times the prompt gives you.\n- The frames it returns are numbered and cited exactly as the frames you already have: [n], right after the sentence they support.\n",
+    "role": "system"
+   },
+   {
+    "content": "Question: QUESTION-MARKER what does it show\n\n\n\nPassages from the file:\n[1]\nSPOKEN-PASSAGE-ALPHA....................\n\n\nDuration of the video: 1:20.\n\n\n\nThe frames follow the question, each introduced by its number and time.\n",
+    "role": "user"
+   },
+   {
+    "content": "[2] 0:05",
+    "images": [
+     "RlJBTUVANTAwMA=="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[3] 0:15",
+    "images": [
+     "RlJBTUVAMTUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[4] 0:25",
+    "images": [
+     "RlJBTUVAMjUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[5] 0:35",
+    "images": [
+     "RlJBTUVAMzUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[6] 0:45",
+    "images": [
+     "RlJBTUVANDUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[7] 0:55",
+    "images": [
+     "RlJBTUVANTUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[8] 1:05",
+    "images": [
+     "RlJBTUVANjUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[9] 1:15",
+    "images": [
+     "RlJBTUVANzUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": {
+        "times": [
+         12.0
+        ]
+       },
+       "name": "get_frames"
+      }
+     }
+    ]
+   },
+   {
+    "content": "1 frame follow.",
+    "role": "tool"
+   },
+   {
+    "content": "[10] 0:12",
+    "images": [
+     "RlJBTUVAMTIwMDA="
+    ],
+    "role": "user"
+   }
+  ],
+  "model": "vision-model",
+  "options": {
+   "num_predict": 8192,
+   "temperature": 0.0
+  },
+  "stream": true,
+  "think": true,
+  "tools": [
+   {
+    "function": {
+     "description": "Return frames of this video at the times you choose, to see what is on screen there.",
+     "name": "get_frames",
+     "parameters": {
+      "properties": {
+       "times": {
+        "description": "Times in the video, as seconds (83.5) or m:ss (\"1:23\"); at most 4.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "times"
+      ],
+      "type": "object"
+     }
+    },
+    "type": "function"
+   }
+  ]
+ },
+ {
+  "messages": [
+   {
+    "content": "You answer a question about a single file, using the numbered passages below and the numbered frames that follow the question.\n\nRules:\n- The passages below are the file's text; the frames that follow the question are moments of the video, in time order after the passages.\n- Each passage and each frame is introduced by its number in square brackets, e.g. [1].\n- Cite the passages and the frames your answer uses inline as [n], right after the sentence they support.\n- Cite only numbers that appear among the passages and frames; never name a number you were not given.\n- Where a passage and a frame differ, take exact characters (numbers, names, labels) from the passage.\n- Take exact characters from a frame when no passage has them.\n- If the frames you have do not show what the question asks about, you must call get_frames before answering, at the times where the passages or the contents mention it. Never say that something is not shown unless you have called get_frames. If it is still not shown after that, say so plainly instead of guessing.\n\n- Answer in short Markdown, with the most useful point first. Use headings, lists, tables and **bold** when they make it clearer.\n- Do not use raw HTML. Do not use code fences unless the question is about code.\n\n\nMore frames:\n- The frames you are given are a sample of the video, not all of it.\n- The tool get_frames returns frames of this video at the times you give it: up to 4 times per call, and at most 3 calls for this question.\n- Call get_frames when the answer depends on what is shown at moments the frames you have do not show.\n- Never ask the viewer for times; choose them yourself from the times the prompt gives you.\n- The frames it returns are numbered and cited exactly as the frames you already have: [n], right after the sentence they support.\n",
+    "role": "system"
+   },
+   {
+    "content": "Question: QUESTION-MARKER what does it show\n\n\n\nPassages from the file:\n[1]\nSPOKEN-PASSAGE-ALPHA....................\n\n\nDuration of the video: 1:20.\n\n\n\nThe frames follow the question, each introduced by its number and time.\n",
+    "role": "user"
+   },
+   {
+    "content": "[2] 0:05",
+    "images": [
+     "RlJBTUVANTAwMA=="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[3] 0:15",
+    "images": [
+     "RlJBTUVAMTUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[4] 0:25",
+    "images": [
+     "RlJBTUVAMjUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[5] 0:35",
+    "images": [
+     "RlJBTUVAMzUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[6] 0:45",
+    "images": [
+     "RlJBTUVANDUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[7] 0:55",
+    "images": [
+     "RlJBTUVANTUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[8] 1:05",
+    "images": [
+     "RlJBTUVANjUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[9] 1:15",
+    "images": [
+     "RlJBTUVANzUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": {
+        "times": [
+         12.0
+        ]
+       },
+       "name": "get_frames"
+      }
+     }
+    ]
+   },
+   {
+    "content": "1 frame follow.",
+    "role": "tool"
+   },
+   {
+    "content": "[10] 0:12",
+    "images": [
+     "RlJBTUVAMTIwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": {
+        "times": [
+         22.0
+        ]
+       },
+       "name": "get_frames"
+      }
+     }
+    ]
+   },
+   {
+    "content": "1 frame follow.",
+    "role": "tool"
+   },
+   {
+    "content": "[11] 0:22",
+    "images": [
+     "RlJBTUVAMjIwMDA="
+    ],
+    "role": "user"
+   }
+  ],
+  "model": "vision-model",
+  "options": {
+   "num_predict": 8192,
+   "temperature": 0.0
+  },
+  "stream": true,
+  "think": true,
+  "tools": [
+   {
+    "function": {
+     "description": "Return frames of this video at the times you choose, to see what is on screen there.",
+     "name": "get_frames",
+     "parameters": {
+      "properties": {
+       "times": {
+        "description": "Times in the video, as seconds (83.5) or m:ss (\"1:23\"); at most 4.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "times"
+      ],
+      "type": "object"
+     }
+    },
+    "type": "function"
+   }
+  ]
+ },
+ {
+  "messages": [
+   {
+    "content": "You answer a question about a single file, using the numbered passages below and the numbered frames that follow the question.\n\nRules:\n- The passages below are the file's text; the frames that follow the question are moments of the video, in time order after the passages.\n- Each passage and each frame is introduced by its number in square brackets, e.g. [1].\n- Cite the passages and the frames your answer uses inline as [n], right after the sentence they support.\n- Cite only numbers that appear among the passages and frames; never name a number you were not given.\n- Where a passage and a frame differ, take exact characters (numbers, names, labels) from the passage.\n- Take exact characters from a frame when no passage has them.\n- If the frames you have do not show what the question asks about, you must call get_frames before answering, at the times where the passages or the contents mention it. Never say that something is not shown unless you have called get_frames. If it is still not shown after that, say so plainly instead of guessing.\n\n- Answer in short Markdown, with the most useful point first. Use headings, lists, tables and **bold** when they make it clearer.\n- Do not use raw HTML. Do not use code fences unless the question is about code.\n\n\nMore frames:\n- The frames you are given are a sample of the video, not all of it.\n- The tool get_frames returns frames of this video at the times you give it: up to 4 times per call, and at most 3 calls for this question.\n- Call get_frames when the answer depends on what is shown at moments the frames you have do not show.\n- Never ask the viewer for times; choose them yourself from the times the prompt gives you.\n- The frames it returns are numbered and cited exactly as the frames you already have: [n], right after the sentence they support.\n",
+    "role": "system"
+   },
+   {
+    "content": "Question: QUESTION-MARKER what does it show\n\n\n\nPassages from the file:\n[1]\nSPOKEN-PASSAGE-ALPHA....................\n\n\nDuration of the video: 1:20.\n\n\n\nThe frames follow the question, each introduced by its number and time.\n",
+    "role": "user"
+   },
+   {
+    "content": "[2] 0:05",
+    "images": [
+     "RlJBTUVANTAwMA=="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[3] 0:15",
+    "images": [
+     "RlJBTUVAMTUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[4] 0:25",
+    "images": [
+     "RlJBTUVAMjUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[5] 0:35",
+    "images": [
+     "RlJBTUVAMzUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[6] 0:45",
+    "images": [
+     "RlJBTUVANDUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[7] 0:55",
+    "images": [
+     "RlJBTUVANTUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[8] 1:05",
+    "images": [
+     "RlJBTUVANjUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "[9] 1:15",
+    "images": [
+     "RlJBTUVANzUwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": {
+        "times": [
+         12.0
+        ]
+       },
+       "name": "get_frames"
+      }
+     }
+    ]
+   },
+   {
+    "content": "1 frame follow.",
+    "role": "tool"
+   },
+   {
+    "content": "[10] 0:12",
+    "images": [
+     "RlJBTUVAMTIwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": {
+        "times": [
+         22.0
+        ]
+       },
+       "name": "get_frames"
+      }
+     }
+    ]
+   },
+   {
+    "content": "1 frame follow.",
+    "role": "tool"
+   },
+   {
+    "content": "[11] 0:22",
+    "images": [
+     "RlJBTUVAMjIwMDA="
+    ],
+    "role": "user"
+   },
+   {
+    "content": "",
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": {
+        "times": [
+         32.0
+        ]
+       },
+       "name": "get_frames"
+      }
+     }
+    ]
+   },
+   {
+    "content": "1 frame follow.",
+    "role": "tool"
+   },
+   {
+    "content": "[12] 0:32",
+    "images": [
+     "RlJBTUVAMzIwMDA="
+    ],
+    "role": "user"
+   }
+  ],
+  "model": "vision-model",
+  "options": {
+   "num_predict": 8192,
+   "temperature": 0.0
+  },
+  "stream": true,
+  "think": true
+ }
+]
