@@ -20,6 +20,7 @@ import pytest
 from jinja2 import UndefinedError
 
 from app.prompt_loader import render
+from tests.summary_text_variant import LANGS, golden, text_variant
 
 
 GOLDEN_DIR = Path(__file__).resolve().parent / "golden_prompts"
@@ -111,6 +112,132 @@ class TestSummariesSystemPrompt:
         """The `.get` fallback; the tables hold only ja and en."""
         _set_lang("fr")
         assert " in fr" in self._out(build)
+
+
+# ---------------------------------------------------------------------------
+# Summaries — the person-name and proper-noun rules by source kind
+# SPEC-ADDON-175, SPEC-ADDON-176
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _lang():
+    """Set ``settings.llm.output_language`` and put the old value back."""
+    from app.config import settings as real_settings
+
+    previous = real_settings.llm.output_language
+
+    def _apply(lang: str) -> None:
+        object.__setattr__(real_settings.llm, "output_language", lang)
+
+    yield _apply
+    object.__setattr__(real_settings.llm, "output_language", previous)
+
+
+def _system_prompt(build: str, *args) -> str:
+    from app.workers import summaries
+
+    return getattr(summaries, build)(*args)
+
+
+_SUMMARY_BUILDERS = ["_build_system_prompt", "_build_detailed_system_prompt"]
+
+
+@pytest.mark.parametrize("lang", LANGS)
+@pytest.mark.parametrize("build", _SUMMARY_BUILDERS)
+@pytest.mark.parametrize(
+    "args",
+    [(), (None,), ("video",), ("audio",), ("text",), ("image",)],
+    ids=["no-arg", "none", "video", "audio", "text", "image"],
+)
+def test_spec_addon_175_176_transcript_prompt_is_byte_identical_to_golden(
+    _lang, build, lang, args
+) -> None:
+    """I1, and the failure case: any context type other than ``document``
+    gets the transcript prompt."""
+    _lang(lang)
+    assert _system_prompt(build, *args) == golden(build, lang)
+
+
+@pytest.mark.parametrize("lang", LANGS)
+@pytest.mark.parametrize("build", _SUMMARY_BUILDERS)
+def test_spec_addon_175_176_document_prompt_is_golden_with_only_the_text_substitutions(
+    _lang, build, lang
+) -> None:
+    """I7: everything outside the substituted lines stays as in the golden."""
+    _lang(lang)
+    assert _system_prompt(build, "document") == text_variant(
+        build, golden(build, lang)
+    )
+
+
+@pytest.mark.parametrize("build", _SUMMARY_BUILDERS)
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "Names heard only in a transcript are often misrecognized",
+        "even when a speaker introduces themselves by name in the transcript",
+    ],
+)
+def test_spec_addon_175_document_prompt_drops_the_transcript_name_rule(
+    _lang, build, phrase
+) -> None:
+    """I2."""
+    _lang("ja")
+    assert phrase in _system_prompt(build, "video")
+    assert phrase not in _system_prompt(build, "document")
+
+
+@pytest.mark.parametrize("build", _SUMMARY_BUILDERS)
+def test_spec_addon_175_document_prompt_names_people_from_the_content(
+    _lang, build
+) -> None:
+    """I3."""
+    _lang("ja")
+    phrase = "only when the content gives no name"
+    assert phrase not in _system_prompt(build, "video")
+    assert phrase in _system_prompt(build, "document")
+
+
+@pytest.mark.parametrize("build", _SUMMARY_BUILDERS)
+def test_spec_addon_176_document_prompt_states_no_misrecognition_premise(
+    _lang, build
+) -> None:
+    """I4."""
+    _lang("ja")
+    transcript = _system_prompt(build, "video")
+    document = _system_prompt(build, "document")
+
+    text_premise = (
+        "This content is text, so proper nouns are written as they appear in it."
+    )
+    assert text_premise not in transcript
+    assert text_premise in document
+    for phrase in ("This content originates from a transcript", "ASR tends to distort"):
+        assert phrase in transcript
+        assert phrase not in document
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "the narrator speculates",
+        "the narrator evaluates",
+        "the narrator describes it as",
+        "Maintain the narrator's tone",
+    ],
+)
+def test_spec_addon_175_detailed_document_prompt_attributes_to_the_author(
+    _lang, phrase
+) -> None:
+    """I5."""
+    _lang("ja")
+    transcript = _system_prompt("_build_detailed_system_prompt", "video")
+    document = _system_prompt("_build_detailed_system_prompt", "document")
+
+    assert phrase in transcript
+    assert phrase not in document
+    assert "the author calls it" in document
 
 
 # ---------------------------------------------------------------------------

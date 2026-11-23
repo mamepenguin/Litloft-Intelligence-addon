@@ -89,6 +89,19 @@ def capture_summaries() -> None:
 
     _write("summaries_common_rules.txt", render("summaries/_common_rules.jinja2"))
 
+    from app.workers import summaries
+
+    for lang in ("ja", "en", "auto", "fr"):
+        with _patch_settings(lang):
+            _write(
+                f"summaries_short_long_system_{lang}.txt",
+                summaries._build_system_prompt(),
+            )
+            _write(
+                f"summaries_detailed_system_{lang}.txt",
+                summaries._build_detailed_system_prompt(),
+            )
+
 
 def main() -> None:
     GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
