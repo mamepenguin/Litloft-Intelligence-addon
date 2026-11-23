@@ -20,6 +20,7 @@ from tests.file_question_vision_doubles import (  # noqa: F401 - fixtures
 from tests.frame_label_layout import tool_messages
 from tests.frame_repeat_doubles import ask_frame_chunk
 from tests.frame_request_doubles import (
+    ANSWER,
     CUT_BUDGET,
     CUT_ROW_TEXTS,
     CUT_ROWS,
@@ -329,7 +330,7 @@ class TestTheFirstSegment:
 
         await ask(call, VIDEO, question=QUESTION)
 
-        result = _result(wire, 2)
+        result = tool_messages(wire.requests[2])[-1]["content"]
         sent = [
             line for line in result.splitlines()
             if line.startswith("already sent")

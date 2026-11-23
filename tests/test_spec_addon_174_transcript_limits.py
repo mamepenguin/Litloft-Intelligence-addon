@@ -144,7 +144,7 @@ class TestTheNumbering:
 
         pairs = events(await ask(call, VIDEO, question=QUESTION))
 
-        result = tool_messages(wire.requests[1])[0]["content"]
+        result = tool_messages(wire.requests[1])[1]["content"]
         assert f"[10]\n{CUT_ROW_TEXTS[1]}" in result
         assert f"[11]\n{CUT_ROW_TEXTS[2]}" in result
         assert requested_frames(wire, wire.requests[1]).frames == labels_for(
