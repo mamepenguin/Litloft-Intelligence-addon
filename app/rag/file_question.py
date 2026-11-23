@@ -15,7 +15,7 @@ import logging
 import math
 import re
 import threading
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -94,6 +94,27 @@ class SelectedChunk:
 
 
 @dataclass(frozen=True)
+class MaterialRow:
+    """One spanned row of a file's material, as a range of the file reads it."""
+
+    start: float
+    end: float | None
+    #: ``"transcript"`` or ``"frame_text"``.
+    kind: str
+    #: The text a passage of this row carries; ``None`` when the repeat filter
+    #: removed a frame-text row whole.
+    text: str | None
+    #: A frame-text row's own text, before the repeat filter.
+    stored_text: str | None
+    #: The ``\n``-parts the repeat filter removed, in their order.
+    removed: tuple[str, ...]
+    #: Position in the file: the last tie-break of time order.
+    order: int
+    #: The passage number the row was sent with, or ``None`` when it was not.
+    number: int | None = None
+
+
+@dataclass(frozen=True)
 class Material:
     """The chunks a question is answered from, in file order."""
 
@@ -106,6 +127,9 @@ class Material:
     file_path: str | None
     duration: float | None
     drive: str = ""
+    #: Every row with a span, kept when ``partial`` so a range can read the text
+    #: the passages left out; empty otherwise.
+    rows: tuple[MaterialRow, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -148,6 +172,17 @@ class _Row:
     embedding_id: str | None
     #: Position in the file, which is also the order the chunks are sent in.
     order: int
+    #: The row's span, when it has one.
+    start: float | None = None
+    end: float | None = None
+    #: ``"transcript"`` or ``"frame_text"`` for a row with a span.
+    kind: str = ""
+    #: A frame-text row's own text, before the repeat filter.
+    stored_text: str | None = None
+    #: The ``\n``-parts the repeat filter removed, in their order.
+    removed: tuple[str, ...] = ()
+    #: True for a frame-text row the repeat filter removed whole.
+    removed_whole: bool = False
 
 
 def _is_picture(file_type: str, mime_type: str) -> bool:
@@ -398,6 +433,10 @@ def load_material(
             else []
         )
         frame_starts = {int(row[0]): row[1] for row in frame_rows}
+        frame_ends = {
+            int(row[0]): None if row[2] is None else float(row[2])
+            for row in frame_rows
+        }
         repeated_by_chunk = {
             index: segment.repeated
             for segment in frame_segments(frame_rows)
@@ -414,21 +453,29 @@ def load_material(
     }
 
     rows: list[_Row] = []
+    # Every row with a span, in file order; the rows below are those of them a
+    # passage may carry.
+    span_rows: list[_Row] = []
+    order = 0
     # Transcript chunks first, by timestamp; a file with both kinds uses both.
     for _chunk_index, text, start, end in sorted(
         transcripts, key=lambda row: (row[2], row[0]),
     ):
         if not text:
             continue
-        rows = [
-            *rows,
-            _Row(
-                text=text,
-                position={"seconds": start},
-                embedding_id=by_time.get((round(start, 3), round(end, 3))),
-                order=len(rows),
-            ),
-        ]
+        row = _Row(
+            text=text,
+            position={"seconds": start},
+            embedding_id=by_time.get((round(start, 3), round(end, 3))),
+            order=order,
+            start=None if start is None else float(start),
+            end=None if end is None else float(end),
+            kind="transcript",
+        )
+        order += 1
+        rows = [*rows, row]
+        if row.start is not None:
+            span_rows = [*span_rows, row]
     # The FTS column is untyped, so "10" would sort before "2" as text.
     for chunk_index, page, text in sorted(
         documents, key=lambda row: _chunk_order(row[0]),
@@ -437,23 +484,42 @@ def load_material(
             continue
         index = _as_int(chunk_index)
         if file_type == "video" and index is not None and index in frame_starts:
-            text = _filter_frame_text(
-                text, repeated_by_chunk.get(index, frozenset()),
+            repeated = repeated_by_chunk.get(index, frozenset())
+            stored = text
+            filtered = _filter_frame_text(stored, repeated)
+            start = frame_starts[index]
+            row = _Row(
+                text="" if filtered is None else filtered,
+                position={"seconds": start},
+                embedding_id=by_chunk.get(index),
+                order=order,
+                start=None if start is None else float(start),
+                end=frame_ends.get(index),
+                kind="frame_text",
+                stored_text=stored,
+                removed=tuple(
+                    part for part in stored.split("\n")
+                    if part.strip() in repeated
+                ),
+                removed_whole=filtered is None,
             )
-            if text is None:
-                continue
-            position = {"seconds": frame_starts[index]}
-        else:
-            position = _document_position(mime, page, section_titles)
+            order += 1
+            if row.start is not None:
+                span_rows = [*span_rows, row]
+            if filtered is not None:
+                rows = [*rows, row]
+            continue
+        position = _document_position(mime, page, section_titles)
         rows = [
             *rows,
             _Row(
                 text=text,
                 position=position,
                 embedding_id=by_chunk.get(index),
-                order=len(rows),
+                order=order,
             ),
         ]
+        order += 1
 
     if not rows:
         return None
@@ -469,10 +535,33 @@ def load_material(
     if sum(len(row.text) for row in rows) <= budget:
         return Material(chunks=_selected(rows), partial=False, **material)
 
+    selected = _fit(_rank(rows, ranking_text), budget)
     return Material(
-        chunks=_selected(_fit(_rank(rows, ranking_text), budget)),
+        chunks=_selected(selected),
         partial=True,
+        rows=_material_rows(span_rows, selected),
         **material,
+    )
+
+
+def _material_rows(
+    span_rows: Sequence[_Row], sent: Sequence[_Row],
+) -> tuple[MaterialRow, ...]:
+    """The spanned rows of cut material, with the number each sent row took."""
+    numbers = {row.order: index + 1 for index, row in enumerate(sent)}
+    return tuple(
+        MaterialRow(
+            start=row.start,
+            end=row.end,
+            kind=row.kind,
+            text=None if row.removed_whole else row.text,
+            stored_text=row.stored_text,
+            removed=row.removed,
+            order=row.order,
+            number=numbers.get(row.order),
+        )
+        for row in span_rows
+        if row.start is not None
     )
 
 
@@ -928,14 +1017,27 @@ def citations(
     A number that was not sent is dropped (SPEC-ADDON-053 I3). Each number
     appears once, in the order the answer first names it.
     """
+    return citations_from(
+        answer, {index: chunk.position for index, chunk in enumerate(chunks, 1)},
+    )
+
+
+def citations_from(
+    answer: str, positions: Mapping[int, dict[str, Any] | None],
+) -> list[dict[str, Any]]:
+    """Every ``[n]`` the answer names that a number was sent for.
+
+    ``positions`` maps each number that was given to what came with it. Each
+    number appears once, in the order the answer first names it.
+    """
     out: list[dict[str, Any]] = []
     seen: set[int] = set()
     for match in _CITATION_MARKER.finditer(answer):
         number = int(match.group(1))
-        if number in seen or not 1 <= number <= len(chunks):
+        if number in seen or number not in positions:
             continue
         seen = {*seen, number}
-        out = [*out, {"n": number, "position": chunks[number - 1].position}]
+        out = [*out, {"n": number, "position": positions[number]}]
     return out
 
 
