@@ -1407,24 +1407,36 @@ async def _frame_tool_answer(
             # A reply's requested passages take their numbers before its
             # frames, whatever order the calls came in.
             transcript_results: dict[int, str] = {}
-            for index, plan in enumerate(plans):
-                if plan.content or plan.kind != "transcript":
-                    continue
-                span = plan.span
-                if span is None:
-                    continue
-                content, next_number, added = _serve_transcript(
-                    material,
-                    span[0],
-                    span[1],
-                    sent_rows=sent_rows,
-                    sent_parts=sent_parts,
-                    next_number=next_number,
+            try:
+                for index, plan in enumerate(plans):
+                    if plan.content or plan.kind != "transcript":
+                        continue
+                    span = plan.span
+                    if span is None:
+                        continue
+                    content, next_number, added = _serve_transcript(
+                        material,
+                        span[0],
+                        span[1],
+                        sent_rows=sent_rows,
+                        sent_parts=sent_parts,
+                        next_number=next_number,
+                    )
+                    transcript_results[index] = content
+                    for number, seconds in added:
+                        positions[number] = {"seconds": seconds}
+                        passages_sent += 1
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - the fallback answers
+                logger.warning(
+                    "file question frames failed: %s (file %s)",
+                    type(exc).__name__,
+                    file_id,
                 )
-                transcript_results[index] = content
-                for number, seconds in added:
-                    positions[number] = {"seconds": seconds}
-                    passages_sent += 1
+                async for event in fallback():
+                    yield event
+                return
             cut_per_plan: list[list[file_question.Frame]] = []
             round_frames: list[tuple[str, bytes, str]] = []
             for plan in plans:
@@ -1588,22 +1600,6 @@ async def _until_done(task: "asyncio.Task", *, deadline: float) -> AsyncIterator
         )
         if not done:
             yield _FRAMES_KEEPALIVE
-
-
-def _call_times(call: "llm.FrameToolCall") -> list | None:
-    """The ``times`` list of a ``get_frames`` call, or ``None`` for another call."""
-    if call.name != _FRAME_TOOL_NAME:
-        return None
-    arguments = call.arguments
-    if isinstance(arguments, str):
-        try:
-            arguments = json.loads(arguments)
-        except ValueError:
-            return None
-    if not isinstance(arguments, dict):
-        return None
-    times = arguments.get("times")
-    return times if isinstance(times, list) else None
 
 
 def _call_arguments(call: "llm.FrameToolCall") -> object:
@@ -1910,7 +1906,8 @@ def _serve_transcript(
             text = row.stored_text if first else row.text
             group = [f"[{next_number}]", "" if text is None else text, ""]
         candidate = "\n".join([*lines, *group])
-        if len(candidate) + _TRANSCRIPT_STOP_CHARS > _TRANSCRIPT_RESULT_CHARS:
+        # The stop note is joined to the result with a newline of its own.
+        if len(candidate) + 1 + _TRANSCRIPT_STOP_CHARS > _TRANSCRIPT_RESULT_CHARS:
             lines = [*lines, _stop_note(row.start)]
             break
         if sent is None:
