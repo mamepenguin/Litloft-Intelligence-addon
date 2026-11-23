@@ -13,6 +13,7 @@ from tests.file_context_doubles import (
     S180,
     S181A,
     S181B,
+    S181C,
     question_bodies,
     system_of,
     today,
@@ -38,7 +39,7 @@ OTHER_BRANCHES = [
 
 
 def _without_new_lines(system: str) -> list[str]:
-    return [line for line in system.split("\n") if line not in (S179, S181A, S181B)]
+    return [line for line in system.split("\n") if line not in (S179, S181A, S181B, S181C)]
 
 
 @pytest.mark.parametrize(("name", "index"), IMAGE_AND_PASSAGES)

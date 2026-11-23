@@ -21,6 +21,7 @@ from tests.file_context_rules import (  # noqa: F401 - re-exported
     S180,
     S181A,
     S181B,
+    S181C,
     TOP_OF_DRIVE,
     block,
 )
@@ -113,15 +114,16 @@ def question_bodies(wire: Wire) -> list[dict]:
 
 
 def assert_s179_and_s181(system: str) -> None:
-    """S179 right after ``Rules:``; S181a then S181b right above the Answer line."""
+    """S179 right after ``Rules:``; S181a, S181b then S181c right above the Answer line."""
     lines = system.split("\n")
     assert lines.count("Rules:") == 1, system
     assert lines[lines.index("Rules:") + 1] == S179, system
     assert system.count(S179) == 1, system
     answer = [i for i, line in enumerate(lines) if line.startswith(ANSWER_LINE)]
     assert len(answer) == 1, system
-    assert lines[answer[0] - 2: answer[0]] == [S181A, S181B], system
-    assert system.count(S181A) == 1 and system.count(S181B) == 1, system
+    assert lines[answer[0] - 3: answer[0]] == [S181A, S181B, S181C], system
+    for rule in (S181A, S181B, S181C):
+        assert system.count(rule) == 1, system
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +132,7 @@ def assert_s179_and_s181(system: str) -> None:
 
 
 def without_additions(body: dict, expected_block: str) -> dict:
-    """``body`` with the file block, S179, S181a/b, the new opener and S180 undone.
+    """``body`` with the file block, S179, S181a/b/c, the new opener and S180 undone.
 
     Asserts the user prompt starts with exactly ``expected_block``.
     """
@@ -153,7 +155,7 @@ def without_additions(body: dict, expected_block: str) -> dict:
 
 
 def _undo_rules(system: str) -> str:
-    kept = [line for line in system.split("\n") if line not in (S179, S181A, S181B)]
+    kept = [line for line in system.split("\n") if line not in (S179, S181A, S181B, S181C)]
     return (
         "\n".join(kept)
         .replace(NEW_OPENER, OLD_OPENER)

@@ -14,7 +14,7 @@ from pathlib import Path
 
 from app.routers import rag as rag_router
 from app.workers.video_visual_selection import SelectedFrame, Selection, SelectionInputs
-from tests.file_context_rules import ANSWER_LINE, S179, S181A, S181B, block
+from tests.file_context_rules import ANSWER_LINE, S179, S181A, S181B, S181C, block
 from tests.file_question_doubles import chunk, toward
 from tests.file_question_vision_doubles import Reply, ToolCall, Wire, vision_client
 from tests.search_endpoint_db import patch_everywhere
@@ -61,13 +61,13 @@ def todays_request(provider: str, kind: str) -> dict:
 
 
 def with_file_context(request: dict, file_block: str) -> dict:
-    """``request`` with ``file_block`` before the question and S179/S181a/S181b added."""
+    """``request`` with ``file_block`` before the question and S179/S181a/S181b/S181c added."""
     system = request["messages"][0]
     assert system["role"] == "system"
     system["content"] = (
         system["content"]
         .replace("\nRules:\n", f"\nRules:\n{S179}\n", 1)
-        .replace(f"\n{ANSWER_LINE}", f"\n{S181A}\n{S181B}\n{ANSWER_LINE}", 1)
+        .replace(f"\n{ANSWER_LINE}", f"\n{S181A}\n{S181B}\n{S181C}\n{ANSWER_LINE}", 1)
     )
     user = request["messages"][1]
     if isinstance(user["content"], str):

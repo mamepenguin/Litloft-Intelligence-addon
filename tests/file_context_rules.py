@@ -24,6 +24,10 @@ S181B = (
     "- If the answer is not in what you were given, say so, but do not list other "
     "things you could not find out unless the question asks about them."
 )
+S181C = (
+    "- Put nothing in square brackets except a number you may cite. Speak of a "
+    "moment of a video as the video at its time."
+)
 PASSAGES_ONLY_SENTENCE = (
     "- If the passages do not contain the answer, say so plainly instead of guessing."
 )

@@ -61,7 +61,7 @@ async def test_spec_addon_179_i1_every_request_starts_with_the_file_block(
 async def test_spec_addon_179_i4_and_181_i6_every_system_prompt_carries_the_rules_in_place(
     name, db, addon, llm, call, tmp_path, monkeypatch,
 ):
-    """SPEC-ADDON-179 I4, SPEC-ADDON-181 I6: S179 first after Rules:, S181a then S181b above the Answer line."""
+    """SPEC-ADDON-179 I4, SPEC-ADDON-181 I6: S179 first after Rules:, S181a, S181b then S181c above the Answer line."""
     bodies = await _play(name, db, addon, llm, call, tmp_path, monkeypatch)
 
     assert bodies
@@ -92,7 +92,7 @@ async def test_spec_addon_179_i7_every_request_is_todays_apart_from_the_addition
 ):
     """SPEC-ADDON-179 I7, SPEC-ADDON-181 I6: no request added; only the spec's lines differ.
 
-    Taking out the file block, S179, S181a/b, the new opener and S180 leaves
+    Taking out the file block, S179, S181a/b/c, the new opener and S180 leaves
     today's request byte for byte: every earlier rule, citation number and tool
     is unchanged.
     """
