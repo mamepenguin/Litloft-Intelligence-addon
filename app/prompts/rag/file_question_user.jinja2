@@ -1,5 +1,5 @@
-{#- vars: question (string), passages (list[str]), image (bool), frames (bool), position (string|none), history (list), duration (string|none), contents (list[str]|none) — see rag/prompt.py:build_file_question_user_prompt -#}
-{% if history -%}
+{#- vars: file_block (string), question (string), passages (list[str]), image (bool), frames (bool), position (string|none), history (list), duration (string|none), contents (list[str]|none) — see rag/prompt.py:build_file_question_user_prompt -#}
+{{ file_block }}{% if history -%}
 Earlier in this conversation:
 {% for turn in history -%}
 The viewer asked: {{ turn.question }}

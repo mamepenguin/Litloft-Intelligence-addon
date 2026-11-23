@@ -168,6 +168,9 @@ def build_file_question_user_prompt(
     question: str,
     passages: list[str],
     *,
+    filename: str,
+    folder: str | None,
+    type_label: str,
     has_image: bool = False,
     frames: bool = False,
     position_seconds: float | None = None,
@@ -177,17 +180,27 @@ def build_file_question_user_prompt(
 ) -> str:
     """Serialize one file's chunks, numbered from 1, and the question.
 
-    Numbering runs across everything sent in file order, so the ``[n]`` the
-    answer cites names exactly the passage the prompt gave it. ``frames``
-    states that the labelled frames follow the prompt; each frame's label
-    travels beside its image, so the text here pairs no number with a time.
-    The position is written in the viewer's clock when the caller read one for
-    a media file. ``history`` is the kept earlier turns, oldest first, written
-    before the question. ``duration`` and ``contents`` state how long the video
-    is and what the sections of it hold, after the passages.
+    The prompt starts with the file's name, type and folder, one line each in
+    that order, a line left out when its value is empty. Numbering runs across
+    everything sent in file order, so the ``[n]`` the answer cites names
+    exactly the passage the prompt gave it. ``frames`` states that the labelled
+    frames follow the prompt; each frame's label travels beside its image, so
+    the text here pairs no number with a time. The position is written in the
+    viewer's clock when the caller read one for a media file. ``history`` is the
+    kept earlier turns, oldest first, written before the question. ``duration``
+    and ``contents`` state how long the video is and what the sections of it
+    hold, after the passages.
     """
+    file_lines = [
+        f"{label}: {value}"
+        for label, value in (
+            ("File", filename), ("Type", type_label), ("Folder", folder),
+        )
+        if value
+    ]
     return render(
         "rag/file_question_user.jinja2",
+        file_block="\n".join(file_lines) + "\n\n" if file_lines else "",
         question=question,
         passages=passages,
         image=has_image,
