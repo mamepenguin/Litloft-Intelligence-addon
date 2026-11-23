@@ -541,7 +541,7 @@ async def _run_window3(
     start = time.monotonic()
     try:
         response = await llm_client.generate(
-            _build_detailed_system_prompt(),
+            _build_detailed_system_prompt("document"),
             user_prompt,
             max_tokens_override=_DETAILED_MAX_TOKENS,
         )
