@@ -53,6 +53,7 @@ from app.rag.service import (
 )
 from app.rag.prompt import (
     GET_FRAMES_TOOL,
+    GET_TRANSCRIPT_TOOL,
     build_file_question_system_prompt,
     build_file_question_user_prompt,
     format_position,
@@ -718,6 +719,18 @@ _FRAME_REQUESTS_PER_QUESTION = 3
 _FRAMES_PER_REQUEST = 4
 #: The name a frame request must call.
 _FRAME_TOOL_NAME = GET_FRAMES_TOOL["function"]["name"]
+#: The name a transcript request must call.
+_TRANSCRIPT_TOOL_NAME = GET_TRANSCRIPT_TOOL["function"]["name"]
+#: How many characters one transcript result may hold.
+_TRANSCRIPT_RESULT_CHARS = 3000
+#: What a transcript result says when its range holds no row.
+_TRANSCRIPT_NOTHING = "Nothing is said or shown between {start} and {end}."
+#: The note a transcript result ends with when a row does not fit.
+_TRANSCRIPT_STOP = (
+    "Text from {time} on was not sent: the limit of one call was reached."
+)
+#: The longest the stop note can be: its clock time is at most 8 characters.
+_TRANSCRIPT_STOP_CHARS = len(_TRANSCRIPT_STOP.format(time="0" * 8))
 
 
 class _Deadline(Exception):
@@ -741,10 +754,14 @@ class _CallPlan:
     """What one tool call of a reply gets, before any frame is cut."""
 
     call: "llm.FrameToolCall"
-    #: Whether this call spends one of the question's three frame requests.
+    #: Whether this call spends one of the question's three tool calls.
     spends: bool
-    #: The whole result text when nothing is cut at all.
+    #: What it is: ``"frames"``, ``"transcript"`` or neither.
+    kind: str = "frames"
+    #: The whole result text when nothing is cut or read at all.
     content: str = ""
+    #: A served transcript request's range.
+    span: tuple[float, float] | None = None
     #: The times to cut, in time order.
     used: tuple[float, ...] = ()
     rejected: tuple[_Rejected, ...] = ()
@@ -1101,11 +1118,17 @@ async def _frame_tool_answer(
 
     A tool request is read to its end before any of its text is written, so a
     reply that asks for frames never reaches the viewer as an answer. Once
-    three requests are served or the window has passed, the next request is
+    three tool calls are served or the window has passed, the next request is
     final and its answer streams. Any failure before the first written chunk
     sends today's request once; nothing is started after the total deadline.
+    A material that was cut also offers ``get_transcript``, which reads the
+    text of a time range the passages left out.
     """
     loop = asyncio.get_running_loop()
+    cut = material.partial and bool(material.rows)
+    tools = (
+        [GET_FRAMES_TOOL, GET_TRANSCRIPT_TOOL] if cut else [GET_FRAMES_TOOL]
+    )
     first_number = len(passages) + 1
     initial_frames = [
         (
@@ -1115,11 +1138,27 @@ async def _frame_tool_answer(
         )
         for index, frame in enumerate(frames)
     ]
-    positions = [frame.time for frame in frames]
     sent = [
         (frame.time, first_number + index)
         for index, frame in enumerate(frames)
     ]
+    # What each number was sent with, filled in the order the numbers run.
+    positions: dict[int, dict | None] = {
+        index: chunk.position
+        for index, chunk in enumerate(passages, start=1)
+    }
+    positions.update({
+        first_number + index: {"seconds": frame.time}
+        for index, frame in enumerate(frames)
+    })
+    # Each sent row's number and whether it was sent with its filtered text.
+    sent_rows: dict[int, tuple[int, str]] = {
+        row.order: (row.number, "filtered")
+        for row in material.rows
+        if row.number is not None
+    }
+    # The removed parts of a frame-text row already sent.
+    sent_parts: set[str] = set()
     duration = material.duration
     system_prompt = build_file_question_system_prompt(
         resolved.profile.config.output_language,
@@ -1128,6 +1167,7 @@ async def _frame_tool_answer(
         has_history=bool(history),
         frames=True,
         tool=True,
+        cut=cut,
     )
     user_prompt = build_file_question_user_prompt(
         question,
@@ -1147,23 +1187,17 @@ async def _frame_tool_answer(
     answer: list[str] = []
     next_number = first_number + len(frames)
     served = 0
+    frame_calls = 0
+    transcript_calls = 0
     requested = 0
+    passages_sent = 0
     cancelled = threading.Event()
 
     def closing(text: str) -> list[AnswerEvent]:
         return [
             AnswerEvent(
                 kind="citations",
-                data=file_question.citations(
-                    text,
-                    passages
-                    + tuple(
-                        file_question.SelectedChunk(
-                            text="", position={"seconds": time},
-                        )
-                        for time in positions
-                    ),
-                ),
+                data=file_question.citations_from(text, positions),
             ),
             _file_meta(material, "attached"),
             AnswerEvent(kind="done", data={}),
@@ -1220,7 +1254,7 @@ async def _frame_tool_answer(
                         user_prompt,
                         initial_frames,
                         rounds,
-                        tools=[GET_FRAMES_TOOL],
+                        tools=tools,
                         tool_choice="none",
                     )
                     async with asyncio.timeout(remaining):
@@ -1272,7 +1306,7 @@ async def _frame_tool_answer(
                     user_prompt,
                     initial_frames,
                     rounds,
-                    tools=[GET_FRAMES_TOOL],
+                    tools=tools,
                     tool_choice="auto",
                 )
             )
@@ -1322,12 +1356,13 @@ async def _frame_tool_answer(
                     yield _format_sse_event(event)
                 return
 
-            plans = _frame_plan(
+            plans = _tool_plan(
                 reply.calls,
                 sent=sent,
                 position=position,
                 duration=duration,
                 served=served,
+                cut=cut,
             )
             wanted = sorted({time for plan in plans for time in plan.used})
             yield _FRAMES_KEEPALIVE
@@ -1337,13 +1372,13 @@ async def _frame_tool_answer(
                     cancelled=cancelled,
                 )
             )
-            cut: list[file_question.Frame] = []
+            cut_frames: list[file_question.Frame] = []
             try:
                 async for event in _until_done(
                     cut_task, deadline=total_deadline,
                 ):
                     yield event
-                cut = cut_task.result()
+                cut_frames = cut_task.result()
             except _Deadline:
                 logger.warning("frame_tool_deadline (file %s)", file_id)
                 for event in failed():
@@ -1368,12 +1403,50 @@ async def _frame_tool_answer(
                     except BaseException:  # noqa: BLE001 - cancelled, not read
                         pass
 
-            by_time = {frame.time: frame for frame in cut}
+            by_time = {frame.time: frame for frame in cut_frames}
+            # A reply's requested passages take their numbers before its
+            # frames, whatever order the calls came in.
+            transcript_results: dict[int, str] = {}
+            try:
+                for index, plan in enumerate(plans):
+                    if plan.content or plan.kind != "transcript":
+                        continue
+                    span = plan.span
+                    if span is None:
+                        continue
+                    content, next_number, added = _serve_transcript(
+                        material,
+                        span[0],
+                        span[1],
+                        sent_rows=sent_rows,
+                        sent_parts=sent_parts,
+                        next_number=next_number,
+                    )
+                    transcript_results[index] = content
+                    for number, seconds in added:
+                        positions[number] = {"seconds": seconds}
+                        passages_sent += 1
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - the fallback answers
+                logger.warning(
+                    "file question frames failed: %s (file %s)",
+                    type(exc).__name__,
+                    file_id,
+                )
+                async for event in fallback():
+                    yield event
+                return
             cut_per_plan: list[list[file_question.Frame]] = []
             round_frames: list[tuple[str, bytes, str]] = []
             for plan in plans:
                 if plan.spends:
                     served += 1
+                    if cut:
+                        if plan.call.name == _FRAME_TOOL_NAME:
+                            frame_calls += 1
+                        elif plan.call.name == _TRANSCRIPT_TOOL_NAME:
+                            transcript_calls += 1
                 frames_here = [
                     by_time[time] for time in plan.used if time in by_time
                 ]
@@ -1387,12 +1460,23 @@ async def _frame_tool_answer(
                             frame.mime_type,
                         ),
                     ]
-                    positions = [*positions, frame.time]
+                    positions[next_number] = {"seconds": frame.time}
                     sent = [*sent, (frame.time, next_number)]
                     next_number += 1
                     requested += 1
             results = []
-            for plan, frames_here in zip(plans, cut_per_plan):
+            for index, (plan, frames_here) in enumerate(
+                zip(plans, cut_per_plan)
+            ):
+                if index in transcript_results:
+                    results = [
+                        *results,
+                        llm.FrameToolResult(
+                            call=plan.call,
+                            content=transcript_results[index],
+                        ),
+                    ]
+                    continue
                 if plan.content:
                     results = [
                         *results,
@@ -1429,7 +1513,18 @@ async def _frame_tool_answer(
             ]
     finally:
         cancelled.set()
-        if served:
+        if cut:
+            if served:
+                logger.info(
+                    "tool requests: %d frame calls, %d frames, %d transcript "
+                    "calls, %d passages (file %s)",
+                    frame_calls,
+                    requested,
+                    transcript_calls,
+                    passages_sent,
+                    file_id,
+                )
+        elif served:
             logger.info(
                 "frame requests: %d calls, %d frames (file %s)",
                 served,
@@ -1507,31 +1602,54 @@ async def _until_done(task: "asyncio.Task", *, deadline: float) -> AsyncIterator
             yield _FRAMES_KEEPALIVE
 
 
+def _call_arguments(call: "llm.FrameToolCall") -> object:
+    """A tool call's arguments as the JSON value they were written as."""
+    arguments = call.arguments
+    if isinstance(arguments, str):
+        try:
+            return json.loads(arguments)
+        except ValueError:
+            return None
+    return arguments
+
+
 def _call_times(call: "llm.FrameToolCall") -> list | None:
     """The ``times`` list of a ``get_frames`` call, or ``None`` for another call."""
     if call.name != _FRAME_TOOL_NAME:
         return None
-    arguments = call.arguments
-    if isinstance(arguments, str):
-        try:
-            arguments = json.loads(arguments)
-        except ValueError:
-            return None
+    arguments = _call_arguments(call)
     if not isinstance(arguments, dict):
         return None
     times = arguments.get("times")
     return times if isinstance(times, list) else None
 
 
-def _frame_plan(
+def _transcript_span(call: "llm.FrameToolCall") -> tuple[float, float] | None:
+    """The range of a ``get_transcript`` call, or ``None`` for bad arguments."""
+    arguments = _call_arguments(call)
+    if not isinstance(arguments, dict):
+        return None
+    start = file_question.read_time(arguments.get("start"))
+    end = file_question.read_time(arguments.get("end"))
+    if start is None or end is None or start >= end:
+        return None
+    return start, end
+
+
+def _tool_plan(
     calls: Sequence["llm.FrameToolCall"],
     *,
     sent: Sequence[tuple[float, int]],
     position: float | None,
     duration: float | None,
     served: int,
+    cut: bool = False,
 ) -> list[_CallPlan]:
-    """Decide, for every call of one reply, what it gets before anything is cut."""
+    """Decide, for every call of one reply, what it gets before anything is cut.
+
+    ``cut`` offers the transcript tool as well: a call that names it is served
+    by reading the material where a frame call is served by cutting frames.
+    """
     plans: list[_CallPlan] = []
     taken = served
     used_here: list[float] = []
@@ -1539,16 +1657,34 @@ def _frame_plan(
         if taken >= _FRAME_REQUESTS_PER_QUESTION:
             plans = [
                 *plans,
-                _CallPlan(call=call, spends=False, content=_limit_text()),
+                _CallPlan(call=call, spends=False, content=_limit_text(cut)),
             ]
             continue
         taken += 1
+        if cut and call.name == _TRANSCRIPT_TOOL_NAME:
+            span = _transcript_span(call)
+            plans = [
+                *plans,
+                _CallPlan(
+                    call=call,
+                    spends=True,
+                    kind="transcript" if span is not None else "other",
+                    content="" if span is not None else _transcript_bad_call_text(),
+                    span=span,
+                ),
+            ]
+            continue
         times = _call_times(call)
         if times is None:
             plans = [
                 *plans,
                 _CallPlan(
-                    call=call, spends=True, content=_bad_call_text(call.name),
+                    call=call,
+                    spends=True,
+                    kind=(
+                        "frames" if call.name == _FRAME_TOOL_NAME else "other"
+                    ),
+                    content=_bad_call_text(call.name, cut),
                 ),
             ]
             continue
@@ -1664,20 +1800,131 @@ def _shown_value(value: object) -> str:
     return text if len(text) <= 40 else text[:40] + "…"
 
 
-def _limit_text() -> str:
+def _limit_text(cut: bool = False) -> str:
+    if cut:
+        return (
+            "No frame or text follows: this question has already been served "
+            f"its {_FRAME_REQUESTS_PER_QUESTION} tool calls."
+        )
     return (
         "No frame follows: this question has already been served its "
         f"{_FRAME_REQUESTS_PER_QUESTION} frame requests."
     )
 
 
-def _bad_call_text(name: str) -> str:
+def _bad_call_text(name: str, cut: bool = False) -> str:
     called = f"{name} cannot" if name else "this call cannot"
+    if cut:
+        return (
+            f"No frame or text follows: {called} be served. Only "
+            f"{_FRAME_TOOL_NAME} (a list of times named times, at most "
+            f"{_FRAMES_PER_REQUEST}) and {_TRANSCRIPT_TOOL_NAME} (start and "
+            "end) are available."
+        )
     return (
         f"No frame follows: {called} be served. Only {_FRAME_TOOL_NAME} takes a "
         "JSON object with a list of times named times, at most "
         f"{_FRAMES_PER_REQUEST} of them."
     )
+
+
+def _transcript_bad_call_text() -> str:
+    """What a ``get_transcript`` call with bad arguments gets."""
+    return (
+        f"No text follows: {_TRANSCRIPT_TOOL_NAME} takes a JSON object with "
+        "start and end, two times with start before end."
+    )
+
+
+def _row_overlaps(
+    row: file_question.MaterialRow, start: float, end: float,
+) -> bool:
+    """Whether the row's span, or its start alone, overlaps ``[start, end)``."""
+    row_end = row.start if row.end is None else row.end
+    return row.start < end and row_end > start
+
+
+def _time_order(row: file_question.MaterialRow) -> tuple[float, int, int]:
+    """Time order: start, then a transcript row before frame text, then file order."""
+    return (row.start, 0 if row.kind == "transcript" else 1, row.order)
+
+
+def _stop_note(start: float) -> str:
+    return _TRANSCRIPT_STOP.format(time=format_position(start))
+
+
+def _serve_transcript(
+    material: file_question.Material,
+    start: float,
+    end: float,
+    *,
+    sent_rows: dict[int, tuple[int, str]],
+    sent_parts: set[str],
+    next_number: int,
+) -> tuple[str, int, list[tuple[int, float]]]:
+    """One transcript result, the next number, and the passages it sent.
+
+    ``sent_rows`` maps a row's file order to the number it was sent with and
+    whether that was its filtered or its stored text; ``sent_parts`` holds the
+    removed parts already sent. A row of the range's first segment is written
+    with its stored text; a later one with its filtered text, and one the
+    filter removed whole is skipped.
+    """
+    rows = sorted(
+        (row for row in material.rows if _row_overlaps(row, start, end)),
+        key=_time_order,
+    )
+    if not rows:
+        return (
+            _TRANSCRIPT_NOTHING.format(
+                start=format_position(start), end=format_position(end),
+            ),
+            next_number,
+            [],
+        )
+    frame_starts = [row.start for row in rows if row.kind == "frame_text"]
+    first_start = min(frame_starts) if frame_starts else None
+    lines: list[str] = []
+    added: list[tuple[int, float]] = []
+    for row in rows:
+        first = row.kind == "frame_text" and row.start == first_start
+        sent = sent_rows.get(row.order)
+        supplement: list[str] = []
+        if sent is not None:
+            number, sent_as = sent
+            group = [f"already sent as [{number}]"]
+            if first and sent_as == "filtered":
+                supplement = [
+                    part for part in row.removed
+                    if part.strip() not in sent_parts
+                ]
+            if supplement:
+                group = [*group, f"[{next_number}]", "\n".join(supplement), ""]
+        else:
+            if row.kind == "frame_text" and not first and row.text is None:
+                continue
+            text = row.stored_text if first else row.text
+            group = [f"[{next_number}]", "" if text is None else text, ""]
+        candidate = "\n".join([*lines, *group])
+        # The stop note is joined to the result with a newline of its own.
+        if len(candidate) + 1 + _TRANSCRIPT_STOP_CHARS > _TRANSCRIPT_RESULT_CHARS:
+            lines = [*lines, _stop_note(row.start)]
+            break
+        if sent is None:
+            sent_rows[row.order] = (
+                next_number, "stored" if first else "filtered",
+            )
+            added = [*added, (next_number, row.start)]
+            next_number += 1
+        elif supplement:
+            sent_parts.update(part.strip() for part in supplement)
+            added = [*added, (next_number, row.start)]
+            next_number += 1
+        lines = [*lines, *group]
+    else:
+        if lines and lines[-1] == "":
+            lines = lines[:-1]
+    return "\n".join(lines), next_number, added
 
 
 async def _answer_with_keepalive(stream) -> AsyncIterator[str | None]:

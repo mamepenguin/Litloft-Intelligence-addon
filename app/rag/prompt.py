@@ -130,6 +130,7 @@ def build_file_question_system_prompt(
     has_history: bool = False,
     frames: bool = False,
     tool: bool = False,
+    cut: bool = False,
 ) -> str:
     """Return the system prompt for a question about one file.
 
@@ -143,7 +144,8 @@ def build_file_question_system_prompt(
     citable from the same numbering, each carried by its own label.
     ``has_history`` adds the earlier-turns sentence, and with it
     the citation limit when there is something to cite. ``tool`` says the
-    model may ask for more frames of the video.
+    model may ask for more frames of the video, and ``cut`` that the
+    passages are only part of its text and may ask for the rest of it.
     """
     lang = output_language
     lang_line = _LANGUAGE_INSTRUCTIONS.get(
@@ -158,6 +160,7 @@ def build_file_question_system_prompt(
         history=has_history,
         frames=frames,
         tool=tool,
+        cut=cut,
     )
 
 
@@ -222,6 +225,39 @@ GET_FRAMES_TOOL = {
                 },
             },
             "required": ["times"],
+        },
+    },
+}
+
+
+#: The tool with which a cut video's question reads the text at a range it picks.
+GET_TRANSCRIPT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_transcript",
+        "description": (
+            "Return what is said and shown in this video between two times, "
+            "apart from what you already have."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "start": {
+                    "type": "string",
+                    "description": (
+                        "Times in the video, as seconds (83.5) or m:ss "
+                        "(\"1:23\")"
+                    ),
+                },
+                "end": {
+                    "type": "string",
+                    "description": (
+                        "Times in the video, as seconds (83.5) or m:ss "
+                        "(\"1:23\")"
+                    ),
+                },
+            },
+            "required": ["start", "end"],
         },
     },
 }

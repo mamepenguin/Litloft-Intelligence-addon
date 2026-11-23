@@ -14,8 +14,8 @@ from pathlib import Path
 
 from app.routers import rag as rag_router
 from app.workers.video_visual_selection import SelectedFrame, Selection, SelectionInputs
-from tests.file_question_doubles import chunk
-from tests.file_question_vision_doubles import Reply, ToolCall
+from tests.file_question_doubles import chunk, toward
+from tests.file_question_vision_doubles import Reply, ToolCall, Wire, vision_client
 from tests.search_endpoint_db import patch_everywhere
 from tests.video_frames_doubles import seed_text_less_video
 
@@ -27,6 +27,8 @@ PROVIDERS = ["openai_compatible", "ollama"]
 KINDS = ["text-video", "text-less-video"]
 ANSWER = "FINAL-ANSWER-MARKER"
 FAILED = {"error": "Answer generation failed"}
+#: The tools a cut-material tool request offers, in order.
+BOTH_TOOLS = ["get_frames", "get_transcript"]
 
 #: The seams the 120 s tool window and the 300 s total deadline are read
 #: through. A test shrinks them instead of waiting minutes.
@@ -114,6 +116,53 @@ def get_frames(*times) -> ToolCall:
 
 def asks(*times, text: str = "", thinking: str = "") -> Reply:
     return Reply(text=text, calls=(get_frames(*times),), thinking=thinking)
+
+
+def get_transcript(start, end) -> ToolCall:
+    return ToolCall({"start": start, "end": end}, name="get_transcript")
+
+
+def transcript_asks(start, end, *, text: str = "", thinking: str = "") -> Reply:
+    return Reply(
+        text=text, calls=(get_transcript(start, end),), thinking=thinking,
+    )
+
+
+def rank_in_file_order(monkeypatch, db) -> None:
+    """Rank every row equally, so fitting takes them in file order."""
+    patch_everywhere(monkeypatch, "embed_query", lambda _text: toward(db.db.dim, 1.0))
+
+
+def seed_cut_video(db, tmp_path, rows, *, duration: float = 80.0) -> None:
+    """Seed ``VIDEO`` with transcript ``(text, start, end)`` rows and no passage."""
+    seed_text_less_video(db, VIDEO, path=tmp_path / f"{VIDEO}.mp4", duration=duration)
+    for text, start, end in rows:
+        db.on(VIDEO).transcript(text, start=start, end=end)
+
+
+#: Three equal-sized transcript rows; a 40-character budget sends only the first.
+CUT_ROW_TEXTS = [chunk(f"CUT-ROW-{index}", 30) for index in range(3)]
+CUT_ROWS = tuple(zip(CUT_ROW_TEXTS, (0.0, 20.0, 30.0), (5.0, 25.0, 35.0)))
+CUT_BUDGET = 40
+
+
+def wire_for(llm, provider: str, script) -> Wire:
+    wire = Wire(provider)
+    wire.script = lambda body: script(wire, body)
+    vision_client(llm, provider=provider, wire=wire)
+    return wire
+
+
+def plays(*replies: Reply, then: Reply | None = None):
+    """Answer tool requests with ``replies`` in turn, everything else with ``then``."""
+    queue = list(replies)
+
+    def script(wire, body):
+        if offers_tool(wire, body) and queue:
+            return queue.pop(0)
+        return then if then is not None else Reply(text=ANSWER)
+
+    return script
 
 
 # ---------------------------------------------------------------------------
