@@ -25,7 +25,7 @@ S181B = (
     "things you could not find out unless the question asks about them."
 )
 S181C = (
-    "- Put nothing in square brackets except a number you may cite. Speak of a "
+    "- Use square brackets only around a number you were given. Speak of a "
     "moment of a video as the video at its time."
 )
 PASSAGES_ONLY_SENTENCE = (
