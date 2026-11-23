@@ -2350,3 +2350,161 @@ class TestTrimToSentenceBoundaryWithOffset:
         assert result == (trimmed, removed)
         assert result[0] == _trim_to_sentence_boundary(snippet)
         assert snippet[removed:].startswith(trimmed)
+
+
+# ---------------------------------------------------------------------------
+# System prompt by source kind, through the worker
+# SPEC-ADDON-175, SPEC-ADDON-176 (I6)
+# ---------------------------------------------------------------------------
+
+
+_TRANSCRIPT_SOURCES = [
+    pytest.param("talk.mp4", "video", "video/mp4", id="video"),
+    pytest.param("talk.m4a", "audio", "audio/mp4", id="audio"),
+    pytest.param(
+        "talk.loft", "other", "application/vnd.litloft.loft+json", id="loft"
+    ),
+]
+_DOCUMENT_SOURCES = [
+    pytest.param("novel.epub", "document", "application/epub+zip", id="epub"),
+    pytest.param("scan.pdf", "document", "application/pdf", id="pdf"),
+    pytest.param("notes.md", "text", "text/markdown", id="markdown"),
+]
+_SOURCE_BODY = "尾高春彦は高校でサッカー同好会を作った。" * 40
+
+
+def _expected_system_prompt(build: str, file_type: str) -> str:
+    from tests.summary_text_variant import golden, text_variant
+
+    transcript = golden(build, "ja")
+    if file_type in ("document", "text"):
+        return text_variant(build, transcript)
+    return transcript
+
+
+def _system_prompt_sent(mock_call) -> str:
+    if "system_prompt" in mock_call.kwargs:
+        return mock_call.kwargs["system_prompt"]
+    return mock_call.args[0]
+
+
+def _stub_source(monkeypatch, filename: str, file_type: str, mime: str) -> None:
+    monkeypatch.setattr("app.workers.summaries._has_summary", lambda fid: False)
+    monkeypatch.setattr(
+        "app.workers.summaries._has_detailed_summary", lambda fid: False
+    )
+    monkeypatch.setattr(
+        "app.workers.summaries._get_indexed_file",
+        lambda fid: {
+            "file_id": fid,
+            "drive": "d",
+            "filename": filename,
+            "file_type": file_type,
+            "mime_type": mime,
+            "title": "",
+            "description": "",
+        },
+    )
+    monkeypatch.setattr(
+        "app.workers.summaries._get_full_transcript", lambda fid: _SOURCE_BODY
+    )
+    monkeypatch.setattr(
+        "app.workers.summaries._get_full_document_text", lambda fid: _SOURCE_BODY
+    )
+    monkeypatch.setattr(
+        "app.workers.summaries._get_pdf_markdown",
+        lambda fid: _SOURCE_BODY if filename.endswith(".pdf") else None,
+    )
+    monkeypatch.setattr("app.workers.summaries._save_summary", AsyncMock())
+    monkeypatch.setattr(
+        "app.workers.summaries._save_detailed_summary", MagicMock()
+    )
+    monkeypatch.setattr(
+        "app.workers.summaries._set_detailed_status", MagicMock()
+    )
+
+    async def _always(*a, **k):
+        return True
+
+    monkeypatch.setattr("app.policy_client.is_file_feature_enabled", _always)
+
+
+def _ja_settings(monkeypatch, make_settings, **features):
+    settings = make_settings(
+        features=FeaturesConfig(**features),
+        llm=LLMConfig(
+            provider="openai_compatible", model="m", output_language="ja"
+        ),
+    )
+    monkeypatch.setattr("app.config.settings", settings)
+    monkeypatch.setattr("app.workers.summaries.settings", settings)
+    return settings
+
+
+class TestSystemPromptBySourceKind:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("filename", "file_type", "mime"), _TRANSCRIPT_SOURCES + _DOCUMENT_SOURCES
+    )
+    async def test_spec_addon_175_176_on_index_job_sends_the_prompt_for_its_source(
+        self,
+        use_llm,
+        monkeypatch,
+        make_settings,
+        mock_llm_client,
+        filename,
+        file_type,
+        mime,
+    ):
+        """I6: one call per variant; documents get the text prompt, the rest
+        the transcript prompt."""
+        _ja_settings(
+            monkeypatch,
+            make_settings,
+            summaries="on_index",
+            detailed_summaries="on_index",
+        )
+        _stub_source(monkeypatch, filename, file_type, mime)
+        mock_llm_client.generate_json = AsyncMock(
+            return_value={"short": "s", "long": "l"}
+        )
+        mock_llm_client.generate = AsyncMock(return_value="## 導入\n\n本文…")
+        use_llm(mock_llm_client)
+
+        await SummariesWorker()._process_file("abc")
+
+        mock_llm_client.generate_json.assert_called_once()
+        mock_llm_client.generate.assert_called_once()
+        assert _system_prompt_sent(
+            mock_llm_client.generate_json.call_args
+        ) == _expected_system_prompt("_build_system_prompt", file_type)
+        assert _system_prompt_sent(
+            mock_llm_client.generate.call_args
+        ) == _expected_system_prompt("_build_detailed_system_prompt", file_type)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("filename", "file_type", "mime"), _TRANSCRIPT_SOURCES + _DOCUMENT_SOURCES
+    )
+    async def test_spec_addon_175_176_detailed_generation_sends_the_prompt_for_its_source(
+        self,
+        monkeypatch,
+        make_settings,
+        mock_llm_client,
+        filename,
+        file_type,
+        mime,
+    ):
+        """I6 for the manual generate and regenerate path."""
+        _ja_settings(monkeypatch, make_settings, detailed_summaries="manual")
+        _stub_source(monkeypatch, filename, file_type, mime)
+        mock_llm_client.generate = AsyncMock(return_value="## 導入\n\n本文…")
+
+        await generate_detailed_summary(
+            "abc", resolved_with(mock_llm_client, model="m")
+        )
+
+        mock_llm_client.generate.assert_called_once()
+        assert _system_prompt_sent(
+            mock_llm_client.generate.call_args
+        ) == _expected_system_prompt("_build_detailed_system_prompt", file_type)

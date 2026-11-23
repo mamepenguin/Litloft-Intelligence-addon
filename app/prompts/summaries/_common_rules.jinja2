@@ -1,4 +1,4 @@
-{#- vars: (none) — see workers/summaries.py:_COMMON_RULES -#}
+{#- vars: source_kind ("transcript" | "text", default "transcript") — see workers/summaries.py:_source_kind -#}{%- set is_text = (source_kind | default("transcript")) == "text" -%}
 ## Strict topic boundaries
 
 When the source covers multiple independent topics (separate recipes, products, chapters, episodes, etc.), each topic section must contain only information from the portion of the source that covers that topic.
@@ -6,7 +6,12 @@ When the source covers multiple independent topics (separate recipes, products, 
 - Do not copy features, effects, or points from one topic into another topic's section (avoid cross-topic information bleed between adjacent topics)
 - When in doubt, either omit the information or create a separate cross-topic section (e.g. "Points across all topics")
 
-## Handling proper nouns
+{% if is_text %}## Handling proper nouns
+
+This content is text, so proper nouns are written as they appear in it.
+
+- When the content spells one entity in more than one way, use the spelling in the filename, title or description; otherwise use the most frequent spelling in the content
+- Do not substitute a different spelling, character or reading by guesswork{% else %}## Handling proper nouns
 
 This content originates from a transcript (speech recognition or text extraction), so it may contain mis-recognized proper nouns. Mis-recognitions can appear not only as phonetic transliterations but also as script-specific ASR errors: wrong characters with similar pronunciation, plausible substitutions, incorrect word boundaries, and other forms.
 
@@ -19,7 +24,7 @@ This content originates from a transcript (speech recognition or text extraction
 ### Handle with care
 - For proper nouns that do not appear in the filename, title, or description, use the transcript rendering as-is in principle
 - Even if the original rendering may be wrong, do not substitute a different character or reading by guesswork (the risk of introducing a new error is higher)
-- For personal names, place names, product names, brand names, and similar proper nouns where a wrong recovery could cause real harm, retain the original rendering even if unintelligible
+- For personal names, place names, product names, brand names, and similar proper nouns where a wrong recovery could cause real harm, retain the original rendering even if unintelligible{% endif %}
 
 ## Handling numeric information
 
@@ -38,8 +43,8 @@ Numeric information in the source (quantities, times, temperatures, storage peri
 ### Procedural (recipe, tutorial, walkthrough)
 - Record specific values such as ingredient names, quantities, cooking times, storage periods, and temperatures with particular accuracy
 - Do not reorder steps
-- Do not mix points from one recipe or procedure into another recipe or procedure's section (pay special attention to strict topic boundaries)
-- For culinary names, technique names, and operation names that ASR tends to distort but can be recovered as common nouns, correct to the appropriate form following the proper noun rules
+- Do not mix points from one recipe or procedure into another recipe or procedure's section (pay special attention to strict topic boundaries){% if not is_text %}
+- For culinary names, technique names, and operation names that ASR tends to distort but can be recovered as common nouns, correct to the appropriate form following the proper noun rules{% endif %}
 
 ### Narrative (anime, drama, novel, film)
 - Watch for inconsistent renderings of character names and unify each character to one form

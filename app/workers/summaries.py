@@ -174,7 +174,16 @@ DETAILED_STATUS_GENERATED = "generated"
 DETAILED_STATUS_FAILED = "failed"
 
 
-def _build_system_prompt() -> str:
+def _source_kind(context_type: str | None) -> str:
+    """Return the templates' ``source_kind`` for a summaries context type.
+
+    Only a document is text; every other value gets the transcript rules,
+    which are the stricter of the two about person names.
+    """
+    return "text" if context_type == "document" else "transcript"
+
+
+def _build_system_prompt(context_type: str | None = None) -> str:
     """Build the system prompt with language instruction from config."""
     lang = settings.llm.output_language
     lang_line = _LANGUAGE_INSTRUCTIONS.get(
@@ -186,10 +195,11 @@ def _build_system_prompt() -> str:
     return render(
         "summaries/short_long_system.jinja2",
         language_instruction=lang_line,
+        source_kind=_source_kind(context_type),
     )
 
 
-def _build_detailed_system_prompt() -> str:
+def _build_detailed_system_prompt(context_type: str | None = None) -> str:
     """Build the system prompt for detailed (Markdown long-form) summaries.
 
     The user-visible output is a structured Markdown document with four
@@ -210,6 +220,7 @@ def _build_detailed_system_prompt() -> str:
     return render(
         "summaries/detailed_system.jinja2",
         language_instruction=lang_line,
+        source_kind=_source_kind(context_type),
     )
 
 
@@ -1074,7 +1085,7 @@ async def generate_detailed_summary(
         max_chars=settings.summaries.detailed_max_context_chars,
         window_count=settings.summaries.detailed_window_count,
     )
-    system_prompt = _build_detailed_system_prompt()
+    system_prompt = _build_detailed_system_prompt(context_type)
     user_prompt = _build_detailed_user_prompt(
         indexed_file, context_type, prepared, was_truncated
     )
@@ -1149,7 +1160,7 @@ async def _generate_short_long(
     )
 
     parsed = await resolved.client.generate_json(
-        _build_system_prompt(), user_prompt
+        _build_system_prompt(context_type), user_prompt
     )
 
     if not isinstance(parsed, dict):
