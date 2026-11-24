@@ -17,7 +17,7 @@ from sqlalchemy import text
 
 from app.database import get_search_db, get_search_db_read, get_search_engine
 from app.models import Embedding
-from app.vec_partition import _FREE_SPACE_FACTOR, insert_vector_sql
+from app.vec_partition import _FREE_SPACE_FACTOR, insert_vector_sql, read_vectors
 
 logger = logging.getLogger(__name__)
 
@@ -34,15 +34,7 @@ SCENE_SECONDS = 30.0
 def _vector_rows(session, table: str, embedding_ids: list[str]) -> dict[str, bytes]:
     if not embedding_ids:
         return {}
-    placeholders = ", ".join(f":id{i}" for i in range(len(embedding_ids)))
-    rows = session.execute(
-        text(
-            f"SELECT embedding_id, vector FROM {table} "
-            f"WHERE embedding_id IN ({placeholders})"
-        ),
-        {f"id{i}": value for i, value in enumerate(embedding_ids)},
-    ).fetchall()
-    return {row[0]: bytes(row[1]) for row in rows if row[1] is not None}
+    return read_vectors(session, table, embedding_ids)
 
 
 def _scene_times(session, file_id: str) -> list[float]:

@@ -32,6 +32,7 @@ from app.extractors.pdf import PYMUPDF_LOCK
 from app.frame_cache import extract_frame_to_cache, frame_cache_path, round_ms
 from app.frame_text_lines import frame_segments
 from app.rag.prompt import format_position
+from app.vec_partition import read_vectors
 from app.workers.embedder import embed_query
 from app.workers.video_visual_selection import load_selection_inputs, select_scenes
 from app.workers.vision import _load_image_bytes, _preprocess_image
@@ -92,9 +93,6 @@ PAGE_IMAGE_LOCK_TIMEOUT = "lock_timeout"
 IMAGE_FAILURE_PICTURE = "picture_unreadable"
 IMAGE_FAILURE_FRAME = "frame_failed"
 IMAGE_FAILURE_REJECTED = "image_rejected"
-
-# vec0 takes its ids as one parameter each, so they go in batches.
-_VECTOR_BATCH = 400
 
 # ``[n]`` markers in the answer, up to a three-digit chunk number.
 _CITATION_MARKER = re.compile(r"\[(\d{1,3})\]")
@@ -1447,23 +1445,12 @@ def _fit(rows: list[_Row], budget: int) -> list[_Row]:
 def _vectors(embedding_ids: list[str]) -> dict[str, np.ndarray]:
     """The stored ``vec_text`` vectors of ``embedding_ids``."""
     wanted = sorted(set(embedding_ids))
-    out: dict[str, np.ndarray] = {}
-    engine = get_search_engine()
-    for start in range(0, len(wanted), _VECTOR_BATCH):
-        batch = wanted[start:start + _VECTOR_BATCH]
-        placeholders = ", ".join(f":id{i}" for i in range(len(batch)))
-        with engine.connect() as conn:
-            rows = conn.execute(
-                sql_text(
-                    "SELECT embedding_id, vector FROM vec_text "
-                    f"WHERE embedding_id IN ({placeholders})"
-                ),
-                {f"id{i}": value for i, value in enumerate(batch)},
-            ).fetchall()
-        for embedding_id, blob in rows:
-            if blob:
-                out[embedding_id] = np.frombuffer(blob, dtype=np.float32)
-    return out
+    with get_search_engine().connect() as conn:
+        stored = read_vectors(conn, "vec_text", wanted)
+    return {
+        embedding_id: np.frombuffer(blob, dtype=np.float32)
+        for embedding_id, blob in stored.items()
+    }
 
 
 def _cosine(left: np.ndarray, right: np.ndarray) -> float:

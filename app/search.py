@@ -28,6 +28,7 @@ from app.models import Embedding, IndexedFile, TranscriptChunk
 from app.workers.clip import embed_text_clip
 from app.workers.embedder import embed_query
 from app.workers.whisper import LOFT_MIME
+from app.vec_partition import read_vectors
 
 if TYPE_CHECKING:
     from app.rag.query_transform import RequiredTerm
@@ -506,8 +507,6 @@ def _safe_clip_embed(query: str) -> np.ndarray | None:
 #: above it the KNN is widened instead, because one read per row stops being
 #: cheap. Matches the size ``/search/images`` already reads in one request.
 _SCOPE_EXACT_ROWS = 20_000
-#: A statement's variable count is capped, so vectors are read in chunks.
-_SCOPE_READ_BATCH = 500
 #: sqlite-vec refuses a KNN ``k`` above 4096.
 _SCOPE_FETCH_MAX = 4096
 _SCOPE_FETCH_FACTORS = (4, 16, 64)
@@ -582,25 +581,13 @@ def _scoped_vector_rows(
         scored: list[tuple[float, str]] = []
         query_vector = np.frombuffer(vec_bytes, dtype=np.float32)
         with engine.connect() as conn:
-            for start in range(0, len(embedding_ids), _SCOPE_READ_BATCH):
-                batch = embedding_ids[start : start + _SCOPE_READ_BATCH]
-                placeholders = ",".join(f":id{i}" for i in range(len(batch)))
-                stored = conn.execute(
-                    sql_text(
-                        f"SELECT embedding_id, vector FROM {table} "
-                        f"WHERE embedding_id IN ({placeholders})"
-                    ),
-                    {f"id{i}": value for i, value in enumerate(batch)},
-                ).fetchall()
-                if not stored:
-                    continue
-                matrix = np.stack(
-                    [np.frombuffer(row[1], dtype=np.float32) for row in stored]
-                )
-                distances = np.linalg.norm(matrix - query_vector, axis=1)
-                scored.extend(
-                    zip(distances.tolist(), [row[0] for row in stored])
-                )
+            stored = read_vectors(conn, table, embedding_ids)
+        if stored:
+            matrix = np.stack(
+                [np.frombuffer(blob, dtype=np.float32) for blob in stored.values()]
+            )
+            distances = np.linalg.norm(matrix - query_vector, axis=1)
+            scored.extend(zip(distances.tolist(), stored))
         scored.sort(key=lambda item: item[0])
         return [(embedding_id, distance) for distance, embedding_id in scored[:limit]]
 
@@ -1087,17 +1074,8 @@ def search_images(
 
     for start in range(0, len(rows), _IMAGE_VECTOR_BATCH):
         batch = rows[start : start + _IMAGE_VECTOR_BATCH]
-        placeholders = ",".join(f":id{i}" for i in range(len(batch)))
-        params = {f"id{i}": row.id for i, row in enumerate(batch)}
         with engine.connect() as conn:
-            vectors = conn.execute(
-                sql_text(
-                    "SELECT embedding_id, vector FROM vec_clip "
-                    f"WHERE embedding_id IN ({placeholders})"
-                ),
-                params,
-            ).fetchall()
-        stored = {row[0]: row[1] for row in vectors}
+            stored = read_vectors(conn, "vec_clip", [row.id for row in batch])
         for row in batch:
             blob = stored.get(row.id)
             if not blob:
