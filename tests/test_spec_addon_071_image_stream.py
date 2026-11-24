@@ -282,15 +282,18 @@ class TestWhatTheFailureTableReports:
         assert "1:05" in wire.prompts[-1]
 
     async def test_a_pdf_gets_no_image(self, db, addon, llm, call, tmp_path):
-        """SPEC-ADDON-071 I3: a document is not a picture for this route."""
+        """SPEC-ADDON-071 I3: a document is not a picture for this route.
+
+        A profile that cannot see keeps today's text path.
+        """
         seed_document(
             db, PDF, text=chunk("page words", 30), path=tmp_path / "doc.pdf",
         )
-        _, wire = vision_client(llm)
+        _, wire = vision_client(llm, config=openai_config(vision_model=""))
 
         response = await ask(call, PDF, position=65.0)
 
-        assert by_kind(response)["meta"]["image"] == "none"
+        assert by_kind(response)["meta"].get("image", "none") == "none"
         assert wire.image_bodies == []
 
 

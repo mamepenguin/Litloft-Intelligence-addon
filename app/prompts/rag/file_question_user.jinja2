@@ -1,4 +1,4 @@
-{#- vars: file_block (string), question (string), passages (list[str]), image (bool), frames (bool), position (string|none), history (list), duration (string|none), contents (list[str]|none) — see rag/prompt.py:build_file_question_user_prompt -#}
+{#- vars: file_block (string), question (string), passages (list[str]), image (bool), frames (bool), position (string|none), history (list), duration (string|none), contents (list[str]|none), document (bool), page_count (int|none), sections (tuple[int,int]|none) — see rag/prompt.py:build_file_question_user_prompt -#}
 {{ file_block }}{% if history -%}
 Earlier in this conversation:
 {% for turn in history -%}
@@ -20,13 +20,19 @@ Passages from the file:
 {{ passage }}
 {% endfor -%}
 {% endif %}
-{%- if duration or contents %}
+{%- if (duration or contents) and not document %}
 
 {% if duration %}Duration of the video: {{ duration }}.{% endif %}
 {% if contents %}Sections of the video, each with the start of what is said and shown in it:
 {% for line in contents %}{{ line }}
 {% endfor %}{% endif %}
 {% endif %}
+{%- if document and (page_count or sections or contents) %}
+{% if page_count %}The document has {{ page_count }} pages.
+{% endif %}{% if sections %}The book has sections {{ sections[0] }} to {{ sections[1] }}.
+{% endif %}{% if contents %}Contents, each with the start of what it says:
+{% for line in contents %}{{ line }}
+{% endfor %}{% endif %}{% endif %}
 {% if frames %}
 The frames follow the question, each introduced by its number and time.
 {% endif %}

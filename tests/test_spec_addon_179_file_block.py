@@ -168,7 +168,7 @@ async def test_spec_addon_179_i3_no_path_sends_the_mount(
     )
     folder = {
         "passages-only": "docs", "passages-and-image": "pics", "image-only": "pics",
-        "text-only-retry": "pics",
+        "text-only-retry": "pics", "document-tool": "docs",
     }.get(name, TOP_OF_DRIVE)
     file_line, type_line = BLOCKS[name].split("\n")[:2]
     expected = f"{file_line}\n{type_line}\nFolder: {folder}\n\n"

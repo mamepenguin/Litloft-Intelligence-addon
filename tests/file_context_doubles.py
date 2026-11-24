@@ -10,6 +10,7 @@ import copy
 import json
 from pathlib import Path
 
+from tests import document_tool_doubles as document_tools
 from tests.file_context_rules import (  # noqa: F401 - re-exported
     ANSWER_LINE,
     IMAGE_RULE,
@@ -30,6 +31,7 @@ from tests.file_question_vision_doubles import (
     Reply,
     Wire,
     ask,
+    openai_config,
     refusing,
     seed_document,
     seed_picture,
@@ -184,11 +186,35 @@ async def _asked(call, file_id: str) -> None:
 
 
 async def passages_only(db, addon, llm, call, tmp_path, monkeypatch, **settings) -> Wire:
+    """Today's text path, pinned by a profile that cannot see."""
     if settings:
         addon(**settings)
     seed_document(db, PDF_ID, text=PDF_TEXT, path=tmp_path / "docs" / "report.pdf")
-    _, wire = vision_client(llm)
+    _, wire = vision_client(llm, config=openai_config(vision_model=""))
     await _asked(call, PDF_ID)
+    return wire
+
+
+DOCUMENT_ID = "pdf000000182"
+
+
+async def document_tool(
+    db, addon, llm, call, tmp_path, monkeypatch, **settings,
+) -> Wire:
+    """A cut PDF with a seeing profile: one text request, then the answer."""
+    addon(budget=document_tools.PDF_BUDGET, **settings)
+    document_tools.seed_pdf(
+        db, tmp_path, monkeypatch, file_id=DOCUMENT_ID,
+    )
+    wire = document_tools.wire_for(
+        llm,
+        "openai_compatible",
+        document_tools.plays(
+            document_tools.calls(document_tools.get_text(page=1)),
+            then=Reply(text=ANSWER),
+        ),
+    )
+    await _asked(call, DOCUMENT_ID)
     return wire
 
 
@@ -311,6 +337,8 @@ RUN = {
     "passages-and-image": passages_and_image,
     "image-only": image_only,
     "text-only-retry": text_only_retry,
+    # This path did not exist before the document tools, so its golden is empty.
+    "document-tool": document_tool,
 }
 #: The file block each path's file gets: ``db.file`` names it ``<id>.bin``,
 #: and its absolute path under ``tmp_path`` has no mount, so no ``Folder:``.
@@ -319,6 +347,7 @@ BLOCKS = {
     "passages-and-image": block(file=f"{PICTURE_ID}.bin", type_="image/png"),
     "image-only": block(file=f"{PICTURE_ID}.bin", type_="image/png"),
     "text-only-retry": block(file=f"{PICTURE_ID}.bin", type_="image/png"),
+    "document-tool": block(file=f"{DOCUMENT_ID}.bin", type_="application/pdf"),
 }
 for _provider in PROVIDERS:
     for _kind in KINDS:
@@ -331,3 +360,7 @@ for _name in RUN:
     BLOCKS.setdefault(_name, VIDEO_BLOCK)
 
 SCENARIOS = tuple(RUN)
+
+#: The paths whose requests are today's apart from SPEC-ADDON-179/180/181's
+#: lines; a document question sends the requests of SPEC-ADDON-182 instead.
+TODAYS_PATHS = tuple(name for name in SCENARIOS if name != "document-tool")

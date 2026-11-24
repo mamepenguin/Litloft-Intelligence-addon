@@ -131,6 +131,10 @@ def build_file_question_system_prompt(
     frames: bool = False,
     tool: bool = False,
     cut: bool = False,
+    document: bool = False,
+    get_text: bool = False,
+    page_images: bool = False,
+    unit: str = "page",
 ) -> str:
     """Return the system prompt for a question about one file.
 
@@ -146,6 +150,9 @@ def build_file_question_system_prompt(
     the citation limit when there is something to cite. ``tool`` says the
     model may ask for more frames of the video, and ``cut`` that the
     passages are only part of its text and may ask for the rest of it.
+    ``document`` puts the question on the document tool path, where
+    ``get_text`` and ``page_images`` say which of its tools are offered, and
+    ``unit`` is the word a text tool names its place by.
     """
     lang = output_language
     lang_line = _LANGUAGE_INSTRUCTIONS.get(
@@ -161,6 +168,10 @@ def build_file_question_system_prompt(
         frames=frames,
         tool=tool,
         cut=cut,
+        document=document,
+        get_text=get_text,
+        page_images=page_images,
+        unit=unit,
     )
 
 
@@ -177,6 +188,9 @@ def build_file_question_user_prompt(
     history: list[Any] | None = None,
     duration: float | None = None,
     contents: tuple[str, ...] = (),
+    document: bool = False,
+    page_count: int | None = None,
+    sections: tuple[int, int] | None = None,
 ) -> str:
     """Serialize one file's chunks, numbered from 1, and the question.
 
@@ -189,7 +203,9 @@ def build_file_question_user_prompt(
     viewer's clock when the caller read one for a media file. ``history`` is the
     kept earlier turns, oldest first, written before the question. ``duration``
     and ``contents`` state how long the video is and what the sections of it
-    hold, after the passages.
+    hold, after the passages. ``document`` adds a document's page count or
+    section range, then ``contents``: the start of what its pages or sections
+    say.
     """
     file_lines = [
         f"{label}: {value}"
@@ -213,7 +229,77 @@ def build_file_question_user_prompt(
         history=history or [],
         duration=format_position(duration) if duration is not None else None,
         contents=contents,
+        document=document,
+        page_count=page_count,
+        sections=sections,
     )
+
+
+def get_text_tool(unit: str) -> dict:
+    """The ``get_text`` definition for a PDF (``page``) or an EPUB (``section``)."""
+    noun = "document" if unit == "page" else "book"
+    return {
+        "type": "function",
+        "function": {
+            "name": "get_text",
+            "description": (
+                f"Return this file's text onward from a {unit}, or from just "
+                "after a passage you were given, apart from what you already "
+                f"have. Give either {unit} or after."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    unit: {
+                        "type": "integer",
+                        "description": f"A {unit} number of this {noun}",
+                    },
+                    "after": {
+                        "type": "integer",
+                        "description": (
+                            "The number of a passage you were given; the text "
+                            "after it is returned"
+                        ),
+                    },
+                },
+            },
+        },
+    }
+
+
+#: The PDF form of the tool with which a document's question reads more of its text.
+GET_TEXT_TOOL = get_text_tool("page")
+
+#: The EPUB form of :data:`GET_TEXT_TOOL`.
+GET_TEXT_SECTION_TOOL = get_text_tool("section")
+
+
+#: The tool with which a PDF's question asks for pictures of its pages.
+GET_PAGE_IMAGES_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_page_images",
+        "description": (
+            "Return images of pages of this document: the pages you name and "
+            "the pages the passages you name are on, up to 4 pages."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pages": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "Page numbers of this document",
+                },
+                "passages": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "Numbers of passages whose pages you want",
+                },
+            },
+        },
+    },
+}
 
 
 #: The tool with which a video's question asks for the frames at times it picks.

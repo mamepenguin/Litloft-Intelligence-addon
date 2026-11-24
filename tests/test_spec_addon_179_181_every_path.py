@@ -14,6 +14,7 @@ from tests.file_context_doubles import (
     OLD_OPENER,
     RUN,
     SCENARIOS,
+    TODAYS_PATHS,
     assert_s179_and_s181,
     question_bodies,
     system_of,
@@ -86,7 +87,7 @@ async def test_spec_addon_179_i4_the_passages_only_opener_names_the_file_lines(
         assert OLD_OPENER not in system_of(body)
 
 
-@pytest.mark.parametrize("name", SCENARIOS)
+@pytest.mark.parametrize("name", TODAYS_PATHS)
 async def test_spec_addon_179_i7_every_request_is_todays_apart_from_the_additions(
     name, db, addon, llm, call, tmp_path, monkeypatch,
 ):
@@ -94,7 +95,8 @@ async def test_spec_addon_179_i7_every_request_is_todays_apart_from_the_addition
 
     Taking out the file block, S179, S181a/b/c, the new opener and S180 leaves
     today's request byte for byte: every earlier rule, citation number and tool
-    is unchanged.
+    is unchanged. The document tool path sends the requests SPEC-ADDON-182
+    states instead.
     """
     bodies = await _play(name, db, addon, llm, call, tmp_path, monkeypatch)
 
