@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import threading
-import time
+import gc
+import weakref
 
 from tests.document_tool_doubles import (
     ANSWER,
@@ -12,13 +12,14 @@ from tests.document_tool_doubles import (
     PDF_BUDGET,
     PDF_ID,
     QUESTION,
+    calls,
+    get_page_images,
     plays,
     seed_epub,
     seed_pdf,
     user_prompt,
     wire_for,
 )
-from tests.file_question_doubles import DRIVE
 from tests.file_question_vision_doubles import (  # noqa: F401 - fixtures
     Reply,
     addon,
@@ -47,40 +48,48 @@ async def test_a_section_title_carries_no_bracketed_number_or_line_break(
     assert line.startswith("Section 3: Intro Part — ")
 
 
-def test_a_document_still_open_when_the_budget_runs_out_is_closed_under_the_lock(
-    db, addon, tmp_path, monkeypatch,
+async def test_every_pymupdf_object_is_freed_under_the_lock_even_when_a_page_fails(
+    db, addon, llm, call, tmp_path, monkeypatch,
 ):
-    """SPEC-ADDON-183 I8: closing the PDF waits for the lock rather than leaving it to the collector."""
+    """SPEC-ADDON-183 I8: pages, pixmaps and the document are dropped while the lock is held."""
     import pymupdf
 
     from app.extractors.pdf import PYMUPDF_LOCK
-    from app.rag import file_question
 
     addon(budget=PDF_BUDGET)
     seed_pdf(db, tmp_path, monkeypatch)
-    material = file_question.load_material(
-        PDF_ID, DRIVE, QUESTION, budget=PDF_BUDGET,
-    )
-    closes: list[bool] = []
-    closed = threading.Event()
-    real_close = pymupdf.Document.close
+    freed: list[tuple[str, bool]] = []
+    render = pymupdf.Page.get_pixmap
+    close = pymupdf.Document.close
+
+    def _render(self, *args, **kwargs):
+        weakref.finalize(
+            self, lambda: freed.append(("page", PYMUPDF_LOCK.locked())),
+        )
+        if self.number == 1:
+            raise RuntimeError("render failed")
+        pixmap = render(self, *args, **kwargs)
+        weakref.finalize(
+            pixmap, lambda: freed.append(("pixmap", PYMUPDF_LOCK.locked())),
+        )
+        return pixmap
 
     def _close(self):
-        closes.append(PYMUPDF_LOCK.locked())
-        real_close(self)
-        closed.set()
+        freed.append(("document", PYMUPDF_LOCK.locked()))
+        close(self)
 
+    monkeypatch.setattr(pymupdf.Page, "get_pixmap", _render)
     monkeypatch.setattr(pymupdf.Document, "close", _close)
+    wire = wire_for(
+        llm, "openai_compatible",
+        plays(calls(get_page_images(pages=[1, 2])), then=Reply(text=ANSWER)),
+    )
 
-    pages = file_question.PageImages(material, lock_seconds=0.2)
-    pages.open()
-    assert PYMUPDF_LOCK.acquire(timeout=1)
-    try:
-        time.sleep(0.3)
-        pages.close()
-        assert closes == []
-    finally:
-        PYMUPDF_LOCK.release()
+    await ask(call, PDF_ID, question=QUESTION)
+    gc.collect()
 
-    assert closed.wait(timeout=5)
-    assert closes == [True]
+    assert len(wire.requests) == 2
+    assert sorted(kind for kind, _ in freed) == [
+        "document", "page", "page", "pixmap",
+    ]
+    assert all(locked for _, locked in freed), freed

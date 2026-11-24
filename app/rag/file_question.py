@@ -1002,24 +1002,29 @@ def page_image_path(material: Material) -> str | None:
     )
 
 
-def _close_locked(document: Any, *, acquired: bool = False) -> None:
-    """Close a PyMuPDF document while holding the lock, then drop it."""
-    if not acquired:
-        PYMUPDF_LOCK.acquire()
-    try:
-        document.close()
-        del document
-    finally:
-        PYMUPDF_LOCK.release()
+def _render_page(document: Any, number: int) -> bytes:
+    """Page ``number`` from 1 as a JPEG whose long edge is 1280 px.
+
+    Its page and pixmap are locals of this frame alone, so they are freed when
+    it returns, or with the traceback of what it raised.
+    """
+    import pymupdf
+
+    page = document[number - 1]
+    long_edge = max(float(page.rect.width), float(page.rect.height))
+    zoom = PAGE_IMAGE_LONG_EDGE / long_edge
+    pixmap = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
+    return pixmap.tobytes("jpeg")
 
 
 class PageImages:
-    """One page request's PDF, opened once and read under the shared lock.
+    """One page request's PDF, read inside one hold of the shared lock.
 
-    A long extraction holds :data:`app.extractors.pdf.PYMUPDF_LOCK` for as long
-    as it runs, and one request may wait no more than
-    :data:`PAGE_IMAGE_LOCK_SECONDS` for it in all: every PyMuPDF call of the
-    request shares that budget.
+    PyMuPDF objects call into MuPDF when they are freed, and MuPDF must not
+    run beside an extraction. So the lock is taken on the request's first need,
+    waiting at most :data:`PAGE_IMAGE_LOCK_SECONDS`, and held until
+    :meth:`close`, which closes and drops the document before releasing it;
+    a page's failure is handled by the caller while the lock is still held.
     """
 
     def __init__(
@@ -1027,59 +1032,36 @@ class PageImages:
         lock_seconds: float = PAGE_IMAGE_LOCK_SECONDS,
     ) -> None:
         self._path = page_image_path(material)
-        self._end = time.monotonic() + lock_seconds
+        self._lock_seconds = lock_seconds
+        self._held = False
         self._document: Any = None
 
     def open(self) -> None:
         if self._path is None:
             raise FileNotFoundError("the file has no path on disk")
-        with self._locked():
-            import pymupdf
+        if not PYMUPDF_LOCK.acquire(timeout=self._lock_seconds):
+            raise PageImageUnavailable(PAGE_IMAGE_LOCK_TIMEOUT)
+        self._held = True
+        import pymupdf
 
-            self._document = pymupdf.open(self._path)
+        self._document = pymupdf.open(self._path)
 
     def page_count(self) -> int:
-        with self._locked():
-            return int(self._document.page_count)
+        return int(self._document.page_count)
 
     def image(self, number: int) -> bytes:
         """Page ``number`` from 1 as a JPEG whose long edge is 1280 px."""
-        with self._locked():
-            import pymupdf
-
-            page = self._document[number - 1]
-            long_edge = max(float(page.rect.width), float(page.rect.height))
-            zoom = PAGE_IMAGE_LONG_EDGE / long_edge
-            pixmap = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
-            data = pixmap.tobytes("jpeg")
-            # Dropped here, under the lock: their finalizers call into MuPDF.
-            del pixmap, page
-            return data
+        return _render_page(self._document, number)
 
     def close(self) -> None:
-        document, self._document = self._document, None
-        if document is None:
+        if not self._held:
             return
-        if PYMUPDF_LOCK.acquire(
-            timeout=max(0.0, self._end - time.monotonic())
-        ):
-            _close_locked(document, acquired=True)
-            return
-        # Past the budget the answer must not wait, and leaving the document to
-        # the collector would run its finalizer outside the lock.
-        threading.Thread(
-            target=_close_locked, args=(document,), daemon=True,
-        ).start()
-
-    @contextlib.contextmanager
-    def _locked(self) -> Iterator[None]:
-        if not PYMUPDF_LOCK.acquire(
-            timeout=max(0.0, self._end - time.monotonic())
-        ):
-            raise PageImageUnavailable(PAGE_IMAGE_LOCK_TIMEOUT)
         try:
-            yield
+            if self._document is not None:
+                self._document.close()
+                self._document = None
         finally:
+            self._held = False
             PYMUPDF_LOCK.release()
 
 
