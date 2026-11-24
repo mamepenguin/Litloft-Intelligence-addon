@@ -432,6 +432,7 @@ def ensure_youtube_frame(
     if fmt is None:
         _drop_description(file_id)
         raise _fail(file_id, 502, "Frame source unavailable", "no_format")
+    _wait_until_available(file_id, fmt, deadline)
 
     if not _slots.acquire(timeout=max(0.0, deadline - time.monotonic())):
         raise _fail(file_id, 504, "Frame extraction timed out", "timeout")
@@ -442,6 +443,24 @@ def ensure_youtube_frame(
         _run_ffmpeg(file_id, fmt, cache_path, timestamp_seconds, size, budget)
     finally:
         _slots.release()
+
+
+def _wait_until_available(file_id: str, fmt: dict[str, Any], deadline: float) -> None:
+    """Sleep until the format's ``available_at``, or raise 504 when the deadline cannot reach it.
+
+    yt-dlp marks a stream URL some clients return with ``available_at`` (epoch
+    seconds), and YouTube answers 403 to a read made before it; yt-dlp's own
+    downloader waits for it, so a reader of the URL has to as well.
+    """
+    available_at = _positive_number(fmt.get("available_at"))
+    if available_at is None:
+        return
+    wait = available_at - time.time()
+    if wait <= 0:
+        return
+    if time.monotonic() + wait > deadline - _MIN_FFMPEG_BUDGET_SECONDS:
+        raise _fail(file_id, 504, "Frame extraction timed out", "timeout")
+    time.sleep(wait)
 
 
 def _run_ffmpeg(
