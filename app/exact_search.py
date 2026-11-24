@@ -17,6 +17,7 @@ from sqlalchemy import text as sql_text
 from app.database import get_search_db_read
 from app.document_sections import EPUB_MIME
 from app.frame_text_lines import frame_segments
+from app.vec_partition import read_vectors
 
 SOURCES = ("text", "transcript", "scene")
 SNIPPET_CONTEXT_CHARS = 80
@@ -291,17 +292,11 @@ def rank_scenes(query_vector: np.ndarray, drive: str, limit: int) -> list[dict[s
         ]
         if not wanted:
             return []
-        vectors = db.execute(
-            sql_text(
-                "SELECT embedding_id, vector FROM vec_text WHERE embedding_id IN :ids"
-            ).bindparams(bindparam("ids", expanding=True)),
-            {"ids": wanted},
-        ).fetchall()
+        vectors = read_vectors(db, "vec_text", wanted)
 
     vector_of = {
-        row.embedding_id: np.frombuffer(row.vector, dtype=np.float32)
-        for row in vectors
-        if row.vector
+        embedding_id: np.frombuffer(blob, dtype=np.float32)
+        for embedding_id, blob in vectors.items()
     }
     query_norm = float(np.linalg.norm(query_vector))
     results = []

@@ -14,6 +14,7 @@ import re
 import shutil
 import sqlite3
 import time
+from collections.abc import Iterable
 from pathlib import Path
 
 from sqlalchemy import bindparam, text
@@ -51,6 +52,31 @@ def insert_vector_sql(table: str) -> str:
         f"INSERT INTO {table}(embedding_id, embedding_type, vector) "
         f"VALUES(:id, :type, :vec)"
     )
+
+
+def read_vectors(conn, table: str, embedding_ids: Iterable[str]) -> dict[str, bytes]:
+    """The stored vector of each of ``embedding_ids``, read one id at a time.
+
+    ``embedding_id = :id`` is answered from the primary key, while ``IN`` with
+    two or more ids scans the whole table: measured at 1-2.5 s on 1.7 M rows
+    against about 0 ms per ``=``. An id with no row, or a NULL or empty
+    vector, is left out.
+    """
+    if table not in VEC_TABLES:
+        raise ValueError(f"not a vec table: {table}")
+    vectors: dict[str, bytes] = {}
+    for embedding_id in dict.fromkeys(embedding_ids):
+        rows = conn.execute(
+            text(
+                f"SELECT embedding_id, vector FROM {table} "
+                "WHERE embedding_id = :id"
+            ),
+            {"id": embedding_id},
+        ).fetchall()
+        for stored_id, blob in rows:
+            if blob:
+                vectors[stored_id] = bytes(blob)
+    return vectors
 
 
 def is_partitioned(conn: Connection, table: str) -> bool:

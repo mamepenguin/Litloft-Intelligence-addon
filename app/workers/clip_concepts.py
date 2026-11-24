@@ -28,6 +28,7 @@ from sqlalchemy import text as sql_text
 from app.config import settings
 from app.database import get_litloft_db, get_search_db
 from app.models import Embedding
+from app.vec_partition import read_vectors
 from app.workers.clip import embed_text_clip
 
 logger = logging.getLogger(__name__)
@@ -245,20 +246,12 @@ def load_file_clip_vectors(file_id: str) -> list[np.ndarray]:
 
     from app.database import get_search_engine
 
-    placeholders = ",".join(f":id{i}" for i in range(len(embedding_ids)))
-    params = {f"id{i}": eid for i, eid in enumerate(embedding_ids)}
-    vectors: list[np.ndarray] = []
     with get_search_engine().connect() as conn:
-        rows = conn.execute(
-            sql_text(
-                f"SELECT vector FROM vec_clip WHERE embedding_id IN ({placeholders})"
-            ),
-            params,
-        ).fetchall()
-    for row in rows:
-        if row[0]:
-            vectors.append(np.frombuffer(row[0], dtype=np.float32))
-    return vectors
+        stored = read_vectors(conn, "vec_clip", embedding_ids)
+    return [
+        np.frombuffer(blob, dtype=np.float32)
+        for blob in stored.values()
+    ]
 
 
 def score_vectors_against_concepts(

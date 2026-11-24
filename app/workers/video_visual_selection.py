@@ -19,9 +19,9 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
-from sqlalchemy import text as sql_text
 
 from app.models import Embedding, IndexedFile, VideoFrameScan, VideoFrameText
+from app.vec_partition import read_vectors
 
 #: Sections aimed at one per this many seconds of span (SPEC-ADDON-112 step 2).
 DENSITY_SECONDS = 75.0
@@ -65,8 +65,6 @@ ALREADY_CHOSEN_WEIGHT = 0.7
 
 #: The only scan-row layout this build reads.
 SCAN_VERSION = 1
-
-_VECTOR_BATCH = 400
 
 
 @dataclass(frozen=True)
@@ -199,23 +197,12 @@ def _load_vectors(table: str, embedding_ids: list[str]) -> dict[str, np.ndarray]
     from app.database import get_search_engine
 
     wanted = sorted(set(embedding_ids))
-    out: dict[str, np.ndarray] = {}
-    engine = get_search_engine()
-    for start in range(0, len(wanted), _VECTOR_BATCH):
-        batch = wanted[start:start + _VECTOR_BATCH]
-        placeholders = ", ".join(f":id{i}" for i in range(len(batch)))
-        with engine.connect() as conn:
-            rows = conn.execute(
-                sql_text(
-                    f"SELECT embedding_id, vector FROM {table} "
-                    f"WHERE embedding_id IN ({placeholders})"
-                ),
-                {f"id{i}": value for i, value in enumerate(batch)},
-            ).fetchall()
-        for embedding_id, blob in rows:
-            if blob:
-                out[embedding_id] = np.frombuffer(blob, dtype=np.float32)
-    return out
+    with get_search_engine().connect() as conn:
+        stored = read_vectors(conn, table, wanted)
+    return {
+        embedding_id: np.frombuffer(blob, dtype=np.float32)
+        for embedding_id, blob in stored.items()
+    }
 
 
 def _parse_scan(row: VideoFrameScan | None) -> Scan | None:

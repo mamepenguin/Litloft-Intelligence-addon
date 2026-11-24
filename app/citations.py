@@ -43,6 +43,7 @@ from sqlalchemy import text as sql_text
 from app.config import settings
 from app.database import get_search_db, get_search_db_read
 from app.summary_parser import Segment, parse_segments
+from app.vec_partition import read_vectors
 
 logger = logging.getLogger(__name__)
 
@@ -104,16 +105,15 @@ def _fetch_file_vectors(
 ) -> list[tuple[str, np.ndarray]]:
     """Fetch every text embedding for a file as ``(chunk_id, vector)`` pairs.
 
-    Joins ``vec_text`` against ``embeddings`` to pull the raw vector
-    bytes directly, bypassing the ``MATCH`` KNN operator. The result
-    set contains **all** of the file's whisper / text_content chunks —
-    the caller then scores them in numpy for an exhaustive per-file
-    top-K.
+    Reads the file's ``embeddings`` rows and their ``vec_text`` vectors,
+    bypassing the ``MATCH`` KNN operator. The result set contains
+    **all** of the file's whisper / text_content chunks — the caller
+    then scores them in numpy for an exhaustive per-file top-K.
 
-    Why not KNN? sqlite-vec's ``MATCH`` is a **global** KNN; passing
-    ``file_id`` through the join filters post-fetch, so if the target
-    file's chunks rank below the global top-K they're silently
-    dropped. For a DB with tens of thousands of vectors and many
+    Why not KNN? sqlite-vec's ``MATCH`` is a **global** KNN; a
+    ``file_id`` filter applied to its results drops rows post-fetch, so
+    if the target file's chunks rank below the global top-K they're
+    silently dropped. For a DB with tens of thousands of vectors and many
     files, a generic summary segment can easily have all its best
     in-file matches buried behind other files' chunks. Exhaustively
     scoring the target file's ~50-500 chunks in memory is cheaper and,
@@ -141,15 +141,13 @@ def _fetch_file_vectors(
         with get_search_db() as session:
             rows = session.execute(
                 sql_text(
-                    "SELECT v.embedding_id, v.vector, e.embedding_type "
-                    "FROM vec_text v "
-                    "JOIN embeddings e "
-                    "ON CAST(e.id AS TEXT) = v.embedding_id "
-                    "WHERE e.file_id = :fid "
-                    "AND e.embedding_type IN ('whisper', 'text_content')"
+                    "SELECT id, embedding_type FROM embeddings "
+                    "WHERE file_id = :fid "
+                    "AND embedding_type IN ('whisper', 'text_content')"
                 ),
                 {"fid": file_id},
             ).fetchall()
+            stored = read_vectors(session, "vec_text", [row[0] for row in rows])
     except Exception as e:  # noqa: BLE001 — fail soft, don't break worker
         logger.warning(
             "Citation vector fetch failed for %s: %s", file_id, e
@@ -159,9 +157,8 @@ def _fetch_file_vectors(
     video = _is_video(file_id)
     pairs: list[tuple[str, np.ndarray]] = []
     seen: set[str] = set()
-    for row in rows:
-        embedding_id, vec_bytes = row[0], row[1]
-        embedding_type = row[2] if len(row) > 2 else None
+    for embedding_id, embedding_type in rows:
+        vec_bytes = stored.get(embedding_id)
         if video and embedding_type == "text_content":
             continue
         chunk_id = _make_chunk_id(embedding_id or "")
