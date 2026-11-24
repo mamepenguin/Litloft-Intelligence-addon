@@ -940,17 +940,24 @@ def document_contents(material: Material) -> tuple[str, ...]:
         group = units[start:start + size]
         label = _contents_label(group, pdf)
         excerpt = _document_excerpt(material.document_rows, set(group))
-        title = None if pdf else titles.get(group[0])
+        title = None if pdf else _contents_title(titles.get(group[0]))
         if not excerpt:
             lines = [*lines, label]
         elif title:
             lines = [
                 *lines,
-                f"{label}: {title[:DOCUMENT_TITLE_CHARS]} — {excerpt}",
+                f"{label}: {title} — {excerpt}",
             ]
         else:
             lines = [*lines, f"{label}: {excerpt}"]
     return tuple(lines)
+
+
+def _contents_title(title: str | None) -> str | None:
+    """A section title as one line with no citation-like number, cut short."""
+    if not title:
+        return None
+    return " ".join(_without_markers(title).split())[:DOCUMENT_TITLE_CHARS] or None
 
 
 def _contents_units(material: Material) -> list[int]:
@@ -995,6 +1002,17 @@ def page_image_path(material: Material) -> str | None:
     )
 
 
+def _close_locked(document: Any, *, acquired: bool = False) -> None:
+    """Close a PyMuPDF document while holding the lock, then drop it."""
+    if not acquired:
+        PYMUPDF_LOCK.acquire()
+    try:
+        document.close()
+        del document
+    finally:
+        PYMUPDF_LOCK.release()
+
+
 class PageImages:
     """One page request's PDF, opened once and read under the shared lock.
 
@@ -1033,22 +1051,25 @@ class PageImages:
             long_edge = max(float(page.rect.width), float(page.rect.height))
             zoom = PAGE_IMAGE_LONG_EDGE / long_edge
             pixmap = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
-            return pixmap.tobytes("jpeg")
+            data = pixmap.tobytes("jpeg")
+            # Dropped here, under the lock: their finalizers call into MuPDF.
+            del pixmap, page
+            return data
 
     def close(self) -> None:
         document, self._document = self._document, None
         if document is None:
             return
-        if not PYMUPDF_LOCK.acquire(
+        if PYMUPDF_LOCK.acquire(
             timeout=max(0.0, self._end - time.monotonic())
         ):
-            # Another request holds the lock now; its holder or the garbage
-            # collector closes the document instead of waiting past the budget.
+            _close_locked(document, acquired=True)
             return
-        try:
-            document.close()
-        finally:
-            PYMUPDF_LOCK.release()
+        # Past the budget the answer must not wait, and leaving the document to
+        # the collector would run its finalizer outside the lock.
+        threading.Thread(
+            target=_close_locked, args=(document,), daemon=True,
+        ).start()
 
     @contextlib.contextmanager
     def _locked(self) -> Iterator[None]:
