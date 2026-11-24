@@ -990,7 +990,9 @@ def page_image_path(material: Material) -> str | None:
         return None
     if os.path.isabs(material.file_path):
         return material.file_path
-    return config.resolve_file_path(material.drive, material.file_path)
+    return config.resolve_stored_path(
+        config.resolve_file_path(material.drive, material.file_path)
+    )
 
 
 class PageImages:
