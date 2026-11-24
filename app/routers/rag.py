@@ -53,6 +53,9 @@ from app.rag.service import (
 )
 from app.rag.prompt import (
     GET_FRAMES_TOOL,
+    GET_PAGE_IMAGES_TOOL,
+    GET_TEXT_SECTION_TOOL,
+    GET_TEXT_TOOL,
     GET_TRANSCRIPT_TOOL,
     build_file_question_system_prompt,
     build_file_question_user_prompt,
@@ -494,7 +497,8 @@ async def _file_question_stream(
     Owns the semaphore slot: it is released on the end of the stream, on a
     mid-stream failure and on a client disconnect. A video whose profile can
     see is answered from a set of its frames, with its passages when it has
-    any; every other file keeps the text path.
+    any; a PDF, or an EPUB whose material was cut, from its document tools
+    when its profile can see; every other file keeps the text path.
     """
     try:
         passages = (
@@ -503,8 +507,20 @@ async def _file_question_stream(
             and file_question.is_text_video(material)
             else ()
         )
-        stream = (
-            _frames_question_stream(
+        if file_question.uses_document_tools(
+            material, can_see=profile_can_see(resolved),
+        ):
+            stream = _document_tool_answer(
+                file_id=file_id,
+                question=question,
+                material=material,
+                resolved=resolved,
+                passages=material.chunks,
+                history=history,
+                slot_time=slot_time,
+            )
+        elif passages or file_question.is_text_less_video(material):
+            stream = _frames_question_stream(
                 file_id=file_id,
                 question=question,
                 material=material,
@@ -515,8 +531,8 @@ async def _file_question_stream(
                 passages=passages,
                 slot_time=slot_time,
             )
-            if passages or file_question.is_text_less_video(material)
-            else _text_question_stream(
+        else:
+            stream = _text_question_stream(
                 file_id=file_id,
                 question=question,
                 material=material,
@@ -524,7 +540,6 @@ async def _file_question_stream(
                 position_seconds=position_seconds,
                 history=history,
             )
-        )
         async for event in stream:
             yield event
     finally:
@@ -737,6 +752,31 @@ _TRANSCRIPT_STOP = (
 )
 #: The longest the stop note can be: its clock time is at most 8 characters.
 _TRANSCRIPT_STOP_CHARS = len(_TRANSCRIPT_STOP.format(time="0" * 8))
+
+#: The name a text request must call.
+_GET_TEXT_TOOL_NAME = GET_TEXT_TOOL["function"]["name"]
+#: The name a page request must call.
+_GET_PAGE_IMAGES_TOOL_NAME = GET_PAGE_IMAGES_TOOL["function"]["name"]
+#: How many characters one text result may hold.
+_DOCUMENT_TEXT_CHARS = 3000
+#: The note a text result ends with when a row does not fit.
+_GET_TEXT_CONTINUES = (
+    "The text continues: call get_text with after {number} for more."
+)
+#: The longest that note can be: its number is at most three digits.
+_GET_TEXT_CONTINUES_CHARS = len(_GET_TEXT_CONTINUES.format(number=999))
+#: What a text result says when the file has no row from the named place on.
+_GET_TEXT_NOTHING = "Nothing is written from {place} on."
+#: What a text result says when the walk started after the file's last row.
+_GET_TEXT_ENDS = "The file ends after [{number}]."
+#: What a text result ends with when the walk wrote the file's last row.
+_GET_TEXT_FILE_ENDS = "The file ends here."
+#: What a page request with bad arguments gets.
+_PAGE_IMAGES_BAD_ARGUMENTS = (
+    "No page image follows: get_page_images takes a JSON object with pages, a "
+    "list of page numbers, or passages, a list of numbers of passages you were "
+    "given; at most 4 pages in all."
+)
 
 
 class _Deadline(Exception):
@@ -1546,6 +1586,696 @@ async def _frame_tool_answer(
                 requested,
                 file_id,
             )
+
+
+async def _document_tool_answer(
+    *,
+    file_id: str,
+    question: str,
+    material: file_question.Material,
+    resolved: Resolved,
+    passages: tuple[file_question.SelectedChunk, ...],
+    history: list[file_question.HistoryTurn] | None,
+    slot_time: float | None = None,
+) -> AsyncIterator[str]:
+    """Offer the document's tools while the question may, then answer.
+
+    A tool request is read to its end before any of its text is written, so a
+    reply that asks for more of the file never reaches the viewer as an
+    answer. Once three tool calls are served or the window has passed, the
+    next request is final and its answer streams. Any failure, refusal or
+    blank reply before the first written chunk sends today's text request
+    once; nothing is started after the total deadline.
+    """
+    loop = asyncio.get_running_loop()
+    if slot_time is None:
+        slot_time = loop.time()
+    total_deadline = slot_time + _FRAME_TOOL_DEADLINE_SECONDS
+    window_end = slot_time + _FRAME_TOOL_WINDOW_SECONDS
+    pdf = material.mime_type == file_question.PDF_MIME
+    cut = material.partial
+    unit = "page" if pdf else "section"
+    tools = _document_tools(pdf=pdf, cut=cut)
+    offered = [tool["function"]["name"] for tool in tools]
+    text_offered = _GET_TEXT_TOOL_NAME in offered
+    pages_offered = _GET_PAGE_IMAGES_TOOL_NAME in offered
+    system_prompt = build_file_question_system_prompt(
+        resolved.profile.config.output_language,
+        has_passages=bool(passages),
+        has_history=bool(history),
+        cut=cut,
+        document=True,
+        get_text=text_offered,
+        page_images=pages_offered,
+        unit=unit,
+    )
+    user_prompt = build_file_question_user_prompt(
+        question,
+        [chunk.text for chunk in passages],
+        history=history,
+        filename=material.filename,
+        folder=material.folder,
+        type_label=material.type_label,
+        document=True,
+        page_count=material.page_count if pdf else None,
+        sections=material.sections,
+        contents=file_question.document_contents(material) if cut else (),
+    )
+    # What each number was sent with, filled in the order the numbers run.
+    positions: dict[int, dict | None] = {
+        index: chunk.position
+        for index, chunk in enumerate(passages, start=1)
+    }
+    # Each sent row's file order and the number it was sent with.
+    sent_rows: dict[int, int] = {
+        row.order: row.number
+        for row in material.document_rows
+        if row.number is not None
+    }
+    pages_taken: set[int] = set()
+    next_number = len(passages) + 1
+    rounds: list[llm.FrameRound] = []
+    answer: list[str] = []
+    served = 0
+    text_calls = 0
+    page_calls = 0
+    passages_sent = 0
+    pages_sent = 0
+
+    def image_status() -> str:
+        if pages_sent:
+            return "attached"
+        return "unavailable" if pages_taken else "none"
+
+    def closing(text: str) -> list[AnswerEvent]:
+        return [
+            AnswerEvent(
+                kind="citations",
+                data=file_question.citations_from(text, positions),
+            ),
+            _document_meta(material, image_status()),
+            AnswerEvent(kind="done", data={}),
+        ]
+
+    def failed() -> list[AnswerEvent]:
+        return [
+            _document_meta(material, image_status()),
+            AnswerEvent(
+                kind="done", data={"error": "Answer generation failed"},
+            ),
+        ]
+
+    def deadline() -> list[AnswerEvent]:
+        logger.warning("document_tool_deadline (file %s)", file_id)
+        return failed()
+
+    async def fallback() -> AsyncIterator[str]:
+        yield _FRAMES_KEEPALIVE
+        async for event in _document_fallback_answer(
+            file_id=file_id,
+            question=question,
+            material=material,
+            resolved=resolved,
+            history=history,
+            total_deadline=total_deadline,
+            image_status="unavailable" if pages_taken else "none",
+        ):
+            yield event
+
+    try:
+        while True:
+            yield _FRAMES_KEEPALIVE
+            if loop.time() >= total_deadline:
+                for event in deadline():
+                    yield _format_sse_event(event)
+                return
+
+            if (
+                served >= _FRAME_REQUESTS_PER_QUESTION
+                or loop.time() >= window_end
+            ):
+                stream = None
+                remaining = total_deadline - loop.time()
+                if remaining <= 0:
+                    for event in deadline():
+                        yield _format_sse_event(event)
+                    return
+                try:
+                    stream = resolved.client.stream_with_frames(
+                        system_prompt,
+                        user_prompt,
+                        [],
+                        rounds,
+                        tools=tools,
+                        tool_choice="none",
+                    )
+                    async with asyncio.timeout(remaining):
+                        # A final answer that is only whitespace must reach the
+                        # fallback with nothing of its own written first, so its
+                        # leading whitespace is held until it shows something.
+                        started = False
+                        held: list[str] = []
+                        async for delta in _answer_with_keepalive(stream):
+                            if delta is None:
+                                yield _FRAMES_KEEPALIVE
+                                continue
+                            if not started:
+                                held = [*held, delta]
+                                if not "".join(held).strip():
+                                    continue
+                                started = True
+                                delta = "".join(held)
+                                held = []
+                            answer.append(delta)
+                            yield _format_sse_event(
+                                AnswerEvent(
+                                    kind="answer_chunk",
+                                    data={"delta": delta},
+                                )
+                            )
+                except TimeoutError:
+                    for event in deadline():
+                        yield _format_sse_event(event)
+                    return
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - reported, not raised
+                    if answer:
+                        logger.warning(
+                            "file question failed: %s (file %s)",
+                            type(exc).__name__,
+                            file_id,
+                        )
+                        for event in failed():
+                            yield _format_sse_event(event)
+                        return
+                    async for event in fallback():
+                        yield event
+                    return
+                finally:
+                    if stream is not None:
+                        await stream.aclose()
+                if not "".join(answer).strip():
+                    logger.warning(
+                        "file question failed: %s (file %s)",
+                        "EmptyAnswer",
+                        file_id,
+                    )
+                    async for event in fallback():
+                        yield event
+                    return
+                for event in closing("".join(answer)):
+                    yield _format_sse_event(event)
+                return
+
+            reply_task = asyncio.create_task(
+                resolved.client.reply_with_frames(
+                    system_prompt,
+                    user_prompt,
+                    [],
+                    rounds,
+                    tools=tools,
+                    tool_choice="auto",
+                )
+            )
+            reply: llm.FrameReply | None = None
+            failure: Exception | None = None
+            try:
+                async for event in _until_done(
+                    reply_task, deadline=total_deadline,
+                ):
+                    yield event
+                reply = reply_task.result()
+            except _Deadline:
+                for event in deadline():
+                    yield _format_sse_event(event)
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - the fallback answers
+                failure = exc
+            finally:
+                if not reply_task.done():
+                    reply_task.cancel()
+                    try:
+                        await reply_task
+                    except BaseException:  # noqa: BLE001 - cancelled, not read
+                        pass
+
+            blank = (
+                reply is not None
+                and not reply.text.strip()
+                and not reply.calls
+            )
+            if failure is not None or blank or reply is None:
+                if failure is not None:
+                    logger.warning(
+                        "file question document tools failed: %s (file %s)",
+                        type(failure).__name__,
+                        file_id,
+                    )
+                elif blank:
+                    logger.warning(
+                        "file question failed: %s (file %s)",
+                        "EmptyAnswer",
+                        file_id,
+                    )
+                async for event in fallback():
+                    yield event
+                return
+
+            if not reply.calls:
+                yield _format_sse_event(
+                    AnswerEvent(kind="answer_chunk", data={"delta": reply.text})
+                )
+                for event in closing(reply.text):
+                    yield _format_sse_event(event)
+                return
+
+            # Calls spend the question's tool calls in the order they came in.
+            plans: list[tuple["llm.FrameToolCall", str]] = []
+            taken = served
+            for call in reply.calls:
+                if taken >= _FRAME_REQUESTS_PER_QUESTION:
+                    plans = [*plans, (call, "limit")]
+                    continue
+                taken += 1
+                if call.name == _GET_TEXT_TOOL_NAME and text_offered:
+                    plans = [*plans, (call, "text")]
+                elif call.name == _GET_PAGE_IMAGES_TOOL_NAME and pages_offered:
+                    plans = [*plans, (call, "pages")]
+                else:
+                    plans = [*plans, (call, "other")]
+            served = taken
+
+            yield _FRAMES_KEEPALIVE
+            contents: dict[int, str] = {}
+            round_images: list[tuple[str, bytes, str]] = []
+            try:
+                # A reply's requested passages take their numbers before its
+                # page images, whatever order the calls came in.
+                for index, (call, kind) in enumerate(plans):
+                    if kind != "text":
+                        continue
+                    text_calls += 1
+                    content, next_number, added = _serve_text_request(
+                        material,
+                        call,
+                        sent_rows=sent_rows,
+                        next_number=next_number,
+                    )
+                    contents[index] = content
+                    for number, position in added:
+                        positions[number] = position
+                        passages_sent += 1
+                for index, (call, kind) in enumerate(plans):
+                    if kind != "pages":
+                        continue
+                    page_calls += 1
+                    content, images = _serve_page_request(
+                        call, taken=pages_taken,
+                    )
+                    contents[index] = content
+                    for page, image in images:
+                        round_images = [
+                            *round_images,
+                            (f"[{next_number}] page {page}", image, "image/jpeg"),
+                        ]
+                        positions[next_number] = {"page": page}
+                        next_number += 1
+                        pages_sent += 1
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - the fallback answers
+                logger.warning(
+                    "file question document tools failed: %s (file %s)",
+                    type(exc).__name__,
+                    file_id,
+                )
+                async for event in fallback():
+                    yield event
+                return
+
+            results: list[llm.FrameToolResult] = []
+            for index, (call, kind) in enumerate(plans):
+                if kind in ("text", "pages"):
+                    content = contents[index]
+                elif kind == "other":
+                    content = _document_cannot_serve(call.name, offered)
+                else:
+                    content = _document_limit_text()
+                results = [
+                    *results, llm.FrameToolResult(call=call, content=content),
+                ]
+            rounds = [
+                *rounds,
+                llm.FrameRound(
+                    text=reply.text,
+                    results=tuple(results),
+                    frames=tuple(round_images),
+                ),
+            ]
+    finally:
+        if served:
+            logger.info(
+                "document tool requests: %d text calls, %d passages, %d page "
+                "calls, %d pages (file %s)",
+                text_calls,
+                passages_sent,
+                page_calls,
+                pages_sent,
+                file_id,
+            )
+
+
+def _document_tools(*, pdf: bool, cut: bool) -> list[dict]:
+    """The tools a document's question offers, in the order it names them."""
+    tools: list[dict] = []
+    if cut:
+        tools = [*tools, GET_TEXT_TOOL if pdf else GET_TEXT_SECTION_TOOL]
+    if pdf:
+        tools = [*tools, GET_PAGE_IMAGES_TOOL]
+    return tools
+
+
+def _document_meta(
+    material: file_question.Material, image_status: str,
+) -> AnswerEvent:
+    """The ``meta`` event of a document's answer."""
+    return AnswerEvent(
+        kind="meta",
+        data={"partial": material.partial, "image": image_status},
+    )
+
+
+def _document_cannot_serve(name: str, offered: Sequence[str]) -> str:
+    """What a call of a tool the question does not offer gets."""
+    called = f"{name} cannot" if name else "this call cannot"
+    return (
+        f"Nothing follows: {called} be served. Only "
+        f"{' and '.join(offered)} are available."
+    )
+
+
+def _document_limit_text() -> str:
+    return (
+        "Nothing follows: this question has already been served its "
+        f"{_FRAME_REQUESTS_PER_QUESTION} tool calls."
+    )
+
+
+def _get_text_bad_arguments(material: file_question.Material) -> str:
+    """What a text request with bad arguments gets."""
+    if material.mime_type == file_question.PDF_MIME:
+        return (
+            "No text follows: get_text takes a JSON object with either page, "
+            f"a page number from 1 to {material.page_count or 0}, or after, the "
+            "number of a passage you were given."
+        )
+    first, last = material.sections or (0, 0)
+    return (
+        "No text follows: get_text takes a JSON object with either section, "
+        f"a section number from {first} to {last}, or after, the number of a "
+        "passage you were given."
+    )
+
+
+def _unit_in_range(material: file_question.Material, number: int) -> bool:
+    """Whether a PDF page or EPUB section is inside the file's own range."""
+    if material.mime_type == file_question.PDF_MIME:
+        return 1 <= number <= (material.page_count or 0)
+    if material.sections is None:
+        return False
+    return material.sections[0] <= number <= material.sections[1]
+
+
+def _text_request_start(
+    material: file_question.Material,
+    arguments: object,
+    *,
+    unit: str,
+    sent_rows: dict[int, int],
+) -> tuple[int | None, str | None]:
+    """The row a text request starts at, or the text that answers it instead."""
+    rows = material.document_rows
+    named: int | None = None
+    after: int | None = None
+    if isinstance(arguments, dict):
+        values = [
+            (key, value)
+            for key, value in (
+                (unit, arguments.get(unit)),
+                ("after", arguments.get("after")),
+            )
+            if value is not None
+        ]
+        if len(values) == 1:
+            key, value = values[0]
+            if key == "after":
+                after = file_question.read_integer(value)
+            else:
+                named = file_question.read_integer(value)
+    if named is None and after is None:
+        return None, _get_text_bad_arguments(material)
+    if named is not None:
+        if not _unit_in_range(material, named):
+            return None, _get_text_bad_arguments(material)
+        # Rows with no unit are passed over in this search.
+        for position, row in enumerate(rows):
+            if row.unit is not None and row.unit >= named:
+                return position, None
+        return None, _GET_TEXT_NOTHING.format(
+            place=f"{unit} {named}",
+        )
+    orders = {
+        row.order for row in rows if sent_rows.get(row.order) == after
+    }
+    if not orders:
+        return None, _get_text_bad_arguments(material)
+    for position, row in enumerate(rows):
+        if row.order in orders:
+            if position + 1 >= len(rows):
+                return None, _GET_TEXT_ENDS.format(number=after)
+            return position + 1, None
+    return None, _get_text_bad_arguments(material)
+
+
+def _unit_marker(
+    rows: Sequence[file_question.DocumentRow],
+    position: int,
+    *,
+    unit: str,
+    first: bool,
+) -> str | None:
+    """The line a row of a text result carries before it, if it carries one."""
+    row = rows[position]
+    if row.unit is None:
+        return None
+    starts = position == 0 or rows[position - 1].unit != row.unit
+    if first and not starts:
+        return f"Continuing {unit} {row.unit}."
+    if not starts:
+        return None
+    return f"{unit.capitalize()} {row.unit} begins."
+
+
+def _serve_text_request(
+    material: file_question.Material,
+    call: "llm.FrameToolCall",
+    *,
+    sent_rows: dict[int, int],
+    next_number: int,
+) -> tuple[str, int, list[tuple[int, dict | None]]]:
+    """One text result, the next number, and the passages it sent.
+
+    ``sent_rows`` maps a row's file order to the number it was sent with, and
+    grows with every row this result sends. A row that was already sent is
+    named by its number instead of being sent again.
+    """
+    pdf = material.mime_type == file_question.PDF_MIME
+    unit = "page" if pdf else "section"
+    rows = material.document_rows
+    start, content = _text_request_start(
+        material, _call_arguments(call), unit=unit, sent_rows=sent_rows,
+    )
+    if content is not None:
+        return content, next_number, []
+    assert start is not None
+    lines: list[str] = []
+    added: list[tuple[int, dict | None]] = []
+    last = 0
+    stopped = False
+    for position in range(start, len(rows)):
+        row = rows[position]
+        marker = _unit_marker(
+            rows, position, unit=unit, first=position == start,
+        )
+        number = sent_rows.get(row.order)
+        if number is not None:
+            group = [f"already sent as [{number}]"]
+        else:
+            group = [f"[{next_number}]", row.text, ""]
+        if marker is not None:
+            group = [marker, *group]
+        # A trailing empty line is dropped before a closing note is joined, so
+        # it must not count against the result's length here.
+        written = [*lines, *group]
+        while written and written[-1] == "":
+            written = written[:-1]
+        # The walk's first row is always written, however long it is.
+        if position != start and (
+            len("\n".join(written)) + 1 + _GET_TEXT_CONTINUES_CHARS
+            > _DOCUMENT_TEXT_CHARS
+        ):
+            stopped = True
+            break
+        lines = [*lines, *group]
+        if number is None:
+            added = [*added, (next_number, row.position)]
+            sent_rows[row.order] = next_number
+            last = next_number
+            next_number += 1
+        else:
+            last = number
+    if lines and lines[-1] == "":
+        lines = lines[:-1]
+    if stopped:
+        lines = [*lines, _GET_TEXT_CONTINUES.format(number=last)]
+    else:
+        lines = [*lines, _GET_TEXT_FILE_ENDS]
+    return "\n".join(lines), next_number, added
+
+
+def _page_images_text(images: int, notes: Sequence[str]) -> str:
+    """A page request's result: how many images follow, then a line per note."""
+    head = (
+        f"{images} page image{'s' if images != 1 else ''} follow."
+        if images
+        else "No page image follows."
+    )
+    return "\n".join([head, *[f"- {note}" for note in notes]])
+
+
+def _serve_page_request(
+    call: "llm.FrameToolCall",
+    *,
+    taken: set[int],
+) -> tuple[str, list[tuple[int, bytes]]]:
+    """One page request's result text and the page images it sends.
+
+    A page the request names is taken; no page image is read, so a taken page
+    has none to send and is named as not available.
+    """
+    arguments = _call_arguments(call)
+    if not isinstance(arguments, dict) or not any(
+        isinstance(arguments.get(key), list) for key in ("pages", "passages")
+    ):
+        return _PAGE_IMAGES_BAD_ARGUMENTS, []
+    notes: list[str] = []
+    for key in ("pages", "passages"):
+        for value in arguments.get(key) or []:
+            page = file_question.read_integer(value)
+            if page is None:
+                notes = [
+                    *notes, f"{_shown_value(value)}: not a number I can read",
+                ]
+                continue
+            taken.add(page)
+            notes = [*notes, f"page {page}: not available"]
+    return _page_images_text(0, notes), []
+
+
+async def _document_fallback_answer(
+    *,
+    file_id: str,
+    question: str,
+    material: file_question.Material,
+    resolved: Resolved,
+    history: list[file_question.HistoryTurn] | None,
+    total_deadline: float,
+    image_status: str,
+) -> AsyncIterator[str]:
+    """Send today's text request once, unless the total deadline has passed.
+
+    It carries no requested passage and no page image, and its citations name
+    the passages the question first sent.
+    """
+    logger.warning("document_tool_fallback (file %s)", file_id)
+    loop = asyncio.get_running_loop()
+    remaining = total_deadline - loop.time()
+    if remaining <= 0:
+        logger.warning("document_tool_deadline (file %s)", file_id)
+        yield _format_sse_event(_document_meta(material, image_status))
+        yield _format_sse_event(
+            AnswerEvent(kind="done", data={"error": "Answer generation failed"})
+        )
+        return
+    stream = None
+    answer: list[str] = []
+    try:
+        stream = resolved.client.generate_stream(
+            build_file_question_system_prompt(
+                resolved.profile.config.output_language,
+                has_passages=bool(material.chunks),
+                has_history=bool(history),
+            ),
+            build_file_question_user_prompt(
+                question,
+                [chunk.text for chunk in material.chunks],
+                history=history,
+                filename=material.filename,
+                folder=material.folder,
+                type_label=material.type_label,
+            ),
+            max_tokens_override=settings.rag.max_tokens,
+        )
+        async with asyncio.timeout(remaining):
+            async for event in _keepalive_answer(stream, answer):
+                yield event
+    except TimeoutError:
+        logger.warning("document_tool_deadline (file %s)", file_id)
+        yield _format_sse_event(_document_meta(material, image_status))
+        yield _format_sse_event(
+            AnswerEvent(kind="done", data={"error": "Answer generation failed"})
+        )
+        return
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the stream must end, not die
+        logger.warning(
+            "file question failed: %s (file %s)",
+            type(exc).__name__,
+            file_id,
+        )
+        yield _format_sse_event(_document_meta(material, image_status))
+        yield _format_sse_event(
+            AnswerEvent(kind="done", data={"error": "Answer generation failed"})
+        )
+        return
+    finally:
+        if stream is not None:
+            await stream.aclose()
+    if not "".join(answer).strip():
+        logger.warning(
+            "file question failed: %s (file %s)",
+            "EmptyAnswer",
+            file_id,
+        )
+        yield _format_sse_event(_document_meta(material, image_status))
+        yield _format_sse_event(
+            AnswerEvent(kind="done", data={"error": "Answer generation failed"})
+        )
+        return
+    yield _format_sse_event(
+        AnswerEvent(
+            kind="citations",
+            data=file_question.citations(
+                "".join(answer), material.chunks,
+            ),
+        )
+    )
+    yield _format_sse_event(_document_meta(material, image_status))
+    yield _format_sse_event(AnswerEvent(kind="done", data={}))
 
 
 async def _fallback_answer(

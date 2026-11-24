@@ -258,7 +258,13 @@ class TestWhenNoToolIsOffered:
         elif subject == "audio":
             seed_audio(db, other, text="AUDIO-TEXT", path=tmp_path / "a.mp3")
         elif subject == "document":
-            seed_document(db, other, text="DOCUMENT-TEXT", path=tmp_path / "d.pdf")
+            seed_document(
+                db, other, text="DOCUMENT-TEXT", path=tmp_path / "d.docx",
+                mime=(
+                    "application/vnd.openxmlformats-officedocument"
+                    ".wordprocessingml.document"
+                ),
+            )
         else:
             other = VIDEO
         config = None

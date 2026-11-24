@@ -70,6 +70,12 @@ CONTENTS_SECTIONS = 40
 #: How long one section's excerpt may be.
 CONTENTS_EXCERPT_CHARS = 120
 
+#: How many lines a document's contents list.
+DOCUMENT_CONTENTS_LINES = 40
+
+#: How long one section's title may be in a document's contents.
+DOCUMENT_TITLE_CHARS = 60
+
 #: Why an image could not be attached; the route logs the class, never
 #: the question or the bytes.
 IMAGE_FAILURE_PICTURE = "picture_unreadable"
@@ -87,6 +93,9 @@ _CITATION_MARKER = re.compile(r"\[(\d{1,3})\]")
 _PLAIN_SECONDS = re.compile(r"^\d+(?:\.\d+)?$")
 _CLOCK_SECONDS = re.compile(r"^(\d+):(\d{1,2})(?:\.(\d+))?$")
 _CLOCK_HOURS = re.compile(r"^(\d+):(\d{1,2}):(\d{1,2})(?:\.(\d+))?$")
+
+# An integer a model may give as a string of ASCII digits.
+_DIGITS = re.compile(r"^[0-9]+$")
 
 
 @dataclass(frozen=True)
@@ -139,6 +148,29 @@ class Material:
     #: Every row with a span, kept when ``partial`` so a range can read the text
     #: the passages left out; empty otherwise.
     rows: tuple[MaterialRow, ...] = ()
+    #: A document's rows in file order, each with the unit it sits in and the
+    #: number it was sent with; empty for every other kind.
+    document_rows: tuple["DocumentRow", ...] = ()
+    #: A PDF's page count: the larger of ``pdf_markdown.page_count`` and the
+    #: largest page its rows name; ``None`` when neither names one.
+    page_count: int | None = None
+    #: An EPUB's first and last section among its rows.
+    sections: tuple[int, int] | None = None
+
+
+@dataclass(frozen=True)
+class DocumentRow:
+    """One row of a document's text, in file order."""
+
+    text: str
+    #: The page of a PDF or section of an EPUB; ``None`` when the stored page is
+    #: not a number.
+    unit: int | None
+    position: dict[str, Any] | None
+    #: Position in the file, which is also the order a walk reads the rows in.
+    order: int
+    #: The passage number the row was sent with, or ``None`` when it was not.
+    number: int | None = None
 
 
 @dataclass(frozen=True)
@@ -297,6 +329,18 @@ def is_text_video(material: Material) -> bool:
             material.file_type, material.mime_type, material.file_path,
             material.drive,
         )
+    )
+
+
+def uses_document_tools(material: Material, *, can_see: bool) -> bool:
+    """Whether a question about this material takes the document tool path.
+
+    A profile that cannot see keeps today's text path, and an EPUB keeps it
+    until its material is cut.
+    """
+    return can_see and (
+        material.mime_type == PDF_MIME
+        or (material.mime_type == EPUB_MIME and material.partial)
     )
 
 
@@ -459,6 +503,16 @@ def load_material(
                 {"fid": file_id},
             ).fetchall()
         }
+        markdown_pages = (
+            session.execute(
+                sql_text(
+                    "SELECT page_count FROM pdf_markdown WHERE file_id = :fid"
+                ),
+                {"fid": file_id},
+            ).scalar()
+            if mime == PDF_MIME
+            else None
+        )
         whisper_embeddings = session.execute(
             sql_text(
                 "SELECT id, timestamp_start, timestamp_end FROM embeddings "
@@ -590,15 +644,60 @@ def load_material(
         drive=drive,
     )
     if sum(len(row.text) for row in rows) <= budget:
-        return Material(chunks=_selected(rows), partial=False, **material)
-
-    selected = _fit(_rank(rows, ranking_text), budget)
+        selected = rows
+        partial = False
+    else:
+        selected = _fit(_rank(rows, ranking_text), budget)
+        partial = True
+    document_rows, page_count, sections = (
+        _document_material(mime, rows, selected, markdown_pages)
+        if mime in (PDF_MIME, EPUB_MIME)
+        else ((), None, None)
+    )
     return Material(
         chunks=_selected(selected),
-        partial=True,
-        rows=_material_rows(span_rows, selected),
+        partial=partial,
+        rows=_material_rows(span_rows, selected) if partial else (),
+        document_rows=document_rows,
+        page_count=page_count,
+        sections=sections,
         **material,
     )
+
+
+def _document_material(
+    mime: str,
+    rows: Sequence[_Row],
+    sent: Sequence[_Row],
+    markdown_pages: int | None,
+) -> tuple[tuple[DocumentRow, ...], int | None, tuple[int, int] | None]:
+    """A document's rows with their units and numbers, its page count and sections."""
+    numbers = {row.order: index + 1 for index, row in enumerate(sent)}
+    document_rows = tuple(
+        DocumentRow(
+            text=row.text,
+            unit=_unit(row.position),
+            position=row.position,
+            order=row.order,
+            number=numbers.get(row.order),
+        )
+        for row in rows
+    )
+    units = [row.unit for row in document_rows if row.unit is not None]
+    if mime == PDF_MIME:
+        largest = max(units) if units else 0
+        return document_rows, max(markdown_pages or 0, largest) or None, None
+    return document_rows, None, ((min(units), max(units)) if units else None)
+
+
+def _unit(position: Mapping[str, Any] | None) -> int | None:
+    """The page or section a row's position names, if it names one."""
+    if not position:
+        return None
+    for key in ("page", "section"):
+        if key in position:
+            return position[key]
+    return None
 
 
 def _material_rows(
@@ -758,6 +857,25 @@ def read_time(value: Any) -> float | None:
     return seconds + (float(f"0.{fraction}") if fraction else 0.0)
 
 
+def read_integer(value: Any) -> int | None:
+    """An integer a model asked for, or ``None`` when it is unreadable.
+
+    A readable one is a JSON integer, a JSON number with no fractional part, or
+    a string of ASCII digits once surrounding whitespace is removed; never a
+    boolean.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return int(text) if _DIGITS.match(text) else None
+
+
 def video_contents(
     file_id: str, sections: Sequence[tuple[float, float]],
 ) -> tuple[str, ...]:
@@ -777,6 +895,72 @@ def video_contents(
         span = f"{format_position(start)}–{format_position(end)}"
         lines = [*lines, f"{span} {excerpt}" if excerpt else span]
     return tuple(lines)
+
+
+def document_contents(material: Material) -> tuple[str, ...]:
+    """The document's table of contents as the prompt lists it, one line a group.
+
+    A PDF lists every page it has; an EPUB the sections its rows name. The
+    pages or sections are split in order into at most
+    :data:`DOCUMENT_CONTENTS_LINES` groups, each line pairing the group with the
+    start of what it says; a group with no row is its range alone.
+    """
+    units = _contents_units(material)
+    if not units:
+        return ()
+    size = math.ceil(len(units) / DOCUMENT_CONTENTS_LINES)
+    pdf = material.mime_type == PDF_MIME
+    titles = {
+        row.unit: (row.position or {}).get("title")
+        for row in material.document_rows
+    }
+    lines: list[str] = []
+    for start in range(0, len(units), size):
+        group = units[start:start + size]
+        label = _contents_label(group, pdf)
+        excerpt = _document_excerpt(material.document_rows, set(group))
+        title = None if pdf else titles.get(group[0])
+        if not excerpt:
+            lines = [*lines, label]
+        elif title:
+            lines = [
+                *lines,
+                f"{label}: {title[:DOCUMENT_TITLE_CHARS]} — {excerpt}",
+            ]
+        else:
+            lines = [*lines, f"{label}: {excerpt}"]
+    return tuple(lines)
+
+
+def _contents_units(material: Material) -> list[int]:
+    """The pages or sections a document's contents list, in order."""
+    if material.mime_type == PDF_MIME:
+        return list(range(1, (material.page_count or 0) + 1))
+    return sorted(
+        {row.unit for row in material.document_rows if row.unit is not None}
+    )
+
+
+def _contents_label(group: Sequence[int], pdf: bool) -> str:
+    """One contents line's range: ``Page 3``, ``Pages 3–5`` or the section forms."""
+    noun = "Page" if pdf else "Section"
+    if len(group) == 1:
+        return f"{noun} {group[0]}"
+    return f"{noun}s {group[0]}–{group[-1]}"
+
+
+def _document_excerpt(
+    rows: Sequence[DocumentRow], units: set[int],
+) -> str:
+    """What the rows of one contents group say, cut short."""
+    parts = [
+        " ".join(_without_markers(row.text).split())
+        for row in rows
+        if row.unit in units
+    ]
+    return " ".join(part for part in parts if part)[
+        :CONTENTS_EXCERPT_CHARS
+    ].rstrip()
 
 
 @dataclass(frozen=True)
