@@ -576,6 +576,9 @@ async def _text_question_stream(
             build_file_question_user_prompt(
                 question, passages, position_seconds=position,
                 history=history,
+                filename=material.filename,
+                folder=material.folder,
+                type_label=material.type_label,
             ),
             max_tokens_override=settings.rag.max_tokens,
         )
@@ -620,6 +623,9 @@ async def _text_question_stream(
                     has_image=True,
                     position_seconds=position,
                     history=history,
+                    filename=material.filename,
+                    folder=material.folder,
+                    type_label=material.type_label,
                 ),
                 max_tokens_override=settings.rag.max_tokens,
             )
@@ -820,6 +826,9 @@ async def _text_only_answer(
                 [chunk.text for chunk in passages],
                 position_seconds=position_seconds,
                 history=history,
+                filename=material.filename,
+                folder=material.folder,
+                type_label=material.type_label,
             ),
             max_tokens_override=settings.rag.max_tokens,
         )
@@ -912,6 +921,9 @@ async def _todays_frames_answer(
                 frames=True,
                 position_seconds=position,
                 history=history,
+                filename=material.filename,
+                folder=material.folder,
+                type_label=material.type_label,
             ),
             max_tokens_override=settings.rag.max_tokens,
         )
@@ -1182,6 +1194,9 @@ async def _frame_tool_answer(
             else None
         ),
         contents=contents,
+        filename=material.filename,
+        folder=material.folder,
+        type_label=material.type_label,
     )
     rounds: list[llm.FrameRound] = []
     answer: list[str] = []

@@ -16,6 +16,7 @@ import pytest
 import app.config as config
 import app.frame_cache as frame_cache
 from app.routers import rag as rag_router
+from tests.file_context_rules import S179, S181A
 from tests.file_question_doubles import chunk
 from tests.file_question_vision_doubles import (  # noqa: F401 - fixtures
     DRIVE,
@@ -73,6 +74,20 @@ def _answer(response) -> str:
     )
 
 
+def _without_file_context(text: str) -> str:
+    """``text`` without the file block, the S179 line and the S181a line.
+
+    Those are the only places the word "image" may come from when no image is
+    sent: the block names a picture's MIME, and the rules name the source.
+    """
+    return "\n".join(
+        line
+        for line in text.split("\n")
+        if line not in (S179, S181A)
+        and not line.startswith(("File: ", "Type: ", "Folder: "))
+    )
+
+
 class TestThePolicyGate:
     @pytest.mark.parametrize(
         ("case", "expected"), [("skip", 400), ("defer", 503)],
@@ -121,7 +136,7 @@ class TestTheRefusedImage:
         assert not wire.has_image(retry)
         assert TEXT in wire.text_of(wire.image_bodies[0])
         assert TEXT in wire.text_of(retry)
-        assert "image" not in wire.text_of(retry).lower()
+        assert "image" not in _without_file_context(wire.text_of(retry)).lower()
 
     async def test_a_text_less_picture_is_never_answered_after_a_refusal(
         self, db, addon, llm, call,
@@ -229,7 +244,7 @@ class TestWhatTheFailureTableReports:
         assert by_kind(response)["meta"]["image"] == "none"
         assert wire.image_bodies == []
         assert _answer(response) == "TEXT ONLY ANSWER"
-        assert "image" not in wire.prompts[-1].lower()
+        assert "image" not in _without_file_context(wire.prompts[-1]).lower()
         assert "exact" not in wire.prompts[-1].lower()
 
     async def test_a_recorded_vision_unsupported_profile_is_silent(
@@ -249,7 +264,7 @@ class TestWhatTheFailureTableReports:
         assert by_kind(response)["meta"]["image"] == "none"
         assert wire.image_bodies == []
         assert _answer(response) == "TEXT ONLY ANSWER"
-        assert "image" not in wire.prompts[-1].lower()
+        assert "image" not in _without_file_context(wire.prompts[-1]).lower()
         assert "exact" not in wire.prompts[-1].lower()
 
     async def test_an_audio_file_gets_no_image(self, db, addon, llm, call, tmp_path):

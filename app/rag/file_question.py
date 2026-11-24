@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
 import re
 import threading
 from collections.abc import Mapping, Sequence
@@ -45,6 +46,9 @@ from app.youtube_source import (
 logger = logging.getLogger(__name__)
 
 PDF_MIME = "application/pdf"
+
+#: The Folder of a file that sits at the top of its drive.
+TOP_OF_DRIVE = "(top of the drive)"
 
 #: How many frames a text-less video's question may carry.
 FRAME_BUDGET = 8
@@ -126,6 +130,11 @@ class Material:
     mime_type: str
     file_path: str | None
     duration: float | None
+    filename: str
+    #: The drive-relative folder; ``TOP_OF_DRIVE`` at the top of the drive, and
+    #: ``None`` when a stored absolute path cannot be placed in the drive.
+    folder: str | None
+    type_label: str
     drive: str = ""
     #: Every row with a span, kept when ``partial`` so a range can read the text
     #: the passages left out; empty otherwise.
@@ -207,6 +216,45 @@ def _loft_source(file_path: str | None, drive: str) -> LoftSource | None:
             return read_loft(file_path)
         except LoftUnreadable:
             return None
+
+
+def _folder_in_drive(file_path: str | None, drive: str) -> str | None:
+    """The folder the stored ``file_path`` sits in, or ``None`` when unknown.
+
+    A relative path is read as stored. An absolute one is placed against the
+    drive's mount by whole path segments, so a sibling mount that shares a name
+    prefix is not mistaken for the drive.
+    """
+    if not file_path:
+        return None
+    if not os.path.isabs(file_path):
+        directory = os.path.dirname(file_path)
+    else:
+        mount = settings.drive_mounts.get(drive)
+        if not mount:
+            return None
+        mount = os.path.normpath(mount)
+        path = os.path.normpath(file_path)
+        try:
+            inside = os.path.commonpath([mount, path]) == mount
+        except ValueError:
+            return None
+        if not inside:
+            return None
+        directory = os.path.dirname(os.path.relpath(path, mount))
+    return directory or TOP_OF_DRIVE
+
+
+def _type_label(mime_type: str, file_path: str | None, drive: str) -> str:
+    """The file's format for the prompt; a ``.loft`` names what it links to."""
+    if mime_type != LOFT_MIME:
+        return mime_type
+    source = _loft_source(file_path, drive)
+    if source is None:
+        return "Litloft link file (.loft)"
+    if source.provider == YOUTUBE_PROVIDER:
+        return "YouTube video, kept as a Litloft link file (.loft)"
+    return f"web link ({source.provider}), kept as a Litloft link file (.loft)"
 
 
 def _has_frame_source(
@@ -354,7 +402,7 @@ def load_material(
     with get_search_db_read() as session:
         indexed = session.execute(
             sql_text(
-                "SELECT mime_type, file_type, file_path, duration "
+                "SELECT mime_type, file_type, file_path, duration, filename "
                 "FROM indexed_files "
                 "WHERE file_id = :fid AND drive = :drive AND active = 1"
             ),
@@ -366,6 +414,9 @@ def load_material(
         file_type = indexed[1] or ""
         file_path = indexed[2]
         duration = indexed[3]
+        filename = indexed[4] or ""
+        folder = _folder_in_drive(file_path, drive)
+        type_label = _type_label(mime, file_path, drive)
         transcripts = session.execute(
             sql_text(
                 "SELECT chunk_index, text, timestamp_start, timestamp_end "
@@ -393,6 +444,9 @@ def load_material(
                 mime_type=mime,
                 file_path=file_path,
                 duration=duration,
+                filename=filename,
+                folder=folder,
+                type_label=type_label,
                 drive=drive,
             )
         section_titles = {
@@ -530,6 +584,9 @@ def load_material(
         mime_type=mime,
         file_path=file_path,
         duration=duration,
+        filename=filename,
+        folder=folder,
+        type_label=type_label,
         drive=drive,
     )
     if sum(len(row.text) for row in rows) <= budget:
