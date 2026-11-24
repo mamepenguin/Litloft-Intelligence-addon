@@ -199,6 +199,12 @@ class _Handler(BaseHTTPRequestHandler):
             override = dict(server.overrides.get(parts.path, {}))
         if override.get("delay"):
             time.sleep(override["delay"])
+        if time.time() < override.get("forbidden_until", 0):
+            # A signed stream URL used before its ``available_at``.
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if override.get("status"):
             self.send_response(override["status"])
             self.send_header("Content-Length", "0")

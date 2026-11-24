@@ -579,6 +579,50 @@ class TestTheDeadline:
         assert len(youtube.lookups()) == 1
 
 
+class TestAStreamNotYetAvailable:
+    """yt-dlp names a stream URL with ``available_at``; before it YouTube answers 403."""
+
+    def described_with(self, youtube, available_at: float) -> dict:
+        fmt = {**youtube.format("f720", 720), "available_at": available_at}
+        youtube.set_ytdlp(describe=describe([fmt]))
+        youtube.override("/v/f720", forbidden_until=available_at)
+        return fmt
+
+    async def test_the_frame_is_read_once_the_stream_is_available(
+        self, youtube, frame_api,
+    ):
+        """SPEC-ADDON-076 I1/I3: a stream available 1.5 s after the lookup still gives the frame."""
+        available_at = time.time() + 1.5
+        self.described_with(youtube, available_at)
+        fid = new_id()
+        frame_api.add_loft(fid)
+
+        response = await frame_api.frame(fid, 1.0)
+
+        assert response.status_code == 200, response.text
+        assert frame_api.cached(fid) == ["1000.webp"]
+        starts = [e["t"] for e in youtube.ffmpeg_events() if e["kind"] == "start"]
+        assert len(starts) == 1
+        assert starts[0] >= available_at
+
+    async def test_a_stream_available_after_the_deadline_is_504_without_ffmpeg(
+        self, youtube, frame_api, short_deadline,
+    ):
+        """SPEC-ADDON-076 I3: no ffmpeg is started for a stream the deadline cannot reach."""
+        self.described_with(youtube, time.time() + 4.0 * DEADLINE)
+        fid = new_id()
+        frame_api.add_loft(fid)
+
+        started = time.monotonic()
+        response = await frame_api.frame(fid, 1.0)
+        elapsed = time.monotonic() - started
+
+        assert response.status_code == 504
+        assert elapsed < DEADLINE
+        assert youtube.ffmpeg_events() == []
+        assert frame_api.cached(fid) == []
+
+
 class TestNothingSecretIsLogged:
     async def test_no_log_line_has_a_url_or_a_header_on_success_or_failure(
         self, youtube, frame_api, caplog,
