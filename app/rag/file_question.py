@@ -11,14 +11,12 @@ rank order while they fit, and sent in file order with ``partial`` set.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import math
 import os
 import re
 import threading
-import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
