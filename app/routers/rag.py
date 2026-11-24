@@ -26,7 +26,7 @@ import json
 import logging
 import math
 import threading
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Annotated
 
@@ -757,6 +757,8 @@ _TRANSCRIPT_STOP_CHARS = len(_TRANSCRIPT_STOP.format(time="0" * 8))
 _GET_TEXT_TOOL_NAME = GET_TEXT_TOOL["function"]["name"]
 #: The name a page request must call.
 _GET_PAGE_IMAGES_TOOL_NAME = GET_PAGE_IMAGES_TOOL["function"]["name"]
+#: How many page images one page request may add.
+_PAGE_IMAGES_PER_REQUEST = 4
 #: How many characters one text result may hold.
 _DOCUMENT_TEXT_CHARS = 3000
 #: The note a text result ends with when a row does not fit.
@@ -1652,6 +1654,14 @@ async def _document_tool_answer(
         for row in material.document_rows
         if row.number is not None
     }
+    # Each given number and the page or section of the row it was sent for.
+    given_units: dict[int, int | None] = {
+        row.number: row.unit
+        for row in material.document_rows
+        if row.number is not None
+    }
+    # Each page an image was sent for, and the number it was sent with.
+    sent_pages: dict[int, int] = {}
     pages_taken: set[int] = set()
     next_number = len(passages) + 1
     rounds: list[llm.FrameRound] = []
@@ -1885,25 +1895,10 @@ async def _document_tool_answer(
                         next_number=next_number,
                     )
                     contents[index] = content
-                    for number, position in added:
-                        positions[number] = position
+                    for number, row in added:
+                        positions[number] = row.position
                         passages_sent += 1
-                for index, (call, kind) in enumerate(plans):
-                    if kind != "pages":
-                        continue
-                    page_calls += 1
-                    content, images = _serve_page_request(
-                        call, taken=pages_taken,
-                    )
-                    contents[index] = content
-                    for page, image in images:
-                        round_images = [
-                            *round_images,
-                            (f"[{next_number}] page {page}", image, "image/jpeg"),
-                        ]
-                        positions[next_number] = {"page": page}
-                        next_number += 1
-                        pages_sent += 1
+                        given_units[number] = row.unit
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - the fallback answers
@@ -1915,6 +1910,66 @@ async def _document_tool_answer(
                 async for event in fallback():
                     yield event
                 return
+
+            page_plans = [
+                (index, call)
+                for index, (call, kind) in enumerate(plans)
+                if kind == "pages"
+            ]
+            page_calls += len(page_plans)
+            if page_plans:
+                # Rendering takes the PyMuPDF lock and may wait on it, so it
+                # runs in a thread; the loop's deadline and keep-alive cover it.
+                pages_task = asyncio.create_task(
+                    asyncio.to_thread(
+                        _page_request_results,
+                        material,
+                        [call for _index, call in page_plans],
+                        sent=sent_pages,
+                        given=given_units,
+                        file_id=file_id,
+                    )
+                )
+                try:
+                    async for event in _until_done(
+                        pages_task, deadline=total_deadline,
+                    ):
+                        yield event
+                    page_contents, page_images, page_taken = pages_task.result()
+                except _Deadline:
+                    for event in deadline():
+                        yield _format_sse_event(event)
+                    return
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - the fallback answers
+                    logger.warning(
+                        "file question document tools failed: %s (file %s)",
+                        type(exc).__name__,
+                        file_id,
+                    )
+                    async for event in fallback():
+                        yield event
+                    return
+                finally:
+                    if not pages_task.done():
+                        pages_task.cancel()
+                        try:
+                            await pages_task
+                        except BaseException:  # noqa: BLE001 - cancelled, not read
+                            pass
+                pages_taken.update(page_taken)
+                for (index, _call), content in zip(page_plans, page_contents):
+                    contents[index] = content
+                for page, image in page_images:
+                    round_images = [
+                        *round_images,
+                        (f"[{next_number}] page {page}", image, "image/jpeg"),
+                    ]
+                    positions[next_number] = {"page": page}
+                    sent_pages[page] = next_number
+                    next_number += 1
+                    pages_sent += 1
 
             results: list[llm.FrameToolResult] = []
             for index, (call, kind) in enumerate(plans):
@@ -2085,7 +2140,7 @@ def _serve_text_request(
     *,
     sent_rows: dict[int, int],
     next_number: int,
-) -> tuple[str, int, list[tuple[int, dict | None]]]:
+) -> tuple[str, int, list[tuple[int, file_question.DocumentRow]]]:
     """One text result, the next number, and the passages it sent.
 
     ``sent_rows`` maps a row's file order to the number it was sent with, and
@@ -2102,7 +2157,7 @@ def _serve_text_request(
         return content, next_number, []
     assert start is not None
     lines: list[str] = []
-    added: list[tuple[int, dict | None]] = []
+    added: list[tuple[int, file_question.DocumentRow]] = []
     last = 0
     stopped = False
     for position in range(start, len(rows)):
@@ -2131,7 +2186,7 @@ def _serve_text_request(
             break
         lines = [*lines, *group]
         if number is None:
-            added = [*added, (next_number, row.position)]
+            added = [*added, (next_number, row)]
             sent_rows[row.order] = next_number
             last = next_number
             next_number += 1
@@ -2148,41 +2203,154 @@ def _serve_text_request(
 
 def _page_images_text(images: int, notes: Sequence[str]) -> str:
     """A page request's result: how many images follow, then a line per note."""
-    head = (
-        f"{images} page image{'s' if images != 1 else ''} follow."
-        if images
-        else "No page image follows."
-    )
+    if images == 1:
+        head = "1 page image follows."
+    elif images:
+        head = f"{images} page images follow."
+    else:
+        head = "No page image follows."
     return "\n".join([head, *[f"- {note}" for note in notes]])
 
 
+def _page_value(value: object) -> str:
+    """A page request's value written back as JSON, cut to 40 characters."""
+    try:
+        text = json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        text = str(value)
+    return text[:40]
+
+
+def _page_request_results(
+    material: file_question.Material,
+    calls: Sequence["llm.FrameToolCall"],
+    *,
+    sent: Mapping[int, int],
+    given: Mapping[int, int | None],
+    file_id: str,
+) -> tuple[list[str], list[tuple[int, bytes]], set[int]]:
+    """Each page request's result, the images sent in order, and the pages taken.
+
+    ``sent`` maps a page sent earlier in the question to its number, and
+    ``given`` a given number to the page its row sits on (``None`` when the row
+    names none). Rendering reads the file under the PyMuPDF lock, so it runs in
+    a worker thread.
+    """
+    taken: set[int] = set()
+    contents: list[str] = []
+    images: list[tuple[int, bytes]] = []
+    for call in calls:
+        content, call_images = _serve_page_request(
+            material, call, sent=sent, given=given, taken=taken,
+            file_id=file_id,
+        )
+        contents = [*contents, content]
+        images = [*images, *call_images]
+    return contents, images, taken
+
+
 def _serve_page_request(
+    material: file_question.Material,
     call: "llm.FrameToolCall",
     *,
+    sent: Mapping[int, int],
+    given: Mapping[int, int | None],
     taken: set[int],
+    file_id: str,
 ) -> tuple[str, list[tuple[int, bytes]]]:
     """One page request's result text and the page images it sends.
 
-    A page the request names is taken; no page image is read, so a taken page
-    has none to send and is named as not available.
+    ``taken`` holds the pages this reply's calls have taken, so a page named
+    again is not sent twice; the pages this call takes join it. A PDF that
+    cannot be opened leaves every taken page without an image.
     """
     arguments = _call_arguments(call)
-    if not isinstance(arguments, dict) or not any(
-        isinstance(arguments.get(key), list) for key in ("pages", "passages")
+    if not isinstance(arguments, dict):
+        return _PAGE_IMAGES_BAD_ARGUMENTS, []
+    keys = [
+        key for key in ("pages", "passages") if arguments.get(key) is not None
+    ]
+    if not keys or not all(
+        isinstance(arguments.get(key), list) for key in keys
     ):
         return _PAGE_IMAGES_BAD_ARGUMENTS, []
+    source = file_question.PageImages(material)
+    count: int | None = None
+    opened = False
+    open_failure: str | None = None
+    taken_here: set[int] = set()
     notes: list[str] = []
-    for key in ("pages", "passages"):
-        for value in arguments.get(key) or []:
-            page = file_question.read_integer(value)
-            if page is None:
-                notes = [
-                    *notes, f"{_shown_value(value)}: not a number I can read",
-                ]
-                continue
-            taken.add(page)
-            notes = [*notes, f"page {page}: not available"]
-    return _page_images_text(0, notes), []
+    images: list[tuple[int, bytes]] = []
+
+    def page_count() -> int | None:
+        """The PDF's own page count, opening it on the request's first need."""
+        nonlocal count, opened, open_failure
+        if opened:
+            return count
+        opened = True
+        try:
+            source.open()
+            count = source.page_count()
+        except file_question.PageImageUnavailable as exc:
+            open_failure = exc.failure
+        except Exception as exc:  # noqa: BLE001 - the pages are unavailable
+            open_failure = type(exc).__name__
+        return count
+
+    def unavailable(page: int, failure: str) -> None:
+        logger.warning(
+            "page_image_failed: %s (file %s)", failure, file_id,
+        )
+        notes.append(f"page {page}: not available")
+
+    try:
+        for key in ("pages", "passages"):
+            for value in arguments.get(key) or []:
+                page = file_question.read_integer(value)
+                if page is None:
+                    notes.append(
+                        f"{_page_value(value)}: not a number I can read"
+                    )
+                    continue
+                if key == "passages":
+                    if page not in given:
+                        notes.append(f"[{page}]: not a passage you were given")
+                        continue
+                    unit = given[page]
+                    if unit is None:
+                        notes.append(f"[{page}]: its page is not known")
+                        continue
+                    page = unit
+                total = page_count()
+                if total is not None and not 1 <= page <= total:
+                    notes.append(f"page {page}: past the end of the document")
+                    continue
+                if page in sent:
+                    notes.append(f"page {page}: already sent as [{sent[page]}]")
+                    continue
+                if page in taken:
+                    notes.append(f"page {page}: named twice in this reply")
+                    continue
+                if len(taken_here) >= _PAGE_IMAGES_PER_REQUEST:
+                    notes.append(
+                        f"page {page}: over the limit of "
+                        f"{_PAGE_IMAGES_PER_REQUEST} pages for one call"
+                    )
+                    continue
+                taken_here.add(page)
+                taken.add(page)
+                if open_failure is not None:
+                    unavailable(page, open_failure)
+                    continue
+                try:
+                    images.append((page, source.image(page)))
+                except file_question.PageImageUnavailable as exc:
+                    unavailable(page, exc.failure)
+                except Exception as exc:  # noqa: BLE001 - one page's own failure
+                    unavailable(page, type(exc).__name__)
+    finally:
+        source.close()
+    return _page_images_text(len(images), notes), images
 
 
 async def _document_fallback_answer(

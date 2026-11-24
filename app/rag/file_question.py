@@ -11,12 +11,14 @@ rank order while they fit, and sent in file order with ``partial`` set.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import math
 import os
 import re
 import threading
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -28,6 +30,7 @@ from app import llm_routing
 from app.config import settings
 from app.database import get_search_db_read, get_search_engine
 from app.document_sections import EPUB_MIME
+from app.extractors.pdf import PYMUPDF_LOCK
 from app.frame_cache import extract_frame_to_cache, frame_cache_path, round_ms
 from app.frame_text_lines import frame_segments
 from app.rag.prompt import format_position
@@ -75,6 +78,16 @@ DOCUMENT_CONTENTS_LINES = 40
 
 #: How long one section's title may be in a document's contents.
 DOCUMENT_TITLE_CHARS = 60
+
+#: The long edge of a page image, in pixels.
+PAGE_IMAGE_LONG_EDGE = 1280
+
+#: How long one page request may wait for the PyMuPDF lock, counted from its
+#: first PyMuPDF call.
+PAGE_IMAGE_LOCK_SECONDS = 30.0
+
+#: The failure a page request's lock wait is logged by.
+PAGE_IMAGE_LOCK_TIMEOUT = "lock_timeout"
 
 #: Why an image could not be attached; the route logs the class, never
 #: the question or the bytes.
@@ -200,6 +213,14 @@ class Frame:
 
 class ImageUnavailable(Exception):
     """An image that applies to the question could not be prepared."""
+
+    def __init__(self, failure: str) -> None:
+        super().__init__(failure)
+        self.failure = failure
+
+
+class PageImageUnavailable(Exception):
+    """A page image could not be made; ``failure`` is what the log line names."""
 
     def __init__(self, failure: str) -> None:
         super().__init__(failure)
@@ -961,6 +982,82 @@ def _document_excerpt(
     return " ".join(part for part in parts if part)[
         :CONTENTS_EXCERPT_CHARS
     ].rstrip()
+
+
+def page_image_path(material: Material) -> str | None:
+    """The PDF on disk: a stored absolute path, or a relative one under its mount."""
+    if not material.file_path:
+        return None
+    if os.path.isabs(material.file_path):
+        return material.file_path
+    return config.resolve_file_path(material.drive, material.file_path)
+
+
+class PageImages:
+    """One page request's PDF, opened once and read under the shared lock.
+
+    A long extraction holds :data:`app.extractors.pdf.PYMUPDF_LOCK` for as long
+    as it runs, and one request may wait no more than
+    :data:`PAGE_IMAGE_LOCK_SECONDS` for it in all: every PyMuPDF call of the
+    request shares that budget.
+    """
+
+    def __init__(
+        self, material: Material, *,
+        lock_seconds: float = PAGE_IMAGE_LOCK_SECONDS,
+    ) -> None:
+        self._path = page_image_path(material)
+        self._end = time.monotonic() + lock_seconds
+        self._document: Any = None
+
+    def open(self) -> None:
+        if self._path is None:
+            raise FileNotFoundError("the file has no path on disk")
+        with self._locked():
+            import pymupdf
+
+            self._document = pymupdf.open(self._path)
+
+    def page_count(self) -> int:
+        with self._locked():
+            return int(self._document.page_count)
+
+    def image(self, number: int) -> bytes:
+        """Page ``number`` from 1 as a JPEG whose long edge is 1280 px."""
+        with self._locked():
+            import pymupdf
+
+            page = self._document[number - 1]
+            long_edge = max(float(page.rect.width), float(page.rect.height))
+            zoom = PAGE_IMAGE_LONG_EDGE / long_edge
+            pixmap = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
+            return pixmap.tobytes("jpeg")
+
+    def close(self) -> None:
+        document, self._document = self._document, None
+        if document is None:
+            return
+        if not PYMUPDF_LOCK.acquire(
+            timeout=max(0.0, self._end - time.monotonic())
+        ):
+            # Another request holds the lock now; its holder or the garbage
+            # collector closes the document instead of waiting past the budget.
+            return
+        try:
+            document.close()
+        finally:
+            PYMUPDF_LOCK.release()
+
+    @contextlib.contextmanager
+    def _locked(self) -> Iterator[None]:
+        if not PYMUPDF_LOCK.acquire(
+            timeout=max(0.0, self._end - time.monotonic())
+        ):
+            raise PageImageUnavailable(PAGE_IMAGE_LOCK_TIMEOUT)
+        try:
+            yield
+        finally:
+            PYMUPDF_LOCK.release()
 
 
 @dataclass(frozen=True)
