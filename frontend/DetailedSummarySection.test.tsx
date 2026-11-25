@@ -1460,3 +1460,59 @@ describe("DetailedSummarySection — regenerate with another model", () => {
     });
   });
 });
+
+describe("DetailedSummarySection — jumping between sections", () => {
+  const realMatchMedia = Object.getOwnPropertyDescriptor(window, "matchMedia");
+
+  function reduceMotion(reduced: boolean) {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: reduced && query.includes("prefers-reduced-motion: reduce"),
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      }),
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWsLastEvent.current = null;
+    resetFileAiActions();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    if (realMatchMedia) Object.defineProperty(window, "matchMedia", realMatchMedia);
+    else delete (window as Partial<Window>).matchMedia;
+  });
+
+  async function jumpOptions(): Promise<unknown> {
+    vi.mocked(getDetailedSummary).mockResolvedValue(generatedResponse as never);
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => {});
+    const { container } = renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: /Expand/ }));
+    const first = await waitFor(() => {
+      const node = container.querySelector<HTMLElement>("[data-citation-section-path]");
+      expect(node).not.toBeNull();
+      return node!;
+    });
+    first.focus();
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+    return scrollIntoView.mock.calls[0][0];
+  }
+
+  it("SPEC-ADDON-186 I5 the arrow-key jump is instant under reduced motion and smooth otherwise, to the same block", async () => {
+    reduceMotion(true);
+    expect(await jumpOptions()).toEqual({ block: "start", behavior: "auto" });
+    cleanup();
+    reduceMotion(false);
+    expect(await jumpOptions()).toEqual({ block: "start", behavior: "smooth" });
+  });
+});

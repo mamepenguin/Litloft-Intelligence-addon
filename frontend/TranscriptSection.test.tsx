@@ -603,6 +603,65 @@ describe("TranscriptSection — suspension actually stops the scrolling", () => 
     // The highlight moved on; the list did not.
     expect(scrollTo).not.toHaveBeenCalled();
   });
+
+  describe("SPEC-ADDON-186 I5 I12 the follow scroll under reduced motion", () => {
+    const realMatchMedia = Object.getOwnPropertyDescriptor(window, "matchMedia");
+
+    function reduceMotion(reduced: boolean) {
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        writable: true,
+        value: (query: string) => ({
+          matches: reduced && query.includes("prefers-reduced-motion: reduce"),
+          media: query,
+          onchange: null,
+          addListener: () => {},
+          removeListener: () => {},
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          dispatchEvent: () => false,
+        }),
+      });
+    }
+
+    afterEach(() => {
+      if (realMatchMedia) Object.defineProperty(window, "matchMedia", realMatchMedia);
+      else delete (window as Partial<Window>).matchMedia;
+    });
+
+    /** The options of the scroll that follows the cue from 1 s to 8 s. */
+    async function followScrolls(): Promise<unknown[]> {
+      const { scrollTo, state } = await setup();
+      state.currentTime = 8;
+      await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+      const calls = scrollTo.mock.calls.map((args) => args[0]);
+      cleanup();
+      clearTranscriptScroll();
+      return calls;
+    }
+
+    it("SPEC-ADDON-186 I5 I12 jumps instead of gliding while following, to the same place, and glides without matchMedia", async () => {
+      reduceMotion(false);
+      const glide = await followScrolls();
+      for (const options of glide) {
+        expect(options).toMatchObject({ behavior: "smooth" });
+      }
+
+      reduceMotion(true);
+      const jump = await followScrolls();
+      expect(jump).toEqual(
+        glide.map((options) => ({ ...(options as object), behavior: "auto" })),
+      );
+
+      // SPEC-ADDON-186 I12: no matchMedia at all reads as "not reduced".
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        writable: true,
+        value: undefined,
+      });
+      expect(await followScrolls()).toEqual(glide);
+    });
+  });
 });
 
 describe("TranscriptSection — a list that appears after its cues", () => {
@@ -837,6 +896,38 @@ describe("TranscriptSection — in a host whose scroller encloses the list", () 
     expect(listScrollTo).not.toHaveBeenCalled();
     expect(screen.getByTestId("fits").scrollTo).not.toHaveBeenCalled();
     expect(screen.getByTestId("tall").scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("SPEC-ADDON-186 I5 jumps that scroller back to the cue under reduced motion, to the same place", async () => {
+    const realMatchMedia = Object.getOwnPropertyDescriptor(window, "matchMedia");
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: query.includes("prefers-reduced-motion: reduce"),
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    });
+    try {
+      const { list, hostScrollTo, listScrollTo } = await setup();
+      fireEvent.wheel(list);
+      fireEvent.click(await screen.findByRole("button", { name: CHIP }));
+
+      await waitFor(() => expect(hostScrollTo).toHaveBeenCalled());
+      for (const [options] of hostScrollTo.mock.calls) {
+        expect(options).toEqual({ top: 545, behavior: "auto" });
+      }
+      expect(listScrollTo).not.toHaveBeenCalled();
+    } finally {
+      if (realMatchMedia) Object.defineProperty(window, "matchMedia", realMatchMedia);
+      else delete (window as Partial<Window>).matchMedia;
+    }
   });
 
   it("stops following when the reader scrolls that scroller outside the list", async () => {

@@ -104,6 +104,13 @@ const REVEAL =
 const STRIP_BUTTON =
   "relative inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-xs font-medium text-text-muted transition-colors before:absolute before:-inset-2 before:content-[''] enabled:hover:text-text-primary enabled:active:text-text-primary disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring";
 
+function scrollBehavior(): ScrollBehavior {
+  if (typeof window === "undefined" || !window.matchMedia) return "smooth";
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ? "auto"
+    : "smooth";
+}
+
 function parseVttCues(vtt: string): TranscriptChunkItem[] {
   const lines = vtt.split(/\r?\n/);
   const cues: TranscriptChunkItem[] = [];
@@ -551,7 +558,7 @@ export default function TranscriptSection({
     const targetOffset = targetRect.top - viewTop + scroller.scrollTop;
     const nextTop =
       targetOffset - (scroller.clientHeight - covered - target.clientHeight) / 2;
-    scroller.scrollTo({ top: nextTop, behavior: "smooth" });
+    scroller.scrollTo({ top: nextTop, behavior: scrollBehavior() });
   }, [isHidden]);
 
   useEffect(() => {

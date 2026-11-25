@@ -115,6 +115,13 @@ const POLL_MAX_ATTEMPTS = 200; // 200 * 3s = 10 minutes
 const WS_SUMMARY_UPDATED = "intelligence.detailed_summary.updated";
 const WS_CITATIONS_READY = "intelligence.detailed_summary.citations_ready";
 
+function scrollBehavior(): ScrollBehavior {
+  if (typeof window === "undefined" || !window.matchMedia) return "smooth";
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ? "auto"
+    : "smooth";
+}
+
 export default function DetailedSummarySection({
   fileId,
   drive,
@@ -853,7 +860,7 @@ function DetailedSummaryBody({
         index = Math.max(0, Math.min(nodes.length - 1, index));
         e.preventDefault();
         nodes[index].focus({ preventScroll: true });
-        nodes[index].scrollIntoView({ block: "start", behavior: "smooth" });
+        nodes[index].scrollIntoView({ block: "start", behavior: scrollBehavior() });
         return;
       }
       if (e.key === "Enter") {
