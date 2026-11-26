@@ -37,8 +37,22 @@ from app.models import IndexedFile
 # ---------------------------------------------------------------------------
 
 
+def _pillow_modules() -> list[str]:
+    return [
+        name
+        for name in sys.modules
+        if name == "PIL"
+        or name.startswith("PIL.")
+        or name == "pillow_heif"
+        or name.startswith("pillow_heif.")
+    ]
+
+
 def real_pillow() -> None:
-    for name in [n for n in sys.modules if n == "PIL" or n.startswith("PIL.")]:
+    # pillow-heif binds Pillow's registries at import time, so a copy imported
+    # while conftest's PIL stub was in place registers a plugin the real Pillow
+    # never sees. Drop both and let the next import bind real Pillow.
+    for name in _pillow_modules():
         del sys.modules[name]
     import PIL.Image  # noqa: F401
     import PIL.ImageOps  # noqa: F401
@@ -52,14 +66,10 @@ def pillow_real():
     against the stub, so a real package left in ``sys.modules`` changes
     their behaviour for every test after this one.
     """
-    saved = {
-        name: module
-        for name, module in sys.modules.items()
-        if name == "PIL" or name.startswith("PIL.")
-    }
+    saved = {name: sys.modules[name] for name in _pillow_modules()}
     real_pillow()
     yield
-    for name in [n for n in sys.modules if n == "PIL" or n.startswith("PIL.")]:
+    for name in _pillow_modules():
         del sys.modules[name]
     sys.modules.update(saved)
 
