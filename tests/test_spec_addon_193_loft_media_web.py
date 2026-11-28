@@ -310,8 +310,8 @@ def test_spec_addon_193_i6_a_web_fetch_writes_what_a_youtube_fetch_writes(world,
         youtube_id, "loft_candidates_done"
     ) in (True, 1)
     assert world.value(web_id, "clip_indexed") == world.value(youtube_id, "clip_indexed")
-    assert _clip_seconds(web_id) == _clip_seconds(youtube_id) != []
-    for timestamp in _clip_seconds(web_id):
+    assert _clip_seconds(world, web_id) == _clip_seconds(world, youtube_id) != []
+    for timestamp in _clip_seconds(world, web_id):
         assert frame_cache_path(web_id, timestamp).exists()
         assert frame_cache_path(youtube_id, timestamp).exists()
     assert world.fetch_dir_files() == []

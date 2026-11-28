@@ -82,7 +82,7 @@ def _answer(response) -> str:
 async def test_spec_addon_194_i17_a_web_loft_with_text_sends_frames_read_live(
     db, addon, llm, call, tmp_path, youtube, monkeypatch,
 ):
-    _loft(db, tmp_path, LOFT, passage=PASSAGE)
+    _loft(db, tmp_path, LOFT, duration=None, passage=PASSAGE)
     scenes(monkeypatch, [10.0, 20.0], duration=None)
     youtube.set_ytdlp(describe=describe([youtube.format("f720", 720)]))
     _, wire = vision_client(llm)
@@ -176,7 +176,7 @@ async def test_spec_addon_194_i17_a_web_loft_with_text_and_a_blind_profile_reads
 
     response = await ask(call, LOFT, position=12.0)
 
-    assert "image" not in by_kind(response)["meta"]
+    assert by_kind(response)["meta"]["image"] == "none"
     assert wire.image_bodies == []
     assert wire.text_bodies
     assert youtube.lookups() == []
