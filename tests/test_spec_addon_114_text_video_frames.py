@@ -707,25 +707,53 @@ class TestTheProfileDecides:
         [({"provider": "vimeo", "url": "https://vimeo.com/1"}, None), (None, "{not json")],
         ids=["other-provider", "unreadable"],
     )
-    async def test_a_loft_that_is_not_a_text_video_keeps_its_position_image_attempt(
-        self, body, raw, db, addon, llm, call, tmp_path, monkeypatch,
+    async def test_a_loft_with_no_frame_source_attempts_no_image(
+        self, body, raw, db, addon, llm, call, tmp_path, monkeypatch, caplog,
     ):
-        """SPEC-ADDON-114 I8 §1.7 (053 I1 revised): no frame set; its attempt ends ``unavailable``."""
+        """SPEC-ADDON-192 I8 (053 I1 revised): no frame set and no attempt; image status ``none``."""
         _loft(db, tmp_path, OTHER_LOFT, body=body, raw=raw)
         _text_video(db, tmp_path)
         scenes(monkeypatch, [], duration=80.0)
         FFmpeg().install(monkeypatch)
         _, wire = vision_client(llm)
 
-        other = await ask(call, OTHER_LOFT, position=5.0)
-        assert by_kind(other)["meta"]["image"] == "unavailable"
+        with caplog.at_level(logging.WARNING):
+            other = await ask(call, OTHER_LOFT, position=5.0)
+        assert by_kind(other)["meta"].get("image", "none") == "none"
+        assert "error" not in by_kind(other)["done"]
         assert wire.image_bodies == []
         assert len(wire.text_bodies) == 1
         assert PASSAGE in wire.text_of(wire.text_bodies[0])
+        cache_dir = frame_cache.frame_cache_dir(OTHER_LOFT)
+        assert not cache_dir.exists() or list(cache_dir.iterdir()) == []
+        assert [
+            r.getMessage() for r in caplog.records
+            if "file question image failed" in r.getMessage()
+        ] == []
 
         native = await ask(call, VIDEO)
         assert by_kind(native)["meta"]["image"] == "attached"
         assert sent_keys(wire) == [ms(t) for t in EVEN_80]
+
+    @pytest.mark.parametrize(
+        ("body", "raw"),
+        [({"provider": "vimeo", "url": "https://vimeo.com/1"}, None), (None, "{not json")],
+        ids=["other-provider", "unreadable"],
+    )
+    async def test_a_loft_with_no_frame_source_carries_no_image_key_for_a_blind_profile(
+        self, body, raw, db, addon, llm, call, tmp_path, monkeypatch,
+    ):
+        """SPEC-ADDON-192 §7: with a profile that cannot see, ``meta`` carries no ``image``."""
+        _loft(db, tmp_path, OTHER_LOFT, body=body, raw=raw)
+        scenes(monkeypatch, [], duration=80.0)
+        FFmpeg().install(monkeypatch)
+        _, wire = vision_client(llm, config=openai_config(vision_model=""))
+
+        other = await ask(call, OTHER_LOFT, position=5.0)
+
+        assert "image" not in by_kind(other)["meta"]
+        assert wire.image_bodies == []
+        assert len(wire.text_bodies) == 1
 
 
 class TestWhenTextArrives:
