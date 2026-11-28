@@ -569,7 +569,14 @@ async def _text_question_stream(
     )
     can_see = profile_can_see(resolved)
     image_applies = file_question.is_picture(material) or (
-        material.file_type == "video" and position_seconds is not None
+        material.file_type == "video"
+        and position_seconds is not None
+        and file_question._has_frame_source(
+            material.file_type,
+            material.mime_type,
+            material.file_path,
+            material.drive,
+        )
     )
 
     image_status = "none"
