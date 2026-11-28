@@ -48,7 +48,11 @@ from app.workers.frame_ocr import index_frame_ocr
 from app.workers.frame_scan import index_frame_scan
 from app.workers.metadata import _remove_embeddings
 from app.workers.ocr import _get_engine
-from app.workers.whisper import LOFT_MIME
+from app.workers.whisper import (
+    LOFT_MIME,
+    _NoLongerALoft,
+    _skip_no_longer_loft,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -248,6 +252,8 @@ def _write(file_id: str, values: dict) -> None:
         ).first()
         if row is None:
             return
+        if row.mime_type != LOFT_MIME:
+            _skip_no_longer_loft(file_id)
         for column, value in values.items():
             setattr(row, column, value)
 
@@ -296,7 +302,11 @@ def _storyboard_step(
                     load_image_model()
                 except Exception:
                     return
-            index_storyboard(file_id, description, state.duration)
+            index_storyboard(
+                file_id, description, state.duration, require_loft_mime=True,
+            )
+    except _NoLongerALoft:
+        raise
     except Exception as exc:  # noqa: BLE001 - the fetch goes on regardless
         logger.warning(
             "youtube storyboard failed: file=%s class=%s",
@@ -402,6 +412,8 @@ def _write_candidates(
             ).first()
             if row is None:
                 return "inactive"
+            if row.mime_type != LOFT_MIME:
+                _skip_no_longer_loft(file_id)
             _remove_clip_embeddings(session, file_id)
             _remove_embeddings(session, file_id, CHANGE_TYPE)
             for timestamp, vector in embedded:
@@ -480,6 +492,9 @@ def _candidates_stage(
                     continue
                 written.append(path)
         outcome = _write_candidates(file_id, embedded)
+    except _NoLongerALoft:
+        _discard_entries(written)
+        raise
     except _CandidatesFailure as exc:
         _discard_entries(written)
         logger.warning("loft_media candidates failed for %s (%s)", file_id, exc.failure)
@@ -542,10 +557,16 @@ def index_loft_media(
     _RUNNING.add(file_id)
     result = FetchResult()
     try:
-        result = _fetch(state, is_paused)
+        try:
+            result = _fetch(state, is_paused)
+        except _NoLongerALoft:
+            result = FetchResult()
     finally:
         _RUNNING.discard(file_id)
-        requeue = _apply_recorded_requests(file_id)
+        try:
+            requeue = _apply_recorded_requests(file_id)
+        except _NoLongerALoft:
+            requeue = False
     return FetchResult(
         scan_set=result.scan_set, candidates_set=result.candidates_set,
         settled=result.settled, requeue=requeue,
@@ -733,7 +754,10 @@ def _fetch(
             try:
                 index_frame_scan(
                     file_id, is_paused=is_paused, source_path=str(destination),
+                    require_loft_mime=True,
                 )
+            except _NoLongerALoft:
+                raise
             except Exception as exc:
                 logger.error(
                     "loft_media scan failed for %s (%s)", file_id, type(exc).__name__,
@@ -745,7 +769,10 @@ def _fetch(
             try:
                 index_frame_ocr(
                     file_id, is_paused=is_paused, source_path=str(destination),
+                    require_loft_mime=True,
                 )
+            except _NoLongerALoft:
+                raise
             except Exception as exc:
                 logger.error(
                     "loft_media OCR failed for %s (%s)", file_id, type(exc).__name__,

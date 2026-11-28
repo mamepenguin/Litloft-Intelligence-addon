@@ -106,6 +106,15 @@ LOFT_MIME = "application/vnd.litloft.loft+json"
 LOFT_STT_TEMP_SUFFIX = ".stt_temp.m4a"
 
 
+class _NoLongerALoft(Exception):
+    """The row's mime stopped being the `.loft` mime while its task ran."""
+
+
+def _skip_no_longer_loft(file_id: str) -> None:
+    logger.info("loft task skipped, no longer a .loft (file %s)", file_id)
+    raise _NoLongerALoft
+
+
 def _loft_stt_temp_path(file_path: str) -> str | None:
     from pathlib import Path
 
@@ -167,11 +176,15 @@ def _mark_loft_stt_temp_consumed(file_id: str) -> None:
         changed_drive: str | None = None
         with get_search_db() as session:
             file_row = extraction.get_file(session, file_id)
+            if file_row is not None and file_row.mime_type != LOFT_MIME:
+                _skip_no_longer_loft(file_id)
             if file_row is not None and file_row.transcript_corrected:
                 return
             changed_drive = _mark_whisper_indexed(session, file_id)
         if changed_drive:
             emit_processing_updated(changed_drive, [file_id])
+    except _NoLongerALoft:
+        return
     except Exception:
         logger.exception("Failed to mark loft STT temp consumed for %s", file_id)
 
@@ -917,14 +930,21 @@ async def index_whisper(file_id: str) -> bool:
         return True
 
     loft_temp_path: str | None = None
+    require_loft_mime = False
     if mime_type == LOFT_MIME:
         loft_temp_path = _loft_stt_temp_path(file_path)
         if loft_temp_path is None:
             # External source carve-out (adjacent .vtt → not a provider
             # call). Called outside the DB context to avoid self-deadlock
             # on the internal write lock.
-            return await asyncio.to_thread(_index_loft_vtt, file_id, file_path)
+            try:
+                return await asyncio.to_thread(
+                    _index_loft_vtt, file_id, file_path
+                )
+            except _NoLongerALoft:
+                return False
         file_path = loft_temp_path
+        require_loft_mime = True
 
     if not validate_file_path(file_path):
         logger.error("File path validation failed for %s: %s", file_id, file_path)
@@ -1014,10 +1034,15 @@ async def index_whisper(file_id: str) -> bool:
         )
 
     try:
-        success = await _do_transcribe_and_index(file_id, file_path, drive, provider)
+        success = await _do_transcribe_and_index(
+            file_id, file_path, drive, provider,
+            require_loft_mime=require_loft_mime,
+        )
         if not success and loft_temp_path is not None:
             await asyncio.to_thread(_mark_loft_stt_temp_consumed, file_id)
         return success
+    except _NoLongerALoft:
+        return False
     finally:
         _cleanup_loft_stt_temp(loft_temp_path)
 
@@ -1090,6 +1115,8 @@ async def _do_transcribe_and_index(
     file_path: str,
     drive: str,
     provider,
+    *,
+    require_loft_mime: bool = False,
 ) -> bool:
     """Run a provider transcription and persist the result.
 
@@ -1179,13 +1206,18 @@ async def _do_transcribe_and_index(
         for w in seg.get("words") or []
     )
 
-    stored = await asyncio.to_thread(
-        _persist_transcript,
-        file_id,
-        provider.name,
-        raw_segments,
-        job_id,
-    )
+    try:
+        stored = await asyncio.to_thread(
+            _persist_transcript,
+            file_id,
+            provider.name,
+            raw_segments,
+            job_id,
+            require_loft_mime=require_loft_mime,
+        )
+    except _NoLongerALoft:
+        await asyncio.to_thread(_finish_job_skipped_no_longer_loft, job_id)
+        raise
     if stored is False:
         # A correction saved while this ran owns the stored text.
         return False
@@ -1257,6 +1289,18 @@ def _finish_job_failed(job_id: int, exc: Exception) -> None:
         record.status = "failed"
         record.error_class = type(exc).__name__
         record.error_message = str(exc)[:1000]
+        record.completed_at = datetime.now(UTC)
+
+
+def _finish_job_skipped_no_longer_loft(job_id: int) -> None:
+    """Close the running job a conversion overtook, without new rows."""
+    with get_search_db() as session:
+        record = session.query(JobRecord).filter_by(id=job_id).first()
+        if record is None:
+            return
+        record.status = "skipped"
+        record.error_class = "NoLongerALoft"
+        record.error_message = "converted"
         record.completed_at = datetime.now(UTC)
 
 
@@ -1445,6 +1489,8 @@ def _persist_transcript(
     provider_name: str,
     raw_segments: list[dict],
     job_id: int,
+    *,
+    require_loft_mime: bool = False,
 ) -> bool:
     """DB write phase: chunks + words + embeddings + JobRecord update.
 
@@ -1457,7 +1503,9 @@ def _persist_transcript(
     saved while the provider ran owns the file's text.
     """
     if not raw_segments:
-        return _finish_without_segments(file_id, job_id)
+        return _finish_without_segments(
+            file_id, job_id, require_loft_mime=require_loft_mime
+        )
 
     whisper_config = settings.transcription.whisper_local
     words = _flatten_words(raw_segments)
@@ -1468,7 +1516,9 @@ def _persist_transcript(
     )
 
     if not chunks:
-        return _finish_without_segments(file_id, job_id)
+        return _finish_without_segments(
+            file_id, job_id, require_loft_mime=require_loft_mime
+        )
 
     chunk_texts = [c["text"] for c in chunks if c["text"].strip()]
     vectors = None
@@ -1483,6 +1533,8 @@ def _persist_transcript(
         file_row = extraction.get_file(session, file_id)
         if file_row is None:
             return False
+        if require_loft_mime and file_row.mime_type != LOFT_MIME:
+            _skip_no_longer_loft(file_id)
         if file_row.transcript_corrected:
             if not file_row.transcript_redo:
                 _mark_job_skipped_corrected(session, job_id)
@@ -1606,7 +1658,9 @@ def _mark_job_skipped_corrected(session: object, job_id: int) -> None:
         record.completed_at = datetime.now(UTC)
 
 
-def _finish_without_segments(file_id: str, job_id: int) -> bool:
+def _finish_without_segments(
+    file_id: str, job_id: int, *, require_loft_mime: bool = False,
+) -> bool:
     """The zero-segment result: a success unless a correction owns the text.
 
     A confirmed regenerate that finds nothing is an ending without a
@@ -1618,6 +1672,8 @@ def _finish_without_segments(file_id: str, job_id: int) -> bool:
         file_row = extraction.get_file(session, file_id)
         if file_row is None:
             return False
+        if require_loft_mime and file_row.mime_type != LOFT_MIME:
+            _skip_no_longer_loft(file_id)
         if file_row.transcript_corrected:
             if file_row.transcript_redo:
                 extraction.clear_redo(
@@ -1906,6 +1962,8 @@ def _flag_loft_indexed(file_id: str) -> None:
     changed_drive: str | None = None
     with get_search_db() as session:
         file_row = extraction.get_file(session, file_id)
+        if file_row is not None and file_row.mime_type != LOFT_MIME:
+            _skip_no_longer_loft(file_id)
         if file_row is not None and file_row.transcript_corrected:
             if file_row.transcript_redo:
                 extraction.clear_redo(
@@ -1981,6 +2039,8 @@ def _index_loft_vtt(file_id: str, file_path: str) -> bool:
         file_row = extraction.get_file(session, file_id)
         if file_row is None:
             return False
+        if file_row.mime_type != LOFT_MIME:
+            _skip_no_longer_loft(file_id)
         if file_row.transcript_corrected:
             if not file_row.transcript_redo:
                 extraction.queue_item(
