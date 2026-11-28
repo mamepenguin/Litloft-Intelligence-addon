@@ -241,6 +241,15 @@ def _load_state(file_id: str) -> _State | None:
         )
 
 
+class _NoLongerALoft(Exception):
+    """The row's mime stopped being the `.loft` mime while its task ran."""
+
+
+def _skip_no_longer_loft(file_id: str) -> None:
+    logger.info("loft task skipped, no longer a .loft (file %s)", file_id)
+    raise _NoLongerALoft
+
+
 def _write(file_id: str, values: dict) -> None:
     with get_search_db() as session:
         row = session.query(IndexedFile).filter_by(
@@ -248,6 +257,8 @@ def _write(file_id: str, values: dict) -> None:
         ).first()
         if row is None:
             return
+        if row.mime_type != LOFT_MIME:
+            _skip_no_longer_loft(file_id)
         for column, value in values.items():
             setattr(row, column, value)
 
@@ -402,6 +413,8 @@ def _write_candidates(
             ).first()
             if row is None:
                 return "inactive"
+            if row.mime_type != LOFT_MIME:
+                _skip_no_longer_loft(file_id)
             _remove_clip_embeddings(session, file_id)
             _remove_embeddings(session, file_id, CHANGE_TYPE)
             for timestamp, vector in embedded:
@@ -480,6 +493,9 @@ def _candidates_stage(
                     continue
                 written.append(path)
         outcome = _write_candidates(file_id, embedded)
+    except _NoLongerALoft:
+        _discard_entries(written)
+        raise
     except _CandidatesFailure as exc:
         _discard_entries(written)
         logger.warning("loft_media candidates failed for %s (%s)", file_id, exc.failure)
@@ -542,10 +558,16 @@ def index_loft_media(
     _RUNNING.add(file_id)
     result = FetchResult()
     try:
-        result = _fetch(state, is_paused)
+        try:
+            result = _fetch(state, is_paused)
+        except _NoLongerALoft:
+            result = FetchResult()
     finally:
         _RUNNING.discard(file_id)
-        requeue = _apply_recorded_requests(file_id)
+        try:
+            requeue = _apply_recorded_requests(file_id)
+        except _NoLongerALoft:
+            requeue = False
     return FetchResult(
         scan_set=result.scan_set, candidates_set=result.candidates_set,
         settled=result.settled, requeue=requeue,

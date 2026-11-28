@@ -39,6 +39,8 @@ from app.models import (
     PictureText,
     TranscriptChunk,
     TranscriptWord,
+    VideoFrameScan,
+    VideoFrameText,
 )
 from app.processing_events import emit_processing_updated
 from app.sidecar_match import match_siblings
@@ -232,6 +234,40 @@ def _drifted_file_ids(rows: list[tuple[str, dict, dict]]) -> list[str]:
         ):
             drifted.append(file_id)
     return drifted
+
+
+def _reopen_empty_loft_stages(
+    session: object, indexed: IndexedFile, file_id: str,
+) -> None:
+    """Reopen the stages a `.loft` closed without storing anything.
+
+    The media file that replaces a `.loft` is a native video for every stage
+    the reference had nothing to give: a stage with rows, or a corrected kind,
+    keeps its flag and its rows.
+    """
+    if (
+        not indexed.transcript_corrected
+        and session.query(TranscriptChunk.file_id).filter_by(
+            file_id=file_id
+        ).first() is None
+    ):
+        indexed.whisper_indexed = False
+    if session.query(VideoFrameScan.file_id).filter_by(
+        file_id=file_id
+    ).first() is None:
+        indexed.frame_scan_indexed = False
+    if (
+        not indexed.picture_text_corrected
+        and session.query(VideoFrameText.file_id).filter_by(
+            file_id=file_id
+        ).first() is None
+    ):
+        indexed.frame_ocr_read = False
+        indexed.frame_ocr_indexed = False
+    if session.query(Embedding.file_id).filter_by(
+        file_id=file_id, embedding_type="clip"
+    ).first() is None:
+        indexed.clip_indexed = False
 
 
 def _loft_needs_reset(file_path: str, chunked: bool) -> bool | None:
@@ -1818,6 +1854,13 @@ class IndexManager:
                     if core_file_type is not None:
                         indexed.file_type = core_file_type
                     if core_mime_type is not None:
+                        if (
+                            indexed.mime_type == LOFT_MIME
+                            and core_mime_type != LOFT_MIME
+                        ):
+                            _reopen_empty_loft_stages(
+                                session, indexed, file_id
+                            )
                         indexed.mime_type = core_mime_type
                     # Core derives the thumbnail's own path from the file
                     # path, so a move invalidates it in exactly the same
