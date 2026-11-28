@@ -59,7 +59,7 @@ def test_spec_addon_117_the_migration_adds_the_two_columns_to_an_existing_databa
     reader.dispose()
 
 
-def test_spec_addon_117_a_text_model_change_rebuilds_the_frame_text_of_youtube_lofts_only(
+def test_spec_addon_117_a_text_model_change_rebuilds_the_frame_text_of_youtube_and_web_lofts_only(
     tmp_path, monkeypatch,
 ):
     engine = _skeleton(tmp_path, vec_text_dim=384, recorded_model=_GRANITE_97)
@@ -73,6 +73,7 @@ def test_spec_addon_117_a_text_model_change_rebuilds_the_frame_text_of_youtube_l
             " frame_ocr_read, frame_ocr_indexed, loft_source) VALUES "
             "('native', 'd', 'video', 'video/mp4', 1, 1, NULL),"
             "('youtube', 'd', 'video', :m, 1, 1, 'youtube'),"
+            "('web', 'd', 'video', :m, 1, 1, 'web'),"
             "('other', 'd', 'video', :m, 1, 1, 'other'),"
             "('unclassified', 'd', 'video', :m, 1, 1, NULL)"
         ), {"m": LOFT_MIME})
@@ -85,7 +86,8 @@ def test_spec_addon_117_a_text_model_change_rebuilds_the_frame_text_of_youtube_l
             "SELECT file_id, frame_ocr_read || ',' || frame_ocr_indexed FROM indexed_files"
         )).fetchall())
     assert rows == {
-        "native": "1,0", "youtube": "1,0", "other": "1,1", "unclassified": "1,1",
+        "native": "1,0", "youtube": "1,0", "web": "1,0", "other": "1,1",
+        "unclassified": "1,1",
     }
 
 

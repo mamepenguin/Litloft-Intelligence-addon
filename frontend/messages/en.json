@@ -151,7 +151,7 @@
         "label": "Scene change scan"
       },
       "loft_media": {
-        "label": "YouTube video analysis"
+        "label": "Linked video analysis"
       }
     },
     "frameOcrFiles": "Text in video {done} / {total}",

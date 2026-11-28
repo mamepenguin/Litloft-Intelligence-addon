@@ -6,6 +6,7 @@ the routed model are the stand-ins the native Visual Index tests use.
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
@@ -58,7 +59,10 @@ def visual(monkeypatch, search_index, make_settings, use_llm, tmp_path):  # noqa
     def add(file_id: str, *, mime: str = LOFT_MIME, source: str | None = "youtube",
             failures: int = 0, scanned: bool = True) -> str:
         path = tmp_path / f"{file_id}.loft"
-        path.write_text('{"provider": "youtube", "url": "https://www.youtube.com/watch?v=x"}')
+        provider = "example-video" if source == "web" else "youtube"
+        url = ("https://videos.example-video.test/watch/abcdef123456"
+               if source == "web" else "https://www.youtube.com/watch?v=x")
+        path.write_text(json.dumps({"provider": provider, "url": url}))
         with database.get_search_db() as s:
             s.add(IndexedFile(
                 file_id=file_id, drive="family", filename=path.name,
@@ -90,12 +94,13 @@ def visual(monkeypatch, search_index, make_settings, use_llm, tmp_path):  # noqa
 
 
 @pytest.mark.parametrize("requested_by", ["manual", "on_index"])
-async def test_spec_addon_118_i8_only_an_uncapped_youtube_loft_is_eligible(
+async def test_spec_addon_118_i8_only_an_uncapped_analysable_loft_is_eligible(
     visual, requested_by,
 ):
     from app.workers.video_visual import VideoVisualWorker
 
     visual("youtube")
+    visual("web", source="web")
     visual("capped", failures=3)
     visual("two-failures", failures=2)
     visual("other", source="other")
@@ -104,10 +109,11 @@ async def test_spec_addon_118_i8_only_an_uncapped_youtube_loft_is_eligible(
 
     answers = {
         f: await worker.enqueue(f, requested_by=requested_by)
-        for f in ("youtube", "two-failures", "capped", "other", "unclassified")
+        for f in ("youtube", "web", "two-failures", "capped", "other", "unclassified")
     }
 
     assert answers["youtube"]["accepted"] is True
+    assert answers["web"]["accepted"] is True
     assert answers["two-failures"]["accepted"] is True
     for refused in ("capped", "other", "unclassified"):
         assert (answers[refused]["accepted"], answers[refused]["reason"]) == (
@@ -130,27 +136,29 @@ async def test_spec_addon_118_a_youtube_loft_waits_for_its_scan_as_a_native_vide
 # ---------------------------------------------------------------------------
 
 
-async def test_spec_addon_118_i8_visual_index_is_eligible_only_for_an_uncapped_youtube_loft(
+async def test_spec_addon_118_i8_visual_index_is_eligible_only_for_an_uncapped_analysable_loft(
     visual,
 ):
     from app.routers.video_visual import get_visual_index
 
     visual("youtube")
+    visual("web", source="web")
     visual("capped", failures=3)
     visual("other", source="other")
     visual("unclassified", source=None)
 
     answers = {
         f: (await get_visual_index(file_id=f, drive="family")).eligible
-        for f in ("youtube", "capped", "other", "unclassified")
+        for f in ("youtube", "web", "capped", "other", "unclassified")
     }
 
     assert answers == {
-        "youtube": True, "capped": False, "other": False, "unclassified": False,
+        "youtube": True, "web": True, "capped": False, "other": False,
+        "unclassified": False,
     }
 
 
-async def test_spec_addon_118_i8_generate_accepts_an_uncapped_youtube_loft_and_404s_others(
+async def test_spec_addon_118_i8_generate_accepts_an_uncapped_analysable_loft_and_404s_others(
     visual, monkeypatch,
 ):
     from app.routers import video_visual as router
@@ -163,19 +171,21 @@ async def test_spec_addon_118_i8_generate_accepts_an_uncapped_youtube_loft_and_4
 
     monkeypatch.setattr("app.routers.video_visual.get_video_visual_worker", _get)
     visual("youtube")
+    visual("web", source="web")
     visual("capped", failures=3)
     visual("other", source="other")
     visual("unclassified", source=None)
 
     accepted = await router.generate_visual_index(file_id="youtube", drive="family")
+    web = await router.generate_visual_index(file_id="web", drive="family")
     refused = {}
     for file_id in ("capped", "other", "unclassified"):
         with pytest.raises(HTTPException) as excinfo:
             await router.generate_visual_index(file_id=file_id, drive="family")
         refused[file_id] = excinfo.value.status_code
 
-    assert accepted["status"] == "accepted"
-    worker.enqueue.assert_awaited_once_with("youtube", requested_by="manual")
+    assert accepted["status"] == web["status"] == "accepted"
+    assert [call.args[0] for call in worker.enqueue.await_args_list] == ["youtube", "web"]
     assert refused == {"capped": 404, "other": 404, "unclassified": 404}
 
 
@@ -185,25 +195,45 @@ async def test_spec_addon_118_i8_generate_accepts_an_uncapped_youtube_loft_and_4
 
 
 @needs_ffmpeg
-async def test_spec_addon_118_i8_without_a_kept_picture_the_scene_frame_is_read_from_youtube(
-    visual, youtube, monkeypatch,  # noqa: F811
+@pytest.mark.parametrize("source", ["youtube", "web"])
+async def test_spec_addon_118_i8_without_a_kept_picture_the_scene_frame_is_read_live(
+    source, visual, youtube, monkeypatch,  # noqa: F811
 ):
     from app.workers.video_visual import _load_frame_bytes
 
     patch_everywhere(monkeypatch, "resolve_file_path", lambda _drive, path: path)
     patch_everywhere(monkeypatch, "validate_file_path", lambda _path: True)
     youtube.set_ytdlp(describe=describe([youtube.format("f720", 720)]))
-    path = visual("youtube")
+    path = visual(source, source=source)
 
-    data = await _load_frame_bytes("youtube", 5.0, path)
+    data = await _load_frame_bytes(source, 5.0, path)
 
     assert data
-    assert frame_cache_path("youtube", 5.0).read_bytes() == data
+    assert frame_cache_path(source, 5.0).read_bytes() == data
     assert len(youtube.lookups()) == 1
     assert not any(path in " ".join(e["argv"]) for e in youtube.ffmpeg_events())
 
 
-async def test_spec_addon_118_the_sweep_enqueues_youtube_lofts_beside_native_videos(
+@needs_ffmpeg
+async def test_spec_addon_193_i8_a_kept_small_picture_is_a_web_lofts_scene_frame(
+    visual, youtube,  # noqa: F811
+):
+    from app.workers.video_visual import _load_frame_bytes
+
+    youtube.set_ytdlp(describe=describe([youtube.format("f720", 720)]))
+    path = visual("web", source="web")
+    kept = frame_cache_path("web", 5.0)
+    kept.parent.mkdir(parents=True, exist_ok=True)
+    kept.write_bytes(b"KEPT")
+
+    data = await _load_frame_bytes("web", 5.0, path)
+
+    assert data == b"KEPT"
+    assert youtube.lookups() == []
+    assert youtube.ffmpeg_events() == []
+
+
+async def test_spec_addon_118_the_sweep_enqueues_analysable_lofts_beside_native_videos(
     visual, monkeypatch,
 ):
     import dataclasses
@@ -220,7 +250,9 @@ async def test_spec_addon_118_the_sweep_enqueues_youtube_lofts_beside_native_vid
         monkeypatch.setattr(f"{name}.settings", settings)
     visual("native", mime="video/mp4")
     visual("youtube")
+    visual("web", source="web")
     visual("capped", failures=3)
+    visual("capped-web", source="web", failures=3)
     visual("other", source="other")
     visual("unclassified", source=None)
 
@@ -228,4 +260,4 @@ async def test_spec_addon_118_the_sweep_enqueues_youtube_lofts_beside_native_vid
 
     with database.get_search_db_read() as s:
         swept = sorted({r.file_id for r in s.query(VideoVisualRun).all()})
-    assert swept == ["native", "youtube"]
+    assert swept == ["native", "web", "youtube"]

@@ -1,9 +1,9 @@
-"""Frames, a storyboard and the one video-only rendition of a YouTube ``.loft``.
+"""Frames, a storyboard and the one rendition of a ``.loft`` reference.
 
 A frame is one ``ffmpeg -ss`` read of the video stream ``yt-dlp`` names, and
-the storyboard is its sheets; the rendition a fetch processes is downloaded by
-``yt-dlp``. A frame that cannot be read is an error; no other frame is ever
-substituted for it.
+the storyboard is YouTube's sheets; the rendition a fetch processes is
+downloaded by ``yt-dlp``. A frame that cannot be read is an error; no other
+frame is ever substituted for it.
 
 Neither the stored URL, a signed stream URL nor a request header is ever put in
 a log line: the failure classes below are what is logged.
@@ -67,6 +67,9 @@ _MAX_LOFT_BYTES = 64 * 1024
 _MAX_FRAME_HEIGHT = 720
 
 YOUTUBE_PROVIDER = "youtube"
+GENERIC_PROVIDER = "generic"
+#: Counted fetch failures after which a web `.loft` is no longer a frame source.
+FRAME_SOURCE_FAILURE_CAP = 3
 
 # Why not only ``--js-runtimes=node``: yt-dlp adds the listed runtimes to the
 # default one (Deno), and ``--no-js-runtimes`` is what removes it.
@@ -186,13 +189,38 @@ def run_lookup(url: str, limit: float) -> dict[str, Any]:
     return description
 
 
-def pick_format(description: dict[str, Any]) -> dict[str, Any] | None:
-    """The video-only plain-HTTPS format with the greatest height up to 720.
+def is_frame_source(
+    provider: str | None, loft_source: str | None, failures: int | None = 0,
+) -> bool:
+    """Whether a `.loft`'s provider, stored source and failures give live frames.
 
-    Among equal heights an H.264 stream wins, then an mp4 container.
+    A YouTube reference is one whatever its stored source; a web reference is
+    one only once its fetch has classified it, and until the cap closes it.
     """
-    best: dict[str, Any] | None = None
-    best_key: tuple[int, int, int] | None = None
+    if provider == YOUTUBE_PROVIDER:
+        return True
+    return (
+        provider is not None
+        and provider != GENERIC_PROVIDER
+        and loft_source == "web"
+        and int(failures or 0) < FRAME_SOURCE_FAILURE_CAP
+    )
+
+
+def pick_format(description: dict[str, Any]) -> dict[str, Any] | None:
+    """The tallest plain-HTTPS video format up to 720, video-only when there is one.
+
+    A video-only format is preferred over a taller muxed one, and a muxed one
+    over a taller format whose codecs are unknown; among equal heights an H.264
+    stream wins, then an mp4 container. ``None`` when no kind has a qualifying
+    format.
+    """
+    best_video: dict[str, Any] | None = None
+    best_muxed: dict[str, Any] | None = None
+    best_unknown: dict[str, Any] | None = None
+    video_key: tuple[int, int, int] | None = None
+    muxed_key: tuple[int, int, int] | None = None
+    unknown_key: tuple[int, int, int] | None = None
     formats = description.get("formats")
     if not isinstance(formats, list):
         return None
@@ -202,8 +230,7 @@ def pick_format(description: dict[str, Any]) -> dict[str, Any] | None:
         height, url = fmt.get("height"), fmt.get("url")
         if (
             fmt.get("protocol") != "https"
-            or fmt.get("acodec") != "none"
-            or fmt.get("vcodec") in (None, "none")
+            or fmt.get("vcodec") == "none"
             or not isinstance(url, str) or not url
             or isinstance(height, bool) or not isinstance(height, int)
             or not 0 < height <= _MAX_FRAME_HEIGHT
@@ -214,9 +241,18 @@ def pick_format(description: dict[str, Any]) -> dict[str, Any] | None:
             1 if str(fmt.get("vcodec")).startswith("avc1") else 0,
             1 if fmt.get("ext") == "mp4" else 0,
         )
-        if best_key is None or key > best_key:
-            best, best_key = fmt, key
-    return best
+        if fmt.get("vcodec") is None:
+            if unknown_key is None or key > unknown_key:
+                best_unknown, unknown_key = fmt, key
+        elif fmt.get("acodec") == "none":
+            if video_key is None or key > video_key:
+                best_video, video_key = fmt, key
+        elif muxed_key is None or key > muxed_key:
+            best_muxed, muxed_key = fmt, key
+    for best in (best_video, best_muxed, best_unknown):
+        if best is not None:
+            return best
+    return None
 
 
 _lock = threading.Lock()
@@ -297,8 +333,12 @@ def _header_option(headers: Any) -> tuple[str, ...]:
 DOWNLOAD_STALL_SECONDS = 120.0
 #: Free space below which a running download is stopped.
 DOWNLOAD_MIN_FREE_BYTES = 1024 ** 3
-#: The one rendition a fetch may download: video only, plain HTTPS, at most 720p.
-DOWNLOAD_FORMAT = f"bv*[height<={_MAX_FRAME_HEIGHT}][protocol=https]"
+#: The one rendition a fetch may download: plain HTTPS, at most 720p, video
+#: only when such a format exists and otherwise one that also carries audio.
+DOWNLOAD_FORMAT = (
+    f"bv[height<={_MAX_FRAME_HEIGHT}][protocol=https]"
+    f"/bv*[height<={_MAX_FRAME_HEIGHT}][protocol=https]"
+)
 #: Range size of yt-dlp's requests; unchunked reads are throttled by YouTube.
 DOWNLOAD_CHUNK_SIZE = "10M"
 
@@ -329,9 +369,10 @@ def download_rendition(
     time_limit: float,
     free_bytes: Callable[[], int] | None = None,
 ) -> DownloadOutcome:
-    """Download the rendition ``yt-dlp`` picks from ``source_url``, video only.
+    """Download the rendition ``yt-dlp`` picks from ``source_url``.
 
-    ``yt-dlp`` writes ``<file_id>.part.<ext>``; the finished file is renamed to
+    A video-only format when one qualifies, otherwise one that also carries
+    audio. ``yt-dlp`` writes ``<file_id>.part.<ext>``; the finished file is renamed to
     ``<file_id>.<ext>``, so an interrupted download never looks complete.
 
     Returns the finished path, or no path when yt-dlp fails, writes nothing,
@@ -601,6 +642,8 @@ def kept_tiles(board: Storyboard, duration: float, max_frames: int) -> list[Tile
 
 __all__ = [
     "DownloadOutcome",
+    "FRAME_SOURCE_FAILURE_CAP",
+    "GENERIC_PROVIDER",
     "LoftNotAccessible",
     "LoftSource",
     "LoftUnreadable",
@@ -611,6 +654,7 @@ __all__ = [
     "YOUTUBE_PROVIDER",
     "download_rendition",
     "ensure_youtube_frame",
+    "is_frame_source",
     "kept_tiles",
     "known_duration",
     "storyboard_of",

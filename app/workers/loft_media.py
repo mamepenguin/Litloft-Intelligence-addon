@@ -1,10 +1,11 @@
 """One fetch of a `.loft` reference's video.
 
 The reference is read and classified, its video is looked up and downloaded
-once at up to 720p without audio, its scene candidates are built from that
-file when they are still the storyboard, the frame scan and frame OCR run on
-it exactly as on a native video, and the download is deleted again. Nothing
-is fetched for a reference that turns out not to point at a YouTube video.
+once at up to 720p, its scene candidates are built from that file when they
+are still the storyboard, the frame scan and frame OCR run on it exactly as on
+a native video, and the download is deleted again. Nothing is fetched for a
+reference whose provider is generic, or that has been given up for having no
+usable video format.
 
 Neither the stored URL, a signed stream URL nor a request header reaches a log
 line: only the file id and the failure class below do.
@@ -75,13 +76,13 @@ _OCR_REQUESTED: set[str] = set()
 _RUNNING: set[str] = set()
 #: Per file, the reindex or regenerate requests that arrived during its fetch.
 _REQUESTED_DURING_RUN: dict[str, set[str]] = {}
-#: Consecutive YouTube failure results across files; a success resets it.
+#: Consecutive lookup or download failures across files; a success resets it.
 _failure_run = 0
 #: The length of the next backoff; doubled as each one starts.
 _next_backoff_seconds = BACKOFF_START_SECONDS
 #: Monotonic time a backoff ends, or ``None`` when none is in effect.
 _backoff_until: float | None = None
-#: The previous YouTube result, of any file, and when it was recorded.
+#: The previous fetch result, of any file, and when it was recorded.
 _last_result: str | None = None
 _last_result_at: float | None = None
 
@@ -151,7 +152,7 @@ def backlog_held() -> bool:
 
 
 def _note_result(kind: str) -> bool:
-    """Record a YouTube result and say whether a failure counts.
+    """Record a fetch result and say whether a failure counts.
 
     A failure counts only when the previous result, of any file, was a
     success: a run of refusals is one episode, not one failure per video.
@@ -215,6 +216,7 @@ class _State:
     frame_ocr_indexed: bool
     failures: int
     candidates_done: bool
+    loft_source: str | None
 
 
 def _load_state(file_id: str) -> _State | None:
@@ -235,6 +237,7 @@ def _load_state(file_id: str) -> _State | None:
             frame_ocr_indexed=bool(row.frame_ocr_indexed),
             failures=int(row.loft_fetch_failures or 0),
             candidates_done=bool(row.loft_candidates_done),
+            loft_source=row.loft_source,
         )
 
 
@@ -527,10 +530,10 @@ def index_loft_media(
 ) -> FetchResult:
     """Fetch and process one `.loft` reference's video.
 
-    Reads and classifies the reference, then (for YouTube) looks the video up,
-    downloads the picked rendition, runs the wanted frame stages on it and
-    deletes it. A counted failure increments the file's failure count; at the
-    cap the failed stages are closed with no rows.
+    Reads and classifies the reference, then (for a reference with a video
+    provider) looks the video up, downloads the picked rendition, runs the
+    wanted frame stages on it and deletes it. A counted failure increments the
+    file's failure count; at the cap the failed stages are closed with no rows.
     """
     state = _load_state(file_id)
     if state is None or state.mime_type != LOFT_MIME:
@@ -580,7 +583,7 @@ def _fetch(
     except (youtube_source.LoftNotAccessible, youtube_source.LoftUnreadable):
         return FetchResult()
 
-    if source is None or source.provider != youtube_source.YOUTUBE_PROVIDER:
+    if source is None or source.provider == youtube_source.GENERIC_PROVIDER:
         _write(file_id, {
             "loft_source": "other",
             "frame_scan_indexed": True,
@@ -590,7 +593,14 @@ def _fetch(
         })
         return FetchResult()
 
-    _write(file_id, {"loft_source": "youtube"})
+    if source.provider == youtube_source.YOUTUBE_PROVIDER:
+        loft_source = "youtube"
+    else:
+        if state.loft_source == "other":
+            return FetchResult()
+        loft_source = "web"
+
+    _write(file_id, {"loft_source": loft_source})
 
     scan_wanted, ocr_wanted, candidates_wanted = _stages_wanted(state)
     if not scan_wanted and not ocr_wanted and not candidates_wanted:
@@ -636,14 +646,25 @@ def _fetch(
     if state.duration is None and lookup_duration is not None:
         _write(file_id, {"duration": lookup_duration})
 
-    _storyboard_step(state, description, candidates_wanted)
+    if loft_source == "youtube":
+        _storyboard_step(state, description, candidates_wanted)
 
     fmt = youtube_source.pick_format(description)
     if fmt is None:
         logger.warning("loft_media no rendition (file %s)", file_id)
-        # YouTube answered, so the run of refusals ends; the video itself has
-        # nothing to fetch, which counts against it as before.
+        # The site answered, so the run of refusals ends; a video with nothing
+        # to fetch counts against a YouTube reference, while a web one is
+        # closed as having no usable format.
         _note_result("success")
+        if loft_source == "web":
+            _write(file_id, {
+                "loft_source": "other",
+                "frame_scan_indexed": True,
+                "frame_ocr_read": True,
+                "frame_ocr_indexed": True,
+                "loft_candidates_done": True,
+            })
+            return FetchResult()
         if candidates_only:
             _write(file_id, {"loft_candidates_done": True})
             return FetchResult()

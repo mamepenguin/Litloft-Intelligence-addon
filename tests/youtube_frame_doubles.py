@@ -105,17 +105,35 @@ def put(target, data):
         f.write(data)
 
 
-formats = [
-    fmt for fmt in (cfg["describe"].get("formats") or [])
-    if fmt.get("protocol") == "https"
-    and fmt.get("vcodec") not in (None, "none")
-    and fmt.get("acodec") == "none"
-    and isinstance(fmt.get("height"), int) and 0 < fmt["height"] <= 720
+def _is_format(fmt, *, video_only):
+    return (
+        fmt.get("protocol") == "https"
+        and fmt.get("vcodec") not in (None, "none")
+        and isinstance(fmt.get("height"), int)
+        and not isinstance(fmt.get("height"), bool)
+        and 0 < fmt["height"] <= 720
+        and isinstance(fmt.get("url"), str) and fmt["url"]
+        and (fmt.get("acodec") == "none") == video_only
+    )
+
+
+def _rank(fmt):
+    return (
+        fmt["height"],
+        1 if str(fmt.get("vcodec")).startswith("avc1") else 0,
+        1 if fmt.get("ext") == "mp4" else 0,
+    )
+
+
+listed = cfg["describe"].get("formats") or []
+video_only = [fmt for fmt in listed if isinstance(fmt, dict) and _is_format(fmt, video_only=True)]
+formats = video_only or [
+    fmt for fmt in listed if isinstance(fmt, dict) and _is_format(fmt, video_only=False)
 ]
 if not formats:
     sys.stderr.write("No video formats found\\n")
     sys.exit(1)
-fmt = max(formats, key=lambda item: item["height"])
+fmt = max(formats, key=_rank)
 template = argv[argv.index("-o") + 1]
 out = template.replace("%(ext)s", fmt.get("ext") or "mp4")
 # Real yt-dlp refuses to fetch a video whose output file is already there.

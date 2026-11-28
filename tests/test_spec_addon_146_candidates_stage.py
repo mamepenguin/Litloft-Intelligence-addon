@@ -379,7 +379,7 @@ def test_spec_addon_146_i6_a_loft_trashed_during_the_stage_keeps_its_rows_and_is
 
 
 def test_spec_addon_146_item_2_a_loft_classified_as_other_has_the_flag_set(world):
-    world.answer()
+    world.answer(rendition=False)
     file_id = world.add()
     path = world.loft.drive_dir / f"{file_id}.loft"
     path.write_text('{"provider": "vimeo", "url": "https://vimeo.com/1"}')

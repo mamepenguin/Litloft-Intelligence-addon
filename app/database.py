@@ -135,6 +135,8 @@ def init_search_db() -> None:
         _migrate_frame_scan_column(conn)
         _migrate_loft_columns(conn)
 
+    _reclassify_other_lofts()
+
     _SearchSession = sessionmaker(bind=_search_engine, expire_on_commit=False)
 
     # Migrate vec_clip if dimension changed (model swap), and vec_text
@@ -488,14 +490,14 @@ def _migrate_vec_clip_if_needed(conn: object) -> None:
     # Reset clip_indexed so the indexer re-processes all files
     conn.execute(text("UPDATE indexed_files SET clip_indexed = 0"))
 
-    # The scene candidates are gone, so a YouTube `.loft` under the cap must be
-    # fetched again; one at the cap keeps its storyboard and stays closed.
+    # The scene candidates are gone, so an analysable `.loft` under the cap must
+    # be fetched again; one at the cap keeps its storyboard and stays closed.
     from app.workers.whisper import LOFT_MIME
 
     conn.execute(
         text(
             "UPDATE indexed_files SET loft_candidates_done = 0 "
-            "WHERE mime_type = :loft_mime AND loft_source = 'youtube' "
+            "WHERE mime_type = :loft_mime AND loft_source IN ('youtube', 'web') "
             "AND loft_fetch_failures < 3"
         ),
         {"loft_mime": LOFT_MIME},
@@ -793,8 +795,9 @@ def _migrate_vec_text_if_needed(conn: object) -> None:
         # read again (above); PDFs need no flag because their text task
         # re-extracts with the stored page texts. SPEC-ADDON-066 I3.
         #
-        # A YouTube `.loft`'s frame text is rebuilt the same way; a `.loft`
-        # of another source, or one not yet classified, has none to rebuild.
+        # A YouTube or web `.loft`'s frame text is rebuilt the same way; a
+        # `.loft` of another source, or one not yet classified, has none to
+        # rebuild.
         if "frame_ocr_indexed" in columns:
             from app.workers.whisper import LOFT_MIME
 
@@ -802,7 +805,8 @@ def _migrate_vec_text_if_needed(conn: object) -> None:
             loft_clause = ""
             if "loft_source" in columns:
                 loft_clause = (
-                    " OR (mime_type = :loft_mime AND loft_source = 'youtube')"
+                    " OR (mime_type = :loft_mime "
+                    "AND loft_source IN ('youtube', 'web'))"
                 )
             conn.execute(
                 text(
@@ -1242,6 +1246,41 @@ def _migrate_loft_columns(conn: object) -> None:
                 "OR loft_fetch_failures >= 3)"
             ),
             {"loft_mime": LOFT_MIME},
+        )
+
+
+_LOFT_RECLASSIFIED_KEY = "loft_source_web_reclassified"
+
+
+def _reclassify_other_lofts() -> None:
+    """Reopen every `.loft` the previous classifier closed, once.
+
+    The classifier lives in the fetch, which reads the drive, so a `.loft` of
+    source ``other`` cannot be told from one whose provider is generic here;
+    the fetch closes the generic ones again without a network call.
+    """
+    if _search_engine is None:
+        return
+    try:
+        with _search_engine.begin() as conn:
+            if _read_index_meta(conn, _LOFT_RECLASSIFIED_KEY) is not None:
+                return
+            from app.workers.whisper import LOFT_MIME
+
+            conn.execute(
+                text(
+                    "UPDATE indexed_files SET loft_source = NULL, "
+                    "frame_scan_indexed = 0, frame_ocr_read = 0, "
+                    "frame_ocr_indexed = 0, loft_candidates_done = 0, "
+                    "loft_fetch_failures = 0 "
+                    "WHERE mime_type = :loft_mime AND loft_source = 'other'"
+                ),
+                {"loft_mime": LOFT_MIME},
+            )
+            _upsert_index_meta(conn, _LOFT_RECLASSIFIED_KEY, "1")
+    except Exception as exc:  # noqa: BLE001 - startup continues as it was
+        logging.getLogger(__name__).warning(
+            "loft source reclassification failed (%s)", type(exc).__name__,
         )
 
 

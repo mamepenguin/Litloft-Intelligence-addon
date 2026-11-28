@@ -504,7 +504,7 @@ async def _file_question_stream(
         passages = (
             material.chunks
             if profile_can_see(resolved)
-            and file_question.is_text_video(material)
+            and await asyncio.to_thread(file_question.is_text_video, material)
             else ()
         )
         if file_question.uses_document_tools(
@@ -571,10 +571,9 @@ async def _text_question_stream(
     image_applies = file_question.is_picture(material) or (
         material.file_type == "video"
         and position_seconds is not None
-        and file_question._has_frame_source(
-            material.file_type,
-            material.mime_type,
-            material.file_path,
+        and await asyncio.to_thread(
+            file_question._has_frame_source,
+            material.file_id,
             material.drive,
         )
     )
